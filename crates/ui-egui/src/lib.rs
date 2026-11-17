@@ -1817,6 +1817,75 @@ impl Editor {
         self.selection.slide.clone()
     }
 
+    /// Paste PNG bytes as a picture on the current slide, centred and selected.
+    ///
+    /// The bytes go through [`Self::import_image`] so they are validated and
+    /// stored under a unique name. The picture is then created with a single
+    /// `object.add` command, so one undo removes it. Returns `false` without
+    /// changing the course in Master View or when no slide is selected.
+    pub fn paste_image_png(&mut self, png_bytes: &[u8]) -> bool {
+        if self.ui.master_view {
+            self.set_status("Not available in Master View");
+            return false;
+        }
+        let slide_id = self.selection.slide.clone();
+        if self.session.course.slide(&slide_id).is_none() {
+            self.set_status("Select a slide to paste into");
+            return false;
+        }
+
+        // import_image validates, stores under a unique name and reports the
+        // natural size through the placement tool. Paste always inserts a new
+        // picture, so a pending "replace" intent must not consume the import.
+        let pending_replace = self.pending_replace_object.take();
+        self.ui.placement_tool = None;
+        let Some(src) = self.import_image("pasted-image.png", png_bytes) else {
+            self.pending_replace_object = pending_replace;
+            return false;
+        };
+        let Some(PlacementTool::Image { natural_size, .. }) = self.ui.placement_tool.take() else {
+            return false;
+        };
+
+        let slide_size = self.session.course.slide_size;
+        let slide_w = slide_size.w as f32;
+        let slide_h = slide_size.h as f32;
+        let (mut w, mut h) = natural_size;
+        if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+            w = 320.0;
+            h = 180.0;
+        }
+        if (w > slide_w || h > slide_h)
+            && slide_w.is_finite()
+            && slide_h.is_finite()
+            && slide_w > 0.0
+            && slide_h > 0.0
+        {
+            // Shrink to fit while keeping the picture's aspect ratio.
+            let scale = (slide_w / w).min(slide_h / h);
+            w = (w * scale).round().max(1.0);
+            h = (h * scale).round().max(1.0);
+        }
+        let x = ((slide_w - w) * 0.5).max(0.0).round();
+        let y = ((slide_h - h) * 0.5).max(0.0).round();
+
+        let mut params = serde_json::json!({
+            "slide": slide_id,
+            "kind": { "type": "image", "src": src, "alt": "" },
+            "frame": { "x": x, "y": y, "w": w.round().max(1.0), "h": h.round().max(1.0) },
+        });
+        if let Some(ref layer) = self.selection.layer {
+            params["layer"] = serde_json::json!(layer);
+        }
+        let Some(result) = self.run("object.add", params) else {
+            return false;
+        };
+        result
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+    }
+
     /// Import an image from raw bytes, validating with the decoder and learning natural dimensions.
     ///
     /// Stores the bytes under a sanitized, unique `src` key. If an image object is queued for replacement,
@@ -2800,6 +2869,33 @@ impl Editor {
         }
     }
 
+    /// Focus conditions shared by the paste event block and the desktop image
+    /// paste, so both ignore a focused text field, the preview and modal panes.
+    fn paste_focus(&self, ctx: &egui::Context) -> (bool, bool) {
+        let preview_has_focus = self.preview.as_ref().is_some_and(|p| p.has_focus);
+        let text_focus = ctx.egui_wants_keyboard_input()
+            || ctx.memory(|m| m.focused().is_some())
+            || self.ui.inline_edit.is_some()
+            || self.is_cropping()
+            || self.ui.ai.open
+            || self.ui.alt.open;
+        (preview_has_focus, text_focus)
+    }
+
+    fn paste_input_allowed(preview_has_focus: bool, text_focus: bool) -> bool {
+        !preview_has_focus && !text_focus
+    }
+
+    /// Whether a desktop image paste shortcut should reach the editor.
+    ///
+    /// This uses the same focus conditions as the copy/cut/paste event block in
+    /// [`Self::show`], so Cmd/Ctrl+V while typing never inserts a picture.
+    #[must_use]
+    pub fn wants_image_paste(&self, ctx: &egui::Context) -> bool {
+        let (preview_has_focus, text_focus) = self.paste_focus(ctx);
+        Self::paste_input_allowed(preview_has_focus, text_focus)
+    }
+
     /// Display the editor UI inside `ui` and return any shell requests.
     #[allow(clippy::cognitive_complexity)]
     pub fn show(&mut self, ui: &mut Ui) -> Vec<EditorRequest> {
@@ -2814,20 +2910,13 @@ impl Editor {
         self.update_timeline_playback(ui);
 
         // Editor shortcuts must not act on the editor's selection while the user is
-        // interacting with the preview window.
-        let preview_has_focus = self.preview.as_ref().is_some_and(|p| p.has_focus);
-        // Crop mode owns the keyboard: only Enter (apply) and Escape (cancel)
-        // act, so nudges, deletes and undo cannot change the course under it.
-        let text_focus = ui.ctx().egui_wants_keyboard_input()
-            || ui.memory(|m| m.focused().is_some())
-            || self.ui.inline_edit.is_some()
-            || self.is_cropping()
-            || self.ui.ai.open
-            || self.ui.alt.open;
+        // interacting with the preview window. Crop mode owns the keyboard: only
+        // Enter (apply) and Escape (cancel) act there.
+        let (preview_has_focus, text_focus) = self.paste_focus(ui.ctx());
 
         // Copy, cut and paste arrive as events so they work in the browser too.
         // Leave them to a focused text field or the in-place editor.
-        if !preview_has_focus && !text_focus {
+        if Self::paste_input_allowed(preview_has_focus, text_focus) {
             let (copy, cut, paste) = ui.input_mut(|i| {
                 let mut copy = false;
                 let mut cut = false;

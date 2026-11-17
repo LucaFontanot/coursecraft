@@ -25,6 +25,8 @@ pub mod export;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod paste_image;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod player_bundle;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prefs;
@@ -2465,6 +2467,11 @@ impl eframe::App for EditorApp {
                 }
             }
         }
+
+        // Insert a clipboard image before the editor UI consumes the frame's
+        // input events; text and object paste stay with the editor UI.
+        #[cfg(not(target_arch = "wasm32"))]
+        paste_image::maybe_paste_image(ui.ctx(), &mut self.editor);
 
         // 4. Editor main UI
         let _requests = self.editor.show(ui);

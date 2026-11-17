@@ -4925,6 +4925,109 @@ fn image_placement_on_canvas_and_undo() {
     );
 }
 
+fn solid_rgba_png(width: u32, height: u32) -> Vec<u8> {
+    let pixels = vec![0u8; width as usize * height as usize * 4];
+    coursecraft_media::encode_png_rgba(width, height, &pixels).expect("PNG encoding failed")
+}
+
+fn pasted_image_object(harness: &TestHarness) -> &Object {
+    harness
+        .editor
+        .session
+        .course
+        .slide(&harness.editor.selection.slide)
+        .and_then(|slide| {
+            slide.objects.iter().find(|object| {
+                matches!(&object.kind, ObjectKind::Image { src, .. } if src == "pasted-image.png")
+            })
+        })
+        .expect("pasted image object")
+}
+
+#[test]
+fn pasted_image_is_centred_and_selected() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+    let before = harness.editor.undo_len_for_test();
+
+    // 2x2 PNG on a 1280x720 slide: kept at natural size, centred.
+    assert!(harness.editor.paste_image_png(&test_png_bytes()));
+
+    let object = pasted_image_object(&harness);
+    assert_eq!(object.frame.w, 2.0);
+    assert_eq!(object.frame.h, 2.0);
+    assert_eq!(object.frame.x, 639.0);
+    assert_eq!(object.frame.y, 359.0);
+    assert_eq!(
+        harness.editor.selection.object.as_deref(),
+        Some(object.id.as_str())
+    );
+    assert_eq!(harness.editor.undo_len_for_test(), before + 1);
+}
+
+#[test]
+fn pasted_image_larger_than_slide_is_scaled_to_fit() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+    // A small slide keeps this test's PNG tiny while still being twice its size.
+    harness.editor.session.course.slide_size = coursecraft_course::Size { w: 100, h: 50 };
+
+    assert!(harness.editor.paste_image_png(&solid_rgba_png(200, 100)));
+
+    let object = pasted_image_object(&harness);
+    assert_eq!(object.frame.w, 100.0);
+    assert_eq!(object.frame.h, 50.0);
+    assert_eq!(object.frame.x, 0.0);
+    assert_eq!(object.frame.y, 0.0);
+    // 200x100 is 2:1; the fitted 100x50 keeps the same aspect ratio.
+    assert!((object.frame.w / object.frame.h - 2.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn one_undo_removes_the_pasted_image() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+    let before = harness.editor.undo_len_for_test();
+
+    assert!(harness.editor.paste_image_png(&test_png_bytes()));
+    assert_eq!(harness.editor.undo_len_for_test(), before + 1);
+    harness.editor.session.undo().expect("undo");
+
+    let slide = harness
+        .editor
+        .session
+        .course
+        .slide(&harness.editor.selection.slide)
+        .expect("slide");
+    assert!(!slide.objects.iter().any(|object| {
+        matches!(&object.kind, ObjectKind::Image { src, .. } if src == "pasted-image.png")
+    }));
+}
+
+#[test]
+fn image_paste_is_refused_in_master_view() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+    let before = harness.editor.undo_len_for_test();
+    harness.editor.ui.master_view = true;
+
+    assert!(!harness.editor.paste_image_png(&test_png_bytes()));
+    assert_eq!(harness.editor.undo_len_for_test(), before);
+    let slide = harness
+        .editor
+        .session
+        .course
+        .slide(&harness.editor.selection.slide)
+        .expect("slide");
+    assert!(!slide.objects.iter().any(|object| {
+        matches!(&object.kind, ObjectKind::Image { src, .. } if src == "pasted-image.png")
+    }));
+}
+
 #[test]
 fn save_writes_only_referenced_media() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
