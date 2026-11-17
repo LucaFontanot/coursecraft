@@ -26,6 +26,7 @@ use serde_json::Value;
 const LAYERS: &[(&str, u8, bool)] = &[
     // (name, layer, standalone)
     ("scorm", 0, true),
+    ("spell", 0, true),
     ("xapi", 0, true),
     ("course", 1, false),
     ("video-native", 1, true),

@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 rust-version = "1.99"
 
 [workspace.dependencies]
+spellbook = "0.4"
 # internal
 coursecraft-scorm = { path = "crates/scorm" }
 coursecraft-course = { path = "crates/course" }
@@ -31,6 +32,7 @@ coursecraft-media = { path = "crates/media" }
 coursecraft-playback = { path = "crates/playback" }
 coursecraft-video-native = { path = "crates/video-native" }
 coursecraft-xapi = { path = "crates/xapi" }
+coursecraft-spell = { path = "crates/spell" }
 
 # external
 serde = { version = "1", features = ["derive"] }

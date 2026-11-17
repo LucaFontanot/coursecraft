@@ -1,0 +1,13 @@
+[package]
+name = "coursecraft-spell"
+description = "Spell checking with a bundled English (US) Hunspell dictionary. Standalone: no workspace dependencies."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+spellbook.workspace = true
+
+[lints]
+workspace = true
