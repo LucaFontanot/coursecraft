@@ -1154,15 +1154,37 @@ pub(crate) fn color_swatch_picker(
         StrokeKind::Outside,
     );
 
+    let field_key = crate::eyedropper::field_key(&id_salt);
     let popup_id = ui.make_persistent_id((id_salt, "color_picker"));
     let pending_id = popup_id.with("pending");
     let mut pending = ui.data(|d| d.get_temp::<bool>(pending_id)).unwrap_or(false);
     let mut swatch_picked = false;
+    // A finished eyedropper pick lands here on the next frame. It follows the
+    // exact same path as a swatch click: one command, one undo step, remembered.
+    if let Some(color) = crate::eyedropper::take_pending(ui.ctx(), &field_key) {
+        *color_hex = color_to_hex(color);
+        pending = true;
+        swatch_picked = true;
+    }
     egui::Popup::menu(&response)
         .id(popup_id)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             ui.spacing_mut().slider_width = 220.0;
+            let eyedropper = ui
+                .add(
+                    egui::Button::new(coursecraft_render::icon_text(
+                        coursecraft_render::Icon::Target,
+                        "Eyedropper",
+                    ))
+                    .min_size(egui::vec2(120.0, 0.0)),
+                )
+                .on_hover_text("Pick a colour from anywhere in the window (Esc cancels)");
+            if eyedropper.clicked() {
+                egui::Popup::close_id(ui.ctx(), popup_id);
+                crate::eyedropper::start_pick(ui.ctx(), field_key.clone());
+            }
+            ui.add_space(4.0);
             let palette: Vec<(String, String)> = ui
                 .ctx()
                 .data(|d| d.get_temp(palette_colors_id()))

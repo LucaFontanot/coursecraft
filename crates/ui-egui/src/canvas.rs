@@ -4849,6 +4849,9 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
 
     let viewport_rect = ui.available_rect_before_wrap();
     let p = coursecraft_render::palette(ui.ctx());
+    // While the eyedropper is picking, the canvas draws as usual but ignores
+    // input: the picking click must not select or deselect anything.
+    let eyedropper_owns_input = crate::eyedropper::swallows_canvas_input(ui.ctx());
 
     let slide_size = editor.session.course.slide_size;
     let (sw, sh) = (slide_size.w as f32, slide_size.h as f32);
@@ -4989,7 +4992,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             }
         }
 
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if !eyedropper_owns_input && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             let had_tool = editor.ui.placement_tool.is_some();
             let had_draw = editor.ui.draw.is_some();
             let had_path_edit = editor.ui.path_edit.is_some();
@@ -5037,7 +5040,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         let was_cropping = editor.ui.crop_edit.is_some();
         if was_cropping {
             crop_input(editor, ui, &t, current_pointer, canvas_rect, pointer_in_hud);
-        } else if !pointer_in_hud && !was_editing {
+        } else if !eyedropper_owns_input && !pointer_in_hud && !was_editing {
             if matches!(editor.ui.placement_tool, Some(PlacementTool::Draw(_))) {
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
                 process_draw_tool(editor, &t, ui, &response);
@@ -5093,7 +5096,8 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         let special_mode = editor.ui.placement_tool.is_some()
             || editor.ui.crop_edit.is_some()
             || editor.ui.inline_edit.is_some();
-        if !special_mode
+        if !eyedropper_owns_input
+            && !special_mode
             && response.secondary_clicked()
             && let Some(pos) = current_pointer
         {

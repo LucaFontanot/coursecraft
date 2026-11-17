@@ -30,6 +30,7 @@ pub mod dialog;
 pub mod document;
 pub mod elevenlabs;
 pub mod export_dialog;
+pub(crate) mod eyedropper;
 pub mod find;
 pub mod fonts;
 pub mod format_painter;
@@ -78,6 +79,8 @@ mod alt_text_tests;
 mod audio_ai_tests;
 #[cfg(test)]
 mod document_tests;
+#[cfg(test)]
+mod eyedropper_tests;
 #[cfg(test)]
 mod find_tests;
 #[cfg(test)]
@@ -2900,6 +2903,8 @@ impl Editor {
     #[allow(clippy::cognitive_complexity)]
     pub fn show(&mut self, ui: &mut Ui) -> Vec<EditorRequest> {
         self.ui.current_time = ui.input(|i| i.time);
+        // Pick mode owns the pointer and Escape before anything else sees them.
+        eyedropper::process_frame(ui.ctx());
         self.check_revision();
         properties::publish_theme_colors(ui.ctx(), &self.session.course.theme);
         coursecraft_render::install_course_fonts(
@@ -3196,6 +3201,7 @@ impl Editor {
             translate_ai::show_translate_window(self, ui.ctx(), &mut requests);
             layers::show_layer_settings_window(self, ui.ctx());
 
+            eyedropper::paint_overlay(ui.ctx());
             requests.append(&mut self.pending_requests);
             return requests;
         }
@@ -3406,6 +3412,7 @@ impl Editor {
 
         self.check_revision();
 
+        eyedropper::paint_overlay(ui.ctx());
         requests.append(&mut self.pending_requests);
         requests
     }
