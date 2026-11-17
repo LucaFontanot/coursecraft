@@ -215,7 +215,7 @@ Goal: things Storyline and Captivate can't do at all, built on the command engin
 - `coursecraft-cli batch` runs one script over many courses (rebrand, replace a logo, update a date, republish), with a dry run that shows the diff. Questions import from a CSV file, all or nothing, with row-numbered problems. Four agent recipes in `docs/recipes/`, checked by a test against the command list.
 - Checked: automated tests and the gate. Not tried by hand: the folder open and save dialogs, the text style and palette controls, and the CSV import menu item.
 
-## M20 Everyday authoring (release 0.2)
+## M20 Everyday authoring (release 0.2) ✅
 
 Plan: `docs/plans/m20-everyday-authoring.md`.
 
