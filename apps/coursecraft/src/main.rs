@@ -31,6 +31,8 @@ pub mod prefs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod publish;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod system_fonts;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod versions;
 
 #[cfg(test)]
@@ -145,6 +147,12 @@ struct EditorApp {
     /// A background PDF or Word review export while one is running.
     #[cfg(not(target_arch = "wasm32"))]
     export_review_rx: Option<std::sync::mpsc::Receiver<Result<PathBuf, String>>>,
+    /// A background scan of the computer's installed fonts, while one is running.
+    #[cfg(not(target_arch = "wasm32"))]
+    system_fonts_rx: Option<std::sync::mpsc::Receiver<Vec<system_fonts::SystemFontFamily>>>,
+    /// The installed font families found by the last scan, kept for importing.
+    #[cfg(not(target_arch = "wasm32"))]
+    system_font_families: Vec<system_fonts::SystemFontFamily>,
     /// Last file written by a successful publish, for "Show in folder".
     #[cfg(not(target_arch = "wasm32"))]
     published_path: Option<PathBuf>,
@@ -373,6 +381,8 @@ impl EditorApp {
             publish_rx: None,
             export_rx: None,
             export_review_rx: None,
+            system_fonts_rx: None,
+            system_font_families: Vec::new(),
             published_path: None,
             #[cfg(test)]
             test_export_path: None,
@@ -1174,6 +1184,72 @@ impl EditorApp {
             EditorRequest::AgentAction { agent, action } => {
                 self.start_agent_action(agent, action, ctx);
             }
+            EditorRequest::ListSystemFonts => self.start_system_font_scan(ctx),
+            EditorRequest::AddSystemFont { family, apply } => {
+                self.add_system_font(&family, apply);
+            }
+        }
+    }
+
+    /// Scan the installed font folders in the background.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_system_font_scan(&mut self, ctx: &egui::Context) {
+        if self.system_fonts_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.system_fonts_rx = Some(rx);
+        std::thread::spawn(move || {
+            let families = system_fonts::scan(&system_fonts::font_folders());
+            let _ = tx.send(families);
+        });
+        ctx.request_repaint();
+    }
+
+    /// Copy every face of an installed family into the course, warn if its
+    /// maker restricts embedding, then run the queued `apply` command.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn add_system_font(&mut self, family: &str, apply: Option<(String, serde_json::Value)>) {
+        let already_in_course = self
+            .editor
+            .session
+            .course
+            .fonts
+            .iter()
+            .any(|face| face.family.eq_ignore_ascii_case(family));
+        let mut added = false;
+        let mut restricted = false;
+
+        if !already_in_course
+            && let Some(found) = self
+                .system_font_families
+                .iter()
+                .find(|item| item.name.eq_ignore_ascii_case(family))
+        {
+            restricted = found.embedding_restricted;
+            for (_style, path) in &found.faces {
+                let file_name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("font.ttf")
+                    .to_string();
+                let Ok(bytes) = std::fs::read(path) else {
+                    continue;
+                };
+                if self.editor.import_font(&file_name, &bytes).is_some() {
+                    added = true;
+                }
+            }
+        }
+
+        if restricted {
+            self.editor
+                .set_status(coursecraft_ui_egui::RESTRICTED_FONT_NOTE.to_string());
+        }
+        if let Some((cmd, params)) = apply
+            && (added || already_in_course)
+        {
+            self.editor.run(&cmd, params);
         }
     }
 
@@ -1402,6 +1478,36 @@ impl EditorApp {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.editor
                     .set_publish_failure("Publishing stopped unexpectedly. Try again.");
+            }
+        }
+    }
+
+    /// Poll the background font scan and hand its result to the editor.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_system_fonts(&mut self, ctx: &egui::Context) {
+        let Some(rx) = self.system_fonts_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(families) => {
+                self.editor.ui.system_fonts = Some(
+                    families
+                        .iter()
+                        .map(|family| coursecraft_ui_egui::SystemFontChoice {
+                            name: family.name.clone(),
+                            embedding_restricted: family.embedding_restricted,
+                        })
+                        .collect(),
+                );
+                self.system_font_families = families;
+                ctx.request_repaint();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.system_fonts_rx = Some(rx);
+                ctx.request_repaint();
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.editor.ui.system_fonts = Some(Vec::new());
             }
         }
     }
@@ -2317,6 +2423,7 @@ impl eframe::App for EditorApp {
             self.poll_publish(ui.ctx());
             self.poll_export(ui.ctx());
             self.poll_export_review(ui.ctx());
+            self.poll_system_fonts(ui.ctx());
 
             // 3. System theme synchronization
             let desired_mode = self.prefs.theme.resolve(ui.ctx());
@@ -2752,6 +2859,10 @@ impl eframe::App for EditorApp {
                     | EditorRequest::SaveAiSource(_)
                     | EditorRequest::SaveElevenLabs(_) => {}
                     EditorRequest::AgentDetect | EditorRequest::AgentAction { .. } => {}
+                    EditorRequest::ListSystemFonts => {
+                        self.editor.ui.system_fonts = Some(Vec::new());
+                    }
+                    EditorRequest::AddSystemFont { .. } => {}
                     EditorRequest::SaveImage { .. } => {
                         self.editor.set_status("Saving works in the desktop app.");
                     }

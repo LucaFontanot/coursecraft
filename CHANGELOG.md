@@ -4,6 +4,8 @@ What changed in each release, newest first. Versions follow [semantic versioning
 
 ## Unreleased
 
+- Use any font installed on your computer: the font picker lists them under "On this computer", and picking one copies it into the course so it publishes with it. Fonts whose maker restricts embedding show a note, and the Fonts window shows each font's licence text.
+
 ## 0.1.2
 
 - CourseCraft has an app icon: a "C" around a play button, in the ArtCraft family style. It shows in the Mac Dock and Finder, on the Windows .exe and taskbar, and on the Linux window.

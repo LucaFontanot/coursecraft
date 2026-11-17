@@ -199,6 +199,93 @@ fn rejects_image_over_bytes_limit() {
     );
 }
 
+/// Build a tiny but valid single-font sfnt with a `name` table and, optionally,
+/// an OS/2 table. `fs_type == None` omits OS/2 entirely; `licence == None`
+/// omits the name ID 13 record.
+fn synthetic_font(fs_type: Option<u16>, licence: Option<&str>) -> Vec<u8> {
+    fn u16be(out: &mut Vec<u8>, value: u16) {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+    fn u32be(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_be_bytes());
+    }
+
+    let family: Vec<u16> = "Test Family".encode_utf16().collect();
+    let licence_units: Vec<u16> = licence.unwrap_or_default().encode_utf16().collect();
+
+    let has_os2 = fs_type.is_some();
+    let num_tables = u16::from(has_os2) + 1;
+    let os2_offset = 12u32 + 16 * u32::from(num_tables);
+    let os2_len = 78u32;
+    let name_offset = if has_os2 {
+        os2_offset + os2_len
+    } else {
+        os2_offset
+    };
+
+    let num_records = u16::from(licence.is_some()) + 1;
+    let string_offset = 6u16 + 12 * num_records;
+    let name_len =
+        u32::from(string_offset) + 2 * family.len() as u32 + 2 * licence_units.len() as u32;
+
+    let mut out = Vec::new();
+    u32be(&mut out, 0x0001_0000); // sfntVersion: TrueType
+    u16be(&mut out, num_tables);
+    u16be(&mut out, 0); // searchRange
+    u16be(&mut out, 0); // entrySelector
+    u16be(&mut out, 0); // rangeShift
+
+    if has_os2 {
+        u32be(&mut out, 0x4F53_2F32); // 'OS/2'
+        u32be(&mut out, 0); // checksum
+        u32be(&mut out, os2_offset);
+        u32be(&mut out, os2_len);
+    }
+    u32be(&mut out, 0x6E61_6D65); // 'name'
+    u32be(&mut out, 0);
+    u32be(&mut out, name_offset);
+    u32be(&mut out, name_len);
+
+    if let Some(fs) = fs_type {
+        debug_assert_eq!(out.len() as u32, os2_offset);
+        u16be(&mut out, 0); // version
+        u16be(&mut out, 0); // xAvgCharWidth
+        u16be(&mut out, 400); // usWeightClass
+        u16be(&mut out, 5); // usWidthClass
+        u16be(&mut out, fs); // fsType
+        out.resize(os2_offset as usize + os2_len as usize, 0);
+    }
+
+    debug_assert_eq!(out.len() as u32, name_offset);
+    u16be(&mut out, 0); // format
+    u16be(&mut out, num_records);
+    u16be(&mut out, string_offset);
+
+    // Family name (name ID 1), en-US.
+    u16be(&mut out, 3); // platformID: Windows
+    u16be(&mut out, 1); // encodingID: Unicode BMP
+    u16be(&mut out, 0x0409); // languageID: en-US
+    u16be(&mut out, 1);
+    u16be(&mut out, (2 * family.len()) as u16);
+    u16be(&mut out, 0);
+    if licence.is_some() {
+        // Licence text (name ID 13), en-US.
+        u16be(&mut out, 3);
+        u16be(&mut out, 1);
+        u16be(&mut out, 0x0409);
+        u16be(&mut out, 13);
+        u16be(&mut out, (2 * licence_units.len()) as u16);
+        u16be(&mut out, (2 * family.len()) as u16);
+    }
+    for unit in family {
+        u16be(&mut out, unit);
+    }
+    for unit in licence_units {
+        u16be(&mut out, unit);
+    }
+    out
+}
+
 #[test]
 fn font_info_reads_family_and_style_from_the_name_table() {
     let regular = font_info(INTER_REGULAR).expect("read Inter Regular");
@@ -212,6 +299,43 @@ fn font_info_reads_family_and_style_from_the_name_table() {
     let italic = font_info(INTER_ITALIC).expect("read Inter Italic");
     assert_eq!(italic.family, "Inter");
     assert_eq!(italic.style, FontFileStyle::Italic);
+}
+
+#[test]
+fn font_info_reads_embedding_restriction() {
+    let restricted = font_info(&synthetic_font(Some(0x0002), None)).expect("read restricted font");
+    assert!(restricted.embedding_restricted);
+
+    // Other fsType bits do not count as restricted embedding.
+    let unrestricted = font_info(&synthetic_font(Some(0x0004), None)).expect("read open font");
+    assert!(!unrestricted.embedding_restricted);
+
+    // No OS/2 table means no restriction.
+    let no_os2 = font_info(&synthetic_font(None, None)).expect("read font without OS/2");
+    assert!(!no_os2.embedding_restricted);
+}
+
+#[test]
+fn font_info_reads_and_cleans_licence() {
+    let with_licence = font_info(&synthetic_font(
+        Some(0),
+        Some("  Licensed \u{0007} for testing.  "),
+    ))
+    .expect("read font with licence");
+    assert_eq!(
+        with_licence.licence.as_deref(),
+        Some("Licensed  for testing.")
+    );
+
+    let no_licence = font_info(&synthetic_font(Some(0), None)).expect("read font without licence");
+    assert_eq!(no_licence.licence, None);
+
+    let empty = font_info(&synthetic_font(Some(0), Some("   "))).expect("read blank licence");
+    assert_eq!(empty.licence, None);
+
+    let long = "x".repeat(250);
+    let capped = font_info(&synthetic_font(Some(0), Some(&long))).expect("read long licence");
+    assert_eq!(capped.licence.as_deref().map(str::len), Some(200));
 }
 
 #[test]

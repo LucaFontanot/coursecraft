@@ -404,7 +404,27 @@ pub enum EditorRequest {
         /// What to do.
         action: coursecraft_ai::agents::AgentAction,
     },
+    /// Ask the app to list the fonts installed on this computer.
+    ListSystemFonts,
+    /// Add an installed font family to the course and optionally apply it.
+    AddSystemFont {
+        /// Family name to look up in the scanned list.
+        family: String,
+        /// Command id and parameters to run after the font is added.
+        apply: Option<(String, serde_json::Value)>,
+    },
 }
+
+/// An installed font family offered by the picker. No file paths cross into
+/// the editor; the app shell keeps those and imports the faces on request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemFontChoice {
+    pub name: String,
+    pub embedding_restricted: bool,
+}
+
+/// Status-bar and Fonts-window note for a font that restricts embedding.
+pub const RESTRICTED_FONT_NOTE: &str = "This font's maker restricts embedding. Check your licence allows using it in a published course.";
 
 /// Summary of a validation issue parsed from `course.validate`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -725,6 +745,10 @@ pub struct UiState {
     pub media_library: media_library::MediaLibraryState,
     /// Fonts manager window.
     pub show_fonts_window: bool,
+    /// Installed font families offered by the picker. `None` means not asked yet.
+    pub system_fonts: Option<Vec<SystemFontChoice>>,
+    /// Licence and embedding facts for course font files, keyed by media path.
+    pub font_facts: std::collections::HashMap<String, (bool, Option<String>)>,
     /// Font face waiting for a "remove while in use" confirmation.
     pub pending_remove_font: Option<(String, FontStyle)>,
     /// Course map replaces the slide editor in the centre.
@@ -1003,6 +1027,8 @@ impl Editor {
                 show_media_library: false,
                 media_library: media_library::MediaLibraryState::default(),
                 show_fonts_window: false,
+                system_fonts: None,
+                font_facts: std::collections::HashMap::new(),
                 pending_remove_font: None,
                 story_view: false,
                 course_map: CourseMapState::default(),

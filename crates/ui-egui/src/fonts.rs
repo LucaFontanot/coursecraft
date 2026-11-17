@@ -15,6 +15,23 @@ fn style_label(style: FontStyle) -> &'static str {
     }
 }
 
+/// Licence and embedding facts for a course font file, read once and cached by
+/// media path so the window does not re-parse the font on every frame.
+fn font_facts(editor: &mut Editor, src: &str) -> Option<(bool, Option<String>)> {
+    if let Some(fact) = editor.ui.font_facts.get(src) {
+        return Some(fact.clone());
+    }
+    let bytes = editor
+        .media
+        .iter()
+        .find(|(name, _)| name == src)
+        .map(|(_, bytes)| bytes.clone())?;
+    let info = coursecraft_media::font_info(&bytes).ok()?;
+    let fact = (info.embedding_restricted, info.licence);
+    editor.ui.font_facts.insert(src.to_owned(), fact.clone());
+    Some(fact)
+}
+
 /// Render the fonts window when the editor asked for it.
 pub fn show_fonts_window(editor: &mut Editor, ctx: &Context) {
     if !editor.ui.show_fonts_window {
@@ -39,6 +56,7 @@ pub fn show_fonts_window(editor: &mut Editor, ctx: &Context) {
                 );
             }
             let faces = editor.session.course.fonts.clone();
+            let mut shown_families: Vec<String> = Vec::new();
             for face in faces {
                 ui.horizontal(|ui| {
                     let font = coursecraft_render::slide_font_named(
@@ -59,6 +77,25 @@ pub fn show_fonts_window(editor: &mut Editor, ctx: &Context) {
                         }
                     });
                 });
+                if !shown_families.contains(&face.family) {
+                    shown_families.push(face.family.clone());
+                    if let Some((restricted, licence)) = font_facts(editor, &face.src) {
+                        if let Some(licence) = licence.filter(|text| !text.is_empty()) {
+                            ui.label(
+                                RichText::new(licence)
+                                    .small()
+                                    .color(coursecraft_render::palette(ctx).text_secondary),
+                            );
+                        }
+                        if restricted {
+                            ui.label(
+                                RichText::new(crate::RESTRICTED_FONT_NOTE)
+                                    .small()
+                                    .color(coursecraft_render::palette(ctx).text_secondary),
+                            );
+                        }
+                    }
+                }
             }
             ui.separator();
             if ui.button("Add font…").clicked() {

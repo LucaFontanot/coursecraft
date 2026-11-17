@@ -3,6 +3,7 @@
 
 use skrifa::MetadataProvider as _;
 use skrifa::attribute::Style;
+use skrifa::raw::TableProvider as _;
 use skrifa::string::StringId;
 
 use crate::MediaError;
@@ -41,6 +42,12 @@ pub struct FontInfo {
     pub subfamily: String,
     /// The face style inferred from the subfamily and the OS/2 attributes.
     pub style: FontFileStyle,
+    /// True when the OS/2 table's `fsType` has bit 0x0002 set (restricted
+    /// licence embedding). False when there is no OS/2 table.
+    pub embedding_restricted: bool,
+    /// The licence text from name ID 13, cleaned and capped at 200 characters.
+    /// `None` when missing or empty.
+    pub licence: Option<String>,
 }
 
 /// Inspect a TrueType or OpenType font.
@@ -87,6 +94,22 @@ pub fn font_info(bytes: &[u8]) -> Result<FontInfo, MediaError> {
         .map(|value| clean_name(&value))
         .unwrap_or_default();
 
+    // fsType bit 0x0002 is "restricted licence embedding". A font without
+    // an OS/2 table places no such restriction on embedding.
+    let embedding_restricted = font
+        .os2()
+        .map(|os2| os2.fs_type() & 0x0002 != 0)
+        .unwrap_or(false);
+
+    let licence = read(13).and_then(|value| {
+        let cleaned = clean_text(&value, 200);
+        if cleaned.is_empty() {
+            None
+        } else {
+            Some(cleaned)
+        }
+    });
+
     let attributes = font.attributes();
     let lower = subfamily.to_ascii_lowercase();
     let bold = lower.contains("bold")
@@ -109,18 +132,25 @@ pub fn font_info(bytes: &[u8]) -> Result<FontInfo, MediaError> {
         family,
         subfamily,
         style,
+        embedding_restricted,
+        licence,
     })
 }
 
 /// Trim, drop control characters, and cap the name to 64 characters.
 fn clean_name(value: &str) -> String {
+    clean_text(value, 64)
+}
+
+/// Drop control characters, trim, and cap to `max_chars` characters.
+fn clean_text(value: &str, max_chars: usize) -> String {
     value
         .chars()
         .filter(|c| !c.is_control())
         .collect::<String>()
         .trim()
         .chars()
-        .take(64)
+        .take(max_chars)
         .collect::<String>()
         .trim()
         .to_string()

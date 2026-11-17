@@ -108,6 +108,10 @@ pub struct PropertiesState {
     pub line_spacing_custom: f32,
     /// The font picker's "Add font…" entry was clicked.
     pub add_font_requested: bool,
+    /// Search text for the "On this computer" font list.
+    pub system_font_search: String,
+    /// Whether we have already asked the app for the installed font list.
+    pub system_fonts_list_requested: bool,
 
     // Button buffers
     pub button_label: String,
@@ -337,6 +341,8 @@ impl Default for PropertiesState {
             link_use_slide: false,
             line_spacing_custom: 1.0,
             add_font_requested: false,
+            system_font_search: String::new(),
+            system_fonts_list_requested: false,
             button_label: String::new(),
             button_fill: "#2F6FEB".into(),
             shape_kind: ShapeKind::Rectangle,
@@ -2730,6 +2736,8 @@ fn show_text_controls(
     font_families: &[String],
     cell: Option<(usize, usize)>,
     autofit: Option<Autofit>,
+    system_fonts: Option<&[crate::SystemFontChoice]>,
+    font_requests: &mut Vec<crate::EditorRequest>,
 ) -> Option<(&'static str, Json)> {
     let mut action_to_run = None;
     let text_edit_id = egui::Id::unique(("prop_text_body", id_prefix));
@@ -2794,6 +2802,72 @@ fn show_text_controls(
                             }),
                         ));
                         ui.close();
+                    }
+                }
+                ui.separator();
+                ui.label(
+                    RichText::new("On this computer")
+                        .size(coursecraft_render::SIZE_SMALL)
+                        .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+                );
+                match system_fonts {
+                    None => {
+                        if !props.system_fonts_list_requested {
+                            props.system_fonts_list_requested = true;
+                            font_requests.push(crate::EditorRequest::ListSystemFonts);
+                        }
+                        ui.label(
+                            RichText::new("Loading fonts…")
+                                .size(coursecraft_render::SIZE_SMALL)
+                                .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+                        );
+                    }
+                    Some([]) => {
+                        ui.label(
+                            RichText::new("Not available here")
+                                .size(coursecraft_render::SIZE_SMALL)
+                                .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+                        );
+                    }
+                    Some(choices) => {
+                        ui.add(
+                            TextEdit::singleline(&mut props.system_font_search)
+                                .hint_text("Search fonts"),
+                        );
+                        let query = props.system_font_search.to_lowercase();
+                        for choice in choices
+                            .iter()
+                            .filter(|choice| choice.name.to_lowercase().contains(&query))
+                            .filter(|choice| {
+                                !font_families
+                                    .iter()
+                                    .any(|name| name.eq_ignore_ascii_case(&choice.name))
+                            })
+                        {
+                            ui.horizontal(|ui| {
+                                if ui.selectable_label(false, &choice.name).clicked() {
+                                    font_requests.push(crate::EditorRequest::AddSystemFont {
+                                        family: choice.name.clone(),
+                                        apply: Some((
+                                            "text.style_range".to_owned(),
+                                            serde_json::json!({
+                                                "slide": slide_id,
+                                                "object": obj_id,
+                                                "start": char_range.0,
+                                                "end": char_range.1,
+                                                "font": choice.name,
+                                            }),
+                                        )),
+                                    });
+                                    ui.close();
+                                }
+                                if choice.embedding_restricted {
+                                    ui.label(RichText::new("restricted").small().color(
+                                        coursecraft_render::palette(ui.ctx()).text_secondary,
+                                    ));
+                                }
+                            });
+                        }
                     }
                 }
                 ui.separator();
@@ -3824,6 +3898,8 @@ fn show_table_controls(
     font_families: &[String],
     slides: &[(String, String)],
     actions: &mut Vec<(&'static str, Json)>,
+    system_fonts: Option<&[crate::SystemFontChoice]>,
+    font_requests: &mut Vec<crate::EditorRequest>,
 ) {
     if props.table_cell != selected_cell {
         props.table_cell = selected_cell;
@@ -3987,6 +4063,8 @@ fn show_table_controls(
             font_families,
             Some((row, column)),
             None,
+            system_fonts,
+            font_requests,
         ) {
             actions.push(action);
         }
@@ -5097,6 +5175,8 @@ fn show_object_properties(
     actions_to_run: &mut Vec<(&'static str, Json)>,
 ) {
     let mut action_to_run: Option<(&'static str, Json)> = None;
+    let mut font_requests: Vec<crate::EditorRequest> = Vec::new();
+    let system_fonts = editor.ui.system_fonts.clone();
     let mut replace_image_requested = false;
     let mut replace_audio_requested = false;
     let mut replace_video_requested = false;
@@ -5253,6 +5333,8 @@ fn show_object_properties(
                 &font_families,
                 None,
                 Some(*autofit),
+                system_fonts.as_deref(),
+                &mut font_requests,
             ) {
                 action_to_run = Some(action);
             }
@@ -5604,6 +5686,8 @@ fn show_object_properties(
                     &font_families,
                     None,
                     autofit,
+                    system_fonts.as_deref(),
+                    &mut font_requests,
                 ) {
                     action_to_run = Some(action);
                 }
@@ -6370,6 +6454,8 @@ fn show_object_properties(
                 &font_families,
                 &slides,
                 actions_to_run,
+                system_fonts.as_deref(),
+                &mut font_requests,
             );
         }
     }
@@ -6671,6 +6757,8 @@ fn show_object_properties(
         CropAction::Apply => editor.apply_crop(),
         CropAction::Cancel => editor.cancel_crop(),
     }
+
+    editor.pending_requests.append(&mut font_requests);
 
     if let Some(act) = action_to_run {
         actions_to_run.push(act);

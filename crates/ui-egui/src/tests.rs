@@ -5326,6 +5326,79 @@ fn font_picker_lists_inter_and_a_course_family() {
 }
 
 #[test]
+fn font_picker_lists_installed_family_and_adds_it() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.editor.selection.slide = "s-intro".into();
+    harness.editor.selection.object = Some("title".into());
+    harness.editor.ui.system_fonts = Some(vec![crate::SystemFontChoice {
+        name: "Georgia".into(),
+        embedding_restricted: true,
+    }]);
+    harness.idle_frame();
+
+    let picker = harness.find_text("Inter").expect("font picker");
+    let opening = click_for_requests(&mut harness, picker);
+    assert!(
+        !opening
+            .iter()
+            .any(|req| matches!(req, EditorRequest::ListSystemFonts)),
+        "the list is already known, so it must not be requested again: {opening:?}"
+    );
+
+    assert!(
+        harness.find_text("On this computer").is_some(),
+        "the picker must have an On this computer section"
+    );
+    let family = harness.find_text("Georgia").expect("installed family");
+    let requests = click_for_requests(&mut harness, family);
+    let add = requests
+        .iter()
+        .find_map(|req| match req {
+            EditorRequest::AddSystemFont { family, apply } => Some((family.clone(), apply.clone())),
+            _ => None,
+        })
+        .expect("AddSystemFont request");
+    assert_eq!(add.0, "Georgia");
+    match add.1 {
+        Some((cmd, params)) => {
+            assert_eq!(cmd, "text.style_range");
+            assert_eq!(params["slide"], "s-intro");
+            assert_eq!(params["object"], "title");
+            assert_eq!(params["font"], "Georgia");
+        }
+        None => panic!("the installed font click must carry apply params"),
+    }
+}
+
+#[test]
+fn font_picker_requests_installed_list_only_once() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.editor.selection.slide = "s-intro".into();
+    harness.editor.selection.object = Some("title".into());
+    harness.idle_frame();
+
+    let picker = harness.find_text("Inter").expect("font picker");
+    let mut requests = click_for_requests(&mut harness, picker);
+    requests.extend(harness.frame(vec![]));
+    assert!(
+        harness.find_text("Loading fonts…").is_some(),
+        "the picker must show a loading message while the list is unknown"
+    );
+    requests.extend(harness.frame(vec![]));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|req| matches!(req, EditorRequest::ListSystemFonts))
+            .count(),
+        1,
+        "the list must be requested exactly once: {requests:?}"
+    );
+    assert!(harness.editor.ui.properties.system_fonts_list_requested);
+}
+
+#[test]
 fn properties_italic_checkbox_toggles_italic_style() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
