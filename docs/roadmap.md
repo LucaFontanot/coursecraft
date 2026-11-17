@@ -215,6 +215,15 @@ Goal: things Storyline and Captivate can't do at all, built on the command engin
 - `coursecraft-cli batch` runs one script over many courses (rebrand, replace a logo, update a date, republish), with a dry run that shows the diff. Questions import from a CSV file, all or nothing, with row-numbered problems. Four agent recipes in `docs/recipes/`, checked by a test against the command list.
 - Checked: automated tests and the gate. Not tried by hand: the folder open and save dialogs, the text style and palette controls, and the CSV import menu item.
 
+## M20 Everyday authoring (release 0.2)
+
+Plan: `docs/plans/m20-everyday-authoring.md`.
+
+- Spell check as you type and across the whole course, with a personal dictionary (English to start).
+- Any font installed on the computer, copied into the course when picked, with a note when its maker restricts embedding.
+- Paste images from the clipboard, and an eyedropper in every colour picker.
+- A gallery of ready-made interactions: flip cards, hotspot reveal, process steps, timeline, reveal grid and scenario choice, all built from ordinary editable objects and triggers.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
