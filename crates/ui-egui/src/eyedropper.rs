@@ -131,18 +131,16 @@ pub(crate) fn sample_color(
 
 /// Run once per frame, before the canvas and inspector are laid out.
 ///
-/// Requests a fresh screenshot, consumes Escape and the picking click so they
-/// cannot reach the canvas, and records the sampled colour for the field's
-/// picker to apply later in the same frame.
+/// Requests a fresh screenshot and consumes Escape and primary pointer events
+/// so they cannot reach the canvas. The picking click itself is detected from
+/// the full-window blocker area's response in [`paint_overlay`], because egui
+/// decides which widget a click lands on before this function runs.
 pub(crate) fn process_frame(ctx: &Context) {
     let state = read(ctx);
     let mut next = state.clone();
     let active = state.field.clone();
-    let shot = screenshot(ctx);
-    let scale = ctx.pixels_per_point();
     let swallow = state.swallow_primary;
     let mut escape = false;
-    let mut click_pos = None;
 
     ctx.input_mut(|input| {
         input.events.retain(|event| match event {
@@ -152,15 +150,6 @@ pub(crate) fn process_frame(ctx: &Context) {
                 ..
             } if active.is_some() => {
                 escape = true;
-                false
-            }
-            Event::PointerButton {
-                pos,
-                button: PointerButton::Primary,
-                pressed: true,
-                ..
-            } if active.is_some() => {
-                click_pos = Some(*pos);
                 false
             }
             Event::PointerButton {
@@ -185,22 +174,67 @@ pub(crate) fn process_frame(ctx: &Context) {
         cancel_pick(ctx);
         return;
     }
-
-    if let (Some(pos), Some(field)) = (click_pos, active)
-        && let Some(sampled) = shot.as_ref().and_then(|img| sample_color(img, pos, scale))
-    {
-        // A picked swatch is always opaque, whatever the screenshot's alpha.
-        let color = Color32::from_rgb(sampled.r(), sampled.g(), sampled.b());
-        next.field = None;
-        next.pending = Some((field, color));
-        next.swallow_primary = 2;
-    }
     write(ctx, next);
 }
 
-/// Draw the crosshair cursor and the small swatch that follows the pointer.
-/// Called after the rest of the UI so the crosshair wins over widget cursors.
+/// Apply a pick sampled at `pos` (in egui points) to the still-active field.
+///
+/// The trailing pointer-release of a pick, or a click that arrives during the
+/// swallow period, has no active field and is ignored, so a single picking
+/// gesture produces exactly one colour change / undo step.
+fn apply_pick_at(ctx: &Context, pos: Pos2) {
+    let state = read(ctx);
+    let Some(field) = state.field.clone() else {
+        return;
+    };
+    let Some(shot) = screenshot(ctx) else {
+        return;
+    };
+    let Some(sampled) = sample_color(&shot, pos, ctx.pixels_per_point()) else {
+        return;
+    };
+    // A picked swatch is always opaque, whatever the screenshot's alpha.
+    let color = Color32::from_rgb(sampled.r(), sampled.g(), sampled.b());
+    let mut next = state;
+    next.field = None;
+    next.pending = Some((field, color));
+    next.swallow_primary = 2;
+    write(ctx, next);
+}
+
+/// Draw the crosshair cursor, the small swatch that follows the pointer, and a
+/// full-window interactive area that keeps the picking click away from every
+/// other widget. Called after the rest of the UI so the crosshair wins over
+/// widget cursors and the blocker sits above them.
 pub(crate) fn paint_overlay(ctx: &Context) {
+    if !swallows_canvas_input(ctx) {
+        return;
+    }
+
+    // egui decides which widget a click lands on at the start of the frame,
+    // from the previous pass's interactive rects. A full-window, topmost area
+    // becomes that target while picking, so toolbar buttons, menus and
+    // inspector controls never receive the picking click. It draws no fill, so
+    // the screenshot the eyedropper samples still shows the real UI.
+    let screen = ctx.content_rect();
+    if screen.is_finite() && screen.is_positive() {
+        let blocker = egui::Area::new(egui::Id::unique("coursecraft_eyedropper_blocker_v1"))
+            .order(Order::Foreground)
+            .fixed_pos(screen.min)
+            .interactable(true)
+            .show(ctx, |ui| {
+                let (_rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+                response.on_hover_cursor(egui::CursorIcon::Crosshair)
+            })
+            .inner;
+
+        if blocker.clicked()
+            && let Some(pos) = blocker.interact_pointer_pos()
+        {
+            apply_pick_at(ctx, pos);
+        }
+    }
+
     if !is_active(ctx) {
         return;
     }

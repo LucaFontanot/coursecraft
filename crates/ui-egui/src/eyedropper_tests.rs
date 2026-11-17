@@ -142,6 +142,51 @@ fn escape_cancels_pick_and_leaves_the_fill_and_selection_untouched() {
 }
 
 #[test]
+fn picking_blocks_toolbar_clicks_and_still_applies_the_colour() {
+    let mut harness = selected_shape(TestHarness::new(course_with_shape()));
+    harness.idle_frame();
+
+    // A labelled toolbar toggle with an observable effect.
+    let story = harness
+        .find_text("Story")
+        .expect("the Story toolbar toggle");
+    let story_before = harness.editor.ui.story_view;
+
+    // Start a pick and give the full-window blocker a frame to register.
+    eyedropper::start_pick(&harness.ctx, eyedropper::field_key(&"prop_shape_fill"));
+    eyedropper::store_screenshot(&harness.ctx, uniform_screenshot());
+    harness.idle_frame();
+    assert!(eyedropper::is_active(&harness.ctx));
+
+    // A click on the toolbar button while picking must not press that button ...
+    harness.click_at(story);
+    harness.idle_frame();
+    assert_eq!(harness.editor.ui.story_view, story_before);
+
+    // ... but it still picks the colour sampled from the screenshot.
+    assert!(!eyedropper::is_active(&harness.ctx));
+    assert_eq!(shape_fill(&harness), "#123456");
+
+    // Escape still cancels a fresh pick while the blocker is up.
+    let fill_before = shape_fill(&harness);
+    let rev_before = harness.editor.session.revision;
+    eyedropper::start_pick(&harness.ctx, eyedropper::field_key(&"prop_shape_fill"));
+    eyedropper::store_screenshot(&harness.ctx, uniform_screenshot());
+    harness.idle_frame();
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(!eyedropper::is_active(&harness.ctx));
+    assert_eq!(shape_fill(&harness), fill_before);
+    assert_eq!(harness.editor.session.revision, rev_before);
+
+    // Once pick mode ends the very same button works again, so the earlier
+    // non-trigger was the blocker, not a mis-aimed click.
+    harness.click_at(story);
+    harness.idle_frame();
+    assert_eq!(harness.editor.ui.story_view, !story_before);
+}
+
+#[test]
 fn eyedropper_button_in_the_popup_starts_pick_mode_for_that_field() {
     let course = Course::from_json(include_str!("../../../examples/hello-course/course.json"))
         .expect("course");
