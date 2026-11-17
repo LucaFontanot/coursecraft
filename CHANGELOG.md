@@ -2,13 +2,15 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
-## Unreleased
+## 0.2.0
 
-- Use any font installed on your computer: the font picker lists them under "On this computer", and picking one copies it into the course so it publishes with it. Fonts whose maker restricts embedding show a note, and the Fonts window shows each font's licence text.
-- Paste a screenshot from the system clipboard with Cmd/Ctrl+V: it lands in the middle of the slide, shrinks to fit if it is larger, and is selected, so one undo removes it. Copy and paste of text and objects now reaches other apps on the desktop too.
-- Every colour picker has an Eyedropper button: it turns the cursor into a crosshair, shows a small swatch with the colour under the pointer, and clicking applies that colour in one undo step. Press Esc to cancel without changing anything.
-- Misspelled words get a red wavy underline while editing. Right-click one for suggestions, "Add to Dictionary" or "Ignore". Edit ▸ Check Spelling (F7) walks every string in the course with Change, Change All, Ignore and Add to Dictionary; added words are remembered in Preferences.
-- Insert ▸ Interaction opens a gallery of ready-made, editable interactions. Alongside tabs, accordion, markers, scrolling panels, timers and progress meters, there are flip cards that turn over when clicked, hotspots that reveal one callout at a time, process steps driven by buttons and a variable, timelines whose dated points remember a visit, a reveal grid whose tiles count towards a total, and scenario choices that show feedback without scoring.
+Everyday authoring: fonts, pictures, colours, spelling and ready-made interactions.
+
+- **Your own fonts:** use any font installed on your computer. It is copied into the course so it publishes with it, with a note when the font's maker restricts embedding.
+- **Paste pictures:** Cmd/Ctrl+V pastes a screenshot straight onto the slide. Copy and paste now also works with other apps.
+- **Eyedropper:** pick any colour from the screen in every colour picker.
+- **Spell check:** misspelled words are underlined as you type, with suggestions on right-click. Edit ▸ Check Spelling (F7) checks the whole course, and words you add are remembered.
+- **Interactions gallery:** Insert ▸ Interaction shows ready-made, editable interactions, including six new ones: flip cards, hotspot reveal, process steps, timeline, reveal grid and scenario choice.
 
 ## 0.1.2
 
