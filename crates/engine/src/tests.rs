@@ -6595,6 +6595,219 @@ fn interaction_insert_tabs_is_one_undo_step() {
     );
 }
 
+fn assert_unique_and_valid(s: &Session, all: &[String]) {
+    let unique: std::collections::BTreeSet<&str> = all.iter().map(String::as_str).collect();
+    assert_eq!(unique.len(), all.len(), "inserted ids must be unique");
+    assert!(
+        s.course
+            .validate()
+            .into_iter()
+            .all(|issue| issue.severity != coursecraft_course::Severity::Error),
+        "the course must stay valid after an insertion"
+    );
+}
+
+#[test]
+fn interaction_insert_flip_cards_builds_toggleable_states() {
+    let mut s = Session::blank("Flip");
+    let before = serde_json::to_value(&s.course).expect("course json");
+    let result = ok(
+        &mut s,
+        "interaction.insert",
+        json!({ "slide": "slide1", "kind": "flip_cards" }),
+    );
+    assert_eq!(result["objects"].as_array().map(Vec::len), Some(3));
+    assert_eq!(result["layers"].as_array().map(Vec::len), Some(0));
+    assert_eq!(result["variables"].as_array().map(Vec::len), Some(3));
+    let all: Vec<String> = result["all_objects"]
+        .as_array()
+        .expect("all_objects")
+        .iter()
+        .filter_map(Json::as_str)
+        .map(str::to_owned)
+        .collect();
+    assert_unique_and_valid(&s, &all);
+
+    let slide = s.course.slide("slide1").expect("slide");
+    assert_eq!(slide.objects.len(), 3);
+    for (i, object) in slide.objects.iter().enumerate() {
+        assert_eq!(object.name, format!("Card {}", i + 1));
+        assert!(
+            object.states.iter().any(|state| state.name == "Back"),
+            "each card has a back state"
+        );
+    }
+    let toggles = slide
+        .triggers
+        .iter()
+        .filter(|t| {
+            matches!(
+                &t.action,
+                coursecraft_course::Action::SetVariable {
+                    op: coursecraft_course::VarOp::Toggle,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(toggles, 3, "one toggle per card");
+    assert_eq!(
+        slide.triggers.len(),
+        9,
+        "toggle plus two state triggers per card"
+    );
+    assert_eq!(s.course.variables.len(), 3);
+
+    ok(&mut s, "edit.undo", json!({}));
+    let after = serde_json::to_value(&s.course).expect("course json");
+    assert_eq!(
+        after, before,
+        "undo restores the whole insertion in one step"
+    );
+}
+
+#[test]
+fn interaction_insert_hotspot_reveal_builds_markers_and_callout_layers() {
+    let mut s = Session::blank("Hotspots");
+    let before = serde_json::to_value(&s.course).expect("course json");
+    let result = ok(
+        &mut s,
+        "interaction.insert",
+        json!({ "slide": "slide1", "kind": "hotspot_reveal" }),
+    );
+    assert_eq!(result["objects"].as_array().map(Vec::len), Some(4));
+    assert_eq!(result["layers"].as_array().map(Vec::len), Some(3));
+    assert_eq!(result["variables"].as_array().map(Vec::len), Some(0));
+    let all: Vec<String> = result["all_objects"]
+        .as_array()
+        .expect("all_objects")
+        .iter()
+        .filter_map(Json::as_str)
+        .map(str::to_owned)
+        .collect();
+    assert_unique_and_valid(&s, &all);
+
+    let slide = s.course.slide("slide1").expect("slide");
+    assert_eq!(slide.layers.len(), 3);
+    assert!(
+        slide
+            .objects
+            .iter()
+            .any(|o| o.name == "Picture placeholder")
+    );
+    for i in 1..=3 {
+        let marker = slide
+            .objects
+            .iter()
+            .find(|o| o.name == format!("Hotspot {i} marker"))
+            .expect("marker");
+        assert!(marker.states.iter().any(|st| st.name == "Visited"));
+        let layer = slide
+            .layers
+            .iter()
+            .find(|l| l.name == format!("Hotspot {i}"))
+            .expect("callout layer");
+        assert_eq!(layer.objects.len(), 4, "panel, title, detail and close");
+        assert!(
+            layer
+                .objects
+                .iter()
+                .any(|o| o.name == format!("Close hotspot {i}"))
+        );
+        assert!(
+            layer.triggers.iter().any(|t| matches!(
+                &t.action,
+                coursecraft_course::Action::HideLayer { layer: None }
+            )),
+            "the close button hides its own layer"
+        );
+        assert!(
+            slide.triggers.iter().any(|t| matches!(
+                &t.action,
+                coursecraft_course::Action::ShowLayer { layer: target } if target == &layer.id
+            )),
+            "clicking the marker shows its layer"
+        );
+    }
+
+    ok(&mut s, "edit.undo", json!({}));
+    let after = serde_json::to_value(&s.course).expect("course json");
+    assert_eq!(
+        after, before,
+        "undo restores the whole insertion in one step"
+    );
+}
+
+#[test]
+fn interaction_insert_process_steps_builds_variable_driven_layers() {
+    let mut s = Session::blank("Steps");
+    let before = serde_json::to_value(&s.course).expect("course json");
+    let result = ok(
+        &mut s,
+        "interaction.insert",
+        json!({ "slide": "slide1", "kind": "process_steps" }),
+    );
+    assert_eq!(result["objects"].as_array().map(Vec::len), Some(13));
+    assert_eq!(result["layers"].as_array().map(Vec::len), Some(4));
+    assert_eq!(result["variables"].as_array().map(Vec::len), Some(1));
+    let all: Vec<String> = result["all_objects"]
+        .as_array()
+        .expect("all_objects")
+        .iter()
+        .filter_map(Json::as_str)
+        .map(str::to_owned)
+        .collect();
+    assert_unique_and_valid(&s, &all);
+
+    let variable = result["variables"][0].as_str().expect("step variable name");
+    assert!(variable.contains("_step"), "variable name carries _step");
+    assert_eq!(
+        s.course.variable(variable).map(|v| v.value.clone()),
+        Some(coursecraft_course::Value::Number(1.0)),
+        "the step variable starts at 1"
+    );
+    let slide = s.course.slide("slide1").expect("slide");
+    for i in 1..=4 {
+        let circle = slide
+            .objects
+            .iter()
+            .find(|o| o.name == format!("Step {i} circle"))
+            .expect("step circle");
+        assert!(circle.states.iter().any(|st| st.name == "Selected"));
+        assert!(slide.layers.iter().any(|l| l.name == format!("Step {i}")));
+    }
+    let variable_changes = slide
+        .triggers
+        .iter()
+        .filter(|t| {
+            matches!(
+                &t.when,
+                coursecraft_course::Event::VariableChanges { variable: v } if v == variable
+            )
+        })
+        .count();
+    assert_eq!(
+        variable_changes, 20,
+        "five triggers per step drive the display"
+    );
+    assert!(
+        slide.triggers.iter().any(|t| {
+            matches!(
+                &t.when,
+                coursecraft_course::Event::TimelineStarts { layer: None }
+            ) && matches!(&t.action, coursecraft_course::Action::ShowLayer { .. })
+        }),
+        "step 1 is shown on slide start"
+    );
+
+    ok(&mut s, "edit.undo", json!({}));
+    let after = serde_json::to_value(&s.course).expect("course json");
+    assert_eq!(
+        after, before,
+        "undo restores the whole insertion in one step"
+    );
+}
+
 #[test]
 fn object_set_drag_sets_clears_and_undoes_in_one_step() {
     let mut s = Session::blank("Drag");

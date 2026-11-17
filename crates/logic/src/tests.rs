@@ -9319,6 +9319,312 @@ fn open_resource_emits_open_url_for_links_and_package_paths_for_files() {
     })));
 }
 
+// ---------------------------------------------------------------- inserted interactions
+
+/// Build a one-slide course from the same object, state, layer, variable and
+/// trigger shapes `interaction.insert` writes. `coursecraft-logic` cannot depend
+/// on the engine, so the play-through tests describe the runtime contract here.
+fn interaction_course(slide: serde_json::Value, variables: serde_json::Value) -> Course {
+    let course = serde_json::json!({
+        "schema_version": 1,
+        "id": "interaction-test",
+        "title": "Interaction",
+        "slide_size": { "w": 1280, "h": 720 },
+        "variables": variables,
+        "scenes": [{
+            "id": "main",
+            "title": "Main",
+            "slides": [slide]
+        }]
+    });
+    let text = serde_json::to_string(&course).expect("course json");
+    Course::from_json(&text).expect("valid course")
+}
+
+#[test]
+fn flip_cards_toggle_between_front_and_back_on_click() {
+    let mut triggers = Vec::new();
+    for i in 1..=3 {
+        let card = format!("card{i}");
+        let variable = format!("flip{i}");
+        triggers.push(serde_json::json!({
+            "action": { "action": "set_variable", "variable": variable, "op": "toggle" },
+            "when": { "event": "click", "object": card }
+        }));
+        for (value, state) in [(true, "Back"), (false, "normal")] {
+            triggers.push(serde_json::json!({
+                "action": { "action": "change_state", "object": card, "state": state },
+                "when": { "event": "variable_changes", "variable": variable },
+                "condition": { "compare": { "variable": variable, "op": "eq", "value": value } }
+            }));
+        }
+    }
+    let objects: Vec<_> = (1..=3)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("card{i}"),
+                "name": format!("Card {i}"),
+                "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#3366CC" },
+                "frame": { "x": 60 + (i - 1) * 400, "y": 200, "w": 360, "h": 300 },
+                "states": [{ "name": "Back", "text": "Add the detail here." }]
+            })
+        })
+        .collect();
+    let slide = serde_json::json!({
+        "id": "s1",
+        "title": "Cards",
+        "objects": objects,
+        "triggers": triggers
+    });
+    let course = interaction_course(
+        slide,
+        serde_json::json!([
+            { "name": "flip1", "value": false },
+            { "name": "flip2", "value": false },
+            { "name": "flip3", "value": false }
+        ]),
+    );
+    let mut p = Player::new(&course).expect("player");
+    p.handle(&Input::Start);
+
+    assert_eq!(p.object_state("card2"), Some("normal"));
+    p.handle(&click("card2"));
+    assert_eq!(p.object_state("card2"), Some("Back"), "the card turns over");
+    p.handle(&click("card2"));
+    assert_eq!(
+        p.object_state("card2"),
+        Some("normal"),
+        "it flips back again"
+    );
+    assert_eq!(
+        p.object_state("card1"),
+        Some("normal"),
+        "other cards are untouched"
+    );
+}
+
+#[test]
+fn hotspot_reveal_shows_one_callout_and_its_close_button_hides_it() {
+    let mut objects = vec![serde_json::json!({
+        "id": "pic",
+        "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#EEEEEE" },
+        "frame": { "x": 80, "y": 100, "w": 1120, "h": 520 }
+    })];
+    for i in 1..=3 {
+        objects.push(serde_json::json!({
+            "id": format!("m{i}"),
+            "name": format!("Hotspot {i} marker"),
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#3366CC" },
+            "frame": { "x": 200 + i * 260, "y": 260, "w": 48, "h": 48 },
+            "states": [{ "name": "Visited", "fill": "#224488" }]
+        }));
+    }
+    let layers = (1..=3)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("h{i}"),
+                "name": format!("Hotspot {i}"),
+                "hide_other_layers": true,
+                "objects": [{
+                    "id": format!("c{i}"),
+                    "name": format!("Close hotspot {i}"),
+                    "kind": { "type": "button", "label": "×" },
+                    "frame": { "x": 900, "y": 160, "w": 40, "h": 40 }
+                }],
+                "triggers": [{
+                    "action": { "action": "hide_layer" },
+                    "when": { "event": "click", "object": format!("c{i}") }
+                }]
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut triggers = Vec::new();
+    for i in 1..=3 {
+        let marker = format!("m{i}");
+        triggers.push(serde_json::json!({
+            "action": { "action": "show_layer", "layer": format!("h{i}") },
+            "when": { "event": "click", "object": marker }
+        }));
+        triggers.push(serde_json::json!({
+            "action": { "action": "change_state", "object": marker, "state": "Visited" },
+            "when": { "event": "click", "object": marker }
+        }));
+    }
+    let course = interaction_course(
+        serde_json::json!({
+            "id": "s1",
+            "title": "Hotspots",
+            "objects": objects,
+            "layers": layers,
+            "triggers": triggers
+        }),
+        serde_json::json!([]),
+    );
+    let mut p = Player::new(&course).expect("player");
+    p.handle(&Input::Start);
+    assert!(p.state().visible_layers.is_empty());
+
+    p.handle(&click("m2"));
+    assert_eq!(
+        p.state().visible_layers,
+        vec!["h2"],
+        "only callout 2 is visible"
+    );
+    assert_eq!(
+        p.object_state("m2"),
+        Some("Visited"),
+        "the marker remembers the visit"
+    );
+
+    p.handle(&click("c2"));
+    assert!(
+        p.state().visible_layers.is_empty(),
+        "the close button hides the callout"
+    );
+}
+
+#[test]
+fn process_steps_share_one_variable_for_clicks_and_buttons() {
+    let variable = "process_step1";
+    let mut objects: Vec<_> = (1..=4)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("c{i}"),
+                "name": format!("Step {i} circle"),
+                "kind": { "type": "button", "label": format!("{i}") },
+                "frame": { "x": 100 + (i - 1) * 260, "y": 140, "w": 60, "h": 60 },
+                "states": [{ "name": "Selected", "fill": "#3366CC" }]
+            })
+        })
+        .collect();
+    objects.push(serde_json::json!({
+        "id": "back", "name": "Back",
+        "kind": { "type": "button", "label": "Back" },
+        "frame": { "x": 100, "y": 600, "w": 120, "h": 48 }
+    }));
+    objects.push(serde_json::json!({
+        "id": "next", "name": "Next",
+        "kind": { "type": "button", "label": "Next" },
+        "frame": { "x": 1060, "y": 600, "w": 120, "h": 48 }
+    }));
+    let layers: Vec<_> = (1..=4)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("p{i}"),
+                "name": format!("Step {i}"),
+                "hide_other_layers": true,
+                "objects": [{
+                    "id": format!("panel{i}"),
+                    "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#EEEEEE" },
+                    "frame": { "x": 100, "y": 240, "w": 1080, "h": 300 }
+                }]
+            })
+        })
+        .collect();
+    let mut triggers = Vec::new();
+    for i in 1..=4 {
+        triggers.push(serde_json::json!({
+            "action": { "action": "set_variable", "variable": variable, "op": "assign", "value": i },
+            "when": { "event": "click", "object": format!("c{i}") }
+        }));
+    }
+    triggers.push(serde_json::json!({
+        "action": { "action": "set_variable", "variable": variable, "op": "add", "value": 1 },
+        "when": { "event": "click", "object": "next" },
+        "condition": { "compare": { "variable": variable, "op": "lt", "value": 4 } }
+    }));
+    triggers.push(serde_json::json!({
+        "action": { "action": "set_variable", "variable": variable, "op": "subtract", "value": 1 },
+        "when": { "event": "click", "object": "back" },
+        "condition": { "compare": { "variable": variable, "op": "gt", "value": 1 } }
+    }));
+    for i in 1..=4 {
+        let condition = serde_json::json!({
+            "compare": { "variable": variable, "op": "eq", "value": i }
+        });
+        triggers.push(serde_json::json!({
+            "action": { "action": "show_layer", "layer": format!("p{i}") },
+            "when": { "event": "variable_changes", "variable": variable },
+            "condition": condition
+        }));
+        for j in 1..=4 {
+            triggers.push(serde_json::json!({
+                "action": {
+                    "action": "change_state",
+                    "object": format!("c{j}"),
+                    "state": if i == j { "Selected" } else { "normal" }
+                },
+                "when": { "event": "variable_changes", "variable": variable },
+                "condition": { "compare": { "variable": variable, "op": "eq", "value": i } }
+            }));
+        }
+    }
+    triggers.push(serde_json::json!({
+        "action": { "action": "show_layer", "layer": "p1" },
+        "when": { "event": "timeline_starts" }
+    }));
+    triggers.push(serde_json::json!({
+        "action": { "action": "change_state", "object": "c1", "state": "Selected" },
+        "when": { "event": "timeline_starts" }
+    }));
+    let course = interaction_course(
+        serde_json::json!({
+            "id": "s1",
+            "title": "Steps",
+            "objects": objects,
+            "layers": layers,
+            "triggers": triggers
+        }),
+        serde_json::json!([{ "name": variable, "value": 1 }]),
+    );
+    let mut p = Player::new(&course).expect("player");
+    p.handle(&Input::Start);
+    assert_eq!(
+        p.state().visible_layers,
+        vec!["p1"],
+        "step 1 opens on start"
+    );
+    assert_eq!(p.object_state("c1"), Some("Selected"));
+
+    p.handle(&click("next"));
+    assert_eq!(p.variable(variable), Some(&Value::Number(2.0)));
+    assert_eq!(p.state().visible_layers, vec!["p2"]);
+    assert_eq!(
+        p.object_state("c2"),
+        Some("Selected"),
+        "circle 2 is highlighted"
+    );
+    assert_eq!(p.object_state("c1"), Some("normal"));
+
+    p.handle(&click("c4"));
+    assert_eq!(
+        p.state().visible_layers,
+        vec!["p4"],
+        "clicking circle 4 jumps there"
+    );
+    assert_eq!(p.object_state("c4"), Some("Selected"));
+
+    p.handle(&click("next"));
+    assert_eq!(
+        p.variable(variable),
+        Some(&Value::Number(4.0)),
+        "Next stops at 4"
+    );
+    assert_eq!(p.state().visible_layers, vec!["p4"]);
+
+    for _ in 0..3 {
+        p.handle(&click("back"));
+    }
+    assert_eq!(p.variable(variable), Some(&Value::Number(1.0)));
+    p.handle(&click("back"));
+    assert_eq!(
+        p.variable(variable),
+        Some(&Value::Number(1.0)),
+        "Back stops at 1"
+    );
+    assert_eq!(p.state().visible_layers, vec!["p1"]);
+}
+
 #[test]
 fn a_slide_override_hiding_nav_blocks_next_on_that_slide_only() {
     let mut course = nav_course(serde_json::json!({}));

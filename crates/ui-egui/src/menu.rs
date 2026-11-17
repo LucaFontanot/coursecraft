@@ -1675,32 +1675,10 @@ fn render_extra_category_items(
                 ui.close();
             }
         });
-        ui.menu_button("Interaction", |ui| {
-            if ui.button("Marker").clicked() {
-                crate::interaction_insert::insert_marker(editor);
-                ui.close();
-            }
-            if ui.button("Scrolling panel").clicked() {
-                crate::interaction_insert::insert_scroll_panel(editor);
-                ui.close();
-            }
-            if ui.button("Timer").clicked() {
-                crate::interaction_insert::insert_timer(editor);
-                ui.close();
-            }
-            if ui.button("Progress meter").clicked() {
-                crate::interaction_insert::insert_progress_meter(editor);
-                ui.close();
-            }
-            if ui.button("Tabs").clicked() {
-                crate::interaction_insert::insert_tabs(editor);
-                ui.close();
-            }
-            if ui.button("Accordion").clicked() {
-                crate::interaction_insert::insert_accordion(editor);
-                ui.close();
-            }
-        });
+        if ui.button("Interaction…").clicked() {
+            editor.ui.show_interaction_gallery = true;
+            ui.close();
+        }
         if ui.button("Web object…").clicked() {
             editor.ui.web_error = None;
             editor.ui.show_web_window = true;

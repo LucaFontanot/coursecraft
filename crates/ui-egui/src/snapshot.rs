@@ -198,6 +198,9 @@ pub const WINDOWS: &[WindowSpec] = &[
     window!("shape-gallery", "Shapes", |e| {
         e.ui.show_shape_gallery_window = true;
     }),
+    window!("interaction-gallery", "Insert Interaction", |e| {
+        e.ui.show_interaction_gallery = true;
+    }),
     window!("web", "Insert Web Object", |e| e.ui.show_web_window = true),
     window!("outline", "Slides from Outline", |e| e
         .open_outline_dialog()),

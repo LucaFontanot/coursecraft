@@ -152,7 +152,7 @@ pub fn insert_accordion(editor: &mut Editor) -> Option<Vec<String>> {
     insert_interaction(editor, "accordion")
 }
 
-fn insert_interaction(editor: &mut Editor, kind: &str) -> Option<Vec<String>> {
+pub(crate) fn insert_interaction(editor: &mut Editor, kind: &str) -> Option<Vec<String>> {
     if editor.ui.master_view {
         editor.set_status("Not available in Master View");
         return None;

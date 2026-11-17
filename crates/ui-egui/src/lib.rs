@@ -35,6 +35,7 @@ pub mod find;
 pub mod fonts;
 pub mod format_painter;
 pub mod input_insert;
+pub mod interaction_gallery;
 pub mod interaction_insert;
 pub mod layers;
 pub mod media_library;
@@ -128,6 +129,10 @@ pub use export_dialog::{
 };
 pub use input_insert::{
     insert_checkbox, insert_dial, insert_radio_group, insert_slider, insert_text_entry,
+};
+pub use interaction_gallery::{
+    GALLERY_WIDTH as INTERACTION_GALLERY_WIDTH, show_interaction_gallery,
+    show_interaction_gallery_window,
 };
 pub use interaction_insert::{insert_marker, insert_scroll_panel};
 pub use layers::{
@@ -667,6 +672,10 @@ pub struct UiState {
     pub shape_gallery_search_rect: Option<egui::Rect>,
     /// The Insert menu's floating shape gallery.
     pub show_shape_gallery_window: bool,
+    /// The Insert ▸ Interaction gallery window.
+    pub show_interaction_gallery: bool,
+    /// Card rects painted by the last open interaction gallery (test hook).
+    pub interaction_gallery_rects: Vec<(&'static str, egui::Rect)>,
     /// Insert ▸ Web object window and its URL field.
     pub show_web_window: bool,
     pub web_url: String,
@@ -1000,6 +1009,8 @@ impl Editor {
                 shape_gallery_draw_rects: Vec::new(),
                 shape_gallery_search_rect: None,
                 show_shape_gallery_window: false,
+                show_interaction_gallery: false,
+                interaction_gallery_rects: Vec::new(),
                 show_web_window: false,
                 web_url: String::new(),
                 web_error: None,
@@ -1256,6 +1267,8 @@ impl Editor {
         self.ui.shape_gallery_rects.clear();
         self.ui.shape_gallery_search_rect = None;
         self.ui.show_shape_gallery_window = false;
+        self.ui.show_interaction_gallery = false;
+        self.ui.interaction_gallery_rects.clear();
         self.ui.show_web_window = false;
         self.ui.web_error = None;
         self.ui.canvas_drag = None;
@@ -3374,6 +3387,9 @@ impl Editor {
 
         // Insert menu's shape gallery (search needs a real text field).
         shape_gallery::show_shape_gallery_window(self, ui.ctx());
+
+        // Insert ▸ Interaction gallery.
+        interaction_gallery::show_interaction_gallery_window(self, ui.ctx());
 
         // Insert ▸ Web object dialog.
         web_insert::show_web_insert_window(self, ui.ctx(), &mut requests);

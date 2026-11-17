@@ -15985,6 +15985,201 @@ fn recent_colors_are_newest_first_unique_and_capped_at_eight() {
 }
 
 #[test]
+fn interaction_gallery_opens_from_the_insert_menu_and_lists_every_card() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.editor.selection.slide = "s-intro".into();
+    harness.idle_frame();
+
+    let insert = harness.find_text("Insert").expect("Insert menu");
+    harness.click_at(insert);
+    harness.idle_frame();
+    let item = harness
+        .find_text("Interaction…")
+        .expect("Interaction… menu item");
+    harness.click_at(item);
+    harness.idle_frame();
+
+    assert!(harness.editor.ui.show_interaction_gallery);
+    let ids: Vec<&str> = harness
+        .editor
+        .ui
+        .interaction_gallery_rects
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            "tabs",
+            "accordion",
+            "marker",
+            "scroll_panel",
+            "timer",
+            "progress",
+            "flip_cards",
+            "hotspot_reveal",
+            "process_steps",
+        ],
+        "all nine interactions are in the gallery"
+    );
+    for name in [
+        "Tabs",
+        "Accordion",
+        "Marker",
+        "Scrolling panel",
+        "Timer",
+        "Progress meter",
+        "Flip cards",
+        "Hotspot reveal",
+        "Process steps",
+    ] {
+        assert!(
+            harness.find_text(name).is_some(),
+            "{name} is painted on its card"
+        );
+    }
+}
+
+#[test]
+fn inserted_interactions_play_the_way_they_are_described() {
+    use coursecraft_logic::{Input, Player};
+
+    fn id_named(course: &coursecraft_course::Course, name: &str) -> String {
+        course
+            .slide("slide1")
+            .and_then(|slide| {
+                slide
+                    .objects
+                    .iter()
+                    .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
+                    .find(|object| object.name == name)
+                    .map(|object| object.id.clone())
+            })
+            .unwrap_or_else(|| panic!("no object named {name}"))
+    }
+
+    let click = |o: &str| Input::Click { object: o.into() };
+
+    // Flip cards: the second card turns over, then back.
+    let mut session = coursecraft_engine::Session::blank("Flip");
+    session
+        .execute(
+            "interaction.insert",
+            &serde_json::json!({ "slide": "slide1", "kind": "flip_cards" }),
+        )
+        .expect("insert flip cards");
+    let card = id_named(&session.course, "Card 2");
+    let mut player = Player::new(&session.course).expect("player");
+    player.handle(&Input::Start);
+    assert_eq!(player.object_state(&card), Some("normal"));
+    player.handle(&click(&card));
+    assert_eq!(player.object_state(&card), Some("Back"));
+    player.handle(&click(&card));
+    assert_eq!(player.object_state(&card), Some("normal"));
+
+    // Hotspots: marker 2 opens callout 2 alone; its close button hides it.
+    let mut session = coursecraft_engine::Session::blank("Hotspots");
+    session
+        .execute(
+            "interaction.insert",
+            &serde_json::json!({ "slide": "slide1", "kind": "hotspot_reveal" }),
+        )
+        .expect("insert hotspots");
+    let marker = id_named(&session.course, "Hotspot 2 marker");
+    let close = id_named(&session.course, "Close hotspot 2");
+    let mut player = Player::new(&session.course).expect("player");
+    player.handle(&Input::Start);
+    player.handle(&click(&marker));
+    assert_eq!(player.state().visible_layers.len(), 1);
+    assert!(
+        player
+            .current_slide()
+            .and_then(|slide| slide.layer(&player.state().visible_layers[0]))
+            .is_some_and(|layer| layer.name == "Hotspot 2")
+    );
+    player.handle(&click(&close));
+    assert!(player.state().visible_layers.is_empty());
+
+    // Process steps: buttons and circle clicks share the one variable.
+    let mut session = coursecraft_engine::Session::blank("Steps");
+    let result = session
+        .execute(
+            "interaction.insert",
+            &serde_json::json!({ "slide": "slide1", "kind": "process_steps" }),
+        )
+        .expect("insert steps");
+    let variable = result["variables"][0]
+        .as_str()
+        .expect("step variable")
+        .to_owned();
+    let circle4 = id_named(&session.course, "Step 4 circle");
+    let next = id_named(&session.course, "Next");
+    let back = id_named(&session.course, "Back");
+    let mut player = Player::new(&session.course).expect("player");
+    player.handle(&Input::Start);
+    assert_eq!(player.state().visible_layers.len(), 1);
+    player.handle(&click(&next));
+    assert_eq!(
+        player.variable(&variable),
+        Some(&coursecraft_course::Value::Number(2.0))
+    );
+    player.handle(&click(&circle4));
+    assert_eq!(player.state().visible_layers.len(), 1);
+    assert_eq!(player.object_state(&circle4), Some("Selected"));
+    for _ in 0..3 {
+        player.handle(&click(&next));
+    }
+    assert_eq!(
+        player.variable(&variable),
+        Some(&coursecraft_course::Value::Number(4.0)),
+        "Next stops at 4"
+    );
+    for _ in 0..5 {
+        player.handle(&click(&back));
+    }
+    assert_eq!(
+        player.variable(&variable),
+        Some(&coursecraft_course::Value::Number(1.0)),
+        "Back stops at 1"
+    );
+}
+
+#[test]
+fn interaction_gallery_flip_cards_pick_inserts_and_closes() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.editor.selection.slide = "s-intro".into();
+    harness.editor.ui.show_interaction_gallery = true;
+    harness.idle_frame();
+
+    let card = harness.find_text("Flip cards").expect("Flip cards card");
+    harness.click_at(card);
+    harness.idle_frame();
+
+    assert!(
+        !harness.editor.ui.show_interaction_gallery,
+        "picking a card closes the gallery"
+    );
+    let slide = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .expect("slide");
+    assert_eq!(
+        slide
+            .objects
+            .iter()
+            .filter(|o| o.name.starts_with("Card "))
+            .count(),
+        3,
+        "three cards were inserted"
+    );
+    assert_eq!(harness.editor.selection.ids().len(), 3);
+}
+
+#[test]
 fn record_narration_opens_from_the_insert_menu() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);

@@ -10,7 +10,7 @@ use coursecraft_course::{
     QuestionKind, QuizSettings, RadioOption, Rect, RevisitMode, Scene, Scoring, SeekMode, Shadow,
     ShapeKind, ShapeText, Size, Slide, SlideTarget, StateDef, TableBorders, TableCell, TableRow,
     TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition, Trigger, Trim, VAlign, Value,
-    VariableDef, WebSource, align_paragraphs, apply_link_to_range, apply_style_to_range,
+    VarOp, VariableDef, WebSource, align_paragraphs, apply_link_to_range, apply_style_to_range,
     apply_text_edit, course_strings, find_in_course, is_valid_link_url, normalize_table_fractions,
     paragraphs_for, parse_color, relative_luminance, replace_in_target, string_mut,
     table_cell_owners,
@@ -1247,7 +1247,7 @@ static REGISTRY: &[Command] = &[
         label: "Interaction",
         menu: "",
         shortcut: None,
-        params: r#"{"slide": id, "kind": "tabs"|"accordion"}"#,
+        params: r#"{"slide": id, "kind": "tabs"|"accordion"|"flip_cards"|"hotspot_reveal"|"process_steps"}"#,
         mutates: true,
         run: interaction_insert,
     },
@@ -8902,6 +8902,198 @@ fn interaction_trigger(action: Action, when: Event) -> Trigger {
     }
 }
 
+/// A trigger that only fires when `condition` holds.
+fn interaction_conditional_trigger(action: Action, when: Event, condition: Condition) -> Trigger {
+    Trigger {
+        action,
+        when,
+        condition: Some(condition),
+        disabled: false,
+    }
+}
+
+/// A shape with optional centred text and a caller-supplied set of states.
+#[allow(clippy::too_many_arguments)]
+fn interaction_shape(
+    id: String,
+    name: String,
+    shape: ShapeKind,
+    fill: Color,
+    outline: Option<Outline>,
+    text: Option<(String, f32, bool)>,
+    states: Vec<StateDef>,
+    frame: Rect,
+    theme: &Theme,
+) -> Object {
+    Object {
+        id,
+        name,
+        kind: ObjectKind::Shape {
+            shape,
+            fill,
+            fill_style: None,
+            outline,
+            text: text.map(|(text, size, bold)| ShapeText {
+                text,
+                style: TextStyle {
+                    font: theme.font.clone(),
+                    size,
+                    color: theme.text.clone(),
+                    bold,
+                    align: Align::Center,
+                    valign: VAlign::Middle,
+                    ..TextStyle::default()
+                },
+                runs: Vec::new(),
+                paragraphs: Vec::new(),
+                autofit: Autofit::None,
+            }),
+            adjust: Vec::new(),
+        },
+        frame,
+        timing: Timing::default(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        states,
+        initial_state: "normal".into(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: None,
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+    }
+}
+
+/// A button with no selected state, so a click never leaves it highlighted.
+fn interaction_plain_button(
+    id: String,
+    name: String,
+    label: String,
+    frame: Rect,
+    theme: &Theme,
+) -> Object {
+    Object {
+        id,
+        name,
+        kind: ObjectKind::Button {
+            label,
+            fill: theme.accent.clone(),
+            fill_style: None,
+        },
+        frame,
+        timing: Timing::default(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        states: Vec::new(),
+        initial_state: "normal".into(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: None,
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+    }
+}
+
+/// A callout panel with a title and one line of short, replaceable detail.
+fn interaction_panel_objects(
+    slide: &Slide,
+    prefix: &str,
+    label: &str,
+    frame: Rect,
+    theme: &Theme,
+) -> Vec<Object> {
+    let panel_id = fresh_id(prefix, slide.local_ids());
+    let title_id = fresh_id(&format!("{prefix}_title"), slide.local_ids());
+    let detail_id = fresh_id(&format!("{prefix}_detail"), slide.local_ids());
+    let panel = interaction_shape(
+        panel_id,
+        format!("{label} panel"),
+        ShapeKind::RoundedRectangle,
+        tint(theme.accent.clone(), 0x22),
+        Some(Outline {
+            color: theme.accent.clone(),
+            width: 2.0,
+            dash: DashStyle::Solid,
+        }),
+        None,
+        Vec::new(),
+        frame,
+        theme,
+    );
+    let mut title = interaction_text(
+        title_id,
+        format!("{label} title"),
+        label.to_owned(),
+        Rect {
+            x: frame.x + 16.0,
+            y: frame.y + 10.0,
+            w: (frame.w - 32.0).max(20.0),
+            h: 36.0,
+        },
+        theme,
+    );
+    if let ObjectKind::Text { style, .. } = &mut title.kind {
+        style.size = 26.0;
+        style.bold = true;
+    }
+    let mut detail = interaction_text(
+        detail_id,
+        format!("{label} detail"),
+        "Add the detail here.".to_owned(),
+        Rect {
+            x: frame.x + 16.0,
+            y: frame.y + 52.0,
+            w: (frame.w - 32.0).max(20.0),
+            h: (frame.h - 64.0).max(24.0),
+        },
+        theme,
+    );
+    if let ObjectKind::Text { style, .. } = &mut detail.kind {
+        style.size = 20.0;
+    }
+    vec![panel, title, detail]
+}
+
+/// A layer whose callout replaces the other callouts when shown.
+fn interaction_callout_layer(
+    id: String,
+    name: String,
+    objects: Vec<Object>,
+    triggers: Vec<Trigger>,
+) -> Layer {
+    Layer {
+        id,
+        name,
+        duration_ms: 5000,
+        objects,
+        triggers,
+        hide_other_layers: true,
+        pause_base_timeline: false,
+        prevent_base_clicks: false,
+        hide_base_objects: false,
+        hide_when_timeline_ends: false,
+        allow_seek: SeekMode::Auto,
+        revisit: RevisitMode::Auto,
+    }
+}
+
+#[allow(clippy::cognitive_complexity)]
 fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "interaction.insert";
     let was_valid = s.course.is_playable();
@@ -8918,6 +9110,35 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
     if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
         return Err(bad(C, "slide size is invalid"));
     }
+
+    // Variables are course-wide, so create them before borrowing the slide.
+    let mut flip_variables: Vec<String> = Vec::new();
+    if kind == "flip_cards" {
+        for _ in 0..3 {
+            let name = fresh_id(
+                "flip_card",
+                s.course.variables.iter().map(|v| v.name.as_str()),
+            );
+            s.course.variables.push(VariableDef {
+                name: name.clone(),
+                value: Value::Bool(false),
+            });
+            flip_variables.push(name);
+        }
+    }
+    let step_variable = if kind == "process_steps" {
+        let name = fresh_id(
+            "process_step",
+            s.course.variables.iter().map(|v| v.name.as_str()),
+        );
+        s.course.variables.push(VariableDef {
+            name: name.clone(),
+            value: Value::Number(1.0),
+        });
+        Some(name)
+    } else {
+        None
+    };
 
     let slide = slide_mut(s, &sid)?;
     let margin = (w * 0.06).clamp(20.0, 120.0);
@@ -9138,14 +9359,433 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
-        _ => return Err(bad(C, "kind must be \"tabs\" or \"accordion\"")),
+        "flip_cards" => {
+            let count = 3usize;
+            let card_h = (h * 0.36).clamp(120.0, 260.0);
+            let card_w = ((w - 2.0 * margin - gap * (count as f32 - 1.0)) / count as f32).max(20.0);
+            let card_y = top + ((h - top * 2.0 - card_h).max(0.0)) * 0.5;
+            let mut card_ids = Vec::new();
+            for i in 0..count {
+                let id = fresh_id("flip_card", slide.local_ids());
+                card_ids.push(id.clone());
+                let card = interaction_shape(
+                    id.clone(),
+                    format!("Card {}", i + 1),
+                    ShapeKind::RoundedRectangle,
+                    theme.accent.clone(),
+                    None,
+                    Some(("Card title".to_owned(), 26.0, true)),
+                    vec![StateDef {
+                        name: "Back".to_owned(),
+                        fill: Some(tint(theme.accent.clone(), 0x55)),
+                        text: Some("Add the detail here.".to_owned()),
+                        src: None,
+                    }],
+                    Rect {
+                        x: margin + (card_w + gap) * i as f32,
+                        y: card_y,
+                        w: card_w,
+                        h: card_h,
+                    },
+                    &theme,
+                );
+                slide.objects.push(card);
+                all_ids.push(id.clone());
+                base_ids.push(id);
+            }
+            for (card_id, variable) in card_ids.iter().zip(flip_variables.iter()) {
+                let when = Event::Click {
+                    object: card_id.clone(),
+                };
+                // Triggers for one event run in order, so a pair of conditions
+                // on the same state would both fire. Toggle a boolean instead
+                // and let variable_changes set the visible state.
+                slide.triggers.push(interaction_trigger(
+                    Action::SetVariable {
+                        variable: variable.clone(),
+                        op: VarOp::Toggle,
+                        value: None,
+                    },
+                    when,
+                ));
+                for (value, state) in [(true, "Back"), (false, "normal")] {
+                    slide.triggers.push(interaction_conditional_trigger(
+                        Action::ChangeState {
+                            object: card_id.clone(),
+                            state: state.to_owned(),
+                        },
+                        Event::VariableChanges {
+                            variable: variable.clone(),
+                        },
+                        Condition::Compare {
+                            variable: variable.clone(),
+                            op: CmpOp::Eq,
+                            value: Value::Bool(value),
+                        },
+                    ));
+                }
+            }
+        }
+        "hotspot_reveal" => {
+            let picture = Rect {
+                x: margin,
+                y: top,
+                w: (w - 2.0 * margin).max(20.0),
+                h: (h - top - margin).max(40.0),
+            };
+            let placeholder_id = fresh_id("hotspot_picture", slide.local_ids());
+            slide.objects.push(interaction_shape(
+                placeholder_id.clone(),
+                "Picture placeholder".to_owned(),
+                ShapeKind::RoundedRectangle,
+                tint(theme.accent.clone(), 0x22),
+                Some(Outline {
+                    color: theme.accent.clone(),
+                    width: 2.0,
+                    dash: DashStyle::Solid,
+                }),
+                Some(("Replace with your picture".to_owned(), 24.0, false)),
+                Vec::new(),
+                picture,
+                &theme,
+            ));
+            base_ids.push(placeholder_id.clone());
+            all_ids.push(placeholder_id);
+
+            let marker_d = (w * 0.055).clamp(36.0, 60.0);
+            let spots = [(0.28_f32, 0.38_f32), (0.72, 0.34), (0.50, 0.74)];
+            let callout = Rect {
+                x: picture.x + picture.w * 0.40,
+                y: picture.y + picture.h * 0.16,
+                w: (picture.w * 0.48).max(120.0),
+                h: (picture.h * 0.48).max(110.0),
+            };
+            for (i, (px, py)) in spots.iter().copied().enumerate() {
+                let marker_id = fresh_id("hotspot_marker", slide.local_ids());
+                let marker = interaction_shape(
+                    marker_id.clone(),
+                    format!("Hotspot {} marker", i + 1),
+                    ShapeKind::Ellipse,
+                    theme.accent.clone(),
+                    None,
+                    Some(((i + 1).to_string(), 22.0, true)),
+                    vec![StateDef {
+                        name: "Visited".to_owned(),
+                        fill: Some(tint(theme.accent.clone(), 0x99)),
+                        text: None,
+                        src: None,
+                    }],
+                    Rect {
+                        x: picture.x + picture.w * px - marker_d * 0.5,
+                        y: picture.y + picture.h * py - marker_d * 0.5,
+                        w: marker_d,
+                        h: marker_d,
+                    },
+                    &theme,
+                );
+                slide.objects.push(marker);
+                base_ids.push(marker_id.clone());
+                all_ids.push(marker_id.clone());
+
+                let layer_id = fresh_id("hotspot_layer", slide.local_ids());
+                layer_ids.push(layer_id.clone());
+                let mut objects = interaction_panel_objects(
+                    slide,
+                    &format!("hotspot_callout{}", i + 1),
+                    &format!("Hotspot {}", i + 1),
+                    callout,
+                    &theme,
+                );
+                let close_id = fresh_id("hotspot_close", slide.local_ids());
+                objects.push(interaction_plain_button(
+                    close_id.clone(),
+                    format!("Close hotspot {}", i + 1),
+                    "×".to_owned(),
+                    Rect {
+                        x: callout.x + callout.w - 44.0,
+                        y: callout.y + 8.0,
+                        w: 36.0,
+                        h: 36.0,
+                    },
+                    &theme,
+                ));
+                all_ids.extend(objects.iter().map(|o| o.id.clone()));
+                let layer_triggers = vec![interaction_trigger(
+                    Action::HideLayer { layer: None },
+                    Event::Click { object: close_id },
+                )];
+                slide.layers.push(interaction_callout_layer(
+                    layer_id.clone(),
+                    format!("Hotspot {}", i + 1),
+                    objects,
+                    layer_triggers,
+                ));
+
+                let when = Event::Click {
+                    object: marker_id.clone(),
+                };
+                slide.triggers.push(interaction_trigger(
+                    Action::ShowLayer { layer: layer_id },
+                    when.clone(),
+                ));
+                slide.triggers.push(interaction_trigger(
+                    Action::ChangeState {
+                        object: marker_id,
+                        state: "Visited".to_owned(),
+                    },
+                    when,
+                ));
+            }
+        }
+        "process_steps" => {
+            let Some(variable) = step_variable.clone() else {
+                return Err(bad(C, "process_steps needs a step variable"));
+            };
+            let count = 4usize;
+            let circle_d = (w * 0.07).clamp(40.0, 76.0);
+            let row_y = top;
+            let step_w = (w - 2.0 * margin) / count as f32;
+            let centres: Vec<f32> = (0..count)
+                .map(|i| margin + step_w * (i as f32 + 0.5))
+                .collect();
+            for i in 0..count.saturating_sub(1) {
+                let id = fresh_id("step_line", slide.local_ids());
+                slide.objects.push(interaction_shape(
+                    id.clone(),
+                    format!("Step {} connector", i + 1),
+                    ShapeKind::LineHorizontal,
+                    theme.accent.clone(),
+                    None,
+                    None,
+                    Vec::new(),
+                    Rect {
+                        x: centres[i] + circle_d * 0.5,
+                        y: row_y + circle_d * 0.5,
+                        w: (centres[i + 1] - centres[i] - circle_d).max(1.0),
+                        h: 2.0,
+                    },
+                    &theme,
+                ));
+                all_ids.push(id.clone());
+                base_ids.push(id);
+            }
+            let mut circle_ids = Vec::new();
+            for (i, &centre) in centres.iter().enumerate() {
+                let circle_id = fresh_id("step_circle", slide.local_ids());
+                circle_ids.push(circle_id.clone());
+                slide.objects.push(interaction_shape(
+                    circle_id.clone(),
+                    format!("Step {} circle", i + 1),
+                    ShapeKind::Ellipse,
+                    tint(theme.accent.clone(), 0x99),
+                    None,
+                    Some(((i + 1).to_string(), 24.0, true)),
+                    vec![StateDef {
+                        name: "Selected".to_owned(),
+                        fill: Some(theme.accent.clone()),
+                        text: None,
+                        src: None,
+                    }],
+                    Rect {
+                        x: centre - circle_d * 0.5,
+                        y: row_y,
+                        w: circle_d,
+                        h: circle_d,
+                    },
+                    &theme,
+                ));
+                all_ids.push(circle_id.clone());
+                base_ids.push(circle_id.clone());
+
+                let label_id = fresh_id("step_label", slide.local_ids());
+                slide.objects.push(interaction_text(
+                    label_id.clone(),
+                    format!("Step {} label", i + 1),
+                    format!("Step {}", i + 1),
+                    Rect {
+                        x: centre - step_w * 0.5,
+                        y: row_y + circle_d + 6.0,
+                        w: step_w,
+                        h: 30.0,
+                    },
+                    &theme,
+                ));
+                all_ids.push(label_id.clone());
+                base_ids.push(label_id);
+            }
+
+            let button_y = (h - margin - 44.0).max(row_y + circle_d + 60.0);
+            let button_w = 110.0;
+            let back_id = fresh_id("step_back", slide.local_ids());
+            let next_id = fresh_id("step_next", slide.local_ids());
+            slide.objects.push(interaction_plain_button(
+                back_id.clone(),
+                "Back".to_owned(),
+                "Back".to_owned(),
+                Rect {
+                    x: margin,
+                    y: button_y,
+                    w: button_w,
+                    h: 44.0,
+                },
+                &theme,
+            ));
+            slide.objects.push(interaction_plain_button(
+                next_id.clone(),
+                "Next".to_owned(),
+                "Next".to_owned(),
+                Rect {
+                    x: (w - margin - button_w).max(margin + button_w + gap),
+                    y: button_y,
+                    w: button_w,
+                    h: 44.0,
+                },
+                &theme,
+            ));
+            all_ids.push(back_id.clone());
+            all_ids.push(next_id.clone());
+            base_ids.push(back_id.clone());
+            base_ids.push(next_id.clone());
+
+            let panel = Rect {
+                x: margin,
+                y: row_y + circle_d + 48.0,
+                w: (w - 2.0 * margin).max(20.0),
+                h: (button_y - row_y - circle_d - 56.0).max(80.0),
+            };
+            for i in 0..count {
+                let layer_id = fresh_id("step_layer", slide.local_ids());
+                layer_ids.push(layer_id.clone());
+                let objects = interaction_panel_objects(
+                    slide,
+                    &format!("step_panel{}", i + 1),
+                    &format!("Step {}", i + 1),
+                    panel,
+                    &theme,
+                );
+                all_ids.extend(objects.iter().map(|o| o.id.clone()));
+                slide.layers.push(interaction_callout_layer(
+                    layer_id,
+                    format!("Step {}", i + 1),
+                    objects,
+                    Vec::new(),
+                ));
+            }
+
+            for (i, circle_id) in circle_ids.iter().enumerate() {
+                let step = (i + 1) as f64;
+                slide.triggers.push(interaction_trigger(
+                    Action::SetVariable {
+                        variable: variable.clone(),
+                        op: VarOp::Assign,
+                        value: Some(Value::Number(step)),
+                    },
+                    Event::Click {
+                        object: circle_id.clone(),
+                    },
+                ));
+            }
+            slide.triggers.push(interaction_conditional_trigger(
+                Action::SetVariable {
+                    variable: variable.clone(),
+                    op: VarOp::Add,
+                    value: Some(Value::Number(1.0)),
+                },
+                Event::Click { object: next_id },
+                Condition::Compare {
+                    variable: variable.clone(),
+                    op: CmpOp::Lt,
+                    value: Value::Number(count as f64),
+                },
+            ));
+            slide.triggers.push(interaction_conditional_trigger(
+                Action::SetVariable {
+                    variable: variable.clone(),
+                    op: VarOp::Subtract,
+                    value: Some(Value::Number(1.0)),
+                },
+                Event::Click { object: back_id },
+                Condition::Compare {
+                    variable: variable.clone(),
+                    op: CmpOp::Gt,
+                    value: Value::Number(1.0),
+                },
+            ));
+            for i in 0..count {
+                let step = (i + 1) as f64;
+                let condition = Condition::Compare {
+                    variable: variable.clone(),
+                    op: CmpOp::Eq,
+                    value: Value::Number(step),
+                };
+                if let Some(layer_id) = layer_ids.get(i) {
+                    slide.triggers.push(interaction_conditional_trigger(
+                        Action::ShowLayer {
+                            layer: layer_id.clone(),
+                        },
+                        Event::VariableChanges {
+                            variable: variable.clone(),
+                        },
+                        condition.clone(),
+                    ));
+                }
+                for (j, circle_id) in circle_ids.iter().enumerate() {
+                    slide.triggers.push(interaction_conditional_trigger(
+                        Action::ChangeState {
+                            object: circle_id.clone(),
+                            state: if j == i { "Selected" } else { "normal" }.to_owned(),
+                        },
+                        Event::VariableChanges {
+                            variable: variable.clone(),
+                        },
+                        condition.clone(),
+                    ));
+                }
+            }
+            if let Some(first_layer) = layer_ids.first()
+                && let Some(first_circle) = circle_ids.first()
+            {
+                // Revisiting the slide starts again at step 1, so the variable,
+                // the shown layer and the selected circle always agree.
+                slide.triggers.push(interaction_trigger(
+                    Action::SetVariable {
+                        variable: variable.clone(),
+                        op: VarOp::Assign,
+                        value: Some(Value::Number(1.0)),
+                    },
+                    Event::TimelineStarts { layer: None },
+                ));
+                slide.triggers.push(interaction_trigger(
+                    Action::ShowLayer {
+                        layer: first_layer.clone(),
+                    },
+                    Event::TimelineStarts { layer: None },
+                ));
+                slide.triggers.push(interaction_trigger(
+                    Action::ChangeState {
+                        object: first_circle.clone(),
+                        state: "Selected".to_owned(),
+                    },
+                    Event::TimelineStarts { layer: None },
+                ));
+            }
+        }
+        _ => {
+            return Err(bad(
+                C,
+                "kind must be \"tabs\", \"accordion\", \"flip_cards\", \"hotspot_reveal\" or \"process_steps\"",
+            ));
+        }
     }
 
     keep_valid(s, was_valid)?;
+    let mut variables = flip_variables;
+    variables.extend(step_variable);
     Ok(json!({
         "objects": base_ids,
         "layers": layer_ids,
         "all_objects": all_ids,
+        "variables": variables,
     }))
 }
 
