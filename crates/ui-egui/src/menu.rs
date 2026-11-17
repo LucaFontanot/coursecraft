@@ -941,6 +941,12 @@ fn show_edit_menu(
     }
 
     ui.separator();
+    let spelling = Button::new("Check Spelling…").shortcut_text(shortcut_label(ui.ctx(), "F7"));
+    if ui.add(spelling).clicked() {
+        crate::spell_check::open(editor);
+        ui.close();
+    }
+    ui.separator();
 
     for cmd in registry() {
         if let Some(label) = cmd.menu.strip_prefix("Edit/")

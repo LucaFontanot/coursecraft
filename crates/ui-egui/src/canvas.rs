@@ -4250,12 +4250,75 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         .frame(inline_edit_frame(accent))
         .show(&mut child);
 
+    // As-you-type spelling: underline each misspelling from the galley and
+    // offer the word menu on a right click over a squiggle.
+    let spell_words = editor.spell_words(&buffer);
+    let misspellings: Vec<coursecraft_spell::Misspelling> = spell_words
+        .iter()
+        .map(|word| word.misspelling.clone())
+        .collect();
+    editor.ui.spell_inline_debug = misspellings.iter().map(|miss| miss.word.clone()).collect();
+    editor.ui.spell_inline_rects.clear();
+    let mut menu_open_at_start = false;
+    if !misspellings.is_empty() {
+        let words = crate::spell_check::underline_rects(
+            &output.galley,
+            output.galley_pos,
+            &buffer,
+            &misspellings,
+        );
+        editor.ui.spell_inline_rects = words.clone();
+        crate::spell_check::spell_underlines(
+            child.painter(),
+            &output.galley,
+            output.galley_pos,
+            &buffer,
+            &misspellings,
+            crate::spell_check::SQUIGGLE_COLOR,
+        );
+        let suggestions: std::collections::BTreeMap<String, Vec<String>> = spell_words
+            .iter()
+            .map(|word| (word.misspelling.word.clone(), word.suggestions.clone()))
+            .collect();
+        let menu_open = output.response.context_menu_opened();
+        let secondary = ui.input(|i| {
+            i.pointer.secondary_pressed()
+                || i.pointer.secondary_clicked()
+                || i.pointer.secondary_released()
+        });
+        if secondary {
+            editor.ui.spell_menu_pos =
+                ui.input(|i| i.pointer.press_origin().or_else(|| i.pointer.latest_pos()));
+        } else if !menu_open {
+            editor.ui.spell_menu_pos = None;
+        }
+        menu_open_at_start = menu_open;
+        if let Some(click_pos) = editor.ui.spell_menu_pos {
+            let mut choice = crate::spell_check::WordMenuOutcome::default();
+            let _ = output.response.context_menu(|menu_ui| {
+                choice =
+                    crate::spell_check::show_word_menu(menu_ui, click_pos, &words, &suggestions);
+            });
+            // A chosen suggestion edits the local buffer; the assignment below
+            // puts it back into the inline edit, so committing stays one step.
+            let (_changed, added, ignored) =
+                crate::spell_check::apply_word_menu(choice, &mut buffer);
+            for word in added {
+                editor.add_spell_word(&word);
+            }
+            for word in ignored {
+                editor.ignore_spell_word(&word);
+            }
+        }
+    }
+
     let cmd_enter = ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter));
     let button_enter =
         edit.is_button && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
     let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
     let clicked_outside = ui.input(|i| {
         i.pointer.primary_pressed()
+            && !menu_open_at_start
             && i.pointer
                 .interact_pos()
                 .is_some_and(|pos| !rect.contains(pos))

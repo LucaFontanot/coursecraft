@@ -92,6 +92,13 @@ pub struct PropertiesState {
 
     // Text buffers
     pub text_body: String,
+    /// Spell check data for `text_body`, refreshed once per frame by the panel.
+    pub spell_words: Vec<coursecraft_spell::Misspelling>,
+    pub spell_suggestions: std::collections::BTreeMap<String, Vec<String>>,
+    pub spell_add: Vec<String>,
+    pub spell_ignore: Vec<String>,
+    /// Where the word menu was opened, kept while the popup is open.
+    pub spell_menu_pos: Option<egui::Pos2>,
     pub text_size: f32,
     pub text_color: String,
     pub text_bold: bool,
@@ -328,6 +335,11 @@ impl Default for PropertiesState {
             end_ms: 5000,
             initial_state: "normal".into(),
             text_body: String::new(),
+            spell_words: Vec::new(),
+            spell_suggestions: std::collections::BTreeMap::new(),
+            spell_add: Vec::new(),
+            spell_ignore: Vec::new(),
+            spell_menu_pos: None,
             text_size: 20.0,
             text_color: "#1F1F1F".into(),
             text_bold: false,
@@ -1682,6 +1694,23 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
         editor.session.revision,
     );
 
+    // Spell data is computed once per frame here, where the editor is mutable,
+    // and read by the Text Content box without threading `Editor` through the
+    // whole inspector.
+    let spell_text = editor.ui.properties.text_body.clone();
+    let spelled = editor.spell_words(&spell_text);
+    let props = &mut editor.ui.properties;
+    props.spell_words = spelled
+        .iter()
+        .map(|word| word.misspelling.clone())
+        .collect();
+    props.spell_suggestions = spelled
+        .iter()
+        .map(|word| (word.misspelling.word.clone(), word.suggestions.clone()))
+        .collect();
+    props.spell_add.clear();
+    props.spell_ignore.clear();
+
     let mut actions_to_run: Vec<(&'static str, Json)> = Vec::new();
     let p = coursecraft_render::palette(ui.ctx());
 
@@ -1730,6 +1759,15 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
             });
         ui.add_space(coursecraft_render::PANEL_MARGIN);
     });
+
+    let spell_add = std::mem::take(&mut editor.ui.properties.spell_add);
+    for word in spell_add {
+        editor.add_spell_word(&word);
+    }
+    let spell_ignore = std::mem::take(&mut editor.ui.properties.spell_ignore);
+    for word in spell_ignore {
+        editor.ignore_spell_word(&word);
+    }
 
     if std::mem::take(&mut editor.ui.properties.add_font_requested) {
         editor
@@ -3156,13 +3194,68 @@ fn show_text_controls(
 
     inspector_row(ui, "Text Content", |ui| {
         let rem_w = ui.available_width().max(30.0);
-        let r = ui.add_sized(
-            [rem_w, 60.0],
-            TextEdit::multiline(&mut props.text_body)
-                .id(text_edit_id)
-                .desired_rows(3),
-        );
-        if (r.lost_focus() || r.changed()) && props.text_body != current_text {
+        let output = TextEdit::multiline(&mut props.text_body)
+            .id(text_edit_id)
+            .desired_rows(3)
+            .min_size(vec2(rem_w, 60.0))
+            .show(ui);
+        if !props.spell_words.is_empty() {
+            let words = crate::spell_check::underline_rects(
+                &output.galley,
+                output.galley_pos,
+                &props.text_body,
+                &props.spell_words,
+            );
+            crate::spell_check::spell_underlines(
+                ui.painter(),
+                &output.galley,
+                output.galley_pos,
+                &props.text_body,
+                &props.spell_words,
+                crate::spell_check::SQUIGGLE_COLOR,
+            );
+            let secondary = ui.input(|i| {
+                i.pointer.secondary_pressed()
+                    || i.pointer.secondary_clicked()
+                    || i.pointer.secondary_released()
+            });
+            if secondary {
+                props.spell_menu_pos =
+                    ui.input(|i| i.pointer.press_origin().or_else(|| i.pointer.latest_pos()));
+            } else if !output.response.context_menu_opened() {
+                props.spell_menu_pos = None;
+            }
+            if let Some(click_pos) = props.spell_menu_pos {
+                let mut choice = crate::spell_check::WordMenuOutcome::default();
+                let _ = output.response.context_menu(|menu_ui| {
+                    choice = crate::spell_check::show_word_menu(
+                        menu_ui,
+                        click_pos,
+                        &words,
+                        &props.spell_suggestions,
+                    );
+                });
+                let (changed, added, ignored) =
+                    crate::spell_check::apply_word_menu(choice, &mut props.text_body);
+                if changed {
+                    action_to_run = Some((
+                        "text.set",
+                        serde_json::json!({
+                            "slide": slide_id,
+                            "object": obj_id,
+                            "text": props.text_body,
+                        }),
+                    ));
+                }
+                props.spell_add.extend(added);
+                props.spell_ignore.extend(ignored);
+            }
+        }
+        let r = &output.response;
+        if (r.lost_focus() || r.changed())
+            && props.text_body != current_text
+            && action_to_run.is_none()
+        {
             action_to_run = Some((
                 "text.set",
                 serde_json::json!({

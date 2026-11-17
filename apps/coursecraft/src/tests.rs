@@ -1340,6 +1340,31 @@ fn preferences_round_trip_and_bad_values_fall_back() {
 }
 
 #[test]
+fn spelling_preferences_round_trip_and_default_when_absent() {
+    let dir = scratch_dir("prefs-spelling");
+    let mut prefs = Prefs {
+        spell_check_as_you_type: false,
+        spell_words: vec!["recieve".to_owned(), "CourseCraft".to_owned()],
+        ..Prefs::default()
+    };
+    save_prefs(&dir, &prefs).expect("save prefs");
+    let loaded = load_prefs(&dir);
+    assert_eq!(loaded, prefs);
+    assert!(!loaded.spell_check_as_you_type);
+    assert_eq!(loaded.spell_words, prefs.spell_words);
+
+    // An older prefs.json without the keys still checks spelling as you type.
+    std::fs::write(dir.join("prefs.json"), "{\"recent\": []}").unwrap();
+    let old = load_prefs(&dir);
+    assert!(old.spell_check_as_you_type);
+    assert!(old.spell_words.is_empty());
+
+    prefs.spell_check_as_you_type = true;
+    save_prefs(&dir, &prefs).expect("save prefs again");
+    assert!(load_prefs(&dir).spell_check_as_you_type);
+}
+
+#[test]
 fn autosave_interval_is_respected_and_zero_turns_it_off() {
     let dir = scratch_dir("autosave-interval");
     let course = Session::blank("Interval").course;

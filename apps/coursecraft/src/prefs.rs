@@ -229,6 +229,12 @@ pub struct Prefs {
     /// Slide size of a new course.
     #[serde(default)]
     pub default_slide: SlidePreset,
+    /// Underline misspellings while editing text.
+    #[serde(default = "default_true")]
+    pub spell_check_as_you_type: bool,
+    /// Words added to the personal dictionary.
+    #[serde(default)]
+    pub spell_words: Vec<String>,
 }
 
 /// Largest autosave interval, in minutes.
@@ -295,6 +301,8 @@ impl Default for Prefs {
             autosave_minutes: default_autosave_minutes(),
             versions_to_keep: default_versions_to_keep(),
             default_slide: SlidePreset::default(),
+            spell_check_as_you_type: true,
+            spell_words: Vec::new(),
         }
     }
 }

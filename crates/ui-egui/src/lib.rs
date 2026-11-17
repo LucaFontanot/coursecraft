@@ -57,6 +57,7 @@ pub mod slide_size_dialog;
 pub mod slides;
 pub mod snap;
 pub mod snapshot;
+pub mod spell_check;
 pub mod states;
 pub mod status;
 pub mod text_styles_ui;
@@ -89,6 +90,8 @@ mod layout_tests;
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
+#[cfg(test)]
+mod spell_check_tests;
 #[cfg(test)]
 pub(crate) mod test_harness;
 #[cfg(test)]
@@ -155,6 +158,10 @@ pub use slides::{
 };
 pub use snapshot::{
     SnapshotSelect, WINDOWS, WindowSpec, open_window, snapshot_editor, window_names, window_spec,
+};
+pub use spell_check::{
+    SpelledWord, SpellingIssue, SpellingState, WordMenuOutcome, WordRects, spell_underlines,
+    underline_rects,
 };
 pub use states::{SUGGESTED_STATE_NAMES, StateEditBuffer, StatesState, show_states_section};
 pub use status::{STATUS_BAR_HEIGHT, navigate_to_issue_path, show_status_bar};
@@ -318,6 +325,10 @@ pub enum EditorRequest {
         autosave_minutes: u32,
         versions_to_keep: u32,
         default_slide: (u32, u32),
+        /// Whether misspellings are underlined while typing.
+        spell_check_as_you_type: bool,
+        /// The personal dictionary, saved with the other preferences.
+        spell_words: Vec<String>,
     },
     /// File > Open Folder…: open a project folder (kept in git).
     OpenFolder,
@@ -602,6 +613,20 @@ pub struct UiState {
     pub document: DocumentDialogState,
     /// Find and Replace window.
     pub find: find::FindState,
+    /// Check Spelling window and its current misspelling.
+    pub spell_check: spell_check::SpellingState,
+    /// Personal dictionary, loaded from preferences at start-up.
+    pub spell_words: Vec<String>,
+    /// Words ignored for this session only.
+    pub spell_ignored: Vec<String>,
+    /// Single occurrences ignored in the Check Spelling window this session.
+    pub spell_ignored_at: Vec<(coursecraft_course::Location, usize)>,
+    /// Misspellings last underlined in the in-place canvas editor (test hook).
+    pub spell_inline_debug: Vec<String>,
+    /// Underline rects from that frame, used by the right-click hit test.
+    pub spell_inline_rects: Vec<spell_check::WordRects>,
+    /// Where the word menu was opened, kept while the popup is open.
+    pub spell_menu_pos: Option<egui::Pos2>,
     pub publish: PublishState,
     /// File ▸ Export ▸ Video (MP4)… is open.
     pub show_export_video: bool,
@@ -810,6 +835,14 @@ pub struct Editor {
     pub timeline_last_revision: u64,
     /// Monotonic timeline clock in milliseconds, from frame deltas.
     pub timeline_mono_ms: u64,
+    /// The one speller, built the first time something needs it.
+    pub spell: Option<coursecraft_spell::Speller>,
+    /// Set once an attempt to build the speller has been made.
+    pub spell_tried: bool,
+    /// Misspellings cached on the hash of the text they came from.
+    pub spell_cache: spell_check::SpellCache,
+    /// Bumped whenever the dictionary or ignored words change.
+    pub spell_version: u64,
 }
 
 /// Text tone of a [`quiet_button`].
@@ -938,6 +971,13 @@ impl Editor {
                 outline_warning: None,
                 document: DocumentDialogState::default(),
                 find: find::FindState::default(),
+                spell_check: spell_check::SpellingState::default(),
+                spell_words: Vec::new(),
+                spell_ignored: Vec::new(),
+                spell_ignored_at: Vec::new(),
+                spell_inline_debug: Vec::new(),
+                spell_inline_rects: Vec::new(),
+                spell_menu_pos: None,
                 publish: PublishState::default(),
                 show_export_video: false,
                 export_width: 1280,
@@ -1053,6 +1093,10 @@ impl Editor {
             timeline_playback: timeline_playback::TimelinePlayback::create_default(),
             timeline_last_revision: initial_revision,
             timeline_mono_ms: 0,
+            spell: None,
+            spell_tried: false,
+            spell_cache: spell_check::SpellCache::default(),
+            spell_version: 0,
         };
         editor.check_revision();
         editor
@@ -2967,6 +3011,17 @@ impl Editor {
                 self.open_preferences();
             }
         }
+        // F7 opens the course-wide spelling check when no dialog owns the keys.
+        if !preview_has_focus
+            && !text_focus
+            && !self.ui.ai.open
+            && !self.ui.document.open
+            && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F7))
+        {
+            spell_check::open(self);
+        }
+        // Escape closes the spelling check before the canvas can act on it.
+        spell_check::consume_escape(self, ui.ctx());
         // Escape closes Find and Replace before the canvas can act on it.
         find::consume_escape(self, ui.ctx());
         // Escape closes Slides from Outline before the canvas can act on it.
@@ -3357,6 +3412,9 @@ impl Editor {
 
         // Find and Replace window
         find::show_find_window(self, ui.ctx());
+
+        // Check Spelling window
+        spell_check::show_spelling_window(self, ui.ctx());
 
         // Publish dialog
         publish::show_publish_dialog(self, ui.ctx(), &mut requests);

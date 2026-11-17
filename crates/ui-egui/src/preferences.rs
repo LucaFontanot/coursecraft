@@ -24,6 +24,8 @@ pub struct PrefsState {
     /// How many earlier saves of a project to keep. 0 keeps none.
     pub versions_to_keep: u32,
     pub default_slide: (u32, u32),
+    /// Underline misspellings while editing text.
+    pub spell_check_as_you_type: bool,
 }
 
 impl Default for PrefsState {
@@ -33,6 +35,7 @@ impl Default for PrefsState {
             autosave_minutes: 1,
             versions_to_keep: 10,
             default_slide: (PRESETS[0].1, PRESETS[0].2),
+            spell_check_as_you_type: true,
         }
     }
 }
@@ -82,6 +85,13 @@ pub fn show_preferences_window(
             );
         });
         ui.small("0 turns autosave off.");
+        ui.separator();
+        ui.label("Writing");
+        ui.checkbox(
+            &mut prefs.spell_check_as_you_type,
+            "Check spelling as you type",
+        );
+        ui.separator();
         ui.horizontal(|ui| {
             ui.label("Versions to keep");
             ui.add(
@@ -119,6 +129,8 @@ pub fn show_preferences_window(
             autosave_minutes: editor.ui.prefs.autosave_minutes,
             versions_to_keep: editor.ui.prefs.versions_to_keep,
             default_slide: editor.ui.prefs.default_slide,
+            spell_check_as_you_type: editor.ui.prefs.spell_check_as_you_type,
+            spell_words: editor.ui.spell_words.clone(),
         });
     }
     if !open {

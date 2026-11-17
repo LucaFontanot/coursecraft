@@ -321,6 +321,7 @@ impl EditorApp {
         editor.set_coach_marks_done(prefs.coach_marks_done);
         editor.set_preferences(prefs.autosave_minutes_clamped(), prefs.default_slide.size());
         editor.set_versions_to_keep(prefs.versions_to_keep_clamped());
+        editor.set_spell_preferences(prefs.spell_check_as_you_type, prefs.spell_words.clone());
         editor.set_ai_config(prefs.ai.as_ref().map(prefs::AiPrefs::to_config));
         editor.set_ai_source(
             prefs
@@ -1106,9 +1107,13 @@ impl EditorApp {
                 autosave_minutes,
                 versions_to_keep,
                 default_slide,
+                spell_check_as_you_type,
+                spell_words,
             } => {
                 self.prefs.autosave_minutes = autosave_minutes.min(prefs::MAX_AUTOSAVE_MINUTES);
                 self.prefs.versions_to_keep = versions_to_keep.min(prefs::MAX_VERSIONS_TO_KEEP);
+                self.prefs.spell_check_as_you_type = spell_check_as_you_type;
+                self.prefs.spell_words = spell_words;
                 if let Some(preset) = prefs::SlidePreset::from_size(default_slide) {
                     self.prefs.default_slide = preset;
                 }

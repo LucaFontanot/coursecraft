@@ -1104,6 +1104,7 @@ dependencies = [
  "coursecraft-media",
  "coursecraft-playback",
  "coursecraft-render",
+ "coursecraft-spell",
  "egui",
  "serde_json",
 ]

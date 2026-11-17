@@ -36,7 +36,7 @@ const DIALOG_MAX_HEIGHT_FRACTION: f32 = 0.8;
 /// Height reserved for the pinned title, hint, and separator above the list.
 const DIALOG_HEADER_HEIGHT: f32 = 100.0;
 /// Height of one shortcut row.
-const SHORTCUT_ROW_HEIGHT: f32 = 22.0;
+const SHORTCUT_ROW_HEIGHT: f32 = 20.0;
 /// Vertical gap between consecutive shortcut rows (`item_spacing.y`).
 const SHORTCUT_ROW_GAP: f32 = 3.0;
 /// Height of a category caption line.
@@ -245,10 +245,16 @@ fn draw_keycap_chip(ui: &mut Ui, right_x: f32, center_y: f32, key_text: &str) {
 }
 
 pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
-    let mut edit_items = vec![ShortcutRow {
-        action: "Cut / Copy / Paste / Select all",
-        shortcut: "Ctrl+X / Ctrl+C / Ctrl+V / Ctrl+A",
-    }];
+    let mut edit_items = vec![
+        ShortcutRow {
+            action: "Cut / Copy / Paste / Select all",
+            shortcut: "Ctrl+X / Ctrl+C / Ctrl+V / Ctrl+A",
+        },
+        ShortcutRow {
+            action: "Check spelling",
+            shortcut: "F7",
+        },
+    ];
     let mut slide_items = Vec::new();
     let mut arrange_items = Vec::new();
 

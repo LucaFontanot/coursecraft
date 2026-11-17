@@ -7,6 +7,7 @@ What changed in each release, newest first. Versions follow [semantic versioning
 - Use any font installed on your computer: the font picker lists them under "On this computer", and picking one copies it into the course so it publishes with it. Fonts whose maker restricts embedding show a note, and the Fonts window shows each font's licence text.
 - Paste a screenshot from the system clipboard with Cmd/Ctrl+V: it lands in the middle of the slide, shrinks to fit if it is larger, and is selected, so one undo removes it. Copy and paste of text and objects now reaches other apps on the desktop too.
 - Every colour picker has an Eyedropper button: it turns the cursor into a crosshair, shows a small swatch with the colour under the pointer, and clicking applies that colour in one undo step. Press Esc to cancel without changing anything.
+- Misspelled words get a red wavy underline while editing. Right-click one for suggestions, "Add to Dictionary" or "Ignore". Edit ▸ Check Spelling (F7) walks every string in the course with Change, Change All, Ignore and Add to Dictionary; added words are remembered in Preferences.
 
 ## 0.1.2
 

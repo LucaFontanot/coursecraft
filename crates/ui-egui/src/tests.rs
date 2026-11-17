@@ -16350,6 +16350,39 @@ fn cmd_comma_opens_preferences() {
     assert!(h.editor.ui.prefs.open);
 }
 
+#[test]
+fn preferences_checkbox_flips_as_you_type_spelling() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_preferences();
+    h.idle_frame();
+    let checkbox = h
+        .find_text("Check spelling as you type")
+        .expect("spelling checkbox");
+    let mut requests = Vec::new();
+    for pressed in [true, false] {
+        requests.extend(h.frame(vec![Event::PointerButton {
+            pos: checkbox,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }]));
+    }
+    assert!(
+        !h.editor.ui.prefs.spell_check_as_you_type,
+        "the checkbox turns checking off"
+    );
+    assert!(
+        requests.iter().any(|r| matches!(
+            r,
+            EditorRequest::SetPreferences {
+                spell_check_as_you_type: false,
+                ..
+            }
+        )),
+        "the change is sent to the app to save"
+    );
+}
+
 fn triggers_harness() -> TestHarness {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);

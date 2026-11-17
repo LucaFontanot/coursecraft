@@ -372,7 +372,7 @@ fn run_replace(editor: &mut Editor, params: Json) {
 }
 
 /// Select the slide, layer, object or question tab a hit lives in.
-fn go_to(editor: &mut Editor, hit: &Hit) {
+pub(crate) fn go_to(editor: &mut Editor, hit: &Hit) {
     let on_master = hit
         .slide
         .as_deref()
