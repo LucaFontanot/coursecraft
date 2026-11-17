@@ -8,7 +8,7 @@ What changed in each release, newest first. Versions follow [semantic versioning
 - Paste a screenshot from the system clipboard with Cmd/Ctrl+V: it lands in the middle of the slide, shrinks to fit if it is larger, and is selected, so one undo removes it. Copy and paste of text and objects now reaches other apps on the desktop too.
 - Every colour picker has an Eyedropper button: it turns the cursor into a crosshair, shows a small swatch with the colour under the pointer, and clicking applies that colour in one undo step. Press Esc to cancel without changing anything.
 - Misspelled words get a red wavy underline while editing. Right-click one for suggestions, "Add to Dictionary" or "Ignore". Edit ▸ Check Spelling (F7) walks every string in the course with Change, Change All, Ignore and Add to Dictionary; added words are remembered in Preferences.
-- Insert ▸ Interaction opens a gallery of ready-made, editable interactions. Alongside tabs, accordion, markers, scrolling panels, timers and progress meters, there are flip cards that turn over when clicked, hotspots that reveal one callout at a time, and process steps driven by buttons and a variable.
+- Insert ▸ Interaction opens a gallery of ready-made, editable interactions. Alongside tabs, accordion, markers, scrolling panels, timers and progress meters, there are flip cards that turn over when clicked, hotspots that reveal one callout at a time, process steps driven by buttons and a variable, timelines whose dated points remember a visit, a reveal grid whose tiles count towards a total, and scenario choices that show feedback without scoring.
 
 ## 0.1.2
 

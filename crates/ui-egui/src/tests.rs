@@ -16020,8 +16020,11 @@ fn interaction_gallery_opens_from_the_insert_menu_and_lists_every_card() {
             "flip_cards",
             "hotspot_reveal",
             "process_steps",
+            "timeline",
+            "reveal_grid",
+            "scenario_choice",
         ],
-        "all nine interactions are in the gallery"
+        "all twelve interactions are in the gallery"
     );
     for name in [
         "Tabs",
@@ -16033,6 +16036,9 @@ fn interaction_gallery_opens_from_the_insert_menu_and_lists_every_card() {
         "Flip cards",
         "Hotspot reveal",
         "Process steps",
+        "Timeline",
+        "Reveal grid",
+        "Scenario choice",
     ] {
         assert!(
             harness.find_text(name).is_some(),
@@ -16041,25 +16047,30 @@ fn interaction_gallery_opens_from_the_insert_menu_and_lists_every_card() {
     }
 }
 
+/// Find an inserted object's id by its readable name, in base objects or layers.
+fn inserted_interaction_id(course: &coursecraft_course::Course, name: &str) -> String {
+    course
+        .slide("slide1")
+        .and_then(|slide| {
+            slide
+                .objects
+                .iter()
+                .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
+                .find(|object| object.name == name)
+                .map(|object| object.id.clone())
+        })
+        .unwrap_or_else(|| panic!("no object named {name}"))
+}
+
+fn interaction_click(o: &str) -> coursecraft_logic::Input {
+    coursecraft_logic::Input::Click { object: o.into() }
+}
+
 #[test]
 fn inserted_interactions_play_the_way_they_are_described() {
     use coursecraft_logic::{Input, Player};
 
-    fn id_named(course: &coursecraft_course::Course, name: &str) -> String {
-        course
-            .slide("slide1")
-            .and_then(|slide| {
-                slide
-                    .objects
-                    .iter()
-                    .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
-                    .find(|object| object.name == name)
-                    .map(|object| object.id.clone())
-            })
-            .unwrap_or_else(|| panic!("no object named {name}"))
-    }
-
-    let click = |o: &str| Input::Click { object: o.into() };
+    let click = interaction_click;
 
     // Flip cards: the second card turns over, then back.
     let mut session = coursecraft_engine::Session::blank("Flip");
@@ -16069,7 +16080,7 @@ fn inserted_interactions_play_the_way_they_are_described() {
             &serde_json::json!({ "slide": "slide1", "kind": "flip_cards" }),
         )
         .expect("insert flip cards");
-    let card = id_named(&session.course, "Card 2");
+    let card = inserted_interaction_id(&session.course, "Card 2");
     let mut player = Player::new(&session.course).expect("player");
     player.handle(&Input::Start);
     assert_eq!(player.object_state(&card), Some("normal"));
@@ -16086,8 +16097,8 @@ fn inserted_interactions_play_the_way_they_are_described() {
             &serde_json::json!({ "slide": "slide1", "kind": "hotspot_reveal" }),
         )
         .expect("insert hotspots");
-    let marker = id_named(&session.course, "Hotspot 2 marker");
-    let close = id_named(&session.course, "Close hotspot 2");
+    let marker = inserted_interaction_id(&session.course, "Hotspot 2 marker");
+    let close = inserted_interaction_id(&session.course, "Close hotspot 2");
     let mut player = Player::new(&session.course).expect("player");
     player.handle(&Input::Start);
     player.handle(&click(&marker));
@@ -16113,9 +16124,9 @@ fn inserted_interactions_play_the_way_they_are_described() {
         .as_str()
         .expect("step variable")
         .to_owned();
-    let circle4 = id_named(&session.course, "Step 4 circle");
-    let next = id_named(&session.course, "Next");
-    let back = id_named(&session.course, "Back");
+    let circle4 = inserted_interaction_id(&session.course, "Step 4 circle");
+    let next = inserted_interaction_id(&session.course, "Next");
+    let back = inserted_interaction_id(&session.course, "Back");
     let mut player = Player::new(&session.course).expect("player");
     player.handle(&Input::Start);
     assert_eq!(player.state().visible_layers.len(), 1);
@@ -16142,6 +16153,139 @@ fn inserted_interactions_play_the_way_they_are_described() {
         player.variable(&variable),
         Some(&coursecraft_course::Value::Number(1.0)),
         "Back stops at 1"
+    );
+}
+
+#[test]
+fn inserted_timeline_plays_the_way_it_is_described() {
+    use coursecraft_logic::{Input, Player};
+    let click = interaction_click;
+
+    let mut session = coursecraft_engine::Session::blank("Timeline");
+    session
+        .execute(
+            "interaction.insert",
+            &serde_json::json!({ "slide": "slide1", "kind": "timeline" }),
+        )
+        .expect("insert timeline");
+    let point3 = inserted_interaction_id(&session.course, "Point 3");
+    let point1 = inserted_interaction_id(&session.course, "Point 1");
+    let mut player = Player::new(&session.course).expect("player");
+    player.handle(&Input::Start);
+    assert!(player.state().visible_layers.is_empty());
+    player.handle(&click(&point3));
+    assert_eq!(player.state().visible_layers.len(), 1);
+    assert!(
+        player
+            .current_slide()
+            .and_then(|slide| slide.layer(&player.state().visible_layers[0]))
+            .is_some_and(|layer| layer.name == "Point 3")
+    );
+    assert_eq!(player.object_state(&point3), Some("Visited"));
+    player.handle(&click(&point1));
+    assert_eq!(player.state().visible_layers.len(), 1);
+    assert!(
+        player
+            .current_slide()
+            .and_then(|slide| slide.layer(&player.state().visible_layers[0]))
+            .is_some_and(|layer| layer.name == "Point 1")
+    );
+    assert_eq!(player.object_state(&point3), Some("Visited"));
+}
+
+#[test]
+fn inserted_reveal_grid_plays_the_way_it_is_described() {
+    use coursecraft_logic::{Input, Player};
+    let click = interaction_click;
+
+    let mut session = coursecraft_engine::Session::blank("Reveal");
+    let result = session
+        .execute(
+            "interaction.insert",
+            &serde_json::json!({ "slide": "slide1", "kind": "reveal_grid" }),
+        )
+        .expect("insert reveal grid");
+    let explored = result["variables"][0]
+        .as_str()
+        .expect("explored variable")
+        .to_owned();
+    let tile2 = inserted_interaction_id(&session.course, "Tile 2");
+    let tile4 = inserted_interaction_id(&session.course, "Tile 4");
+    let tile5 = inserted_interaction_id(&session.course, "Tile 5");
+    let counter_text = session
+        .course
+        .slide("slide1")
+        .and_then(|slide| slide.objects.iter().find(|o| o.name == "Explored counter"))
+        .and_then(|o| match &o.kind {
+            coursecraft_course::ObjectKind::Text { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let mut player = Player::new(&session.course).expect("player");
+    player.handle(&Input::Start);
+    player.handle(&click(&tile2));
+    assert_eq!(player.object_state(&tile2), Some("Revealed"));
+    assert_eq!(
+        player.variable(&explored),
+        Some(&coursecraft_course::Value::Number(1.0))
+    );
+    player.handle(&click(&tile2));
+    assert_eq!(
+        player.variable(&explored),
+        Some(&coursecraft_course::Value::Number(1.0)),
+        "a second click does not count twice"
+    );
+    player.handle(&click(&tile4));
+    player.handle(&click(&tile5));
+    assert_eq!(
+        player.variable(&explored),
+        Some(&coursecraft_course::Value::Number(3.0))
+    );
+    assert_eq!(player.display_text(&counter_text), "3 of 6 explored");
+}
+
+#[test]
+fn inserted_scenario_choice_plays_the_way_it_is_described() {
+    use coursecraft_logic::{Input, Player};
+    let click = interaction_click;
+
+    let mut session = coursecraft_engine::Session::blank("Scenario");
+    session
+        .execute(
+            "interaction.insert",
+            &serde_json::json!({ "slide": "slide1", "kind": "scenario_choice" }),
+        )
+        .expect("insert scenario choice");
+    let choice1 = inserted_interaction_id(&session.course, "Choice 1");
+    let choice2 = inserted_interaction_id(&session.course, "Choice 2");
+    let retry1 = inserted_interaction_id(&session.course, "Try again 1");
+    let mut player = Player::new(&session.course).expect("player");
+    player.handle(&Input::Start);
+    assert!(player.state().visible_layers.is_empty());
+    player.handle(&click(&choice1));
+    assert_eq!(player.state().visible_layers.len(), 1);
+    assert!(
+        player
+            .current_slide()
+            .and_then(|slide| slide.layer(&player.state().visible_layers[0]))
+            .is_some_and(|layer| layer.name == "Choice 1")
+    );
+    player.handle(&click(&retry1));
+    assert!(player.state().visible_layers.is_empty());
+    player.handle(&click(&choice2));
+    assert_eq!(player.state().visible_layers.len(), 1);
+    assert!(
+        player
+            .current_slide()
+            .and_then(|slide| slide.layer(&player.state().visible_layers[0]))
+            .is_some_and(|layer| layer.name == "Choice 2")
+    );
+    player.handle(&click(&choice1));
+    assert!(
+        player
+            .current_slide()
+            .and_then(|slide| slide.layer(&player.state().visible_layers[0]))
+            .is_some_and(|layer| layer.name == "Choice 1")
     );
 }
 
@@ -16177,6 +16321,45 @@ fn interaction_gallery_flip_cards_pick_inserts_and_closes() {
         "three cards were inserted"
     );
     assert_eq!(harness.editor.selection.ids().len(), 3);
+}
+
+#[test]
+fn interaction_gallery_scenario_choice_pick_inserts_and_closes() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.editor.selection.slide = "s-intro".into();
+    harness.editor.ui.show_interaction_gallery = true;
+    harness.idle_frame();
+
+    let card = harness
+        .find_text("Scenario choice")
+        .expect("Scenario choice card");
+    harness.click_at(card);
+    harness.idle_frame();
+
+    assert!(
+        !harness.editor.ui.show_interaction_gallery,
+        "picking a card closes the gallery"
+    );
+    let slide = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .expect("slide");
+    assert_eq!(
+        slide
+            .layers
+            .iter()
+            .filter(|layer| layer.name.starts_with("Choice "))
+            .count(),
+        3,
+        "three feedback layers were inserted"
+    );
+    assert!(
+        slide.question.is_none(),
+        "scenario choice is not a graded question"
+    );
 }
 
 #[test]

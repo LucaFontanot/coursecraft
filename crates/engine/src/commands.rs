@@ -1247,7 +1247,7 @@ static REGISTRY: &[Command] = &[
         label: "Interaction",
         menu: "",
         shortcut: None,
-        params: r#"{"slide": id, "kind": "tabs"|"accordion"|"flip_cards"|"hotspot_reveal"|"process_steps"}"#,
+        params: r#"{"slide": id, "kind": "tabs"|"accordion"|"flip_cards"|"hotspot_reveal"|"process_steps"|"timeline"|"reveal_grid"|"scenario_choice"}"#,
         mutates: true,
         run: interaction_insert,
     },
@@ -1574,6 +1574,15 @@ fn fresh_id<'a>(prefix: &str, taken: impl Iterator<Item = &'a str>) -> String {
         .map(|n| format!("{prefix}{n}"))
         .find(|id| !taken.contains(id.as_str()))
         .unwrap_or_else(|| prefix.to_owned())
+}
+
+/// The first `prefix<N>_explored` name not already used by a course variable.
+fn fresh_explored_variable(course: &Course, prefix: &str) -> String {
+    let taken: BTreeSet<&str> = course.variables.iter().map(|v| v.name.as_str()).collect();
+    (1u64..)
+        .map(|n| format!("{prefix}{n}_explored"))
+        .find(|name| !taken.contains(name.as_str()))
+        .unwrap_or_else(|| format!("{prefix}_explored"))
 }
 
 fn slide_mut<'a>(s: &'a mut Session, id: &str) -> Result<&'a mut Slide> {
@@ -9139,6 +9148,28 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
     } else {
         None
     };
+    // The explored counter comes first, then one flag per tile so a second click
+    // on a revealed tile cannot count it twice.
+    let mut reveal_variables: Vec<String> = Vec::new();
+    if kind == "reveal_grid" {
+        let explored = fresh_explored_variable(&s.course, "grid");
+        s.course.variables.push(VariableDef {
+            name: explored.clone(),
+            value: Value::Number(0.0),
+        });
+        reveal_variables.push(explored);
+        for _ in 0..6 {
+            let name = fresh_id(
+                "grid_tile",
+                s.course.variables.iter().map(|v| v.name.as_str()),
+            );
+            s.course.variables.push(VariableDef {
+                name: name.clone(),
+                value: Value::Bool(false),
+            });
+            reveal_variables.push(name);
+        }
+    }
 
     let slide = slide_mut(s, &sid)?;
     let margin = (w * 0.06).clamp(20.0, 120.0);
@@ -9770,10 +9801,492 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 ));
             }
         }
+        "timeline" => {
+            let count = 5usize;
+            let point_d = (w * 0.05).clamp(28.0, 52.0);
+            let line_y = top + 40.0;
+            let step = (w - 2.0 * margin) / (count as f32 - 1.0);
+            let centres: Vec<f32> = (0..count).map(|i| margin + step * i as f32).collect();
+
+            let line_id = fresh_id("timeline_line", slide.local_ids());
+            slide.objects.push(interaction_shape(
+                line_id.clone(),
+                "Timeline line".to_owned(),
+                ShapeKind::LineHorizontal,
+                theme.accent.clone(),
+                None,
+                None,
+                Vec::new(),
+                Rect {
+                    x: margin,
+                    y: line_y,
+                    w: (w - 2.0 * margin).max(1.0),
+                    h: 2.0,
+                },
+                &theme,
+            ));
+            all_ids.push(line_id.clone());
+            base_ids.push(line_id);
+
+            let mut point_ids = Vec::new();
+            for (i, &centre) in centres.iter().enumerate() {
+                let point_id = fresh_id("timeline_point", slide.local_ids());
+                point_ids.push(point_id.clone());
+                slide.objects.push(interaction_shape(
+                    point_id.clone(),
+                    format!("Point {}", i + 1),
+                    ShapeKind::Ellipse,
+                    tint(theme.accent.clone(), 0x99),
+                    None,
+                    None,
+                    vec![StateDef {
+                        name: "Visited".to_owned(),
+                        fill: Some(theme.accent.clone()),
+                        text: None,
+                        src: None,
+                    }],
+                    Rect {
+                        x: centre - point_d * 0.5,
+                        y: line_y - point_d * 0.5,
+                        w: point_d,
+                        h: point_d,
+                    },
+                    &theme,
+                ));
+                all_ids.push(point_id.clone());
+                base_ids.push(point_id.clone());
+
+                let year_id = fresh_id("timeline_year", slide.local_ids());
+                let mut year = interaction_text(
+                    year_id.clone(),
+                    format!("Point {} year", i + 1),
+                    format!("{}", 2020 + i as u32),
+                    Rect {
+                        x: centre - step * 0.5,
+                        y: top - 8.0,
+                        w: step,
+                        h: 30.0,
+                    },
+                    &theme,
+                );
+                if let ObjectKind::Text { style, .. } = &mut year.kind {
+                    style.size = 18.0;
+                    style.align = Align::Center;
+                }
+                slide.objects.push(year);
+                all_ids.push(year_id.clone());
+                base_ids.push(year_id);
+
+                let title_id = fresh_id("timeline_title", slide.local_ids());
+                let mut title = interaction_text(
+                    title_id.clone(),
+                    format!("Point {} title", i + 1),
+                    format!("Title {}", i + 1),
+                    Rect {
+                        x: centre - step * 0.5,
+                        y: line_y + point_d * 0.5 + 4.0,
+                        w: step,
+                        h: 30.0,
+                    },
+                    &theme,
+                );
+                if let ObjectKind::Text { style, .. } = &mut title.kind {
+                    style.size = 18.0;
+                    style.align = Align::Center;
+                }
+                slide.objects.push(title);
+                all_ids.push(title_id.clone());
+                base_ids.push(title_id);
+            }
+
+            let panel_y = line_y + point_d * 0.5 + 40.0;
+            let panel = Rect {
+                x: margin,
+                y: panel_y,
+                w: (w - 2.0 * margin).max(20.0),
+                h: (h - panel_y - margin).max(80.0),
+            };
+            for (i, point_id) in point_ids.iter().enumerate() {
+                let layer_id = fresh_id("timeline_layer", slide.local_ids());
+                layer_ids.push(layer_id.clone());
+                let objects = interaction_panel_objects(
+                    slide,
+                    &format!("timeline_panel{}", i + 1),
+                    &format!("Point {}", i + 1),
+                    panel,
+                    &theme,
+                );
+                all_ids.extend(objects.iter().map(|o| o.id.clone()));
+                slide.layers.push(interaction_callout_layer(
+                    layer_id.clone(),
+                    format!("Point {}", i + 1),
+                    objects,
+                    Vec::new(),
+                ));
+
+                let when = Event::Click {
+                    object: point_id.clone(),
+                };
+                slide.triggers.push(interaction_trigger(
+                    Action::ShowLayer { layer: layer_id },
+                    when.clone(),
+                ));
+                slide.triggers.push(interaction_trigger(
+                    Action::ChangeState {
+                        object: point_id.clone(),
+                        state: "Visited".to_owned(),
+                    },
+                    when,
+                ));
+            }
+            // No layer is shown on slide start; each visit is remembered.
+        }
+        "reveal_grid" => {
+            let Some(explored) = reveal_variables.first().cloned() else {
+                return Err(bad(C, "reveal_grid needs an explored variable"));
+            };
+            let tile_vars: Vec<String> = reveal_variables.iter().skip(1).cloned().collect();
+            let cols = 3usize;
+            let rows = 2usize;
+            let count = cols * rows;
+            let counter_h = 32.0;
+            let grid_w = (w - 2.0 * margin).max(20.0);
+            let grid_h = (h - top - margin - counter_h - gap).max(120.0);
+            let tile_w = (grid_w - gap * (cols as f32 - 1.0)) / cols as f32;
+            let tile_h = (grid_h - gap * (rows as f32 - 1.0)) / rows as f32;
+
+            let mut tile_ids = Vec::new();
+            for i in 0..count {
+                let id = fresh_id("grid_tile_shape", slide.local_ids());
+                tile_ids.push(id.clone());
+                slide.objects.push(interaction_shape(
+                    id.clone(),
+                    format!("Tile {}", i + 1),
+                    ShapeKind::RoundedRectangle,
+                    tint(theme.accent.clone(), 0x22),
+                    Some(Outline {
+                        color: theme.accent.clone(),
+                        width: 2.0,
+                        dash: DashStyle::Solid,
+                    }),
+                    Some(("Tap to reveal".to_owned(), 18.0, false)),
+                    vec![StateDef {
+                        name: "Revealed".to_owned(),
+                        fill: Some(tint(theme.accent.clone(), 0x77)),
+                        text: Some(format!("Detail {}", i + 1)),
+                        src: None,
+                    }],
+                    Rect {
+                        x: margin + (tile_w + gap) * (i % cols) as f32,
+                        y: top + (tile_h + gap) * (i / cols) as f32,
+                        w: tile_w,
+                        h: tile_h,
+                    },
+                    &theme,
+                ));
+                all_ids.push(id.clone());
+                base_ids.push(id);
+            }
+
+            let counter_id = fresh_id("grid_counter", slide.local_ids());
+            let mut counter = interaction_text(
+                counter_id.clone(),
+                "Explored counter".to_owned(),
+                format!("%{explored}% of {count} explored"),
+                Rect {
+                    x: margin,
+                    y: top + grid_h + gap,
+                    w: grid_w,
+                    h: counter_h,
+                },
+                &theme,
+            );
+            if let ObjectKind::Text { style, .. } = &mut counter.kind {
+                style.align = Align::Center;
+                style.size = 20.0;
+            }
+            slide.objects.push(counter);
+            all_ids.push(counter_id.clone());
+            base_ids.push(counter_id);
+
+            for (tile_id, tile_var) in tile_ids.iter().zip(tile_vars.iter()) {
+                // A click only flips the flag when the tile is still normal. The
+                // reveal and the count then follow the flag's change, so a second
+                // click on a revealed tile changes nothing.
+                slide.triggers.push(interaction_conditional_trigger(
+                    Action::SetVariable {
+                        variable: tile_var.clone(),
+                        op: VarOp::Assign,
+                        value: Some(Value::Bool(true)),
+                    },
+                    Event::Click {
+                        object: tile_id.clone(),
+                    },
+                    Condition::Compare {
+                        variable: tile_var.clone(),
+                        op: CmpOp::Eq,
+                        value: Value::Bool(false),
+                    },
+                ));
+                let changed = Event::VariableChanges {
+                    variable: tile_var.clone(),
+                };
+                let revealed = Condition::Compare {
+                    variable: tile_var.clone(),
+                    op: CmpOp::Eq,
+                    value: Value::Bool(true),
+                };
+                slide.triggers.push(interaction_conditional_trigger(
+                    Action::ChangeState {
+                        object: tile_id.clone(),
+                        state: "Revealed".to_owned(),
+                    },
+                    changed.clone(),
+                    revealed.clone(),
+                ));
+                slide.triggers.push(interaction_conditional_trigger(
+                    Action::SetVariable {
+                        variable: explored.clone(),
+                        op: VarOp::Add,
+                        value: Some(Value::Number(1.0)),
+                    },
+                    changed,
+                    revealed,
+                ));
+                // Revisiting the slide resets both the flag and the visible state.
+                slide.triggers.push(interaction_trigger(
+                    Action::SetVariable {
+                        variable: tile_var.clone(),
+                        op: VarOp::Assign,
+                        value: Some(Value::Bool(false)),
+                    },
+                    Event::TimelineStarts { layer: None },
+                ));
+                slide.triggers.push(interaction_trigger(
+                    Action::ChangeState {
+                        object: tile_id.clone(),
+                        state: "normal".to_owned(),
+                    },
+                    Event::TimelineStarts { layer: None },
+                ));
+            }
+            slide.triggers.push(interaction_trigger(
+                Action::SetVariable {
+                    variable: explored,
+                    op: VarOp::Assign,
+                    value: Some(Value::Number(0.0)),
+                },
+                Event::TimelineStarts { layer: None },
+            ));
+        }
+        "scenario_choice" => {
+            let situation = Rect {
+                x: margin,
+                y: top,
+                w: (w - 2.0 * margin).max(20.0),
+                h: (h * 0.22).clamp(90.0, 180.0),
+            };
+            for (id, name, fill, text, size, bold) in [
+                (
+                    fresh_id("scenario_panel", slide.local_ids()),
+                    "Situation panel".to_owned(),
+                    tint(theme.accent.clone(), 0x22),
+                    None,
+                    0.0,
+                    false,
+                ),
+                (
+                    fresh_id("scenario_title", slide.local_ids()),
+                    "Situation title".to_owned(),
+                    theme.text.clone(),
+                    Some("What would you do?".to_owned()),
+                    26.0,
+                    true,
+                ),
+                (
+                    fresh_id("scenario_body", slide.local_ids()),
+                    "Situation sentence".to_owned(),
+                    theme.text.clone(),
+                    Some("Describe the situation here.".to_owned()),
+                    20.0,
+                    false,
+                ),
+            ] {
+                all_ids.push(id.clone());
+                base_ids.push(id.clone());
+                if text.is_none() {
+                    slide.objects.push(interaction_shape(
+                        id,
+                        name,
+                        ShapeKind::RoundedRectangle,
+                        fill,
+                        Some(Outline {
+                            color: theme.accent.clone(),
+                            width: 2.0,
+                            dash: DashStyle::Solid,
+                        }),
+                        None,
+                        Vec::new(),
+                        situation,
+                        &theme,
+                    ));
+                } else {
+                    slide.objects.push(interaction_text(
+                        id,
+                        name,
+                        text.unwrap_or_default(),
+                        Rect {
+                            x: situation.x + 16.0,
+                            y: situation.y + if bold { 10.0 } else { 52.0 },
+                            w: (situation.w - 32.0).max(20.0),
+                            h: 36.0,
+                        },
+                        &theme,
+                    ));
+                    if let Some(object) = slide.objects.last_mut()
+                        && let ObjectKind::Text { style, .. } = &mut object.kind
+                    {
+                        style.size = size;
+                        style.bold = bold;
+                    }
+                }
+            }
+
+            let choice_h = (h * 0.08).clamp(36.0, 56.0);
+            let choice_y = situation.y + situation.h + gap;
+            let mut choice_ids = Vec::new();
+            for i in 0..3 {
+                let id = fresh_id("scenario_choice", slide.local_ids());
+                choice_ids.push(id.clone());
+                slide.objects.push(interaction_plain_button(
+                    id.clone(),
+                    format!("Choice {}", i + 1),
+                    format!("Choice {}", i + 1),
+                    Rect {
+                        x: situation.x,
+                        y: choice_y + (choice_h + gap) * i as f32,
+                        w: situation.w,
+                        h: choice_h,
+                    },
+                    &theme,
+                ));
+                all_ids.push(id.clone());
+                base_ids.push(id);
+            }
+
+            let panel = Rect {
+                x: situation.x + situation.w * 0.10,
+                y: choice_y,
+                w: (situation.w * 0.80).max(20.0),
+                h: (h - choice_y - margin).max(160.0),
+            };
+            let feedback = [
+                (
+                    "Think again",
+                    "That is a reasonable start, but there is a better option. Consider the suggested answer and try again.",
+                ),
+                (
+                    "Good choice",
+                    "This is the suggested best answer because it balances the learner's needs with the goal of the situation.",
+                ),
+                (
+                    "Think again",
+                    "Not quite. Think about what the situation is asking, then try a different approach.",
+                ),
+            ];
+            for (i, (heading, body)) in feedback.into_iter().enumerate() {
+                let layer_id = fresh_id("scenario_layer", slide.local_ids());
+                layer_ids.push(layer_id.clone());
+                let heading_id = fresh_id("scenario_feedback_title", slide.local_ids());
+                let body_id = fresh_id("scenario_feedback_text", slide.local_ids());
+                let mut heading_object = interaction_text(
+                    heading_id.clone(),
+                    format!("Choice {} heading", i + 1),
+                    heading.to_owned(),
+                    Rect {
+                        x: panel.x + 16.0,
+                        y: panel.y + 12.0,
+                        w: (panel.w - 32.0).max(20.0),
+                        h: 36.0,
+                    },
+                    &theme,
+                );
+                if let ObjectKind::Text { style, .. } = &mut heading_object.kind {
+                    style.size = 26.0;
+                    style.bold = true;
+                }
+                let body_object = interaction_text(
+                    body_id.clone(),
+                    format!("Choice {} text", i + 1),
+                    body.to_owned(),
+                    Rect {
+                        x: panel.x + 16.0,
+                        y: panel.y + 56.0,
+                        w: (panel.w - 32.0).max(20.0),
+                        h: (panel.h - 120.0).max(24.0),
+                    },
+                    &theme,
+                );
+                let mut objects = vec![
+                    interaction_shape(
+                        fresh_id("scenario_feedback_panel", slide.local_ids()),
+                        format!("Choice {} panel", i + 1),
+                        ShapeKind::RoundedRectangle,
+                        tint(theme.accent.clone(), 0x22),
+                        Some(Outline {
+                            color: theme.accent.clone(),
+                            width: 2.0,
+                            dash: DashStyle::Solid,
+                        }),
+                        None,
+                        Vec::new(),
+                        panel,
+                        &theme,
+                    ),
+                    heading_object,
+                    body_object,
+                ];
+                let layer_triggers = if i == 1 {
+                    Vec::new()
+                } else {
+                    let retry_id = fresh_id("scenario_retry", slide.local_ids());
+                    objects.push(interaction_plain_button(
+                        retry_id.clone(),
+                        format!("Try again {}", i + 1),
+                        "Try again".to_owned(),
+                        Rect {
+                            x: panel.x + 16.0,
+                            y: panel.y + panel.h - 52.0,
+                            w: 120.0,
+                            h: 40.0,
+                        },
+                        &theme,
+                    ));
+                    vec![interaction_trigger(
+                        Action::HideLayer { layer: None },
+                        Event::Click { object: retry_id },
+                    )]
+                };
+                all_ids.extend(objects.iter().map(|o| o.id.clone()));
+                slide.layers.push(interaction_callout_layer(
+                    layer_id.clone(),
+                    format!("Choice {}", i + 1),
+                    objects,
+                    layer_triggers,
+                ));
+                slide.triggers.push(interaction_trigger(
+                    Action::ShowLayer { layer: layer_id },
+                    Event::Click {
+                        object: choice_ids[i].clone(),
+                    },
+                ));
+            }
+            // No question and no score: the best answer is marked by its text only.
+        }
         _ => {
             return Err(bad(
                 C,
-                "kind must be \"tabs\", \"accordion\", \"flip_cards\", \"hotspot_reveal\" or \"process_steps\"",
+                "kind must be \"tabs\", \"accordion\", \"flip_cards\", \"hotspot_reveal\", \"process_steps\", \"timeline\", \"reveal_grid\" or \"scenario_choice\"",
             ));
         }
     }
@@ -9781,6 +10294,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
     keep_valid(s, was_valid)?;
     let mut variables = flip_variables;
     variables.extend(step_variable);
+    variables.extend(reveal_variables);
     Ok(json!({
         "objects": base_ids,
         "layers": layer_ids,

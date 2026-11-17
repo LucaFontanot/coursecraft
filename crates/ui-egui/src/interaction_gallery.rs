@@ -27,6 +27,9 @@ enum Preview {
     Flip,
     Hotspot,
     Process,
+    Timeline,
+    RevealGrid,
+    ScenarioChoice,
 }
 
 struct Card {
@@ -90,6 +93,24 @@ const CARDS: &[Card] = &[
         name: "Process steps",
         description: "Four steps joined to buttons by a variable.",
         preview: Preview::Process,
+    },
+    Card {
+        id: "timeline",
+        name: "Timeline",
+        description: "Five dated points open details.",
+        preview: Preview::Timeline,
+    },
+    Card {
+        id: "reveal_grid",
+        name: "Reveal grid",
+        description: "Six tiles reveal as you explore.",
+        preview: Preview::RevealGrid,
+    },
+    Card {
+        id: "scenario_choice",
+        name: "Scenario choice",
+        description: "Three choices show feedback.",
+        preview: Preview::ScenarioChoice,
     },
 ];
 
@@ -229,6 +250,58 @@ fn draw_preview(painter: &egui::Painter, area: Rect, preview: Preview, p: &Palet
                 painter.circle_filled(c, 11.0, if i == 0 { p.accent } else { p.border_strong });
             }
         }
+        Preview::Timeline => {
+            let y = area.center().y;
+            let left = area.min.x + 10.0;
+            let right = area.max.x - 10.0;
+            line(pos2(left, y), pos2(right, y), p.border_strong);
+            for i in 0..5 {
+                let x = left + (right - left) * i as f32 / 4.0;
+                painter.circle_filled(
+                    pos2(x, y),
+                    7.0,
+                    if i == 2 { p.accent } else { p.border_strong },
+                );
+                box_at(
+                    painter,
+                    Rect::from_center_size(pos2(x, area.min.y + 8.0), vec2(26.0, 10.0)),
+                    p,
+                    false,
+                );
+            }
+        }
+        Preview::RevealGrid => {
+            let cell_w = (area.width() - 12.0) / 3.0;
+            let cell_h = (h - 8.0) / 2.0;
+            for row in 0..2 {
+                for col in 0..3 {
+                    let r = Rect::from_min_size(
+                        area.min + vec2((cell_w + 6.0) * col as f32, (cell_h + 8.0) * row as f32),
+                        vec2(cell_w, cell_h),
+                    );
+                    box_at(painter, r, p, row == 0 && col == 1);
+                }
+            }
+        }
+        Preview::ScenarioChoice => {
+            box_at(
+                painter,
+                Rect::from_min_size(area.min, vec2(area.width(), h * 0.36)),
+                p,
+                false,
+            );
+            for i in 0..3 {
+                box_at(
+                    painter,
+                    Rect::from_min_size(
+                        area.min + vec2(0.0, h * (0.48 + i as f32 * 0.17)),
+                        vec2(area.width() * 0.7, h * 0.13),
+                    ),
+                    p,
+                    i == 1,
+                );
+            }
+        }
     }
 }
 
@@ -303,7 +376,8 @@ fn insert_choice(editor: &mut Editor, id: &str) {
         "progress" => {
             crate::interaction_insert::insert_progress_meter(editor);
         }
-        "tabs" | "accordion" | "flip_cards" | "hotspot_reveal" | "process_steps" => {
+        "tabs" | "accordion" | "flip_cards" | "hotspot_reveal" | "process_steps" | "timeline"
+        | "reveal_grid" | "scenario_choice" => {
             crate::interaction_insert::insert_interaction(editor, id);
         }
         _ => {}

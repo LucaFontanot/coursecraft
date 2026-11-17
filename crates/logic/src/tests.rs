@@ -9626,6 +9626,249 @@ fn process_steps_share_one_variable_for_clicks_and_buttons() {
 }
 
 #[test]
+fn timeline_points_show_one_detail_and_stay_visited() {
+    let objects: Vec<_> = (1..=5)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("p{i}"),
+                "name": format!("Point {i}"),
+                "kind": { "type": "shape", "shape": "ellipse", "fill": "#3366CC" },
+                "frame": { "x": 100 + (i - 1) * 220, "y": 200, "w": 48, "h": 48 },
+                "states": [{ "name": "Visited", "fill": "#224488" }]
+            })
+        })
+        .collect();
+    let layers: Vec<_> = (1..=5)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("t{i}"),
+                "name": format!("Point {i}"),
+                "hide_other_layers": true,
+                "objects": [{
+                    "id": format!("d{i}"),
+                    "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#EEEEEE" },
+                    "frame": { "x": 100, "y": 300, "w": 1000, "h": 300 }
+                }]
+            })
+        })
+        .collect();
+    let mut triggers = Vec::new();
+    for i in 1..=5 {
+        triggers.push(serde_json::json!({
+            "action": { "action": "show_layer", "layer": format!("t{i}") },
+            "when": { "event": "click", "object": format!("p{i}") }
+        }));
+        triggers.push(serde_json::json!({
+            "action": { "action": "change_state", "object": format!("p{i}"), "state": "Visited" },
+            "when": { "event": "click", "object": format!("p{i}") }
+        }));
+    }
+    let course = interaction_course(
+        serde_json::json!({
+            "id": "s1",
+            "title": "Timeline",
+            "objects": objects,
+            "layers": layers,
+            "triggers": triggers
+        }),
+        serde_json::json!([]),
+    );
+    let mut p = Player::new(&course).expect("player");
+    p.handle(&Input::Start);
+    assert!(
+        p.state().visible_layers.is_empty(),
+        "no detail layer shows on start"
+    );
+
+    p.handle(&click("p3"));
+    assert_eq!(p.state().visible_layers, vec!["t3"], "only point 3 opens");
+    assert_eq!(p.object_state("p3"), Some("Visited"));
+    assert_eq!(p.object_state("p1"), Some("normal"));
+
+    p.handle(&click("p1"));
+    assert_eq!(p.state().visible_layers, vec!["t1"], "point 1 opens alone");
+    assert_eq!(p.object_state("p1"), Some("Visited"));
+    assert_eq!(
+        p.object_state("p3"),
+        Some("Visited"),
+        "point 3 stays visited"
+    );
+}
+
+#[test]
+fn reveal_grid_counts_each_tile_once_and_resolves_the_counter_text() {
+    let variable = "grid_explored1";
+    let mut variables = serde_json::json!([{ "name": variable, "value": 0 }]);
+    let variables_array = variables.as_array_mut().expect("variables array");
+    for i in 1..=6 {
+        variables_array.push(serde_json::json!({ "name": format!("tile{i}"), "value": false }));
+    }
+
+    let mut objects: Vec<_> = (1..=6)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("tile{i}"),
+                "name": format!("Tile {i}"),
+                "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#EEEEEE" },
+                "frame": { "x": 80 + (i - 1) % 3 * 360, "y": 120 + (i - 1) / 3 * 240, "w": 340, "h": 220 },
+                "states": [{ "name": "Revealed", "text": "Detail" }]
+            })
+        })
+        .collect();
+    objects.push(serde_json::json!({
+        "id": "counter",
+        "name": "Explored counter",
+        "kind": { "type": "text", "text": format!("%{variable}% of 6 explored") },
+        "frame": { "x": 80, "y": 620, "w": 1100, "h": 40 }
+    }));
+
+    let mut triggers = Vec::new();
+    for i in 1..=6 {
+        let flag = format!("tile{i}");
+        triggers.push(serde_json::json!({
+            "action": { "action": "set_variable", "variable": flag, "op": "assign", "value": true },
+            "when": { "event": "click", "object": format!("tile{i}") },
+            "condition": { "compare": { "variable": flag, "op": "eq", "value": false } }
+        }));
+        triggers.push(serde_json::json!({
+            "action": { "action": "change_state", "object": format!("tile{i}"), "state": "Revealed" },
+            "when": { "event": "variable_changes", "variable": flag },
+            "condition": { "compare": { "variable": flag, "op": "eq", "value": true } }
+        }));
+        triggers.push(serde_json::json!({
+            "action": { "action": "set_variable", "variable": variable, "op": "add", "value": 1 },
+            "when": { "event": "variable_changes", "variable": flag },
+            "condition": { "compare": { "variable": flag, "op": "eq", "value": true } }
+        }));
+        triggers.push(serde_json::json!({
+            "action": { "action": "set_variable", "variable": flag, "op": "assign", "value": false },
+            "when": { "event": "timeline_starts" }
+        }));
+        triggers.push(serde_json::json!({
+            "action": { "action": "change_state", "object": format!("tile{i}"), "state": "normal" },
+            "when": { "event": "timeline_starts" }
+        }));
+    }
+    triggers.push(serde_json::json!({
+        "action": { "action": "set_variable", "variable": variable, "op": "assign", "value": 0 },
+        "when": { "event": "timeline_starts" }
+    }));
+
+    let course = interaction_course(
+        serde_json::json!({
+            "id": "s1",
+            "title": "Reveal grid",
+            "objects": objects,
+            "triggers": triggers
+        }),
+        variables,
+    );
+    let mut p = Player::new(&course).expect("player");
+    p.handle(&Input::Start);
+    assert_eq!(p.variable(variable), Some(&Value::Number(0.0)));
+    assert_eq!(p.object_state("tile2"), Some("normal"));
+
+    p.handle(&click("tile2"));
+    assert_eq!(p.object_state("tile2"), Some("Revealed"), "tile 2 opens");
+    assert_eq!(p.variable(variable), Some(&Value::Number(1.0)));
+    p.handle(&click("tile2"));
+    assert_eq!(
+        p.variable(variable),
+        Some(&Value::Number(1.0)),
+        "clicking a revealed tile does not count twice"
+    );
+    p.handle(&click("tile4"));
+    p.handle(&click("tile5"));
+    assert_eq!(p.variable(variable), Some(&Value::Number(3.0)));
+    assert_eq!(
+        p.display_text(&format!("%{variable}% of 6 explored")),
+        "3 of 6 explored"
+    );
+}
+
+#[test]
+fn scenario_choices_show_feedback_and_try_again_hides_it() {
+    let objects: Vec<_> = (1..=3)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("b{i}"),
+                "name": format!("Choice {i}"),
+                "kind": { "type": "button", "label": format!("Choice {i}") },
+                "frame": { "x": 100, "y": 200 + (i - 1) * 80, "w": 1000, "h": 60 }
+            })
+        })
+        .collect();
+    let layers: Vec<_> = (1..=3)
+        .map(|i| {
+            let mut layer_objects = vec![serde_json::json!({
+                "id": format!("heading{i}"),
+                "name": format!("Choice {i} heading"),
+                "kind": { "type": "text", "text": if i == 2 { "Good choice" } else { "Think again" } },
+                "frame": { "x": 200, "y": 260, "w": 800, "h": 300 }
+            })];
+            let mut layer_triggers = Vec::new();
+            if i != 2 {
+                layer_objects.push(serde_json::json!({
+                    "id": format!("retry{i}"),
+                    "name": format!("Try again {i}"),
+                    "kind": { "type": "button", "label": "Try again" },
+                    "frame": { "x": 200, "y": 560, "w": 120, "h": 40 }
+                }));
+                layer_triggers.push(serde_json::json!({
+                    "action": { "action": "hide_layer" },
+                    "when": { "event": "click", "object": format!("retry{i}") }
+                }));
+            }
+            serde_json::json!({
+                "id": format!("ch{i}"),
+                "name": format!("Choice {i}"),
+                "hide_other_layers": true,
+                "objects": layer_objects,
+                "triggers": layer_triggers
+            })
+        })
+        .collect();
+    let triggers: Vec<_> = (1..=3)
+        .map(|i| {
+            serde_json::json!({
+                "action": { "action": "show_layer", "layer": format!("ch{i}") },
+                "when": { "event": "click", "object": format!("b{i}") }
+            })
+        })
+        .collect();
+    let course = interaction_course(
+        serde_json::json!({
+            "id": "s1",
+            "title": "Scenario",
+            "objects": objects,
+            "layers": layers,
+            "triggers": triggers
+        }),
+        serde_json::json!([]),
+    );
+    let mut p = Player::new(&course).expect("player");
+    p.handle(&Input::Start);
+    assert!(p.state().visible_layers.is_empty());
+
+    p.handle(&click("b1"));
+    assert_eq!(p.state().visible_layers, vec!["ch1"]);
+    p.handle(&click("retry1"));
+    assert!(
+        p.state().visible_layers.is_empty(),
+        "Try again closes the feedback"
+    );
+
+    p.handle(&click("b2"));
+    assert_eq!(p.state().visible_layers, vec!["ch2"]);
+    p.handle(&click("b1"));
+    assert_eq!(
+        p.state().visible_layers,
+        vec!["ch1"],
+        "choosing again hides the previous feedback"
+    );
+}
+
+#[test]
 fn a_slide_override_hiding_nav_blocks_next_on_that_slide_only() {
     let mut course = nav_course(serde_json::json!({}));
     course.slide_mut("s1").unwrap().player = Some(coursecraft_course::SlidePlayerOverrides {

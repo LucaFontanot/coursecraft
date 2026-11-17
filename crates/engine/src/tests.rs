@@ -6809,6 +6809,288 @@ fn interaction_insert_process_steps_builds_variable_driven_layers() {
 }
 
 #[test]
+fn interaction_insert_timeline_builds_dated_points_and_visited_layers() {
+    let mut s = Session::blank("Timeline");
+    let before = serde_json::to_value(&s.course).expect("course json");
+    let result = ok(
+        &mut s,
+        "interaction.insert",
+        json!({ "slide": "slide1", "kind": "timeline" }),
+    );
+    // A line, five points, five year labels and five short titles.
+    assert_eq!(result["objects"].as_array().map(Vec::len), Some(16));
+    assert_eq!(result["layers"].as_array().map(Vec::len), Some(5));
+    assert_eq!(result["variables"].as_array().map(Vec::len), Some(0));
+    let all: Vec<String> = result["all_objects"]
+        .as_array()
+        .expect("all_objects")
+        .iter()
+        .filter_map(Json::as_str)
+        .map(str::to_owned)
+        .collect();
+    assert_unique_and_valid(&s, &all);
+
+    let slide = s.course.slide("slide1").expect("slide");
+    assert!(
+        slide.objects.iter().any(|o| o.name == "Timeline line"),
+        "there is a line across the slide"
+    );
+    for i in 1..=5 {
+        let point = slide
+            .objects
+            .iter()
+            .find(|o| o.name == format!("Point {i}"))
+            .expect("point");
+        assert!(
+            point.states.iter().any(|st| st.name == "Visited"),
+            "each point remembers a visit"
+        );
+        assert!(
+            slide
+                .objects
+                .iter()
+                .any(|o| o.name == format!("Point {i} year")),
+            "each point has a year label"
+        );
+        assert!(
+            slide
+                .layers
+                .iter()
+                .any(|l| l.name == format!("Point {i}") && l.hide_other_layers),
+            "each point has an exclusive detail layer"
+        );
+        assert!(
+            slide.triggers.iter().any(|t| {
+                matches!(&t.when, coursecraft_course::Event::Click { object }
+                    if object == &point.id)
+                    && matches!(&t.action, coursecraft_course::Action::ShowLayer { .. })
+            }),
+            "clicking a point shows its layer"
+        );
+        assert!(
+            slide.triggers.iter().any(|t| {
+                matches!(&t.when, coursecraft_course::Event::Click { object }
+                    if object == &point.id)
+                    && matches!(
+                        &t.action,
+                        coursecraft_course::Action::ChangeState { state, .. }
+                            if state == "Visited"
+                    )
+            }),
+            "clicking a point marks it visited"
+        );
+    }
+    let years: Vec<&str> = slide
+        .objects
+        .iter()
+        .filter(|o| o.name.contains(" year"))
+        .filter_map(|o| match &o.kind {
+            coursecraft_course::ObjectKind::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(years, vec!["2020", "2021", "2022", "2023", "2024"]);
+    assert!(
+        !slide.triggers.iter().any(|t| {
+            matches!(
+                &t.when,
+                coursecraft_course::Event::TimelineStarts { layer: None }
+            ) && matches!(&t.action, coursecraft_course::Action::ShowLayer { .. })
+        }),
+        "no detail layer is shown when the slide starts"
+    );
+
+    ok(&mut s, "edit.undo", json!({}));
+    let after = serde_json::to_value(&s.course).expect("course json");
+    assert_eq!(
+        after, before,
+        "undo restores the whole insertion in one step"
+    );
+}
+
+#[test]
+fn interaction_insert_reveal_grid_builds_tiles_flag_and_counter() {
+    let mut s = Session::blank("Reveal");
+    let before = serde_json::to_value(&s.course).expect("course json");
+    let result = ok(
+        &mut s,
+        "interaction.insert",
+        json!({ "slide": "slide1", "kind": "reveal_grid" }),
+    );
+    assert_eq!(result["objects"].as_array().map(Vec::len), Some(7));
+    assert_eq!(result["layers"].as_array().map(Vec::len), Some(0));
+    assert_eq!(result["variables"].as_array().map(Vec::len), Some(7));
+    let all: Vec<String> = result["all_objects"]
+        .as_array()
+        .expect("all_objects")
+        .iter()
+        .filter_map(Json::as_str)
+        .map(str::to_owned)
+        .collect();
+    assert_unique_and_valid(&s, &all);
+
+    let variables: Vec<&str> = result["variables"]
+        .as_array()
+        .expect("variables")
+        .iter()
+        .filter_map(Json::as_str)
+        .collect();
+    let explored = variables[0];
+    assert!(explored.ends_with("_explored"), "counter variable name");
+    assert_eq!(
+        s.course.variable(explored).map(|v| &v.value),
+        Some(&coursecraft_course::Value::Number(0.0)),
+        "the counter starts at zero"
+    );
+    let slide = s.course.slide("slide1").expect("slide");
+    for i in 1..=6 {
+        let tile = slide
+            .objects
+            .iter()
+            .find(|o| o.name == format!("Tile {i}"))
+            .expect("tile");
+        assert!(
+            tile.states.iter().any(|st| st.name == "Revealed"),
+            "each tile has a revealed state"
+        );
+        assert!(
+            slide.triggers.iter().any(|t| {
+                matches!(&t.action, coursecraft_course::Action::ChangeState { state, .. }
+                    if state == "Revealed")
+                    && matches!(&t.when, coursecraft_course::Event::VariableChanges { .. })
+            }),
+            "a flag change reveals a tile"
+        );
+    }
+    let counter = slide
+        .objects
+        .iter()
+        .find(|o| o.name == "Explored counter")
+        .expect("counter text");
+    match &counter.kind {
+        coursecraft_course::ObjectKind::Text { text, .. } => {
+            assert_eq!(text, &format!("%{explored}% of 6 explored"));
+        }
+        _ => panic!("counter must be text"),
+    }
+    let adds = slide
+        .triggers
+        .iter()
+        .filter(|t| {
+            matches!(
+                &t.action,
+                coursecraft_course::Action::SetVariable {
+                    op: coursecraft_course::VarOp::Add,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(adds, 6, "one increment per tile");
+    let resets = slide
+        .triggers
+        .iter()
+        .filter(|t| {
+            matches!(
+                &t.when,
+                coursecraft_course::Event::TimelineStarts { layer: None }
+            )
+        })
+        .count();
+    assert_eq!(resets, 13, "counter and every tile reset on slide start");
+
+    ok(&mut s, "edit.undo", json!({}));
+    let after = serde_json::to_value(&s.course).expect("course json");
+    assert_eq!(
+        after, before,
+        "undo restores the whole insertion in one step"
+    );
+}
+
+#[test]
+fn interaction_insert_scenario_choice_builds_feedback_layers_without_a_question() {
+    let mut s = Session::blank("Scenario");
+    let before = serde_json::to_value(&s.course).expect("course json");
+    let result = ok(
+        &mut s,
+        "interaction.insert",
+        json!({ "slide": "slide1", "kind": "scenario_choice" }),
+    );
+    assert_eq!(result["objects"].as_array().map(Vec::len), Some(6));
+    assert_eq!(result["layers"].as_array().map(Vec::len), Some(3));
+    assert_eq!(result["variables"].as_array().map(Vec::len), Some(0));
+    let all: Vec<String> = result["all_objects"]
+        .as_array()
+        .expect("all_objects")
+        .iter()
+        .filter_map(Json::as_str)
+        .map(str::to_owned)
+        .collect();
+    assert_unique_and_valid(&s, &all);
+
+    let slide = s.course.slide("slide1").expect("slide");
+    assert!(slide.question.is_none(), "this is not a graded question");
+    assert!(
+        slide.objects.iter().any(
+            |o| matches!(&o.kind, coursecraft_course::ObjectKind::Text { text, .. }
+                if text == "What would you do?")
+        ),
+        "the situation has the expected title"
+    );
+    for i in 1..=3 {
+        assert!(
+            slide
+                .objects
+                .iter()
+                .any(|o| o.name == format!("Choice {i}")),
+            "each choice has a button"
+        );
+        let layer = slide
+            .layers
+            .iter()
+            .find(|l| l.name == format!("Choice {i}"))
+            .expect("feedback layer");
+        assert!(
+            layer.objects.iter().any(
+                |o| matches!(&o.kind, coursecraft_course::ObjectKind::Text { text, .. }
+                    if text == if i == 2 { "Good choice" } else { "Think again" })
+            ),
+            "the feedback heading matches the choice"
+        );
+        assert!(
+            slide.triggers.iter().any(|t| {
+                matches!(&t.action, coursecraft_course::Action::ShowLayer { layer: target }
+                    if target == &layer.id)
+            }),
+            "clicking a choice shows its layer"
+        );
+        if i != 2 {
+            assert!(
+                layer
+                    .objects
+                    .iter()
+                    .any(|o| o.name == format!("Try again {i}")),
+                "a wrong choice has a Try again button"
+            );
+            assert!(
+                layer.triggers.iter().any(|t| matches!(
+                    &t.action,
+                    coursecraft_course::Action::HideLayer { layer: None }
+                )),
+                "Try again hides the feedback layer"
+            );
+        }
+    }
+
+    ok(&mut s, "edit.undo", json!({}));
+    let after = serde_json::to_value(&s.course).expect("course json");
+    assert_eq!(
+        after, before,
+        "undo restores the whole insertion in one step"
+    );
+}
+
+#[test]
 fn object_set_drag_sets_clears_and_undoes_in_one_step() {
     let mut s = Session::blank("Drag");
     let card = ok(
