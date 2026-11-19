@@ -1051,8 +1051,14 @@ fn slide_space_rect(editor: &Editor) -> Rect {
     Rect::from_min_size(pos2(0.0, 0.0), vec2(size.w as f32, size.h as f32))
 }
 
-fn draw_snap_guides(editor: &Editor, painter: &Painter, t: &SlideTransform, ui: &Ui) {
-    if editor.ui.snap_guides.is_empty() {
+fn draw_snap_guides(
+    editor: &Editor,
+    painter: &Painter,
+    t: &SlideTransform,
+    items: &[DrawItem],
+    ui: &Ui,
+) {
+    if editor.ui.snap_guides.is_empty() && editor.ui.spacing_guides.is_empty() {
         return;
     }
     let p = coursecraft_render::palette(ui.ctx());
@@ -1067,6 +1073,134 @@ fn draw_snap_guides(editor: &Editor, painter: &Painter, t: &SlideTransform, ui: 
             let end = t.to_screen_pos(pos2(guide.end, guide.at));
             painter.line_segment([start, end], stroke);
         }
+    }
+    draw_spacing_guides(editor, painter, t, items, p.accent);
+}
+
+fn selection_handle_avoid_zones(
+    editor: &Editor,
+    t: &SlideTransform,
+    items: &[DrawItem],
+) -> (Option<Rect>, Vec<Rect>) {
+    let ids = editor.selection.ids();
+    if ids.is_empty() {
+        return (None, Vec::new());
+    }
+    let mut bbox: Option<Rect> = None;
+    for id in &ids {
+        let Some(item) = items.iter().find(|it| it.hit == Hit::Object(id.clone())) else {
+            continue;
+        };
+        let bounds = coursecraft_render::item_bounds(item);
+        bbox = Some(match bbox {
+            Some(current) => current.union(bounds),
+            None => bounds,
+        });
+    }
+    let Some(bbox) = bbox else {
+        return (None, Vec::new());
+    };
+    let screen_rect = t.to_screen_rect(bbox);
+    let single_item = if editor.selection.is_multi() {
+        None
+    } else {
+        editor.selection.object.as_ref().and_then(|id| {
+            items
+                .iter()
+                .find(|item| item.hit == Hit::Object(id.clone()))
+        })
+    };
+    let mut centers: Vec<Pos2> = match single_item {
+        Some(item) => rotated_handle_centers(t.to_screen_rect(item.rect), item.rotation)
+            .into_iter()
+            .map(|(_, pos)| pos)
+            .collect(),
+        None => get_handle_centers(screen_rect)
+            .into_iter()
+            .map(|(_, pos)| pos)
+            .collect(),
+    };
+    if let Some(item) = single_item {
+        centers.push(rotate_handle_center(
+            t.to_screen_rect(item.rect),
+            item.rotation,
+        ));
+    }
+    let zones = centers
+        .into_iter()
+        .map(|center| Rect::from_center_size(center, vec2(12.0, 12.0)))
+        .collect();
+    (Some(screen_rect), zones)
+}
+
+fn draw_spacing_guides(
+    editor: &Editor,
+    painter: &Painter,
+    t: &SlideTransform,
+    items: &[DrawItem],
+    accent: Color32,
+) {
+    if editor.ui.spacing_guides.is_empty() {
+        return;
+    }
+    let stroke = Stroke::new(1.0, accent);
+    let tick = 4.0;
+    let (moving_screen, handle_zones) = selection_handle_avoid_zones(editor, t, items);
+
+    for guide in &editor.ui.spacing_guides {
+        let (start, end) = if guide.vertical {
+            let s = t.to_screen_pos(pos2(guide.across, guide.from));
+            let e = t.to_screen_pos(pos2(guide.across, guide.to));
+            painter.line_segment([s, e], stroke);
+            painter.line_segment([pos2(s.x - tick, s.y), pos2(s.x + tick, s.y)], stroke);
+            painter.line_segment([pos2(e.x - tick, e.y), pos2(e.x + tick, e.y)], stroke);
+            (s, e)
+        } else {
+            let s = t.to_screen_pos(pos2(guide.from, guide.across));
+            let e = t.to_screen_pos(pos2(guide.to, guide.across));
+            painter.line_segment([s, e], stroke);
+            painter.line_segment([pos2(s.x, s.y - tick), pos2(s.x, s.y + tick)], stroke);
+            painter.line_segment([pos2(e.x, e.y - tick), pos2(e.x, e.y + tick)], stroke);
+            (s, e)
+        };
+
+        let gap_px = (guide.to - guide.from).abs().round() as i32;
+        let galley = painter.layout_no_wrap(gap_px.to_string(), FontId::proportional(10.0), accent);
+        let size = galley.size();
+        let mid = pos2((start.x + end.x) * 0.5, (start.y + end.y) * 0.5);
+
+        let mut candidates = if guide.vertical {
+            vec![
+                pos2(mid.x + 5.0, mid.y - size.y * 0.5),
+                pos2(mid.x - 5.0 - size.x, mid.y - size.y * 0.5),
+            ]
+        } else {
+            vec![
+                pos2(mid.x - size.x * 0.5, mid.y - 4.0 - size.y),
+                pos2(mid.x - size.x * 0.5, mid.y + 4.0),
+            ]
+        };
+        if let Some(rect) = moving_screen {
+            if guide.vertical {
+                candidates.push(pos2(rect.right() + 10.0, mid.y - size.y * 0.5));
+                candidates.push(pos2(rect.left() - 10.0 - size.x, mid.y - size.y * 0.5));
+            } else {
+                candidates.push(pos2(mid.x - size.x * 0.5, rect.bottom() + 10.0));
+                candidates.push(pos2(mid.x - size.x * 0.5, rect.top() - 28.0 - size.y));
+            }
+        }
+
+        let label_pos = candidates
+            .iter()
+            .copied()
+            .find(|&pos| {
+                let label_rect = Rect::from_min_size(pos, size);
+                !handle_zones.iter().any(|zone| zone.intersects(label_rect))
+            })
+            .or_else(|| candidates.last().copied())
+            .unwrap_or(mid);
+
+        painter.galley(label_pos, galley, accent);
     }
 }
 
@@ -3482,7 +3616,7 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
         let targets = snap_targets(editor, &drag.frames);
         if is_move {
             if let Some(bbox) = frames_rotated_bbox(editor, &preview_frames) {
-                let result = crate::snap::snap_rect_lines(
+                let mut result = crate::snap::snap_rect_lines(
                     bbox,
                     &targets,
                     slide_space_rect(editor),
@@ -3490,6 +3624,12 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
                     editor.ui.snap_to_guides,
                     &lines,
                 );
+                let spacing_guides = if editor.ui.snap_to_guides {
+                    let spacing = crate::snap::snap_spacing(bbox, &targets, threshold);
+                    crate::snap::apply_spacing_fallback(&mut result, spacing)
+                } else {
+                    Vec::new()
+                };
                 if result.offset != vec2(0.0, 0.0) {
                     for (_, frame) in &mut preview_frames {
                         *frame = Rect::from_min_max(
@@ -3499,8 +3639,10 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
                     }
                 }
                 editor.ui.snap_guides = result.guides;
+                editor.ui.spacing_guides = spacing_guides;
             }
         } else if is_resize && drag.frames.len() == 1 && !shift_held {
+            editor.ui.spacing_guides.clear();
             // Snapping moves edges on their own, which would break Shift's proportions.
             if let (Some(raw), DragOp::Resize { handle, rotation }) = (resize_bbox, drag.op) {
                 if rotation != 0.0 && rotation.is_finite() {
@@ -3567,14 +3709,17 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
             }
         } else {
             editor.ui.snap_guides.clear();
+            editor.ui.spacing_guides.clear();
         }
     } else {
         editor.ui.snap_guides.clear();
+        editor.ui.spacing_guides.clear();
     }
 
     if primary_released || !primary_down {
         editor.ui.canvas_drag = None;
         editor.ui.snap_guides.clear();
+        editor.ui.spacing_guides.clear();
 
         if is_move {
             let slide = editor.selection.slide.clone();
@@ -3873,6 +4018,7 @@ fn update_crop_drag(
         }
     };
     editor.ui.snap_guides.clear();
+    editor.ui.spacing_guides.clear();
 }
 
 /// Press handling in crop mode: start a handle or source drag, or leave on a
@@ -5092,6 +5238,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             editor.ui.path_edit = None;
             editor.ui.canvas_drag = None;
             editor.ui.snap_guides.clear();
+            editor.ui.spacing_guides.clear();
             let other_modal = editor.ui.show_shortcuts_dialog
                 || editor.ui.show_course_settings_window
                 || editor.ui.show_theme_window
@@ -5274,7 +5421,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         } else {
             draw_handles_and_outline(editor, &painter, &t, &items, current_pointer, ui);
             draw_connector_sites(editor, &painter, &t, ui);
-            draw_snap_guides(editor, &painter, &t, ui);
+            draw_snap_guides(editor, &painter, &t, &items, ui);
         }
         crate::rulers::show(editor, ui, &painter, &t, canvas_rect);
         if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {

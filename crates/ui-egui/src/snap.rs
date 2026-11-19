@@ -223,6 +223,308 @@ pub fn snap_rect_lines(
     result
 }
 
+/// An equal-gap guide to draw while the moving rectangle is spacing-snapped.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpacingGuide {
+    /// True for a vertical gap (between objects in a column, `from..to` is y
+    /// and `across` is x); false for a horizontal gap (`from..to` is x and
+    /// `across` is y).
+    pub vertical: bool,
+    /// Start of the gap along its axis, in slide space.
+    pub from: f32,
+    /// End of the gap along its axis, in slide space.
+    pub to: f32,
+    /// Coordinate on the perpendicular axis where the guide sits, in slide space.
+    pub across: f32,
+}
+
+/// The offset to apply and the equal-spacing guides to draw.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SpacingResult {
+    pub offset: Vec2,
+    pub guides: Vec<SpacingGuide>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AxisSpan {
+    min: f32,
+    max: f32,
+    perp_min: f32,
+    perp_max: f32,
+}
+
+impl AxisSpan {
+    fn from_rect(rect: Rect, vertical: bool) -> Self {
+        if vertical {
+            Self {
+                min: rect.top(),
+                max: rect.bottom(),
+                perp_min: rect.left(),
+                perp_max: rect.right(),
+            }
+        } else {
+            Self {
+                min: rect.left(),
+                max: rect.right(),
+                perp_min: rect.top(),
+                perp_max: rect.bottom(),
+            }
+        }
+    }
+
+    fn center(self) -> f32 {
+        (self.min + self.max) * 0.5
+    }
+
+    fn len(self) -> f32 {
+        self.max - self.min
+    }
+}
+
+fn perp_overlap(a: AxisSpan, b: AxisSpan) -> Option<(f32, f32)> {
+    let start = a.perp_min.max(b.perp_min);
+    let end = a.perp_max.min(b.perp_max);
+    (start < end).then_some((start, end))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExistingGap {
+    gap: f32,
+    from: f32,
+    to: f32,
+    across: f32,
+}
+
+fn existing_gaps_on_axis(spans: &[AxisSpan]) -> Vec<ExistingGap> {
+    let mut gaps = Vec::new();
+    for (i, &a) in spans.iter().enumerate() {
+        for (j, &b) in spans.iter().enumerate() {
+            if i == j || a.max >= b.min {
+                continue;
+            }
+            let Some((p0, p1)) = perp_overlap(a, b) else {
+                continue;
+            };
+            let blocked = spans.iter().enumerate().any(|(k, &c)| {
+                k != i
+                    && k != j
+                    && c.max > a.max
+                    && c.min < b.min
+                    && c.perp_max > p0
+                    && c.perp_min < p1
+            });
+            if !blocked {
+                gaps.push(ExistingGap {
+                    gap: b.min - a.max,
+                    from: a.max,
+                    to: b.min,
+                    across: (p0 + p1) * 0.5,
+                });
+            }
+        }
+    }
+    gaps
+}
+
+fn push_unique_guide(guides: &mut Vec<SpacingGuide>, guide: SpacingGuide) {
+    let duplicate = guides.iter().any(|existing| {
+        existing.vertical == guide.vertical
+            && (existing.from - guide.from).abs() < 0.01
+            && (existing.to - guide.to).abs() < 0.01
+            && (existing.across - guide.across).abs() < 0.01
+    });
+    if !duplicate {
+        guides.push(guide);
+    }
+}
+
+fn snap_spacing_axis(
+    moving: Rect,
+    targets: &[Rect],
+    threshold: f32,
+    vertical: bool,
+) -> Option<(f32, Vec<SpacingGuide>)> {
+    let m = AxisSpan::from_rect(moving, vertical);
+    let spans: Vec<AxisSpan> = targets
+        .iter()
+        .map(|r| AxisSpan::from_rect(*r, vertical))
+        .collect();
+    let existing = existing_gaps_on_axis(&spans);
+
+    // Immediate neighbours in the same row/column as `moving`.
+    let mut prev: Option<(AxisSpan, (f32, f32))> = None;
+    let mut next: Option<(AxisSpan, (f32, f32))> = None;
+    for &t in &spans {
+        let Some(perp) = perp_overlap(m, t) else {
+            continue;
+        };
+        if t.min < m.min && t.max <= m.min + threshold && t.center() < m.center() {
+            let replace = prev.is_none_or(|(cur, _)| t.max > cur.max);
+            if replace {
+                prev = Some((t, perp));
+            }
+        }
+        if t.max > m.max && t.min >= m.max - threshold && t.center() > m.center() {
+            let replace = next.is_none_or(|(cur, _)| t.min < cur.min);
+            if replace {
+                next = Some((t, perp));
+            }
+        }
+    }
+
+    let mut best_distance = f32::INFINITY;
+    let mut best_delta = 0.0_f32;
+    let mut candidates: Vec<(f32, SpacingGuide)> = Vec::new();
+    let mut consider = |delta: f32, guides: &[SpacingGuide]| {
+        let distance = delta.abs();
+        if distance > threshold {
+            return;
+        }
+        if distance + 0.001 < best_distance {
+            best_distance = distance;
+            best_delta = delta;
+        }
+        for &guide in guides {
+            candidates.push((delta, guide));
+        }
+    };
+
+    // 1. Equal gap on both sides when moving between `prev` and `next`.
+    if let (Some((p, p_perp)), Some((n, n_perp))) = (prev, next) {
+        let space = n.min - p.max;
+        let len = m.len();
+        if space > len {
+            let gap = (space - len) * 0.5;
+            let delta = (p.max + gap) - m.min;
+            let g1 = SpacingGuide {
+                vertical,
+                from: p.max,
+                to: p.max + gap,
+                across: (p_perp.0 + p_perp.1) * 0.5,
+            };
+            let g2 = SpacingGuide {
+                vertical,
+                from: n.min - gap,
+                to: n.min,
+                across: (n_perp.0 + n_perp.1) * 0.5,
+            };
+            consider(delta, &[g1, g2]);
+        }
+    }
+
+    // 2. Gap to `prev` matching an existing gap.
+    if let Some((p, p_perp)) = prev {
+        for eg in &existing {
+            let target_min = p.max + eg.gap;
+            if let Some((n, _)) = next
+                && target_min + m.len() >= n.min
+            {
+                continue;
+            }
+            let delta = target_min - m.min;
+            let g_existing = SpacingGuide {
+                vertical,
+                from: eg.from,
+                to: eg.to,
+                across: eg.across,
+            };
+            let g_new = SpacingGuide {
+                vertical,
+                from: p.max,
+                to: target_min,
+                across: (p_perp.0 + p_perp.1) * 0.5,
+            };
+            consider(delta, &[g_existing, g_new]);
+        }
+    }
+
+    // 3. Gap to `next` matching an existing gap.
+    if let Some((n, n_perp)) = next {
+        for eg in &existing {
+            let target_max = n.min - eg.gap;
+            if let Some((p, _)) = prev
+                && target_max - m.len() <= p.max
+            {
+                continue;
+            }
+            let delta = target_max - m.max;
+            let g_existing = SpacingGuide {
+                vertical,
+                from: eg.from,
+                to: eg.to,
+                across: eg.across,
+            };
+            let g_new = SpacingGuide {
+                vertical,
+                from: target_max,
+                to: n.min,
+                across: (n_perp.0 + n_perp.1) * 0.5,
+            };
+            consider(delta, &[g_existing, g_new]);
+        }
+    }
+
+    if !best_distance.is_finite() {
+        return None;
+    }
+
+    let mut matched = Vec::new();
+    for (delta, guide) in candidates {
+        if (delta - best_delta).abs() < 0.01 {
+            push_unique_guide(&mut matched, guide);
+        }
+    }
+    Some((best_delta, matched))
+}
+
+/// Snap `moving` so its gap to a neighbour in the same row or column matches
+/// an existing gap between two other `targets` on that axis, or matches the
+/// gap on its opposite side. Non-finite inputs are ignored.
+#[must_use]
+pub fn snap_spacing(moving: Rect, targets: &[Rect], threshold: f32) -> SpacingResult {
+    let mut result = SpacingResult::default();
+    if !finite_rect(moving) || !threshold.is_finite() || threshold <= 0.0 {
+        return result;
+    }
+    let valid_targets: Vec<Rect> = targets
+        .iter()
+        .copied()
+        .filter(|r| finite_rect(*r) && r.width() > 0.0 && r.height() > 0.0)
+        .collect();
+    if valid_targets.is_empty() {
+        return result;
+    }
+
+    if let Some((dx, guides_x)) = snap_spacing_axis(moving, &valid_targets, threshold, false) {
+        result.offset.x = dx;
+        result.guides.extend(guides_x);
+    }
+    if let Some((dy, guides_y)) = snap_spacing_axis(moving, &valid_targets, threshold, true) {
+        result.offset.y = dy;
+        result.guides.extend(guides_y);
+    }
+    result
+}
+
+/// Combine an edge/centre [`SnapResult`] with a [`SpacingResult`], keeping
+/// edge/centre snapping on any axis where it already matched and falling back
+/// to equal-spacing on the remaining axes.
+#[must_use]
+pub fn apply_spacing_fallback(snap: &mut SnapResult, spacing: SpacingResult) -> Vec<SpacingGuide> {
+    let snapped_x = snap.guides.iter().any(|g| g.vertical);
+    let snapped_y = snap.guides.iter().any(|g| !g.vertical);
+    let mut guides = Vec::new();
+    if !snapped_x && spacing.guides.iter().any(|g| !g.vertical) {
+        snap.offset.x = spacing.offset.x;
+        guides.extend(spacing.guides.iter().copied().filter(|g| !g.vertical));
+    }
+    if !snapped_y && spacing.guides.iter().any(|g| g.vertical) {
+        snap.offset.y = spacing.offset.y;
+        guides.extend(spacing.guides.iter().copied().filter(|g| g.vertical));
+    }
+    guides
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +699,100 @@ mod tests {
             &lines,
         );
         assert_eq!(bad, SnapResult::default());
+    }
+
+    #[test]
+    fn three_boxes_in_a_row_with_equal_gaps_snap() {
+        // Middle box between left (100..150) and right (250..300):
+        // available space is 100, moving width is 50, so equal gap is 25 at x = 175.
+        let left = rect(100.0, 100.0, 50.0, 40.0);
+        let right = rect(250.0, 100.0, 50.0, 40.0);
+        let moving = rect(178.0, 100.0, 50.0, 40.0);
+        let result = snap_spacing(moving, &[left, right], 6.0);
+        assert_eq!(result.offset.x, -3.0);
+        assert_eq!(result.offset.y, 0.0);
+        assert_eq!(result.guides.len(), 2);
+        assert!(result.guides.iter().all(|g| !g.vertical));
+        assert_eq!(result.guides[0].from, 150.0);
+        assert_eq!(result.guides[0].to, 175.0);
+        assert_eq!(result.guides[1].from, 225.0);
+        assert_eq!(result.guides[1].to, 250.0);
+
+        // Third box beside two existing boxes (gap 24): snaps to 24 px right of the second.
+        let a = rect(100.0, 100.0, 50.0, 40.0);
+        let b = rect(174.0, 100.0, 50.0, 40.0);
+        let moving = rect(245.0, 100.0, 50.0, 40.0); // currently 21 px from b, 3 px from 24
+        let result = snap_spacing(moving, &[a, b], 6.0);
+        assert_eq!(result.offset.x, 3.0);
+        assert_eq!(result.guides.len(), 2);
+    }
+
+    #[test]
+    fn unequal_gaps_beyond_threshold_do_not_snap() {
+        let a = rect(100.0, 100.0, 50.0, 40.0);
+        let b = rect(174.0, 100.0, 50.0, 40.0); // gap 24
+        let moving = rect(260.0, 100.0, 50.0, 40.0); // gap 36 (12 px off, > threshold 6)
+        let result = snap_spacing(moving, &[a, b], 6.0);
+        assert_eq!(result, SpacingResult::default());
+    }
+
+    #[test]
+    fn vertical_columns_snap_equal_gaps() {
+        let top = rect(100.0, 100.0, 60.0, 40.0);
+        let bottom = rect(100.0, 240.0, 60.0, 40.0);
+        // Available space 100, moving height 40 => equal gap 30 at y = 170.
+        let moving = rect(100.0, 166.0, 60.0, 40.0);
+        let result = snap_spacing(moving, &[top, bottom], 6.0);
+        assert_eq!(result.offset.y, 4.0);
+        assert_eq!(result.offset.x, 0.0);
+        assert_eq!(result.guides.len(), 2);
+        assert!(result.guides.iter().all(|g| g.vertical));
+        assert_eq!(result.guides[0].from, 140.0);
+        assert_eq!(result.guides[0].to, 170.0);
+        assert_eq!(result.guides[1].from, 210.0);
+        assert_eq!(result.guides[1].to, 240.0);
+    }
+
+    #[test]
+    fn spacing_ignores_non_finite_rects() {
+        let good_left = rect(100.0, 100.0, 50.0, 40.0);
+        let good_right = rect(250.0, 100.0, 50.0, 40.0);
+        let bad_target = rect(f32::NAN, 100.0, 50.0, 40.0);
+        let moving = rect(178.0, 100.0, 50.0, 40.0);
+        let result = snap_spacing(moving, &[bad_target, good_left, good_right], 6.0);
+        assert_eq!(result.offset.x, -3.0);
+
+        let bad_moving = rect(f32::INFINITY, 100.0, 50.0, 40.0);
+        assert_eq!(
+            snap_spacing(bad_moving, &[good_left, good_right], 6.0),
+            SpacingResult::default()
+        );
+    }
+
+    #[test]
+    fn edge_snap_beats_spacing_snap_and_ties_prefer_smaller_movement() {
+        // Edge target aligns moving.left to 179 (4 px away), while spacing wants 175 (0 px away).
+        // Edge/centre snapping still wins when both apply within threshold.
+        let left = rect(100.0, 100.0, 50.0, 40.0);
+        let right = rect(250.0, 100.0, 50.0, 40.0);
+        let edge_target = rect(179.0, 300.0, 50.0, 40.0);
+        let moving = rect(175.0, 100.0, 50.0, 40.0);
+        let targets = [left, right, edge_target];
+
+        let mut snap = snap_rect(moving, &targets, SLIDE, 6.0);
+        let spacing = snap_spacing(moving, &targets, 6.0);
+        let spacing_guides = apply_spacing_fallback(&mut snap, spacing);
+        assert_eq!(snap.offset.x, 4.0);
+        assert!(spacing_guides.is_empty());
+
+        // Among spacing candidates, smaller movement wins.
+        let a = rect(0.0, 100.0, 40.0, 40.0);
+        let b = rect(60.0, 100.0, 40.0, 40.0); // gap 20
+        let c = rect(125.0, 100.0, 40.0, 40.0); // gap 25
+        // Next to c: gap 20 puts moving at 185, gap 25 puts moving at 190.
+        // At x = 189, gap 25 is 1 px away and gap 20 is 4 px away => 1 px wins.
+        let moving = rect(189.0, 100.0, 40.0, 40.0);
+        let res = snap_spacing(moving, &[a, b, c], 6.0);
+        assert_eq!(res.offset.x, 1.0);
     }
 }

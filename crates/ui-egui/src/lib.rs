@@ -103,6 +103,8 @@ mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
+mod spacing_tests;
+#[cfg(test)]
 mod spell_check_tests;
 #[cfg(test)]
 pub(crate) mod test_harness;
@@ -772,6 +774,8 @@ pub struct UiState {
     pub rulers: rulers::RulerState,
     /// Guides drawn for the active drag, in slide space.
     pub snap_guides: Vec<snap::SnapGuide>,
+    /// Equal-spacing guides drawn for the active move, in slide space.
+    pub spacing_guides: Vec<snap::SpacingGuide>,
     /// Object temporarily focused out of a group by double-clicking it.
     pub group_focus: Option<String>,
     /// Arrange align actions target the slide rather than the selection.
@@ -1086,6 +1090,7 @@ impl Editor {
                 slide_size_dialog: slide_size_dialog::SlideSizeState::default(),
                 rulers: rulers::RulerState::default(),
                 snap_guides: Vec::new(),
+                spacing_guides: Vec::new(),
                 group_focus: None,
                 align_to_slide: false,
                 master_view: false,
@@ -1345,6 +1350,7 @@ impl Editor {
         self.ui.pending_copy_text = None;
         self.ui.status_message = None;
         self.ui.snap_guides.clear();
+        self.ui.spacing_guides.clear();
         self.ui.group_focus = None;
         self.ui.master_view = false;
         self.ui.master_view_return_slide = None;
