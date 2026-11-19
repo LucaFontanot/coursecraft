@@ -315,34 +315,45 @@ fn failed_commands_roll_back_and_name_the_problem() {
 }
 
 #[test]
-fn deleting_a_referenced_object_is_refused() {
+fn deleting_a_referenced_object_takes_its_triggers_in_one_undo() {
     let mut s = Session::blank("T");
     ok(
         &mut s,
         "object.add",
         json!({ "slide": "slide1", "kind": { "type": "button", "label": "Go" }, "frame": { "x": 0, "y": 0, "w": 1, "h": 1 } }),
     );
-    ok(&mut s, "slide.add", json!({}));
     ok(
         &mut s,
-        "trigger.add",
-        json!({ "slide": "slide1", "trigger": {
-        "action": { "action": "jump_to_slide", "target": "next" }, "when": { "event": "click", "object": "button1" } } }),
+        "object.add",
+        json!({ "slide": "slide1", "kind": { "type": "button", "label": "Other" }, "frame": { "x": 0, "y": 0, "w": 1, "h": 1 } }),
     );
-    let e = s
-        .execute(
-            "object.delete",
-            &json!({ "slide": "slide1", "object": "button1" }),
-        )
-        .unwrap_err();
-    assert!(matches!(e, EngineError::Invalid(_)), "{e}");
-    assert!(
-        s.course
-            .slide("slide1")
-            .unwrap()
-            .object("button1")
-            .is_some()
+    ok(&mut s, "slide.add", json!({}));
+    // From the button, acting on the button, a condition-free unrelated one.
+    for trigger in [
+        json!({ "action": { "action": "jump_to_slide", "target": "next" }, "when": { "event": "click", "object": "button1" } }),
+        json!({ "action": { "action": "change_state", "object": "button1", "state": "hidden" }, "when": { "event": "click", "object": "button2" } }),
+        json!({ "action": { "action": "jump_to_slide", "target": "next" }, "when": { "event": "click", "object": "button2" } }),
+    ] {
+        ok(
+            &mut s,
+            "trigger.add",
+            json!({ "slide": "slide1", "trigger": trigger }),
+        );
+    }
+    let result = ok(
+        &mut s,
+        "object.delete",
+        json!({ "slide": "slide1", "object": "button1" }),
     );
+    assert_eq!(result["removed_triggers"], json!(2));
+    let slide = s.course.slide("slide1").unwrap();
+    assert!(slide.object("button1").is_none());
+    assert_eq!(slide.triggers.len(), 1, "the unrelated trigger stays");
+    assert!(s.course.is_playable());
+    ok(&mut s, "edit.undo", json!({}));
+    let slide = s.course.slide("slide1").unwrap();
+    assert!(slide.object("button1").is_some());
+    assert_eq!(slide.triggers.len(), 3, "one undo brings both back");
 }
 
 #[test]
@@ -991,17 +1002,18 @@ fn layer_duplicate_copies_the_new_options() {
 }
 
 #[test]
-fn deleting_a_layer_used_by_a_trigger_is_refused_and_names_it() {
+fn deleting_a_layer_takes_the_triggers_that_show_it() {
     let mut s = Session::blank("Title");
     add_layer_l1(&mut s);
     add_show_layer_trigger(&mut s);
-    let e = s
-        .execute("layer.delete", &json!({ "slide": "slide1", "layer": "l1" }))
-        .unwrap_err();
-    assert!(
-        matches!(e, EngineError::Invalid(ref m) if m.contains("l1")),
-        "{e}"
+    let result = ok(
+        &mut s,
+        "layer.delete",
+        json!({ "slide": "slide1", "layer": "l1" }),
     );
+    assert_eq!(result["removed_triggers"], json!(1));
+    assert!(s.course.slide("slide1").unwrap().triggers.is_empty());
+    assert!(s.course.is_playable());
 }
 
 #[test]

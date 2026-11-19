@@ -2786,10 +2786,12 @@ impl Editor {
         match self.session.execute(id, &params) {
             Ok(v) => {
                 self.select_created(id, &v);
+                self.note_removed_triggers(&v);
                 Some(v)
             }
             Err(e) => {
                 let msg = e.to_string();
+                log_failed_for_test(id, &params, &msg);
                 self.ui.last_error = Some((msg.clone(), self.ui.current_time));
                 self.ui.error_history.push(msg);
                 None
@@ -2812,14 +2814,36 @@ impl Editor {
                 for (step, res) in steps.iter().zip(&results) {
                     self.select_created(&step.0, res);
                 }
+                let removed: u64 = results
+                    .iter()
+                    .filter_map(|res| res.get("removed_triggers").and_then(Json::as_u64))
+                    .sum();
+                self.note_removed_triggers(&serde_json::json!({ "removed_triggers": removed }));
                 Some(results)
             }
             Err(e) => {
                 let msg = e.to_string();
+                log_failed_for_test("batch", &serde_json::json!(steps), &msg);
                 self.ui.last_error = Some((msg.clone(), self.ui.current_time));
                 self.ui.error_history.push(msg);
                 None
             }
+        }
+    }
+
+    /// Tell the author when a delete also removed the triggers that used
+    /// what was deleted (they come back with one Undo).
+    fn note_removed_triggers(&mut self, result: &Json) {
+        let removed = result
+            .get("removed_triggers")
+            .and_then(Json::as_u64)
+            .unwrap_or(0);
+        if removed == 1 {
+            self.set_status("Deleted, with 1 trigger that used it (Undo brings it back)");
+        } else if removed > 1 {
+            self.set_status(format!(
+                "Deleted, with {removed} triggers that used it (Undo brings them back)"
+            ));
         }
     }
 
@@ -3883,4 +3907,21 @@ fn parse_audit_result(val: &Json) -> (Vec<AuditFindingSummary>, Vec<String>) {
         })
         .unwrap_or_default();
     (findings, manual_checks)
+}
+
+/// TEMP: log failed commands while sweeping the test suite.
+#[allow(unused_variables)]
+fn log_failed_for_test(id: &str, params: &Json, msg: &str) {
+    #[cfg(test)]
+    if let Ok(path) = std::env::var("CC_FAILED_LOG") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let name = std::thread::current().name().unwrap_or("").to_owned();
+            let _ = writeln!(f, "{name}\t{id}\t{msg}\t{params}");
+        }
+    }
 }

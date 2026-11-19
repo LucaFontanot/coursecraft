@@ -304,9 +304,18 @@ fn object_delete_and_undo_restores_it() {
     let mut harness = TestHarness::new(course);
     harness.idle_frame();
 
-    // 1. With tab1 selected, deleting it is refused by keep_valid because triggers on s-tabs reference it
+    // 1. tab1 has triggers. Delete takes them with it, says so, and one
+    // Undo brings everything back.
     harness.editor.selection.slide = "s-tabs".into();
     harness.editor.selection.object = Some("tab1".into());
+    let triggers_before = harness
+        .editor
+        .session
+        .course
+        .slide("s-tabs")
+        .expect("s-tabs")
+        .triggers
+        .len();
     harness.frame(vec![Event::Key {
         key: Key::Delete,
         physical_key: None,
@@ -315,24 +324,50 @@ fn object_delete_and_undo_restores_it() {
         modifiers: Modifiers::NONE,
     }]);
     assert!(
-        harness.editor.ui.last_error.is_some(),
-        "deleting tab1 must be refused because triggers point at it"
+        harness.editor.ui.last_error.is_none(),
+        "{:?}",
+        harness.editor.ui.last_error
     );
+    let slide = harness
+        .editor
+        .session
+        .course
+        .slide("s-tabs")
+        .expect("s-tabs");
+    assert!(slide.object("tab1").is_none(), "tab1 deleted");
     assert!(
-        harness
-            .editor
-            .session
-            .course
-            .slide("s-tabs")
-            .expect("s-tabs")
-            .object("tab1")
-            .is_some(),
-        "tab1 must still exist after refused delete"
+        slide.triggers.len() < triggers_before,
+        "its triggers went with it"
     );
+    assert!(harness.editor.session.course.is_playable());
+    let status = harness
+        .editor
+        .ui
+        .status_message
+        .as_ref()
+        .map(|m| m.0.clone())
+        .unwrap_or_default();
+    assert!(
+        status.contains("trigger"),
+        "status says triggers went too: {status}"
+    );
+    harness.frame(vec![Event::Key {
+        key: Key::Z,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    }]);
+    let slide = harness
+        .editor
+        .session
+        .course
+        .slide("s-tabs")
+        .expect("s-tabs");
+    assert!(slide.object("tab1").is_some(), "Undo restores tab1");
+    assert_eq!(slide.triggers.len(), triggers_before, "and its triggers");
 
-    // 2. We now test deleting an unreferenced object: 'title' on slide 's-intro'.
-    // As explained: keep_valid refuses deleting any object referenced by a trigger, so
-    // unreferenced objects are the ones that can be deleted while keeping the course valid.
+    // 2. An object no trigger uses: 'title' on slide 's-intro'.
     harness.editor.selection.slide = "s-intro".into();
     harness.editor.selection.object = Some("title".into());
     harness.frame(vec![Event::Key {
@@ -378,7 +413,7 @@ fn object_delete_and_undo_restores_it() {
 }
 
 #[test]
-fn deleting_referenced_btn_close_on_about_layer_is_refused() {
+fn deleting_btn_close_on_a_layer_takes_its_trigger_and_undoes() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
     harness.idle_frame();
@@ -386,28 +421,8 @@ fn deleting_referenced_btn_close_on_about_layer_is_refused() {
     harness.editor.selection.slide = "s-intro".into();
     harness.editor.selection.layer = Some("about".into());
     harness.editor.selection.object = Some("btn-close".into());
-
-    let rev_before = harness.editor.session.revision;
-
-    harness.frame(vec![Event::Key {
-        key: Key::Delete,
-        physical_key: None,
-        pressed: true,
-        repeat: false,
-        modifiers: Modifiers::NONE,
-    }]);
-
-    assert_eq!(
-        harness.editor.session.revision, rev_before,
-        "revision must be unchanged when deletion is refused"
-    );
-    assert!(
-        harness.editor.ui.last_error.is_some(),
-        "last_error must be set when deletion is refused"
-    );
-    assert!(
-        harness
-            .editor
+    let has_close = |h: &TestHarness| {
+        h.editor
             .session
             .course
             .slide("s-intro")
@@ -416,9 +431,47 @@ fn deleting_referenced_btn_close_on_about_layer_is_refused() {
             .expect("about layer")
             .objects
             .iter()
-            .any(|o| o.id == "btn-close"),
-        "btn-close must still exist"
+            .any(|o| o.id == "btn-close")
+    };
+    let layer_triggers = |h: &TestHarness| {
+        h.editor
+            .session
+            .course
+            .slide("s-intro")
+            .expect("s-intro")
+            .layer("about")
+            .expect("about layer")
+            .triggers
+            .len()
+    };
+    let before = layer_triggers(&harness);
+    harness.frame(vec![Event::Key {
+        key: Key::Delete,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }]);
+    assert!(
+        harness.editor.ui.last_error.is_none(),
+        "{:?}",
+        harness.editor.ui.last_error
     );
+    assert!(!has_close(&harness), "btn-close deleted");
+    assert!(
+        layer_triggers(&harness) < before,
+        "its Close trigger went with it"
+    );
+    assert!(harness.editor.session.course.is_playable());
+    harness.frame(vec![Event::Key {
+        key: Key::Z,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::COMMAND,
+    }]);
+    assert!(has_close(&harness), "Undo restores btn-close");
+    assert_eq!(layer_triggers(&harness), before, "and its trigger");
 }
 
 #[test]
@@ -2250,14 +2303,21 @@ fn slide_layers_panel_hides_in_master_view() {
 }
 
 #[test]
-fn deleting_about_layer_is_refused_due_to_trigger_and_shows_error() {
+fn deleting_about_layer_takes_the_triggers_that_show_it() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
     harness.editor.selection.slide = "s-intro".into();
     harness.editor.selection.layer = Some("about".into());
     harness.idle_frame();
+    let triggers_before = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .expect("slide")
+        .triggers
+        .len();
 
-    let rev_before = harness.editor.session.revision;
     let del_btn_rect = harness
         .editor
         .ui
@@ -2265,21 +2325,12 @@ fn deleting_about_layer_is_refused_due_to_trigger_and_shows_error() {
         .delete_button_rect
         .expect("delete layer button rect");
     harness.click_at(del_btn_rect.center());
+    harness.idle_frame();
 
-    assert_eq!(harness.editor.session.revision, rev_before);
-    let err = harness
-        .editor
-        .ui
-        .last_error
-        .as_ref()
-        .expect("error registered");
     assert!(
-        err.0.to_lowercase().contains("trigger")
-            || err.0.to_lowercase().contains("about")
-            || err.0.to_lowercase().contains("referenced")
-            || err.0.to_lowercase().contains("layer"),
-        "error message should indicate reason for refusal: {}",
-        err.0
+        harness.editor.ui.last_error.is_none(),
+        "{:?}",
+        harness.editor.ui.last_error
     );
     let slide = harness
         .editor
@@ -2287,7 +2338,29 @@ fn deleting_about_layer_is_refused_due_to_trigger_and_shows_error() {
         .course
         .slide("s-intro")
         .expect("slide");
+    assert!(slide.layer("about").is_none(), "layer deleted");
+    assert!(
+        slide.triggers.len() < triggers_before,
+        "the Show layer trigger went with it"
+    );
+    assert!(harness.editor.session.course.is_playable());
+    let status = harness
+        .editor
+        .ui
+        .status_message
+        .as_ref()
+        .map(|m| m.0.clone())
+        .unwrap_or_default();
+    assert!(status.contains("trigger"), "{status}");
+    harness.editor.run("edit.undo", serde_json::json!({}));
+    let slide = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .expect("slide");
     assert!(slide.layer("about").is_some());
+    assert_eq!(slide.triggers.len(), triggers_before);
 }
 
 #[test]

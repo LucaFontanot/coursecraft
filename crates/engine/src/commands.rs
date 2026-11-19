@@ -3617,8 +3617,14 @@ fn layer_delete(s: &mut Session, p: &Json) -> Result<Json> {
             "layer {lid:?} is not on slide {sid:?}"
         )));
     }
+    // Triggers that show, hide or start from the layer go with it.
+    let removed = if was_valid {
+        remove_dangling_triggers(s, &sid, &[format!("layer {lid:?} is not on slide")])
+    } else {
+        0
+    };
     keep_valid(s, was_valid)?;
-    Ok(Json::Null)
+    Ok(json!({ "removed_triggers": removed }))
 }
 
 fn layer_move(s: &mut Session, p: &Json) -> Result<Json> {
@@ -6716,10 +6722,82 @@ fn object_delete(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
     }
-    // A trigger that still points at the object makes the course invalid, so
-    // keep_valid refuses the delete and names the trigger.
+    // Triggers that start from the object or act on it go with it, in the
+    // same undo step. Anything else that still needs it (a group, a
+    // question) makes keep_valid refuse the delete and name it.
+    let removed = if was_valid {
+        remove_dangling_triggers(
+            s,
+            &sid,
+            &[
+                format!("object {oid:?} is not on slide"),
+                format!("target {oid:?} is not on slide"),
+            ],
+        )
+    } else {
+        0
+    };
     keep_valid(s, was_valid)?;
-    Ok(Json::Null)
+    Ok(json!({ "removed_triggers": removed }))
+}
+
+/// Remove the triggers on slide `sid` (base or layers) that validation
+/// reports with a message starting with one of `needles`, one at a time
+/// until none is left. Returns how many were removed.
+///
+/// Validation is the single source of truth for what a trigger refers to,
+/// so the event, the action and the condition are all covered.
+fn remove_dangling_triggers(s: &mut Session, sid: &str, needles: &[String]) -> usize {
+    let Some(slide_path) = s.course.scenes.iter().enumerate().find_map(|(si, scene)| {
+        scene
+            .slides
+            .iter()
+            .position(|slide| slide.id == sid)
+            .map(|li| format!("/scenes/{si}/slides/{li}/"))
+    }) else {
+        return 0;
+    };
+    let mut removed = 0;
+    // Each pass removes one trigger; a slide never has this many.
+    for _ in 0..10_000 {
+        let found = s.course.validate().into_iter().find_map(|issue| {
+            if issue.severity != coursecraft_course::Severity::Error
+                || !needles
+                    .iter()
+                    .any(|n| issue.message.starts_with(n.as_str()))
+            {
+                return None;
+            }
+            let rest = issue.path.strip_prefix(slide_path.as_str())?;
+            let mut parts = rest.split('/');
+            match (parts.next(), parts.next(), parts.next(), parts.next()) {
+                (Some("triggers"), Some(t), _, _) => Some((None, t.parse::<usize>().ok()?)),
+                (Some("layers"), Some(l), Some("triggers"), Some(t)) => {
+                    Some((Some(l.parse::<usize>().ok()?), t.parse::<usize>().ok()?))
+                }
+                _ => None,
+            }
+        });
+        let Some((layer, index)) = found else {
+            break;
+        };
+        let Some(slide) = s.course.slide_mut(sid) else {
+            break;
+        };
+        let triggers = match layer {
+            None => &mut slide.triggers,
+            Some(l) => match slide.layers.get_mut(l) {
+                Some(layer) => &mut layer.triggers,
+                None => break,
+            },
+        };
+        if index >= triggers.len() {
+            break;
+        }
+        triggers.remove(index);
+        removed += 1;
+    }
+    removed
 }
 
 /// Default shape text style: a contrasting colour on the shape's fill, centred
