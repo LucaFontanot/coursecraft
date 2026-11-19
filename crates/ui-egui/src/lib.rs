@@ -103,6 +103,8 @@ mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
+mod preview_variables_tests;
+#[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
 mod spell_check_tests;

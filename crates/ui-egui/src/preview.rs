@@ -11,7 +11,7 @@
 //! costs negligible validation overhead for courses of standard authoring size.
 
 use crate::EditorRequest;
-use coursecraft_course::{Course, Issue, Severity};
+use coursecraft_course::{Course, Issue, Object, ObjectKind, Severity, Value};
 use coursecraft_logic::{Effect, HostInfo, Input, Player, PlayerState};
 use coursecraft_playback::MediaBackend;
 use coursecraft_render::{
@@ -19,6 +19,7 @@ use coursecraft_render::{
     render_player_rgba,
 };
 use egui::{Align, Id, Layout, Rect, ScrollArea, Ui};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A draw seed from the system clock, so Restart can draw different questions.
 /// This crate is desktop-only (L6), so the system clock does not affect wasm.
@@ -101,6 +102,12 @@ fn queue_prints(
 /// Gap between the slide area and the effect log.
 const LOG_GAP: f32 = 10.0;
 
+/// Maximum characters shown inline for a text variable in the live variables panel.
+const MAX_TEXT_PREVIEW_CHARS: usize = 24;
+
+/// Duration (in seconds) that a changed variable stays highlighted before fading out.
+const VAR_HIGHLIGHT_SECS: f64 = 1.0;
+
 /// Maximum number of log lines retained before dropping the oldest entries.
 pub const MAX_PREVIEW_LOG_ENTRIES: usize = 1000;
 
@@ -128,6 +135,14 @@ pub struct Preview {
     pub requests: Vec<EditorRequest>,
     /// Whether the collapsible effect log panel is visible.
     pub show_log: bool,
+    /// Whether the collapsible live variables panel is visible.
+    pub show_variables: bool,
+    /// Variable names referenced via `%var%` in course text objects.
+    referenced_vars: HashSet<String>,
+    /// Last observed variable values, used to detect changes for the highlight fade.
+    last_var_values: BTreeMap<String, Value>,
+    /// Timestamp (`egui::InputState::time`) when each variable last changed.
+    var_changed_at: HashMap<String, f64>,
     /// Whether the course has ended.
     pub ended: bool,
     /// Whether the preview window currently owns keyboard interaction: it was the
@@ -244,6 +259,197 @@ fn poll_media_events(
     feed_inputs(media, player, &mut queue, media_source, log, ended, ctx);
 }
 
+fn collect_percent_vars(text: &str, out: &mut HashSet<String>) {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes.get(i) == Some(&b'%') {
+            if bytes.get(i + 1) == Some(&b'%') {
+                i += 2;
+                continue;
+            }
+            let mut j = i + 1;
+            while j < bytes.len() && bytes.get(j) != Some(&b'%') {
+                j += 1;
+            }
+            if j < bytes.len() {
+                let name_len = j - (i + 1);
+                if (1..=128).contains(&name_len)
+                    && let Some(slice) = bytes.get(i + 1..j)
+                    && let Ok(name) = std::str::from_utf8(slice)
+                {
+                    out.insert(name.to_owned());
+                    i = j + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn collect_object_percent_vars(obj: &Object, out: &mut HashSet<String>) {
+    match &obj.kind {
+        ObjectKind::Text { text, .. } => collect_percent_vars(text, out),
+        ObjectKind::Shape {
+            text: Some(shape_text),
+            ..
+        } => collect_percent_vars(&shape_text.text, out),
+        ObjectKind::Button { label, .. } => collect_percent_vars(label, out),
+        ObjectKind::Checkbox { label, .. } => collect_percent_vars(label, out),
+        ObjectKind::RadioGroup { options, .. } => {
+            for opt in options {
+                collect_percent_vars(&opt.label, out);
+            }
+        }
+        ObjectKind::Marker { title, body, .. } => {
+            collect_percent_vars(title, out);
+            collect_percent_vars(body, out);
+        }
+        ObjectKind::Table { rows, .. } => {
+            for row in rows {
+                for cell in &row.cells {
+                    collect_percent_vars(&cell.text, out);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn referenced_variables_in_course(course: &Course) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for slide in course.slides() {
+        for obj in &slide.objects {
+            collect_object_percent_vars(obj, &mut out);
+        }
+        for layer in &slide.layers {
+            for obj in &layer.objects {
+                collect_object_percent_vars(obj, &mut out);
+            }
+        }
+    }
+    out
+}
+
+fn format_live_value(val: &Value) -> (String, Option<String>) {
+    match val {
+        Value::Bool(b) => (if *b { "true" } else { "false" }.to_owned(), None),
+        Value::Number(n) => {
+            if !n.is_finite() || *n == 0.0 {
+                return ("0".to_owned(), None);
+            }
+            let formatted = format!("{n:.2}");
+            let trimmed = if formatted.contains('.') {
+                formatted.trim_end_matches('0').trim_end_matches('.')
+            } else {
+                formatted.as_str()
+            };
+            (trimmed.to_owned(), None)
+        }
+        Value::Text(s) => {
+            let mut chars = s.chars();
+            let prefix: String = chars.by_ref().take(MAX_TEXT_PREVIEW_CHARS).collect();
+            if chars.next().is_some() {
+                (format!("{prefix}…"), Some(s.clone()))
+            } else {
+                (s.clone(), None)
+            }
+        }
+    }
+}
+
+fn show_variables_panel(
+    ui: &mut Ui,
+    course: &Course,
+    player: &Player,
+    referenced_vars: &HashSet<String>,
+    var_changed_at: &HashMap<String, f64>,
+    now: f64,
+) {
+    let p = coursecraft_render::palette(ui.ctx());
+    ui.label(egui::RichText::new("Variables").strong());
+    if course.variables.is_empty() {
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("No variables in this course.")
+                .small()
+                .color(p.text_secondary),
+        );
+        return;
+    }
+
+    let mut vars: Vec<&coursecraft_course::VariableDef> = course.variables.iter().collect();
+    vars.sort_by_key(|v| !referenced_vars.contains(&v.name));
+
+    ScrollArea::vertical()
+        .id_salt("preview_variables_scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (idx, var) in vars.iter().enumerate() {
+                let live_val = player.variable(&var.name).unwrap_or(&var.value);
+                let (display_val, full_tooltip) = format_live_value(live_val);
+                let highlight_alpha = var_changed_at
+                    .get(&var.name)
+                    .and_then(|&t| {
+                        let elapsed = now - t;
+                        if (0.0..VAR_HIGHLIGHT_SECS).contains(&elapsed) {
+                            Some(((VAR_HIGHLIGHT_SECS - elapsed) / VAR_HIGHLIGHT_SECS) as f32)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0.0);
+                let row_fill = if highlight_alpha > 0.0 {
+                    p.accent.gamma_multiply(0.25 * highlight_alpha)
+                } else if idx % 2 == 1 {
+                    p.hover.gamma_multiply(0.4)
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+
+                egui::Frame::new()
+                    .fill(row_fill)
+                    .inner_margin(egui::Margin::symmetric(6, 4))
+                    .corner_radius(4.0)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            let name_w = (ui.available_width() - 60.0).max(40.0);
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(name_w, 16.0),
+                                Layout::left_to_right(Align::Center),
+                                |ui| {
+                                    ui.add(
+                                        egui::Label::new(egui::RichText::new(&var.name).strong())
+                                            .truncate(),
+                                    );
+                                },
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(
+                                    egui::RichText::new(crate::variables::value_kind_name(
+                                        live_val.kind(),
+                                    ))
+                                    .small()
+                                    .color(p.text_secondary),
+                                );
+                            });
+                        });
+                        let val_resp = ui.add(
+                            egui::Label::new(egui::RichText::new(&display_val).monospace())
+                                .truncate(),
+                        );
+                        if let Some(full) = full_tooltip {
+                            val_resp.on_hover_text(full);
+                        }
+                    });
+            }
+        });
+}
+
 impl Preview {
     /// Create a new preview for the given course, optionally overriding the start slide.
     #[must_use]
@@ -255,6 +461,7 @@ impl Preview {
         {
             course_clone.start_slide = Some(slide.to_owned());
         }
+        let referenced_vars = referenced_variables_in_course(&course_clone);
 
         let errors: Vec<Issue> = course_clone
             .validate()
@@ -275,6 +482,10 @@ impl Preview {
                 log: Vec::new(),
                 requests: Vec::new(),
                 show_log: false,
+                show_variables: false,
+                referenced_vars,
+                last_var_values: BTreeMap::new(),
+                var_changed_at: HashMap::new(),
                 ended: false,
                 has_focus: false,
                 window_rect: None,
@@ -303,6 +514,7 @@ impl Preview {
                     None,
                 );
                 let state = player.state().clone();
+                let last_var_values = state.variables.clone();
                 Self {
                     course: course_clone,
                     course_start: course_start.clone(),
@@ -315,6 +527,10 @@ impl Preview {
                     log,
                     requests,
                     show_log: false,
+                    show_variables: false,
+                    referenced_vars,
+                    last_var_values,
+                    var_changed_at: HashMap::new(),
                     ended,
                     has_focus: false,
                     window_rect: None,
@@ -332,6 +548,10 @@ impl Preview {
                 log: Vec::new(),
                 requests: Vec::new(),
                 show_log: false,
+                show_variables: false,
+                referenced_vars,
+                last_var_values: BTreeMap::new(),
+                var_changed_at: HashMap::new(),
                 ended: false,
                 has_focus: false,
                 window_rect: None,
@@ -379,7 +599,10 @@ impl Preview {
                 &mut self.ended,
                 None,
             );
-            self.state = Some(player.state().clone());
+            let state = player.state().clone();
+            self.last_var_values = state.variables.clone();
+            self.var_changed_at.clear();
+            self.state = Some(state);
             self.ticker = Ticker::new();
             self.frame.restart();
             self.view = SlideView::new();
@@ -478,6 +701,10 @@ impl Preview {
             let media_driver = &mut self.media;
             let log = &mut self.log;
             let show_log = &mut self.show_log;
+            let show_variables = &mut self.show_variables;
+            let referenced_vars = &self.referenced_vars;
+            let last_var_values = &mut self.last_var_values;
+            let var_changed_at = &mut self.var_changed_at;
             let ended = &mut self.ended;
 
             let mut player = match Player::resume(course, state) {
@@ -500,6 +727,10 @@ impl Preview {
             // Keyboard shortcut: F2 toggles effect log
             if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
                 *show_log = !*show_log;
+            }
+            // Keyboard shortcut: F3 toggles live variables
+            if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
+                *show_variables = !*show_variables;
             }
 
             // Top controls bar
@@ -524,6 +755,16 @@ impl Preview {
                 {
                     *show_log = !*show_log;
                 }
+                if crate::widgets::icon_toggle(
+                    ui,
+                    coursecraft_render::Icon::BracketsCurly,
+                    *show_variables,
+                    "Variables (F3)",
+                )
+                .clicked()
+                {
+                    *show_variables = !*show_variables;
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if crate::widgets::icon_button(ui, coursecraft_render::Icon::X, "Close preview")
                         .clicked()
@@ -541,10 +782,11 @@ impl Preview {
             }
 
             let is_log_visible = *show_log;
+            let is_vars_visible = *show_variables;
             let avail = ui.available_size();
-            let (slide_width, log_width) = if is_log_visible {
-                let lw = (avail.x * 0.35).clamp(240.0, 400.0);
-                (avail.x - lw - LOG_GAP, Some(lw))
+            let (slide_width, side_width) = if is_log_visible || is_vars_visible {
+                let sw = (avail.x * 0.35).clamp(240.0, 400.0);
+                (avail.x - sw - LOG_GAP, Some(sw))
             } else {
                 (avail.x, None)
             };
@@ -601,8 +843,23 @@ impl Preview {
                     },
                 );
 
-                // Right area: Effect log
-                if let Some(lw) = log_width {
+                let now = ctx.input(|i| i.time);
+                for var in &course.variables {
+                    let current = player.variable(&var.name).unwrap_or(&var.value);
+                    match last_var_values.get(&var.name) {
+                        Some(prev) if prev != current => {
+                            last_var_values.insert(var.name.clone(), current.clone());
+                            var_changed_at.insert(var.name.clone(), now);
+                        }
+                        None => {
+                            last_var_values.insert(var.name.clone(), current.clone());
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Right area: Live variables and/or Effect log
+                if let Some(sw) = side_width {
                     let gap = ui.allocate_space(egui::vec2(LOG_GAP, avail.y)).1;
                     ui.painter().vline(
                         gap.center().x,
@@ -610,18 +867,67 @@ impl Preview {
                         ui.visuals().widgets.noninteractive.bg_stroke,
                     );
                     ui.allocate_ui_with_layout(
-                        egui::vec2(lw, avail.y),
+                        egui::vec2(sw, avail.y),
                         Layout::top_down(Align::Min),
                         |ui| {
-                            ui.label(egui::RichText::new("Effect Log").strong());
-                            ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .stick_to_bottom(true)
-                                .show(ui, |ui| {
-                                    for line in &*log {
-                                        ui.monospace(line);
-                                    }
-                                });
+                            if is_vars_visible && is_log_visible {
+                                let top_h = ((avail.y - LOG_GAP) * 0.5).max(80.0);
+                                let bot_h = (avail.y - LOG_GAP - top_h).max(80.0);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(sw, top_h),
+                                    Layout::top_down(Align::Min),
+                                    |ui| {
+                                        show_variables_panel(
+                                            ui,
+                                            course,
+                                            &player,
+                                            referenced_vars,
+                                            var_changed_at,
+                                            now,
+                                        );
+                                    },
+                                );
+                                let hgap = ui.allocate_space(egui::vec2(sw, LOG_GAP)).1;
+                                ui.painter().hline(
+                                    hgap.x_range(),
+                                    hgap.center().y,
+                                    ui.visuals().widgets.noninteractive.bg_stroke,
+                                );
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(sw, bot_h),
+                                    Layout::top_down(Align::Min),
+                                    |ui| {
+                                        ui.label(egui::RichText::new("Effect Log").strong());
+                                        ScrollArea::vertical()
+                                            .auto_shrink([false, false])
+                                            .stick_to_bottom(true)
+                                            .show(ui, |ui| {
+                                                for line in &*log {
+                                                    ui.monospace(line);
+                                                }
+                                            });
+                                    },
+                                );
+                            } else if is_vars_visible {
+                                show_variables_panel(
+                                    ui,
+                                    course,
+                                    &player,
+                                    referenced_vars,
+                                    var_changed_at,
+                                    now,
+                                );
+                            } else {
+                                ui.label(egui::RichText::new("Effect Log").strong());
+                                ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .stick_to_bottom(true)
+                                    .show(ui, |ui| {
+                                        for line in &*log {
+                                            ui.monospace(line);
+                                        }
+                                    });
+                            }
                         },
                     );
                 }
