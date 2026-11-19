@@ -34,6 +34,7 @@ pub(crate) mod eyedropper;
 pub mod find;
 pub mod fonts;
 pub mod format_painter;
+pub mod history;
 pub mod input_insert;
 pub mod interaction_gallery;
 pub mod interaction_insert;
@@ -91,6 +92,8 @@ mod find_tests;
 mod guard_counters;
 #[cfg(test)]
 mod guard_tests;
+#[cfg(test)]
+mod history_tests;
 #[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
@@ -790,6 +793,8 @@ pub struct UiState {
     pub media_library: media_library::MediaLibraryState,
     /// Fonts manager window.
     pub show_fonts_window: bool,
+    /// History window.
+    pub show_history: bool,
     /// Installed font families offered by the picker. `None` means not asked yet.
     pub system_fonts: Option<Vec<SystemFontChoice>>,
     /// Licence and embedding facts for course font files, keyed by media path.
@@ -1092,6 +1097,7 @@ impl Editor {
                 show_media_library: false,
                 media_library: media_library::MediaLibraryState::default(),
                 show_fonts_window: false,
+                show_history: false,
                 system_fonts: None,
                 font_facts: std::collections::HashMap::new(),
                 pending_remove_font: None,
@@ -3635,6 +3641,9 @@ impl Editor {
 
         // Custom font manager
         fonts::show_fonts_window(self, ui.ctx());
+
+        // History window
+        history::show_history_window(self, ui.ctx());
 
         // Media Library window
         media_library::show_media_library(self, ui.ctx());

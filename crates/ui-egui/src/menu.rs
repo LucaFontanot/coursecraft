@@ -267,6 +267,8 @@ pub enum MenuRoute {
     OpenFind,
     /// Open the Slides from Outline window.
     OpenOutline,
+    /// Open the History window.
+    OpenHistory,
 }
 
 /// The route for every registry command that has a menu entry.
@@ -285,6 +287,7 @@ pub fn menu_route(id: &str) -> Option<MenuRoute> {
         "object.reorder" => Some(MenuRoute::Reorder),
         "course.find" => Some(MenuRoute::OpenFind),
         "course.import_outline" => Some(MenuRoute::OpenOutline),
+        "edit.history" => Some(MenuRoute::OpenHistory),
         "course.validate" | "edit.undo" | "edit.redo" | "scene.add" | "slide.add"
         | "slide.delete" | "layer.add" | "layer.delete" | "object.duplicate" | "object.delete"
         | "object.group" | "object.ungroup" | "question.insert" | "question.delete"
@@ -1295,6 +1298,7 @@ fn render_open_window_menu_item(
         match cmd.id {
             "course.find" => crate::find::open(editor),
             "course.import_outline" => editor.open_outline_dialog(),
+            "edit.history" => editor.ui.show_history = true,
             _ => editor.ui.show_theme_window = true,
         }
         ui.close();
@@ -1315,7 +1319,7 @@ fn render_registry_menu_item(
 
     if matches!(
         cmd.id,
-        "course.find" | "course.import_outline" | "course.set_theme"
+        "course.find" | "course.import_outline" | "course.set_theme" | "edit.history"
     ) {
         render_open_window_menu_item(editor, ui, cmd, label);
         return;

@@ -262,6 +262,15 @@ static REGISTRY: &[Command] = &[
         run: edit_redo,
     },
     Command {
+        id: "edit.history",
+        label: "History",
+        menu: "Edit/History…",
+        shortcut: None,
+        params: "{}",
+        mutates: false,
+        run: edit_history,
+    },
+    Command {
         id: "scene.add",
         label: "New Scene",
         menu: "Insert/New Scene",
@@ -2127,6 +2136,13 @@ fn edit_undo(s: &mut Session, _p: &Json) -> Result<Json> {
 
 fn edit_redo(s: &mut Session, _p: &Json) -> Result<Json> {
     s.redo().map(|()| Json::Null)
+}
+
+fn edit_history(s: &mut Session, _p: &Json) -> Result<Json> {
+    Ok(json!({
+        "undo": s.undo_names(),
+        "redo": s.redo_names(),
+    }))
 }
 
 fn scene_add(s: &mut Session, p: &Json) -> Result<Json> {
