@@ -181,7 +181,6 @@ fn a_new_action_after_undo_clears_redo() {
 /// BUG: Cmd+Shift+Z (the standard Mac redo) does not redo. Redo is only bound to Ctrl+Y
 /// in the command registry, and the Shift+Z press is handled as an undo.
 #[test]
-#[ignore = "BUG: Cmd+Shift+Z undoes instead of redoing; redo is only bound to Ctrl+Y"]
 fn cmd_shift_z_redoes_after_common_actions() {
     let start = healthy();
     let mut problems = Vec::new();

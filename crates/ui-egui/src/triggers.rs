@@ -3035,8 +3035,10 @@ fn render_condition_group(
             {
                 to_remove = Some(idx);
             }
-            ui.indent(("child_indent", depth, idx), |ui| {
-                render_condition_editor(child, ui, slide, course, depth + 1);
+            ui.vertical(|ui| {
+                ui.indent(("child_indent", depth, idx), |ui| {
+                    render_condition_editor(child, ui, slide, course, depth + 1);
+                });
             });
         });
     }

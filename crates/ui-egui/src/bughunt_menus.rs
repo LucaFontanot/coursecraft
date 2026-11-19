@@ -127,7 +127,6 @@ fn clicking_away_from_fill_menu_over_each_panel_changes_nothing() {
 /// list, also acts on the slide list: the object selection is dropped and the
 /// inspector jumps to Slide. The same fix as for the Slide Layers panel is needed.
 #[test]
-#[ignore = "BUG: clicking away from an open menu over the slide list also acts on the slide list"]
 fn clicking_away_from_fill_menu_over_the_slide_list_changes_nothing() {
     let mut h = TestHarness::new_with_size(healthy(), (1100.0, 700.0));
     select_object(&mut h, "welcome", "w_start", InspectorTab::Format);

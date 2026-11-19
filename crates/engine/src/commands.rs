@@ -10417,14 +10417,29 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
 /// The condition a new freeform question starts with: the first user variable
 /// (if any) compared with zero, else the built-in score percent.
 fn freeform_default_condition(course: &Course) -> Condition {
-    let variable = course
-        .variables
-        .first()
-        .map_or_else(|| "Course.ScorePercent".to_owned(), |v| v.name.clone());
-    Condition::Compare {
-        variable,
-        op: CmpOp::Ge,
-        value: Value::Number(0.0),
+    match course.variables.first() {
+        Some(v) => match &v.value {
+            Value::Bool(_) => Condition::Compare {
+                variable: v.name.clone(),
+                op: CmpOp::Eq,
+                value: Value::Bool(true),
+            },
+            Value::Number(_) => Condition::Compare {
+                variable: v.name.clone(),
+                op: CmpOp::Ge,
+                value: Value::Number(0.0),
+            },
+            Value::Text(_) => Condition::Compare {
+                variable: v.name.clone(),
+                op: CmpOp::Eq,
+                value: Value::Text(String::new()),
+            },
+        },
+        None => Condition::Compare {
+            variable: "Course.ScorePercent".to_owned(),
+            op: CmpOp::Ge,
+            value: Value::Number(0.0),
+        },
     }
 }
 

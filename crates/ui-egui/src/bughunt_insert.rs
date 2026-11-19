@@ -305,7 +305,6 @@ fn insert_then_second_undo_is_harmless() {
 /// `render_condition_group`), and egui asserts that an indent is in a vertical layout.
 /// The healthy-habits slide `q9` is a freeform question with a condition.
 #[test]
-#[ignore = "BUG: a Freeform question's Correct-when condition editor panics (ui.indent inside ui.horizontal)"]
 fn freeform_question_condition_editor_renders_without_panicking() {
     let start = course("examples/healthy-habits/course.json");
     let mut harness = TestHarness::new_with_size(start, (1280.0, 800.0));
@@ -321,7 +320,6 @@ fn freeform_question_condition_editor_renders_without_panicking() {
 /// with a number, so the validation fails and nothing is inserted (no visible
 /// cause in the Question panel beyond the status line).
 #[test]
-#[ignore = "BUG: Insert Question > Freeform fails when the first variable is not a number"]
 fn freeform_question_insert_works_when_the_first_variable_is_a_boolean() {
     let start = course("examples/healthy-habits/course.json");
     let mut harness = TestHarness::new_with_size(start, (1280.0, 800.0));

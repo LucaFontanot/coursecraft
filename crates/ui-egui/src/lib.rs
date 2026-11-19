@@ -3239,6 +3239,27 @@ impl Editor {
             self.ui.story_view = !self.ui.story_view;
         }
 
+        // Redo with Ctrl+Shift+Z / Cmd+Shift+Z comes before the registry
+        // shortcuts: egui matches Ctrl+Z logically (extra Shift ignored), so
+        // Ctrl+Shift+Z must be consumed before edit.undo's Ctrl+Z.
+        if !preview_has_focus
+            && !self.is_cropping()
+            && !self.ui.ai.open
+            && !self.ui.document.open
+            && !self.ui.alt.open
+            && !self.ui.translate.open
+            && let Some(sc) = menu::parse_shortcut("Ctrl+Shift+Z")
+        {
+            let conflict = sc.conflicts_with_text_editing()
+                && (ui.ctx().egui_wants_keyboard_input() || ui.memory(|m| m.focused().is_some()));
+            if !conflict
+                && ui.input_mut(|i| i.consume_shortcut(&sc))
+                && let Some(params) = menu::adapter(self, "edit.redo")
+            {
+                self.run("edit.redo", params);
+            }
+        }
+
         // Handle keyboard shortcuts from registry. More specific shortcuts run
         // first so Cmd+Shift+G is not swallowed by Cmd+G.
         let mut shortcuts: Vec<(&coursecraft_engine::Command, &str)> = registry()

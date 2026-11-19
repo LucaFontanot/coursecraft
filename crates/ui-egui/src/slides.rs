@@ -1136,7 +1136,10 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             // Thumbnail click, drag and context menu interaction
             let thumb_response =
                 ui.interact(thumb_rect, ui.scope_id().with(&slide.id), Sense::click());
-            if editor.ui.slide_drag.is_none()
+            let raw_pointer = ui.input(|i| i.pointer.interact_pos());
+            let covered = raw_pointer.is_some_and(|pos| !crate::widgets::pointer_reaches(ui, pos));
+            if !covered
+                && editor.ui.slide_drag.is_none()
                 && ui.input(|i| i.pointer.primary_pressed())
                 && thumb_response.contains_pointer()
             {
@@ -1154,11 +1157,11 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     target_index: slide_idx,
                 });
             }
-            if thumb_response.clicked() {
+            if !covered && thumb_response.clicked() {
                 editor.ui.last_active_area = crate::ActiveArea::Navigator;
                 slide_to_select = Some(slide.id.clone());
             }
-            if thumb_response.secondary_clicked() || thumb_response.has_focus() {
+            if (!covered && thumb_response.secondary_clicked()) || thumb_response.has_focus() {
                 editor.ui.last_active_area = crate::ActiveArea::Navigator;
             }
 

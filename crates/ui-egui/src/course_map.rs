@@ -360,7 +360,10 @@ fn show_map_thumbnail(
     // Tab reachability: a clicked thumbnail can take keyboard focus, and
     // Enter on it opens the slide (handled with the global map keys too).
     let resp = resp.on_hover_text(slide_title.clone());
-    if editor.ui.course_map.drag.is_none()
+    let raw_pointer = ui.input(|i| i.pointer.interact_pos());
+    let covered = raw_pointer.is_some_and(|pos| !crate::widgets::pointer_reaches(ui, pos));
+    if !covered
+        && editor.ui.course_map.drag.is_none()
         && ui.input(|i| i.pointer.primary_pressed())
         && resp.contains_pointer()
     {
@@ -383,13 +386,13 @@ fn show_map_thumbnail(
             target_index: source_index,
         });
     }
-    if resp.clicked() {
+    if !covered && resp.clicked() {
         editor.ui.last_active_area = crate::ActiveArea::Navigator;
         editor.selection.slide = slide_id.to_owned();
         editor.selection.layer = None;
         editor.selection.clear_objects();
     }
-    if resp.double_clicked() {
+    if !covered && resp.double_clicked() {
         editor.selection.slide = slide_id.to_owned();
         editor.selection.layer = None;
         editor.selection.clear_objects();
