@@ -80,6 +80,14 @@ mod alt_text_tests;
 #[cfg(test)]
 mod audio_ai_tests;
 #[cfg(test)]
+mod bughunt_insert;
+#[cfg(test)]
+mod bughunt_menus;
+#[cfg(test)]
+mod bughunt_stress;
+#[cfg(test)]
+mod bughunt_undo;
+#[cfg(test)]
 mod document_tests;
 #[cfg(test)]
 mod eyedropper_tests;
