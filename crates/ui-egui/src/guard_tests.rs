@@ -263,3 +263,35 @@ fn spelling_window_asks_for_suggestions_when_open() {
         "the window asks for the current word's suggestions"
     );
 }
+
+/// Course validation runs once per course revision, not on every idle frame.
+#[test]
+fn validation_runs_once_per_revision() {
+    let mut h = hello();
+    h.editor.ui.bottom_tab = crate::BottomTab::Triggers;
+    // Initial frame runs validation for revision 0.
+    let _ = h.idle_frame();
+    reset_counts();
+    for _ in 0..20 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::validation_runs(),
+        0,
+        "idle frames with no revision change must not re-run course validation"
+    );
+
+    // One edit bumps the revision and triggers validation exactly once.
+    let _ = h.editor.run(
+        "object.delete",
+        serde_json::json!({ "slide": "s-intro", "object": "btn-start" }),
+    );
+    for _ in 0..5 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::validation_runs(),
+        1,
+        "a single revision bump must run course validation exactly once"
+    );
+}

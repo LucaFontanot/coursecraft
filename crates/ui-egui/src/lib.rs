@@ -113,6 +113,8 @@ mod tests;
 #[cfg(test)]
 mod translate_tests;
 #[cfg(test)]
+mod trigger_problems_tests;
+#[cfg(test)]
 mod walkthrough_tests;
 
 pub use ai_settings::{
@@ -610,6 +612,9 @@ pub struct UiState {
     pub validation_errors: usize,
     pub validation_warnings: usize,
     pub validation_issues: Vec<ValidationIssueSummary>,
+    /// Cached trigger validation issues, keyed by canonical trigger path
+    /// (e.g. `"/scenes/0/slides/2/triggers/1"` or `"/scenes/0/slides/2/layers/0/triggers/3"`).
+    pub trigger_issues_by_path: std::collections::HashMap<String, Vec<ValidationIssueSummary>>,
     pub audit_findings: Vec<AuditFindingSummary>,
     pub audit_manual_checks: Vec<String>,
     pub show_validation_window: bool,
@@ -985,6 +990,7 @@ impl Editor {
                 validation_errors: 0,
                 validation_warnings: 0,
                 validation_issues: Vec::new(),
+                trigger_issues_by_path: std::collections::HashMap::new(),
                 audit_findings: Vec::new(),
                 audit_manual_checks: Vec::new(),
                 show_validation_window: false,
@@ -3067,8 +3073,11 @@ impl Editor {
 
     /// Run validation and the accessibility audit now, through the engine.
     pub(crate) fn refresh_validation(&mut self) {
+        #[cfg(test)]
+        crate::guard_counters::note_validation_run();
         if let Some(res) = self.run("course.validate", serde_json::json!({})) {
             let (errs, warns, issues) = parse_validation_result(&res);
+            self.ui.trigger_issues_by_path = index_trigger_issues(&issues);
             self.ui.validation_errors = errs;
             self.ui.validation_warnings = warns;
             self.ui.validation_issues = issues;
@@ -3986,6 +3995,33 @@ fn parse_validation_result(val: &Json) -> (usize, usize, Vec<ValidationIssueSumm
     }
 
     (errors, warnings, issues)
+}
+
+/// Extract the canonical trigger path prefix from a validation issue path
+/// (e.g. `"/scenes/0/slides/2/triggers/1"` from `"/scenes/0/slides/2/triggers/1/action"`),
+/// or `None` if the path does not refer to a specific trigger.
+pub(crate) fn trigger_path_key(path: &str) -> Option<&str> {
+    let marker = "/triggers/";
+    let idx = path.find(marker)?;
+    let rest = &path[idx + marker.len()..];
+    let seg = rest.split('/').next()?;
+    if seg.is_empty() || !seg.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(&path[..idx + marker.len() + seg.len()])
+}
+
+fn index_trigger_issues(
+    issues: &[ValidationIssueSummary],
+) -> std::collections::HashMap<String, Vec<ValidationIssueSummary>> {
+    let mut map: std::collections::HashMap<String, Vec<ValidationIssueSummary>> =
+        std::collections::HashMap::new();
+    for issue in issues {
+        if let Some(key) = trigger_path_key(&issue.path) {
+            map.entry(key.to_owned()).or_default().push(issue.clone());
+        }
+    }
+    map
 }
 
 fn parse_audit_result(val: &Json) -> (Vec<AuditFindingSummary>, Vec<String>) {

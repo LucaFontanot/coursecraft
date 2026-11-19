@@ -1403,6 +1403,31 @@ pub fn show_triggers_tab(
         None => slide_clone.triggers.clone(),
     };
 
+    let trigger_prefix = trigger_list_path_prefix(
+        &editor.session.course,
+        &slide_clone.id,
+        selected_layer.as_deref(),
+    );
+    let trigger_issues: Vec<Vec<crate::ValidationIssueSummary>> = (0..triggers.len())
+        .map(|idx| {
+            trigger_prefix
+                .as_ref()
+                .and_then(|prefix| {
+                    editor
+                        .ui
+                        .trigger_issues_by_path
+                        .get(&format!("{prefix}/{idx}"))
+                })
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect();
+    let problem_indices: Vec<usize> = trigger_issues
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, issues)| (!issues.is_empty()).then_some(idx))
+        .collect();
+
     let p = coursecraft_render::palette(ui.ctx());
     // Header row: caption on the left, quiet "+ Add trigger" on the right.
     ui.horizontal(|ui| {
@@ -1451,6 +1476,51 @@ pub fn show_triggers_tab(
             .and_then(|(k, i)| (k == owner_key).then_some(i))
     });
     let mut new_active_row: Option<usize> = None;
+
+    if !problem_indices.is_empty() {
+        let has_error = problem_indices.iter().any(|&idx| {
+            trigger_issues
+                .get(idx)
+                .is_some_and(|issues| issues.iter().any(|i| i.severity == "error"))
+        });
+        let note_color = if has_error { p.danger } else { p.warning };
+        let scope = if selected_layer.is_some() {
+            "layer"
+        } else {
+            "slide"
+        };
+        let note = if problem_indices.len() == 1 {
+            format!("1 trigger on this {scope} needs attention")
+        } else {
+            format!(
+                "{} triggers on this {scope} need attention",
+                problem_indices.len()
+            )
+        };
+        ui.horizontal(|ui| {
+            ui.label(
+                coursecraft_render::icon(
+                    coursecraft_render::Icon::Warning,
+                    coursecraft_render::ICON_SM,
+                )
+                .color(note_color),
+            );
+            ui.label(coursecraft_render::small(note).color(note_color));
+            if let Some(&first_idx) = problem_indices.first()
+                && let Some(trig) = triggers.get(first_idx)
+                && crate::quiet_button(ui, "Edit first", crate::QuietTone::Accent, true).clicked()
+            {
+                new_active_row = Some(first_idx);
+                editor.ui.trigger_form = Some(TriggerFormState::from_existing(
+                    first_idx,
+                    trig,
+                    &slide_clone,
+                    selected_layer.as_deref(),
+                    &editor.session.course,
+                ));
+            }
+        });
+    }
 
     ScrollArea::vertical()
         .id_salt("triggers_list_scroll")
@@ -1516,6 +1586,23 @@ pub fn show_triggers_tab(
                                 ui.label(format!("{}.", idx + 1))
                             },
                         );
+                        if let Some(issues) = trigger_issues.get(idx).filter(|v| !v.is_empty()) {
+                            let is_error = issues.iter().any(|i| i.severity == "error");
+                            let icon_color = if is_error { p.danger } else { p.warning };
+                            let tooltip = issues
+                                .iter()
+                                .map(|i| i.message.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            ui.label(
+                                coursecraft_render::icon(
+                                    coursecraft_render::Icon::Warning,
+                                    coursecraft_render::ICON_SM,
+                                )
+                                .color(icon_color),
+                            )
+                            .on_hover_text(tooltip);
+                        }
                         if trig.disabled {
                             ui.label(RichText::new(&desc).color(p.text_tertiary));
                             ui.label(coursecraft_render::small("Off").color(p.text_tertiary));
@@ -1673,6 +1760,42 @@ pub fn show_triggers_tab(
 
     if let Some(idx) = new_active_row {
         ui.data_mut(|d| d.insert_temp(active_id, (owner_key, idx)));
+    }
+}
+
+/// Canonical validation path prefix for the triggers on `slide_id` (and optional `layer_id`),
+/// matching `coursecraft_course::Course::validate` paths (e.g. `"/scenes/0/slides/2/triggers"`).
+fn trigger_list_path_prefix(
+    course: &coursecraft_course::Course,
+    slide_id: &str,
+    layer_id: Option<&str>,
+) -> Option<String> {
+    let slide_path = course
+        .scenes
+        .iter()
+        .enumerate()
+        .find_map(|(si, scene)| {
+            scene
+                .slides
+                .iter()
+                .position(|s| s.id == slide_id)
+                .map(|li| format!("/scenes/{si}/slides/{li}"))
+        })
+        .or_else(|| {
+            course.banks.iter().enumerate().find_map(|(bi, bank)| {
+                bank.slides
+                    .iter()
+                    .position(|s| s.id == slide_id)
+                    .map(|si| format!("/banks/{bi}/slides/{si}"))
+            })
+        })?;
+    match layer_id {
+        Some(lid) => {
+            let slide = course.slide(slide_id)?;
+            let lyi = slide.layers.iter().position(|l| l.id == lid)?;
+            Some(format!("{slide_path}/layers/{lyi}/triggers"))
+        }
+        None => Some(format!("{slide_path}/triggers")),
     }
 }
 
