@@ -6,6 +6,28 @@ An open-source, clean-room alternative to Articulate Storyline 360, written in p
 
 > **Status: early.** You can build a course in the visual editor, from text, shapes, images, audio, video, triggers, variables, layers and quizzes, and publish it for SCORM 1.2, SCORM 2004, cmi5, xAPI or LTI 1.3. It's tested against local mock servers. It has not yet been certified against commercial LMSs, so try a package in yours before relying on it.
 
+## Screenshots
+
+<p align="center"><img src="docs/screenshots/tour.gif" alt="A tour of CourseCraft: the editor, themes, interactions, triggers, quizzes, the learner player and publishing" width="900"></p>
+
+The sample course "Healthy Habits at Work" was built entirely with `coursecraft-cli` commands; its pictures were made with AI. Tap or click any picture below to see it full size.
+
+<details>
+<summary><b>All screenshots (17)</b></summary>
+<br>
+<table>
+<tr><td width="50%" align="center"><a href="docs/screenshots/editor.jpg"><img src="docs/screenshots/editor.jpg" alt="The editor"></a><br><sub>The editor</sub></td><td width="50%" align="center"><a href="docs/screenshots/editor-dark-light.jpg"><img src="docs/screenshots/editor-dark-light.jpg" alt="Dark and light themes"></a><br><sub>Dark and light themes</sub></td></tr>
+<tr><td width="50%" align="center"><a href="docs/screenshots/design-light.jpg"><img src="docs/screenshots/design-light.jpg" alt="Designing a slide"></a><br><sub>Designing a slide</sub></td><td width="50%" align="center"><a href="docs/screenshots/interactions-gallery.jpg"><img src="docs/screenshots/interactions-gallery.jpg" alt="Ready-made interactions"></a><br><sub>Ready-made interactions</sub></td></tr>
+<tr><td width="50%" align="center"><a href="docs/screenshots/markers-dark-light.jpg"><img src="docs/screenshots/markers-dark-light.jpg" alt="Markers on a picture"></a><br><sub>Markers on a picture</sub></td><td width="50%" align="center"><a href="docs/screenshots/triggers.jpg"><img src="docs/screenshots/triggers.jpg" alt="Triggers, without code"></a><br><sub>Triggers, without code</sub></td></tr>
+<tr><td width="50%" align="center"><a href="docs/screenshots/quiz-editor.jpg"><img src="docs/screenshots/quiz-editor.jpg" alt="Question editor"></a><br><sub>Question editor</sub></td><td width="50%" align="center"><a href="docs/screenshots/animate.jpg"><img src="docs/screenshots/animate.jpg" alt="Animation"></a><br><sub>Animation</sub></td></tr>
+<tr><td width="50%" align="center"><a href="docs/screenshots/publish.jpg"><img src="docs/screenshots/publish.jpg" alt="Publish to any LMS"></a><br><sub>Publish to any LMS</sub></td><td width="50%" align="center"><a href="docs/screenshots/cards-dark-light.jpg"><img src="docs/screenshots/cards-dark-light.jpg" alt="Cards, dark and light"></a><br><sub>Cards, dark and light</sub></td></tr>
+<tr><td width="50%" align="center"><a href="docs/screenshots/triggers-dark-light.jpg"><img src="docs/screenshots/triggers-dark-light.jpg" alt="Triggers, dark and light"></a><br><sub>Triggers, dark and light</sub></td><td width="50%" align="center"><a href="docs/screenshots/steps-dark-light.jpg"><img src="docs/screenshots/steps-dark-light.jpg" alt="Process steps, dark and light"></a><br><sub>Process steps, dark and light</sub></td></tr>
+<tr><td width="50%" align="center"><a href="docs/screenshots/player-title.jpg"><img src="docs/screenshots/player-title.jpg" alt="Learner player"></a><br><sub>Learner player</sub></td><td width="50%" align="center"><a href="docs/screenshots/player-flip-cards.jpg"><img src="docs/screenshots/player-flip-cards.jpg" alt="Flip cards"></a><br><sub>Flip cards</sub></td></tr>
+<tr><td width="50%" align="center"><a href="docs/screenshots/player-quiz.jpg"><img src="docs/screenshots/player-quiz.jpg" alt="A quiz question"></a><br><sub>A quiz question</sub></td><td width="50%" align="center"><a href="docs/screenshots/player-menu.jpg"><img src="docs/screenshots/player-menu.jpg" alt="Slide menu"></a><br><sub>Slide menu</sub></td></tr>
+<tr><td width="50%" align="center"><a href="docs/screenshots/player-finish.jpg"><img src="docs/screenshots/player-finish.jpg" alt="Finish slide"></a><br><sub>Finish slide</sub></td></tr>
+</table>
+</details>
+
 ## Get CourseCraft
 
 Download the latest version from the **Releases** page of this repository: a `.dmg` for macOS on Apple Silicon, an `.exe` for Windows, or a `.tar.gz` for Linux (x86-64; built automatically but less tested, so reports are welcome). It's free, with no account and no subscription.
