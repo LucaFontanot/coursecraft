@@ -2,21 +2,24 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
-## Unreleased
+## 0.2.1
 
-- A new sample course, **Healthy Habits at Work**, opens behind the welcome screen on a fresh launch and is first under Explore an example. Its 36 slides show off every feature: narration with objects timed to the spoken words (also inside layers), a video with cue points, a Lottie animation, all 12 question types, a question bank with a random draw, every ready-made interaction, inputs, timers, drag and drop, layers, states, a slide template and a certificate.
-- The player's outline drawer no longer draws scrolled rows over its header and tabs. Its rows take no clicks while it slides in, and on the web the screen-reader layer can no longer scroll away from the controls it describes.
-- Saving a project now keeps the background music and any media used only by question-bank slides.
-- Animations work again: what you pick in the Animations panel is now saved (it was lost, so nothing played and moving the object on the timeline seemed to reset it), and the timeline's Play button shows entrances and exits on the slide.
-- A sound longer than its slide plays again from the start on the next Play, and scrubbing back works (it used to jump straight to the end).
-- Deleting a button (or any object) that has triggers now works: its triggers go with it, the status bar says how many, and one Undo brings everything back. Deleting a layer takes the triggers that show it.
-- Speaker notes typed in the Slide tab are saved (they were lost).
-- Audio and video you place play by themselves, like narration, and a slide shorter than the sound or video grows to fit it.
-- F12 previews the current slide and Shift+F12 previews from the start.
+A new sample course that shows off every feature, and the fixes we found by building it.
+
+- **Healthy Habits at Work:** a new sample course opens behind the welcome screen on a fresh launch and is first under Explore an example. Its 36 slides use every feature: narration with objects timed to the spoken words (also inside layers), a video with cue points, a Lottie animation, all 12 question types, a question bank with a random draw, every ready-made interaction, layers, states, a slide template, a custom font, background music and a certificate.
+- **Animations work again:** what you pick in the Animations panel is now saved, so entrances and exits play, and the timeline's Play button shows them on the slide.
+- **Audio and video play by themselves:** media you place starts with the slide, like narration, and a slide shorter than its sound or video grows to fit. A long sound starts from the beginning on the next Play, and scrubbing back works.
+- **Faster typing:** typing in long text with spell check on is fast again (it took most of a second per key in 0.2.0). The editor also stops redrawing while idle, and the slide list draws only the thumbnails you can see.
+- **Quick preview:** F12 previews the current slide and Shift+F12 previews from the start.
+- **Scenes:** each scene in the slide list has a + button for a new slide in that scene, and New Scene starts with a slide of its own.
+
+**Fixes**
+- Deleting an object that has triggers works: its triggers go with it, the status bar says how many, and one Undo brings everything back. Deleting a layer also removes the triggers that show it.
+- Speaker notes typed in the Slide tab are saved.
+- Saving keeps the course's background music and any media used only by question-bank slides.
+- The player's outline drawer no longer draws scrolled rows over its header and tabs, and its rows ignore clicks while it slides in. On the web, the screen-reader layer no longer drifts away from the rows it describes.
 - Choosing a value that is already set no longer adds an Undo step that does nothing.
-- Each scene in the slide list has a + button for a new slide in that scene, and New Scene starts with a slide of its own.
-- Typing in long text with spell check on is fast again (it took most of a second per key in 0.2.0), the editor no longer redraws while idle, decoded pictures have a memory ceiling, and the slide list only draws the thumbnails you can see.
-- Flip cards now have readable text on both sides with any theme colour (a white card with an accent outline, turning to an accent tint), and process-step labels are centred under their circles.
+- Flip cards have readable text on both sides with any theme colour, and process-step labels are centred under their circles.
 
 ## 0.2.0
 
