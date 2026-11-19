@@ -47,7 +47,7 @@ fn error_set(course: &Course) -> BTreeSet<String> {
 }
 
 #[test]
-#[ignore = "BUG: the random walk hits the Freeform condition editor panic (see freeform_question_condition_editor_renders_without_panicking)"]
+#[ignore = "slow (about 75 s): run with --ignored before a release"]
 fn random_walk_over_healthy_habits_keeps_the_editor_sane() {
     const STEPS: usize = 2000;
     const W: f32 = 1280.0;

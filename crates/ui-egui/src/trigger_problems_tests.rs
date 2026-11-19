@@ -121,7 +121,7 @@ fn broken_trigger_shows_icon_and_tooltip_and_fixing_removes_them() {
 }
 
 /// When multiple triggers on a slide have problems, the note reports the count
-/// and clicking "Edit first" selects the first broken trigger and opens its editor.
+/// and clicking "Fix the first one" selects the first broken trigger and opens its editor.
 #[test]
 fn multiple_broken_triggers_show_count_and_edit_first_opens_editor() {
     let json = r#"{
@@ -157,7 +157,9 @@ fn multiple_broken_triggers_show_count_and_edit_first_opens_editor() {
         "expected plural attention note for 2 broken triggers"
     );
 
-    let edit_btn = h.find_text("Edit first").expect("Edit first button");
+    let edit_btn = h
+        .find_text("Fix the first one")
+        .expect("Fix the first one button");
     h.click_at(edit_btn);
     h.idle_frame();
 

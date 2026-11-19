@@ -2,6 +2,19 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## Unreleased
+
+- **Undo history:** Undo and Redo in the Edit menu name the step ("Undo Set Fill Style"), and Edit ▸ History… lists every step; click one to go straight back to it.
+- **Equal-spacing guides:** while you drag an object, guides show when its gap to a neighbour matches the other gaps in the row or column, with the gap in pixels, and it snaps into place.
+- **Problems on triggers:** the Triggers tab marks a trigger that can't work (for example, it uses an object you deleted) with a warning and the reason, and says how many need attention.
+- **Live variables in Preview:** a Variables panel (F3) in the preview shows every variable's value as it changes, so you can see why a branch went one way.
+
+**Fixes**
+- Opening "Correct when" on a Freeform question no longer crashes the editor.
+- A click that closes a menu over the slide list or the course map no longer also switches the slide.
+- Cmd+Shift+Z (Ctrl+Shift+Z on Windows and Linux) redoes; it used to undo.
+- Insert ▸ Question ▸ Freeform works when the course's first variable is true/false or text.
+
 ## 0.2.1
 
 A new sample course that shows off every feature, and the fixes we found by building it.

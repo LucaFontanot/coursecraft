@@ -1508,7 +1508,8 @@ pub fn show_triggers_tab(
             ui.label(coursecraft_render::small(note).color(note_color));
             if let Some(&first_idx) = problem_indices.first()
                 && let Some(trig) = triggers.get(first_idx)
-                && crate::quiet_button(ui, "Edit first", crate::QuietTone::Accent, true).clicked()
+                && crate::quiet_button(ui, "Fix the first one", crate::QuietTone::Accent, true)
+                    .clicked()
             {
                 new_active_row = Some(first_idx);
                 editor.ui.trigger_form = Some(TriggerFormState::from_existing(

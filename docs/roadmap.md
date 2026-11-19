@@ -233,6 +233,16 @@ Measure first, then fix only what the numbers show, and leave count-based tests 
 - Fixes for every stage over budget, quicker start-up and a memory ceiling for pictures.
 - Count-based guard tests in the normal test run.
 
+## M22 Editor upgrades ✅
+
+Plan: `docs/plans/m22-editor-upgrades.md`. Implemented by Gemini 4 Hydrogen, reviewed by Opus.
+
+- Named undo steps and a History panel that jumps to any step.
+- Equal-spacing smart guides with gap labels.
+- The Triggers tab marks triggers with problems, with the reason.
+- A live variables panel in Preview (read-only; no runtime change).
+- A tester-style bug hunt (`docs/bug-hunt/2026-11-20.md`) found a crash and three more bugs, all fixed with tests; a 2,000-step random-click test is kept for release checks.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
