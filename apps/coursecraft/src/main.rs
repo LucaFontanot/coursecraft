@@ -992,7 +992,12 @@ impl EditorApp {
             }
             EditorRequest::Preview { .. } => {}
             EditorRequest::PickImage => {
-                if let Some(path) = files::pick_image_file() {
+                let picked = files::pick_image_file();
+                if picked.is_none() {
+                    // Cancelled: a picture fill waiting for this file is off.
+                    self.editor.pending_picture_fill = None;
+                }
+                if let Some(path) = picked {
                     let name = path
                         .file_name()
                         .and_then(|n| n.to_str())

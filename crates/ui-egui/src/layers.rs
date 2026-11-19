@@ -550,8 +550,11 @@ fn show_layer_row(
     let focused = focus_layer == Some(layer_id);
     let hidden = editor.ui.layers.is_hidden(layer_id);
 
-    let pointer = ui.input(|input| input.pointer.interact_pos());
-    let primary_pressed = ui.input(|input| input.pointer.primary_pressed());
+    // A pointer over a menu or window drawn on top of the panel is not over the row.
+    let raw_pointer = ui.input(|input| input.pointer.interact_pos());
+    let covered = raw_pointer.is_some_and(|pos| !crate::widgets::pointer_reaches(ui, pos));
+    let pointer = raw_pointer.filter(|_| !covered);
+    let primary_pressed = pointer.is_some() && ui.input(|input| input.pointer.primary_pressed());
     let over_eye = pointer.is_some_and(|pos| eye_rect.contains(pos));
     let over_gear = pointer.is_some_and(|pos| gear_rect.contains(pos));
 
@@ -569,7 +572,7 @@ fn show_layer_row(
         }
     }
 
-    if !over_eye && !over_gear {
+    if !covered && !over_eye && !over_gear {
         if response.double_clicked() {
             start_layer_rename(editor, slide_id, layer_id);
         } else if response.clicked() {

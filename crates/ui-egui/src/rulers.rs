@@ -175,7 +175,9 @@ pub fn show(editor: &mut Editor, ui: &Ui, painter: &Painter, t: &SlideTransform,
         return;
     }
     let pos = ui.input(|i| i.pointer.interact_pos());
-    let pressed = ui.input(|i| i.pointer.primary_pressed());
+    // A press on a menu or popup drawn over a ruler or guide is not meant for it.
+    let pressed = ui.input(|i| i.pointer.primary_pressed())
+        && pos.is_some_and(|pos| crate::widgets::pointer_reaches(ui, pos));
     let down = ui.input(|i| i.pointer.primary_down());
 
     if editor.ui.rulers.drag.is_none()

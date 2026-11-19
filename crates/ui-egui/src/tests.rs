@@ -12024,6 +12024,9 @@ fn inspector_shape_swap_is_one_undo_step() {
 fn inspector_switches_a_shape_to_a_linear_gradient_and_adds_a_stop() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
+    // The panel lives on the About layer: select it the way a click there does.
+    harness.editor.selection.slide = "s-intro".into();
+    harness.editor.selection.layer = Some("about".into());
     harness.editor.selection.set_many(["about-panel"]);
     harness.idle_frame();
 
@@ -12060,22 +12063,24 @@ fn inspector_switches_a_shape_to_a_linear_gradient_and_adds_a_stop() {
         "shape now has a linear fill: {kind:?}"
     );
 
-    // The popup click can also land on the canvas; reselect and return to Format.
-    harness.editor.selection.set_many(["about-panel"]);
-    harness.editor.ui.inspector_tab = InspectorTab::Format;
-    harness.idle_frame();
+    // The click on the menu item is not also a click on what lies under the menu.
+    assert_eq!(
+        harness.editor.selection.object.as_deref(),
+        Some("about-panel")
+    );
+    assert_eq!(harness.editor.ui.inspector_tab, InspectorTab::Format);
 
     let add_stop = {
         let mut found = None;
         for _ in 0..40 {
             let panel = harness.right_panel_rect();
-            if let Some(position) = harness.find_text_in("Add stop", panel) {
+            if let Some(position) = harness.find_text_in("Add colour", panel) {
                 found = Some(position);
                 break;
             }
             harness.scroll_over(panel.center(), -120.0);
         }
-        found.expect("visible Add stop button")
+        found.expect("visible Add colour button")
     };
     harness.click_at(add_stop);
     harness.idle_frame();

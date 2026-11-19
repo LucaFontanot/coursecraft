@@ -445,10 +445,18 @@ fn render_time_ruler(
     )));
     let half_second_px = 500.0 / duration_ms as f32 * track_width;
     let tick_step: u32 = if half_second_px >= 120.0 { 100 } else { 500 };
+    // Label every 1, 2, 5, 10, ... seconds, whatever keeps labels about 40 px apart.
+    let second_px = 1000.0 / duration_ms.max(1) as f32 * track_width;
+    let label_every_s: u32 = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
+        .into_iter()
+        .find(|step| *step as f32 * second_px >= 40.0)
+        .unwrap_or(600);
+    let mut last_label_right = f32::NEG_INFINITY;
     let mut ms_tick: u32 = 0;
     while ms_tick <= duration_ms {
         let x = ms_to_x(ms_tick);
         let is_sec = ms_tick.is_multiple_of(1000);
+        let labelled = is_sec && (ms_tick / 1000).is_multiple_of(label_every_s);
         let tick_h = if is_sec { 12.0 } else { 6.0 };
         painter.line_segment(
             [
@@ -457,7 +465,7 @@ fn render_time_ruler(
             ],
             Stroke::new(1.0, p.text_tertiary),
         );
-        if is_sec && (ruler_rect.min.x - 0.5..=ruler_rect.max.x + 0.5).contains(&x) {
+        if labelled && (ruler_rect.min.x - 0.5..=ruler_rect.max.x + 0.5).contains(&x) {
             let galley = label_painter.layout_no_wrap(
                 format!("{}s", ms_tick / 1000),
                 FontId::proportional(11.0),
@@ -467,9 +475,14 @@ fn render_time_ruler(
             // edge instead of letting it run past the panel.
             let max_x = (ruler_rect.max.x - galley.size().x).max(ruler_rect.min.x);
             let label_x = (x + 2.0).clamp(ruler_rect.min.x, max_x);
-            let label_pos = pos2(label_x, ruler_rect.min.y + 2.0);
-            label_rects.push(Rect::from_min_size(label_pos, galley.size()));
-            label_painter.galley(label_pos, galley, p.text_tertiary);
+            // The last label is pulled in to the edge; drop it rather than draw
+            // it on top of the one before.
+            if label_x >= last_label_right + 4.0 {
+                let label_pos = pos2(label_x, ruler_rect.min.y + 2.0);
+                last_label_right = label_x + galley.size().x;
+                label_rects.push(Rect::from_min_size(label_pos, galley.size()));
+                label_painter.galley(label_pos, galley, p.text_tertiary);
+            }
         }
         painter.line_segment(
             [pos2(x, ruler_rect.max.y), pos2(x, total_area.max.y)],
@@ -986,8 +999,11 @@ fn render_object_rows(
         return;
     }
 
-    let pointer_pos = ui.input(|i| i.pointer.interact_pos());
-    let primary_pressed = ui.input(|i| i.pointer.primary_pressed());
+    // A pointer over a menu or window drawn on top of the timeline is not over its rows.
+    let pointer_pos = ui
+        .input(|i| i.pointer.interact_pos())
+        .filter(|pos| crate::widgets::pointer_reaches(ui, *pos));
+    let primary_pressed = pointer_pos.is_some() && ui.input(|i| i.pointer.primary_pressed());
     let modifiers = ui.input(|i| i.modifiers);
 
     let row_count = objects.len();

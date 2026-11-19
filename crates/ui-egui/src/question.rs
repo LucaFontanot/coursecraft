@@ -1094,6 +1094,7 @@ fn show_hotspot(
                 && crate::quiet_primary_button(ui, "Choose image…").clicked()
             {
                 editor.pending_replace_object = Some(image_id.clone());
+                editor.pending_picture_fill = None;
                 editor.request(crate::EditorRequest::PickImage);
             }
         }

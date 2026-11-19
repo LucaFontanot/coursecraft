@@ -5118,7 +5118,10 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             .input(|i| i.pointer.interact_pos())
             .or_else(|| response.interact_pointer_pos());
 
+        // A pointer over a menu, popup or window drawn over the canvas is treated
+        // like one over the zoom HUD: it cannot place, draw, crop or click away.
         let pointer_in_hud = current_pointer.is_some_and(|p| zoom_hud_rect.contains(p))
+            || current_pointer.is_some_and(|p| !crate::widgets::pointer_reaches(ui, p))
             || current_pointer
                 .is_some_and(|p| crate::rulers::captures(&editor.ui.rulers, canvas_rect, &t, p));
         let was_editing = editor.ui.inline_edit.is_some();

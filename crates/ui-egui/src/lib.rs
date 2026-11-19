@@ -84,6 +84,8 @@ mod document_tests;
 #[cfg(test)]
 mod eyedropper_tests;
 #[cfg(test)]
+mod fill_style_tests;
+#[cfg(test)]
 mod find_tests;
 #[cfg(test)]
 mod guard_counters;
@@ -837,6 +839,9 @@ pub struct Editor {
     pub media: Vec<(String, std::sync::Arc<[u8]>)>,
     pub media_cache: coursecraft_render::MediaCache,
     pub pending_replace_object: Option<String>,
+    /// The shape or button (slide id, object id) whose picture fill the next
+    /// picked image becomes, instead of placing or replacing an object.
+    pub pending_picture_fill: Option<(String, String)>,
     pub pending_requests: Vec<EditorRequest>,
     pub automation_available: bool,
     /// This app's own binary, for the Connect an AI agent dialog.
@@ -1101,6 +1106,7 @@ impl Editor {
             media: Vec::new(),
             media_cache: coursecraft_render::MediaCache::new(),
             pending_replace_object: None,
+            pending_picture_fill: None,
             pending_requests: Vec::new(),
             automation_available: false,
             agent_exe_path: None,
@@ -1360,6 +1366,7 @@ impl Editor {
         self.media.clear();
         self.media_cache = coursecraft_render::MediaCache::new();
         self.pending_replace_object = None;
+        self.pending_picture_fill = None;
         self.pending_requests.clear();
 
         self.check_revision();
@@ -1443,6 +1450,7 @@ impl Editor {
         // object). The library wants the bytes only, so keep both untouched.
         let previous_tool = self.ui.placement_tool.take();
         let previous_replace = self.pending_replace_object.take();
+        let previous_picture_fill = self.pending_picture_fill.take();
         let src = if is_image || lower.ends_with(".svg") || lower.ends_with(".svgz") {
             self.import_image(file_name, bytes)
         } else if is_lottie {
@@ -1484,6 +1492,7 @@ impl Editor {
         };
         self.ui.placement_tool = previous_tool;
         self.pending_replace_object = previous_replace;
+        self.pending_picture_fill = previous_picture_fill;
         let src = src?;
         self.mark_media_changed();
         self.set_status(format!("Added {src}. File operations are not undoable."));
@@ -1884,9 +1893,11 @@ impl Editor {
         // natural size through the placement tool. Paste always inserts a new
         // picture, so a pending "replace" intent must not consume the import.
         let pending_replace = self.pending_replace_object.take();
+        let pending_picture_fill = self.pending_picture_fill.take();
         self.ui.placement_tool = None;
         let Some(src) = self.import_image("pasted-image.png", png_bytes) else {
             self.pending_replace_object = pending_replace;
+            self.pending_picture_fill = pending_picture_fill;
             return false;
         };
         let Some(PlacementTool::Image { natural_size, .. }) = self.ui.placement_tool.take() else {
@@ -1989,7 +2000,18 @@ impl Editor {
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
         self.media.push((src.clone(), arc_bytes));
 
-        if let Some(object_id) = self.pending_replace_object.take() {
+        // A picture fill applies only while its shape or button is still the
+        // selection; otherwise the picture is placed as usual.
+        let picture_fill = self
+            .pending_picture_fill
+            .take()
+            .filter(|(slide_id, object_id)| {
+                self.selection.slide == *slide_id
+                    && self.selection.object.as_deref() == Some(object_id.as_str())
+            });
+        if let Some((slide_id, object_id)) = picture_fill {
+            self.apply_picture_fill(&slide_id, &object_id, &src);
+        } else if let Some(object_id) = self.pending_replace_object.take() {
             let current_alt = self
                 .session
                 .course
@@ -2021,6 +2043,39 @@ impl Editor {
         }
 
         Some(src)
+    }
+
+    /// Make picture `src` the fill of shape or button `object_id`, keeping its
+    /// picture fit when it already has a picture fill.
+    fn apply_picture_fill(&mut self, slide_id: &str, object_id: &str, src: &str) {
+        let mode = self
+            .session
+            .course
+            .slide(slide_id)
+            .and_then(|slide| slide.object(object_id))
+            .and_then(|(obj, _)| match &obj.kind {
+                coursecraft_course::ObjectKind::Shape { fill_style, .. }
+                | coursecraft_course::ObjectKind::Button { fill_style, .. } => fill_style.clone(),
+                _ => None,
+            })
+            .and_then(|style| match style {
+                coursecraft_course::FillStyle::Picture { mode, .. } => Some(mode),
+                _ => None,
+            })
+            .unwrap_or(coursecraft_course::PictureFillMode::Stretch);
+        let style = coursecraft_course::FillStyle::Picture {
+            src: src.to_owned(),
+            mode,
+        };
+        let fill_style = serde_json::to_value(&style).unwrap_or(serde_json::Value::Null);
+        self.run(
+            "object.set_fill_style",
+            serde_json::json!({
+                "slide": slide_id,
+                "object": object_id,
+                "fill_style": fill_style,
+            }),
+        );
     }
 
     /// Maximum import size allowed for a media file (200 MiB).
@@ -3047,6 +3102,7 @@ impl Editor {
         crate::guard_counters::begin_frame();
         self.ui.current_time = ui.input(|i| i.time);
         self.media_cache.begin_frame();
+        widgets::begin_press_guard(ui.ctx());
         // Pick mode owns the pointer and Escape before anything else sees them.
         eyedropper::process_frame(ui.ctx());
         self.check_revision();
@@ -3590,6 +3646,7 @@ impl Editor {
         self.check_revision();
 
         eyedropper::paint_overlay(ui.ctx());
+        widgets::end_press_guard(ui.ctx());
         requests.append(&mut self.pending_requests);
         requests
     }

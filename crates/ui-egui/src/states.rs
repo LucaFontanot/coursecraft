@@ -91,7 +91,8 @@ fn show_state_color_field(
         let r = ui.add(
             TextEdit::singleline(color_hex)
                 .id_salt(id_salt)
-                .desired_width(70.0),
+                // Wide enough for "#RRGGBB" after the field's own padding.
+                .desired_width(86.0),
         );
         if picked {
             mark_color_picked(&r);

@@ -78,6 +78,8 @@ pub struct PropertiesState {
     /// Buffered fill style for a shape or button. `None` is a solid fill.
     pub fill_style: Option<coursecraft_course::FillStyle>,
     pub fill_add_stop_rect: Option<Rect>,
+    /// Set for one frame when the author asks to choose a picture file for the fill.
+    pub pick_picture_fill: bool,
     pub shadow_enabled: bool,
     pub shadow: coursecraft_course::Shadow,
     pub glow_enabled: bool,
@@ -315,6 +317,7 @@ impl Default for PropertiesState {
             opacity_rect: None,
             fill_style: None,
             fill_add_stop_rect: None,
+            pick_picture_fill: false,
             shadow_enabled: false,
             shadow: Shadow {
                 color: Color("#00000080".into()),
@@ -3607,10 +3610,25 @@ fn show_fill_style_editor(
                                 center: [0.5, 0.5],
                                 stops: default_gradient_stops(solid),
                             }),
-                            _ => Some(coursecraft_course::FillStyle::Picture {
-                                src: media_names.first().cloned().unwrap_or_default(),
-                                mode: coursecraft_course::PictureFillMode::Stretch,
-                            }),
+                            _ => {
+                                let first = media_names
+                                    .iter()
+                                    .find(|name| coursecraft_course::is_image_src(name))
+                                    .cloned();
+                                match first {
+                                    Some(src) => Some(coursecraft_course::FillStyle::Picture {
+                                        src,
+                                        mode: coursecraft_course::PictureFillMode::Stretch,
+                                    }),
+                                    None => {
+                                        // No picture in the course yet: go straight to the
+                                        // file picker. The fill changes when a file arrives,
+                                        // so cancelling the picker leaves it as it was.
+                                        props.pick_picture_fill = true;
+                                        continue;
+                                    }
+                                }
+                            }
                         };
                         changed = true;
                     }
@@ -3676,7 +3694,17 @@ fn show_fill_style_editor(
                     .width(rem_w)
                     .selected_text(selected)
                     .show_ui(ui, |ui| {
-                        for name in media_names {
+                        if ui.selectable_label(false, "Choose a file…").clicked() {
+                            props.pick_picture_fill = true;
+                        }
+                        let pictures: Vec<&String> = media_names
+                            .iter()
+                            .filter(|name| coursecraft_course::is_image_src(name))
+                            .collect();
+                        if !pictures.is_empty() {
+                            ui.separator();
+                        }
+                        for name in pictures {
                             if ui.selectable_label(src == name, name).clicked() && src != name {
                                 *src = name.clone();
                                 changed = true;
@@ -3738,25 +3766,42 @@ fn show_gradient_stops(
             continue;
         };
         ui.push_id(("fill_stop", i), |ui| {
-            inspector_row(ui, &format!("Stop {}", i + 1), |ui| {
-                let (color_response, valid) =
-                    show_color_field(ui, "", &mut stop.color.0, "prop_stop_color");
+            inspector_row(ui, &format!("Colour {}", i + 1), |ui| {
+                // Leave room for the position field and the remove button, so the
+                // whole row stays inside the panel.
+                let reserve = 64.0 + if can_remove { 26.0 } else { 0.0 };
+                let field_w = (ui.available_width() - reserve).max(60.0);
+                let (color_response, valid) = ui
+                    .allocate_ui_with_layout(
+                        vec2(field_w, coursecraft_render::CONTROL_COMPACT),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| show_color_field(ui, "", &mut stop.color.0, "prop_stop_color"),
+                    )
+                    .inner;
                 if is_committed(&color_response, ui) && valid {
                     *changed = true;
                 }
                 let mut percent = stop.position * 100.0;
-                let response = ui.add(
-                    DragValue::new(&mut percent)
-                        .speed(1.0)
-                        .range(0.0..=100.0)
-                        .suffix("%"),
-                );
+                let response = ui
+                    .add_sized(
+                        [58.0, coursecraft_render::CONTROL_COMPACT],
+                        DragValue::new(&mut percent)
+                            .speed(1.0)
+                            .range(0.0..=100.0)
+                            .suffix("%"),
+                    )
+                    .on_hover_text("Where this colour sits along the gradient");
                 let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if response.drag_stopped() || response.lost_focus() || enter {
                     stop.position = (percent / 100.0).clamp(0.0, 1.0);
                     *changed = true;
                 }
-                if can_remove && ui.small_button("×").clicked() {
+                if can_remove
+                    && ui
+                        .small_button("×")
+                        .on_hover_text("Remove this colour")
+                        .clicked()
+                {
                     remove = Some(i);
                 }
             });
@@ -3769,7 +3814,7 @@ fn show_gradient_stops(
         *changed = true;
     }
     if stops.len() < coursecraft_course::MAX_GRADIENT_STOPS {
-        let response = ui.button("Add stop");
+        let response = ui.button("Add colour");
         *add_stop_rect = Some(response.rect);
         if response.clicked() {
             add = true;
@@ -5215,54 +5260,58 @@ fn show_radio_options(
     inspector_section_header(ui, "Options");
     let count = props.input_options.len();
     for (index, option) in props.input_options.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
-            let label_w = (ui.available_width() - 150.0).max(60.0);
-            let r = ui.add_sized(
-                [label_w, coursecraft_render::CONTROL_COMPACT],
-                TextEdit::singleline(&mut option.label)
-                    .id_salt(("prop_input_option_label", index))
-                    .hint_text("Label"),
-            );
-            props.input_option_rects.push(r.rect);
-            let mut changed = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if r.lost_focus() {
-                changed = true;
-            }
-            let value_w = 70.0;
-            let r = ui.add_sized(
-                [value_w, coursecraft_render::CONTROL_COMPACT],
-                TextEdit::singleline(&mut option.value)
-                    .id_salt(("prop_input_option_value", index))
-                    .hint_text("Value"),
-            );
-            if r.lost_focus() {
-                changed = true;
-            }
-            if changed {
-                edited = true;
-            }
-            if ui
-                .add_enabled(index > 0, egui::Button::new("↑").small())
-                .clicked()
-            {
-                move_up = Some(index);
-            }
-            if ui
-                .add_enabled(index + 1 < count, egui::Button::new("↓").small())
-                .clicked()
-            {
-                move_down = Some(index);
-            }
-            if ui
-                .add_enabled(
-                    count > coursecraft_course::MIN_RADIO_OPTIONS,
-                    egui::Button::new("✕").small(),
-                )
-                .clicked()
-            {
-                remove = Some(index);
-            }
-        });
+        // Laid out from the right: the buttons and the value field take their
+        // size first and the label field fills what is left, so the row (and
+        // with it the whole panel) never grows past the panel's edge.
+        let row_w = ui.available_width();
+        ui.allocate_ui_with_layout(
+            vec2(row_w, coursecraft_render::CONTROL_COMPACT),
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                if ui
+                    .add_enabled(
+                        count > coursecraft_course::MIN_RADIO_OPTIONS,
+                        egui::Button::new("✕").small(),
+                    )
+                    .on_hover_text("Remove option")
+                    .clicked()
+                {
+                    remove = Some(index);
+                }
+                if ui
+                    .add_enabled(index + 1 < count, egui::Button::new("↓").small())
+                    .on_hover_text("Move down")
+                    .clicked()
+                {
+                    move_down = Some(index);
+                }
+                if ui
+                    .add_enabled(index > 0, egui::Button::new("↑").small())
+                    .on_hover_text("Move up")
+                    .clicked()
+                {
+                    move_up = Some(index);
+                }
+                let value_w = (ui.available_width() * 0.4).clamp(64.0, 100.0);
+                let value = ui.add_sized(
+                    [value_w, coursecraft_render::CONTROL_COMPACT],
+                    TextEdit::singleline(&mut option.value)
+                        .id_salt(("prop_input_option_value", index))
+                        .hint_text("Value"),
+                );
+                let label_w = ui.available_width().max(40.0);
+                let label = ui.add_sized(
+                    [label_w, coursecraft_render::CONTROL_COMPACT],
+                    TextEdit::singleline(&mut option.label)
+                        .id_salt(("prop_input_option_label", index))
+                        .hint_text("Label"),
+                );
+                props.input_option_rects.push(label.rect);
+                if label.lost_focus() || value.lost_focus() {
+                    edited = true;
+                }
+            },
+        );
     }
     // The closure above may have changed the number of options; edit after it.
     if let Some(index) = move_up {
@@ -7380,7 +7429,15 @@ fn handle_image_actions(
     reset_natural_size_src: Option<String>,
     actions_to_run: &mut Vec<(&'static str, Json)>,
 ) {
+    if std::mem::take(&mut editor.ui.properties.pick_picture_fill)
+        && let Some(object) = editor.selection.object.clone()
+    {
+        editor.pending_replace_object = None;
+        editor.pending_picture_fill = Some((editor.selection.slide.clone(), object));
+        editor.request(crate::EditorRequest::PickImage);
+    }
     if replace_image_requested {
+        editor.pending_picture_fill = None;
         editor.pending_replace_object = editor.selection.object.clone();
         editor.request(crate::EditorRequest::PickImage);
     }

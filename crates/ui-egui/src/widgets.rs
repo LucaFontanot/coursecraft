@@ -21,6 +21,65 @@ pub enum IconTone {
     Danger,
 }
 
+/// Whether `ui`'s layer is the topmost layer under `pos`.
+///
+/// Panels that read raw pointer presses (the canvas, rulers, timeline rows,
+/// slide layers) check this, so a click on a menu, popup or window drawn on
+/// top of them is not also taken as a click on what lies underneath.
+///
+/// A press that began while a menu or popup was open never reaches them
+/// either, up to and including its release: that press picks a menu item or
+/// dismisses the menu, and the menu may already be gone by the time the
+/// button comes up.
+pub(crate) fn pointer_reaches(ui: &Ui, pos: egui::Pos2) -> bool {
+    !press_began_over_popup(ui.ctx())
+        && ui
+            .ctx()
+            .layer_id_at(pos)
+            .is_none_or(|layer| layer == ui.layer_id())
+}
+
+fn popup_open_id() -> egui::Id {
+    egui::Id::unique("coursecraft_popup_open_last_pass")
+}
+
+fn press_guard_id() -> egui::Id {
+    egui::Id::unique("coursecraft_press_began_over_popup")
+}
+
+/// Whether the current press (or the click it just ended in) started while a
+/// menu or popup was open.
+pub(crate) fn press_began_over_popup(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<bool>(press_guard_id()).unwrap_or(false))
+}
+
+/// Call at the start of every editor pass, before any panel reads the pointer.
+pub(crate) fn begin_press_guard(ctx: &egui::Context) {
+    let (pressed, down, released) = ctx.input(|input| {
+        (
+            input.pointer.any_pressed(),
+            input.pointer.any_down(),
+            input.pointer.any_released(),
+        )
+    });
+    let popup_open = ctx.data(|data| data.get_temp::<bool>(popup_open_id()).unwrap_or(false))
+        || egui::Popup::is_any_open(ctx);
+    let mut guard = press_began_over_popup(ctx);
+    if pressed {
+        guard = popup_open;
+    } else if !down && !released {
+        // The press ended on an earlier pass; its click has been handled.
+        guard = false;
+    }
+    ctx.data_mut(|data| data.insert_temp(press_guard_id(), guard));
+}
+
+/// Call at the end of every editor pass, after every menu has been drawn.
+pub(crate) fn end_press_guard(ctx: &egui::Context) {
+    let open = egui::Popup::is_any_open(ctx);
+    ctx.data_mut(|data| data.insert_temp(popup_open_id(), open));
+}
+
 /// A compact 26×26 icon button.
 ///
 /// Quiet at rest (no background fill), `hover` fill on hover, and `pressed` fill when pressed.

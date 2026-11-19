@@ -199,6 +199,7 @@ pub fn insert_ellipse(editor: &mut Editor) {
 /// Request image file picker for insertion.
 pub fn insert_image(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
     editor.pending_replace_object = None;
+    editor.pending_picture_fill = None;
     requests.push(EditorRequest::PickImage);
 }
 
