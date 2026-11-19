@@ -9399,12 +9399,19 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
             for i in 0..count {
                 let id = fresh_id("flip_card", slide.local_ids());
                 card_ids.push(id.clone());
+                // The front is a plain card with an accent outline and the
+                // back an accent tint, so the one text colour (the theme's)
+                // reads on both sides whatever the accent is.
                 let card = interaction_shape(
                     id.clone(),
                     format!("Card {}", i + 1),
                     ShapeKind::RoundedRectangle,
-                    theme.accent.clone(),
-                    None,
+                    theme.background.clone(),
+                    Some(Outline {
+                        color: theme.accent.clone(),
+                        width: 2.0,
+                        dash: Default::default(),
+                    }),
                     Some(("Card title".to_owned(), 26.0, true)),
                     vec![StateDef {
                         name: "Back".to_owned(),
@@ -9629,7 +9636,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 base_ids.push(circle_id.clone());
 
                 let label_id = fresh_id("step_label", slide.local_ids());
-                slide.objects.push(interaction_text(
+                let mut label = interaction_text(
                     label_id.clone(),
                     format!("Step {} label", i + 1),
                     format!("Step {}", i + 1),
@@ -9640,7 +9647,12 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                         h: 30.0,
                     },
                     &theme,
-                ));
+                );
+                // The box is centred on its circle, so the text is too.
+                if let ObjectKind::Text { style, .. } = &mut label.kind {
+                    style.align = Align::Center;
+                }
+                slide.objects.push(label);
                 all_ids.push(label_id.clone());
                 base_ids.push(label_id);
             }

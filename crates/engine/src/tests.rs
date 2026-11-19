@@ -8250,3 +8250,85 @@ fn slide_set_player_overrides_sets_and_clears_the_show_flags() {
         Some(false)
     );
 }
+
+/// Flip cards keep one text colour for both sides, so it must read on the
+/// front fill and on the back state's fill (composited over the slide), for
+/// the default theme and a dark-accent theme.
+#[test]
+fn interaction_flip_cards_text_reads_on_both_sides() {
+    for accent in [None, Some("#2F6F6A"), Some("#F4C542")] {
+        let mut s = Session::blank("Flip contrast");
+        if let Some(accent) = accent {
+            ok(&mut s, "course.set_theme", json!({ "accent": accent }));
+        }
+        ok(
+            &mut s,
+            "interaction.insert",
+            json!({ "slide": "slide1", "kind": "flip_cards" }),
+        );
+        let backdrop =
+            coursecraft_course::parse_color(&s.course.theme.background).expect("background");
+        let slide = s.course.slide("slide1").expect("slide");
+        for object in &slide.objects {
+            let ObjectKind::Shape {
+                fill,
+                text: Some(text),
+                ..
+            } = &object.kind
+            else {
+                panic!("a flip card is a shape with text");
+            };
+            let ink = coursecraft_course::parse_color(&text.style.color).expect("text colour");
+            let front = coursecraft_course::parse_color(fill)
+                .expect("front")
+                .over(backdrop);
+            let back_fill = object
+                .states
+                .iter()
+                .find(|st| st.name == "Back")
+                .and_then(|st| st.fill.clone())
+                .expect("back fill");
+            let back = coursecraft_course::parse_color(&back_fill)
+                .expect("back")
+                .over(backdrop);
+            for (side, colour) in [("front", front), ("back", back)] {
+                let ratio = coursecraft_course::contrast_ratio(ink, colour);
+                assert!(
+                    ratio >= 4.5,
+                    "{side} of {} with accent {accent:?}: contrast {ratio:.2}",
+                    object.id
+                );
+            }
+        }
+    }
+}
+
+/// Process-step labels sit in boxes centred on their circles, so the text is
+/// centred too.
+#[test]
+fn interaction_process_step_labels_are_centred() {
+    let mut s = Session::blank("Steps");
+    ok(
+        &mut s,
+        "interaction.insert",
+        json!({ "slide": "slide1", "kind": "process_steps" }),
+    );
+    let slide = s.course.slide("slide1").expect("slide");
+    let labels: Vec<_> = slide
+        .objects
+        .iter()
+        .filter(|o| o.id.starts_with("step_label"))
+        .collect();
+    assert_eq!(labels.len(), 4);
+    for label in labels {
+        let ObjectKind::Text { style, .. } = &label.kind else {
+            panic!("a label is text");
+        };
+        assert_eq!(
+            style.align,
+            coursecraft_course::Align::Center,
+            "{}",
+            label.id
+        );
+    }
+}

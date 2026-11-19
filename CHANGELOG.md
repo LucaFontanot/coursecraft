@@ -5,6 +5,7 @@ What changed in each release, newest first. Versions follow [semantic versioning
 ## Unreleased
 
 - Typing in long text with spell check on is fast again (it took most of a second per key in 0.2.0), the editor no longer redraws while idle, decoded pictures have a memory ceiling, and the slide list only draws the thumbnails you can see.
+- Flip cards now have readable text on both sides with any theme colour (a white card with an accent outline, turning to an accent tint), and process-step labels are centred under their circles.
 
 ## 0.2.0
 
