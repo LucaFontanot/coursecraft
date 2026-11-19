@@ -1455,3 +1455,110 @@ fn a_slide_override_hides_the_navigation_buttons_on_that_slide() {
     harness.run(&player, Vec::new());
     assert!(harness.frame.chrome_rect(&ChromeButton::Next).is_some());
 }
+
+const HEALTHY_JSON: &str = include_str!("../../../../examples/healthy-habits/course.json");
+
+fn healthy() -> Player<'static> {
+    let course = Course::from_json(HEALTHY_JSON).expect("valid course");
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+    player
+}
+
+fn wheel(delta_y: f32) -> Event {
+    Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, delta_y),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::default(),
+    }
+}
+
+#[test]
+fn scrolled_drawer_rows_never_report_a_place_over_the_tabs() {
+    let player = healthy();
+    let mut harness = Harness::new(1280.0, 720.0);
+    open_drawer(&mut harness, &player);
+    let drawer = harness.frame.drawer_rect().expect("drawer is painted");
+    let tabs = harness
+        .frame
+        .chrome_rect(&ChromeButton::DrawerTab(crate::drawer::DrawerTab::Menu))
+        .expect("the sample course has drawer tabs");
+    let over = drawer.center();
+    for _ in 0..8 {
+        harness.run(&player, vec![Event::PointerMoved(over), wheel(-300.0)]);
+    }
+    harness.run(&player, Vec::new());
+    let rows: Vec<Rect> = player
+        .play_order()
+        .iter()
+        .filter_map(|s| {
+            harness
+                .frame
+                .chrome_rect(&ChromeButton::DrawerRow(s.id.clone()))
+        })
+        .collect();
+    assert!(!rows.is_empty());
+    assert!(
+        rows.iter().any(|r| r.area() == 0.0),
+        "the long outline should have scrolled rows out of view"
+    );
+    for row in rows.iter().filter(|r| r.area() > 0.0) {
+        assert!(
+            row.top() >= tabs.bottom() - 0.5,
+            "row {row:?} reaches over the tabs {tabs:?}"
+        );
+    }
+}
+
+#[test]
+fn drawer_reports_its_settled_place_and_ignores_row_clicks_while_sliding() {
+    let (_course, player) = hello();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.run(&player, Vec::new());
+    harness.run(&player, vec![key(egui::Key::M)]);
+    let sliding_drawer = harness.frame.drawer_rect().expect("drawer is painted");
+    let sliding_close = harness
+        .frame
+        .chrome_rect(&ChromeButton::DrawerClose)
+        .expect("close button");
+    let target = player
+        .play_order()
+        .get(1)
+        .map(|s| s.id.clone())
+        .expect("a second slide");
+    let row = harness
+        .frame
+        .chrome_rect(&ChromeButton::DrawerRow(target.clone()))
+        .expect("row rect");
+    // Still sliding: a click on the row's reported place does nothing.
+    let output = harness.run(&player, click(row.center()));
+    assert!(output.inputs.is_empty(), "{:?}", output.inputs);
+    for _ in 0..4 {
+        harness.run(&player, Vec::new());
+    }
+    let settled_drawer = harness.frame.drawer_rect().expect("drawer is painted");
+    let settled_close = harness
+        .frame
+        .chrome_rect(&ChromeButton::DrawerClose)
+        .expect("close button");
+    assert!((sliding_drawer.left() - settled_drawer.left()).abs() < 0.5);
+    assert!((sliding_close.center().x - settled_close.center().x).abs() < 0.5);
+    let settled_row = harness
+        .frame
+        .chrome_rect(&ChromeButton::DrawerRow(target.clone()))
+        .expect("row rect");
+    assert!((settled_row.center().x - row.center().x).abs() < 0.5);
+    // Settled: the same click goes to the slide.
+    let output = harness.run(&player, click(settled_row.center()));
+    assert!(
+        output
+            .inputs
+            .iter()
+            .any(|i| matches!(i, Input::GoTo { slide } if *slide == target)),
+        "{:?}",
+        output.inputs
+    );
+}

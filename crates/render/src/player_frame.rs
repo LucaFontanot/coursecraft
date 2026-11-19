@@ -679,7 +679,7 @@ impl PlayerFrame {
         }
 
         if self.drawer_progress > 0.01 && show_menu {
-            self.last_drawer_rect = Some(drawer);
+            let chrome_before = self.last_chrome.len();
             draw_drawer(
                 ui,
                 player,
@@ -693,6 +693,19 @@ impl PlayerFrame {
                 &mut self.drawer_view,
                 &mut self.focus_glossary_search,
             );
+            // While the drawer slides, report its controls where they will
+            // settle, so accessibility rects and automated clicks do not chase
+            // a moving target.
+            let settled = drawer_rect(full, if self.drawer_open { 1.0 } else { 0.0 });
+            let dx = settled.left() - drawer.left();
+            if dx.abs() > 0.5 && self.drawer_open {
+                for (_, rect) in self.last_chrome.iter_mut().skip(chrome_before) {
+                    *rect = rect.translate(vec2(dx, 0.0));
+                }
+                self.last_drawer_rect = Some(settled);
+            } else {
+                self.last_drawer_rect = Some(drawer);
+            }
         } else {
             self.last_drawer_rect = None;
         }
@@ -2674,9 +2687,14 @@ fn draw_drawer(
         outline
     };
 
+    // Rows take clicks only once the drawer has stopped moving.
+    let settled = progress >= 1.0;
     ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(&mut child, |ui| {
+            // The scroll area's painter clips rows to the list, so a scrolled
+            // row never draws over the drawer header or tabs.
+            let painter = ui.painter().clone();
             for (scene, expanded) in &outline {
                 let scene_title = player.display_text(&scene.title);
                 ui.add_space(8.0);
@@ -2690,9 +2708,27 @@ fn draw_drawer(
                     let current = player.current_slide().is_some_and(|s| s.id == slide.id);
                     let visited = player.state().visited.contains(&slide.id);
                     let reachable = current || player.can_go_to(&slide.id);
+                    let sense = if settled {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    };
                     let (row, resp) =
-                        ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-                    chrome.push((crate::focus::ChromeButton::DrawerRow(slide.id.clone()), row));
+                        ui.allocate_exact_size(vec2(ui.available_width(), 30.0), sense);
+                    // Report only the visible part; a row scrolled out of
+                    // view gets an empty rect instead of one over the header.
+                    let shown = row.intersect(ui.clip_rect());
+                    let shown = if shown.height() > 0.0 && shown.width() > 0.0 {
+                        shown
+                    } else {
+                        let clip = ui.clip_rect();
+                        let y = row.top().clamp(clip.top(), clip.bottom());
+                        Rect::from_min_size(Pos2::new(row.left(), y), egui::Vec2::ZERO)
+                    };
+                    chrome.push((
+                        crate::focus::ChromeButton::DrawerRow(slide.id.clone()),
+                        shown,
+                    ));
                     if current {
                         painter.rect_filled(
                             row,

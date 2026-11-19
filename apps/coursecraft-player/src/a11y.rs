@@ -75,6 +75,9 @@ impl AccessLayer {
         let _ = style.set_property("width", "100%");
         let _ = style.set_property("height", "100%");
         let _ = style.set_property("overflow", "hidden");
+        // `clip` (where supported) also forbids scrolling, so focusing an
+        // element below the fold cannot shift the whole layer off the canvas.
+        let _ = style.set_property("overflow", "clip");
         let _ = style.set_property("opacity", "0");
         let _ = style.set_property("pointer-events", "none");
         let _ = style.set_property("z-index", "5");
@@ -202,6 +205,14 @@ impl AccessLayer {
             self.previous = Some(tree);
         }
         self.push_focus(frame.focus(), dom_owned);
+        // The layer clips its overflow, and the browser scrolls it to show a
+        // focused element past the bottom (a drawer row below the fold, say).
+        // Every overlay element would then sit off its painted control, so
+        // keep the layer unscrolled.
+        if self.root.scroll_top() != 0 || self.root.scroll_left() != 0 {
+            self.root.set_scroll_top(0);
+            self.root.set_scroll_left(0);
+        }
     }
 
     fn focus_in_layer(&self) -> bool {
