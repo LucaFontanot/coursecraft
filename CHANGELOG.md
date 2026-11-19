@@ -6,6 +6,11 @@ What changed in each release, newest first. Versions follow [semantic versioning
 
 - Animations work again: what you pick in the Animations panel is now saved (it was lost, so nothing played and moving the object on the timeline seemed to reset it), and the timeline's Play button shows entrances and exits on the slide.
 - A sound longer than its slide plays again from the start on the next Play, and scrubbing back works (it used to jump straight to the end).
+- Deleting a button (or any object) that has triggers now works: its triggers go with it, the status bar says how many, and one Undo brings everything back. Deleting a layer takes the triggers that show it.
+- Speaker notes typed in the Slide tab are saved (they were lost).
+- Audio and video you place play by themselves, like narration, and a slide shorter than the sound or video grows to fit it.
+- F12 previews the current slide and Shift+F12 previews from the start.
+- Choosing a value that is already set no longer adds an Undo step that does nothing.
 - Each scene in the slide list has a + button for a new slide in that scene, and New Scene starts with a slide of its own.
 - Typing in long text with spell check on is fast again (it took most of a second per key in 0.2.0), the editor no longer redraws while idle, decoded pictures have a memory ceiling, and the slide list only draws the thumbnails you can see.
 - Flip cards now have readable text on both sides with any theme colour (a white card with an accent outline, turning to an accent tint), and process-step labels are centred under their circles.
