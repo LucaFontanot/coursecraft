@@ -1,0 +1,822 @@
+[
+ {
+  "input": "start"
+ },
+ {
+  "input": "tick",
+  "ms": 1500
+ },
+ {
+  "input": "key_pressed",
+  "key": "enter"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "set_input_value",
+  "object": "n_entry",
+  "value": "Sam"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "name_next"
+ },
+ {
+  "input": "tick",
+  "ms": 7000
+ },
+ {
+  "input": "click",
+  "object": "h_card_move"
+ },
+ {
+  "input": "tick",
+  "ms": 4500
+ },
+ {
+  "input": "click",
+  "object": "h_close_move"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "h_pic_breathe"
+ },
+ {
+  "input": "tick",
+  "ms": 4500
+ },
+ {
+  "input": "click",
+  "object": "h_close_breathe"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "h_card_connect"
+ },
+ {
+  "input": "key_pressed",
+  "key": "escape"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "habits_next"
+ },
+ {
+  "input": "tick",
+  "ms": 2500
+ },
+ {
+  "input": "marker_toggled",
+  "object": "d_m1"
+ },
+ {
+  "input": "markers_closed"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "marker_toggled",
+  "object": "d_m2"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "desk_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "v_play"
+ },
+ {
+  "input": "media_time",
+  "object": "v_video",
+  "at_ms": 5000
+ },
+ {
+  "input": "media_ended",
+  "object": "v_video"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "video_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "e_start"
+ },
+ {
+  "input": "tick",
+  "ms": 21000
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "eyes_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "flip_card1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "myth_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "object_dropped",
+  "object": "so_water",
+  "x": 665,
+  "y": 230
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "object_dropped",
+  "object": "so_lunch",
+  "x": 955,
+  "y": 230
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "object_dropped",
+  "object": "so_stairs",
+  "x": 665,
+  "y": 330
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "object_dropped",
+  "object": "so_scroll",
+  "x": 955,
+  "y": 330
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "sort_next"
+ },
+ {
+  "input": "tick",
+  "ms": 20000
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "breathe_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "step_next1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "steps_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "set_input_value",
+  "object": "ci_slider",
+  "value": 8
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "set_input_value",
+  "object": "ci_dial",
+  "value": 6
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "checkin_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "tab_button2"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "resets_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "scenario_choice2"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "scenario_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "timeline_point1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "day_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "accordion_header1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "faq_next_l1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "grid_tile_shape1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "tips_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "hotspot_marker1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "office_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "set_input_value",
+  "object": "pl_radio",
+  "value": "breathe"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "plan_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "more_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "select_choice",
+  "choice": "a"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "q1_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "select_choice",
+  "choice": "a"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "select_choice",
+  "choice": "b"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "select_choice",
+  "choice": "d"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "q2_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "select_choice",
+  "choice": "false"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "q3_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "text_entered",
+  "text": "20"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "q4_Correct1_go"
+ },
+ {
+  "input": "sequence_moved",
+  "choice": "a",
+  "to": 0
+ },
+ {
+  "input": "sequence_moved",
+  "choice": "b",
+  "to": 1
+ },
+ {
+  "input": "sequence_moved",
+  "choice": "c",
+  "to": 2
+ },
+ {
+  "input": "sequence_moved",
+  "choice": "d",
+  "to": 3
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "q5_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "match_selected",
+  "left": "p1",
+  "right": "p1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "match_selected",
+  "left": "p2",
+  "right": "p2"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "match_selected",
+  "left": "p3",
+  "right": "p3"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "q6_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "hotspot_clicked",
+  "x": 230,
+  "y": 205
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "q7_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "drag_dropped",
+  "item": "dd_water",
+  "target": "dd_move",
+  "x": 225,
+  "y": 440
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "drag_dropped",
+  "item": "dd_stairs",
+  "target": "dd_move",
+  "x": 225,
+  "y": 440
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "drag_dropped",
+  "item": "dd_count",
+  "target": "dd_breathe",
+  "x": 535,
+  "y": 440
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "drag_dropped",
+  "item": "dd_walk",
+  "target": "dd_connect",
+  "x": 845,
+  "y": 440
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button2"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "q8_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "set_input_value",
+  "object": "q9_slider",
+  "value": 30
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "q9_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "select_choice",
+  "choice": "true"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "bank_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 500
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "passed_finish1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "select_choice",
+  "choice": "4"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "r1_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "text_entered",
+  "text": "Stand for calls"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "r2_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "text_entered",
+  "text": "Walk at lunch every Tuesday"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "button1"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "r3_Correct1_go"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "certificate1_next"
+ },
+ {
+  "input": "tick",
+  "ms": 1200
+ },
+ {
+  "input": "click",
+  "object": "f_finish"
+ }
+]

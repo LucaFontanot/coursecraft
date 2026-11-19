@@ -1729,3 +1729,51 @@ fn import_questions_adds_a_bank_from_the_template() {
         .unwrap();
     assert_eq!(bank.slides.len(), 4);
 }
+
+#[test]
+fn healthy_habits_pass_inputs_visit_every_slide_and_score_full_marks() {
+    let course = Course::from_json(include_str!("../../../examples/healthy-habits/course.json"))
+        .expect("valid Healthy Habits course");
+    let inputs: Vec<Input> = serde_json::from_str(include_str!(
+        "../../../examples/healthy-habits/pass.inputs.json"
+    ))
+    .expect("inputs");
+    let mut player = Player::new(&course).expect("valid player");
+    let mut effects = Vec::new();
+    for input in &inputs {
+        effects.extend(player.handle(input));
+    }
+    let warnings: Vec<&Effect> = effects
+        .iter()
+        .filter(|e| matches!(e, Effect::Warning { .. }))
+        .collect();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let entered: std::collections::HashSet<&str> = effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::SlideEntered { slide } => Some(slide.as_str()),
+            _ => None,
+        })
+        .collect();
+    let lightbox_only = ["bonus"];
+    for slide in course.slides() {
+        // A draw slide is replaced by a question from its bank.
+        if !lightbox_only.contains(&slide.id.as_str()) && slide.draw.is_none() {
+            assert!(
+                entered.contains(slide.id.as_str()),
+                "never entered {}",
+                slide.id
+            );
+        }
+    }
+    assert!(
+        entered.iter().any(|id| id.starts_with("bank_q")),
+        "the random draw should enter a bank question"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Score { percent, .. } if *percent == 100)),
+        "expected a 100% score"
+    );
+}

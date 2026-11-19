@@ -198,7 +198,7 @@ pub use triggers::{
 };
 pub use variables::{VariablesState, show_variables_tab};
 pub use web_insert::{insert_web_object, show_web_insert_window};
-pub use welcome::{ExampleId, example_course_and_media, show_welcome_screen};
+pub use welcome::{ExampleId, LoadedExample, example_course_and_media, show_welcome_screen};
 pub use widgets::{
     IconTone, icon_button, icon_button_danger, icon_button_enabled, icon_toggle, toolbar_button,
     toolbar_button_active, toolbar_button_enabled, toolbar_caret_button, toolbar_primary_button,

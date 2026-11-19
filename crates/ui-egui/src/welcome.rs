@@ -2,7 +2,7 @@
 //!
 //! Displayed on launch when no course is open and via `File ▸ Welcome screen`.
 //! Features quick actions (New, Open, Import PPTX, Explore examples), recent files list,
-//! and embedded example courses (hello-course and feature showcase).
+//! and embedded example courses (Healthy Habits at Work, hello-course and feature showcase).
 
 use std::sync::Arc;
 
@@ -17,6 +17,162 @@ use egui::{
 
 use crate::{Editor, EditorRequest};
 
+const HEALTHY_HABITS_JSON: &str = include_str!("../../../examples/healthy-habits/course.json");
+/// Media files of the Healthy Habits course, by their path under `media/`.
+const HEALTHY_HABITS_MEDIA: &[(&str, &[u8])] = &[
+    (
+        "badge.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/badge.jpg"),
+    ),
+    (
+        "breathe-circle.json",
+        include_bytes!("../../../examples/healthy-habits/media/breathe-circle.json"),
+    ),
+    (
+        "breathe-tip.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/breathe-tip.mp3"),
+    ),
+    (
+        "breathe-tip.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/breathe-tip.vtt"),
+    ),
+    (
+        "breathe.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/breathe.jpg"),
+    ),
+    (
+        "breathe.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/breathe.mp3"),
+    ),
+    (
+        "breathe.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/breathe.vtt"),
+    ),
+    (
+        "connect.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/connect.mp3"),
+    ),
+    (
+        "connect.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/connect.vtt"),
+    ),
+    (
+        "day.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/day.mp3"),
+    ),
+    (
+        "day.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/day.vtt"),
+    ),
+    (
+        "desk.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/desk.jpg"),
+    ),
+    (
+        "desk.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/desk.mp3"),
+    ),
+    (
+        "desk.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/desk.vtt"),
+    ),
+    (
+        "evening.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/evening.jpg"),
+    ),
+    (
+        "eyes.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/eyes.jpg"),
+    ),
+    (
+        "eyes.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/eyes.mp3"),
+    ),
+    (
+        "eyes.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/eyes.vtt"),
+    ),
+    (
+        "failed.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/failed.mp3"),
+    ),
+    (
+        "failed.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/failed.vtt"),
+    ),
+    (
+        "habits.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/habits.mp3"),
+    ),
+    (
+        "habits.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/habits.vtt"),
+    ),
+    (
+        "hero.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/hero.jpg"),
+    ),
+    (
+        "move.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/move.mp3"),
+    ),
+    (
+        "move.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/move.vtt"),
+    ),
+    (
+        "office.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/office.jpg"),
+    ),
+    (
+        "passed.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/passed.mp3"),
+    ),
+    (
+        "passed.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/passed.vtt"),
+    ),
+    (
+        "stairs.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/stairs.jpg"),
+    ),
+    (
+        "stretch.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/stretch.jpg"),
+    ),
+    (
+        "stretch.mp4",
+        include_bytes!("../../../examples/healthy-habits/media/stretch.mp4"),
+    ),
+    (
+        "stretch.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/stretch.vtt"),
+    ),
+    (
+        "team.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/team.jpg"),
+    ),
+    (
+        "water.jpg",
+        include_bytes!("../../../examples/healthy-habits/media/water.jpg"),
+    ),
+    (
+        "welcome.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/welcome.mp3"),
+    ),
+    (
+        "welcome.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/welcome.vtt"),
+    ),
+    (
+        "welldone.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/welldone.mp3"),
+    ),
+    (
+        "welldone.vtt",
+        include_bytes!("../../../examples/healthy-habits/media/welldone.vtt"),
+    ),
+];
 const HELLO_COURSE_JSON: &str = include_str!("../../../examples/hello-course/course.json");
 const SHOWCASE_COURSE_JSON: &str = include_str!("../../../examples/showcase/course.json");
 
@@ -29,6 +185,8 @@ const SHOWCASE_INTRO_BYTES: &[u8] = include_bytes!("../../../examples/showcase/m
 /// Identifier of an embedded example course.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExampleId {
+    /// The sample course a fresh launch opens: every feature in a wellbeing module.
+    HealthyHabits,
     /// Minimal introduction course.
     HelloCourse,
     /// Full feature showcase course with media assets.
@@ -39,6 +197,7 @@ impl ExampleId {
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
+            Self::HealthyHabits => "Healthy Habits at Work",
             Self::HelloCourse => "Hello course",
             Self::FeatureShowcase => "Feature showcase",
         }
@@ -47,6 +206,7 @@ impl ExampleId {
     #[must_use]
     pub const fn description(self) -> &'static str {
         match self {
+            Self::HealthyHabits => "The sample course: every feature in one short module",
             Self::HelloCourse => "A quick 4-slide tour with quiz and tabs",
             Self::FeatureShowcase => "Full showcase with animations, media and questions",
         }
@@ -62,6 +222,15 @@ pub type LoadedExample = (Course, Vec<(String, Arc<[u8]>)>);
 /// Returns an error string if JSON deserialization fails.
 pub fn example_course_and_media(id: ExampleId) -> Result<LoadedExample, String> {
     match id {
+        ExampleId::HealthyHabits => {
+            let course = Course::from_json(HEALTHY_HABITS_JSON)
+                .map_err(|e| format!("Failed to parse Healthy Habits at Work: {e}"))?;
+            let media = HEALTHY_HABITS_MEDIA
+                .iter()
+                .map(|(name, bytes)| ((*name).to_string(), Arc::from(*bytes)))
+                .collect();
+            Ok((course, media))
+        }
         ExampleId::HelloCourse => {
             let course = Course::from_json(HELLO_COURSE_JSON)
                 .map_err(|e| format!("Failed to parse hello course: {e}"))?;
@@ -232,12 +401,16 @@ pub fn show_welcome_screen(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<
                 tile_size,
                 Icon::BookOpen,
                 "Explore an example",
-                "Hello course or feature showcase",
+                "Healthy Habits, Hello course or feature showcase",
                 true,
                 "Explore built-in sample courses",
             );
 
             egui::Popup::menu(&resp).show(|ui| {
+                if ui.button(ExampleId::HealthyHabits.name()).clicked() {
+                    clicked_example = Some(ExampleId::HealthyHabits);
+                    ui.close();
+                }
                 if ui.button("Hello course").clicked() {
                     clicked_example = Some(ExampleId::HelloCourse);
                     ui.close();

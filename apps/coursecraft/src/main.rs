@@ -59,14 +59,21 @@ use files::Project;
 #[cfg(not(target_arch = "wasm32"))]
 use prefs::Prefs;
 
-const HELLO_COURSE: &str = include_str!("../../../examples/hello-course/course.json");
-
+/// The course a fresh launch opens behind the welcome screen: the Healthy Habits sample,
+/// or a blank course with `--blank`.
+#[cfg(test)]
 fn initial_course(blank: bool) -> Course {
-    let blank_course = || Session::blank("Untitled course").course;
+    initial_course_and_media(blank).0
+}
+
+/// [`initial_course`] with the media files the sample course uses.
+fn initial_course_and_media(blank: bool) -> coursecraft_ui_egui::LoadedExample {
+    let blank_course = || (Session::blank("Untitled course").course, Vec::new());
     if blank {
         return blank_course();
     }
-    Course::from_json(HELLO_COURSE).unwrap_or_else(|_| blank_course())
+    coursecraft_ui_egui::example_course_and_media(coursecraft_ui_egui::ExampleId::HealthyHabits)
+        .unwrap_or_else(|_| blank_course())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2963,7 +2970,7 @@ fn run_editor_window() -> eframe::Result {
     let config_dir = prefs::config_dir_from_env();
     crash::install_panic_hook(config_dir.clone());
 
-    let course = initial_course(blank);
+    let (course, media) = initial_course_and_media(blank);
 
     #[cfg_attr(target_os = "macos", allow(unused_mut))]
     let mut viewport = egui::ViewportBuilder::default()
@@ -2985,6 +2992,7 @@ fn run_editor_window() -> eframe::Result {
         Box::new(move |cc| {
             coursecraft_ui_egui::install_fonts(&cc.egui_ctx);
             let mut app = EditorApp::new_desktop(course, config_dir);
+            app.editor.set_media(media);
             let mode = app.prefs.theme.resolve(&cc.egui_ctx);
             coursecraft_ui_egui::coursecraft_render::apply_style(&cc.egui_ctx, mode);
             if let Ok(mut slot) = app.repaint_ctx.lock() {
@@ -3015,7 +3023,9 @@ fn main() {
             return;
         };
 
-        let mut editor = Editor::new(initial_course(blank));
+        let (course, media) = initial_course_and_media(blank);
+        let mut editor = Editor::new(course);
+        editor.set_media(media);
         editor.set_file_ops_available(false);
         editor.set_publish_available(false);
         editor.set_coach_marks_done(false);

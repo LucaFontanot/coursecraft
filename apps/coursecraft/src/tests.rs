@@ -872,6 +872,51 @@ fn app_explore_example_feature_showcase_loads_with_media() {
     assert!(app.editor.media().iter().any(|(s, _)| s == "banner.png"));
 }
 
+#[test]
+fn fresh_launch_opens_healthy_habits_with_all_its_media() {
+    let (course, media) = crate::initial_course_and_media(false);
+    assert_eq!(course.id, "healthy-habits-at-work");
+    assert_eq!(initial_course(false).id, course.id);
+    assert!(course.validate().is_empty(), "{:?}", course.validate());
+    let names: std::collections::HashSet<&str> = media.iter().map(|(n, _)| n.as_str()).collect();
+    let referenced = coursecraft_ui_egui::referenced_media_srcs(&course);
+    for src in &referenced {
+        assert!(
+            names.contains(src.as_str()),
+            "{src} is used but not embedded"
+        );
+    }
+    for name in &names {
+        assert!(
+            referenced.contains(*name) || name.ends_with(".vtt"),
+            "{name} is embedded but never used"
+        );
+    }
+    assert!(media.iter().all(|(_, bytes)| !bytes.is_empty()));
+
+    let (blank, blank_media) = crate::initial_course_and_media(true);
+    assert_eq!(blank.title, "Untitled course");
+    assert!(blank_media.is_empty());
+}
+
+#[test]
+fn app_explore_example_healthy_habits_loads_with_media() {
+    let dir = scratch_dir("test-app-welcome-healthy-habits");
+    let mut app = EditorApp::new_desktop(initial_course(false), Some(dir));
+    app.startup(None, false);
+    let ctx = egui::Context::default();
+    app.handle_request(
+        coursecraft_ui_egui::EditorRequest::OpenExample(
+            coursecraft_ui_egui::ExampleId::HealthyHabits,
+        ),
+        &ctx,
+    );
+    assert!(!app.editor.is_welcome());
+    assert_eq!(app.editor.session.course.id, "healthy-habits-at-work");
+    assert!(app.editor.media().iter().any(|(s, _)| s == "stretch.mp4"));
+    assert!(app.editor.media().iter().any(|(s, _)| s == "welcome.mp3"));
+}
+
 fn fake_player() -> Vec<PackageFile> {
     vec![
         PackageFile {
