@@ -224,7 +224,7 @@ Plan: `docs/plans/m20-everyday-authoring.md`.
 - Paste images from the clipboard, and an eyedropper in every colour picker.
 - A gallery of ready-made interactions: flip cards, hotspot reveal, process steps, timeline, reveal grid and scenario choice, all built from ordinary editable objects and triggers.
 
-## M21 Optimization pass
+## M21 Optimization pass ✅
 
 Measure first, then fix only what the numbers show, and leave count-based tests so the speed holds. See `docs/plans/m21-optimization.md`.
 
