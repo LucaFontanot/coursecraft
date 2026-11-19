@@ -1006,16 +1006,24 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             show_scene_rename_editor(editor, ui, header_rect);
         } else {
             let painter = ui.painter_at(header_rect);
-            painter.text(
-                header_rect.left_center(),
-                Align2::LEFT_CENTER,
-                &scene.title,
+            // One line, ending in "…" before the + so a long title never
+            // runs under it.
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                scene.title.clone(),
                 FontId::new(
                     coursecraft_render::SIZE_CAPTION,
                     egui::FontFamily::Name("inter-bold".into()),
                 ),
                 p.text_secondary,
             );
+            job.wrap =
+                egui::text::TextWrapping::truncate_at_width((header_rect.width() - 28.0).max(16.0));
+            let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+            let title_pos = pos2(
+                header_rect.min.x,
+                header_rect.center().y - galley.size().y * 0.5,
+            );
+            painter.galley(title_pos, galley, p.text_secondary);
             // "+" at the right of the header: a new slide at the end of this
             // scene, so a slide never has to be made elsewhere and dragged in.
             let add_size = vec2(22.0, 22.0);

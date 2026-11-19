@@ -7622,9 +7622,37 @@ pub fn show_animations_section(
             });
     }
 
-    if let Some(act) = action_to_run {
+    if let Some(act) = action_to_run
+        && !animation_unchanged(&act, obj)
+    {
         actions_to_run.push(act);
     }
+}
+
+/// Whether `act` is an `object.set_animation` that would store what `obj`
+/// already has (a combo re-picking its value, a duration field losing focus
+/// unchanged). Running it would add an undo step that changes nothing.
+pub(crate) fn animation_unchanged(
+    act: &(&'static str, Json),
+    obj: &coursecraft_course::Object,
+) -> bool {
+    let (cmd, params) = act;
+    if *cmd != "object.set_animation" {
+        return false;
+    }
+    let stored = match params.get("which").and_then(Json::as_str) {
+        Some("entrance") => &obj.entrance,
+        Some("exit") => &obj.exit,
+        _ => return false,
+    };
+    let wanted: Option<coursecraft_course::Animation> = match params.get("animation") {
+        Some(Json::Null) | None => None,
+        Some(value) => match serde_json::from_value(value.clone()) {
+            Ok(animation) => Some(animation),
+            Err(_) => return false,
+        },
+    };
+    &wanted == stored
 }
 
 pub(crate) fn is_committed(r: &Response, ui: &Ui) -> bool {

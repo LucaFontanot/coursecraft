@@ -17286,3 +17286,108 @@ fn new_scene_starts_with_a_selected_slide_in_one_undo() {
         "scene and its first slide undo together"
     );
 }
+
+#[test]
+fn reselecting_the_same_animation_adds_no_undo_step() {
+    use coursecraft_course::{Direction, Easing};
+    let mut harness = TestHarness::new(timeline_media_course());
+    let make = |effect, ms| {
+        crate::properties::animation_command(
+            "entrance",
+            effect,
+            Direction::Left,
+            ms,
+            Easing::EaseOut,
+            "s1",
+            "txt",
+        )
+    };
+    let none = make("none", 500);
+    assert!(
+        crate::properties::animation_unchanged(&none, &txt_object(&harness)),
+        "None over no animation changes nothing"
+    );
+    let (cmd, params) = make("fly_in", 600);
+    assert!(harness.editor.run(cmd, params).is_some());
+    let obj = txt_object(&harness);
+    assert!(crate::properties::animation_unchanged(
+        &make("fly_in", 600),
+        &obj
+    ));
+    assert!(!crate::properties::animation_unchanged(
+        &make("fly_in", 700),
+        &obj
+    ));
+    assert!(!crate::properties::animation_unchanged(
+        &make("fade", 600),
+        &obj
+    ));
+    assert!(!crate::properties::animation_unchanged(&none, &obj));
+}
+
+#[test]
+fn scene_header_plus_adds_a_slide_to_that_scene() {
+    let mut course = timeline_media_course();
+    course.scenes.push(coursecraft_course::Scene {
+        id: "scene2".into(),
+        title: "Scene 2".into(),
+        slides: Vec::new(),
+    });
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+    let Some(title) = harness.find_text("Scene 2") else {
+        panic!("scene 2 header drawn");
+    };
+    // The + is the rightmost text on the header row (an icon glyph).
+    let raw_input = egui::RawInput {
+        screen_rect: Some(harness.screen_rect),
+        ..Default::default()
+    };
+    let output = harness.ctx.run_ui(raw_input, |ui| {
+        let _ = harness.editor.show(ui);
+    });
+    let mut plus: Option<egui::Pos2> = None;
+    let mut walk = vec![];
+    for clipped in &output.shapes {
+        walk.push(clipped.shape.clone());
+    }
+    while let Some(shape) = walk.pop() {
+        match shape {
+            egui::epaint::Shape::Vec(v) => walk.extend(v),
+            egui::epaint::Shape::Text(t) => {
+                let c = crate::test_harness::text_center(&t);
+                if (c.y - title.y).abs() < 4.0
+                    && c.x > title.x + 40.0
+                    && c.x < 400.0
+                    && plus.is_none_or(|p| c.x > p.x)
+                {
+                    plus = Some(c);
+                }
+            }
+            _ => {}
+        }
+    }
+    output.drop_without_applying_deltas();
+    let Some(plus) = plus else {
+        panic!("+ drawn on the scene header");
+    };
+    harness.click_at(plus);
+    harness.idle_frame();
+    let Some(scene) = harness
+        .editor
+        .session
+        .course
+        .scenes
+        .iter()
+        .find(|s| s.id == "scene2")
+    else {
+        panic!("scene2");
+    };
+    assert_eq!(scene.slides.len(), 1, "a slide was added to Scene 2");
+    let added = scene.slides.first().map(|s| s.id.clone());
+    assert_eq!(
+        Some(harness.editor.selection.slide.clone()),
+        added,
+        "and selected"
+    );
+}
