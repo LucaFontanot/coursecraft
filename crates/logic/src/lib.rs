@@ -29,6 +29,83 @@ pub use animation::{
 };
 pub use suspend::{SUSPEND_PREFIX, SuspendError, decode_suspend, encode_suspend};
 
+/// Entrance and exit animation of `obj` at `clock_ms` on a timeline of
+/// `duration_ms` (the slide's or the object's layer's).
+///
+/// `None` when the object is not on screen: before `start_ms`, at or after
+/// a stored `end_ms`, or after its exit animation has finished. Motion
+/// paths, drags and states are not included; the player adds those. The
+/// editor's timeline Play uses this alone, so it previews the same
+/// entrances and exits the learner sees.
+#[must_use]
+pub fn sample_timed_animation(
+    obj: &coursecraft_course::Object,
+    clock_ms: u32,
+    duration_ms: u32,
+    slide_size: coursecraft_course::Size,
+) -> Option<ObjectSample> {
+    if clock_ms < obj.timing.start_ms {
+        return None;
+    }
+
+    let end_ms = obj.timing.end_ms.unwrap_or(duration_ms);
+    if let Some(end) = obj.timing.end_ms
+        && clock_ms >= end
+    {
+        return None;
+    }
+    if obj.exit.is_some() && clock_ms >= end_ms {
+        return None;
+    }
+
+    let mut anim_sample = ObjectSample::IDENTITY;
+
+    let exit_running = if let Some(ref exit_anim) = obj.exit {
+        let dur = exit_anim.duration_ms;
+        let start = end_ms.saturating_sub(dur);
+        if clock_ms >= start && clock_ms < end_ms {
+            let progress = if dur == 0 {
+                1.0
+            } else {
+                (clock_ms.saturating_sub(start) as f32 / dur as f32).clamp(0.0, 1.0)
+            };
+            anim_sample = sample_animation(
+                exit_anim,
+                AnimationPhase::Exiting,
+                progress,
+                obj.frame,
+                slide_size,
+            );
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if !exit_running && let Some(ref ent_anim) = obj.entrance {
+        let dur = ent_anim.duration_ms;
+        let start = obj.timing.start_ms;
+        let end = start.saturating_add(dur);
+        if clock_ms >= start && clock_ms < end {
+            let progress = if dur == 0 {
+                1.0
+            } else {
+                (clock_ms.saturating_sub(start) as f32 / dur as f32).clamp(0.0, 1.0)
+            };
+            anim_sample = sample_animation(
+                ent_anim,
+                AnimationPhase::Entering,
+                progress,
+                obj.frame,
+                slide_size,
+            );
+        }
+    }
+    Some(anim_sample)
+}
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use coursecraft_course::{
@@ -1483,65 +1560,8 @@ impl<'c> Player<'c> {
             }
         };
 
-        if clock_ms < obj.timing.start_ms {
-            return None;
-        }
-
-        let end_ms = obj.timing.end_ms.unwrap_or(duration_ms);
-        if let Some(end) = obj.timing.end_ms
-            && clock_ms >= end
-        {
-            return None;
-        }
-        if obj.exit.is_some() && clock_ms >= end_ms {
-            return None;
-        }
-
-        let mut anim_sample = ObjectSample::IDENTITY;
-
-        let exit_running = if let Some(ref exit_anim) = obj.exit {
-            let dur = exit_anim.duration_ms;
-            let start = end_ms.saturating_sub(dur);
-            if clock_ms >= start && clock_ms < end_ms {
-                let progress = if dur == 0 {
-                    1.0
-                } else {
-                    (clock_ms.saturating_sub(start) as f32 / dur as f32).clamp(0.0, 1.0)
-                };
-                anim_sample = sample_animation(
-                    exit_anim,
-                    AnimationPhase::Exiting,
-                    progress,
-                    obj.frame,
-                    self.course.slide_size,
-                );
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        if !exit_running && let Some(ref ent_anim) = obj.entrance {
-            let dur = ent_anim.duration_ms;
-            let start = obj.timing.start_ms;
-            let end = start.saturating_add(dur);
-            if clock_ms >= start && clock_ms < end {
-                let progress = if dur == 0 {
-                    1.0
-                } else {
-                    (clock_ms.saturating_sub(start) as f32 / dur as f32).clamp(0.0, 1.0)
-                };
-                anim_sample = sample_animation(
-                    ent_anim,
-                    AnimationPhase::Entering,
-                    progress,
-                    obj.frame,
-                    self.course.slide_size,
-                );
-            }
-        }
+        let anim_sample =
+            sample_timed_animation(obj, clock_ms, duration_ms, self.course.slide_size)?;
 
         let motion_offset = if let Some(running) = self.st.running_paths.get(object_id) {
             sample_motion_path(&running.path, running.elapsed_ms, running.from, obj.frame)

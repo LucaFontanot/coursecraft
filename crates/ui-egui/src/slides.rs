@@ -1016,6 +1016,37 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 ),
                 p.text_secondary,
             );
+            // "+" at the right of the header: a new slide at the end of this
+            // scene, so a slide never has to be made elsewhere and dragged in.
+            let add_size = vec2(22.0, 22.0);
+            let add_rect = Rect::from_center_size(
+                pos2(header_rect.max.x - add_size.x * 0.5, header_rect.center().y),
+                add_size,
+            );
+            let add_btn = egui::Button::new(
+                coursecraft_render::icon(
+                    coursecraft_render::Icon::Plus,
+                    coursecraft_render::ICON_SM,
+                )
+                .color(p.text_secondary),
+            )
+            .fill(egui::Color32::TRANSPARENT)
+            .corner_radius(coursecraft_render::RADIUS_SM as u8)
+            .min_size(add_size);
+            if ui
+                .put(add_rect, add_btn)
+                .on_hover_text(format!("New slide in {}", scene.title))
+                .clicked()
+                && !editor.ui.master_view
+            {
+                action_to_run = Some((
+                    "slide.add",
+                    serde_json::json!({
+                        "scene": scene.id,
+                        "title": crate::toolbar::next_slide_title(&editor.session.course),
+                    }),
+                ));
+            }
         }
         current_y += SCENE_HEADER_HEIGHT + SCENE_BOTTOM_GAP;
 

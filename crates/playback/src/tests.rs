@@ -791,3 +791,53 @@ mod worker_tests {
         handle.join().unwrap();
     }
 }
+
+/// 16-bit mono PCM WAV, 8 kHz, `ms` long, a quiet square wave.
+#[cfg(not(target_arch = "wasm32"))]
+fn wav_of_ms(ms: u32) -> Vec<u8> {
+    let rate: u32 = 8000;
+    let samples = rate.saturating_mul(ms) / 1000;
+    let data_len = samples.saturating_mul(2);
+    let mut b = Vec::new();
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&36u32.saturating_add(data_len).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&rate.to_le_bytes());
+    b.extend_from_slice(&(rate * 2).to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&data_len.to_le_bytes());
+    for i in 0..samples {
+        let v: i16 = if (i / 20) % 2 == 0 { 2000 } else { -2000 };
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b
+}
+
+/// Play again from the start (and scrubbing left) seeks the sound
+/// backwards. A forward-only decoder ignored that, so a second Play of a
+/// sound longer than the slide jumped straight to the end.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn audio_decoder_seeks_backwards() {
+    use rodio::Source;
+    let bytes: Arc<[u8]> = Arc::from(wav_of_ms(1000).into_boxed_slice());
+    let Ok(mut decoder) = crate::seekable_decoder(&bytes, "media/Tone.WAV") else {
+        panic!("the WAV decodes");
+    };
+    let total = decoder.by_ref().take(4000).count();
+    assert_eq!(total, 4000, "half a second read");
+    assert!(
+        decoder.try_seek(std::time::Duration::ZERO).is_ok(),
+        "seeking back to the start works"
+    );
+    let remaining = decoder.count();
+    assert!(
+        remaining > 7500,
+        "after seeking back the whole second plays again, got {remaining} samples"
+    );
+}

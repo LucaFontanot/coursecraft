@@ -1569,35 +1569,54 @@ fn show_anim_row(
     }
 
     if changed {
-        let anim_json = if effect_str.as_str() == "none" {
-            serde_json::Value::Null
-        } else {
-            let mut val = serde_json::json!({
-                "type": effect_str,
-                "duration_ms": duration_ms,
-                "easing": easing,
-            });
-            if matches!(effect_str.as_str(), "fly_in" | "wipe" | "float") {
-                val["from"] = serde_json::json!(direction);
-            }
-            val
-        };
-
-        let cmd = if which == "entrance" {
-            "object.set_entrance"
-        } else {
-            "object.set_exit"
-        };
-
-        *action_to_run = Some((
-            cmd,
-            serde_json::json!({
-                "slide": slide_id,
-                "object": obj_id,
-                "animation": anim_json,
-            }),
+        *action_to_run = Some(animation_command(
+            which,
+            effect_str,
+            *direction,
+            *duration_ms,
+            *easing,
+            slide_id,
+            obj_id,
         ));
     }
+}
+
+/// The `object.set_animation` call for one row of the Animations section.
+///
+/// The engine stores an [`coursecraft_course::Animation`]: the effect (with
+/// its direction) nested under `effect`, plus duration and easing. `none`
+/// clears the animation.
+pub(crate) fn animation_command(
+    which: &'static str,
+    effect: &str,
+    direction: Direction,
+    duration_ms: u32,
+    easing: Easing,
+    slide_id: &str,
+    obj_id: &str,
+) -> (&'static str, Json) {
+    let animation = if effect == "none" {
+        Json::Null
+    } else {
+        let mut effect_json = serde_json::json!({ "type": effect });
+        if matches!(effect, "fly_in" | "wipe" | "float") {
+            effect_json["from"] = serde_json::json!(direction);
+        }
+        serde_json::json!({
+            "effect": effect_json,
+            "duration_ms": duration_ms.clamp(1, 60_000),
+            "easing": easing,
+        })
+    };
+    (
+        "object.set_animation",
+        serde_json::json!({
+            "slide": slide_id,
+            "object": obj_id,
+            "which": which,
+            "animation": animation,
+        }),
+    )
 }
 
 /// Strikethrough, baseline and letter spacing in effect at the cursor.

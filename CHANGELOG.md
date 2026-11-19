@@ -4,6 +4,9 @@ What changed in each release, newest first. Versions follow [semantic versioning
 
 ## Unreleased
 
+- Animations work again: what you pick in the Animations panel is now saved (it was lost, so nothing played and moving the object on the timeline seemed to reset it), and the timeline's Play button shows entrances and exits on the slide.
+- A sound longer than its slide plays again from the start on the next Play, and scrubbing back works (it used to jump straight to the end).
+- Each scene in the slide list has a + button for a new slide in that scene, and New Scene starts with a slide of its own.
 - Typing in long text with spell check on is fast again (it took most of a second per key in 0.2.0), the editor no longer redraws while idle, decoded pictures have a memory ceiling, and the slide list only draws the thumbnails you can see.
 - Flip cards now have readable text on both sides with any theme colour (a white card with an accent outline, turning to an accent tint), and process-step labels are centred under their circles.
 

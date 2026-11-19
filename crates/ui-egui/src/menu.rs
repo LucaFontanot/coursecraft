@@ -832,7 +832,12 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
     });
 
     if let Some((cmd, params)) = action_to_run {
-        editor.run(cmd, params);
+        if cmd == "scene.add" {
+            // A new scene from the menu starts with a slide, like the toolbar.
+            crate::toolbar::add_new_scene(editor);
+        } else {
+            editor.run(cmd, params);
+        }
     }
 }
 

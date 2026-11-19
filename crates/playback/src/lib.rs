@@ -1204,6 +1204,31 @@ impl RodioBackend {
     }
 }
 
+/// Decode audio bytes so that seeking backwards works.
+///
+/// `rodio::Decoder::try_from` marks the data forward-only, so a seek back
+/// (Play again from the start, or a scrub to the left) silently fails and
+/// the sound carries on from where it was paused. Marking the in-memory
+/// bytes seekable with their length fixes that; the file extension is a
+/// hint for formats that are hard to sniff.
+#[cfg(not(target_arch = "wasm32"))]
+fn seekable_decoder(
+    bytes: &Arc<[u8]>,
+    src: &str,
+) -> Result<rodio::Decoder<std::io::Cursor<Arc<[u8]>>>, rodio::decoder::DecoderError> {
+    let mut builder = rodio::Decoder::builder()
+        .with_data(std::io::Cursor::new(Arc::clone(bytes)))
+        .with_byte_len(bytes.len() as u64)
+        .with_seekable(true);
+    if let Some(ext) = std::path::Path::new(src)
+        .extension()
+        .and_then(|ext| ext.to_str())
+    {
+        builder = builder.with_hint(&ext.to_ascii_lowercase());
+    }
+    builder.build()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl MediaBackend for RodioBackend {
     fn play(&mut self, object: &str, src: &str, kind: MediaKind, bytes: Arc<[u8]>) {
@@ -1237,8 +1262,7 @@ impl MediaBackend for RodioBackend {
         };
 
         let sink = rodio::Sink::connect_new(stream.mixer());
-        let cursor = std::io::Cursor::new(Arc::clone(&bytes));
-        match rodio::Decoder::try_from(cursor) {
+        match seekable_decoder(&bytes, src) {
             Ok(decoder) => {
                 sink.set_volume(self.effective_volume(object));
                 sink.append(decoder);

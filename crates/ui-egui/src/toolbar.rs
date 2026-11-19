@@ -52,8 +52,38 @@ pub fn add_new_slide(editor: &mut Editor) {
 }
 
 /// Add a new scene to the course.
+///
+/// The new scene starts with one slide, which becomes the selection, so
+/// New Slide (toolbar, Ctrl+M) then keeps adding to this scene. Scene and
+/// slide are one undo step.
 pub fn add_new_scene(editor: &mut Editor) {
-    editor.run("scene.add", serde_json::json!({}));
+    if editor.ui.master_view {
+        editor.set_status("Not available in Master View");
+        return;
+    }
+    let course = &editor.session.course;
+    let scene_id = first_free_id("scene", course.scenes.iter().map(|sc| sc.id.as_str()));
+    let slide_id = first_free_id("slide", course.all_slide_ids());
+    let title = next_slide_title(course);
+    editor.run_batch(&[
+        (
+            "scene.add".to_owned(),
+            serde_json::json!({ "id": scene_id }),
+        ),
+        (
+            "slide.add".to_owned(),
+            serde_json::json!({ "id": slide_id, "scene": scene_id, "title": title }),
+        ),
+    ]);
+}
+
+/// The first `prefix<N>` not in `taken`.
+fn first_free_id<'a>(prefix: &str, taken: impl Iterator<Item = &'a str>) -> String {
+    let taken: std::collections::BTreeSet<&str> = taken.collect();
+    (1u64..)
+        .map(|n| format!("{prefix}{n}"))
+        .find(|id| !taken.contains(id.as_str()))
+        .unwrap_or_else(|| prefix.to_owned())
 }
 
 /// Add a new layer to the currently selected slide.

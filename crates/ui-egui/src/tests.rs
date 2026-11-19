@@ -17014,3 +17014,275 @@ fn folder_menu_items_raise_requests_and_history_says_git_is_the_history() {
     assert!(h.find_text_containing("git is its history").is_some());
     assert!(h.find_text("Open as Copy").is_none());
 }
+
+// --- Tester report, 2026-11-19: animations, timeline, scenes ---------------
+
+fn txt_object(harness: &TestHarness) -> coursecraft_course::Object {
+    let Some(slide) = harness.editor.session.course.slide("s1") else {
+        panic!("slide s1");
+    };
+    let Some((obj, _)) = slide.object("txt") else {
+        panic!("object txt");
+    };
+    obj.clone()
+}
+
+#[test]
+fn animation_panel_settings_are_stored_for_every_effect() {
+    use coursecraft_course::{AnimEffect, Direction, Easing};
+    let mut harness = TestHarness::new(timeline_media_course());
+    harness.editor.selection.slide = "s1".into();
+    for (effect, expected) in [
+        ("fade", AnimEffect::Fade),
+        (
+            "fly_in",
+            AnimEffect::FlyIn {
+                from: Direction::Top,
+            },
+        ),
+        ("zoom", AnimEffect::Zoom),
+        (
+            "wipe",
+            AnimEffect::Wipe {
+                from: Direction::Top,
+            },
+        ),
+        (
+            "float",
+            AnimEffect::Float {
+                from: Direction::Top,
+            },
+        ),
+    ] {
+        for which in ["entrance", "exit"] {
+            let (cmd, params) = crate::properties::animation_command(
+                which,
+                effect,
+                Direction::Top,
+                700,
+                Easing::EaseIn,
+                "s1",
+                "txt",
+            );
+            assert!(
+                harness.editor.run(cmd, params).is_some(),
+                "{which} {effect} is accepted: {:?}",
+                harness.editor.ui.last_error
+            );
+            let obj = txt_object(&harness);
+            let stored = if which == "entrance" {
+                obj.entrance
+            } else {
+                obj.exit
+            };
+            let Some(anim) = stored else {
+                panic!("{which} {effect} stored");
+            };
+            assert_eq!(anim.effect, expected);
+            assert_eq!(anim.duration_ms, 700);
+            assert_eq!(anim.easing, Easing::EaseIn);
+        }
+    }
+    let (cmd, params) = crate::properties::animation_command(
+        "entrance",
+        "none",
+        Direction::Bottom,
+        500,
+        Easing::EaseOut,
+        "s1",
+        "txt",
+    );
+    assert!(harness.editor.run(cmd, params).is_some());
+    assert!(txt_object(&harness).entrance.is_none(), "None clears it");
+}
+
+#[test]
+fn moving_an_object_on_the_timeline_keeps_its_animation() {
+    use coursecraft_course::{Direction, Easing};
+    let mut harness = TestHarness::new(timeline_media_course());
+    harness.editor.selection.slide = "s1".into();
+    harness.editor.selection.set_many(["txt"]);
+    harness.idle_frame();
+    let (cmd, params) = crate::properties::animation_command(
+        "entrance",
+        "fly_in",
+        Direction::Left,
+        800,
+        Easing::EaseOut,
+        "s1",
+        "txt",
+    );
+    assert!(harness.editor.run(cmd, params).is_some());
+    harness.idle_frame();
+    assert_eq!(harness.editor.ui.properties.entrance_effect, "fly_in");
+    // What a timeline bar drag commits.
+    let moved = harness.editor.run(
+        "object.update",
+        serde_json::json!({
+            "slide": "s1", "object": "txt",
+            "timing": { "start_ms": 1500, "end_ms": null }
+        }),
+    );
+    assert!(moved.is_some());
+    harness.idle_frame();
+    assert!(
+        txt_object(&harness).entrance.is_some(),
+        "stored animation kept"
+    );
+    assert_eq!(
+        harness.editor.ui.properties.entrance_effect, "fly_in",
+        "the inspector still shows it"
+    );
+    assert_eq!(
+        harness.editor.ui.properties.entrance_direction,
+        Direction::Left
+    );
+}
+
+/// Every command id the editor dispatches exists in the engine. The
+/// Animations section once sent `object.set_entrance`, which the engine
+/// does not have, so nothing an author chose was ever stored.
+#[test]
+fn every_command_the_editor_sends_exists() {
+    let known: std::collections::BTreeSet<&str> = coursecraft_engine::registry()
+        .iter()
+        .map(|cmd| cmd.id)
+        .collect();
+    let prefixes: std::collections::BTreeSet<&str> =
+        known.iter().filter_map(|id| id.split('.').next()).collect();
+    // Menu aliases resolved in menu.rs before anything runs.
+    let aliases = [
+        "object.bring_forward",
+        "object.send_backward",
+        "object.reorder_backward",
+    ];
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        panic!("read {dir:?}");
+    };
+    let mut unknown = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !name.ends_with(".rs") || name.contains("test") {
+            continue;
+        }
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for literal in source.split('"').skip(1).step_by(2) {
+            let Some((prefix, rest)) = literal.split_once('.') else {
+                continue;
+            };
+            let word =
+                |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c == '_');
+            // File names such as `course.json` are not commands.
+            let file = ["ccraft", "json", "zip", "png", "tsv", "html", "md", "txt"].contains(&rest);
+            if word(prefix)
+                && word(rest)
+                && !file
+                && prefixes.contains(prefix)
+                && !known.contains(literal)
+                && !aliases.contains(&literal)
+            {
+                unknown.push(format!("{name}: {literal}"));
+            }
+        }
+    }
+    assert!(unknown.is_empty(), "unknown command ids: {unknown:?}");
+}
+
+#[test]
+fn timeline_play_shows_entrance_and_exit_on_the_canvas() {
+    use coursecraft_course::{AnimEffect, Animation, Direction, Easing};
+    let mut course = timeline_media_course();
+    let Some(slide) = course.slide_mut("s1") else {
+        panic!("slide s1");
+    };
+    let Some(obj) = slide.objects.iter_mut().find(|o| o.id == "txt") else {
+        panic!("txt");
+    };
+    obj.timing = coursecraft_course::Timing {
+        start_ms: 1000,
+        end_ms: Some(5000),
+    };
+    obj.entrance = Some(Animation {
+        effect: AnimEffect::FlyIn {
+            from: Direction::Left,
+        },
+        duration_ms: 1000,
+        easing: Easing::Linear,
+    });
+    obj.exit = Some(Animation {
+        effect: AnimEffect::Fade,
+        duration_ms: 1000,
+        easing: Easing::Linear,
+    });
+    let Some(slide) = course.slide("s1") else {
+        panic!("slide s1");
+    };
+    let items = coursecraft_render::compose_authoring_layers(&course, slide, None, &[], false);
+    let rest = |items: &[coursecraft_render::DrawItem]| {
+        items
+            .iter()
+            .find(|i| i.hit == coursecraft_render::Hit::Object("txt".into()))
+            .map(|i| (i.rect.min.x, i.opacity))
+    };
+    let Some((rest_x, _)) = rest(&items) else {
+        panic!("txt drawn at rest");
+    };
+    let at = |ms| crate::canvas::timeline_animated_items(&items, slide, course.slide_size, ms);
+    assert_eq!(rest(&at(500)), None, "not on screen before it starts");
+    let Some((mid_x, _)) = rest(&at(1500)) else {
+        panic!("flying in");
+    };
+    assert!(
+        mid_x < rest_x - 100.0,
+        "halfway in from the left: {mid_x} vs {rest_x}"
+    );
+    assert_eq!(
+        rest(&at(2500)),
+        Some((rest_x, 1.0)),
+        "at rest in the middle"
+    );
+    let Some((_, fading)) = rest(&at(4500)) else {
+        panic!("fading out");
+    };
+    assert!((fading - 0.5).abs() < 0.01, "half faded: {fading}");
+    assert_eq!(rest(&at(5000)), None, "gone after its exit");
+    // The video and audio objects outside the text keep their own rules.
+    assert!(at(2500).len() >= items.len() - 1);
+}
+
+#[test]
+fn new_scene_starts_with_a_selected_slide_in_one_undo() {
+    let mut harness = TestHarness::new(timeline_media_course());
+    harness.idle_frame();
+    let scenes_before = harness.editor.session.course.scenes.len();
+    crate::toolbar::add_new_scene(&mut harness.editor);
+    let course = &harness.editor.session.course;
+    assert_eq!(course.scenes.len(), scenes_before + 1);
+    let Some(scene) = course.scenes.last() else {
+        panic!("new scene");
+    };
+    assert_eq!(scene.slides.len(), 1, "the new scene has a slide");
+    let new_slide = scene.slides.first().map(|s| s.id.clone());
+    assert_eq!(Some(harness.editor.selection.slide.clone()), new_slide);
+    // New Slide now adds to the new scene.
+    crate::toolbar::add_new_slide(&mut harness.editor);
+    let Some(scene) = harness.editor.session.course.scenes.last() else {
+        panic!("new scene");
+    };
+    assert_eq!(
+        scene.slides.len(),
+        2,
+        "New Slide adds to the selected scene"
+    );
+    harness.editor.run("edit.undo", serde_json::json!({}));
+    harness.editor.run("edit.undo", serde_json::json!({}));
+    assert_eq!(
+        harness.editor.session.course.scenes.len(),
+        scenes_before,
+        "scene and its first slide undo together"
+    );
+}

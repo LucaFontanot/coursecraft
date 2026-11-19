@@ -5200,10 +5200,29 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 .as_shape(t.slide_rect(), CornerRadius::ZERO),
         );
 
+        // While the timeline plays, show entrances and exits as the
+        // learner will see them. Paused or scrubbed, every object stays at
+        // rest so it can be selected and edited.
+        let animated = if editor.timeline_playback.is_playing() {
+            editor
+                .session
+                .course
+                .slide(&editor.selection.slide)
+                .map(|slide| {
+                    timeline_animated_items(
+                        &items,
+                        slide,
+                        editor.session.course.slide_size,
+                        playhead_ms,
+                    )
+                })
+        } else {
+            None
+        };
         paint(
             &painter,
             &t,
-            &items,
+            animated.as_deref().unwrap_or(&items),
             Highlight::default(),
             Some((&mut editor.media_cache, &source)),
             theme,
@@ -5543,4 +5562,55 @@ fn draw_empty_slide_hint(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             }
         });
     });
+}
+
+/// The canvas items as they look at `playhead_ms` during timeline Play:
+/// each object moved, scaled, faded and clipped by its entrance or exit
+/// animation, and objects outside their timing left out. Items that are not
+/// slide objects (masters, question rows) are kept as they are.
+pub(crate) fn timeline_animated_items(
+    items: &[DrawItem],
+    slide: &coursecraft_course::Slide,
+    slide_size: coursecraft_course::Size,
+    playhead_ms: u32,
+) -> Vec<DrawItem> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let Hit::Object(id) = &item.hit else {
+                return Some(item.clone());
+            };
+            let Some((obj, layer_id)) = slide.object(id) else {
+                return Some(item.clone());
+            };
+            let duration_ms = layer_id
+                .and_then(|layer| slide.layer(layer))
+                .map_or(slide.duration_ms, |layer| layer.duration_ms);
+            let sample = coursecraft_logic::sample_timed_animation(
+                obj,
+                playhead_ms,
+                duration_ms,
+                slide_size,
+            )?;
+            if sample.opacity <= 0.0 {
+                return None;
+            }
+            let mut item = item.clone();
+            let offset = vec2(sample.offset.0, sample.offset.1);
+            let scale = if sample.scale.is_finite() {
+                sample.scale.max(0.0)
+            } else {
+                1.0
+            };
+            if offset.x.is_finite() && offset.y.is_finite() {
+                item.rect = item.rect.translate(offset);
+            }
+            let center = item.rect.center();
+            let half = item.rect.size() * 0.5 * scale;
+            item.rect = Rect::from_min_max(center - half, center + half);
+            item.opacity = (item.opacity * sample.opacity).clamp(0.0, 1.0);
+            item.clip = sample.clip;
+            Some(item)
+        })
+        .collect()
 }

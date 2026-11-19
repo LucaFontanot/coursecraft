@@ -9891,3 +9891,39 @@ fn a_slide_override_hiding_nav_blocks_next_on_that_slide_only() {
     p.handle(&Input::Previous);
     assert_eq!(p.current_slide().unwrap().id, "s2");
 }
+
+#[test]
+fn timed_animation_follows_entrance_timing_and_exit() {
+    use coursecraft_course::{AnimEffect, Animation, Direction, Easing, Object, Size};
+    let json = serde_json::json!({
+        "id": "o", "kind": { "type": "text", "text": "Hi" },
+        "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 50.0 },
+        "timing": { "start_ms": 1000, "end_ms": 4000 }
+    });
+    let Ok(mut obj) = serde_json::from_value::<Object>(json) else {
+        panic!("valid object");
+    };
+    obj.entrance = Some(Animation {
+        effect: AnimEffect::FlyIn {
+            from: Direction::Left,
+        },
+        duration_ms: 1000,
+        easing: Easing::Linear,
+    });
+    obj.exit = Some(Animation {
+        effect: AnimEffect::Fade,
+        duration_ms: 500,
+        easing: Easing::Linear,
+    });
+    let size = Size { w: 1280, h: 720 };
+    let sample = |ms| crate::sample_timed_animation(&obj, ms, 10_000, size);
+    assert!(sample(999).is_none(), "hidden before it starts");
+    let start = sample(1000).map(|s| s.offset.0);
+    assert_eq!(start, Some(-300.0), "starts fully off the left edge");
+    let mid = sample(1500).map(|s| s.offset.0);
+    assert_eq!(mid, Some(-150.0), "halfway in at half the duration");
+    assert_eq!(sample(2500), Some(crate::ObjectSample::IDENTITY), "at rest");
+    let fading = sample(3750).map(|s| s.opacity);
+    assert_eq!(fading, Some(0.5), "half faded halfway through the exit");
+    assert!(sample(4000).is_none(), "gone at its end");
+}
