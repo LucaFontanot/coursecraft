@@ -260,6 +260,7 @@ course.export_xliff  -                        -          {"target_language": str
 course.import_xliff  -                        -          {"xliff": string}
 edit.undo            Edit/Undo                Ctrl+Z     {}
 edit.redo            Edit/Redo                Ctrl+Y     {}
+edit.history         Edit/History…            -          {}
 scene.add            Insert/New Scene         -          {"id"?: id, "title"?: string}
 scene.update         -                        -          {"scene": id, "title"?: string}
 scene.delete         Edit/Delete Scene        -          {"scene": id}
