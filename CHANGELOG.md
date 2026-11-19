@@ -2,15 +2,6 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
-## Unreleased
-
-- A click on a menu or popup no longer also clicks what lies underneath. Picking "Radial gradient" from the Fill type menu in a smaller window used to select the slide layer under the menu too: the layer's content appeared over the slide and the panel jumped to the Slide tab. A click that closes a menu now only closes it, and the same fix covers the canvas, rulers and timeline.
-- Picture fill: choosing Picture when the course has no pictures opens the file picker, and the Image menu always offers "Choose a file…". The chosen picture fills the shape or button; it is no longer placed as a separate picture. The menu lists only pictures, not audio or video, and cancelling the file picker leaves the fill as it was.
-- Gradient colours are labelled Colour 1, Colour 2 and so on, with "Add colour", and each row fits inside the panel (its position and remove button used to run off the edge).
-- Radio group options fit inside the Format panel. One option row was wider than the panel and pushed every field below it past the edge.
-- The timeline ruler labels every 1, 2, 5 or 10 seconds as space allows, so labels on a long slide no longer overlap.
-- The colour field for an object state is wide enough to show the whole colour code.
-
 ## 0.2.1
 
 A new sample course that shows off every feature, and the fixes we found by building it.
@@ -29,6 +20,12 @@ A new sample course that shows off every feature, and the fixes we found by buil
 - The player's outline drawer no longer draws scrolled rows over its header and tabs, and its rows ignore clicks while it slides in. On the web, the screen-reader layer no longer drifts away from the rows it describes.
 - Choosing a value that is already set no longer adds an Undo step that does nothing.
 - Flip cards have readable text on both sides with any theme colour, and process-step labels are centred under their circles.
+- A click on a menu or popup no longer also clicks what lies underneath. Picking "Radial gradient" from the Fill type menu in a smaller window used to select the slide layer under the menu too: the layer's content appeared over the slide and the panel jumped to the Slide tab. A click that closes a menu now only closes it, and the same fix covers the canvas, rulers and timeline.
+- Picture fill: choosing Picture when the course has no pictures opens the file picker, and the Image menu always offers "Choose a file…". The chosen picture fills the shape or button; it is no longer placed as a separate picture. The menu lists only pictures, not audio or video, and cancelling the file picker leaves the fill as it was.
+- Gradient colours are labelled Colour 1, Colour 2 and so on, with "Add colour", and each row fits inside the panel (its position and remove button used to run off the edge).
+- Radio group options fit inside the Format panel. One option row was wider than the panel and pushed every field below it past the edge.
+- The timeline ruler labels every 1, 2, 5 or 10 seconds as space allows, so labels on a long slide no longer overlap.
+- The colour field for an object state is wide enough to show the whole colour code.
 
 ## 0.2.0
 
