@@ -7,14 +7,16 @@
 //! `package-example` (build the web player with trunk, publish
 //! `examples/hello-course` into the mock LMS at `target/mock-lms/` and to
 //! `target/hello-course.zip`; also publishes the showcase as SCORM 2004 to
-//! `target/mock-lms/scorm2004/` and `target/showcase-2004.zip`), and `mock-ai`
-//! (a local OpenAI-compatible endpoint for trying AI features offline).
+//! `target/mock-lms/scorm2004/` and `target/showcase-2004.zip`), `perf` (run
+//! the ignored timing tests in release and write `target/perf/report.md`) and
+//! `mock-ai` (a local OpenAI-compatible endpoint for trying AI features offline).
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod mock_ai;
 mod mock_lrs;
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::process::{Command, ExitCode};
 
@@ -517,6 +519,115 @@ fn parse_port_with_default(
     Ok(port)
 }
 
+/// Turn TSV rows from the timing suites into the markdown report. Pure so it
+/// can be unit tested without a release run; the caller supplies the date, OS
+/// and CPU count for the header. A zero or negative budget means "not
+/// budgeted" and is never marked over.
+fn results_to_markdown(tsv: &str, date: &str, os: &str, cpus: usize) -> String {
+    let mut out = String::new();
+    out.push_str("# CourseCraft performance report\n\n");
+    let _ = writeln!(out, "Date: {date}");
+    let _ = writeln!(out, "OS: {os}");
+    let _ = writeln!(out, "CPUs: {cpus}");
+    out.push_str("\n| Suite | Stage | Median | p95 | Budget | Status |\n");
+    out.push_str("|---|---|---|---|---|---|\n");
+    for line in tsv.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut fields = line.splitn(6, '\t');
+        let (Some(suite), Some(stage), Some(median), Some(p95), Some(budget)) = (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        ) else {
+            continue;
+        };
+        let note = fields.next().unwrap_or("");
+        let median = median.parse::<f64>().unwrap_or(0.0);
+        let p95 = p95.parse::<f64>().unwrap_or(0.0);
+        let budget = budget.parse::<f64>().unwrap_or(0.0);
+        let status = if budget > 0.0 && p95 > budget {
+            "over"
+        } else {
+            "ok"
+        };
+        let stage_cell = if note.is_empty() {
+            stage.to_owned()
+        } else {
+            format!("{stage} ({note})")
+        };
+        let _ = writeln!(
+            out,
+            "| {suite} | {stage_cell} | {median:.1} ms | {p95:.1} ms | {budget} ms | {status} |"
+        );
+    }
+    out
+}
+
+/// Run every ignored timing test in release, then summarise their TSV rows.
+/// Exits non-zero only when a test fails, never because a stage is over budget.
+fn perf() -> Result<(), String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or("xtask has no parent directory")?;
+    let dir = root.join("target/perf");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let tsv = dir.join("results.tsv");
+    let report = dir.join("report.md");
+    let _ = std::fs::remove_file(&tsv);
+
+    let ran_ui = cargo(&[
+        "test",
+        "--release",
+        "-p",
+        "coursecraft-ui-egui",
+        "perf_tests",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ]);
+    let ran_cli = cargo(&[
+        "test",
+        "--release",
+        "-p",
+        "coursecraft-cli",
+        "--test",
+        "big_course",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ]);
+    if !ran_ui || !ran_cli {
+        return Err("a timing test failed".into());
+    }
+
+    let raw = std::fs::read_to_string(&tsv).map_err(|e| {
+        format!(
+            "{}: {e} (did the timing tests write any results?)",
+            tsv.display()
+        )
+    })?;
+    let date = std::process::Command::new("date")
+        .args(["-u", "+%Y-%m-%d"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".into());
+    let os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
+    let cpus = std::thread::available_parallelism().map_or(0, |n| n.get());
+    let markdown = results_to_markdown(&raw, &date, &os, cpus);
+    std::fs::write(&report, markdown).map_err(|e| format!("{}: {e}", report.display()))?;
+    println!("perf: report written to {}", report.display());
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let task = std::env::args().nth(1).unwrap_or_default();
     let layers = || match check_layers() {
@@ -541,6 +652,7 @@ fn main() -> ExitCode {
         "package-example" => package_example()
             .map_err(|e| eprintln!("package-example: {e}"))
             .is_ok(),
+        "perf" => perf().map_err(|e| eprintln!("perf: {e}")).is_ok(),
         "mock-lrs" => match parse_port(std::env::args().skip(2)) {
             Ok(port) => mock_lrs::run(port)
                 .map_err(|e| eprintln!("mock-lrs: {e}"))
@@ -575,7 +687,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo xtask <layers|wasm|ci|dep-src|build-player|package-example|mock-lrs|mock-ai>"
+                "usage: cargo xtask <layers|wasm|ci|dep-src|build-player|package-example|perf|mock-lrs|mock-ai>"
             );
             false
         }
@@ -584,5 +696,36 @@ fn main() -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+#[cfg(test)]
+mod perf_tests {
+    use super::results_to_markdown;
+
+    #[test]
+    fn tsv_becomes_a_report_with_over_budget_rows_marked() {
+        let tsv = "editor\tidle\t12.3\t13.1\t16\t\n\
+                   editor\tslow\t40.0\t55.0\t33\t\n\
+                   big-course\topen\t1200.0\t1200.0\t5000\trss 130 MB\n";
+        let md = results_to_markdown(tsv, "2026-11-19", "macos x86_64", 8);
+        assert!(md.contains("# CourseCraft performance report"));
+        assert!(md.contains("Date: 2026-11-19"));
+        assert!(md.contains("OS: macos x86_64"));
+        assert!(md.contains("CPUs: 8"));
+        assert!(md.contains("| editor | idle | 12.3 ms | 13.1 ms | 16 ms | ok |"));
+        assert!(md.contains("| editor | slow | 40.0 ms | 55.0 ms | 33 ms | over |"));
+        assert!(md.contains("open (rss 130 MB)"));
+    }
+
+    #[test]
+    fn a_zero_budget_is_never_over() {
+        let md = results_to_markdown(
+            "big-course\tgenerate\t100.0\t150.0\t0\tmedia 500 MB\n",
+            "d",
+            "os",
+            1,
+        );
+        assert!(md.contains("generate (media 500 MB) | 100.0 ms | 150.0 ms | 0 ms | ok |"));
     }
 }

@@ -10,7 +10,7 @@
 //! `/usr/bin/time -l` reports the overall peak memory (no `unsafe` here).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use coursecraft_course::{Course, Severity};
@@ -202,12 +202,59 @@ fn rss_mb() -> f64 {
         .map_or(0.0, |k| k / 1024.0)
 }
 
-fn row(stage: &str, took: Duration, note: &str) {
-    println!(
-        "| {stage:<28} | {:>9.0} ms | rss {:>5.0} MB | {note}",
-        took.as_secs_f64() * 1000.0,
-        rss_mb()
+const SUITE: &str = "big-course";
+
+/// Where the timing suites append their machine-readable results. Never panics:
+/// if the target folder cannot be found or written, the run just has no TSV row.
+fn results_path() -> Option<PathBuf> {
+    let target = if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
+        if dir.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(dir))
+        }
+    } else {
+        None
+    }
+    .or_else(|| {
+        let mut here = Path::new(env!("CARGO_MANIFEST_DIR"));
+        loop {
+            if here.join("Cargo.toml").is_file() && here.join("target").is_dir() {
+                return Some(here.join("target"));
+            }
+            here = here.parent()?;
+        }
+    })?;
+    let dir = target.join("perf");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir.join("results.tsv"))
+}
+
+fn append_tsv(stage: &str, ms: f64, budget_ms: f64, note: &str) {
+    use std::io::Write;
+    let Some(path) = results_path() else {
+        return;
+    };
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    let _ = writeln!(
+        file,
+        "{SUITE}\t{stage}\t{ms:.3}\t{ms:.3}\t{budget_ms}\t{note}"
     );
+}
+
+fn row(stage: &str, took: Duration, budget_ms: f64, note: &str) {
+    let ms = took.as_secs_f64() * 1000.0;
+    let rss = rss_mb();
+    println!("| {stage:<28} | {ms:>9.0} ms | rss {rss:>5.0} MB | {note}");
+    // One-shot stages use the same number for median and p95; the resident
+    // memory is a memory stage's note.
+    append_tsv(stage, ms, budget_ms, &format!("{note} rss {rss:.0} MB"));
 }
 
 #[test]
@@ -249,6 +296,7 @@ fn big_course_speed() -> Result<(), String> {
     row(
         "generate (not budgeted)",
         t.elapsed(),
+        0.0,
         &format!("media {:.0} MB", media_total as f64 / 1e6),
     );
 
@@ -265,7 +313,7 @@ fn big_course_speed() -> Result<(), String> {
         "validate errors: {:?}",
         errors.first().map(|i| (&i.path, &i.message))
     );
-    row("validate (<= 200 ms)", validate_time, "");
+    row("validate (<= 200 ms)", validate_time, 200.0, "");
 
     // Save.
     let file = dir.join("big.ccraft");
@@ -278,6 +326,7 @@ fn big_course_speed() -> Result<(), String> {
         row(
             "save .ccraft (<= 5 s)",
             save_time,
+            5000.0,
             &format!("file {:.0} MB", size as f64 / 1e6),
         );
 
@@ -288,10 +337,10 @@ fn big_course_speed() -> Result<(), String> {
         let reader =
             std::io::BufReader::new(std::fs::File::open(&file).map_err(|e| e.to_string())?);
         coursecraft_format::verify_project(reader).map_err(|e| e.to_string())?;
-        row("verify saved file", t.elapsed(), "CRC of every entry");
+        row("verify saved file", t.elapsed(), 0.0, "CRC of every entry");
         let t = Instant::now();
         std::fs::copy(&file, dir.join("version.ccraft")).map_err(|e| e.to_string())?;
-        row("keep a version (copy)", t.elapsed(), "");
+        row("keep a version (copy)", t.elapsed(), 0.0, "");
         let _ = std::fs::remove_file(dir.join("version.ccraft"));
     }
 
@@ -307,6 +356,7 @@ fn big_course_speed() -> Result<(), String> {
         row(
             "save folder, first (<= 5 s)",
             t.elapsed(),
+            5000.0,
             &format!("{} files written", report.written.len()),
         );
         let t = Instant::now();
@@ -315,6 +365,7 @@ fn big_course_speed() -> Result<(), String> {
         row(
             "save folder, unchanged (<= 5 s)",
             t.elapsed(),
+            5000.0,
             &format!("{} files written", again.written.len()),
         );
         assert!(again.written.is_empty(), "an unchanged save wrote files");
@@ -357,6 +408,7 @@ fn big_course_speed() -> Result<(), String> {
         row(
             name,
             t.elapsed(),
+            60000.0,
             &format!("zip {:.0} MB", size as f64 / 1e6),
         );
     }
@@ -382,6 +434,7 @@ fn open_stage(dir: &std::path::Path) -> Result<(), String> {
     row(
         "open .ccraft (<= 5 s)",
         t.elapsed(),
+        5000.0,
         &format!("{} media files", project.media.len()),
     );
     drop(bytes);
@@ -395,6 +448,7 @@ fn open_stage(dir: &std::path::Path) -> Result<(), String> {
         row(
             "open folder (<= 5 s)",
             t.elapsed(),
+            5000.0,
             &format!("{} media files", opened.project.media.len()),
         );
     }
@@ -417,6 +471,7 @@ fn open_stage(dir: &std::path::Path) -> Result<(), String> {
     row(
         "simulate all slides",
         t.elapsed(),
+        0.0,
         &format!("{visited} slides"),
     );
     Ok(())

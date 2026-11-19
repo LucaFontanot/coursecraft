@@ -1,0 +1,24 @@
+name: Perf
+
+# Manual only: release timing tests take minutes and heat the runner up.
+# Actions -> Perf -> Run workflow, then download the `perf` artifact.
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  perf:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo xtask perf
+      - uses: actions/upload-artifact@v7
+        with:
+          name: perf
+          path: target/perf/

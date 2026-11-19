@@ -83,3 +83,75 @@ All within budget with room to spare; nothing needed fixing. Frame times use stu
 3. **Memory copies.** The save and zip buffers are sized once instead of doubling; entries are read into an exactly-sized buffer; `save_project_to` and `zip_package_to` write straight into a file, and the editor's publish now streams the zip to a temporary file and renames it. That removes one whole-package copy from publish (it was about 4.1 GB at peak, over budget).
 
 Still copied once: publish resolves each media file with a copy (`PackageInput::media` returns an owned `Vec`), so publish holds the media twice (2756 MB here, within budget). Removing that needs a borrowed-bytes API and was left alone.
+
+## `cargo xtask perf` (M21)
+
+CourseCraft keeps a set of ignored timing tests on a 300-slide course. They only
+mean something in a release build, so they are not part of the normal test run.
+`cargo xtask perf` runs all of them and writes two files under `target/perf/`:
+
+- `results.tsv` — one row per stage: `suite`, `stage`, `median_ms`, `p95_ms`,
+  `budget_ms`, `note`. One-shot stages use the same number for median and p95;
+  memory stages put the resident memory in the note.
+- `report.md` — a header (date, OS, CPU count) and a table of suite, stage,
+  median, p95, budget and status. A row is marked **over** when its p95 is above
+  its budget. The command only fails when a test fails, not when a stage is over.
+
+Timings differ between machines, so compare runs on the **same** machine. The
+budgets are guardrails for regressions, not a promise about every laptop.
+
+### What each stage measures
+
+Editor suite (`crates/ui-egui/src/perf_tests.rs`, 1280×900 headless frames):
+
+| Stage | What it measures | Budget |
+|---|---|---|
+| idle | A frame with no input after settling | 16 ms |
+| select slide 150 | Switching between two slides | 33 ms |
+| scroll slide list | A wheel event over the slide list | 33 ms |
+| typing in a text field | A keystroke in the button-label field in Properties | 33 ms |
+| type on canvas with spell check | A keystroke in the in-place editor of a 2,000-character paragraph with misspellings, as-you-type checking on | 33 ms |
+| check spelling, open | Opening Check Spelling on the 300-slide course (a misspelling on every 10th slide): collect every issue and draw the window | 250 ms |
+| check spelling, ignore step | Ignoring one issue (re-scanning the course) and drawing the next, 20 times | 33 ms |
+| insert interaction + undo | For each of the 8 M20 interactions, insert it on slide 150 then undo, timed together | 100 ms |
+| undo / redo move | Arrow-key nudge of an object on slide 150, undo and redo, 30 cycles | 33 ms |
+| visit every slide | Selecting s-0 … s-299, one frame each; the note records resident memory before and after | 33 ms |
+| first frame | From `TestHarness::new(big_course())` through the first editor frame | 500 ms |
+
+Big-course suite (`apps/coursecraft-cli/tests/big_course.rs`, a real 300-slide
+project with pictures and video, about 5 GB of scratch data):
+
+| Stage | What it measures | Budget |
+|---|---|---|
+| generate | Building the course and its media (not budgeted) | — |
+| validate | Validating the course | 200 ms |
+| save .ccraft | Writing the project file | 5 s |
+| verify saved file | Streaming CRC check of the file | — |
+| keep a version (copy) | Copying the file into version history | — |
+| save folder, first | First project-folder save | 5 s |
+| save folder, unchanged | Re-save with nothing changed | 5 s |
+| publish SCORM 1.2 | Building and zipping the package | 60 s |
+| publish LTI zip | Building and zipping the package | 60 s |
+| open .ccraft | Reading and parsing the project file | 5 s |
+| open folder | Reopening the project folder | 5 s |
+| simulate all slides | Playing through every slide (not budgeted) | — |
+
+### Running it
+
+Locally, from the repository root:
+
+```sh
+cargo xtask perf
+```
+
+The big-course test needs at least 15 GB free and takes minutes; scratch files
+under `target/big-course/` are deleted afterwards. The editor tests are filtered
+with `perf_tests` and the CLI test with `big_course`; both run with `--ignored
+--nocapture --test-threads=1`.
+
+On GitHub: **Actions → Perf → Run workflow**. The workflow runs `cargo xtask
+perf` on a macOS runner and uploads `target/perf/` as the `perf` artifact.
+
+### Baseline
+
+Filled in after the first run.
