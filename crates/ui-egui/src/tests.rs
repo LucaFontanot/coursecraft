@@ -7543,6 +7543,34 @@ fn referenced_media_includes_caption_files() {
     assert!(referenced.contains("chime.vtt"), "{referenced:?}");
 }
 
+#[test]
+fn background_music_and_bank_question_media_are_kept_on_save() {
+    let mut course = Course::from_json(COURSE_JSON).expect("valid course");
+    course.background_audio = Some(coursecraft_course::BackgroundAudio {
+        src: "music.mp3".into(),
+        volume: 0.2,
+        looping: true,
+    });
+    let mut bank_slide = course.slides().next().expect("a slide").clone();
+    bank_slide.id = "bank_q1".into();
+    bank_slide.objects = vec![
+        serde_json::from_value(serde_json::json!({
+            "id": "bank_pic", "name": "Picture",
+            "kind": {"type": "image", "src": "bank-only.png", "alt": "A picture"},
+            "frame": {"x": 0, "y": 0, "w": 10, "h": 10}
+        }))
+        .expect("image object"),
+    ];
+    course.banks = vec![coursecraft_course::QuestionBank {
+        id: "b".into(),
+        title: "Bank".into(),
+        slides: vec![bank_slide],
+    }];
+    let referenced = referenced_media_srcs(&course);
+    assert!(referenced.contains("music.mp3"), "{referenced:?}");
+    assert!(referenced.contains("bank-only.png"), "{referenced:?}");
+}
+
 fn click_for_requests(harness: &mut TestHarness, pos: egui::Pos2) -> Vec<EditorRequest> {
     harness.frame(vec![Event::PointerMoved(pos)]);
     harness.frame(vec![Event::PointerButton {

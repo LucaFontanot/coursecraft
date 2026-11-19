@@ -8,6 +8,8 @@ The sample course CourseCraft opens on a fresh launch. It is a short wellbeing m
 
 | Area | Where to look |
 |---|---|
+| Custom font (DM Serif Display from Google Fonts, SIL OFL) | Every heading. Course Settings ▸ Fonts; the file is `media/fonts/` with its licence |
+| Background music across the whole course | Course Settings ▸ Background audio (`music.mp3`, 12% volume, loops) |
 | Theme, palette, named text styles, slide master | Every slide. Course Settings ▸ Theme; the Heading, Eyebrow and Body styles; the `Content` master's accent strip |
 | Entrance and exit animations (fade, fly in, zoom, wipe, float) | Welcome, Three small habits, Three quick resets, Well done; the desk hint leaves on its own (`timing.end_ms` plus an exit animation) |
 | Objects timed to narration (staggered timeline) | Welcome, Three small habits and each habit's layer, Set up your desk, Rest your eyes, A healthy day, Your results. Open the Timeline panel to see each object start on its spoken words |
@@ -52,7 +54,7 @@ cargo run -p coursecraft-cli -- simulate examples/healthy-habits/course.json exa
 
 ## Media
 
-The pictures were made with an AI image generator, the narration with ElevenLabs (twelve clips of 2 to 7 seconds), and `stretch.mp4` with ffmpeg from three of the pictures (Google Flow prompts for real clips are in `flow/prompts.md`). `breathe-circle.json` is a hand-written Lottie file. Captions are WebVTT files next to their media.
+The background music was made with CassetteAI on fal.ai. The pictures were made with an AI image generator, the narration with ElevenLabs (twelve clips of 2 to 7 seconds), and `stretch.mp4` with ffmpeg from three of the pictures (Google Flow prompts for real clips are in `flow/prompts.md`). `breathe-circle.json` is a hand-written Lottie file. Captions are WebVTT files next to their media.
 
 ## Rebuilding
 

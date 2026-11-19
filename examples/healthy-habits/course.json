@@ -239,23 +239,23 @@
         "type": "text",
         "text": "Healthy Habits\nat Work",
         "style": {
-         "font": "Inter",
+         "font": "DM Serif Display",
          "size": 64,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
-          "line_spacing": 0.95
+          "line_spacing": 0.82
          },
          {
-          "line_spacing": 0.95
+          "line_spacing": 0.82
          }
         ]
        },
        "frame": {
         "x": 76,
-        "y": 208,
+        "y": 212,
         "w": 520,
         "h": 150
        },
@@ -612,10 +612,10 @@
         "type": "text",
         "text": "What should we\ncall you?",
         "style": {
-         "font": "Inter",
-         "size": 44,
+         "font": "DM Serif Display",
+         "size": 46,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -834,10 +834,10 @@
         "type": "text",
         "text": "Three small habits, one better day",
         "style": {
-         "font": "Inter",
-         "size": 40,
+         "font": "DM Serif Display",
+         "size": 42,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -1547,10 +1547,37 @@
         "captions": "habits.vtt"
        },
        "frame": {
-        "x": 950,
+        "x": 850,
         "y": 140,
         "w": 36,
         "h": 36
+       }
+      },
+      {
+       "id": "h_voice_pause",
+       "name": "Pause habits narration",
+       "kind": {
+        "type": "button",
+        "label": "Pause voice",
+        "fill": "#5C6B68"
+       },
+       "frame": {
+        "x": 850,
+        "y": 140,
+        "w": 132,
+        "h": 36
+       },
+       "states": [
+        {
+         "name": "hover",
+         "fill": "#5C6B68"
+        }
+       ],
+       "shadow": {
+        "offset_x": 0,
+        "offset_y": 6,
+        "blur": 14,
+        "color": "#2F6F6A55"
        }
       }
      ],
@@ -1668,10 +1695,10 @@
           "type": "text",
           "text": "Move",
           "style": {
-           "font": "Inter",
-           "size": 40,
+           "font": "DM Serif Display",
+           "size": 42,
            "color": "#1F2D2B",
-           "bold": true
+           "bold": false
           },
           "paragraphs": [
            {
@@ -1745,10 +1772,37 @@
           "captions": "move.vtt"
          },
          "frame": {
-          "x": 1030,
+          "x": 930,
           "y": 130,
           "w": 36,
           "h": 36
+         }
+        },
+        {
+         "id": "h_l_voice_move_pause",
+         "name": "Pause habit narration",
+         "kind": {
+          "type": "button",
+          "label": "Pause voice",
+          "fill": "#5C6B68"
+         },
+         "frame": {
+          "x": 930,
+          "y": 130,
+          "w": 132,
+          "h": 36
+         },
+         "states": [
+          {
+           "name": "hover",
+           "fill": "#5C6B68"
+          }
+         ],
+         "shadow": {
+          "offset_x": 0,
+          "offset_y": 6,
+          "blur": 14,
+          "color": "#2F6F6A55"
          }
         },
         {
@@ -1846,6 +1900,16 @@
          "when": {
           "event": "key_pressed",
           "key": "escape"
+         }
+        },
+        {
+         "action": {
+          "action": "pause_media",
+          "object": "h_l_voice_move"
+         },
+         "when": {
+          "event": "click",
+          "object": "h_l_voice_move_pause"
          }
         }
        ]
@@ -1963,10 +2027,10 @@
           "type": "text",
           "text": "Breathe",
           "style": {
-           "font": "Inter",
-           "size": 40,
+           "font": "DM Serif Display",
+           "size": 42,
            "color": "#1F2D2B",
-           "bold": true
+           "bold": false
           },
           "paragraphs": [
            {
@@ -2040,10 +2104,37 @@
           "captions": "breathe-tip.vtt"
          },
          "frame": {
-          "x": 1030,
+          "x": 930,
           "y": 130,
           "w": 36,
           "h": 36
+         }
+        },
+        {
+         "id": "h_l_voice_breathe_pause",
+         "name": "Pause habit narration",
+         "kind": {
+          "type": "button",
+          "label": "Pause voice",
+          "fill": "#5C6B68"
+         },
+         "frame": {
+          "x": 930,
+          "y": 130,
+          "w": 132,
+          "h": 36
+         },
+         "states": [
+          {
+           "name": "hover",
+           "fill": "#5C6B68"
+          }
+         ],
+         "shadow": {
+          "offset_x": 0,
+          "offset_y": 6,
+          "blur": 14,
+          "color": "#2F6F6A55"
          }
         },
         {
@@ -2141,6 +2232,16 @@
          "when": {
           "event": "key_pressed",
           "key": "escape"
+         }
+        },
+        {
+         "action": {
+          "action": "pause_media",
+          "object": "h_l_voice_breathe"
+         },
+         "when": {
+          "event": "click",
+          "object": "h_l_voice_breathe_pause"
          }
         }
        ]
@@ -2258,10 +2359,10 @@
           "type": "text",
           "text": "Connect",
           "style": {
-           "font": "Inter",
-           "size": 40,
+           "font": "DM Serif Display",
+           "size": 42,
            "color": "#1F2D2B",
-           "bold": true
+           "bold": false
           },
           "paragraphs": [
            {
@@ -2335,10 +2436,37 @@
           "captions": "connect.vtt"
          },
          "frame": {
-          "x": 1030,
+          "x": 930,
           "y": 130,
           "w": 36,
           "h": 36
+         }
+        },
+        {
+         "id": "h_l_voice_connect_pause",
+         "name": "Pause habit narration",
+         "kind": {
+          "type": "button",
+          "label": "Pause voice",
+          "fill": "#5C6B68"
+         },
+         "frame": {
+          "x": 930,
+          "y": 130,
+          "w": 132,
+          "h": 36
+         },
+         "states": [
+          {
+           "name": "hover",
+           "fill": "#5C6B68"
+          }
+         ],
+         "shadow": {
+          "offset_x": 0,
+          "offset_y": 6,
+          "blur": 14,
+          "color": "#2F6F6A55"
          }
         },
         {
@@ -2436,6 +2564,16 @@
          "when": {
           "event": "key_pressed",
           "key": "escape"
+         }
+        },
+        {
+         "action": {
+          "action": "pause_media",
+          "object": "h_l_voice_connect"
+         },
+         "when": {
+          "event": "click",
+          "object": "h_l_voice_connect_pause"
          }
         }
        ]
@@ -2825,6 +2963,16 @@
        "when": {
         "event": "timeline_starts"
        }
+      },
+      {
+       "action": {
+        "action": "pause_media",
+        "object": "h_voice"
+       },
+       "when": {
+        "event": "click",
+        "object": "h_voice_pause"
+       }
       }
      ]
     }
@@ -2977,10 +3125,10 @@
         "type": "text",
         "text": "Make the desk fit you, not the other way round",
         "style": {
-         "font": "Inter",
-         "size": 34,
+         "font": "DM Serif Display",
+         "size": 36,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -3098,10 +3246,37 @@
         "captions": "desk.vtt"
        },
        "frame": {
-        "x": 1180,
-        "y": 40,
+        "x": 1124,
+        "y": 36,
         "w": 36,
         "h": 36
+       }
+      },
+      {
+       "id": "d_voice_pause",
+       "name": "Pause desk narration",
+       "kind": {
+        "type": "button",
+        "label": "Pause voice",
+        "fill": "#5C6B68"
+       },
+       "frame": {
+        "x": 1124,
+        "y": 36,
+        "w": 132,
+        "h": 36
+       },
+       "states": [
+        {
+         "name": "hover",
+         "fill": "#5C6B68"
+        }
+       ],
+       "shadow": {
+        "offset_x": 0,
+        "offset_y": 6,
+        "blur": 14,
+        "color": "#2F6F6A55"
        }
       },
       {
@@ -3300,6 +3475,16 @@
        "when": {
         "event": "timeline_starts"
        }
+      },
+      {
+       "action": {
+        "action": "pause_media",
+        "object": "d_voice"
+       },
+       "when": {
+        "event": "click",
+        "object": "d_voice_pause"
+       }
       }
      ]
     },
@@ -3345,10 +3530,10 @@
         "type": "text",
         "text": "Three stretches you can do at your desk",
         "style": {
-         "font": "Inter",
-         "size": 40,
+         "font": "DM Serif Display",
+         "size": 42,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -4149,10 +4334,10 @@
         "type": "text",
         "text": "Give your eyes a 20-second holiday",
         "style": {
-         "font": "Inter",
-         "size": 38,
+         "font": "DM Serif Display",
+         "size": 40,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -4382,10 +4567,37 @@
         "captions": "eyes.vtt"
        },
        "frame": {
-        "x": 1180,
-        "y": 40,
+        "x": 1124,
+        "y": 36,
         "w": 36,
         "h": 36
+       }
+      },
+      {
+       "id": "e_voice_pause",
+       "name": "Pause eyes narration",
+       "kind": {
+        "type": "button",
+        "label": "Pause voice",
+        "fill": "#5C6B68"
+       },
+       "frame": {
+        "x": 1124,
+        "y": 36,
+        "w": 132,
+        "h": 36
+       },
+       "states": [
+        {
+         "name": "hover",
+         "fill": "#5C6B68"
+        }
+       ],
+       "shadow": {
+        "offset_x": 0,
+        "offset_y": 6,
+        "blur": 14,
+        "color": "#2F6F6A55"
        }
       },
       {
@@ -4575,6 +4787,16 @@
        "when": {
         "event": "click",
         "object": "eyes_next"
+       }
+      },
+      {
+       "action": {
+        "action": "pause_media",
+        "object": "e_voice"
+       },
+       "when": {
+        "event": "click",
+        "object": "e_voice_pause"
        }
       }
      ],
@@ -4834,10 +5056,10 @@
         "type": "text",
         "text": "Myth or fact? Tap a card to find out",
         "style": {
-         "font": "Inter",
-         "size": 40,
+         "font": "DM Serif Display",
+         "size": 42,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -5105,10 +5327,10 @@
         "type": "text",
         "text": "Helps or hurts? Drag each card to a side",
         "style": {
-         "font": "Inter",
-         "size": 40,
+         "font": "DM Serif Display",
+         "size": 42,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -7813,10 +8035,10 @@
         "type": "text",
         "text": "How are you feeling today?",
         "style": {
-         "font": "Inter",
-         "size": 40,
+         "font": "DM Serif Display",
+         "size": 42,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -8366,10 +8588,10 @@
           "type": "text",
           "text": "One minute of paced breathing",
           "style": {
-           "font": "Inter",
-           "size": 32,
+           "font": "DM Serif Display",
+           "size": 34,
            "color": "#1F2D2B",
-           "bold": true
+           "bold": false
           },
           "paragraphs": [
            {
@@ -8466,10 +8688,10 @@
           "type": "text",
           "text": "The 20-20-20 rule",
           "style": {
-           "font": "Inter",
-           "size": 32,
+           "font": "DM Serif Display",
+           "size": 34,
            "color": "#1F2D2B",
-           "bold": true
+           "bold": false
           },
           "paragraphs": [
            {
@@ -8566,10 +8788,10 @@
           "type": "text",
           "text": "Keep a bottle in reach",
           "style": {
-           "font": "Inter",
-           "size": 32,
+           "font": "DM Serif Display",
+           "size": 34,
            "color": "#1F2D2B",
-           "bold": true
+           "bold": false
           },
           "paragraphs": [
            {
@@ -9905,10 +10127,10 @@
         "type": "text",
         "text": "A healthy day, hour by hour",
         "style": {
-         "font": "Inter",
-         "size": 40,
+         "font": "DM Serif Display",
+         "size": 42,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -9961,10 +10183,37 @@
         "captions": "day.vtt"
        },
        "frame": {
-        "x": 1180,
-        "y": 40,
+        "x": 1124,
+        "y": 36,
         "w": 36,
         "h": 36
+       }
+      },
+      {
+       "id": "dy_voice_pause",
+       "name": "Pause day narration",
+       "kind": {
+        "type": "button",
+        "label": "Pause voice",
+        "fill": "#5C6B68"
+       },
+       "frame": {
+        "x": 1124,
+        "y": 36,
+        "w": 132,
+        "h": 36
+       },
+       "states": [
+        {
+         "name": "hover",
+         "fill": "#5C6B68"
+        }
+       ],
+       "shadow": {
+        "offset_x": 0,
+        "offset_y": 6,
+        "blur": 14,
+        "color": "#2F6F6A55"
        }
       }
      ],
@@ -10665,6 +10914,16 @@
         "event": "click",
         "object": "day_next"
        }
+      },
+      {
+       "action": {
+        "action": "pause_media",
+        "object": "dy_voice"
+       },
+       "when": {
+        "event": "click",
+        "object": "dy_voice_pause"
+       }
       }
      ],
      "background": "#FBF6EE",
@@ -10797,10 +11056,10 @@
         "type": "text",
         "text": "Straight answers to common worries",
         "style": {
-         "font": "Inter",
-         "size": 40,
+         "font": "DM Serif Display",
+         "size": 42,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -10990,10 +11249,10 @@
           "type": "text",
           "text": "Straight answers to common worries",
           "style": {
-           "font": "Inter",
-           "size": 40,
+           "font": "DM Serif Display",
+           "size": 42,
            "color": "#1F2D2B",
-           "bold": true
+           "bold": false
           },
           "paragraphs": [
            {
@@ -11228,10 +11487,10 @@
           "type": "text",
           "text": "Straight answers to common worries",
           "style": {
-           "font": "Inter",
-           "size": 40,
+           "font": "DM Serif Display",
+           "size": 42,
            "color": "#1F2D2B",
-           "bold": true
+           "bold": false
           },
           "paragraphs": [
            {
@@ -11466,10 +11725,10 @@
           "type": "text",
           "text": "Straight answers to common worries",
           "style": {
-           "font": "Inter",
-           "size": 40,
+           "font": "DM Serif Display",
+           "size": 42,
            "color": "#1F2D2B",
-           "bold": true
+           "bold": false
           },
           "paragraphs": [
            {
@@ -13190,10 +13449,10 @@
         "type": "text",
         "text": "Your plan for next week",
         "style": {
-         "font": "Inter",
-         "size": 40,
+         "font": "DM Serif Display",
+         "size": 42,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -13821,10 +14080,10 @@
         "type": "text",
         "text": "Why small habits work",
         "style": {
-         "font": "Inter",
-         "size": 40,
+         "font": "DM Serif Display",
+         "size": 42,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -17917,10 +18176,37 @@
           "captions": "passed.vtt"
          },
          "frame": {
-          "x": 1180,
-          "y": 40,
+          "x": 1124,
+          "y": 36,
           "w": 36,
           "h": 36
+         }
+        },
+        {
+         "id": "rs_voice_pass_pause",
+         "name": "Pause passed narration",
+         "kind": {
+          "type": "button",
+          "label": "Pause voice",
+          "fill": "#5C6B68"
+         },
+         "frame": {
+          "x": 1124,
+          "y": 36,
+          "w": 132,
+          "h": 36
+         },
+         "states": [
+          {
+           "name": "hover",
+           "fill": "#5C6B68"
+          }
+         ],
+         "shadow": {
+          "offset_x": 0,
+          "offset_y": 6,
+          "blur": 14,
+          "color": "#2F6F6A55"
          }
         }
        ],
@@ -17942,6 +18228,16 @@
          "when": {
           "event": "click",
           "object": "passed_finish1"
+         }
+        },
+        {
+         "action": {
+          "action": "pause_media",
+          "object": "rs_voice_pass"
+         },
+         "when": {
+          "event": "click",
+          "object": "rs_voice_pass_pause"
          }
         }
        ],
@@ -18059,10 +18355,37 @@
           "captions": "failed.vtt"
          },
          "frame": {
-          "x": 1180,
-          "y": 40,
+          "x": 1124,
+          "y": 36,
           "w": 36,
           "h": 36
+         }
+        },
+        {
+         "id": "rs_voice_fail_pause",
+         "name": "Pause failed narration",
+         "kind": {
+          "type": "button",
+          "label": "Pause voice",
+          "fill": "#5C6B68"
+         },
+         "frame": {
+          "x": 1124,
+          "y": 36,
+          "w": 132,
+          "h": 36
+         },
+         "states": [
+          {
+           "name": "hover",
+           "fill": "#5C6B68"
+          }
+         ],
+         "shadow": {
+          "offset_x": 0,
+          "offset_y": 6,
+          "blur": 14,
+          "color": "#2F6F6A55"
          }
         }
        ],
@@ -18083,6 +18406,16 @@
          "when": {
           "event": "click",
           "object": "failed_review1"
+         }
+        },
+        {
+         "action": {
+          "action": "pause_media",
+          "object": "rs_voice_fail"
+         },
+         "when": {
+          "event": "click",
+          "object": "rs_voice_fail_pause"
          }
         }
        ],
@@ -19830,10 +20163,10 @@
         "type": "text",
         "text": "Why 20-20-20?",
         "style": {
-         "font": "Inter",
-         "size": 44,
+         "font": "DM Serif Display",
+         "size": 46,
          "color": "#1F2D2B",
-         "bold": true
+         "bold": false
         },
         "paragraphs": [
          {
@@ -20018,10 +20351,10 @@
    "id": "ts_heading",
    "name": "Heading",
    "style": {
-    "font": "Inter",
-    "size": 40,
+    "font": "DM Serif Display",
+    "size": 42,
     "color": "#1F2D2B",
-    "bold": true
+    "bold": false
    },
    "paragraphs": {
     "line_spacing": 1.05
@@ -21201,10 +21534,10 @@
       "type": "text",
       "text": "Lesson title",
       "style": {
-       "font": "Inter",
-       "size": 40,
+       "font": "DM Serif Display",
+       "size": 42,
        "color": "#1F2D2B",
-       "bold": true
+       "bold": false
       },
       "paragraphs": [
        {
@@ -21297,5 +21630,16 @@
    ]
   }
  ],
+ "fonts": [
+  {
+   "family": "DM Serif Display",
+   "style": "regular",
+   "src": "fonts/dm-serif-display-regular.ttf"
+  }
+ ],
+ "background_audio": {
+  "src": "music.mp3",
+  "volume": 0.12
+ },
  "start_slide": "welcome"
 }

@@ -101,6 +101,10 @@ const HEALTHY_HABITS_MEDIA: &[(&str, &[u8])] = &[
         include_bytes!("../../../examples/healthy-habits/media/failed.vtt"),
     ),
     (
+        "fonts/dm-serif-display-regular.ttf",
+        include_bytes!("../../../examples/healthy-habits/media/fonts/dm-serif-display-regular.ttf"),
+    ),
+    (
         "habits.mp3",
         include_bytes!("../../../examples/healthy-habits/media/habits.mp3"),
     ),
@@ -119,6 +123,10 @@ const HEALTHY_HABITS_MEDIA: &[(&str, &[u8])] = &[
     (
         "move.vtt",
         include_bytes!("../../../examples/healthy-habits/media/move.vtt"),
+    ),
+    (
+        "music.mp3",
+        include_bytes!("../../../examples/healthy-habits/media/music.mp3"),
     ),
     (
         "office.jpg",

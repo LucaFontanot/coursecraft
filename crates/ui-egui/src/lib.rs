@@ -1533,27 +1533,7 @@ impl Editor {
     /// the Publish dialog blocks before building.
     #[must_use]
     pub fn missing_media(&self) -> Vec<String> {
-        let mut referenced = std::collections::HashSet::new();
-        for face in &self.session.course.fonts {
-            if !face.src.is_empty() {
-                referenced.insert(face.src.clone());
-            }
-        }
-        for slide in self
-            .session
-            .course
-            .slides()
-            .chain(self.session.course.masters.iter())
-        {
-            for obj in &slide.objects {
-                collect_object_media_srcs(obj, &mut referenced);
-            }
-            for layer in &slide.layers {
-                for obj in &layer.objects {
-                    collect_object_media_srcs(obj, &mut referenced);
-                }
-            }
-        }
+        let referenced = referenced_media_srcs(&self.session.course);
         referenced
             .into_iter()
             .filter(|src| !self.media.iter().any(|(name, _)| name == src))
@@ -3695,10 +3675,16 @@ pub fn referenced_media_srcs(course: &Course) -> std::collections::HashSet<Strin
             set.insert(src.clone());
         }
     }
+    if let Some(audio) = &course.background_audio
+        && !audio.src.is_empty()
+    {
+        set.insert(audio.src.clone());
+    }
     for slide in course
         .slides()
         .chain(course.masters.iter())
         .chain(course.templates.iter())
+        .chain(course.banks.iter().flat_map(|bank| bank.slides.iter()))
     {
         for obj in &slide.objects {
             collect_object_media_srcs(obj, &mut set);

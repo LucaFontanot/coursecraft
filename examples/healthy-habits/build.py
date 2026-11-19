@@ -152,8 +152,10 @@ def eyebrow(oid, s, x, y, color=CORAL, w=600):
     o["kind"]["text_style"] = "ts_eyebrow"
     return o
 
+SERIF = "DM Serif Display"   # custom font from Google Fonts (SIL OFL), in media/fonts/
+
 def heading(oid, s, x, y, w=900, h=60, size=40, color=INK):
-    o = text(oid, s, F(x, y, w, h), size, color, True, "Title", ls=1.05)
+    o = text(oid, s, F(x, y, w, h), size + 2, color, False, "Title", ls=1.05, font=SERIF)
     o["kind"]["text_style"] = "ts_heading"
     return o
 
@@ -262,7 +264,7 @@ def next_button(sid, x=1040, y=600, label="Continue", oid=None, lid=None, fill=T
 
 # ------------------------------------------------------------------ course-wide settings
 C["text_styles"] = [
-    {"id": "ts_heading", "name": "Heading", "style": style(40, INK, True), "paragraphs": {"line_spacing": 1.05}},
+    {"id": "ts_heading", "name": "Heading", "style": style(42, INK, False, font=SERIF), "paragraphs": {"line_spacing": 1.05}},
     {"id": "ts_eyebrow", "name": "Eyebrow", "style": style(16, CORAL, True, letter_spacing=2)},
     {"id": "ts_body", "name": "Body", "style": style(19, BODY), "paragraphs": {"line_spacing": 1.35}},
 ]
@@ -301,7 +303,7 @@ add(s, anim(image("w_hero", "hero.jpg", "A person stretching happily beside a su
 add(s, obj("w_curve", "Decorative curve", {"type": "path", "points": [{"x": 0, "y": 1}, {"x": 0.35, "y": 0.2}, {"x": 0.7, "y": 0.8}, {"x": 1, "y": 0}],
            "style": "curved", "outline": {"color": SAGE, "width": 3, "dash": "dot"}, "end_end": "dot"}, F(80, 104, 220, 40), decorative=True))
 add(s, anim(eyebrow("w_eyebrow", "WELLBEING SERIES  ·  A COURSECRAFT SAMPLE", 80, 176), "entrance", fly("left"), 500, 200))
-add(s, anim(text("w_title", "Healthy Habits\nat Work", F(76, 208, 520, 150), 64, INK, True, "Title", ls=0.95), "entrance", fly("left"), 700, 350))
+add(s, anim(text("w_title", "Healthy Habits\nat Work", F(76, 212, 520, 150), 64, INK, False, "Title", ls=0.82, font=SERIF), "entrance", fly("left"), 700, 350))
 add(s, anim(body("w_sub", "Small changes to how you sit, breathe and take breaks add up to calmer, more focused days.", 80, 370, 440, 90, 20, "#4A5B58", "Subtitle"), "entrance", FADE, 600, 700))
 st = add(s, anim(button("w_start", "Start the course  →", F(80, 484, 236, 58), CORAL), "entrance", ZOOM, 500, 1000))
 add(s, anim(shape("w_chip", F(336, 492, 176, 42), MIST, name="Duration chip", label="15 min  ·  5 lessons",
@@ -1061,7 +1063,11 @@ def vtt(name, cues):
 
 def voice(sid, oid, name, src, frame, cues, lid=None, autoplay=True):
     vtt(src.replace(".mp3", ".vtt"), cues)
-    return add(sid, obj(oid, name, {"type": "audio", "src": src, "autoplay": autoplay, "captions": src.replace(".mp3", ".vtt")}, frame), lid)
+    o = add(sid, obj(oid, name, {"type": "audio", "src": src, "autoplay": autoplay, "captions": src.replace(".mp3", ".vtt")}, frame), lid)
+    # WCAG 1.4.2: a visible button pauses the autoplaying voice.
+    btn = add(sid, button(f"{oid}_pause", "Pause voice", F(frame["x"], frame["y"], 132, 36), MUTED, name=f"Pause {name.lower()}"), lid)
+    trig(sid, click(f"{oid}_pause"), {"action": "pause_media", "object": oid}, lid=lid)
+    return o
 
 def at(sid, oid, start, effect=None, ms=500, lid=None):
     o = find(sid, oid) if lid is None else next(x for x in layer(sid, lid)["objects"] if x["id"] == oid)
@@ -1075,7 +1081,7 @@ for oid, ms in [("w_sub", 2400), ("w_start", 3200), ("w_chip", 3400), ("w_hint",
 # Three small habits: each card rises as its name is spoken.
 s = "habits"
 slide(s)["duration_ms"] = 8000
-voice(s, "h_voice", "Habits narration", "habits.mp3", F(950, 140, 36, 36),
+voice(s, "h_voice", "Habits narration", "habits.mp3", F(850, 140, 36, 36),
       [(0, 1900, "Three small habits make a big difference."), (2700, 3300, "Move."), (4150, 4900, "Breathe."), (5950, 6700, "And connect.")])
 for key, ms in [("move", 2700), ("breathe", 4150), ("connect", 5950)]:
     for oid in (f"h_card_{key}", f"h_pic_{key}", f"h_num_{key}", f"h_head_{key}", f"h_body_{key}"):
@@ -1095,7 +1101,7 @@ for key, (src, dur, cues, lines, starts) in habit_voice.items():
     L["duration_ms"] = dur
     L["pause_base_timeline"] = True
     L["objects"] = [o for o in L["objects"] if o["id"] != f"h_l_body_{key}"]
-    voice(s, f"h_l_voice_{key}", "Habit narration", src, F(1030, 130, 36, 36), cues, lid)
+    voice(s, f"h_l_voice_{key}", "Habit narration", src, F(930, 130, 36, 36), cues, lid)
     at(s, f"h_l_eyebrow_{key}", 0, fly("right"), 400, lid)
     at(s, f"h_l_title_{key}", 150, fly("right"), 450, lid)
     for j, (line, ms) in enumerate(zip(lines, starts)):
@@ -1104,13 +1110,13 @@ for key, (src, dur, cues, lines, starts) in habit_voice.items():
 
 # Desk: the markers pop in on "plus sign".
 s = "desk"
-voice(s, "d_voice", "Desk narration", "desk.mp3", F(1180, 40, 36, 36), [(0, 3200, "Tap each plus sign on the picture to see how to set up your desk.")])
+voice(s, "d_voice", "Desk narration", "desk.mp3", F(1124, 36, 36, 36), [(0, 3200, "Tap each plus sign on the picture to see how to set up your desk.")])
 for i, ms in [(1, 1100), (2, 1450), (3, 1800)]:
     find(s, f"d_m{i}")["timing"]["start_ms"] = ms
 
 # Rest your eyes: three numbers, each on its words.
 s = "eyes"
-voice(s, "e_voice", "Eyes narration", "eyes.mp3", F(1180, 40, 36, 36), [(0, 3200, "Every twenty minutes, look about six metres away, for twenty seconds.")])
+voice(s, "e_voice", "Eyes narration", "eyes.mp3", F(1124, 36, 36, 36), [(0, 3200, "Every twenty minutes, look about six metres away, for twenty seconds.")])
 slide(s)["objects"] = [o for o in slide(s)["objects"] if o["id"] != "e_body"]
 for j, (big, small, ms) in enumerate([("20 min", "Every", 0), ("6 m away", "Look", 900), ("20 s", "For", 2350)]):
     x = 660 + j * 184
@@ -1119,15 +1125,15 @@ for j, (big, small, ms) in enumerate([("20 min", "Every", 0), ("6 m away", "Look
 
 # A healthy day: the five times slide in while she says it.
 s = "day"
-voice(s, "dy_voice", "Day narration", "day.mp3", F(1180, 40, 36, 36), [(0, 2850, "Here's how the habits fit into a normal working day.")])
+voice(s, "dy_voice", "Day narration", "day.mp3", F(1124, 36, 36, 36), [(0, 2850, "Here's how the habits fit into a normal working day.")])
 for i in range(1, 6):
     for oid in (f"timeline_point{i}", f"timeline_year{i}", f"timeline_title{i}"):
         anim(find(s, oid), "entrance", fly("bottom"), 400, 500 + i * 380)
 
 # Results: each feedback layer talks, and its buttons wait for the words.
 s = "results1"
-voice(s, "rs_voice_pass", "Passed narration", "passed.mp3", F(1180, 40, 36, 36), [(0, 1300, "Great work! You passed.")], "passed")
-voice(s, "rs_voice_fail", "Failed narration", "failed.mp3", F(1180, 40, 36, 36), [(0, 500, "Not quite."), (1130, 2850, "Review your answers, then try again.")], "failed")
+voice(s, "rs_voice_pass", "Passed narration", "passed.mp3", F(1124, 36, 36, 36), [(0, 1300, "Great work! You passed.")], "passed")
+voice(s, "rs_voice_fail", "Failed narration", "failed.mp3", F(1124, 36, 36, 36), [(0, 500, "Not quite."), (1130, 2850, "Review your answers, then try again.")], "failed")
 for lid, plan in [("passed", [("message1", 0), ("passed_review1", 1500), ("passed_finish1", 1700)]),
                   ("failed", [("message2", 0), ("failed_review1", 1150), ("failed_retry1", 2200)])]:
     layer(s, lid)["duration_ms"] = max(layer(s, lid).get("duration_ms", 0), 4000)
@@ -1215,6 +1221,10 @@ for o in [eyebrow("t_eyebrow", "LESSON  ·  TOPIC", 80, 110),
           image("t_pic", "office.jpg", "Replace with a picture for this lesson", F(680, 64, 520, 560), crop={"x": 0.25, "y": 0.0, "w": 0.5, "h": 1.0}, name="Picture"),
           button("t_next", "Continue  →", F(80, 560, 180, 52))]:
     tpl["objects"].append(o)
+
+# Custom font and background music.
+C["fonts"] = [{"family": SERIF, "style": "regular", "src": "fonts/dm-serif-display-regular.ttf"}]
+C["background_audio"] = {"src": "music.mp3", "volume": 0.12}
 
 # ------------------------------------------------------------------ global restyle of inserted content
 def walk(o):

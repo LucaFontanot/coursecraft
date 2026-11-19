@@ -5,6 +5,8 @@ What changed in each release, newest first. Versions follow [semantic versioning
 ## Unreleased
 
 - A new sample course, **Healthy Habits at Work**, opens behind the welcome screen on a fresh launch and is first under Explore an example. Its 36 slides show off every feature: narration with objects timed to the spoken words (also inside layers), a video with cue points, a Lottie animation, all 12 question types, a question bank with a random draw, every ready-made interaction, inputs, timers, drag and drop, layers, states, a slide template and a certificate.
+- The player's outline drawer no longer draws scrolled rows over its header and tabs. Its rows take no clicks while it slides in, and on the web the screen-reader layer can no longer scroll away from the controls it describes.
+- Saving a project now keeps the background music and any media used only by question-bank slides.
 - Animations work again: what you pick in the Animations panel is now saved (it was lost, so nothing played and moving the object on the timeline seemed to reset it), and the timeline's Play button shows entrances and exits on the slide.
 - A sound longer than its slide plays again from the start on the next Play, and scrubbing back works (it used to jump straight to the end).
 - Deleting a button (or any object) that has triggers now works: its triggers go with it, the status bar says how many, and one Undo brings everything back. Deleting a layer takes the triggers that show it.
