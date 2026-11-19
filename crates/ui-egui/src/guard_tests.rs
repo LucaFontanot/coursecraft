@@ -1,0 +1,265 @@
+//! M21 step 5 guard rails for the normal test run.
+//!
+//! Timing tests are too noisy for CI, so these count work instead of clocks.
+//! All counters live in `guard_counters` (editor work) and in
+//! `coursecraft_render::media::test_counts` (picture decodes), and are compiled
+//! out of release builds. See `docs/performance.md` for what each one protects.
+
+use std::sync::Arc;
+
+use crate::guard_counters as gc;
+use crate::test_harness::TestHarness;
+use coursecraft_course::Course;
+use egui::{Event, Key, Modifiers, MouseWheelUnit, TouchPhase, pos2, vec2};
+
+const HELLO_COURSE: &str = include_str!("../../../examples/hello-course/course.json");
+
+fn hello() -> TestHarness {
+    TestHarness::new(Course::from_json(HELLO_COURSE).expect("hello course parses"))
+}
+
+fn picture_decodes() -> u64 {
+    coursecraft_render::media::test_counts::picture_decode_count()
+}
+
+fn reset_counts() {
+    gc::reset();
+    coursecraft_render::media::test_counts::reset_picture_decode_count();
+}
+
+/// A course with one picture per slide, all with distinct cache keys.
+fn picture_course(n: usize) -> Course {
+    let mut slides = Vec::with_capacity(n);
+    for i in 0..n {
+        slides.push(format!(
+            r##"{{"id":"s-{i}","title":"Slide {i}","objects":[{{"id":"p{i}","kind":{{"type":"image","src":"img/p{i}.png","alt":"Test picture"}},"frame":{{"x":100,"y":100,"w":400,"h":225}}}}]}}"##
+        ));
+    }
+    let json = format!(
+        r#"{{"schema_version":1,"id":"pictures","title":"Pictures","slide_size":{{"w":1280,"h":720}},"scenes":[{{"id":"sc0","title":"Scene 0","slides":[{}]}}]}}"#,
+        slides.join(",")
+    );
+    Course::from_json(&json).expect("generated picture course parses")
+}
+
+fn picture_media(n: usize) -> Vec<(String, Arc<[u8]>)> {
+    let pixels = vec![0u8; 16 * 16 * 4];
+    let png = Arc::from(
+        crate::coursecraft_media::encode_png_rgba(16, 16, &pixels).expect("test picture encodes"),
+    );
+    (0..n)
+        .map(|n| (format!("img/p{n}.png"), Arc::clone(&png)))
+        .collect()
+}
+
+fn wheel(dy: f32) -> Event {
+    Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        delta: vec2(0.0, dy),
+        phase: TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+/// Twenty idle frames after settling copy nothing, spell-check nothing,
+/// redraw no thumbnail and decode no picture.
+#[test]
+fn idle_frames_do_no_counted_work() {
+    let mut h = hello();
+    for _ in 0..20 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    for _ in 0..20 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(gc::course_copies(), 0, "idle frames copy no course");
+    assert_eq!(
+        gc::speller_runs(),
+        0,
+        "unchanged text is served from the cache"
+    );
+    assert_eq!(
+        gc::thumbnail_redraws(),
+        0,
+        "settled thumbnails are not redrawn"
+    );
+    assert_eq!(picture_decodes(), 0, "no new picture is decoded while idle");
+}
+
+/// Typing one letter into the in-place editor checks the one edited text once.
+/// It does not check every text box on the slide, and no suggestion is looked
+/// up until a word menu or the Check Spelling window needs one.
+#[test]
+fn typing_one_letter_checks_one_text_and_no_suggestions() {
+    let mut h = hello();
+    h.editor.selection.slide = "s-intro".into();
+    h.editor.ui.inline_edit = Some(crate::canvas::InlineEdit {
+        slide: "s-intro".into(),
+        object: "title".into(),
+        buffer: "Teh cat".into(),
+        original: "Teh cat".into(),
+        is_button: false,
+        is_shape: false,
+        cell: None,
+        just_entered: true,
+    });
+    // First frame focuses and selects all, the second clears `just_entered`,
+    // then ArrowRight collapses the selection so typing lands in the buffer.
+    h.idle_frame();
+    h.idle_frame();
+    h.press(Key::ArrowRight, Modifiers::NONE);
+    assert!(
+        h.editor
+            .ui
+            .spell_inline_debug
+            .iter()
+            .any(|word| word == "Teh"),
+        "the test needs a misspelling in the edited text"
+    );
+
+    reset_counts();
+    h.frame(vec![Event::Text("x".into())]);
+    assert!(
+        h.editor
+            .ui
+            .inline_edit
+            .as_ref()
+            .is_some_and(|edit| edit.buffer == "Teh catx"),
+        "the typed letter should land in the in-place buffer"
+    );
+    assert_eq!(
+        gc::speller_runs(),
+        1,
+        "one edited text means one misspellings call, not one per text box"
+    );
+    assert_eq!(
+        gc::suggestion_lookups(),
+        0,
+        "suggestions are lazy: no word menu is open"
+    );
+    assert_eq!(
+        gc::course_copies(),
+        0,
+        "typing in a buffer has not changed the course yet"
+    );
+}
+
+/// Switching to a slide whose thumbnail is off screen decodes only that slide's
+/// picture. Returning to the first slide decodes nothing: its texture is cached.
+#[test]
+fn switching_slides_decodes_only_the_new_pictures() {
+    const SLIDES: usize = 12;
+    let mut h = TestHarness::new(picture_course(SLIDES));
+    h.editor.set_media(picture_media(SLIDES));
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+    assert!(
+        h.editor.media_cache.is_loaded_image("img/p0.png"),
+        "the first slide's picture should be decoded while settling"
+    );
+
+    // s-8 is outside the thumbnail viewport, so its picture is not cached yet.
+    reset_counts();
+    h.editor.selection.slide = "s-8".into();
+    let _ = h.idle_frame();
+    let decodes = picture_decodes();
+    assert_eq!(
+        decodes, 1,
+        "only s-8's one picture should decode, got {decodes}"
+    );
+
+    reset_counts();
+    h.editor.selection.slide = "s-0".into();
+    let _ = h.idle_frame();
+    assert_eq!(picture_decodes(), 0, "the first slide's picture is cached");
+}
+
+/// A nudge changes one slide's content, so only that slide's thumbnail is
+/// recomposed. The engine takes one whole-course undo snapshot for the edit.
+#[test]
+fn moving_an_object_redraws_only_that_slide_thumbnail() {
+    let mut h = hello();
+    h.editor.selection.slide = "s-intro".into();
+    h.editor.selection.object = Some("title".into());
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    h.press(Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(
+        gc::thumbnail_redraws(),
+        1,
+        "the other visible thumbnails still show the same slides"
+    );
+    assert_eq!(
+        gc::course_copies(),
+        1,
+        "one mutating command takes one undo snapshot"
+    );
+}
+
+/// With 100 slides, a scroll frame only redraws and decodes the thumbnails in
+/// the viewport, not all 100 rows.
+#[test]
+fn scrolling_the_list_only_touches_visible_thumbnails() {
+    const SLIDES: usize = 100;
+    const VISIBLE_LIMIT: u64 = 12;
+    let mut h = TestHarness::new(picture_course(SLIDES));
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+    let list_pos = h
+        .find_text_containing("Slide 0")
+        .unwrap_or_else(|| pos2(90.0, 300.0));
+    h.frame(vec![Event::PointerMoved(list_pos)]);
+    let top = h.editor.ui.slides_scroll_y;
+    // Supply the pictures only now, so scrolling has real decodes to do.
+    h.editor.set_media(picture_media(SLIDES));
+
+    reset_counts();
+    gc::reset_thumb_signatures();
+    // One scroll frame: every row it draws is a fresh arrival.
+    h.frame(vec![wheel(-8000.0)]);
+    let bottom = h.editor.ui.slides_scroll_y;
+    assert!(bottom > top, "the wheel event should scroll the slide list");
+    let redraws = gc::thumbnail_redraws();
+    let decodes = picture_decodes();
+    assert!(
+        (1..=VISIBLE_LIMIT).contains(&redraws),
+        "only the rows in view should be redrawn, got {redraws}"
+    );
+    assert!(
+        (1..=VISIBLE_LIMIT).contains(&decodes),
+        "only the visible thumbnails' pictures should decode, got {decodes}"
+    );
+}
+
+/// The Check Spelling window is the other place that needs suggestions: with
+/// a misspelling on the current issue, opening it works them out once.
+#[test]
+fn spelling_window_asks_for_suggestions_when_open() {
+    let json = r#"{"schema_version":1,"id":"typos","title":"Typos","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[{"id":"t0","kind":{"type":"text","text":"teh cat"},"frame":{"x":80,"y":80,"w":600,"h":120}}]}]}]}"#;
+    let course = Course::from_json(json).expect("typo course parses");
+    let mut h = TestHarness::new(course);
+    for _ in 0..2 {
+        let _ = h.idle_frame();
+    }
+    assert!(
+        h.editor.ui.prefs.spell_check_as_you_type,
+        "as-you-type checking is on by default"
+    );
+    reset_counts();
+    crate::spell_check::open(&mut h.editor);
+    let _ = h.idle_frame();
+    assert!(
+        !h.editor.ui.spell_check.issues.is_empty(),
+        "the course-wide check should find the typo"
+    );
+    assert!(
+        gc::suggestion_lookups() > 0,
+        "the window asks for the current word's suggestions"
+    );
+}

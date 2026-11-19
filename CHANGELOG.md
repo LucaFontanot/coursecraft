@@ -2,6 +2,10 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## Unreleased
+
+- Typing in long text with spell check on is fast again (it took most of a second per key in 0.2.0), the editor no longer redraws while idle, decoded pictures have a memory ceiling, and the slide list only draws the thumbnails you can see.
+
 ## 0.2.0
 
 Everyday authoring: fonts, pictures, colours, spelling and ready-made interactions.

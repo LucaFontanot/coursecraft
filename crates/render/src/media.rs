@@ -158,6 +158,36 @@ impl std::fmt::Debug for MediaEntry {
     }
 }
 
+/// Test-only picture-decode counter. Gated on `debug_assertions` rather than
+/// `test` because the guard tests live in `coursecraft-ui-egui`, and a
+/// dependency is not built with `cfg(test)` for its caller's tests. Debug
+/// builds (which include the normal `cargo test` run) have the counter; release
+/// builds compile it away, so a shipped frame never pays for it.
+#[cfg(debug_assertions)]
+pub mod test_counts {
+    use std::cell::Cell;
+
+    thread_local! {
+        static PICTURE_DECODES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Called only after `decode_image` actually produced a texture.
+    pub fn note_picture_decode() {
+        PICTURE_DECODES.set(PICTURE_DECODES.get().saturating_add(1));
+    }
+
+    /// Number of picture decodes on this thread since the last reset.
+    #[must_use]
+    pub fn picture_decode_count() -> u64 {
+        PICTURE_DECODES.get()
+    }
+
+    /// Zero the count before the measured part of a guard test.
+    pub fn reset_picture_decode_count() {
+        PICTURE_DECODES.set(0);
+    }
+}
+
 /// Ceiling for decoded picture textures: 512 MB on the desktop, 256 MB on wasm
 /// where the whole app shares the browser's memory.
 #[cfg(target_arch = "wasm32")]
@@ -811,6 +841,8 @@ impl MediaCache {
             match source.get(src) {
                 MediaFetch::Ready(bytes) => match decode_image(&bytes, &self.limits) {
                     Ok(img) => {
+                        #[cfg(debug_assertions)]
+                        test_counts::note_picture_decode();
                         let color_image = ColorImage::from_rgba_unmultiplied(
                             [img.width as usize, img.height as usize],
                             &img.pixels,

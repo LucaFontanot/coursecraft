@@ -299,6 +299,8 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                     thumb_bg,
                 );
                 if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
+                    #[cfg(test)]
+                    crate::guard_counters::note_thumbnail_paint(&master.id, master);
                     let source = crate::MemoryMediaSource {
                         media: &editor.media,
                     };
@@ -1073,6 +1075,8 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             if thumb_rect.intersects(ui.clip_rect())
                 && let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
             {
+                #[cfg(test)]
+                crate::guard_counters::note_thumbnail_paint(&slide.id, slide);
                 let source = crate::MemoryMediaSource {
                     media: &editor.media,
                 };

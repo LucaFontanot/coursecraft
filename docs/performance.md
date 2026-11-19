@@ -213,3 +213,30 @@ server (a listener and a thread, whose port is shown in the UI). Both are small
 here, and moving the listener could change when automation connects, so they
 were left alone. The font scan and the speller are already lazy or background
 work and were not touched.
+
+### Guard tests (M21 step 5)
+
+`crates/ui-egui/src/guard_tests.rs` runs in the normal test build: no release
+build and no stopwatch. The editor counters are `#[cfg(test)]` thread-local
+`Cell`s, and the picture-decode counter in
+`coursecraft_render::media::test_counts` is gated on `debug_assertions` (a
+dependency is not built with `cfg(test)` for its caller's tests). Release builds
+compile all of them out. Tests run on their own threads, so a test sees only its
+own frames.
+
+| Test | What it counts | Expected |
+|---|---|---|
+| `idle_frames_do_no_counted_work` | 20 idle frames on hello-course after settling: course copies, speller runs, thumbnail redraws, picture decodes | 0 each |
+| `typing_one_letter_checks_one_text_and_no_suggestions` | One letter in the in-place editor | 1 misspellings call on the edited text, 0 suggestion lookups, 0 course copies |
+| `switching_slides_decodes_only_the_new_pictures` | Switch to an off-screen slide, then back | 1 decode for the new slide, 0 on the way back (cached) |
+| `moving_an_object_redraws_only_that_slide_thumbnail` | Arrow-key nudge | 1 thumbnail recomposed, 1 undo snapshot course copy |
+| `scrolling_the_list_only_touches_visible_thumbnails` | One wheel frame over a 100-slide list | at most 12 thumbnails redrawn and 12 pictures decoded |
+| `spelling_window_asks_for_suggestions_when_open` | Open Check Spelling on a course with a typo | at least 1 suggestion lookup, the contrast with typing |
+
+The editor copies the whole course only when a command mutates it: the engine
+takes one undo snapshot, so the idle count is zero and a committed change costs
+one copy. Validation and audit are read-only commands and copy nothing. A
+thumbnail "redraw" means a row that needed recomposing, not every paint call:
+egui paints the panel every frame, but a row is counted only when it first comes
+into view, its slide changes, or it returns after being off screen. That is the
+work step 4's off-screen paint skip removed.

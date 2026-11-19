@@ -86,6 +86,10 @@ mod eyedropper_tests;
 #[cfg(test)]
 mod find_tests;
 #[cfg(test)]
+mod guard_counters;
+#[cfg(test)]
+mod guard_tests;
+#[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
 mod layout_tests;
@@ -2768,6 +2772,17 @@ impl Editor {
     /// On `Err` it stores the error message in `ui.last_error` and returns `None`.
     /// Nothing else in the crate calls `execute`.
     pub fn run(&mut self, id: &str, params: Json) -> Option<Json> {
+        // A mutating command makes `Session::execute` clone the whole course
+        // for its undo snapshot. Count that copy here, where the editor has a
+        // hook; non-mutating reads (validate, audit, info) copy nothing.
+        #[cfg(test)]
+        if registry()
+            .iter()
+            .find(|cmd| cmd.id == id)
+            .is_some_and(|cmd| cmd.mutates)
+        {
+            crate::guard_counters::note_course_copy();
+        }
         match self.session.execute(id, &params) {
             Ok(v) => {
                 self.select_created(id, &v);
@@ -2787,6 +2802,11 @@ impl Editor {
     /// On `Err` it stores the error message in `ui.last_error` and returns `None`.
     /// On success, selects the last created item if any.
     pub fn run_batch(&mut self, steps: &[(String, Json)]) -> Option<Vec<Json>> {
+        // `execute_batch` takes one undo snapshot for the whole batch, up front.
+        #[cfg(test)]
+        if !steps.is_empty() {
+            crate::guard_counters::note_course_copy();
+        }
         match self.session.execute_batch(steps) {
             Ok(results) => {
                 for (step, res) in steps.iter().zip(&results) {
@@ -2961,6 +2981,8 @@ impl Editor {
     /// Display the editor UI inside `ui` and return any shell requests.
     #[allow(clippy::cognitive_complexity)]
     pub fn show(&mut self, ui: &mut Ui) -> Vec<EditorRequest> {
+        #[cfg(test)]
+        crate::guard_counters::begin_frame();
         self.ui.current_time = ui.input(|i| i.time);
         self.media_cache.begin_frame();
         // Pick mode owns the pointer and Escape before anything else sees them.

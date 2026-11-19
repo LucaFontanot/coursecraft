@@ -300,6 +300,9 @@ impl Editor {
         if let Some(list) = self.spell_cache.suggestions(word) {
             return list.clone();
         }
+        // Only a cache miss reaches the speller; typing never calls this.
+        #[cfg(test)]
+        crate::guard_counters::note_suggestion_lookup();
         let list = self
             .speller()
             .map(|speller| speller.suggestions(word))
@@ -336,6 +339,10 @@ impl Editor {
         if let Some(words) = self.spell_cache.get(hash) {
             return words.clone();
         }
+        // One run per distinct edited text, not one per text box on screen:
+        // the cache above absorbs every later frame with the same characters.
+        #[cfg(test)]
+        crate::guard_counters::note_speller_run();
         let ignored = self.ui.spell_ignored.clone();
         let words: Vec<SpelledWord> = match self.speller() {
             Some(speller) => speller
@@ -490,6 +497,10 @@ pub fn collect_issues(editor: &mut Editor) -> Vec<SpellingIssue> {
     };
     let mut issues = Vec::new();
     for item in strings {
+        // The counter is a thread-local, so it does not borrow `editor` while
+        // the mutable `speller` reference is alive.
+        #[cfg(test)]
+        crate::guard_counters::note_speller_run();
         for miss in speller.misspellings(&item.text) {
             if is_ignored(&ignored_words, &miss.word)
                 || ignored_at
