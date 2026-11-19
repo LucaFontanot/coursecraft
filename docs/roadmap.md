@@ -224,6 +224,15 @@ Plan: `docs/plans/m20-everyday-authoring.md`.
 - Paste images from the clipboard, and an eyedropper in every colour picker.
 - A gallery of ready-made interactions: flip cards, hotspot reveal, process steps, timeline, reveal grid and scenario choice, all built from ordinary editable objects and triggers.
 
+## M21 Optimization pass
+
+Measure first, then fix only what the numbers show, and leave count-based tests so the speed holds. See `docs/plans/m21-optimization.md`.
+
+- One command (`cargo xtask perf`) and a manual GitHub workflow for big-course timings, with a recorded baseline.
+- No redrawing when nothing changes, including the welcome screen and open dialogs.
+- Fixes for every stage over budget, quicker start-up and a memory ceiling for pictures.
+- Count-based guard tests in the normal test run.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
