@@ -302,7 +302,7 @@ static REGISTRY: &[Command] = &[
         label: "Slide Properties",
         menu: "",
         shortcut: None,
-        params: r#"{"slide": id, "title"?: string, "duration_ms"?: u32, "revisit"?: "auto"|"reset"|"resume"}"#,
+        params: r#"{"slide": id, "title"?: string, "duration_ms"?: u32, "revisit"?: "auto"|"reset"|"resume", "notes"?: string}"#,
         mutates: true,
         run: slide_update,
     },
@@ -2288,7 +2288,12 @@ fn slide_update(s: &mut Session, p: &Json) -> Result<Json> {
     let title: Option<String> = opt(C, p, "title")?;
     let duration_ms: Option<u32> = opt(C, p, "duration_ms")?;
     let revisit: Option<RevisitMode> = opt(C, p, "revisit")?;
+    let notes: Option<String> = opt(C, p, "notes")?;
+    let notes = notes.map(|n| text(C, n, "notes")).transpose()?;
     let slide = slide_mut(s, &sid)?;
+    if let Some(n) = notes {
+        slide.notes = n;
+    }
     if let Some(t) = title {
         let t = text(C, t, "title")?;
         if t.trim().is_empty() {

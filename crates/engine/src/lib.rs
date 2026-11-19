@@ -169,7 +169,10 @@ impl Session {
         let snapshot = self.course.clone();
         self.skip_undo = false;
         let outcome = (cmd.run)(self, params);
-        let unchanged = std::mem::take(&mut self.skip_undo);
+        // A command that leaves the course exactly as it was (an inspector
+        // re-sending the value it already has) records no undo step and no
+        // new revision, so Undo never "does nothing".
+        let unchanged = std::mem::take(&mut self.skip_undo) || self.course == snapshot;
         match outcome {
             Ok(v) if unchanged => Ok(v),
             Ok(v) => {
@@ -246,7 +249,7 @@ impl Session {
             }
         }
 
-        if any_changed {
+        if any_changed && self.course != snapshot {
             reroute_connectors(&mut self.course);
             self.undo.push(snapshot);
             if self.undo.len() > MAX_HISTORY {

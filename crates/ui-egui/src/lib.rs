@@ -2783,8 +2783,20 @@ impl Editor {
         {
             crate::guard_counters::note_course_copy();
         }
+        #[cfg(test)]
+        let before_for_log = std::env::var("CC_FAILED_LOG")
+            .ok()
+            .map(|_| self.session.course.clone());
         match self.session.execute(id, &params) {
             Ok(v) => {
+                #[cfg(test)]
+                if let Some(before) = before_for_log
+                    && before == self.session.course
+                    && !matches!(id, "edit.undo" | "edit.redo")
+                    && registry().iter().any(|cmd| cmd.id == id && cmd.mutates)
+                {
+                    log_failed_for_test(id, &params, "NO CHANGE");
+                }
                 self.select_created(id, &v);
                 self.note_removed_triggers(&v);
                 Some(v)
@@ -3909,7 +3921,8 @@ fn parse_audit_result(val: &Json) -> (Vec<AuditFindingSummary>, Vec<String>) {
     (findings, manual_checks)
 }
 
-/// TEMP: log failed commands while sweeping the test suite.
+/// Tests only: with `CC_FAILED_LOG` set, append every failed command (test
+/// name, id, error, params) to that file, to sweep the suite for silent failures.
 #[allow(unused_variables)]
 fn log_failed_for_test(id: &str, params: &Json, msg: &str) {
     #[cfg(test)]

@@ -264,7 +264,7 @@ scene.add            Insert/New Scene         -          {"id"?: id, "title"?: s
 scene.update         -                        -          {"scene": id, "title"?: string}
 scene.delete         Edit/Delete Scene        -          {"scene": id}
 slide.add            Insert/New Slide         Ctrl+M     {"id"?: id, "scene"?: id, "after"?: slide id, "title"?: string}
-slide.update         -                        -          {"slide": id, "title"?: string, "duration_ms"?: u32, "revisit"?: "auto"|"reset"|"resume"}
+slide.update         -                        -          {"slide": id, "title"?: string, "duration_ms"?: u32, "revisit"?: "auto"|"reset"|"resume", "notes"?: string}
 slide.delete         Edit/Delete Slide        -          {"slide": id}
 slide.move           -                        -          {"slide": id, "scene"?: id, "index": usize}
 slide.duplicate      -                        -          {"slide": id, "after"?: slide id}

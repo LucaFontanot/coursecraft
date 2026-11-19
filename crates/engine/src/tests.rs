@@ -8344,3 +8344,62 @@ fn interaction_process_step_labels_are_centred() {
         );
     }
 }
+
+#[test]
+fn slide_update_stores_speaker_notes() {
+    let mut s = Session::blank("Notes");
+    ok(
+        &mut s,
+        "slide.update",
+        json!({ "slide": "slide1", "notes": "Say hello first." }),
+    );
+    assert_eq!(s.course.slide("slide1").unwrap().notes, "Say hello first.");
+    ok(
+        &mut s,
+        "slide.update",
+        json!({ "slide": "slide1", "notes": "" }),
+    );
+    assert_eq!(
+        s.course.slide("slide1").unwrap().notes,
+        "",
+        "notes can be cleared"
+    );
+    ok(
+        &mut s,
+        "slide.update",
+        json!({ "slide": "slide1", "title": "Intro" }),
+    );
+    assert_eq!(s.course.slide("slide1").unwrap().title, "Intro");
+}
+
+#[test]
+fn a_command_that_changes_nothing_adds_no_undo_step() {
+    let mut s = Session::blank("Same");
+    ok(
+        &mut s,
+        "slide.update",
+        json!({ "slide": "slide1", "title": "Intro" }),
+    );
+    let revision = s.revision;
+    ok(
+        &mut s,
+        "slide.update",
+        json!({ "slide": "slide1", "title": "Intro" }),
+    );
+    assert_eq!(s.revision, revision, "same value: no new revision");
+    ok(&mut s, "edit.undo", json!({}));
+    assert_ne!(
+        s.course.slide("slide1").unwrap().title,
+        "Intro",
+        "one Undo goes back past the real change"
+    );
+    let batch = s.execute_batch(&[(
+        "slide.update".to_owned(),
+        json!({ "slide": "slide1", "title": s.course.slide("slide1").unwrap().title.clone() }),
+    )]);
+    assert!(batch.is_ok());
+    assert!(
+        !s.can_undo(),
+        "a batch that changes nothing adds no undo step"
+    );
+}
