@@ -1067,7 +1067,12 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
                 thumb_bg,
             );
-            if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
+            // Off-screen thumbnails are clipped away by the scroll area anyway.
+            // Skipping their paint keeps their pictures from being handed out
+            // (and pinned as "used this frame") on every frame.
+            if thumb_rect.intersects(ui.clip_rect())
+                && let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
+            {
                 let source = crate::MemoryMediaSource {
                     media: &editor.media,
                 };
@@ -1379,7 +1384,12 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
                     thumb_bg,
                 );
-                if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
+                // Same as the slides panel: don't hand out pictures for
+                // thumbnails the scroll area clips away.
+                if thumb_rect.intersects(ui.clip_rect())
+                    && let Some(t) =
+                        SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
+                {
                     let source = crate::MemoryMediaSource {
                         media: &editor.media,
                     };

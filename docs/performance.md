@@ -116,6 +116,7 @@ Editor suite (`crates/ui-egui/src/perf_tests.rs`, 1280×900 headless frames):
 | insert interaction + undo | For each of the 8 M20 interactions, insert it on slide 150 then undo, timed together | 100 ms |
 | undo / redo move | Arrow-key nudge of an object on slide 150, undo and redo, 30 cycles | 33 ms |
 | visit every slide | Selecting s-0 … s-299, one frame each; the note records resident memory before and after | 33 ms |
+| visit every slide, real pictures | The same 300 slides, but each picture is backed by a real 1280×720 PNG (distinct cache keys, shared source bytes); the note records resident memory before and after and the number of decoded pictures left in the cache | 33 ms |
 | first frame | From `TestHarness::new(big_course())` through the first editor frame | 500 ms |
 
 Big-course suite (`apps/coursecraft-cli/tests/big_course.rs`, a real 300-slide
@@ -171,3 +172,44 @@ Editor suite, release build, the maintainer's Mac (Apple M5, 10 cores), 2026-11-
 | first frame | 500 | 26 | 13 |
 
 Only the canvas typing change comes from code; the general drop in the other rows is the machine being less busy on the second run. Compare rows within one run.
+
+### Decoded-picture ceiling (M21 step 4)
+
+`coursecraft_render::MediaCache` now limits decoded *picture* textures to 512 MB
+on the desktop and 256 MB on wasm (`DEFAULT_PICTURE_BUDGET`). A picture costs
+width × height × 4 bytes. When a hand-out would push the total over the ceiling,
+pictures last used before the current frame are dropped least-recently-used
+first and decoded again when needed. Pictures handed out in the current frame
+are never dropped, so a frame may briefly sit over the ceiling; the editor and
+the learner player call `MediaCache::begin_frame()` once per frame. SVG rasters,
+GIF/WebP frames, Lottie compositions, video textures and failed or pending
+lookups have their own lifetimes and are neither counted nor evicted by this
+rule. `set_picture_budget(bytes)` overrides the ceiling for tests.
+
+Slide thumbnails outside the scroll viewport are no longer painted, so their
+pictures are not decoded just because the rows are laid out. This is invisible
+on screen and is what lets the ceiling apply to off-screen slides at all:
+without it, every thumbnail is "used this frame" on every frame.
+
+The `visit every slide, real pictures` stage measures the result. Its source
+bytes are shared between slides so the resident-memory delta is decoded pixels,
+not PNG bytes. Release build, the maintainer's Mac, 2026-11-19:
+
+| Stage | Budget | Before (0.2.0) | After |
+|---|---|---|---|
+| visit every slide, real pictures | 33 ms | every one of the 300 pictures stays decoded (about 1.1 GB counted as width × height × 4) | 4.2 / 7.0 ms a frame; 81 pictures decoded at the end (about 300 MB), under the 512 MB ceiling |
+
+The headless test harness never uploads textures to a GPU, so its resident memory (98 → 123 MB) understates what a real window holds; the decoded-picture count is the number to watch. The same run's idle frame fell from 2.1 to 1.3 ms, because off-screen thumbnails are no longer painted.
+
+### Start-up (M21 step 4)
+
+Nothing was moved. `Editor::new` builds its state, then `check_revision` runs
+`course.validate` and `course.audit` through the engine on the first call; both
+walk the whole course. Their counts and findings are drawn on the first frame
+(status bar and canvas markers), so deferring them is not clearly safe. On the
+desktop, `EditorApp::new_desktop` also reads the preferences file (needed for
+the theme and other first-frame settings) and starts the automation control
+server (a listener and a thread, whose port is shown in the UI). Both are small
+here, and moving the listener could change when automation connects, so they
+were left alone. The font scan and the speller are already lazy or background
+work and were not touched.

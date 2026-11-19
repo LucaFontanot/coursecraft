@@ -158,12 +158,20 @@ impl std::fmt::Debug for MediaEntry {
     }
 }
 
+/// Ceiling for decoded picture textures: 512 MB on the desktop, 256 MB on wasm
+/// where the whole app shares the browser's memory.
+#[cfg(target_arch = "wasm32")]
+pub const DEFAULT_PICTURE_BUDGET: u64 = 256 * 1024 * 1024;
+#[cfg(not(target_arch = "wasm32"))]
+pub const DEFAULT_PICTURE_BUDGET: u64 = 512 * 1024 * 1024;
+
 /// Texture cache for slide media assets keyed by `src`.
 ///
 /// Ensures each asset is decoded at most once and uploaded to egui's texture manager.
 /// Failed decodes and missing assets are retained so they are not re-queried or re-decoded
-/// on every frame.
-#[derive(Default)]
+/// on every frame. Decoded pictures are bounded by a byte budget: the least recently
+/// used ones are dropped and decoded again when needed. SVG, animation, Lottie and
+/// video textures have their own lifetimes and are not counted in that budget.
 pub struct MediaCache {
     entries: HashMap<String, MediaEntry>,
     svg: HashMap<String, SvgAsset>,
@@ -172,6 +180,10 @@ pub struct MediaCache {
     video: HashMap<String, VideoTextureEntry>,
     limits: Limits,
     animation_time_ms: Option<u64>,
+    picture_budget: u64,
+    frame: u64,
+    use_counter: u64,
+    picture_uses: HashMap<String, PictureUse>,
 }
 
 impl std::fmt::Debug for MediaCache {
@@ -182,9 +194,19 @@ impl std::fmt::Debug for MediaCache {
             .field("animation_count", &self.animations.len())
             .field("lottie_count", &self.lottie.len())
             .field("video_count", &self.video.len())
+            .field("picture_budget", &self.picture_budget)
+            .field("picture_bytes", &self.picture_bytes())
             .field("limits", &self.limits)
             .finish()
     }
+}
+
+/// When a decoded picture was last handed out to the painter.
+struct PictureUse {
+    /// Monotonic use counter; higher means more recently used.
+    counter: u64,
+    /// Frame on which it was last handed out.
+    frame: u64,
 }
 
 struct VideoTextureEntry {
@@ -192,6 +214,24 @@ struct VideoTextureEntry {
     size: [u32; 2],
     /// Identity of the last uploaded frame (same Arc = same frame).
     last_ptr: *const coursecraft_playback::VideoFrame,
+}
+
+impl Default for MediaCache {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            svg: HashMap::new(),
+            animations: HashMap::new(),
+            lottie: HashMap::new(),
+            video: HashMap::new(),
+            limits: Limits::default(),
+            animation_time_ms: None,
+            picture_budget: DEFAULT_PICTURE_BUDGET,
+            frame: 0,
+            use_counter: 0,
+            picture_uses: HashMap::new(),
+        }
+    }
 }
 
 impl MediaCache {
@@ -205,13 +245,99 @@ impl MediaCache {
     #[must_use]
     pub fn with_limits(limits: Limits) -> Self {
         Self {
-            entries: HashMap::new(),
-            svg: HashMap::new(),
-            animations: HashMap::new(),
-            lottie: HashMap::new(),
-            video: HashMap::new(),
             limits,
-            animation_time_ms: None,
+            ..Self::default()
+        }
+    }
+
+    /// Bump the frame counter. Call once per editor or player frame, before any
+    /// picture is requested. Pictures handed out in the current frame are never
+    /// evicted, even if the cache is over budget for that frame.
+    pub fn begin_frame(&mut self) {
+        self.frame = self.frame.saturating_add(1);
+    }
+
+    /// Set the ceiling for decoded picture textures, in bytes (RGBA: width × height × 4).
+    ///
+    /// Entries over the new ceiling are dropped at once, except those used in the
+    /// current frame. Meant for tests; ordinary caches use [`DEFAULT_PICTURE_BUDGET`].
+    pub fn set_picture_budget(&mut self, bytes: u64) {
+        self.picture_budget = bytes;
+        self.evict_over_budget();
+    }
+
+    /// Current ceiling for decoded picture textures, in bytes.
+    #[must_use]
+    pub fn picture_budget(&self) -> u64 {
+        self.picture_budget
+    }
+
+    /// Number of decoded picture textures cached (not SVG, animation, Lottie,
+    /// video, failed or pending entries).
+    #[must_use]
+    pub fn decoded_picture_count(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|entry| matches!(entry, MediaEntry::Texture(..)))
+            .count()
+    }
+
+    /// Bytes held by decoded picture textures, counted as RGBA (4 bytes per pixel).
+    fn picture_bytes(&self) -> u64 {
+        self.entries
+            .values()
+            .fold(0u64, |total, entry| match entry {
+                MediaEntry::Texture(_, [w, h]) => total.saturating_add(
+                    u64::from(*w)
+                        .saturating_mul(u64::from(*h))
+                        .saturating_mul(4),
+                ),
+                MediaEntry::Loading | MediaEntry::Failed(_) => total,
+            })
+    }
+
+    /// Remember that a decoded picture was handed out on the current frame.
+    fn note_picture_use(&mut self, key: &str) {
+        self.use_counter = self.use_counter.saturating_add(1);
+        let counter = self.use_counter;
+        let frame = self.frame;
+        let used = self
+            .picture_uses
+            .entry(key.to_owned())
+            .or_insert(PictureUse {
+                counter: 0,
+                frame: 0,
+            });
+        used.counter = counter;
+        used.frame = frame;
+    }
+
+    /// Drop the least recently used pictures until the decoded total fits the
+    /// budget. Pictures handed out in the current frame stay even if that means
+    /// going over budget for this frame.
+    fn evict_over_budget(&mut self) {
+        while self.picture_bytes() > self.picture_budget {
+            let oldest = self
+                .entries
+                .iter()
+                .filter(|(key, entry)| {
+                    matches!(entry, MediaEntry::Texture(..))
+                        && self
+                            .picture_uses
+                            .get(key.as_str())
+                            .is_none_or(|used| used.frame < self.frame)
+                })
+                .min_by_key(|(key, _)| {
+                    self.picture_uses
+                        .get(key.as_str())
+                        .map_or(0, |used| used.counter)
+                })
+                .map(|(key, _)| key.clone());
+            let Some(key) = oldest else {
+                break;
+            };
+            self.entries.remove(&key);
+            self.picture_uses.remove(&key);
         }
     }
 
@@ -712,6 +838,11 @@ impl MediaCache {
             }
         }
 
+        if matches!(self.entries.get(&key), Some(MediaEntry::Texture(..))) {
+            self.note_picture_use(&key);
+            self.evict_over_budget();
+        }
+
         match self.entries.get(&key) {
             Some(MediaEntry::Texture(handle, size)) => MediaView::Ready {
                 texture: handle,
@@ -729,6 +860,8 @@ impl MediaCache {
         srcs: &HashSet<S>,
     ) {
         self.entries.retain(|key, _| srcs.contains(key_source(key)));
+        self.picture_uses
+            .retain(|key, _| srcs.contains(key_source(key)));
         self.svg.retain(|key, _| srcs.contains(key.as_str()));
         self.animations.retain(|key, _| srcs.contains(key.as_str()));
         self.lottie.retain(|key, _| srcs.contains(key.as_str()));
@@ -738,6 +871,8 @@ impl MediaCache {
     /// Retain only textures whose keys are in the provided slice.
     pub fn retain_slice(&mut self, srcs: &[&str]) {
         self.entries
+            .retain(|key, _| srcs.contains(&key_source(key)));
+        self.picture_uses
             .retain(|key, _| srcs.contains(&key_source(key)));
         self.svg.retain(|key, _| srcs.contains(&key.as_str()));
         self.animations
@@ -870,12 +1005,56 @@ mod tests {
     use crate::paint::{Highlight, paint};
     use coursecraft_course::Size;
     use egui::{Pos2, Rect, vec2};
+    use std::cell::Cell;
 
     struct NoMedia;
     impl MediaSource for NoMedia {
         fn get(&self, _src: &str) -> MediaFetch {
             MediaFetch::Missing
         }
+    }
+
+    fn solid_png(width: u32, height: u32) -> Vec<u8> {
+        let pixels = vec![0u8; width as usize * height as usize * 4];
+        coursecraft_media::encode_png_rgba(width, height, &pixels).expect("encode test png")
+    }
+
+    /// In-memory media for the cache tests. `fetches` proves a dropped picture is
+    /// fetched again from the source when it is next needed.
+    struct TestSource {
+        bytes: HashMap<String, Arc<[u8]>>,
+        fetches: Cell<usize>,
+    }
+
+    impl TestSource {
+        fn new() -> Self {
+            Self {
+                bytes: HashMap::new(),
+                fetches: Cell::new(0),
+            }
+        }
+
+        fn add(&mut self, src: &str, bytes: Vec<u8>) {
+            self.bytes.insert(src.to_owned(), Arc::from(bytes));
+        }
+
+        fn fetches(&self) -> usize {
+            self.fetches.get()
+        }
+    }
+
+    impl MediaSource for TestSource {
+        fn get(&self, src: &str) -> MediaFetch {
+            self.fetches.set(self.fetches.get().saturating_add(1));
+            self.bytes
+                .get(src)
+                .cloned()
+                .map_or(MediaFetch::Missing, MediaFetch::Ready)
+        }
+    }
+
+    fn picture_key(n: usize) -> String {
+        format!("p{n}.png")
     }
 
     #[test]
@@ -912,5 +1091,167 @@ mod tests {
         });
         output.textures_delta.clear();
         assert_eq!(cache.animation_time_ms(), None);
+    }
+
+    /// Three pictures of 4×4 fit a budget of 3 × 64 bytes. Loading five, one per
+    /// frame, keeps the three newest: the oldest-used ones go first.
+    #[test]
+    fn picture_budget_evicts_least_recently_used_first() {
+        let ctx = egui::Context::default();
+        let mut source = TestSource::new();
+        for n in 0..5 {
+            source.add(&picture_key(n), solid_png(4, 4));
+        }
+        let mut cache = MediaCache::new();
+        cache.set_picture_budget(3 * 4 * 4 * 4);
+
+        for n in 0..5 {
+            cache.begin_frame();
+            let view = cache.texture(&ctx, &picture_key(n), &source);
+            assert!(
+                matches!(view, MediaView::Ready { size: [4, 4], .. }),
+                "picture {n} should decode"
+            );
+        }
+
+        assert!(cache.decoded_picture_count() <= 3);
+        assert!(
+            cache.get_entry(&picture_key(0)).is_none(),
+            "p0 was the oldest"
+        );
+        assert!(
+            cache.get_entry(&picture_key(1)).is_none(),
+            "p1 was next oldest"
+        );
+        for n in 2..5 {
+            assert!(
+                matches!(
+                    cache.get_entry(&picture_key(n)),
+                    Some(MediaEntry::Texture(..))
+                ),
+                "picture {n} should be cached"
+            );
+        }
+        assert!(cache.picture_bytes() <= cache.picture_budget());
+    }
+
+    /// A picture handed out on this frame is never evicted, even when that means
+    /// the cache stays over budget until the next frame.
+    #[test]
+    fn picture_budget_keeps_pictures_used_this_frame() {
+        let ctx = egui::Context::default();
+        let mut source = TestSource::new();
+        for n in 0..4 {
+            source.add(&picture_key(n), solid_png(4, 4));
+        }
+        let mut cache = MediaCache::new();
+        let budget = 2 * 4 * 4 * 4;
+        cache.set_picture_budget(budget);
+
+        cache.begin_frame();
+        for n in 0..2 {
+            let _ = cache.texture(&ctx, &picture_key(n), &source);
+        }
+        assert!(cache.picture_bytes() <= budget);
+
+        cache.begin_frame();
+        // Both existing pictures are used now, then one more arrives.
+        let _ = cache.texture(&ctx, &picture_key(0), &source);
+        let _ = cache.texture(&ctx, &picture_key(1), &source);
+        let _ = cache.texture(&ctx, &picture_key(2), &source);
+        assert_eq!(cache.decoded_picture_count(), 3);
+        assert!(
+            cache.picture_bytes() > budget,
+            "over budget until next frame"
+        );
+        for n in 0..3 {
+            assert!(
+                matches!(
+                    cache.get_entry(&picture_key(n)),
+                    Some(MediaEntry::Texture(..))
+                ),
+                "picture {n} was used this frame and must stay"
+            );
+        }
+
+        // On the next frame those three are cold, so the oldest goes.
+        cache.begin_frame();
+        let _ = cache.texture(&ctx, &picture_key(3), &source);
+        assert!(cache.get_entry(&picture_key(0)).is_none());
+        assert!(cache.decoded_picture_count() <= 3);
+    }
+
+    /// An evicted picture is fetched and decoded again when it is next asked for.
+    #[test]
+    fn evicted_picture_is_decoded_again_on_demand() {
+        let ctx = egui::Context::default();
+        let mut source = TestSource::new();
+        for n in 0..2 {
+            source.add(&picture_key(n), solid_png(8, 6));
+        }
+        let mut cache = MediaCache::new();
+        cache.set_picture_budget(8 * 6 * 4);
+
+        cache.begin_frame();
+        let _ = cache.texture(&ctx, &picture_key(0), &source);
+        let fetches_after_first = source.fetches();
+        cache.begin_frame();
+        let _ = cache.texture(&ctx, &picture_key(1), &source);
+        assert!(cache.get_entry(&picture_key(0)).is_none(), "p0 was evicted");
+
+        cache.begin_frame();
+        let view = cache.texture(&ctx, &picture_key(0), &source);
+        assert!(matches!(view, MediaView::Ready { size: [8, 6], .. }));
+        assert_eq!(
+            source.fetches(),
+            fetches_after_first + 2,
+            "p1 was fetched once, then p0 again"
+        );
+        assert!(cache.texture_id(&picture_key(0)).is_some());
+    }
+
+    /// SVG rasters, Lottie compositions and failed entries have their own
+    /// lifetimes: they are not counted in the picture budget and not evicted.
+    #[test]
+    fn picture_budget_ignores_svg_lottie_and_failed_entries() {
+        let ctx = egui::Context::default();
+        let mut source = TestSource::new();
+        for n in 0..2 {
+            source.add(&picture_key(n), solid_png(4, 4));
+        }
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#00aa00"/></svg>"##;
+        source.add("vector.svg", svg.to_vec());
+        let lottie = br#"{"v":"5.5.7","fr":30,"ip":0,"op":2,"w":8,"h":8,"nm":"tiny","ddd":0,"assets":[],"layers":[{"ddd":0,"ind":1,"ty":4,"nm":"Rect","sr":1,"ks":{"a":{"a":0,"k":[0,0]},"p":{"a":0,"k":[4,4]},"s":{"a":0,"k":[100,100]},"r":{"a":0,"k":0},"o":{"a":0,"k":100}},"ao":0,"shapes":[{"ty":"gr","it":[{"ty":"rc","d":1,"s":{"a":0,"k":[4,4]},"p":{"a":0,"k":[0,0]},"r":{"a":0,"k":0}},{"ty":"fl","c":{"a":0,"k":[1,0,0,1]},"o":{"a":0,"k":100},"r":1},{"ty":"tr","p":{"a":0,"k":[0,0]},"a":{"a":0,"k":[0,0]},"s":{"a":0,"k":[100,100]},"r":{"a":0,"k":0},"o":{"a":0,"k":100}}]}],"ip":0,"op":2,"st":0,"bm":0}]}"#;
+        source.add("anim.json", lottie.to_vec());
+
+        let mut cache = MediaCache::new();
+        cache.set_picture_budget(4 * 4 * 4);
+        cache.begin_frame();
+        let _ = cache.texture(&ctx, &picture_key(0), &source);
+        let _ = cache.texture_for(&ctx, "vector.svg", &source, (8, 8));
+        let _ = cache.lottie_view("anim.json", &source);
+        let _ = cache.texture(&ctx, "broken.png", &source);
+
+        assert!(cache.natural_size("vector.svg").is_some());
+        assert!(cache.texture_id("vector.svg").is_some());
+        assert!(cache.lottie_info("anim.json").is_some());
+        assert!(matches!(
+            cache.get_entry("broken.png"),
+            Some(MediaEntry::Failed(_))
+        ));
+        assert_eq!(cache.picture_bytes(), 4 * 4 * 4);
+
+        // One more picture cannot fit; only the picture is evicted.
+        cache.begin_frame();
+        let _ = cache.texture(&ctx, &picture_key(1), &source);
+        assert!(cache.get_entry(&picture_key(0)).is_none());
+        assert_eq!(cache.decoded_picture_count(), 1);
+        assert!(cache.natural_size("vector.svg").is_some());
+        assert!(cache.texture_id("vector.svg").is_some());
+        assert!(cache.lottie_info("anim.json").is_some());
+        assert!(matches!(
+            cache.get_entry("broken.png"),
+            Some(MediaEntry::Failed(_))
+        ));
     }
 }

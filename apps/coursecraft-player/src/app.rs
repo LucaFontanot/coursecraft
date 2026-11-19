@@ -823,6 +823,7 @@ impl eframe::App for PlayerApp {
                 });
             }
             State::Playing(ref mut playing) => {
+                playing.media_cache.begin_frame();
                 // 5. Repaint continuously while playing so the clock advances
                 ui.ctx().request_repaint();
 

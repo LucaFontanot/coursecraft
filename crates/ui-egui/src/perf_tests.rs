@@ -4,6 +4,7 @@
 //! Budgets: idle frame at most 16 ms, interaction frame at most 33 ms.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::canvas;
@@ -13,6 +14,93 @@ use egui::{Event, Key, Modifiers, RawInput, pos2};
 
 const SLIDES: usize = 300;
 const SUITE: &str = "editor";
+
+/// Deterministic pixel source for the PNG writer below, copied from the
+/// big-course test so these pictures really have to be decoded by the editor.
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 >> 11
+    }
+    fn fill(&mut self, buf: &mut [u8]) {
+        for chunk in buf.chunks_mut(8) {
+            let bytes = self.next().to_le_bytes();
+            for (d, s) in chunk.iter_mut().zip(bytes) {
+                *d = s;
+            }
+        }
+    }
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut table = [0u32; 256];
+    for (i, slot) in table.iter_mut().enumerate() {
+        let mut c = i as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+        }
+        *slot = c;
+    }
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc = table[((crc ^ u32::from(b)) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    !crc
+}
+
+fn adler32(data: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in data {
+        a = (a + u32::from(x)) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    let mut body = kind.to_vec();
+    body.extend_from_slice(data);
+    out.extend_from_slice(&body);
+    out.extend_from_slice(&crc32(&body).to_be_bytes());
+}
+
+/// A valid RGB PNG of random pixels in stored (uncompressed) deflate blocks.
+fn random_png(rng: &mut Lcg, side: usize) -> Vec<u8> {
+    let mut raw = vec![0u8; side * (side * 3 + 1)];
+    rng.fill(&mut raw);
+    for row in raw.chunks_mut(side * 3 + 1) {
+        if let Some(first) = row.first_mut() {
+            *first = 0; // filter: none
+        }
+    }
+    let mut z = vec![0x78, 0x01];
+    let mut blocks = raw.chunks(65535).peekable();
+    while let Some(b) = blocks.next() {
+        z.push(u8::from(blocks.peek().is_none()));
+        z.extend_from_slice(&(b.len() as u16).to_le_bytes());
+        z.extend_from_slice(&(!(b.len() as u16)).to_le_bytes());
+        z.extend_from_slice(b);
+    }
+    z.extend_from_slice(&adler32(&raw).to_be_bytes());
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&(side as u32).to_be_bytes());
+    ihdr.extend_from_slice(&(side as u32).to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    chunk(&mut png, b"IHDR", &ihdr);
+    chunk(&mut png, b"IDAT", &z);
+    chunk(&mut png, b"IEND", &[]);
+    png
+}
 
 /// Where the timing suites append their machine-readable results. Never panics:
 /// if the target folder cannot be found or written, the run just has no TSV row.
@@ -413,4 +501,64 @@ fn first_frame() {
     let mut h = TestHarness::new(big_course());
     let _ = h.frame(Vec::new());
     report_one("first frame", 500.0, t.elapsed(), "");
+}
+
+/// The same 300-slide course, but with a real 1280×720 PNG behind every
+/// picture. The source bytes are shared between slides (one decode per slide
+/// still happens, because each slide has its own cache key), so the resident
+/// memory this stage records is decoded textures, not PNG bytes.
+#[test]
+#[ignore = "timing test: run in release with --ignored --nocapture"]
+fn visit_every_slide_with_real_pictures() {
+    let mut h = TestHarness::new(big_course());
+    let png = Arc::from(random_png(&mut Lcg(0x5EED), 1280));
+    let media: Vec<_> = (0..SLIDES)
+        .map(|n| (format!("img/p{n}.png"), Arc::clone(&png)))
+        .collect();
+    h.editor.set_media(media);
+    let rss_before = rss_mb();
+    let mut samples = Vec::new();
+    for n in 0..SLIDES {
+        h.editor.selection.slide = format!("s-{n}");
+        samples.push(timed(&mut h, Vec::new()));
+    }
+    let rss_after = rss_mb();
+    let pictures = h.editor.media_cache.decoded_picture_count();
+    report_note(
+        "visit every slide, real pictures",
+        33.0,
+        &samples,
+        &format!("rss {rss_before:.0} -> {rss_after:.0} MB, {pictures} decoded pictures"),
+    );
+}
+
+/// A small ceiling keeps the editor cache bounded while walking 100 slides
+/// with different pictures, and a slide revisited later still shows its image.
+#[test]
+fn picture_budget_bounds_editor_cache() {
+    let mut h = TestHarness::new(big_course());
+    let png = Arc::from(random_png(&mut Lcg(0x5EED), 8));
+    let media: Vec<_> = (0..100)
+        .map(|n| (format!("img/p{n}.png"), Arc::clone(&png)))
+        .collect();
+    h.editor.set_media(media);
+    h.editor.media_cache.set_picture_budget(20 * 8 * 8 * 4);
+
+    for n in 0..100 {
+        h.editor.selection.slide = format!("s-{n}");
+        h.idle_frame();
+        let count = h.editor.media_cache.decoded_picture_count();
+        assert!(
+            count <= 20,
+            "cache grew to {count} picture entries on slide {n}"
+        );
+    }
+    assert!(h.editor.media_cache.is_loaded_image("img/p99.png"));
+    assert!(h.editor.media_cache.texture_id("img/p99.png").is_some());
+
+    h.editor.selection.slide = "s-0".into();
+    h.idle_frame();
+    assert!(h.editor.media_cache.is_loaded_image("img/p0.png"));
+    assert!(h.editor.media_cache.texture_id("img/p0.png").is_some());
+    assert!(h.editor.media_cache.decoded_picture_count() <= 20);
 }

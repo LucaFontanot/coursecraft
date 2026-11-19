@@ -2962,6 +2962,7 @@ impl Editor {
     #[allow(clippy::cognitive_complexity)]
     pub fn show(&mut self, ui: &mut Ui) -> Vec<EditorRequest> {
         self.ui.current_time = ui.input(|i| i.time);
+        self.media_cache.begin_frame();
         // Pick mode owns the pointer and Escape before anything else sees them.
         eyedropper::process_frame(ui.ctx());
         self.check_revision();
