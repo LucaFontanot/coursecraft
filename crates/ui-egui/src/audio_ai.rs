@@ -263,25 +263,32 @@ impl Editor {
         let margin = 16.0_f32;
         let x = (slide_size.w as f32 - width - margin).max(0.0);
         let y = (slide_size.h as f32 - height - margin).max(0.0);
-        let result = self.run(
-            "object.add",
-            serde_json::json!({
-                "slide": slide_id,
-                "kind": {
-                    "type": "audio",
-                    "src": name,
-                    "autoplay": true,
-                },
-                "frame": { "x": x, "y": y, "w": width, "h": height },
-                "name": "Narration",
-            }),
-        );
-        let Some(value) = result else {
+        let add = serde_json::json!({
+            "slide": slide_id,
+            "kind": {
+                "type": "audio",
+                "src": name,
+                "autoplay": true,
+            },
+            "frame": { "x": x, "y": y, "w": width, "h": height },
+            "name": "Narration",
+        });
+        // A slide shorter than the narration grows to fit it.
+        let fit = self.media_fit_step(slide_id, coursecraft_playback::MediaKind::Audio, &name);
+        let mut steps = vec![("object.add".to_owned(), add)];
+        if let Some((step, _)) = &fit {
+            steps.push(step.clone());
+        }
+        let Some(results) = self.run_batch(&steps) else {
             self.media.retain(|(key, _)| key != &name);
             return None;
         };
-        value
-            .get("id")
+        if let Some((_, duration_ms)) = fit {
+            self.note_slide_fitted(coursecraft_playback::MediaKind::Audio, duration_ms);
+        }
+        results
+            .first()
+            .and_then(|value| value.get("id"))
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
     }

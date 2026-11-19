@@ -680,6 +680,53 @@ fn write_video_bytes(bytes: &[u8]) -> Option<std::path::PathBuf> {
     Some(path)
 }
 
+/// Length of an audio or video file in milliseconds, when it can be read.
+///
+/// The editor uses it to stretch a slide to fit media placed on it. `None`
+/// on the web and for files the decoders cannot open.
+#[must_use]
+pub fn media_duration_ms(kind: MediaKind, src: &str, bytes: &[u8]) -> Option<u64> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (kind, src, bytes);
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match kind {
+            MediaKind::Audio => audio_duration_ms(src, bytes),
+            MediaKind::Video => {
+                let path = write_video_bytes(bytes)?;
+                let file = coursecraft_video_native::VideoFile::open(&path).ok()?;
+                Some(file.duration_ms()).filter(|ms| *ms > 0)
+            }
+        }
+    }
+}
+
+/// Audio length from the container, else by counting decoded samples (an
+/// MP3 without a length header), capped at three hours of samples.
+#[cfg(not(target_arch = "wasm32"))]
+fn audio_duration_ms(src: &str, bytes: &[u8]) -> Option<u64> {
+    use rodio::Source;
+    let bytes: Arc<[u8]> = Arc::from(bytes);
+    let decoder = seekable_decoder(&bytes, src).ok()?;
+    if let Some(total) = decoder.total_duration() {
+        return u64::try_from(total.as_millis()).ok().filter(|ms| *ms > 0);
+    }
+    let rate = u64::from(decoder.sample_rate());
+    let channels = u64::from(decoder.channels());
+    let per_second = rate.saturating_mul(channels);
+    if per_second == 0 {
+        return None;
+    }
+    let cap = per_second.saturating_mul(3 * 60 * 60);
+    let samples = decoder
+        .take(usize::try_from(cap).unwrap_or(usize::MAX))
+        .count() as u64;
+    Some(samples.saturating_mul(1000) / per_second).filter(|ms| *ms > 0)
+}
+
 /// Kind of media asset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MediaKind {

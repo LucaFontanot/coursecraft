@@ -1522,3 +1522,290 @@ fn walkthrough_builds_hello_course_through_ui() {
     // 8. Behaviour parity: run pass.inputs.json and verify effect stream matches golden effects exactly
     assert_course_behaviour(built_course);
 }
+
+// ----------------------------------------------------------------------------
+// Author click-through: animation, slide notes and preview, all through the UI
+// ----------------------------------------------------------------------------
+
+/// Topmost painted text equal to `label` inside the inspector.
+fn topmost_in_inspector(harness: &mut TestHarness, label: &str) -> Option<Pos2> {
+    let panel = harness.right_panel_rect();
+    harness
+        .find_texts(label)
+        .into_iter()
+        .filter(|p| panel.contains(*p))
+        .min_by(|a, b| a.y.total_cmp(&b.y))
+}
+
+fn click_inspector_tab(harness: &mut TestHarness, tab: &str) {
+    // The tabs sit in the top toolbar.
+    let pos = harness
+        .find_texts(tab)
+        .into_iter()
+        .min_by(|a, b| a.y.total_cmp(&b.y))
+        .filter(|p| p.y < 80.0)
+        .unwrap_or_else(|| panic!("{tab} tab"));
+    harness.click_at(pos);
+    harness.idle_frame();
+}
+
+fn object_on(harness: &TestHarness, slide: &str, id: &str) -> coursecraft_course::Object {
+    let course = &harness.editor.session.course;
+    let Some((obj, _)) = course.slide(slide).and_then(|s| s.object(id)) else {
+        panic!("{id} on {slide}");
+    };
+    obj.clone()
+}
+
+#[test]
+fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
+    use coursecraft_course::{AnimEffect, Direction};
+    let blank = Session::blank("Untitled course").course;
+    let mut harness = TestHarness::new_with_size(blank, (1280.0, 860.0));
+    harness.idle_frame();
+    let slide = harness.editor.selection.slide.clone();
+    insert_object(&mut harness, "Text Box");
+    let Some(id) = harness.editor.selection.object.clone() else {
+        panic!("the new text box is selected");
+    };
+
+    // Animate tab: Effect None -> Fly in.
+    click_inspector_tab(&mut harness, "Animate");
+    let effect = topmost_in_inspector(&mut harness, "None").expect("entrance effect combo");
+    harness.click_at(effect);
+    harness.idle_frame();
+    let fly = harness.find_text_last("Fly in").expect("Fly in option");
+    harness.click_at(fly);
+    harness.idle_frame();
+    let entrance = object_on(&harness, &slide, &id).entrance;
+    assert!(
+        matches!(
+            entrance.as_ref().map(|a| &a.effect),
+            Some(AnimEffect::FlyIn { .. })
+        ),
+        "Fly in stored: {entrance:?} / {:?}",
+        harness.editor.ui.last_error
+    );
+
+    // Direction Bottom -> Left.
+    let dir = topmost_in_inspector(&mut harness, "Bottom").expect("direction combo");
+    harness.click_at(dir);
+    harness.idle_frame();
+    let left = harness.find_text_last("Left").expect("Left option");
+    harness.click_at(left);
+    harness.idle_frame();
+    let entrance = object_on(&harness, &slide, &id).entrance;
+    assert_eq!(
+        entrance.as_ref().map(|a| a.effect.clone()),
+        Some(AnimEffect::FlyIn {
+            from: Direction::Left
+        })
+    );
+
+    // Duration 500 -> 1200.
+    let duration = topmost_in_inspector(&mut harness, "Duration").expect("Duration row");
+    harness.set_field(duration + vec2(120.0, 0.0), "1200");
+    harness.idle_frame();
+    let entrance = object_on(&harness, &slide, &id).entrance;
+    assert_eq!(entrance.as_ref().map(|a| a.duration_ms), Some(1200));
+
+    // Clicking the same choice again adds no undo step.
+    let revision = harness.editor.session.revision;
+    let effect = topmost_in_inspector(&mut harness, "Fly in").expect("effect shows Fly in");
+    harness.click_at(effect);
+    harness.idle_frame();
+    let fly = harness.find_text_last("Fly in").expect("Fly in option");
+    harness.click_at(fly);
+    harness.idle_frame();
+    assert_eq!(
+        harness.editor.session.revision, revision,
+        "same choice changes nothing"
+    );
+
+    // Leave the slide and come back: the inspector still shows the animation.
+    harness
+        .editor
+        .run("slide.add", serde_json::json!({ "title": "Two" }));
+    harness.idle_frame();
+    harness.editor.selection.slide = slide.clone();
+    harness.editor.selection.set_many([id.clone()]);
+    harness.idle_frame();
+    click_inspector_tab(&mut harness, "Animate");
+    assert!(
+        topmost_in_inspector(&mut harness, "Fly in").is_some(),
+        "Fly in still shown after leaving the slide"
+    );
+
+    // Slide tab: type speaker notes, click away to commit.
+    harness.editor.selection.clear_objects();
+    harness.idle_frame();
+    click_inspector_tab(&mut harness, "Slide");
+    let notes = scroll_to_label(&mut harness, "Notes");
+    harness.click_at(notes + vec2(0.0, 40.0));
+    harness.type_text("Welcome the learner.");
+    let away = scroll_to_label(&mut harness, "Notes");
+    harness.click_at(away);
+    harness.idle_frame();
+    let saved = harness
+        .editor
+        .session
+        .course
+        .slide(&slide)
+        .map(|s| s.notes.clone());
+    assert_eq!(
+        saved.as_deref(),
+        Some("Welcome the learner."),
+        "notes saved"
+    );
+
+    // Preview from this slide carries the animation.
+    harness.frame(vec![Event::Key {
+        key: Key::F12,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }]);
+    harness.idle_frame();
+    let Some(preview) = harness.editor.preview.as_ref() else {
+        panic!("F12 opens the preview");
+    };
+    assert!(preview.is_valid(), "{:?}", preview.errors);
+    let anim = preview
+        .course
+        .slide(&slide)
+        .and_then(|s| s.object(&id))
+        .and_then(|(o, _)| o.entrance.clone());
+    assert_eq!(anim.map(|a| a.duration_ms), Some(1200));
+    let mut player = coursecraft_logic::Player::new(&preview.course).expect("player");
+    player.handle(&coursecraft_logic::Input::Start);
+    let start = player.sample_object(&id).map(|s| s.offset.0);
+    assert!(
+        start.is_some_and(|x| x < -10.0),
+        "starts off to the left: {start:?}"
+    );
+}
+
+/// 16-bit mono PCM WAV, 8 kHz, `ms` long.
+fn wav_bytes(ms: u32) -> Vec<u8> {
+    let rate: u32 = 8000;
+    let samples = rate * ms / 1000;
+    let data_len = samples * 2;
+    let mut b = Vec::new();
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + data_len).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&rate.to_le_bytes());
+    b.extend_from_slice(&(rate * 2).to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&data_len.to_le_bytes());
+    b.resize(b.len() + data_len as usize, 0);
+    b
+}
+
+fn click_slide_center(harness: &mut TestHarness) {
+    let c_rect = canvas_rect(harness.central_panel_rect());
+    let transform = SlideTransform::fit(
+        c_rect.shrink(16.0),
+        harness.editor.session.course.slide_size,
+    )
+    .expect("transform");
+    harness.click_at(transform.slide_rect().center());
+    harness.idle_frame();
+}
+
+#[test]
+fn placed_audio_plays_by_itself_and_the_slide_grows_to_fit() {
+    let blank = Session::blank("Untitled course").course;
+    let mut harness = TestHarness::new_with_size(blank, (1280.0, 860.0));
+    harness.idle_frame();
+    let slide = harness.editor.selection.slide.clone();
+    let duration_before = harness
+        .editor
+        .session
+        .course
+        .slide(&slide)
+        .map(|s| s.duration_ms);
+    assert_eq!(duration_before, Some(5000));
+
+    assert!(
+        harness
+            .editor
+            .import_audio("Long talk.wav", &wav_bytes(12_340))
+            .is_some()
+    );
+    click_slide_center(&mut harness);
+    let Some(id) = harness.editor.selection.object.clone() else {
+        panic!(
+            "the placed sound is selected: {:?}",
+            harness.editor.ui.last_error
+        );
+    };
+    let obj = object_on(&harness, &slide, &id);
+    assert!(
+        matches!(obj.kind, ObjectKind::Audio { autoplay: true, .. }),
+        "plays by itself: {:?}",
+        obj.kind
+    );
+    let duration = harness
+        .editor
+        .session
+        .course
+        .slide(&slide)
+        .map(|s| s.duration_ms);
+    assert_eq!(
+        duration,
+        Some(12_400),
+        "slide grows to the sound, rounded up"
+    );
+    let status = harness
+        .editor
+        .ui
+        .status_message
+        .as_ref()
+        .map(|m| m.0.clone())
+        .unwrap_or_default();
+    assert!(status.contains("0:12.4"), "{status}");
+
+    // One Undo removes the sound and puts the slide length back.
+    harness.editor.run("edit.undo", serde_json::json!({}));
+    let course = &harness.editor.session.course;
+    assert_eq!(course.slide(&slide).map(|s| s.duration_ms), Some(5000));
+    assert!(course.slide(&slide).and_then(|s| s.object(&id)).is_none());
+
+    // A short sound leaves the slide alone.
+    assert!(
+        harness
+            .editor
+            .import_audio("click.wav", &wav_bytes(800))
+            .is_some()
+    );
+    click_slide_center(&mut harness);
+    let duration = harness
+        .editor
+        .session
+        .course
+        .slide(&slide)
+        .map(|s| s.duration_ms);
+    assert_eq!(duration, Some(5000));
+
+    // The learner hears it: the player starts it on entering the slide.
+    let mut player =
+        coursecraft_logic::Player::new(&harness.editor.session.course).expect("player");
+    let effects = player.handle(&coursecraft_logic::Input::Start);
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            coursecraft_logic::Effect::Media {
+                op: coursecraft_logic::MediaOp::Play,
+                ..
+            }
+        )),
+        "{effects:?}"
+    );
+}

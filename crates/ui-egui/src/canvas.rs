@@ -1439,7 +1439,7 @@ fn placement_kind_and_size(editor: &Editor, tool: &PlacementTool) -> (Json, (f32
             serde_json::json!({
                 "type": "audio",
                 "src": src,
-                "autoplay": false,
+                "autoplay": true,
             }),
             (48.0, 48.0),
         ),
@@ -1447,7 +1447,7 @@ fn placement_kind_and_size(editor: &Editor, tool: &PlacementTool) -> (Json, (f32
             serde_json::json!({
                 "type": "video",
                 "src": src,
-                "autoplay": false,
+                "autoplay": true,
             }),
             (640.0, 360.0),
         ),
@@ -1675,6 +1675,31 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
     }
     if let Some(ref lid) = editor.selection.layer {
         params["layer"] = serde_json::json!(lid);
+    }
+    // Audio and video play when the slide reaches them, and a base slide
+    // shorter than the media grows to fit it, in the same undo step.
+    let media = match tool {
+        PlacementTool::Audio { src } => Some((coursecraft_playback::MediaKind::Audio, src)),
+        PlacementTool::Video { src } => Some((coursecraft_playback::MediaKind::Video, src)),
+        _ => None,
+    };
+    if let Some((kind, src)) = media {
+        let fit = if editor.selection.layer.is_none() {
+            let slide = editor.selection.slide.clone();
+            editor.media_fit_step(&slide, kind, src)
+        } else {
+            None
+        };
+        let mut steps = vec![("object.add".to_owned(), params)];
+        if let Some((step, _)) = &fit {
+            steps.push(step.clone());
+        }
+        if editor.run_batch(&steps).is_some()
+            && let Some((_, duration_ms)) = fit
+        {
+            editor.note_slide_fitted(kind, duration_ms);
+        }
+        return;
     }
     let result = editor.run("object.add", params);
     if is_text

@@ -287,12 +287,12 @@ pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
             shortcut: "Ctrl+0",
         },
         ShortcutRow {
-            action: "Zoom in",
-            shortcut: "Ctrl+=",
+            action: "Zoom in / out",
+            shortcut: "Ctrl+= / Ctrl+-",
         },
         ShortcutRow {
-            action: "Zoom out",
-            shortcut: "Ctrl+-",
+            action: "Preview this slide / from the start",
+            shortcut: "F12 / Shift+F12",
         },
     ];
 

@@ -2074,6 +2074,52 @@ impl Editor {
         Some(src)
     }
 
+    /// The `slide.update` step that lengthens base slide `slide_id` to fit
+    /// media `src` starting at 0, when the media is longer than the slide,
+    /// with the new duration. `None` when it already fits or the length
+    /// cannot be read (the web editor, an unreadable file).
+    pub(crate) fn media_fit_step(
+        &self,
+        slide_id: &str,
+        kind: MediaKind,
+        src: &str,
+    ) -> Option<((String, Json), u32)> {
+        let (_, bytes) = self.media.iter().find(|(name, _)| name == src)?;
+        let ms = coursecraft_playback::media_duration_ms(kind, src, bytes)?;
+        let slide = self.session.course.slide(slide_id)?;
+        let needed = ms
+            .div_ceil(100)
+            .saturating_mul(100)
+            .min(24 * 60 * 60 * 1000);
+        let needed = u32::try_from(needed).ok()?;
+        if needed <= slide.duration_ms {
+            return None;
+        }
+        Some((
+            (
+                "slide.update".to_owned(),
+                serde_json::json!({ "slide": slide_id, "duration_ms": needed }),
+            ),
+            needed,
+        ))
+    }
+
+    /// Status line after a slide was lengthened to fit media.
+    pub(crate) fn note_slide_fitted(&mut self, kind: MediaKind, duration_ms: u32) {
+        let what = match kind {
+            MediaKind::Audio => "sound",
+            MediaKind::Video => "video",
+        };
+        let secs = duration_ms / 1000;
+        let tenths = (duration_ms % 1000) / 100;
+        self.set_status(format!(
+            "Slide lengthened to {}:{:02}.{} to fit the {what}",
+            secs / 60,
+            secs % 60,
+            tenths
+        ));
+    }
+
     /// Size-check, sanitise and store a media file, returning its `media/` name.
     fn store_media(&mut self, kind: MediaKind, file_name: &str, bytes: &[u8]) -> Option<String> {
         let label = match kind {
@@ -3291,6 +3337,22 @@ impl Editor {
         }
 
         let mut requests = Vec::new();
+        // F12 previews this slide and Shift+F12 the course from the start,
+        // like the toolbar's Preview button and its menu.
+        if !self.ui.show_welcome
+            && self.preview.is_none()
+            && !self.ui.master_view
+            && !ui.ctx().egui_wants_keyboard_input()
+        {
+            if ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::F12)) {
+                self.open_preview_at(None);
+                requests.push(EditorRequest::Preview {
+                    slide: String::new(),
+                });
+            } else if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F12)) {
+                toolbar::preview_slide(self, &mut requests);
+            }
+        }
         let p = coursecraft_render::palette(ui.ctx());
         // Horizontal inner margin shared by the menu row, bottom panel and status bar, so their
         // content never touches the window edge (matches the side panels).

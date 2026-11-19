@@ -409,7 +409,7 @@ Speech is `POST /v1/text-to-speech/{voice_id}?output_format=mp3_44100_128` with 
 
 Browsers may block ElevenLabs' cross-origin requests, so the desktop app is the sure way to use it. No test or `cargo xtask ci` run calls the real service.
 
-The success state offers **Add to slide**, which stores the MP3 in the media library and adds an autoplaying audio object in the bottom-right corner through the ordinary `object.add` command: one undo step. The course validates and publish's missing-media preflight finds the new file, so publishing is not blocked. There is deliberately no separate captions request: using captions is a second, author-triggered action. **Close** and **Cancel** change nothing.
+The success state offers **Add to slide**, which stores the MP3 in the media library and adds an autoplaying audio object in the bottom-right corner through the ordinary `object.add` command, and lengthens the slide when the narration is longer than it: one undo step. The course validates and publish's missing-media preflight finds the new file, so publishing is not blocked. There is deliberately no separate captions request: using captions is a second, author-triggered action. **Close** and **Cancel** change nothing.
 
 A 404 is normal for these endpoints: `This server doesn't offer speech-to-text. Local servers often don't: try a hosted one.` or the equivalent for text-to-speech.
 

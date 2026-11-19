@@ -841,3 +841,14 @@ fn audio_decoder_seeks_backwards() {
         "after seeking back the whole second plays again, got {remaining} samples"
     );
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn audio_length_is_read_from_the_file() {
+    let ms = crate::media_duration_ms(MediaKind::Audio, "tone.wav", &wav_of_ms(2500));
+    assert!(ms.is_some_and(|ms| (2450..=2550).contains(&ms)), "{ms:?}");
+    assert_eq!(
+        crate::media_duration_ms(MediaKind::Audio, "x.mp3", b"not audio"),
+        None
+    );
+}

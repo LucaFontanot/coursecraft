@@ -421,7 +421,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         if master_view {
             "Not available in Master View"
         } else {
-            "Preview current slide"
+            "Preview current slide (F12)"
         },
     );
     if preview_resp.clicked() {
@@ -433,11 +433,17 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
             ui.add_enabled(false, egui::Button::new("Not available in Master View"));
             return;
         }
-        if ui.button("Preview this slide").clicked() {
+        if ui
+            .add(egui::Button::new("Preview this slide").shortcut_text("F12"))
+            .clicked()
+        {
             preview_slide(editor, requests);
             ui.close();
         }
-        if ui.button("Preview from the start").clicked() {
+        if ui
+            .add(egui::Button::new("Preview from the start").shortcut_text("Shift+F12"))
+            .clicked()
+        {
             editor.open_preview_at(None);
             requests.push(EditorRequest::Preview {
                 slide: String::new(),
