@@ -1699,15 +1699,21 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
     // whole inspector.
     let spell_text = editor.ui.properties.text_body.clone();
     let spelled = editor.spell_words(&spell_text);
+    // Suggestions are slow to work out, so only when the word menu is open
+    // or about to open (a secondary press arrives a frame before the menu).
+    let menu_coming = editor.ui.properties.spell_menu_pos.is_some()
+        || ui.input(|i| i.pointer.secondary_pressed() || i.pointer.secondary_down());
+    let suggestions = if menu_coming && !spelled.is_empty() {
+        editor.spell_suggestion_map(&spelled)
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let props = &mut editor.ui.properties;
     props.spell_words = spelled
         .iter()
         .map(|word| word.misspelling.clone())
         .collect();
-    props.spell_suggestions = spelled
-        .iter()
-        .map(|word| (word.misspelling.word.clone(), word.suggestions.clone()))
-        .collect();
+    props.spell_suggestions = suggestions;
     props.spell_add.clear();
     props.spell_ignore.clear();
 

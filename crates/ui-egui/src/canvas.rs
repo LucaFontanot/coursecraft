@@ -4276,10 +4276,6 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             &misspellings,
             crate::spell_check::SQUIGGLE_COLOR,
         );
-        let suggestions: std::collections::BTreeMap<String, Vec<String>> = spell_words
-            .iter()
-            .map(|word| (word.misspelling.word.clone(), word.suggestions.clone()))
-            .collect();
         let menu_open = output.response.context_menu_opened();
         let secondary = ui.input(|i| {
             i.pointer.secondary_pressed()
@@ -4294,6 +4290,8 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         }
         menu_open_at_start = menu_open;
         if let Some(click_pos) = editor.ui.spell_menu_pos {
+            // Suggestions only while the menu is up: they are the slow part.
+            let suggestions = editor.spell_suggestion_map(&spell_words);
             let mut choice = crate::spell_check::WordMenuOutcome::default();
             let _ = output.response.context_menu(|menu_ui| {
                 choice =

@@ -154,4 +154,20 @@ perf` on a macOS runner and uploads `target/perf/` as the `perf` artifact.
 
 ### Baseline
 
-Filled in after the first run.
+Editor suite, release build, the maintainer's Mac (Apple M5, 10 cores), 2026-11-19. Times are per frame (median / p95, ms) unless the budget says otherwise. "Before" is 0.2.0; "after" is the M21 step 3 fix (suggestions worked out only when a word menu or the Check Spelling window needs them, then cached).
+
+| Stage | Budget | Before | After |
+|---|---|---|---|
+| idle | 16 | 3.5 / 3.6 | 2.1 / 2.2 |
+| select slide 150 | 33 | 3.6 / 3.6 | 2.1 / 2.1 |
+| scroll slide list | 33 | 3.5 / 3.6 | 1.9 / 2.1 |
+| typing in a text field | 33 | 3.7 / 3.8 | 2.0 / 2.0 |
+| type on canvas with spell check | 33 | **777 / 807** | 0.42 / 0.44 |
+| check spelling, open | 250 | 41 | 31 |
+| check spelling, ignore step | 33 | 14.7 / 15.7 | 9.5 / 10.0 |
+| insert interaction + undo | 100 | 3.6 / 4.1 | 2.0 / 2.2 |
+| undo / redo move | 33 | 15.6 / 15.9 | 8.2 / 8.7 |
+| visit every slide | 33 | 3.6 / 3.8 (85 → 86 MB) | 1.9 / 1.9 (85 → 86 MB) |
+| first frame | 500 | 26 | 13 |
+
+Only the canvas typing change comes from code; the general drop in the other rows is the machine being less busy on the second run. Compare rows within one run.

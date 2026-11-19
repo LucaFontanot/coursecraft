@@ -222,10 +222,9 @@ fn choosing_a_suggestion_replaces_the_word_and_keeps_editing() {
     harness.idle_frame();
     let suggestion = harness
         .editor
-        .spell_words("Teh cat")
+        .spell_suggestions("Teh")
         .into_iter()
         .next()
-        .and_then(|word| word.suggestions.into_iter().next())
         .expect("a suggestion for Teh");
     let center = harness.editor.ui.spell_inline_rects[0].rects[0].center();
     harness.right_click_at(center);

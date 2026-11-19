@@ -44,6 +44,9 @@ pub struct SpelledWord {
 #[derive(Debug, Clone, Default)]
 pub struct SpellCache {
     entries: Vec<(u64, Vec<SpelledWord>)>,
+    /// Suggestions per word. Working them out is the slow part of spell
+    /// checking, so it happens only when a menu or the window needs them.
+    suggestions: Vec<(String, Vec<String>)>,
 }
 
 impl SpellCache {
@@ -65,9 +68,27 @@ impl SpellCache {
         self.entries.push((hash, words));
     }
 
+    /// Number of words whose suggestions are kept.
+    const SUGGESTION_CAPACITY: usize = 64;
+
+    pub fn suggestions(&self, word: &str) -> Option<&Vec<String>> {
+        self.suggestions
+            .iter()
+            .find(|(key, _)| key == word)
+            .map(|(_, list)| list)
+    }
+
+    pub fn insert_suggestions(&mut self, word: &str, list: Vec<String>) {
+        if self.suggestions.len() >= Self::SUGGESTION_CAPACITY {
+            self.suggestions.remove(0);
+        }
+        self.suggestions.push((word.to_owned(), list));
+    }
+
     /// Forget everything: personal and ignored words change what is correct.
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.suggestions.clear();
     }
 }
 
@@ -274,8 +295,38 @@ impl Editor {
         self.spell.as_mut()
     }
 
-    /// Misspellings (and suggestions) for `text`, or none when as-you-type
-    /// checking is off. Ignored words are skipped for this session.
+    /// Suggestions for one word, best first, worked out once and cached.
+    pub fn spell_suggestions(&mut self, word: &str) -> Vec<String> {
+        if let Some(list) = self.spell_cache.suggestions(word) {
+            return list.clone();
+        }
+        let list = self
+            .speller()
+            .map(|speller| speller.suggestions(word))
+            .unwrap_or_default();
+        self.spell_cache.insert_suggestions(word, list.clone());
+        list
+    }
+
+    /// Suggestions for every word in `words`, keyed by the word.
+    pub fn spell_suggestion_map(
+        &mut self,
+        words: &[SpelledWord],
+    ) -> std::collections::BTreeMap<String, Vec<String>> {
+        words
+            .iter()
+            .map(|word| {
+                let text = word.misspelling.word.clone();
+                let list = self.spell_suggestions(&text);
+                (text, list)
+            })
+            .collect()
+    }
+
+    /// Misspellings for `text`, or none when as-you-type checking is off.
+    /// Ignored words are skipped for this session. `suggestions` is left
+    /// empty: they are slow to work out, so ask [`Editor::spell_suggestions`]
+    /// only when a menu needs them.
     #[must_use]
     pub fn spell_words(&mut self, text: &str) -> Vec<SpelledWord> {
         if !self.ui.prefs.spell_check_as_you_type {
@@ -292,7 +343,7 @@ impl Editor {
                 .into_iter()
                 .filter(|miss| !is_ignored(&ignored, &miss.word))
                 .map(|miss| SpelledWord {
-                    suggestions: speller.suggestions(&miss.word),
+                    suggestions: Vec::new(),
                     misspelling: miss,
                 })
                 .collect(),
@@ -564,7 +615,7 @@ pub fn show_spelling_window(editor: &mut Editor, ctx: &egui::Context) {
         .map(|issue| issue.misspelling.word.clone());
     let suggestions = word
         .as_deref()
-        .and_then(|word| editor.speller().map(|speller| speller.suggestions(word)))
+        .map(|word| editor.spell_suggestions(word))
         .unwrap_or_default();
 
     let mut open = true;
