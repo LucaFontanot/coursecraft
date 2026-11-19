@@ -68,8 +68,8 @@ pub struct Command {
 /// An open course being edited.
 pub struct Session {
     pub course: Course,
-    undo: Vec<Course>,
-    redo: Vec<Course>,
+    undo: Vec<(Course, String)>,
+    redo: Vec<(Course, String)>,
     /// Bumped on every successful mutating command (UI caches key off this).
     pub revision: u64,
     /// Set by a mutating command that changed nothing (for example a replace
@@ -153,6 +153,26 @@ impl Session {
         !self.redo.is_empty()
     }
 
+    /// Names of recorded undo steps, newest first.
+    #[must_use]
+    pub fn undo_names(&self) -> Vec<&str> {
+        self.undo
+            .iter()
+            .rev()
+            .map(|(_, name)| name.as_str())
+            .collect()
+    }
+
+    /// Names of recorded redo steps, next redo first.
+    #[must_use]
+    pub fn redo_names(&self) -> Vec<&str> {
+        self.redo
+            .iter()
+            .rev()
+            .map(|(_, name)| name.as_str())
+            .collect()
+    }
+
     /// Run a command by id.
     ///
     /// # Errors
@@ -177,7 +197,7 @@ impl Session {
             Ok(v) if unchanged => Ok(v),
             Ok(v) => {
                 reroute_connectors(&mut self.course);
-                self.undo.push(snapshot);
+                self.undo.push((snapshot, cmd.label.to_owned()));
                 if self.undo.len() > MAX_HISTORY {
                     self.undo.remove(0);
                 }
@@ -202,6 +222,26 @@ impl Session {
     /// # Errors
     /// Returns [`EngineError::BatchFailed`] on the first command error.
     pub fn execute_batch(&mut self, steps: &[(String, Json)]) -> Result<Vec<Json>> {
+        self.execute_batch_with_name(None, steps)
+    }
+
+    /// Run a batch of commands atomically with an explicit undo-step name.
+    ///
+    /// # Errors
+    /// Returns [`EngineError::BatchFailed`] on the first command error.
+    pub fn execute_batch_named(
+        &mut self,
+        name: &str,
+        steps: &[(String, Json)],
+    ) -> Result<Vec<Json>> {
+        self.execute_batch_with_name(Some(name), steps)
+    }
+
+    fn execute_batch_with_name(
+        &mut self,
+        name: Option<&str>,
+        steps: &[(String, Json)],
+    ) -> Result<Vec<Json>> {
         if steps.is_empty() {
             return Ok(Vec::new());
         }
@@ -209,6 +249,7 @@ impl Session {
         let snapshot = self.course.clone();
         let mut results = Vec::with_capacity(steps.len());
         let mut any_changed = false;
+        let mut first_label: Option<&'static str> = None;
 
         for (i, (id, params)) in steps.iter().enumerate() {
             let cmd = registry()
@@ -227,6 +268,8 @@ impl Session {
                 }
             };
 
+            let step_snapshot = (name.is_none() && first_label.is_none() && cmd.mutates)
+                .then(|| self.course.clone());
             self.skip_undo = false;
             let outcome = (cmd.run)(self, params);
             // A step that changed nothing must not make an undo step on its own.
@@ -235,6 +278,11 @@ impl Session {
                 // Nothing to record for this step.
             } else if cmd.mutates {
                 any_changed = true;
+                if let Some(before) = step_snapshot
+                    && self.course != before
+                {
+                    first_label = Some(cmd.label);
+                }
             }
             match outcome {
                 Ok(res) => results.push(res),
@@ -251,7 +299,11 @@ impl Session {
 
         if any_changed && self.course != snapshot {
             reroute_connectors(&mut self.course);
-            self.undo.push(snapshot);
+            let label = name
+                .map(str::to_owned)
+                .or_else(|| first_label.map(str::to_owned))
+                .unwrap_or_else(|| "Batch".to_owned());
+            self.undo.push((snapshot, label));
             if self.undo.len() > MAX_HISTORY {
                 self.undo.remove(0);
             }
@@ -263,16 +315,42 @@ impl Session {
     }
 
     pub fn undo(&mut self) -> Result<()> {
-        let prev = self.undo.pop().ok_or(EngineError::NothingTo("undo"))?;
-        self.redo.push(std::mem::replace(&mut self.course, prev));
+        let (prev, name) = self.undo.pop().ok_or(EngineError::NothingTo("undo"))?;
+        let current = std::mem::replace(&mut self.course, prev);
+        self.redo.push((current, name));
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
 
     pub fn redo(&mut self) -> Result<()> {
-        let next = self.redo.pop().ok_or(EngineError::NothingTo("redo"))?;
-        self.undo.push(std::mem::replace(&mut self.course, next));
+        let (next, name) = self.redo.pop().ok_or(EngineError::NothingTo("redo"))?;
+        let current = std::mem::replace(&mut self.course, next);
+        self.undo.push((current, name));
         self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Undo `n` steps atomically: if fewer than `n` steps are available,
+    /// returns [`EngineError::NothingTo`] and leaves the course untouched.
+    pub fn undo_steps(&mut self, n: usize) -> Result<()> {
+        if n > self.undo.len() {
+            return Err(EngineError::NothingTo("undo"));
+        }
+        for _ in 0..n {
+            self.undo()?;
+        }
+        Ok(())
+    }
+
+    /// Redo `n` steps atomically: if fewer than `n` steps are available,
+    /// returns [`EngineError::NothingTo`] and leaves the course untouched.
+    pub fn redo_steps(&mut self, n: usize) -> Result<()> {
+        if n > self.redo.len() {
+            return Err(EngineError::NothingTo("redo"));
+        }
+        for _ in 0..n {
+            self.redo()?;
+        }
         Ok(())
     }
 }

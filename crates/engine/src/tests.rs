@@ -447,6 +447,152 @@ fn execute_batch_success_one_undo_step() {
 }
 
 #[test]
+fn undo_names_follow_commands_and_move_with_undo_redo() {
+    let mut s = Session::blank("A");
+    assert!(s.undo_names().is_empty());
+    assert!(s.redo_names().is_empty());
+
+    ok(&mut s, "course.set_title", json!({ "title": "B" }));
+    assert_eq!(s.undo_names(), vec!["Course Title"]);
+    assert!(s.redo_names().is_empty());
+
+    // A no-change command adds no name.
+    ok(&mut s, "course.set_title", json!({ "title": "B" }));
+    assert_eq!(s.undo_names(), vec!["Course Title"]);
+
+    ok(&mut s, "slide.add", json!({ "title": "Slide 2" }));
+    assert_eq!(s.undo_names(), vec!["New Slide", "Course Title"]);
+
+    s.undo().expect("undo 1");
+    assert_eq!(s.undo_names(), vec!["Course Title"]);
+    assert_eq!(s.redo_names(), vec!["New Slide"]);
+
+    s.undo().expect("undo 2");
+    assert!(s.undo_names().is_empty());
+    assert_eq!(s.redo_names(), vec!["Course Title", "New Slide"]);
+
+    s.redo().expect("redo 1");
+    assert_eq!(s.undo_names(), vec!["Course Title"]);
+    assert_eq!(s.redo_names(), vec!["New Slide"]);
+}
+
+#[test]
+fn execute_batch_uses_first_changing_step_label_and_named_batch_overrides() {
+    let mut s = Session::blank("A");
+    let steps = vec![
+        ("course.validate".to_string(), json!({})),
+        ("course.set_title".to_string(), json!({ "title": "A" })), // no-op
+        ("slide.add".to_string(), json!({ "title": "Slide 2" })),
+        ("scene.add".to_string(), json!({ "title": "Scene 2" })),
+    ];
+    s.execute_batch(&steps).expect("batch");
+    assert_eq!(s.undo_names(), vec!["New Slide"]);
+
+    s.execute_batch_named(
+        "Import deck",
+        &[("slide.add".to_string(), json!({ "title": "Slide 3" }))],
+    )
+    .expect("named batch");
+    assert_eq!(s.undo_names(), vec!["Import deck", "New Slide"]);
+}
+
+#[test]
+fn undo_history_trimming_keeps_names_and_snapshots_in_step() {
+    let mut s = Session::blank("Start");
+    for i in 0..(super::MAX_HISTORY + 5) {
+        if i % 2 == 0 {
+            ok(
+                &mut s,
+                "course.set_title",
+                json!({ "title": format!("T{i}") }),
+            );
+        } else {
+            ok(
+                &mut s,
+                "slide.update",
+                json!({ "slide": "slide1", "title": format!("S{i}") }),
+            );
+        }
+    }
+    assert_eq!(s.undo_len(), super::MAX_HISTORY);
+    let names: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    assert_eq!(names.len(), super::MAX_HISTORY);
+
+    // Undo all MAX_HISTORY steps; the oldest kept snapshot is right before i = 5.
+    for expected_name in &names {
+        assert_eq!(
+            s.undo_names().first().copied(),
+            Some(expected_name.as_str())
+        );
+        s.undo().expect("undo");
+    }
+    assert!(!s.can_undo());
+    // At i = 4 (last even before i = 5), course.title was "T4"; at i = 3, slide1.title was "S3".
+    assert_eq!(s.course.title, "T4");
+    assert_eq!(s.course.slide("slide1").expect("slide1").title, "S3");
+}
+
+#[test]
+fn undo_steps_and_redo_steps_match_repeated_calls_and_reject_past_end() {
+    let mut s1 = Session::blank("0");
+    let mut s2 = Session::blank("0");
+    for title in ["1", "2", "3", "4"] {
+        ok(&mut s1, "course.set_title", json!({ "title": title }));
+        ok(&mut s2, "course.set_title", json!({ "title": title }));
+    }
+
+    s1.undo_steps(3).expect("undo_steps(3)");
+    s2.undo().expect("u1");
+    s2.undo().expect("u2");
+    s2.undo().expect("u3");
+    assert_eq!(s1.course, s2.course);
+    assert_eq!(s1.revision, s2.revision);
+    assert_eq!(s1.undo_names(), s2.undo_names());
+    assert_eq!(s1.redo_names(), s2.redo_names());
+
+    // Undoing past the end returns an error and leaves the course untouched.
+    let before_course = s1.course.clone();
+    let before_rev = s1.revision;
+    let before_undo = s1
+        .undo_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let before_redo = s1
+        .redo_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(s1.undo_steps(2), Err(EngineError::NothingTo("undo")));
+    assert_eq!(s1.course, before_course);
+    assert_eq!(s1.revision, before_rev);
+    assert_eq!(
+        s1.undo_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
+        before_undo
+    );
+    assert_eq!(
+        s1.redo_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
+        before_redo
+    );
+
+    // Redo steps matches repeated redo() calls and rejects past the end.
+    s1.redo_steps(2).expect("redo_steps(2)");
+    s2.redo().expect("r1");
+    s2.redo().expect("r2");
+    assert_eq!(s1.course, s2.course);
+    assert_eq!(s1.revision, s2.revision);
+    assert_eq!(s1.redo_steps(2), Err(EngineError::NothingTo("redo")));
+    assert_eq!(s1.course, s2.course);
+    assert_eq!(s1.revision, s2.revision);
+}
+
+#[test]
 fn execute_batch_failure_leaves_course_byte_identical() {
     let mut s = Session::blank("Batch Test");
     let initial_course = s.course.clone();

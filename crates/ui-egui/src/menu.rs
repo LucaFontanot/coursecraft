@@ -870,7 +870,27 @@ fn show_edit_menu(
 ) {
     for id in ["edit.undo", "edit.redo"] {
         if let Some(cmd) = registry().iter().find(|cmd| cmd.id == id) {
-            render_registry_menu_item(editor, ui, cmd, cmd.label, action_to_run);
+            let dynamic_label;
+            let label = match id {
+                "edit.undo" => {
+                    if let Some(name) = editor.session.undo_names().first() {
+                        dynamic_label = format!("Undo {name}");
+                        dynamic_label.as_str()
+                    } else {
+                        cmd.label
+                    }
+                }
+                "edit.redo" => {
+                    if let Some(name) = editor.session.redo_names().first() {
+                        dynamic_label = format!("Redo {name}");
+                        dynamic_label.as_str()
+                    } else {
+                        cmd.label
+                    }
+                }
+                _ => cmd.label,
+            };
+            render_registry_menu_item(editor, ui, cmd, label, action_to_run);
         }
     }
     ui.separator();

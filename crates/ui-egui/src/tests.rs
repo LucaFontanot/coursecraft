@@ -17497,3 +17497,33 @@ fn scene_header_plus_adds_a_slide_to_that_scene() {
         "and selected"
     );
 }
+
+#[test]
+fn edit_menu_shows_named_undo_and_redo() {
+    let mut harness = TestHarness::new(Session::blank("Course").course);
+    harness.editor.run(
+        "course.set_title",
+        serde_json::json!({ "title": "Renamed" }),
+    );
+    harness.idle_frame();
+
+    let edit = harness.find_text("Edit").expect("Edit menu");
+    harness.click_at(edit);
+    harness.idle_frame();
+    assert!(
+        harness.find_text_last("Undo Course Title").is_some(),
+        "Edit menu should show named Undo"
+    );
+    assert!(
+        harness.find_text_last("Redo").is_some(),
+        "Edit menu should show plain Redo when redo stack is empty"
+    );
+
+    // Undo and re-open the Edit menu to verify named Redo.
+    harness.editor.run("edit.undo", serde_json::json!({}));
+    harness.idle_frame();
+    assert!(
+        harness.find_text_last("Redo Course Title").is_some(),
+        "Edit menu should show named Redo"
+    );
+}
