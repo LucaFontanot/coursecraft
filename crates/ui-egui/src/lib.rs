@@ -86,6 +86,8 @@ mod eyedropper_tests;
 #[cfg(test)]
 mod find_tests;
 #[cfg(test)]
+mod idle_tests;
+#[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
 mod outline_tests;

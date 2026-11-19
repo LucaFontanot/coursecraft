@@ -711,8 +711,11 @@ impl PlayerFrame {
         self.show_review(ui, player, review_text, review_banner, &mut inputs);
         self.show_notice(ui, player, notice_text, notice_banner);
 
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(16));
+        // Repaint scheduling belongs to the host: the player app and the
+        // editor preview already request frames while playback advances,
+        // and the loading bar and transition/marker animations request their
+        // own. Scheduling a 16 ms repaint here made a paused/loaded player
+        // redraw for ever, even when nothing on screen moved.
         let volume = if self.volume_changed {
             self.volume_changed = false;
             Some(self.volume)

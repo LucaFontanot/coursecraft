@@ -885,7 +885,10 @@ impl EditorApp {
             || editor.used_media(),
         );
         if is_dirty && let Some(wait) = self.autosaver.secs_until_next(current_time) {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait + 0.5));
+            // Autosave is a timer, so never wake the UI more often than once
+            // a second just to check it. The extra half second is the usual
+            // margin; the floor keeps a nearly-due timer from busy-polling.
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64((wait + 0.5).max(1.0)));
         }
     }
 
@@ -1206,11 +1209,14 @@ impl EditorApp {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         self.system_fonts_rx = Some(rx);
+        let repaint_ctx = ctx.clone();
         std::thread::spawn(move || {
             let families = system_fonts::scan(&system_fonts::font_folders());
             let _ = tx.send(families);
+            // Wake the UI only when there is a result to show, instead of
+            // repainting every frame while the scan runs.
+            repaint_ctx.request_repaint();
         });
-        ctx.request_repaint();
     }
 
     /// Copy every face of an installed family into the course, warn if its
@@ -1480,7 +1486,9 @@ impl EditorApp {
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.publish_rx = Some(rx);
-                ctx.request_repaint();
+                // Waiting on a background job: check at most once a second
+                // instead of forcing a redraw every frame.
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.editor
@@ -1510,8 +1518,9 @@ impl EditorApp {
                 ctx.request_repaint();
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // The scan thread calls request_repaint() when it sends, so
+                // there is no need to wake the UI on every polling frame.
                 self.system_fonts_rx = Some(rx);
-                ctx.request_repaint();
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.editor.ui.system_fonts = Some(Vec::new());
@@ -1657,7 +1666,9 @@ impl EditorApp {
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     self.export_rx = Some(rx);
-                    ctx.request_repaint();
+                    // The progress bar is waiting on a background job; a
+                    // one-second poll is enough and keeps idle frames quiet.
+                    ctx.request_repaint_after(std::time::Duration::from_secs(1));
                     return;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -1718,7 +1729,8 @@ impl EditorApp {
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.export_review_rx = Some(rx);
-                ctx.request_repaint();
+                // Waiting on a background job: check at most once a second.
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.finish_export_review(Err(
