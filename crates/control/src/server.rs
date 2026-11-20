@@ -73,7 +73,7 @@ impl ControlServer {
             return Err(ServerError::NotLoopback);
         }
         let port = addr.port();
-        let token = generate_token();
+        let token = generate_token()?;
         let pid = std::process::id();
 
         if let Some(dir) = config_dir {
@@ -275,84 +275,60 @@ fn handle_connection(
 
 fn read_line_capped<R: BufRead>(reader: &mut R, buf: &mut String) -> std::io::Result<Option<()>> {
     buf.clear();
-    let mut total_read = 0;
+    let mut raw = Vec::new();
     loop {
         let available = reader.fill_buf()?;
         if available.is_empty() {
-            if total_read == 0 {
+            if raw.is_empty() {
                 return Ok(None);
             }
+            let s = String::from_utf8(raw)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            *buf = s;
             return Ok(Some(()));
         }
         if let Some(pos) = available.iter().position(|&b| b == b'\n') {
             let consume_len = pos + 1;
-            if total_read + consume_len > MAX_LINE_BYTES {
+            if raw.len() + consume_len > MAX_LINE_BYTES {
                 reader.consume(consume_len);
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "line exceeded 16 MiB limit",
                 ));
             }
-            let s = std::str::from_utf8(&available[..consume_len])
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            buf.push_str(s);
+            raw.extend_from_slice(&available[..consume_len]);
             reader.consume(consume_len);
+            let s = String::from_utf8(raw)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            *buf = s;
             return Ok(Some(()));
         }
         let len = available.len();
-        if total_read + len > MAX_LINE_BYTES {
+        if raw.len() + len > MAX_LINE_BYTES {
             reader.consume(len);
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "line exceeded 16 MiB limit",
             ));
         }
-        let s = std::str::from_utf8(available)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        buf.push_str(s);
-        total_read += len;
+        raw.extend_from_slice(available);
         reader.consume(len);
     }
 }
 
-fn generate_token() -> String {
+fn generate_token() -> Result<String, ServerError> {
     let mut bytes = [0u8; 32];
-    let mut filled = false;
-    #[cfg(unix)]
-    {
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            use std::io::Read;
-            if f.read_exact(&mut bytes).is_ok() {
-                filled = true;
-            }
-        }
-    }
-    if !filled {
-        use std::hash::{DefaultHasher, Hasher};
-        let mut hasher = DefaultHasher::new();
-        let now = std::time::SystemTime::now();
-        let pid = std::process::id();
-        let stack_var = 42u8;
-        hasher.write_u32(pid);
-        if let Ok(dur) = now.duration_since(std::time::UNIX_EPOCH) {
-            hasher.write_u128(dur.as_nanos());
-        }
-        let addr = std::ptr::from_ref(&stack_var) as usize;
-        hasher.write_usize(addr);
-        for chunk in bytes.chunks_mut(8) {
-            hasher.write_u64(0x9e37_79b9_7f4a_7c15);
-            let val = hasher.finish();
-            let val_bytes = val.to_ne_bytes();
-            let len = chunk.len().min(8);
-            chunk[..len].copy_from_slice(&val_bytes[..len]);
-        }
-    }
+    getrandom::fill(&mut bytes).map_err(|e| {
+        ServerError::Io(std::io::Error::other(format!(
+            "failed to generate control token: {e}"
+        )))
+    })?;
     let mut s = String::with_capacity(64);
     for b in bytes {
         use std::fmt::Write;
         let _ = write!(s, "{b:02x}");
     }
-    s
+    Ok(s)
 }
 
 fn write_discovery_file(
@@ -409,5 +385,27 @@ pub fn default_config_dir() -> Option<PathBuf> {
             .or_else(|| {
                 std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/coursecraft"))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+    use super::*;
+    use std::io::BufReader;
+
+    #[test]
+    fn read_line_capped_handles_multibyte_char_across_8kib_boundary() {
+        let mut raw = vec![b'a'; 8191];
+        raw.extend_from_slice("é".as_bytes());
+        raw.push(b'\n');
+
+        let mut reader = BufReader::with_capacity(8192, raw.as_slice());
+        let mut line = String::new();
+        let res = read_line_capped(&mut reader, &mut line).expect("should read line");
+        assert_eq!(res, Some(()));
+        assert_eq!(line.len(), 8194);
+        assert!(line.ends_with("é\n"));
     }
 }

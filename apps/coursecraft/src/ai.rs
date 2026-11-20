@@ -59,6 +59,23 @@ pub trait AiTransport: Send {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EhttpTransport;
 
+/// Maximum response body size accepted from an AI endpoint (16 MiB).
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+fn read_body_capped(reader: impl std::io::Read, limit: usize) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let max_read = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
+    let mut out = Vec::new();
+    reader
+        .take(max_read)
+        .read_to_end(&mut out)
+        .map_err(|error| format!("Failed to read response body: {error}"))?;
+    if out.len() > limit {
+        return Err("The endpoint's answer was larger than 16 MiB.".to_string());
+    }
+    Ok(out)
+}
+
 impl AiTransport for EhttpTransport {
     fn send(&self, call: HttpCall, done: Box<dyn FnOnce(FetchOutcome) + Send>) {
         let mut headers = ehttp::Headers::default();
@@ -73,10 +90,15 @@ impl AiTransport for EhttpTransport {
         request.body = call.body;
         ehttp::fetch(request, move |result| {
             let outcome = match result {
-                Ok(response) => FetchOutcome::Response {
-                    status: response.status,
-                    body: response.bytes,
-                },
+                Ok(response) => {
+                    match read_body_capped(response.bytes.as_slice(), MAX_RESPONSE_BYTES) {
+                        Ok(body) => FetchOutcome::Response {
+                            status: response.status,
+                            body,
+                        },
+                        Err(message) => FetchOutcome::Failed { message },
+                    }
+                }
                 Err(error) => FetchOutcome::Failed {
                     message: error.to_string(),
                 },
@@ -110,6 +132,7 @@ enum PendingReply {
 struct Pending {
     purpose: AiPurpose,
     kind: CallKind,
+    api_key: String,
     started: f64,
     timeout: f64,
     reply: PendingReply,
@@ -169,7 +192,15 @@ impl AiClient {
     ) -> Result<(), String> {
         self.ensure_idle()?;
         let call = build_chat_call(config, request).map_err(|error| error.to_string())?;
-        self.start(purpose, CallKind::Chat, call, TIMEOUT_SECONDS, now, repaint);
+        self.start(
+            purpose,
+            CallKind::Chat,
+            &config.api_key,
+            call,
+            TIMEOUT_SECONDS,
+            now,
+            repaint,
+        );
         Ok(())
     }
 
@@ -195,6 +226,7 @@ impl AiClient {
         self.start(
             purpose,
             CallKind::Captions,
+            &config.api_key,
             call,
             TIMEOUT_SECONDS,
             now,
@@ -225,6 +257,7 @@ impl AiClient {
         self.start(
             purpose,
             CallKind::Speech,
+            &config.api_key,
             call,
             TIMEOUT_SECONDS,
             now,
@@ -253,6 +286,7 @@ impl AiClient {
         self.start(
             purpose,
             CallKind::ElevenLabsSpeech,
+            &config.api_key,
             call,
             ELEVENLABS_SPEECH_TIMEOUT_SECONDS,
             now,
@@ -279,6 +313,7 @@ impl AiClient {
         self.start(
             purpose,
             CallKind::ElevenLabsVoices,
+            &config.api_key,
             call,
             TIMEOUT_SECONDS,
             now,
@@ -305,6 +340,7 @@ impl AiClient {
         self.start(
             purpose,
             CallKind::ElevenLabsVoice,
+            &config.api_key,
             call,
             TIMEOUT_SECONDS,
             now,
@@ -330,6 +366,7 @@ impl AiClient {
         self.start(
             purpose,
             CallKind::ElevenLabsModels,
+            &config.api_key,
             call,
             TIMEOUT_SECONDS,
             now,
@@ -347,10 +384,12 @@ impl AiClient {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start(
         &mut self,
         purpose: AiPurpose,
         kind: CallKind,
+        api_key: &str,
         call: HttpCall,
         timeout: f64,
         now: f64,
@@ -368,6 +407,7 @@ impl AiClient {
         self.pending = Some(Pending {
             purpose,
             kind,
+            api_key: api_key.to_string(),
             started: now,
             timeout,
             reply: PendingReply::Http(rx),
@@ -419,6 +459,7 @@ impl AiClient {
         self.pending = Some(Pending {
             purpose,
             kind: CallKind::AgentChat,
+            api_key: String::new(),
             started: now,
             timeout: AGENT_TIMEOUT_SECONDS,
             reply: PendingReply::Agent(rx),
@@ -446,7 +487,7 @@ impl AiClient {
         let outcome = match &pending.reply {
             PendingReply::Http(rx) => rx
                 .try_recv()
-                .map(|outcome| outcome_to_result(outcome, pending.kind)),
+                .map(|outcome| outcome_to_result(outcome, pending.kind, &pending.api_key)),
             #[cfg(not(target_arch = "wasm32"))]
             PendingReply::Agent(rx) => rx.try_recv().map(|result| result.map(AiReply::Chat)),
         };
@@ -479,30 +520,42 @@ impl AiClient {
     }
 }
 
-fn outcome_to_result(outcome: FetchOutcome, kind: CallKind) -> Result<AiReply, String> {
+fn redact_api_key(text: &str, api_key: &str) -> String {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return text.to_string();
+    }
+    text.replace(key, "[hidden]")
+}
+
+fn outcome_to_result(
+    outcome: FetchOutcome,
+    kind: CallKind,
+    api_key: &str,
+) -> Result<AiReply, String> {
     match outcome {
         FetchOutcome::Response { status, body } => match kind {
             CallKind::Captions => parse_transcription(status, &body)
                 .map(AiReply::Captions)
-                .map_err(|error| error.to_string()),
+                .map_err(|error| redact_api_key(&error.to_string(), api_key)),
             CallKind::Speech => parse_speech(status, &body)
                 .map(AiReply::Speech)
-                .map_err(|error| error.to_string()),
+                .map_err(|error| redact_api_key(&error.to_string(), api_key)),
             CallKind::ElevenLabsSpeech => parse_elevenlabs_speech(status, &body)
                 .map(AiReply::Speech)
-                .map_err(|error| error.to_string()),
+                .map_err(|error| redact_api_key(&error.to_string(), api_key)),
             CallKind::ElevenLabsVoices => parse_voices(status, &body)
                 .map(AiReply::ElevenLabsVoices)
-                .map_err(|error| error.to_string()),
+                .map_err(|error| redact_api_key(&error.to_string(), api_key)),
             CallKind::ElevenLabsVoice => parse_voice(status, &body)
                 .map(AiReply::ElevenLabsVoice)
-                .map_err(|error| error.to_string()),
+                .map_err(|error| redact_api_key(&error.to_string(), api_key)),
             CallKind::ElevenLabsModels => parse_elevenlabs_models(status, &body)
                 .map(AiReply::ElevenLabsModels)
-                .map_err(|error| error.to_string()),
+                .map_err(|error| redact_api_key(&error.to_string(), api_key)),
             CallKind::Chat => parse_chat_response(status, &body)
                 .map(AiReply::Chat)
-                .map_err(|error| error.to_string()),
+                .map_err(|error| redact_api_key(&error.to_string(), api_key)),
             #[cfg(not(target_arch = "wasm32"))]
             CallKind::AgentChat => {
                 Err("An agent answer arrived through the wrong channel.".to_string())
@@ -1095,5 +1148,51 @@ mod tests {
             "{message}"
         );
         assert!(!message.contains("sk-secret"), "{message}");
+    }
+
+    #[test]
+    fn error_body_excerpt_removes_api_key() {
+        let fake = FakeTransport::default();
+        let mut client = client(&fake);
+        client
+            .begin(AiPurpose::TestConnection, &config(), &request(), 0.0, || {})
+            .expect("begin");
+        fake.answer(FetchOutcome::Response {
+            status: 500,
+            body: br#"{"error":"bad key sk-secret in request"}"#.to_vec(),
+        });
+        let (_, result) = client.poll(1.0).expect("result");
+        let message = result.expect_err("must fail");
+        assert!(!message.contains("sk-secret"), "{message}");
+    }
+
+    #[test]
+    fn response_body_cap_stops_at_limit() {
+        struct CountingReader<'a> {
+            data: &'a [u8],
+            pos: usize,
+        }
+
+        impl std::io::Read for CountingReader<'_> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let remaining = &self.data[self.pos..];
+                let n = remaining.len().min(buf.len()).min(4);
+                buf[..n].copy_from_slice(&remaining[..n]);
+                self.pos += n;
+                Ok(n)
+            }
+        }
+
+        let data = vec![b'x'; 100];
+        let mut reader = CountingReader {
+            data: &data,
+            pos: 0,
+        };
+        let err = read_body_capped(&mut reader, 16).expect_err("over limit must fail");
+        assert!(err.contains("16 MiB"), "{err}");
+        assert_eq!(reader.pos, 17);
+
+        let ok = read_body_capped(&data[..16], 16).expect("at limit must succeed");
+        assert_eq!(ok.len(), 16);
     }
 }
