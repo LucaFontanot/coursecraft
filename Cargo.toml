@@ -78,3 +78,10 @@ debug = false
 
 [profile.release]
 lto = "thin"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true

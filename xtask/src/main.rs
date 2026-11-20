@@ -308,6 +308,17 @@ fn publish_course(
     Ok(())
 }
 
+/// Delete the demo `course.json` copied by `index.html` for local `trunk serve`
+/// so it is not embedded in desktop builds or published zips.
+fn remove_bundled_demo_course(dist: &Path) -> Result<(), String> {
+    let demo_course = dist.join("course.json");
+    match std::fs::remove_file(&demo_course) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("{}: {err}", demo_course.display())),
+    }
+}
+
 /// Build the release web player into `target/player-dist` for the desktop editor to embed.
 fn build_player() -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -328,6 +339,7 @@ fn build_player() -> Result<(), String> {
     if !built.success() {
         return Err("trunk build failed".into());
     }
+    remove_bundled_demo_course(&dist)?;
     println!("build-player: player written to {}", dist.display());
     Ok(())
 }
@@ -622,10 +634,55 @@ fn perf() -> Result<(), String> {
         .unwrap_or_else(|| "unknown".into());
     let os = format!("{} {}", std::env::consts::OS, std::env::consts::ARCH);
     let cpus = std::thread::available_parallelism().map_or(0, |n| n.get());
-    let markdown = results_to_markdown(&raw, &date, &os, cpus);
+    let mut markdown = results_to_markdown(&raw, &date, &os, cpus);
+    markdown.push_str(&format_wasm_size_section(&root.join("target/player-dist")));
     std::fs::write(&report, markdown).map_err(|e| format!("{}: {e}", report.display()))?;
     println!("perf: report written to {}", report.display());
     Ok(())
+}
+
+fn measure_wasm_size(dist: &Path) -> Option<(String, u64, Option<u64>)> {
+    let entries = std::fs::read_dir(dist).ok()?;
+    let mut wasm_path = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with("_bg.wasm"))
+        {
+            wasm_path = Some(path);
+            break;
+        }
+    }
+    let path = wasm_path?;
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let raw_bytes = std::fs::metadata(&path).ok()?.len();
+    let gzip_bytes = Command::new("gzip")
+        .arg("-c")
+        .arg(&path)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| out.stdout.len() as u64);
+    Some((name, raw_bytes, gzip_bytes))
+}
+
+fn format_wasm_size_section(dist: &Path) -> String {
+    let mut out = String::from("\n## Web player wasm size\n\n");
+    let Some((name, raw_bytes, gzip_bytes)) = measure_wasm_size(dist) else {
+        out.push_str("Not built (run `cargo xtask build-player`).\n");
+        return out;
+    };
+    let raw_mib = raw_bytes as f64 / (1024.0 * 1024.0);
+    let gzip_cell = match gzip_bytes {
+        Some(bytes) => format!("{bytes} B ({:.2} MiB)", bytes as f64 / (1024.0 * 1024.0)),
+        None => "n/a".to_owned(),
+    };
+    let _ = writeln!(out, "- File: `{name}`");
+    let _ = writeln!(out, "- Raw: {raw_bytes} B ({raw_mib:.2} MiB)");
+    let _ = writeln!(out, "- Gzip: {gzip_cell}");
+    out
 }
 
 fn main() -> ExitCode {
@@ -727,5 +784,51 @@ mod perf_tests {
             1,
         );
         assert!(md.contains("generate (media 500 MB) | 100.0 ms | 150.0 ms | 0 ms | ok |"));
+    }
+
+    #[test]
+    fn dist_cleanup_removes_course_json_and_nothing_else() {
+        let dir = std::env::temp_dir().join(format!(
+            "coursecraft-xtask-dist-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join("index.html"), "<html></html>").expect("write index.html");
+        std::fs::write(dir.join("player.js"), "console.log(1);").expect("write player.js");
+        std::fs::write(dir.join("player_bg.wasm"), b"wasm").expect("write wasm");
+        std::fs::write(dir.join("course.json"), "{}").expect("write course.json");
+
+        super::remove_bundled_demo_course(&dir).expect("cleanup succeeds");
+        assert!(!dir.join("course.json").exists());
+        assert!(dir.join("index.html").exists());
+        assert!(dir.join("player.js").exists());
+        assert!(dir.join("player_bg.wasm").exists());
+
+        // Idempotent when course.json is already absent.
+        super::remove_bundled_demo_course(&dir).expect("second cleanup succeeds");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wasm_size_section_reports_raw_and_gzip_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "coursecraft-xtask-wasm-size-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let wasm_bytes = vec![0x41u8; 4096];
+        std::fs::write(dir.join("coursecraft-player_bg.wasm"), &wasm_bytes).expect("write wasm");
+
+        let section = super::format_wasm_size_section(&dir);
+        assert!(section.contains("## Web player wasm size"));
+        assert!(section.contains("coursecraft-player_bg.wasm"));
+        assert!(section.contains("Raw: 4096 B"));
+        assert!(section.contains("Gzip:"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let missing = super::format_wasm_size_section(&dir);
+        assert!(missing.contains("Not built"));
     }
 }

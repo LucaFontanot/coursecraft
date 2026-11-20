@@ -110,6 +110,12 @@ pub struct Playing {
     /// Iframes over web objects (wasm only).
     #[cfg(target_arch = "wasm32")]
     pub web_objects: crate::web_object::WebObjects,
+    /// Last slide id whose media was marked protected in `media_source` (wasm only).
+    #[cfg(target_arch = "wasm32")]
+    last_slide_id: Option<String>,
+    /// Last slide id for which next-slide image prefetching was triggered (wasm only).
+    #[cfg(target_arch = "wasm32")]
+    last_prefetched_slide_id: Option<String>,
 }
 
 impl Drop for Playing {
@@ -220,6 +226,8 @@ impl Playing {
             start_ms,
             a11y,
             web_objects: crate::web_object::WebObjects::new(),
+            last_slide_id: None,
+            last_prefetched_slide_id: None,
         }
     }
 
@@ -440,6 +448,31 @@ impl Playing {
     /// Update backend video layout positions for the current slide's videos.
     pub fn layout_videos(&mut self) {
         self.media.layout_videos(&self.player, &self.view);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn sync_web_media_prefetch(&mut self) {
+        let Some(slide) = self.player.current_slide() else {
+            return;
+        };
+        if self.last_slide_id.as_deref() != Some(slide.id.as_str()) {
+            let protected = crate::media::slide_media_srcs(self.player.course(), slide);
+            self.media_source.set_current_slide_media(&protected);
+            self.last_slide_id = Some(slide.id.clone());
+        }
+        if self.last_prefetched_slide_id.as_deref() != Some(slide.id.as_str())
+            && self.media_source.is_idle()
+        {
+            if let Some(next_slide) = self
+                .player
+                .slide_position(&slide.id)
+                .and_then(|pos| self.player.play_order().get(pos + 1).copied())
+            {
+                let next_images = crate::media::slide_image_srcs(self.player.course(), next_slide);
+                self.media_source.prefetch(&next_images);
+            }
+            self.last_prefetched_slide_id = Some(slide.id.clone());
+        }
     }
 }
 
@@ -939,6 +972,9 @@ impl eframe::App for PlayerApp {
                             Some((&mut playing.media_cache, &source as &dyn MediaSource)),
                         );
                     });
+
+                #[cfg(target_arch = "wasm32")]
+                playing.sync_web_media_prefetch();
 
                 if let Some(volume) = frame_output.volume {
                     playing.media.set_volume(volume);

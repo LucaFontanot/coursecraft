@@ -202,11 +202,56 @@ pub fn parse_course(text: &str, source: &str) -> Result<coursecraft_course::Cour
 }
 
 /// Course text plus the optional package-standard marker.
-#[cfg(target_arch = "wasm32")]
-#[derive(Debug, Clone)]
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebCourse {
     pub course_json: String,
     pub package_json: Option<String>,
+}
+
+/// Collects the two concurrent start-up fetches (`course.json` and
+/// `coursecraft-package.json`) and produces the combined result once both have
+/// answered.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Default)]
+pub struct PendingWebFetch {
+    course: Option<Result<String, String>>,
+    package: Option<Option<String>>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl PendingWebFetch {
+    /// Record the `course.json` fetch result. Returns `Some` once the package
+    /// marker fetch has also answered.
+    pub fn set_course(
+        &mut self,
+        result: Result<String, String>,
+    ) -> Option<Result<WebCourse, String>> {
+        self.course = Some(result);
+        self.take_ready()
+    }
+
+    /// Record the `coursecraft-package.json` fetch result (`None` when missing
+    /// or unreadable). Returns `Some` once `course.json` has also answered.
+    pub fn set_package(
+        &mut self,
+        package_json: Option<String>,
+    ) -> Option<Result<WebCourse, String>> {
+        self.package = Some(package_json);
+        self.take_ready()
+    }
+
+    fn take_ready(&mut self) -> Option<Result<WebCourse, String>> {
+        if self.course.is_none() || self.package.is_none() {
+            return None;
+        }
+        let course_res = self.course.take()?;
+        let package_json = self.package.take()?;
+        Some(course_res.map(|course_json| WebCourse {
+            course_json,
+            package_json,
+        }))
+    }
 }
 
 /// Web loader delivering the fetched course and package marker.
@@ -224,7 +269,7 @@ fn store_web_result(
     *guard = Some(result);
 }
 
-/// Start an asynchronous fetch of `course.json` and `coursecraft-package.json`.
+/// Start concurrent asynchronous fetches of `course.json` and `coursecraft-package.json`.
 ///
 /// A missing or unreadable marker is [`None`], which the player treats as
 /// SCORM 1.2. The course fetch failing still fails playback.
@@ -233,11 +278,13 @@ pub fn start_web_fetch(ctx: &egui::Context) -> WebLoader {
     use std::sync::{Arc, Mutex};
 
     let loader = Arc::new(Mutex::new(None));
-    let loader_cb = Arc::clone(&loader);
-    let ctx_cb = ctx.clone();
+    let pending = Arc::new(Mutex::new(PendingWebFetch::default()));
 
     // Same-origin fetches must send cookies: LMSs such as SCORM Cloud protect
     // package files with sign-in cookies, and ehttp's web default omits them.
+    let loader_course = Arc::clone(&loader);
+    let pending_course = Arc::clone(&pending);
+    let ctx_course = ctx.clone();
     #[allow(unused_mut)]
     let mut request = ehttp::Request::get("course.json");
     #[cfg(target_arch = "wasm32")]
@@ -245,60 +292,49 @@ pub fn start_web_fetch(ctx: &egui::Context) -> WebLoader {
         request.credentials = ehttp::Credentials::SameOrigin;
     }
     ehttp::fetch(request, move |response| {
-        let course_json = match response {
+        let course_result = match response {
             Ok(resp) => {
                 if resp.status != 200 {
-                    store_web_result(
-                        &loader_cb,
-                        Err(format!("failed to fetch course.json: HTTP {}", resp.status)),
-                    );
-                    ctx_cb.request_repaint();
-                    return;
-                }
-                match String::from_utf8(resp.bytes) {
-                    Ok(text) => text,
-                    Err(e) => {
-                        store_web_result(
-                            &loader_cb,
-                            Err(format!("course.json is not valid UTF-8: {e}")),
-                        );
-                        ctx_cb.request_repaint();
-                        return;
-                    }
+                    Err(format!("failed to fetch course.json: HTTP {}", resp.status))
+                } else {
+                    String::from_utf8(resp.bytes)
+                        .map_err(|e| format!("course.json is not valid UTF-8: {e}"))
                 }
             }
-            Err(err) => {
-                store_web_result(
-                    &loader_cb,
-                    Err(format!("failed to fetch course.json: {err}")),
-                );
-                ctx_cb.request_repaint();
-                return;
-            }
+            Err(err) => Err(format!("failed to fetch course.json: {err}")),
         };
-
-        let loader_pkg = Arc::clone(&loader_cb);
-        let ctx_pkg = ctx_cb.clone();
-        #[allow(unused_mut)]
-        let mut package_request = ehttp::Request::get("coursecraft-package.json");
-        #[cfg(target_arch = "wasm32")]
-        {
-            package_request.credentials = ehttp::Credentials::SameOrigin;
+        let ready = pending_course
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_course(course_result);
+        if let Some(result) = ready {
+            store_web_result(&loader_course, result);
+            ctx_course.request_repaint();
         }
-        ehttp::fetch(package_request, move |response| {
-            let package_json = match response {
-                Ok(resp) if resp.status == 200 => String::from_utf8(resp.bytes).ok(),
-                _ => None,
-            };
-            store_web_result(
-                &loader_pkg,
-                Ok(WebCourse {
-                    course_json,
-                    package_json,
-                }),
-            );
+    });
+
+    let loader_pkg = Arc::clone(&loader);
+    let pending_pkg = Arc::clone(&pending);
+    let ctx_pkg = ctx.clone();
+    #[allow(unused_mut)]
+    let mut package_request = ehttp::Request::get("coursecraft-package.json");
+    #[cfg(target_arch = "wasm32")]
+    {
+        package_request.credentials = ehttp::Credentials::SameOrigin;
+    }
+    ehttp::fetch(package_request, move |response| {
+        let package_json = match response {
+            Ok(resp) if resp.status == 200 => String::from_utf8(resp.bytes).ok(),
+            _ => None,
+        };
+        let ready = pending_pkg
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_package(package_json);
+        if let Some(result) = ready {
+            store_web_result(&loader_pkg, result);
             ctx_pkg.request_repaint();
-        });
+        }
     });
 
     loader

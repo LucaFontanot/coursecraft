@@ -379,3 +379,138 @@ fn player_null_backend_audio_lifecycle() {
 
     let _ = fs::remove_dir_all(&base_dir);
 }
+
+#[test]
+fn pending_web_fetch_combines_course_and_package_in_either_order() {
+    let mut first = crate::load::PendingWebFetch::default();
+    assert!(first.set_course(Ok("{\"id\":\"c1\"}".into())).is_none());
+    let ready = first
+        .set_package(Some("{\"standard\":\"web\"}".into()))
+        .expect("both arrived");
+    assert_eq!(
+        ready,
+        Ok(crate::load::WebCourse {
+            course_json: "{\"id\":\"c1\"}".into(),
+            package_json: Some("{\"standard\":\"web\"}".into()),
+        })
+    );
+
+    // Missing package (None) arriving first, then course.json arriving second.
+    let mut second = crate::load::PendingWebFetch::default();
+    assert!(second.set_package(None).is_none());
+    let ready_missing_pkg = second
+        .set_course(Ok("{\"id\":\"c2\"}".into()))
+        .expect("both arrived");
+    assert_eq!(
+        ready_missing_pkg,
+        Ok(crate::load::WebCourse {
+            course_json: "{\"id\":\"c2\"}".into(),
+            package_json: None,
+        })
+    );
+
+    // Course failure still propagates once both have answered.
+    let mut failed = crate::load::PendingWebFetch::default();
+    assert!(failed.set_package(None).is_none());
+    let err = failed
+        .set_course(Err("failed to fetch course.json: HTTP 404".into()))
+        .expect("both arrived");
+    assert_eq!(err, Err("failed to fetch course.json: HTTP 404".into()));
+}
+
+#[test]
+fn web_media_cache_lru_evicts_unprotected_entries_over_cap() {
+    use std::sync::Arc;
+
+    let mut state = crate::media::WebMediaState::with_max_bytes(100);
+    state.insert_ready("a.png".into(), Arc::from(vec![1u8; 40]));
+    state.insert_ready("b.png".into(), Arc::from(vec![2u8; 40]));
+    assert_eq!(state.total_bytes(), 80);
+
+    // Touch a.png so b.png becomes the least recently used entry.
+    let _ = state.get_or_queue("a.png");
+
+    // Inserting c.png (40 bytes -> 120 > 100) evicts b.png, keeping a.png and c.png.
+    state.insert_ready("c.png".into(), Arc::from(vec![3u8; 40]));
+    assert_eq!(state.total_bytes(), 80);
+    assert!(state.contains("a.png"));
+    assert!(!state.contains("b.png"));
+    assert!(state.contains("c.png"));
+
+    // Protect a.png (on current slide); inserting d.png (40 bytes) must evict c.png,
+    // even if a.png were older.
+    state.set_protected(&["a.png".into()]);
+    let _ = state.get_or_queue("c.png");
+    state.insert_ready("d.png".into(), Arc::from(vec![4u8; 40]));
+    assert_eq!(state.total_bytes(), 80);
+    assert!(state.contains("a.png"));
+    assert!(!state.contains("c.png"));
+    assert!(state.contains("d.png"));
+
+    // Prefetch skips already-cached or unsafe paths, and Missing clears any prior Ready bytes.
+    assert!(!state.queue_prefetch(&["a.png".into(), "../escape.png".into()]));
+    assert!(state.queue_prefetch(&["next.png".into()]));
+    state.insert_missing("d.png".into());
+    assert_eq!(state.total_bytes(), 40);
+}
+
+#[test]
+fn slide_image_srcs_collects_images_and_skips_video_and_audio() {
+    let raw = r##"{
+      "schema_version": 1,
+      "id": "course-images",
+      "title": "Images",
+      "slide_size": { "w": 960, "h": 540 },
+      "scenes": [
+        {
+          "id": "scene-1",
+          "title": "Scene 1",
+          "slides": [
+            {
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 5000,
+              "objects": [
+                {
+                  "id": "img1",
+                  "name": "Pic",
+                  "kind": { "type": "image", "src": "hero.png", "alt": "" },
+                  "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                },
+                {
+                  "id": "vid1",
+                  "name": "Vid",
+                  "kind": { "type": "video", "src": "clip.mp4" },
+                  "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                },
+                {
+                  "id": "aud1",
+                  "name": "Aud",
+                  "kind": { "type": "audio", "src": "narration.mp3" },
+                  "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 }
+                },
+                {
+                  "id": "shp1",
+                  "name": "Shape",
+                  "kind": {
+                    "type": "shape",
+                    "shape": "rectangle",
+                    "fill": "#ffffff",
+                    "fill_style": { "type": "picture", "src": "pattern.png" }
+                  },
+                  "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }"##;
+    let course: Course = serde_json::from_str(raw).expect("valid course");
+    let slide = &course.scenes[0].slides[0];
+    let srcs = crate::media::slide_image_srcs(&course, slide);
+    assert_eq!(
+        srcs,
+        vec!["hero.png".to_string(), "pattern.png".to_string()]
+    );
+}
