@@ -93,6 +93,23 @@ pub fn learner_name_from_query(search: &str) -> Option<String> {
     None
 }
 
+/// Whether the page query string enables effect logging (`debug=1`).
+#[cfg(any(target_arch = "wasm32", test))]
+#[must_use]
+pub fn debug_logging_from_query(search: &str) -> bool {
+    let query = search.strip_prefix('?').unwrap_or(search);
+    query.split('&').any(|pair| pair == "debug=1")
+}
+
+/// Read `debug=1` from the browser's query string; returns `false` if unavailable.
+#[cfg(target_arch = "wasm32")]
+#[must_use]
+pub fn web_log_effects() -> bool {
+    web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .is_some_and(|search| debug_logging_from_query(&search))
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn decode_query_component(value: &str) -> String {
     let bytes = value.as_bytes();

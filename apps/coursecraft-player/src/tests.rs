@@ -514,3 +514,12 @@ fn slide_image_srcs_collects_images_and_skips_video_and_audio() {
         vec!["hero.png".to_string(), "pattern.png".to_string()]
     );
 }
+
+#[test]
+fn debug_logging_from_query_matches_exact_flag() {
+    assert!(crate::load::debug_logging_from_query("?debug=1"));
+    assert!(crate::load::debug_logging_from_query("?a=b&debug=1"));
+    assert!(!crate::load::debug_logging_from_query(""));
+    assert!(!crate::load::debug_logging_from_query("?debug=0"));
+    assert!(!crate::load::debug_logging_from_query("?debugger=1"));
+}
