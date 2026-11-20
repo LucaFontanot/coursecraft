@@ -3464,25 +3464,26 @@ fn motion_path_lifecycle_and_triggers() {
     )
     .unwrap();
 
-    // Removing path1 reports referencing triggers
-    let remove_res = s
-        .execute(
-            "object.remove_motion_path",
-            &json!({
-                "slide": "slide1",
-                "object": obj_id,
-                "path": path1
-            }),
-        )
-        .unwrap();
-    let referencing = remove_res["triggers"].as_array().unwrap();
-    assert_eq!(referencing.len(), 2);
+    // Removing path1 removes its referencing triggers in the same undo step
+    // and keeps the course valid.
+    s.execute(
+        "object.remove_motion_path",
+        &json!({
+            "slide": "slide1",
+            "object": obj_id,
+            "path": path1
+        }),
+    )
+    .unwrap();
+    assert!(s.course.is_playable(), "{:#?}", s.course.validate());
+    assert!(s.course.slide("slide1").unwrap().triggers.is_empty());
 
-    // Undo removes triggers report and restores path1
+    // Undo restores path1 and its referencing triggers.
     s.undo().unwrap();
     let slide = s.course.slide("slide1").unwrap();
     let obj = slide.objects.iter().find(|o| o.id == obj_id).unwrap();
     assert!(obj.motion_paths.iter().any(|p| p.id == path1));
+    assert_eq!(slide.triggers.len(), 2);
 
     // Hostile inputs
     assert!(
@@ -8829,4 +8830,618 @@ fn set_scroll_panel_with_tall_frame_does_not_panic() {
             "patch": { "content_height": 500.0 }
         }),
     );
+}
+
+#[test]
+fn bank_slide_object_delete_removes_dangling_triggers() {
+    let mut s = Session::blank("Bank");
+    let bank = bank_id(&mut s);
+    let qid = ok(
+        &mut s,
+        "bank.add_question",
+        json!({ "bank": bank, "title": "Q1" }),
+    )["id"]
+        .as_str()
+        .expect("question slide id")
+        .to_owned();
+    let submit_id = s
+        .course
+        .bank_slide(&qid)
+        .expect("bank slide")
+        .objects
+        .iter()
+        .find(|o| o.name == "Submit")
+        .map(|o| o.id.clone())
+        .expect("submit button");
+
+    ok(
+        &mut s,
+        "object.delete",
+        json!({ "slide": qid, "object": submit_id }),
+    );
+    assert!(s.course.is_playable(), "{:#?}", s.course.validate());
+}
+
+#[test]
+fn slide_duplicate_remaps_panel_and_drag_targets() {
+    let mut s = Session::blank("DupSlide");
+    let panel = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 10.0, "y": 10.0, "w": 200.0, "h": 200.0 },
+            "kind": { "type": "scroll_panel", "content_height": 400.0 }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 20.0, "y": 20.0, "w": 50.0, "h": 50.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.set_panel",
+        json!({ "slide": "slide1", "object": child, "panel": panel }),
+    );
+
+    let target = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 300.0, "y": 10.0, "w": 80.0, "h": 80.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let card = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 300.0, "y": 120.0, "w": 80.0, "h": 80.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.set_drag",
+        json!({
+            "slide": "slide1",
+            "object": card,
+            "drag": { "targets": [target], "snap": true, "return_on_miss": true }
+        }),
+    );
+
+    let dup_id = ok(&mut s, "slide.duplicate", json!({ "slide": "slide1" }))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(s.course.is_playable(), "{:#?}", s.course.validate());
+
+    let dup = s.course.slide(&dup_id).unwrap();
+    let dup_panel = dup
+        .objects
+        .iter()
+        .find(|o| matches!(o.kind, coursecraft_course::ObjectKind::ScrollPanel { .. }))
+        .unwrap();
+    assert_ne!(dup_panel.id, panel);
+    let dup_child = dup.objects.iter().find(|o| o.panel.is_some()).unwrap();
+    assert_eq!(dup_child.panel.as_deref(), Some(dup_panel.id.as_str()));
+
+    let dup_drag = dup.objects.iter().find(|o| o.drag.is_some()).unwrap();
+    let dup_targets = &dup_drag.drag.as_ref().unwrap().targets;
+    assert_eq!(dup_targets.len(), 1);
+    assert_ne!(dup_targets[0], target);
+    assert!(dup.object(&dup_targets[0]).is_some());
+}
+
+#[test]
+fn layer_duplicate_remaps_panel_and_clears_uncopied_drag_target() {
+    let mut s = Session::blank("DupLayer");
+    let base_target = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 300.0, "y": 10.0, "w": 80.0, "h": 80.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let lid = ok(
+        &mut s,
+        "layer.add",
+        json!({ "slide": "slide1", "name": "L1" }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let panel = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": lid,
+            "frame": { "x": 10.0, "y": 10.0, "w": 200.0, "h": 200.0 },
+            "kind": { "type": "scroll_panel", "content_height": 400.0 }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": lid,
+            "frame": { "x": 20.0, "y": 20.0, "w": 50.0, "h": 50.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.set_panel",
+        json!({ "slide": "slide1", "object": child, "panel": panel }),
+    );
+    let layer_target = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": lid,
+            "frame": { "x": 250.0, "y": 10.0, "w": 40.0, "h": 40.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let card = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": lid,
+            "frame": { "x": 250.0, "y": 100.0, "w": 40.0, "h": 40.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.set_drag",
+        json!({
+            "slide": "slide1",
+            "object": card,
+            "drag": { "targets": [base_target, layer_target], "snap": true, "return_on_miss": true }
+        }),
+    );
+
+    let dup_lid = ok(
+        &mut s,
+        "layer.duplicate",
+        json!({ "slide": "slide1", "layer": lid }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(s.course.is_playable(), "{:#?}", s.course.validate());
+
+    let dup_layer = s.course.slide("slide1").unwrap().layer(&dup_lid).unwrap();
+    let dup_panel = dup_layer
+        .objects
+        .iter()
+        .find(|o| matches!(o.kind, coursecraft_course::ObjectKind::ScrollPanel { .. }))
+        .unwrap();
+    assert_ne!(dup_panel.id, panel);
+    let dup_child = dup_layer
+        .objects
+        .iter()
+        .find(|o| o.panel.is_some())
+        .unwrap();
+    assert_eq!(dup_child.panel.as_deref(), Some(dup_panel.id.as_str()));
+
+    let dup_drag = dup_layer.objects.iter().find(|o| o.drag.is_some()).unwrap();
+    let dup_targets = &dup_drag.drag.as_ref().unwrap().targets;
+    assert_eq!(dup_targets.len(), 1);
+    assert_ne!(dup_targets[0], layer_target);
+    assert!(dup_layer.objects.iter().any(|o| o.id == dup_targets[0]));
+}
+
+#[test]
+fn object_duplicate_remaps_or_clears_panel_and_drag_targets() {
+    let mut s = Session::blank("DupObj");
+    let panel = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 10.0, "y": 10.0, "w": 200.0, "h": 200.0 },
+            "kind": { "type": "scroll_panel", "content_height": 400.0 }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 20.0, "y": 20.0, "w": 50.0, "h": 50.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.set_panel",
+        json!({ "slide": "slide1", "object": child, "panel": panel }),
+    );
+    let target = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 300.0, "y": 10.0, "w": 80.0, "h": 80.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let card = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 300.0, "y": 120.0, "w": 80.0, "h": 80.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.set_drag",
+        json!({
+            "slide": "slide1",
+            "object": card,
+            "drag": { "targets": [target], "snap": true, "return_on_miss": true }
+        }),
+    );
+
+    // Duplicate panel + child together: child's panel points to the duplicated panel.
+    let pair = ok(
+        &mut s,
+        "object.duplicate",
+        json!({ "slide": "slide1", "objects": [panel, child] }),
+    );
+    let pair_ids = pair["ids"].as_array().unwrap();
+    let dup_panel = pair_ids[0].as_str().unwrap();
+    let dup_child = pair_ids[1].as_str().unwrap();
+    assert_eq!(
+        s.course
+            .slide("slide1")
+            .unwrap()
+            .object(dup_child)
+            .unwrap()
+            .0
+            .panel
+            .as_deref(),
+        Some(dup_panel)
+    );
+
+    // Duplicate child alone: panel is cleared.
+    let solo_child = ok(
+        &mut s,
+        "object.duplicate",
+        json!({ "slide": "slide1", "object": child }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        s.course
+            .slide("slide1")
+            .unwrap()
+            .object(&solo_child)
+            .unwrap()
+            .0
+            .panel,
+        None
+    );
+
+    // Duplicate draggable + target together: target is remapped.
+    let drag_pair = ok(
+        &mut s,
+        "object.duplicate",
+        json!({ "slide": "slide1", "objects": [card, target] }),
+    );
+    let drag_ids = drag_pair["ids"].as_array().unwrap();
+    let dup_card = drag_ids[0].as_str().unwrap();
+    let dup_target = drag_ids[1].as_str().unwrap();
+    assert_eq!(
+        s.course
+            .slide("slide1")
+            .unwrap()
+            .object(dup_card)
+            .unwrap()
+            .0
+            .drag
+            .as_ref()
+            .unwrap()
+            .targets,
+        vec![dup_target.to_owned()]
+    );
+
+    // Duplicate draggable alone: targets are cleared.
+    let solo_card = ok(
+        &mut s,
+        "object.duplicate",
+        json!({ "slide": "slide1", "object": card }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        s.course
+            .slide("slide1")
+            .unwrap()
+            .object(&solo_card)
+            .unwrap()
+            .0
+            .drag
+            .as_ref()
+            .unwrap()
+            .targets
+            .is_empty()
+    );
+    assert!(s.course.is_playable(), "{:#?}", s.course.validate());
+}
+
+#[test]
+fn object_paste_remaps_or_clears_panel_and_drag_targets() {
+    let mut s = Session::blank("PasteObj");
+    let slide2 = ok(&mut s, "slide.add", json!({ "scene": "scene1" }))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let panel = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 10.0, "y": 10.0, "w": 200.0, "h": 200.0 },
+            "kind": { "type": "scroll_panel", "content_height": 400.0 }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let child = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 20.0, "y": 20.0, "w": 50.0, "h": 50.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.set_panel",
+        json!({ "slide": "slide1", "object": child, "panel": panel }),
+    );
+    let target = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 300.0, "y": 10.0, "w": 80.0, "h": 80.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let card = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 300.0, "y": 120.0, "w": 80.0, "h": 80.0 },
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#cccccc" }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.set_drag",
+        json!({
+            "slide": "slide1",
+            "object": card,
+            "drag": { "targets": [target], "snap": true, "return_on_miss": true }
+        }),
+    );
+
+    let slide1 = s.course.slide("slide1").unwrap().clone();
+    let panel_obj = slide1.object(&panel).unwrap().0.clone();
+    let child_obj = slide1.object(&child).unwrap().0.clone();
+    let target_obj = slide1.object(&target).unwrap().0.clone();
+    let card_obj = slide1.object(&card).unwrap().0.clone();
+
+    // Paste panel + child together onto slide2: panel is remapped.
+    let pasted_pair = ok(
+        &mut s,
+        "object.paste",
+        json!({ "slide": slide2, "objects": [panel_obj, child_obj], "source_slide": "slide1" }),
+    );
+    let pair_ids = pasted_pair["ids"].as_array().unwrap();
+    assert_eq!(
+        s.course
+            .slide(&slide2)
+            .unwrap()
+            .object(pair_ids[1].as_str().unwrap())
+            .unwrap()
+            .0
+            .panel
+            .as_deref(),
+        Some(pair_ids[0].as_str().unwrap())
+    );
+
+    // Paste child alone onto slide2: panel is cleared.
+    let pasted_solo_child = ok(
+        &mut s,
+        "object.paste",
+        json!({ "slide": slide2, "objects": [child_obj], "source_slide": "slide1" }),
+    )["ids"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        s.course
+            .slide(&slide2)
+            .unwrap()
+            .object(&pasted_solo_child)
+            .unwrap()
+            .0
+            .panel,
+        None
+    );
+
+    // Paste draggable + target together onto slide2: target is remapped.
+    let pasted_drag_pair = ok(
+        &mut s,
+        "object.paste",
+        json!({ "slide": slide2, "objects": [card_obj, target_obj], "source_slide": "slide1" }),
+    );
+    let drag_ids = pasted_drag_pair["ids"].as_array().unwrap();
+    assert_eq!(
+        s.course
+            .slide(&slide2)
+            .unwrap()
+            .object(drag_ids[0].as_str().unwrap())
+            .unwrap()
+            .0
+            .drag
+            .as_ref()
+            .unwrap()
+            .targets,
+        vec![drag_ids[1].as_str().unwrap().to_owned()]
+    );
+
+    // Paste draggable alone onto slide2: targets are cleared.
+    let pasted_solo_card = ok(
+        &mut s,
+        "object.paste",
+        json!({ "slide": slide2, "objects": [card_obj], "source_slide": "slide1" }),
+    )["ids"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        s.course
+            .slide(&slide2)
+            .unwrap()
+            .object(&pasted_solo_card)
+            .unwrap()
+            .0
+            .drag
+            .as_ref()
+            .unwrap()
+            .targets
+            .is_empty()
+    );
+    assert!(s.course.is_playable(), "{:#?}", s.course.validate());
+}
+
+#[test]
+fn execute_batch_refuses_undo_and_redo() {
+    let mut s = Session::blank("BatchUndo");
+    ok(&mut s, "slide.add", json!({ "scene": "scene1" }));
+    let before_course = s.course.clone();
+    let before_undo = s.undo_len();
+    let before_redo = s.can_redo();
+    let before_rev = s.revision;
+
+    let err_undo = s
+        .execute_batch(&[
+            ("slide.add".to_owned(), json!({ "scene": "scene1" })),
+            ("edit.undo".to_owned(), json!({})),
+        ])
+        .unwrap_err();
+    assert!(err_undo.to_string().contains("edit.undo"), "{err_undo}");
+    assert_eq!(s.course, before_course);
+    assert_eq!(s.undo_len(), before_undo);
+    assert_eq!(s.can_redo(), before_redo);
+    assert_eq!(s.revision, before_rev);
+
+    let err_redo = s
+        .execute_batch(&[("edit.redo".to_owned(), json!({}))])
+        .unwrap_err();
+    assert!(err_redo.to_string().contains("edit.redo"), "{err_redo}");
+    assert_eq!(s.course, before_course);
+    assert_eq!(s.undo_len(), before_undo);
+    assert_eq!(s.can_redo(), before_redo);
+    assert_eq!(s.revision, before_rev);
+}
+
+#[test]
+fn slide_set_master_rejects_bank_slide() {
+    let mut s = Session::blank("BankMaster");
+    let bank = bank_id(&mut s);
+    let qid = ok(
+        &mut s,
+        "bank.add_question",
+        json!({ "bank": bank, "title": "Q1" }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let master = ok(&mut s, "master.add", json!({ "title": "M1" }))["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let err = s
+        .execute(
+            "slide.set_master",
+            &json!({ "slides": [qid], "master": master }),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains(&qid), "{err}");
 }

@@ -251,6 +251,17 @@ impl Session {
         if steps.is_empty() {
             return Ok(Vec::new());
         }
+        for (i, (id, _)) in steps.iter().enumerate() {
+            if matches!(id.as_str(), "edit.undo" | "edit.redo") {
+                return Err(EngineError::BatchFailed {
+                    step: i,
+                    command: id.clone(),
+                    error: Box::new(EngineError::Invalid(format!(
+                        "{id} is not allowed inside a batch"
+                    ))),
+                });
+            }
+        }
 
         let snapshot = self.course.clone();
         let mut results = Vec::with_capacity(steps.len());

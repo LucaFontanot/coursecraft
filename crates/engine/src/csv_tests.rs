@@ -137,3 +137,14 @@ fn hostile_input_is_capped() {
     );
     assert!(import(&mut s, "").unwrap_err().contains("empty"));
 }
+
+#[test]
+fn rows_of_only_commas_or_whitespace_are_skipped_as_blank() {
+    let text = "type,question,correct\n,,,\n , \t ,  \ntrue_false,Is it?,true\n";
+    let rows = parse_csv(text).unwrap();
+    assert_eq!(rows.len(), 2);
+
+    let mut s = session();
+    let res = import(&mut s, text).unwrap();
+    assert_eq!(res["imported"], 1);
+}

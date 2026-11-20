@@ -2716,8 +2716,14 @@ fn slide_set_master(s: &mut Session, p: &Json) -> Result<Json> {
             "master {master:?} does not exist"
         )));
     }
-    // Only play slides can take a master; a master cannot take another master.
+    // Only play slides in scenes can take a master; masters and bank slides cannot.
     for id in &slides {
+        if s.course.bank_slide(id).is_some() {
+            return Err(bad(
+                C,
+                format!("question-bank slide {id:?} cannot take a master"),
+            ));
+        }
         if s.course.play_slide(id).is_none() {
             return Err(EngineError::NotFound(format!(
                 "slide {id:?} does not exist"
@@ -4001,6 +4007,14 @@ fn remap_object_glue(object: &mut Object, map: &BTreeMap<String, String>) {
     if let ObjectKind::Path { path } = &mut object.kind {
         remap_glue(&mut path.start_glue, map);
         remap_glue(&mut path.end_glue, map);
+    }
+    object.panel = object.panel.as_deref().and_then(|id| map.get(id).cloned());
+    if let Some(drag) = object.drag.as_mut() {
+        drag.targets = drag
+            .targets
+            .iter()
+            .filter_map(|id| map.get(id).cloned())
+            .collect();
     }
 }
 
@@ -7186,13 +7200,27 @@ fn object_delete(s: &mut Session, p: &Json) -> Result<Json> {
 /// Validation is the single source of truth for what a trigger refers to,
 /// so the event, the action and the condition are all covered.
 fn remove_dangling_triggers(s: &mut Session, sid: &str, needles: &[String]) -> usize {
-    let Some(slide_path) = s.course.scenes.iter().enumerate().find_map(|(si, scene)| {
-        scene
-            .slides
-            .iter()
-            .position(|slide| slide.id == sid)
-            .map(|li| format!("/scenes/{si}/slides/{li}/"))
-    }) else {
+    let Some(slide_path) = s
+        .course
+        .scenes
+        .iter()
+        .enumerate()
+        .find_map(|(si, scene)| {
+            scene
+                .slides
+                .iter()
+                .position(|slide| slide.id == sid)
+                .map(|li| format!("/scenes/{si}/slides/{li}/"))
+        })
+        .or_else(|| {
+            s.course.banks.iter().enumerate().find_map(|(bi, bank)| {
+                bank.slides
+                    .iter()
+                    .position(|slide| slide.id == sid)
+                    .map(|si| format!("/banks/{bi}/slides/{si}/"))
+            })
+        })
+    else {
         return 0;
     };
     let mut removed = 0;
@@ -12288,6 +12316,7 @@ fn object_update_motion_path(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_remove_motion_path(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.remove_motion_path";
+    let was_valid = s.course.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let path_id: String = req(C, p, "path")?;
@@ -12305,22 +12334,18 @@ fn object_remove_motion_path(s: &mut Session, p: &Json) -> Result<Json> {
         })?;
     target.motion_paths.remove(pos);
 
-    let mut referencing = Vec::new();
-    let slide = slide_mut(s, &sid)?;
-    for (i, t) in slide.triggers.iter().enumerate() {
-        if trigger_references_path(t, &oid, &path_id) {
-            referencing.push(format!("slide:{sid}:trigger:{i}"));
-        }
-    }
-    for l in &slide.layers {
-        for (i, t) in l.triggers.iter().enumerate() {
-            if trigger_references_path(t, &oid, &path_id) {
-                referencing.push(format!("slide:{sid}:layer:{}:trigger:{i}", l.id));
-            }
-        }
+    // Triggers naming the removed path cannot run again: remove them in the
+    // same undo step so the course stays valid.
+    slide
+        .triggers
+        .retain(|t| !trigger_references_path(t, &oid, &path_id));
+    for l in &mut slide.layers {
+        l.triggers
+            .retain(|t| !trigger_references_path(t, &oid, &path_id));
     }
 
-    Ok(json!({ "triggers": referencing }))
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
 }
 
 fn trigger_references_path(t: &Trigger, obj_id: &str, path_id: &str) -> bool {

@@ -82,7 +82,7 @@ fn finish_record(
     field: &mut String,
     field_started: &mut bool,
 ) -> std::result::Result<(), String> {
-    let blank = record.is_empty() && field.is_empty() && !*field_started;
+    let blank = record.iter().all(|s| s.trim().is_empty()) && field.trim().is_empty();
     if !blank {
         record.push(std::mem::take(field));
         records.push(std::mem::take(record));
