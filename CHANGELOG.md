@@ -2,7 +2,7 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
-## Unreleased
+## 0.2.4
 
 Everyday speed and fewer clicks.
 
@@ -13,6 +13,7 @@ Everyday speed and fewer clicks.
 - **Canvas:** Alt-drag duplicates, Shift-drag keeps one axis, Space-drag pans, and Cmd+B/I/U work while typing. Set animation, outline, opacity and font on many objects at once. Fixed: changing the fill of several buttons no longer removes their gradient.
 - **Smaller web player:** about 30% smaller (3.3 MB gzipped), starts faster, and loads the next slide's pictures early. The browser console stays quiet unless the address has `?debug=1`.
 - **Small fixes:** drop a `.ccraft` file to open it; one-click Hover / Selected / Visited / Disabled states; Enter adds a variable; double-click a media row to insert it; a note when an SVG has text; a note when old undo steps are dropped; `coursecraft-cli simulate --strict`, plainer `validate` errors, and `publish` finds the built player on its own.
+- **Checked by two stress-test passes:** fixed Undo after Publish (remembering the publish standard no longer adds an Undo step), Cmd+B with only a caret, the state preset buttons shifting under the mouse, a rename box left open after deleting its slide, the preview server waiting on a stuck browser, and the command line picking a half-built player folder.
 
 ## 0.2.3
 
