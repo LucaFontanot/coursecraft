@@ -167,6 +167,8 @@ pub struct CanvasDrag {
     pub start_screen: Pos2,
     /// Original frames of every object being moved or resized.
     pub frames: Vec<(String, Rect)>,
+    /// True when Alt was held at move-drag start (duplicates on drop).
+    pub alt_duplicate: bool,
 }
 
 /// An in-progress drag that sizes a new object before it is placed.
@@ -861,13 +863,19 @@ fn compute_drag_frame(drag: &CanvasDrag, curr_screen: Pos2, shift: bool, scale: 
 
     match drag.op {
         DragOp::Move | DragOp::RegionMove => {
-            let mut nx = drag.orig_frame.min.x + delta_x;
-            let mut ny = drag.orig_frame.min.y + delta_y;
-            if shift {
-                nx = (nx / 10.0).round() * 10.0;
-                ny = (ny / 10.0).round() * 10.0;
-            }
-            Rect::from_min_size(pos2(nx, ny), drag.orig_frame.size())
+            let (dx, dy) = if shift {
+                if delta_x.abs() >= delta_y.abs() {
+                    (delta_x, 0.0)
+                } else {
+                    (0.0, delta_y)
+                }
+            } else {
+                (delta_x, delta_y)
+            };
+            Rect::from_min_size(
+                pos2(drag.orig_frame.min.x + dx, drag.orig_frame.min.y + dy),
+                drag.orig_frame.size(),
+            )
         }
         DragOp::Resize { handle, rotation } => resize_frame_rotated(
             drag.orig_frame,
@@ -2836,6 +2844,7 @@ fn start_drag_if_pressed(
             orig_frame,
             start_screen: start_pos,
             frames: Vec::new(),
+            alt_duplicate: false,
         });
         return;
     }
@@ -2900,6 +2909,7 @@ fn start_drag_if_pressed(
             orig_frame: frame,
             start_screen: start_pos,
             frames: Vec::new(),
+            alt_duplicate: false,
         });
         return;
     }
@@ -3035,6 +3045,7 @@ fn start_drag_if_pressed(
             orig_frame: Rect::ZERO,
             start_screen: start_pos,
             frames: Vec::new(),
+            alt_duplicate: false,
         });
     } else if let Some((sel_id, index, original)) = adjust_handle_hit {
         let orig_frame = editor
@@ -3055,6 +3066,7 @@ fn start_drag_if_pressed(
             orig_frame,
             start_screen: start_pos,
             frames: Vec::new(),
+            alt_duplicate: false,
         });
     } else if let Some((centre, start_angle, orig_rotation)) = rotate_hit {
         let primary = editor.selection.object.clone().unwrap_or_default();
@@ -3068,6 +3080,7 @@ fn start_drag_if_pressed(
             orig_frame: primary_item.map_or(Rect::ZERO, |item| item.rect),
             start_screen: start_pos,
             frames: Vec::new(),
+            alt_duplicate: false,
         });
     } else if let Some((h, orig_frame)) = handle_hit {
         let primary = editor
@@ -3086,6 +3099,7 @@ fn start_drag_if_pressed(
             orig_frame,
             start_screen: start_pos,
             frames,
+            alt_duplicate: false,
         });
     } else if let Some((h, region_id, orig_frame)) = region_handle_hit {
         editor.ui.canvas_drag = Some(CanvasDrag {
@@ -3094,6 +3108,7 @@ fn start_drag_if_pressed(
             orig_frame,
             start_screen: start_pos,
             frames: Vec::new(),
+            alt_duplicate: false,
         });
     } else if let Some((region_id, orig_frame)) = region_hit {
         editor.ui.question.selected_region = Some(region_id.clone());
@@ -3104,6 +3119,7 @@ fn start_drag_if_pressed(
             orig_frame,
             start_screen: start_pos,
             frames: Vec::new(),
+            alt_duplicate: false,
         });
     } else if t.slide_rect().contains(start_pos) {
         let slide_pos = t.to_slide_pos(start_pos);
@@ -3139,6 +3155,7 @@ fn start_drag_if_pressed(
                 orig_frame,
                 start_screen: start_pos,
                 frames,
+                alt_duplicate: modifiers.alt,
             });
         } else {
             editor.ui.canvas_drag = Some(CanvasDrag {
@@ -3147,6 +3164,7 @@ fn start_drag_if_pressed(
                 orig_frame: Rect::ZERO,
                 start_screen: start_pos,
                 frames: Vec::new(),
+                alt_duplicate: false,
             });
         }
     } else {
@@ -3157,6 +3175,7 @@ fn start_drag_if_pressed(
             orig_frame: Rect::ZERO,
             start_screen: start_pos,
             frames: Vec::new(),
+            alt_duplicate: false,
         });
     }
 }
@@ -3628,12 +3647,25 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
                     editor.ui.snap_to_guides,
                     &lines,
                 );
-                let spacing_guides = if editor.ui.snap_to_guides {
+                let spacing_guides = if editor.ui.snap_to_guides
+                    && !(shift_held && matches!(drag.op, DragOp::Move))
+                {
                     let spacing = crate::snap::snap_spacing(bbox, &targets, threshold);
                     crate::snap::apply_spacing_fallback(&mut result, spacing)
                 } else {
                     Vec::new()
                 };
+                if shift_held && matches!(drag.op, DragOp::Move) {
+                    let delta_x = (curr_screen.x - drag.start_screen.x).abs();
+                    let delta_y = (curr_screen.y - drag.start_screen.y).abs();
+                    if delta_x >= delta_y {
+                        result.offset.y = 0.0;
+                        result.guides.retain(|guide| guide.vertical);
+                    } else {
+                        result.offset.x = 0.0;
+                        result.guides.retain(|guide| !guide.vertical);
+                    }
+                }
                 if result.offset != vec2(0.0, 0.0) {
                     for (_, frame) in &mut preview_frames {
                         *frame = Rect::from_min_max(
@@ -3648,7 +3680,7 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
         } else if is_resize && drag.frames.len() == 1 && !shift_held {
             editor.ui.spacing_guides.clear();
             // Snapping moves edges on their own, which would break Shift's proportions.
-            if let (Some(raw), DragOp::Resize { handle, rotation }) = (resize_bbox, drag.op) {
+            if let (Some(raw), &DragOp::Resize { handle, rotation }) = (resize_bbox, &drag.op) {
                 if rotation != 0.0 && rotation.is_finite() {
                     // A rotated object's resize is anchored in its own axes;
                     // snapping its axis-aligned raw frame would move that anchor.
@@ -3727,32 +3759,70 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
 
         if is_move {
             let slide = editor.selection.slide.clone();
-            let mut steps: Vec<(String, Json)> = Vec::new();
-            for ((id, orig), (_, preview)) in drag.frames.iter().zip(&preview_frames) {
-                let fx = preview.min.x.round();
-                let fy = preview.min.y.round();
-                let fw = preview.width().round().max(4.0);
-                let fh = preview.height().round().max(4.0);
-                if !fx.is_finite() || !fy.is_finite() || !fw.is_finite() || !fh.is_finite() {
-                    continue;
-                }
-                if fx != orig.min.x || fy != orig.min.y || fw != orig.width() || fh != orig.height()
+            if drag.alt_duplicate && matches!(drag.op, DragOp::Move) {
+                if let Some(((_, orig), (_, preview))) =
+                    drag.frames.iter().zip(&preview_frames).next()
                 {
-                    steps.push((
-                        "object.set_frame".to_owned(),
-                        serde_json::json!({
-                            "slide": slide,
-                            "object": id,
-                            "frame": { "x": fx, "y": fy, "w": fw, "h": fh },
-                        }),
-                    ));
+                    let dx = (preview.min.x - orig.min.x).round();
+                    let dy = (preview.min.y - orig.min.y).round();
+                    if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
+                        let ids: Vec<String> =
+                            drag.frames.iter().map(|(id, _)| id.clone()).collect();
+                        if let Some(res) = editor.run(
+                            "object.duplicate",
+                            serde_json::json!({
+                                "slide": slide,
+                                "objects": ids,
+                                "dx": dx,
+                                "dy": dy,
+                            }),
+                        ) {
+                            let new_ids: Vec<String> = res
+                                .get("ids")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(str::to_owned))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            if !new_ids.is_empty() {
+                                editor.selection.set_many(new_ids);
+                            }
+                        }
+                    }
                 }
-            }
-            if !steps.is_empty() {
-                editor.run_batch(&steps);
+            } else {
+                let mut steps: Vec<(String, Json)> = Vec::new();
+                for ((id, orig), (_, preview)) in drag.frames.iter().zip(&preview_frames) {
+                    let fx = preview.min.x.round();
+                    let fy = preview.min.y.round();
+                    let fw = preview.width().round().max(4.0);
+                    let fh = preview.height().round().max(4.0);
+                    if !fx.is_finite() || !fy.is_finite() || !fw.is_finite() || !fh.is_finite() {
+                        continue;
+                    }
+                    if fx != orig.min.x
+                        || fy != orig.min.y
+                        || fw != orig.width()
+                        || fh != orig.height()
+                    {
+                        steps.push((
+                            "object.set_frame".to_owned(),
+                            serde_json::json!({
+                                "slide": slide,
+                                "object": id,
+                                "frame": { "x": fx, "y": fy, "w": fw, "h": fh },
+                            }),
+                        ));
+                    }
+                }
+                if !steps.is_empty() {
+                    editor.run_batch(&steps);
+                }
             }
         }
-    } else if is_move {
+    } else if is_move && !drag.alt_duplicate {
         for (id, preview) in &preview_frames {
             for it in items.iter_mut() {
                 if it.hit == Hit::Object(id.clone()) {
@@ -4255,6 +4325,95 @@ fn hide_edited_text(items: &mut [DrawItem], edit: &InlineEdit) {
 }
 
 /// Draw the in-place editor over the object's frame and commit or cancel it.
+#[allow(clippy::too_many_arguments)]
+fn apply_inline_edit_style_shortcut(
+    editor: &mut Editor,
+    edit: &InlineEdit,
+    buffer: &str,
+    cursor_range: Option<egui::text::CCursorRange>,
+    toggle_bold: bool,
+    toggle_italic: bool,
+    toggle_underline: bool,
+) {
+    let (char_range, cursor_pos): ((usize, usize), usize) = if let Some(cr) = cursor_range {
+        if !cr.is_empty() {
+            let sorted = cr.as_sorted_char_range();
+            ((sorted.start.0, sorted.end.0), sorted.start.0)
+        } else {
+            ((0, 0), cr.primary.index.0)
+        }
+    } else {
+        ((0, 0), 0)
+    };
+    let eff = editor
+        .session
+        .course
+        .slide(&edit.slide)
+        .and_then(|slide| slide.object(&edit.object))
+        .and_then(|(obj, _)| match (&obj.kind, edit.cell) {
+            (coursecraft_course::ObjectKind::Text { style, runs, .. }, None) => {
+                Some(crate::properties::style_at_cursor(runs, style, cursor_pos))
+            }
+            (coursecraft_course::ObjectKind::Shape { fill, text, .. }, None) => {
+                let fallback = default_shape_text_style(fill);
+                let style = text.as_ref().map_or(&fallback, |t| &t.style);
+                let runs = text.as_ref().map_or(&[][..], |t| t.runs.as_slice());
+                Some(crate::properties::style_at_cursor(runs, style, cursor_pos))
+            }
+            (coursecraft_course::ObjectKind::Table { rows, .. }, Some((row, col))) => {
+                rows.get(row).and_then(|r| r.cells.get(col)).map(|cell| {
+                    crate::properties::style_at_cursor(&cell.runs, &cell.style, cursor_pos)
+                })
+            }
+            _ => None,
+        });
+    let Some((eff_bold, eff_italic, eff_underline, _, _)) = eff else {
+        return;
+    };
+    let mut params = serde_json::json!({
+        "slide": edit.slide,
+        "object": edit.object,
+        "start": char_range.0,
+        "end": char_range.1,
+    });
+    if let Some((row, col)) = edit.cell {
+        params["row"] = serde_json::json!(row);
+        params["column"] = serde_json::json!(col);
+    }
+    if toggle_bold {
+        params["bold"] = serde_json::json!(!eff_bold);
+    }
+    if toggle_italic {
+        params["italic"] = serde_json::json!(!eff_italic);
+    }
+    if toggle_underline {
+        params["underline"] = serde_json::json!(!eff_underline);
+    }
+    if buffer != edit.original {
+        let mut text_params = serde_json::json!({
+            "slide": edit.slide,
+            "object": edit.object,
+            "text": buffer,
+        });
+        if let Some((row, col)) = edit.cell {
+            text_params["row"] = serde_json::json!(row);
+            text_params["column"] = serde_json::json!(col);
+        }
+        if editor
+            .run_batch(&[
+                ("text.set".to_owned(), text_params),
+                ("text.style_range".to_owned(), params),
+            ])
+            .is_some()
+            && let Some(state) = editor.ui.inline_edit.as_mut()
+        {
+            state.original = buffer.to_owned();
+        }
+    } else {
+        editor.run("text.style_range", params);
+    }
+}
+
 fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let Some(edit) = editor.ui.inline_edit.clone() else {
         return;
@@ -4470,6 +4629,9 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let button_enter =
         edit.is_button && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
     let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let toggle_bold = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::B));
+    let toggle_italic = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::I));
+    let toggle_underline = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::U));
     let clicked_outside = ui.input(|i| {
         i.pointer.primary_pressed()
             && !menu_open_at_start
@@ -4486,6 +4648,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     if edit.just_entered || (!output.response.has_focus() && !clicked_outside && !escaped) {
         output.response.request_focus();
     }
+    let cursor_range = output.state.cursor.char_range();
     if edit.just_entered {
         // Re-apply select-all through the release click so the placeholder stays
         // selected; clear it once the pointer is idle.
@@ -4507,7 +4670,18 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     }
 
     if let Some(state) = editor.ui.inline_edit.as_mut() {
-        state.buffer = buffer;
+        state.buffer = buffer.clone();
+    }
+    if (toggle_bold || toggle_italic || toggle_underline) && !escaped {
+        apply_inline_edit_style_shortcut(
+            editor,
+            &edit,
+            &buffer,
+            cursor_range,
+            toggle_bold,
+            toggle_italic,
+            toggle_underline,
+        );
     }
     if escaped {
         cancel_inline_edit(editor);
@@ -5263,11 +5437,34 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 )
             });
         let was_editing = editor.ui.inline_edit.is_some();
+        let space_held = ui.input(|i| i.key_down(egui::Key::Space))
+            && !was_editing
+            && !ui.ctx().egui_wants_keyboard_input();
+        let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+        let pan_active = !eyedropper_owns_input
+            && !pointer_in_hud
+            && !was_editing
+            && editor.ui.crop_edit.is_none()
+            && ((space_held
+                && editor.ui.canvas_drag.is_none()
+                && editor.ui.placement_drag.is_none())
+                || (middle_down && current_pointer.is_some_and(|p| canvas_rect.contains(p))));
+        if pan_active {
+            if middle_down || ui.input(|i| i.pointer.primary_down()) {
+                ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+                let delta = ui.input(|i| i.pointer.delta());
+                if delta != egui::Vec2::ZERO && delta.x.is_finite() && delta.y.is_finite() {
+                    ui.scroll_with_delta(delta);
+                }
+            } else if space_held {
+                ui.ctx().set_cursor_icon(CursorIcon::Grab);
+            }
+        }
 
         let was_cropping = editor.ui.crop_edit.is_some();
         if was_cropping {
             crop_input(editor, ui, &t, current_pointer, canvas_rect, pointer_in_hud);
-        } else if !eyedropper_owns_input && !pointer_in_hud && !was_editing {
+        } else if !eyedropper_owns_input && !pointer_in_hud && !was_editing && !pan_active {
             if matches!(editor.ui.placement_tool, Some(PlacementTool::Draw(_))) {
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
                 process_draw_tool(editor, &t, ui, &response);

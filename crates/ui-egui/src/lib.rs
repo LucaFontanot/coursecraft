@@ -89,6 +89,8 @@ mod bughunt_stress;
 #[cfg(test)]
 mod bughunt_undo;
 #[cfg(test)]
+mod canvas_speed_tests;
+#[cfg(test)]
 mod document_tests;
 #[cfg(test)]
 mod eyedropper_tests;

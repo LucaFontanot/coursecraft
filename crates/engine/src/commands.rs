@@ -5049,6 +5049,11 @@ fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
     let was_valid = s.course.is_playable();
     let sid: String = req(C, p, "slide")?;
     let objects: Option<Vec<String>> = opt(C, p, "objects")?;
+    let dx: f32 = opt(C, p, "dx")?.unwrap_or(20.0);
+    let dy: f32 = opt(C, p, "dy")?.unwrap_or(20.0);
+    if !dx.is_finite() || !dy.is_finite() {
+        return Err(bad(C, "dx and dy must be finite"));
+    }
     let mut ids: Vec<String> = Vec::new();
     if let Some(objects) = objects {
         for id in objects {
@@ -5089,8 +5094,8 @@ fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
         taken.insert(new_id.clone());
         copy_map.insert(object.id.clone(), new_id.clone());
         object.id = new_id.clone();
-        object.frame.x += 20.0;
-        object.frame.y += 20.0;
+        object.frame.x += dx;
+        object.frame.y += dy;
         if let Some(old_group) = object.group.clone() {
             let new_group = group_map.entry(old_group).or_insert_with(|| {
                 let fresh = fresh_id_in("group", &taken_groups);
