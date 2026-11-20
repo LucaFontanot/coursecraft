@@ -2,6 +2,19 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.2.5
+
+Fixes from a full code review, faster everywhere, and new features: resume on the web, desktop playback speed, a shared template library, and open, save and publish in the web editor.
+
+- **No more lost work:** saving through an AI agent (MCP or the control server) keeps a project's media; Ctrl+S on a plain `course.json` writes JSON instead of breaking the file; folder projects keep media whose names differ only by upper and lower case.
+- **No more crashes:** fixed crashes from a ring progress meter with a zoom animation, pasting a copy bigger than the slide, dragging the end of a timeline bar near the end, very tall scroll panels, a freeze on a huge slide duration, and a damaged `.ccraft` that asks for huge memory. Slide durations and object sizes now have sensible limits.
+- **Windows:** videos whose video track is not the first stream now open.
+- **Import and editing:** PowerPoint and Word import keep `&`, `<` and `>`; Find and Replace keeps subscript, strikethrough, spacing and font; replacing text near a `%` no longer breaks a `%variable%`; shortcuts like Ctrl+Z act on your typing while you type; objects on question-bank slides can be deleted; duplicating slides with scroll panels or drag targets works; clicking a path point no longer moves it.
+- **Player:** Retry Quiz, Review Quiz and Exit Review close an open lightbox; a resumed course runs the leave steps of the slide it resumed on; a warning when a timer is longer than its slide.
+- **LMS and LTI:** a pass is no longer overwritten by a later fail; the LTI server refuses cross-site score posts, keeps working through platform key changes, and ties logins to the browser.
+- **Faster:** fewer repeated checks per edit, a lighter runtime, less copying when saving, opening and autosaving, and the LTI server caches files and supports video seeking in Safari.
+- **New:** courses published to Web remember where the learner stopped (with a "Start over" option); the desktop preview has playback speed; long documents for AI are read in parts instead of being cut; save templates to "My library" and use them in any course; the web editor can open, save and publish.
+
 ## 0.2.4
 
 Everyday speed and fewer clicks.
