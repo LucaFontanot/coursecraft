@@ -83,6 +83,12 @@ mod audio_ai_tests;
 #[cfg(test)]
 mod bughunt_insert;
 #[cfg(test)]
+mod bughunt_m24_canvas;
+#[cfg(test)]
+mod bughunt_m24_rename;
+#[cfg(test)]
+mod bughunt_m24_stress;
+#[cfg(test)]
 mod bughunt_menus;
 #[cfg(test)]
 mod bughunt_stress;

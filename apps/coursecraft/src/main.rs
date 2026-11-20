@@ -40,6 +40,8 @@ pub mod system_fonts;
 pub mod versions;
 
 #[cfg(test)]
+mod bughunt_m24_preview;
+#[cfg(test)]
 mod files_tests;
 #[cfg(test)]
 mod tests;
