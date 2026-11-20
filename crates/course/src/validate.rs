@@ -49,7 +49,7 @@ impl Ctx<'_> {
     }
 }
 
-fn valid_name(s: &str) -> bool {
+pub(crate) fn valid_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.chars()

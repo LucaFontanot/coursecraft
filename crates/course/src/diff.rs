@@ -97,6 +97,13 @@ pub fn diff_with_media(
         |g| g.id.as_str(),
         |g| g.term.clone(),
     );
+    d.keyed(
+        "text style",
+        &a.text_styles,
+        &b.text_styles,
+        |s| s.id.as_str(),
+        |s| s.name.clone(),
+    );
     d.scenes(a, b);
     d.slides(a, b);
     d.banks(a, b);

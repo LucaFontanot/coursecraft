@@ -1,6 +1,8 @@
 //! Changing the slide size, with or without scaling the content.
 
-use coursecraft_course::{Course, Object, ObjectKind, Outline, Size, Slide, TextRun, TextStyle};
+use coursecraft_course::{
+    Course, Object, ObjectKind, Outline, Paragraph, Size, Slide, TextRun, TextStyle,
+};
 
 /// Smallest and largest slide sides the command accepts, in pixels.
 pub(crate) const MIN_SIDE: u32 = 100;
@@ -61,6 +63,17 @@ fn scale_outline(outline: &mut Outline, m: Map) {
     outline.width = m.len(outline.width).clamp(0.0, 50.0);
 }
 
+fn scale_paragraph(paragraph: &mut Paragraph, m: Map) {
+    paragraph.space_before = m.len(paragraph.space_before).clamp(0.0, 200.0);
+    paragraph.space_after = m.len(paragraph.space_after).clamp(0.0, 200.0);
+}
+
+fn scale_paragraphs(paragraphs: &mut [Paragraph], m: Map) {
+    for paragraph in paragraphs {
+        scale_paragraph(paragraph, m);
+    }
+}
+
 fn scale_object(o: &mut Object, m: Map) {
     let f = &mut o.frame;
     f.x = m.x(f.x).round();
@@ -88,9 +101,15 @@ fn scale_object(o: &mut Object, m: Map) {
         }
     }
     match &mut o.kind {
-        ObjectKind::Text { style, runs, .. } => {
+        ObjectKind::Text {
+            style,
+            runs,
+            paragraphs,
+            ..
+        } => {
             scale_size(style, m);
             scale_runs(runs, m);
+            scale_paragraphs(paragraphs, m);
         }
         ObjectKind::Shape { outline, text, .. } => {
             if let Some(outline) = outline {
@@ -99,6 +118,7 @@ fn scale_object(o: &mut Object, m: Map) {
             if let Some(text) = text {
                 scale_size(&mut text.style, m);
                 scale_runs(&mut text.runs, m);
+                scale_paragraphs(&mut text.paragraphs, m);
             }
         }
         ObjectKind::Path { path } => scale_outline(&mut path.outline, m),
@@ -107,6 +127,7 @@ fn scale_object(o: &mut Object, m: Map) {
                 for cell in &mut row.cells {
                     scale_size(&mut cell.style, m);
                     scale_runs(&mut cell.runs, m);
+                    scale_paragraphs(&mut cell.paragraphs, m);
                 }
             }
             if let Some(outline) = borders.outer.as_mut() {
@@ -176,6 +197,19 @@ pub(crate) fn set_slide_size(course: &mut Course, w: u32, h: u32, scale: bool) -
             for bank in &mut course.banks {
                 for slide in &mut bank.slides {
                     scale_slide(slide, m);
+                }
+            }
+            for guide in &mut course.editor.guides {
+                guide.at = if guide.vertical {
+                    m.x(guide.at).round()
+                } else {
+                    m.y(guide.at).round()
+                };
+            }
+            for named in &mut course.text_styles {
+                scale_size(&mut named.style, m);
+                if let Some(paragraph) = named.paragraphs.as_mut() {
+                    scale_paragraph(paragraph, m);
                 }
             }
         }

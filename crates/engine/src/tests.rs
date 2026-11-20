@@ -8249,6 +8249,64 @@ fn set_slide_size_checks_bounds_mode_and_noop() {
     assert_no_errors(&s);
 }
 
+#[test]
+fn set_slide_size_scale_scales_guides_paragraph_spacing_and_text_styles() {
+    let mut s = sized_course();
+    s.course.editor.guides = vec![
+        coursecraft_course::Guide {
+            vertical: true,
+            at: 200.0,
+        },
+        coursecraft_course::Guide {
+            vertical: false,
+            at: 100.0,
+        },
+    ];
+    s.course
+        .text_styles
+        .push(coursecraft_course::NamedTextStyle {
+            id: "h1".to_owned(),
+            name: "Heading".to_owned(),
+            style: coursecraft_course::TextStyle {
+                size: 40.0,
+                ..coursecraft_course::TextStyle::default()
+            },
+            paragraphs: Some(coursecraft_course::Paragraph {
+                space_before: 20.0,
+                space_after: 10.0,
+                ..coursecraft_course::Paragraph::default()
+            }),
+        });
+    if let ObjectKind::Text { paragraphs, .. } = &mut s.course.scenes[0].slides[0].objects[0].kind {
+        paragraphs.push(coursecraft_course::Paragraph {
+            space_before: 16.0,
+            space_after: 8.0,
+            ..coursecraft_course::Paragraph::default()
+        });
+    }
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 1000, "h": 1000, "mode": "scale" }),
+    );
+    let f = 0.78125_f32;
+    let dy = (1000.0 - 720.0 * f) / 2.0;
+    assert_eq!(s.course.editor.guides[0].at, (200.0 * f).round());
+    assert_eq!(s.course.editor.guides[1].at, (100.0 * f + dy).round());
+    let named = &s.course.text_styles[0];
+    assert!((named.style.size - 40.0 * f).abs() < 0.01);
+    let np = named.paragraphs.as_ref().unwrap();
+    assert!((np.space_before - 20.0 * f).abs() < 0.01);
+    assert!((np.space_after - 10.0 * f).abs() < 0.01);
+    if let ObjectKind::Text { paragraphs, .. } = &s.course.scenes[0].slides[0].objects[0].kind {
+        assert!((paragraphs[0].space_before - 16.0 * f).abs() < 0.01);
+        assert!((paragraphs[0].space_after - 8.0 * f).abs() < 0.01);
+    } else {
+        panic!("expected text object");
+    }
+    assert_no_errors(&s);
+}
+
 fn assert_no_errors(s: &Session) {
     let errors: Vec<_> = s
         .course

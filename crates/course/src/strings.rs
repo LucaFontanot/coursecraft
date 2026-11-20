@@ -21,8 +21,6 @@ use crate::{Course, Object, ObjectKind, Question, Slide, TextRun};
 pub const MAX_HITS: usize = 1000;
 /// Characters of context shown on each side of a hit.
 const SNIPPET_CONTEXT: usize = 30;
-/// Longest variable name the runtime accepts inside `%name%`.
-const MAX_VARIABLE_NAME: usize = 128;
 
 /// Where a string lives. `slide` is `None` for course and scene titles.
 /// `field` names the string inside that place, for example `text`, `label`,
@@ -760,11 +758,14 @@ pub fn variable_reference_spans(text: &str) -> Vec<Range<usize>> {
         else {
             break;
         };
-        let name_len = close.saturating_sub(i).saturating_sub(1);
-        if name_len > 0 && name_len <= MAX_VARIABLE_NAME {
+        if let Some(name) = text.get(i.saturating_add(1)..close)
+            && crate::validate::valid_name(name)
+        {
             spans.push(i..close.saturating_add(1));
+            i = close.saturating_add(1);
+        } else {
+            i = i.saturating_add(1);
         }
-        i = close.saturating_add(1);
     }
     spans
 }
@@ -949,14 +950,7 @@ fn replace_runs(runs: &[TextRun], ranges: &[Range<usize>], replacement: &str) ->
 }
 
 fn all_plain(runs: &[TextRun]) -> bool {
-    runs.iter().all(|run| {
-        run.bold.is_none()
-            && run.italic.is_none()
-            && run.underline.is_none()
-            && run.size.is_none()
-            && run.color.is_none()
-            && run.link.is_none()
-    })
+    runs.iter().all(TextRun::is_plain)
 }
 
 #[cfg(test)]
@@ -1165,5 +1159,88 @@ mod tests {
     fn variable_names_longer_than_the_limit_are_not_references() {
         let long = format!("%{}%", "n".repeat(129));
         assert!(variable_reference_spans(&long).is_empty());
+    }
+
+    #[test]
+    fn replace_preserves_strikethrough_baseline_letter_spacing_and_font() {
+        let mut text = "H2O".to_owned();
+        let mut runs = vec![
+            TextRun {
+                text: "H".to_owned(),
+                bold: None,
+                italic: None,
+                underline: None,
+                strikethrough: None,
+                baseline: None,
+                letter_spacing: None,
+                size: None,
+                color: None,
+                link: None,
+                font: None,
+            },
+            TextRun {
+                text: "2".to_owned(),
+                bold: None,
+                italic: None,
+                underline: None,
+                strikethrough: Some(true),
+                baseline: Some(crate::Baseline::Subscript),
+                letter_spacing: Some(1.5),
+                size: None,
+                color: None,
+                link: None,
+                font: Some("Georgia".to_owned()),
+            },
+            TextRun {
+                text: "O".to_owned(),
+                bold: None,
+                italic: None,
+                underline: None,
+                strikethrough: None,
+                baseline: None,
+                letter_spacing: None,
+                size: None,
+                color: None,
+                link: None,
+                font: None,
+            },
+        ];
+        let outcome = replace_in_target(
+            StringTarget::Runs {
+                text: &mut text,
+                runs: &mut runs,
+            },
+            "H",
+            "D",
+            true,
+            false,
+            1000,
+        );
+        assert_eq!(outcome.replaced, 1);
+        assert_eq!(text, "D2O");
+        assert_eq!(runs.len(), 3, "runs should be preserved: {runs:?}");
+        assert_eq!(runs[1].baseline, Some(crate::Baseline::Subscript));
+        assert_eq!(runs[1].strikethrough, Some(true));
+        assert_eq!(runs[1].letter_spacing, Some(1.5));
+        assert_eq!(runs[1].font.as_deref(), Some("Georgia"));
+    }
+
+    #[test]
+    fn variable_reference_spans_ignores_stray_percent_before_variable() {
+        let text = "Save 50% today, %UserName%!";
+        let spans = variable_reference_spans(text);
+        assert_eq!(spans, vec![16..26]);
+        let mut edited = text.to_owned();
+        let outcome = replace_in_target(
+            StringTarget::Plain(&mut edited),
+            "User",
+            "Member",
+            true,
+            false,
+            1000,
+        );
+        assert_eq!(outcome.replaced, 0);
+        assert_eq!(outcome.skipped, 1);
+        assert_eq!(edited, text);
     }
 }

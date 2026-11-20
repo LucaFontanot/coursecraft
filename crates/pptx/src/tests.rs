@@ -2332,3 +2332,92 @@ fn import_report_lists_deck_fonts_missing_from_the_course() {
         other => panic!("expected text, got {other:?}"),
     }
 }
+
+#[test]
+fn parse_xml_tree_resolves_character_references_and_cdata() {
+    let xml = concat!(
+        r#"<root>"#,
+        r#"<a:t>Research &amp; Development &lt;1&gt; &apos;ok&apos; &quot;hi&quot; &#8217; &#x2014;</a:t>"#,
+        r#"<a:t><![CDATA[a < b & c > d]]></a:t>"#,
+        r#"</root>"#,
+    );
+    let root = crate::parse_xml_tree(xml, "test.xml", 20).expect("parse xml");
+    assert_eq!(
+        root.children[0].text,
+        "Research & Development <1> 'ok' \"hi\" \u{2019} \u{2014}"
+    );
+    assert_eq!(root.children[1].text, "a < b & c > d");
+}
+
+#[test]
+fn import_pptx_drops_links_to_hidden_slides() {
+    let slide1 = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+           xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+        <p:cSld>
+            <p:spTree>
+                <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+                <p:grpSpPr/>
+                <p:sp>
+                    <p:nvSpPr><p:cNvPr id="2" name="Link"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+                    <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="500000"/></a:xfrm></p:spPr>
+                    <p:txBody>
+                        <a:bodyPr/><a:lstStyle/>
+                        <a:p><a:r>
+                            <a:rPr lang="en-US"><a:hlinkClick r:id="rId1" action="ppaction://hlinksldjump"/></a:rPr>
+                            <a:t>Go to hidden</a:t>
+                        </a:r></a:p>
+                    </p:txBody>
+                </p:sp>
+            </p:spTree>
+        </p:cSld>
+    </p:sld>"#;
+    let slide1_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+        <Relationship Id="rId1"
+            Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+            Target="slide2.xml"/>
+    </Relationships>"#;
+    let slide2 = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+           xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+           show="0">
+        <p:cSld>
+            <p:spTree>
+                <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+                <p:grpSpPr/>
+            </p:spTree>
+        </p:cSld>
+    </p:sld>"#;
+    let bytes = fixture_pptx(
+        &[slide1, slide2],
+        &[("ppt/slides/_rels/slide1.xml.rels", slide1_rels.as_bytes())],
+    );
+    let imported =
+        crate::import_pptx_with_limits(&bytes, "Hidden Link", Limits::default()).expect("import");
+    assert_eq!(imported.course.scenes[0].slides.len(), 1);
+    let obj = &imported.course.scenes[0].slides[0].objects[0];
+    match &obj.kind {
+        coursecraft_course::ObjectKind::Text { runs, .. } => {
+            assert_eq!(runs[0].link, None);
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+    assert!(
+        imported
+            .report
+            .items
+            .iter()
+            .any(|item| item.slide == 1 && item.note.contains("slide2")),
+        "expected report item for dropped link: {:?}",
+        imported.report.items
+    );
+    let errors: Vec<_> = imported
+        .course
+        .validate()
+        .into_iter()
+        .filter(|i| i.severity == coursecraft_course::Severity::Error)
+        .collect();
+    assert!(errors.is_empty(), "validation errors: {errors:?}");
+}

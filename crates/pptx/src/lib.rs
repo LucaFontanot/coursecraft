@@ -561,6 +561,48 @@ fn parse_xml_tree(xml_str: &str, part_name: &str, max_depth: usize) -> Result<Xm
                     parent.text.push_str(&unescaped);
                 }
             }
+            Ok(quick_xml::events::Event::GeneralRef(reference)) => {
+                if let Some(parent) = stack.last_mut() {
+                    if let Some(c) =
+                        reference
+                            .resolve_char_ref()
+                            .map_err(|e| PptxError::MalformedXml {
+                                part: part_name.to_string(),
+                                message: e.to_string(),
+                            })?
+                    {
+                        parent.text.push(c);
+                    } else {
+                        let name = reference.decode().map_err(|e| PptxError::MalformedXml {
+                            part: part_name.to_string(),
+                            message: e.to_string(),
+                        })?;
+                        let ch = match name.as_ref() {
+                            "lt" => '<',
+                            "gt" => '>',
+                            "amp" => '&',
+                            "apos" => '\'',
+                            "quot" => '"',
+                            other => {
+                                return Err(PptxError::MalformedXml {
+                                    part: part_name.to_string(),
+                                    message: format!("unknown entity &{other};"),
+                                });
+                            }
+                        };
+                        parent.text.push(ch);
+                    }
+                }
+            }
+            Ok(quick_xml::events::Event::CData(cdata)) => {
+                if let Some(parent) = stack.last_mut() {
+                    let decoded = cdata.decode().map_err(|e| PptxError::MalformedXml {
+                        part: part_name.to_string(),
+                        message: e.to_string(),
+                    })?;
+                    parent.text.push_str(&decoded);
+                }
+            }
             Ok(quick_xml::events::Event::Eof) => break,
             Err(e) => {
                 return Err(PptxError::MalformedXml {
@@ -1305,6 +1347,8 @@ pub fn import_pptx_with_limits(
     if imported_slides.is_empty() {
         return Err(PptxError::NoSlides);
     }
+
+    drop_links_to_unimported_slides(&mut imported_slides, &mut report.items);
 
     report.slides = imported_slides.len();
 
@@ -3729,6 +3773,55 @@ fn resolve_run_link(r_pr: &XmlNode, links: TextLinkContext<'_>) -> Option<Link> 
         return Some(Link::Url { url });
     }
     None
+}
+
+/// Drop `Link::Slide` values whose target slide was not imported (for example,
+/// a hidden slide with `<p:sld show="0">`) and record one report line per link.
+fn drop_links_to_unimported_slides(slides: &mut [Slide], report_items: &mut Vec<ReportItem>) {
+    let imported_ids: HashSet<String> = slides.iter().map(|s| s.id.clone()).collect();
+    let mut check_runs = |slide_num: usize, runs: &mut [TextRun]| {
+        for run in runs {
+            if let Some(Link::Slide { slide: target }) = &run.link
+                && !imported_ids.contains(target)
+            {
+                report_items.push(ReportItem {
+                    slide: slide_num,
+                    kind: SkipKind::HiddenSlide,
+                    note: format!("Dropped link to skipped hidden slide {target}"),
+                });
+                run.link = None;
+            }
+        }
+    };
+    let mut check_objects = |slide_num: usize, objects: &mut [Object]| {
+        for object in objects {
+            match &mut object.kind {
+                ObjectKind::Text { runs, .. } => check_runs(slide_num, runs),
+                ObjectKind::Shape {
+                    text: Some(text), ..
+                } => check_runs(slide_num, &mut text.runs),
+                ObjectKind::Table { rows, .. } => {
+                    for row in rows {
+                        for cell in &mut row.cells {
+                            check_runs(slide_num, &mut cell.runs);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    };
+    for slide in slides {
+        let slide_num = slide
+            .id
+            .strip_prefix("slide")
+            .and_then(|n| n.parse::<usize>().ok())
+            .unwrap_or(1);
+        check_objects(slide_num, &mut slide.objects);
+        for layer in &mut slide.layers {
+            check_objects(slide_num, &mut layer.objects);
+        }
+    }
 }
 
 /// Map a picture's `a:srcRect` onto the crop rect CourseCraft stores.

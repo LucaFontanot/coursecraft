@@ -2466,6 +2466,37 @@ pub struct TextRun {
     pub font: Option<String>,
 }
 
+impl TextRun {
+    /// True when this run has no formatting or link overrides on top of the
+    /// paragraph style.
+    #[must_use]
+    pub fn is_plain(&self) -> bool {
+        let Self {
+            text: _,
+            bold,
+            italic,
+            underline,
+            strikethrough,
+            baseline,
+            letter_spacing,
+            size,
+            color,
+            link,
+            font,
+        } = self;
+        bold.is_none()
+            && italic.is_none()
+            && underline.is_none()
+            && strikethrough.is_none()
+            && baseline.is_none()
+            && letter_spacing.is_none()
+            && size.is_none()
+            && color.is_none()
+            && link.is_none()
+            && font.is_none()
+    }
+}
+
 /// Where a text run links to.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
