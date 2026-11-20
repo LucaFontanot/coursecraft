@@ -243,6 +243,16 @@ Plan: `docs/plans/m22-editor-upgrades.md`. Implemented by Gemini 4 Hydrogen, rev
 - A live variables panel in Preview (read-only; no runtime change).
 - A tester-style bug hunt (`docs/bug-hunt/2026-11-20.md`) found a crash and three more bugs, all fixed with tests; a 2,000-step random-click test is kept for release checks.
 
+## M23 Week-one authoring ✅
+
+Plan: `docs/plans/m23-week-one-authoring.md`. Steps 1–2 by Gemini 4 Neon, step 3 started by Neon and finished by Gemini 4 Hydrogen, steps 4–5 by Hydrogen; reviewed by Opus.
+
+- Publish to Web (no LMS); web runs have no resume yet.
+- Lock, hide, guides, rulers and grid saved with the course; four starter templates.
+- Try Again layer, and answered questions re-show their feedback layer on resume.
+- Variable-to-variable set and compare, ignore-case text checks, jump to last visited slide or a scene.
+- Audio waveforms (desktop) and named slide cue points that triggers can fire on.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.

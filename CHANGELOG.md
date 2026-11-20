@@ -4,7 +4,16 @@ What changed in each release, newest first. Versions follow [semantic versioning
 
 ## 0.2.3
 
-A fix so published courses load in SCORM Cloud.
+Share courses on any website, start from a template, give learners a second try, branch on variables, and time slides to narration. Also a fix so published courses load in SCORM Cloud.
+
+- **Publish to Web:** File ▸ Publish has a "Web (any website, no LMS)" option (and `--standard web` in the command line). Upload the folder to any web server; results are not reported to an LMS.
+- **Starter templates:** the welcome screen offers Blank, Quick Knowledge Check, Linear Lesson and Branching Scenario.
+- **Lock and hide are saved:** locked and hidden objects, guides, rulers and the grid stay as you left them when you reopen a course. Hidden objects are hidden only in the editor; learners still see them.
+- **Try Again layer:** a question with more than one attempt can show a Try Again layer after a wrong answer; its button clears the answer so the learner can try again. Add it with one click in the question panel.
+- **Safe resume:** coming back to a question you already answered shows its feedback layer again, so its Continue button is always there.
+- **Variables compared to variables:** set a variable from another variable, or compare two variables in a condition. Text checks can ignore upper and lower case.
+- **More jumps:** jump to the last slide the learner visited, or to the first slide of a scene.
+- **Waveforms and cue points:** audio on the timeline shows its waveform. Press C to drop a named cue point at the playhead; objects snap to cues, and a trigger can fire at a cue, so moving the cue retimes the trigger.
 
 **Fixes**
 - Published courses load in LMSs that protect course files with sign-in cookies, such as SCORM Cloud. Before, the player showed "failed to fetch course.json: HTTP 403".
