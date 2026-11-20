@@ -87,8 +87,9 @@ pub use shapes::{
     shape_label,
 };
 pub use strings::{
-    Hit, Location, MAX_HITS, ReplaceOutcome, StringItem, StringTarget, course_strings,
-    find_in_course, find_matches, replace_in_target, snippet, string_mut, variable_reference_spans,
+    Hit, Location, MAX_HITS, ReplaceOutcome, StringItem, StringTarget, course_string_locations,
+    course_strings, find_in_course, find_matches, replace_in_target, snippet, string_mut,
+    variable_reference_spans,
 };
 pub use text::{
     TextRunPatch, align_paragraphs, apply_link_to_range, apply_style_to_range, apply_text_edit,

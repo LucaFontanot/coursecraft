@@ -79,6 +79,12 @@ pub struct Session {
     skip_undo: bool,
     /// Set once older undo steps are dropped to stay within [`MAX_HISTORY`].
     history_truncated: bool,
+    /// Last known `course.is_playable()` result for a given `revision`.
+    valid_at_revision: Option<(u64, bool)>,
+    /// Set by `keep_valid` when the mutated course passed validation.
+    validated_in_cmd: bool,
+    #[cfg(test)]
+    pub(crate) is_playable_checks: usize,
 }
 
 impl Session {
@@ -91,6 +97,10 @@ impl Session {
             revision: 0,
             skip_undo: false,
             history_truncated: false,
+            valid_at_revision: None,
+            validated_in_cmd: false,
+            #[cfg(test)]
+            is_playable_checks: 0,
         }
     }
 
@@ -178,6 +188,29 @@ impl Session {
             .collect()
     }
 
+    /// Whether the course currently passes validation without errors.
+    ///
+    /// Caches the result per [`Session::revision`] so consecutive commands on an
+    /// unchanged course do not re-validate it.
+    pub(crate) fn is_playable(&mut self) -> bool {
+        if let Some((rev, valid)) = self.valid_at_revision
+            && rev == self.revision
+        {
+            return valid;
+        }
+        #[cfg(test)]
+        {
+            self.is_playable_checks += 1;
+        }
+        let valid = self.course.is_playable();
+        self.valid_at_revision = Some((self.revision, valid));
+        valid
+    }
+
+    pub(crate) fn mark_validated_valid(&mut self) {
+        self.validated_in_cmd = true;
+    }
+
     /// Run a command by id.
     ///
     /// # Errors
@@ -193,6 +226,7 @@ impl Session {
         }
         let snapshot = self.course.clone();
         self.skip_undo = false;
+        self.validated_in_cmd = false;
         let outcome = (cmd.run)(self, params);
         // A command that leaves the course exactly as it was (an inspector
         // re-sending the value it already has) records no undo step and no
@@ -209,6 +243,9 @@ impl Session {
                 }
                 self.redo.clear();
                 self.revision = self.revision.wrapping_add(1);
+                if self.validated_in_cmd {
+                    self.valid_at_revision = Some((self.revision, true));
+                }
                 Ok(v)
             }
             Err(e) => {
@@ -289,6 +326,9 @@ impl Session {
                 .then(|| self.course.clone());
             self.skip_undo = false;
             let outcome = (cmd.run)(self, params);
+            if cmd.mutates {
+                self.valid_at_revision = None;
+            }
             // A step that changed nothing must not make an undo step on its own.
             // Other steps in the batch still do.
             if std::mem::take(&mut self.skip_undo) {
@@ -336,6 +376,7 @@ impl Session {
         let (prev, name) = self.undo.pop().ok_or(EngineError::NothingTo("undo"))?;
         let current = std::mem::replace(&mut self.course, prev);
         self.redo.push((current, name));
+        self.valid_at_revision = None;
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
@@ -344,6 +385,7 @@ impl Session {
         let (next, name) = self.redo.pop().ok_or(EngineError::NothingTo("redo"))?;
         let current = std::mem::replace(&mut self.course, next);
         self.undo.push((current, name));
+        self.valid_at_revision = None;
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }

@@ -566,3 +566,63 @@ fn headless_save_ccraft_preserves_opened_media() {
     let reopened = coursecraft_format::open_project(&saved_bytes).expect("reopen saved ccraft");
     assert_eq!(reopened.media, media);
 }
+
+#[test]
+fn test_course_get_pointer_matches_full_course_json() {
+    let mut session = Session::blank("Pointer Parity");
+    session
+        .course
+        .strings
+        .insert("next".into(), "Continue".into());
+    let mut host = HeadlessHost::new(session, None);
+    let token = "";
+    let full = serde_json::to_value(host.course()).unwrap();
+
+    for ptr in [
+        "/title",
+        "title",
+        "/scenes/0/slides/0/title",
+        "/scenes/0/slides/0",
+        "/strings/next",
+        "/player",
+    ] {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "course.get",
+            "params": { "pointer": ptr }
+        });
+        let res = dispatch(&mut host, &req, token);
+        let norm = if ptr.starts_with('/') {
+            ptr.to_owned()
+        } else {
+            format!("/{ptr}")
+        };
+        assert_eq!(
+            res["result"],
+            full.pointer(&norm).cloned().unwrap(),
+            "mismatch for pointer {ptr}"
+        );
+    }
+
+    for missing in [
+        "/variables",
+        "/theme",
+        "/start_slide",
+        "/scenes/99/slides/0",
+        "/scenes/01/slides/0",
+        "/nonexistent/field",
+    ] {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "course.get",
+            "params": { "pointer": missing }
+        });
+        let res = dispatch(&mut host, &req, token);
+        assert_eq!(
+            res["error"]["code"], -32004,
+            "expected not found for {missing}: {res}"
+        );
+    }
+}

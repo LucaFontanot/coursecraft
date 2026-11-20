@@ -5070,3 +5070,22 @@ fn timer_longer_than_owning_timeline_emits_validation_warning() {
         "expected no warning when timer fits timeline, got {issues_ok:?}"
     );
 }
+
+#[test]
+fn course_string_locations_matches_course_strings() {
+    let mut c = Course::from_json(include_str!("../../../examples/hello-course/course.json"))
+        .expect("hello course");
+    c.masters.push(c.scenes[0].slides[0].clone());
+    let mut bank_slide = c.scenes[0].slides[0].clone();
+    bank_slide.id = "bank_s1".into();
+    c.banks.push(crate::QuestionBank {
+        id: "b1".into(),
+        title: "Bank 1".into(),
+        slides: vec![bank_slide],
+    });
+    let expected: Vec<crate::Location> = crate::course_strings(&c)
+        .into_iter()
+        .map(|item| item.location)
+        .collect();
+    assert_eq!(crate::course_string_locations(&c), expected);
+}

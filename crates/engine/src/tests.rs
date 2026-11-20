@@ -9445,3 +9445,167 @@ fn slide_set_master_rejects_bank_slide() {
         .unwrap_err();
     assert!(err.to_string().contains(&qid), "{err}");
 }
+
+#[test]
+fn is_playable_cache_avoids_revalidating_unchanged_revision() {
+    let mut s = Session::blank("Cached");
+    assert_eq!(s.is_playable_checks, 0);
+
+    ok(
+        &mut s,
+        "slide.add",
+        json!({ "scene": "scene1", "title": "S2" }),
+    );
+    assert_eq!(s.is_playable_checks, 1);
+
+    // Second mutating command at the new revision uses the cached validity from keep_valid.
+    ok(
+        &mut s,
+        "slide.add",
+        json!({ "scene": "scene1", "title": "S3" }),
+    );
+    assert_eq!(s.is_playable_checks, 1);
+
+    // A no-op mutating command leaves revision unchanged and still hits the cache.
+    ok(
+        &mut s,
+        "course.replace",
+        json!({ "query": "never_matches_anything", "replacement": "x" }),
+    );
+    assert_eq!(s.is_playable_checks, 1);
+
+    // After undo, the cache is cleared so the next command checks once.
+    s.undo().unwrap();
+    ok(
+        &mut s,
+        "slide.add",
+        json!({ "scene": "scene1", "title": "S4" }),
+    );
+    assert_eq!(s.is_playable_checks, 2);
+
+    // In a batch, fixing an invalid course in step 1 must invalidate the cache so step 2
+    // sees the course is now valid and refuses to break it again.
+    let mut invalid = Session::blank("Valid");
+    invalid.course.title.clear();
+    let err = invalid
+        .execute_batch(&[
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": "Fixed Title" }),
+            ),
+            ("course.set_title".to_owned(), json!({ "title": "" })),
+        ])
+        .unwrap_err();
+    assert!(err.to_string().contains("step 1"), "{err}");
+}
+
+#[test]
+fn object_delete_removes_many_dangling_triggers_on_base_and_layers_in_one_pass() {
+    let mut s = Session::blank("DanglingTriggers");
+    let b1 = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "kind": { "type": "button", "label": "Target" },
+            "frame": { "x": 10, "y": 10, "w": 100, "h": 40 }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let b2 = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "kind": { "type": "button", "label": "Keep" },
+            "frame": { "x": 120, "y": 10, "w": 100, "h": 40 }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let layer = ok(
+        &mut s,
+        "layer.add",
+        json!({ "slide": "slide1", "name": "L1" }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": b1,
+            "state": { "name": "active", "fill": "#112233" }
+        }),
+    );
+
+    // Unrelated trigger on b2 (must survive).
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": b2 },
+                "action": { "action": "jump_to_slide", "target": "next" }
+            }
+        }),
+    );
+
+    // Trigger referencing b1 in both event and action (duplicate validation error on same trigger).
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": b1 },
+                "action": { "action": "change_state", "object": b1, "state": "active" }
+            }
+        }),
+    );
+
+    // 25 base triggers + 24 layer triggers referencing b1.
+    for _ in 0..25 {
+        ok(
+            &mut s,
+            "trigger.add",
+            json!({
+                "slide": "slide1",
+                "trigger": {
+                    "when": { "event": "click", "object": b1 },
+                    "action": { "action": "jump_to_slide", "target": "next" }
+                }
+            }),
+        );
+    }
+    for _ in 0..24 {
+        ok(
+            &mut s,
+            "trigger.add",
+            json!({
+                "slide": "slide1",
+                "layer": layer,
+                "trigger": {
+                    "when": { "event": "timeline_starts" },
+                    "action": { "action": "change_state", "object": b1, "state": "active" }
+                }
+            }),
+        );
+    }
+
+    let res = ok(
+        &mut s,
+        "object.delete",
+        json!({ "slide": "slide1", "object": b1 }),
+    );
+    assert_eq!(res["removed_triggers"], 50);
+    assert_eq!(s.course.scenes[0].slides[0].triggers.len(), 1);
+    assert!(s.course.scenes[0].slides[0].layers[0].triggers.is_empty());
+    assert!(s.course.is_playable());
+}

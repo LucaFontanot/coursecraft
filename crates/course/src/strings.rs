@@ -89,58 +89,153 @@ pub struct ReplaceOutcome {
 
 // ---------------------------------------------------------------- walker
 
+trait StringSink {
+    const NEEDS_LABELS: bool;
+    fn emit(&mut self, location: Location, label: impl FnOnce() -> String, text: &str);
+    fn emit_runs(
+        &mut self,
+        location: Location,
+        label: impl FnOnce() -> String,
+        text: &str,
+        runs: &[TextRun],
+    );
+}
+
+impl StringSink for Vec<StringItem> {
+    const NEEDS_LABELS: bool = true;
+
+    fn emit(&mut self, location: Location, label: impl FnOnce() -> String, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.push(StringItem {
+            location,
+            label: label(),
+            text: text.to_owned(),
+        });
+    }
+
+    fn emit_runs(
+        &mut self,
+        location: Location,
+        label: impl FnOnce() -> String,
+        text: &str,
+        runs: &[TextRun],
+    ) {
+        if runs.is_empty() {
+            self.emit(location, label, text);
+        } else {
+            let joined: String = runs.iter().map(|run| run.text.as_str()).collect();
+            self.emit(location, label, &joined);
+        }
+    }
+}
+
+impl StringSink for Vec<Location> {
+    const NEEDS_LABELS: bool = false;
+
+    fn emit(&mut self, location: Location, _label: impl FnOnce() -> String, text: &str) {
+        if !text.is_empty() {
+            self.push(location);
+        }
+    }
+
+    fn emit_runs(
+        &mut self,
+        location: Location,
+        _label: impl FnOnce() -> String,
+        text: &str,
+        runs: &[TextRun],
+    ) {
+        let non_empty = if runs.is_empty() {
+            !text.is_empty()
+        } else {
+            runs.iter().any(|run| !run.text.is_empty())
+        };
+        if non_empty {
+            self.push(location);
+        }
+    }
+}
+
 /// Every author-visible string, in play order, then masters and bank slides.
 #[must_use]
 pub fn course_strings(course: &Course) -> Vec<StringItem> {
     let mut out = Vec::new();
-    add(
-        &mut out,
+    walk_course(course, &mut out);
+    out
+}
+
+/// Locations of every author-visible string, in the same order as
+/// [`course_strings`], without cloning the text or building labels.
+#[must_use]
+pub fn course_string_locations(course: &Course) -> Vec<Location> {
+    let mut out = Vec::new();
+    walk_course(course, &mut out);
+    out
+}
+
+fn walk_course<S: StringSink>(course: &Course, out: &mut S) {
+    out.emit(
         Location {
             slide: None,
             object: None,
             layer: None,
             field: "course/title".to_owned(),
         },
-        "Course ▸ Title".to_owned(),
+        || "Course ▸ Title".to_owned(),
         &course.title,
     );
     let mut number = 0usize;
     for (scene_index, scene) in course.scenes.iter().enumerate() {
-        add(
-            &mut out,
+        out.emit(
             Location {
                 slide: None,
                 object: None,
                 layer: None,
                 field: format!("scene/{}/title", scene.id),
             },
-            format!("Scene {} ▸ Title", scene_index.saturating_add(1)),
+            || format!("Scene {} ▸ Title", scene_index.saturating_add(1)),
             &scene.title,
         );
         for slide in &scene.slides {
             number = number.saturating_add(1);
-            walk_slide(&mut out, slide, &format!("Slide {number}"));
+            let place = if S::NEEDS_LABELS {
+                format!("Slide {number}")
+            } else {
+                String::new()
+            };
+            walk_slide(out, slide, &place);
         }
     }
     for master in &course.masters {
-        let name = if master.title.is_empty() {
-            master.id.as_str()
+        let place = if S::NEEDS_LABELS {
+            let name = if master.title.is_empty() {
+                master.id.as_str()
+            } else {
+                master.title.as_str()
+            };
+            format!("Master \"{name}\"")
         } else {
-            master.title.as_str()
+            String::new()
         };
-        walk_slide(&mut out, master, &format!("Master \"{name}\""));
+        walk_slide(out, master, &place);
     }
     for bank in &course.banks {
-        let name = if bank.title.is_empty() {
-            bank.id.as_str()
+        let place = if S::NEEDS_LABELS {
+            let name = if bank.title.is_empty() {
+                bank.id.as_str()
+            } else {
+                bank.title.as_str()
+            };
+            format!("Bank \"{name}\"")
         } else {
-            bank.title.as_str()
+            String::new()
         };
         for slide in &bank.slides {
-            walk_slide(&mut out, slide, &format!("Bank \"{name}\""));
+            walk_slide(out, slide, &place);
         }
     }
-    out
 }
 
 fn slide_location(
@@ -157,41 +252,32 @@ fn slide_location(
     }
 }
 
-fn add(out: &mut Vec<StringItem>, location: Location, label: String, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    out.push(StringItem {
-        location,
-        label,
-        text: text.to_owned(),
-    });
-}
-
-fn walk_slide(out: &mut Vec<StringItem>, slide: &Slide, place: &str) {
+fn walk_slide<S: StringSink>(out: &mut S, slide: &Slide, place: &str) {
     let sid = slide.id.as_str();
-    add(
-        out,
+    out.emit(
         slide_location(sid, None, None, "title".to_owned()),
-        format!("{place} ▸ Title"),
+        || format!("{place} ▸ Title"),
         &slide.title,
     );
-    add(
-        out,
+    out.emit(
         slide_location(sid, None, None, "notes".to_owned()),
-        format!("{place} ▸ Notes"),
+        || format!("{place} ▸ Notes"),
         &slide.notes,
     );
     for object in &slide.objects {
         walk_object(out, sid, place, None, object);
     }
     for layer in &slide.layers {
-        let name = if layer.name.is_empty() {
-            layer.id.as_str()
+        let layer_place = if S::NEEDS_LABELS {
+            let name = if layer.name.is_empty() {
+                layer.id.as_str()
+            } else {
+                layer.name.as_str()
+            };
+            format!("{place} ▸ Layer \"{name}\"")
         } else {
-            layer.name.as_str()
+            String::new()
         };
-        let layer_place = format!("{place} ▸ Layer \"{name}\"");
         for object in &layer.objects {
             walk_object(out, sid, &layer_place, Some(layer.id.as_str()), object);
         }
@@ -201,110 +287,86 @@ fn walk_slide(out: &mut Vec<StringItem>, slide: &Slide, place: &str) {
     }
 }
 
-fn walk_object(
-    out: &mut Vec<StringItem>,
+fn walk_object<S: StringSink>(
+    out: &mut S,
     slide: &str,
     place: &str,
     layer: Option<&str>,
     object: &Object,
 ) {
-    let name = if object.name.is_empty() {
-        object.id.as_str()
+    let object_place = if S::NEEDS_LABELS {
+        let name = if object.name.is_empty() {
+            object.id.as_str()
+        } else {
+            object.name.as_str()
+        };
+        format!("{place} ▸ {name}")
     } else {
-        object.name.as_str()
+        String::new()
     };
-    let object_place = format!("{place} ▸ {name}");
     let at = |field: String| slide_location(slide, Some(object.id.as_str()), layer, field);
     match &object.kind {
         ObjectKind::Text { text, runs, .. } => {
-            if runs.is_empty() {
-                add(
-                    out,
-                    at("text".to_owned()),
-                    format!("{object_place} ▸ Text"),
-                    text,
-                );
-            } else {
-                let joined: String = runs.iter().map(|run| run.text.as_str()).collect();
-                add(
-                    out,
-                    at("text".to_owned()),
-                    format!("{object_place} ▸ Text"),
-                    &joined,
-                );
-            }
+            out.emit_runs(
+                at("text".to_owned()),
+                || format!("{object_place} ▸ Text"),
+                text,
+                runs,
+            );
         }
-        ObjectKind::Button { label, .. } => add(
-            out,
+        ObjectKind::Button { label, .. } => out.emit(
             at("label".to_owned()),
-            format!("{object_place} ▸ Button label"),
+            || format!("{object_place} ▸ Button label"),
             label,
         ),
-        ObjectKind::Image { alt, .. } => add(
-            out,
+        ObjectKind::Image { alt, .. } => out.emit(
             at("alt".to_owned()),
-            format!("{object_place} ▸ Alt text"),
+            || format!("{object_place} ▸ Alt text"),
             alt,
         ),
         ObjectKind::Shape {
             text: Some(text), ..
         } => {
-            if text.runs.is_empty() {
-                add(
-                    out,
-                    at("text".to_owned()),
-                    format!("{object_place} ▸ Shape text"),
-                    &text.text,
-                );
-            } else {
-                let joined: String = text.runs.iter().map(|run| run.text.as_str()).collect();
-                add(
-                    out,
-                    at("text".to_owned()),
-                    format!("{object_place} ▸ Shape text"),
-                    &joined,
-                );
-            }
+            out.emit_runs(
+                at("text".to_owned()),
+                || format!("{object_place} ▸ Shape text"),
+                &text.text,
+                &text.runs,
+            );
         }
         ObjectKind::Table { rows, .. } => {
             for (row_index, row) in rows.iter().enumerate() {
                 for (column, cell) in row.cells.iter().enumerate() {
-                    let text = if cell.runs.is_empty() {
-                        cell.text.clone()
-                    } else {
-                        cell.runs.iter().map(|run| run.text.as_str()).collect()
-                    };
-                    add(
-                        out,
+                    out.emit_runs(
                         at(format!("table/{row_index}/{column}/text")),
-                        format!(
-                            "{object_place} ▸ Table cell {},{}",
-                            row_index.saturating_add(1),
-                            column.saturating_add(1)
-                        ),
-                        &text,
+                        || {
+                            format!(
+                                "{object_place} ▸ Table cell {},{}",
+                                row_index.saturating_add(1),
+                                column.saturating_add(1)
+                            )
+                        },
+                        &cell.text,
+                        &cell.runs,
                     );
                 }
             }
         }
-        ObjectKind::TextEntry { placeholder, .. } => add(
-            out,
+        ObjectKind::TextEntry { placeholder, .. } => out.emit(
             at("placeholder".to_owned()),
-            format!("{object_place} ▸ Placeholder"),
+            || format!("{object_place} ▸ Placeholder"),
             placeholder,
         ),
-        ObjectKind::Checkbox { label, .. } => add(
-            out,
+        ObjectKind::Checkbox { label, .. } => out.emit(
             at("label".to_owned()),
-            format!("{object_place} ▸ Checkbox label"),
+            || format!("{object_place} ▸ Checkbox label"),
             label,
         ),
         ObjectKind::RadioGroup { options, .. } => {
             for (index, option) in options.iter().enumerate() {
-                add(
-                    out,
+                out.emit(
                     at(format!("options/{index}/label")),
-                    format!("{object_place} ▸ Radio option {}", index.saturating_add(1)),
+                    || format!("{object_place} ▸ Radio option {}", index.saturating_add(1)),
                     &option.label,
                 );
             }
@@ -312,28 +374,17 @@ fn walk_object(
         ObjectKind::Marker {
             title, body, runs, ..
         } => {
-            add(
-                out,
+            out.emit(
                 at("title".to_owned()),
-                format!("{object_place} ▸ Marker title"),
+                || format!("{object_place} ▸ Marker title"),
                 title,
             );
-            if runs.is_empty() {
-                add(
-                    out,
-                    at("body".to_owned()),
-                    format!("{object_place} ▸ Marker body"),
-                    body,
-                );
-            } else {
-                let joined: String = runs.iter().map(|run| run.text.as_str()).collect();
-                add(
-                    out,
-                    at("body".to_owned()),
-                    format!("{object_place} ▸ Marker body"),
-                    &joined,
-                );
-            }
+            out.emit_runs(
+                at("body".to_owned()),
+                || format!("{object_place} ▸ Marker body"),
+                body,
+                runs,
+            );
         }
         ObjectKind::Shape { text: None, .. }
         | ObjectKind::Path { .. }
@@ -348,60 +399,53 @@ fn walk_object(
         | ObjectKind::Lottie { .. } => {}
     }
     if let Some(description) = &object.description {
-        add(
-            out,
+        out.emit(
             at("description".to_owned()),
-            format!("{object_place} ▸ Description"),
+            || format!("{object_place} ▸ Description"),
             description,
         );
     }
     for state in &object.states {
         if let Some(text) = &state.text {
-            add(
-                out,
+            out.emit(
                 at(format!("state/{}/text", state.name)),
-                format!("{object_place} ▸ State \"{}\" text", state.name),
+                || format!("{object_place} ▸ State \"{}\" text", state.name),
                 text,
             );
         }
     }
 }
 
-fn walk_question(out: &mut Vec<StringItem>, slide: &str, place: &str, question: &Question) {
+fn walk_question<S: StringSink>(out: &mut S, slide: &str, place: &str, question: &Question) {
     let at = |field: String| slide_location(slide, None, None, field);
-    add(
-        out,
+    out.emit(
         at("question/prompt".to_owned()),
-        format!("{place} ▸ Question prompt"),
+        || format!("{place} ▸ Question prompt"),
         &question.prompt,
     );
     for (index, choice) in question.choices.iter().enumerate() {
-        add(
-            out,
+        out.emit(
             at(format!("question/choice/{}", choice.id)),
-            format!("{place} ▸ Choice {}", index.saturating_add(1)),
+            || format!("{place} ▸ Choice {}", index.saturating_add(1)),
             &choice.text,
         );
     }
     for (index, answer) in question.accepted.iter().enumerate() {
-        add(
-            out,
+        out.emit(
             at(format!("question/accepted/{index}")),
-            format!("{place} ▸ Accepted answer {}", index.saturating_add(1)),
+            || format!("{place} ▸ Accepted answer {}", index.saturating_add(1)),
             answer,
         );
     }
     for pair in &question.pairs {
-        add(
-            out,
+        out.emit(
             at(format!("question/pair/{}/left", pair.id)),
-            format!("{place} ▸ Pair {} left", pair.id),
+            || format!("{place} ▸ Pair {} left", pair.id),
             &pair.left,
         );
-        add(
-            out,
+        out.emit(
             at(format!("question/pair/{}/right", pair.id)),
-            format!("{place} ▸ Pair {} right", pair.id),
+            || format!("{place} ▸ Pair {} right", pair.id),
             &pair.right,
         );
     }

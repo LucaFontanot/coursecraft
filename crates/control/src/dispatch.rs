@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use coursecraft_course::Severity;
+use coursecraft_course::{Course, Severity, Theme};
 use serde_json::Value as Json;
 
 use crate::host::{ControlHost, HostError};
@@ -114,28 +114,23 @@ pub fn dispatch(host: &mut dyn ControlHost, request: &Json, expected_token: &str
 
         "course.get" => {
             let course = host.course();
-            let course_val = match serde_json::to_value(course) {
-                Ok(v) => v,
-                Err(e) => return error(id, CODE_ENGINE_ERROR, &e.to_string()),
-            };
-
             let pointer = p_map.get("pointer").and_then(Json::as_str);
-            if let Some(ptr) = pointer {
-                if ptr.is_empty() {
-                    success(id, course_val)
+            if let Some(ptr) = pointer.filter(|p| !p.is_empty()) {
+                let normalized_ptr = if ptr.starts_with('/') {
+                    ptr.to_string()
                 } else {
-                    let normalized_ptr = if ptr.starts_with('/') {
-                        ptr.to_string()
-                    } else {
-                        format!("/{ptr}")
-                    };
-                    match course_val.pointer(&normalized_ptr) {
-                        Some(val) => success(id, val.clone()),
-                        None => error(id, CODE_NOT_FOUND, &format!("pointer not found: {ptr}")),
-                    }
+                    format!("/{ptr}")
+                };
+                match course_pointer_value(course, &normalized_ptr) {
+                    Ok(Some(val)) => success(id, val),
+                    Ok(None) => error(id, CODE_NOT_FOUND, &format!("pointer not found: {ptr}")),
+                    Err(e) => error(id, CODE_ENGINE_ERROR, &e.to_string()),
                 }
             } else {
-                success(id, course_val)
+                match serde_json::to_value(course) {
+                    Ok(v) => success(id, v),
+                    Err(e) => error(id, CODE_ENGINE_ERROR, &e.to_string()),
+                }
             }
         }
 
@@ -475,4 +470,127 @@ pub fn encode_base64(bytes: &[u8]) -> String {
         _ => {}
     }
     out
+}
+
+fn split_pointer_head(ptr: &str) -> (&str, &str) {
+    let rest = ptr.strip_prefix('/').unwrap_or(ptr);
+    match rest.find('/') {
+        Some(pos) => (&rest[..pos], &rest[pos..]),
+        None => (rest, ""),
+    }
+}
+
+fn parse_pointer_index(seg: &str) -> Option<usize> {
+    if seg == "0"
+        || (!seg.is_empty() && !seg.starts_with('0') && seg.bytes().all(|b| b.is_ascii_digit()))
+    {
+        seg.parse::<usize>().ok()
+    } else {
+        None
+    }
+}
+
+fn serialize_pointer_tail<T: serde::Serialize>(
+    node: &T,
+    tail: &str,
+) -> Result<Option<Json>, serde_json::Error> {
+    let val = serde_json::to_value(node)?;
+    if tail.is_empty() {
+        Ok(Some(val))
+    } else {
+        Ok(val.pointer(tail).cloned())
+    }
+}
+
+fn slice_pointer<T: serde::Serialize>(
+    items: &[T],
+    tail: &str,
+    skip_if_empty: bool,
+) -> Result<Option<Json>, serde_json::Error> {
+    if skip_if_empty && items.is_empty() {
+        return Ok(None);
+    }
+    if tail.is_empty() {
+        return serde_json::to_value(items).map(Some);
+    }
+    let (idx_seg, rest) = split_pointer_head(tail);
+    let Some(item) = parse_pointer_index(idx_seg).and_then(|i| items.get(i)) else {
+        return Ok(None);
+    };
+    serialize_pointer_tail(item, rest)
+}
+
+/// Resolve a non-empty JSON pointer against `course`, serializing only the
+/// addressed subtree for known top-level paths.
+fn course_pointer_value(course: &Course, ptr: &str) -> Result<Option<Json>, serde_json::Error> {
+    let (head, tail) = split_pointer_head(ptr);
+    match head {
+        "schema_version" => serialize_pointer_tail(&course.schema_version, tail),
+        "id" => serialize_pointer_tail(&course.id, tail),
+        "title" => serialize_pointer_tail(&course.title, tail),
+        "slide_size" => serialize_pointer_tail(&course.slide_size, tail),
+        "variables" => slice_pointer(&course.variables, tail, true),
+        "scenes" => {
+            if tail.is_empty() {
+                return serde_json::to_value(&course.scenes).map(Some);
+            }
+            let (idx_seg, rest) = split_pointer_head(tail);
+            let Some(scene) = parse_pointer_index(idx_seg).and_then(|i| course.scenes.get(i))
+            else {
+                return Ok(None);
+            };
+            if let Some(after_slides) = rest.strip_prefix("/slides")
+                && (after_slides.is_empty() || after_slides.starts_with('/'))
+            {
+                return slice_pointer(&scene.slides, after_slides, false);
+            }
+            serialize_pointer_tail(scene, rest)
+        }
+        "masters" => slice_pointer(&course.masters, tail, true),
+        "templates" => slice_pointer(&course.templates, tail, true),
+        "banks" => slice_pointer(&course.banks, tail, true),
+        "start_slide" => match &course.start_slide {
+            Some(s) => serialize_pointer_tail(s, tail),
+            None => Ok(None),
+        },
+        "quiz" => match &course.quiz {
+            Some(q) => serialize_pointer_tail(q, tail),
+            None => Ok(None),
+        },
+        "player" => serialize_pointer_tail(&course.player, tail),
+        "theme" => {
+            if course.theme == Theme::default() {
+                Ok(None)
+            } else {
+                serialize_pointer_tail(&course.theme, tail)
+            }
+        }
+        "language" => match &course.language {
+            Some(l) => serialize_pointer_tail(l, tail),
+            None => Ok(None),
+        },
+        "strings" => {
+            if course.strings.is_empty() {
+                Ok(None)
+            } else {
+                serialize_pointer_tail(&course.strings, tail)
+            }
+        }
+        "fonts" => slice_pointer(&course.fonts, tail, true),
+        "background_audio" => match &course.background_audio {
+            Some(a) => serialize_pointer_tail(a, tail),
+            None => Ok(None),
+        },
+        "text_styles" => slice_pointer(&course.text_styles, tail, true),
+        "resources" => slice_pointer(&course.resources, tail, true),
+        "glossary" => slice_pointer(&course.glossary, tail, true),
+        "editor" => {
+            if course.editor.is_default() {
+                Ok(None)
+            } else {
+                serialize_pointer_tail(&course.editor, tail)
+            }
+        }
+        _ => Ok(None),
+    }
 }

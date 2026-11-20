@@ -148,3 +148,23 @@ fn rows_of_only_commas_or_whitespace_are_skipped_as_blank() {
     let res = import(&mut s, text).unwrap();
     assert_eq!(res["imported"], 1);
 }
+
+#[test]
+fn importing_2000_rows_completes_under_a_second() {
+    let mut csv = String::from("type,question,choice1,choice2,correct\n");
+    for i in 0..MAX_CSV_ROWS {
+        csv.push_str(&format!("multiple_choice,Question {i}?,Alpha,Beta,1\n"));
+    }
+    let mut s = session();
+    let start = std::time::Instant::now();
+    let res = import(&mut s, &csv).unwrap();
+    let elapsed = start.elapsed();
+    assert_eq!(res["imported"], MAX_CSV_ROWS);
+    let ids = res["slides"].as_array().unwrap();
+    let unique: std::collections::HashSet<&str> = ids.iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(unique.len(), MAX_CSV_ROWS);
+    assert!(
+        elapsed.as_secs_f64() < 1.0,
+        "2000-row import took {elapsed:?}, expected < 1s"
+    );
+}

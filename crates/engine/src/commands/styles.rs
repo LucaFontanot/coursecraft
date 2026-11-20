@@ -107,7 +107,7 @@ pub(super) fn theme_set_palette(s: &mut Session, p: &Json) -> Result<Json> {
 /// and, unless `recolor` is false, every use of its old colour in the course.
 pub(super) fn theme_set_palette_color(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "theme.set_palette_color";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let id: String = req(C, p, "id")?;
     let raw: String = req(C, p, "color")?;
     let recolor: bool = opt(C, p, "recolor")?.unwrap_or(true);
@@ -144,7 +144,7 @@ pub(super) fn theme_set_palette_color(s: &mut Session, p: &Json) -> Result<Json>
 /// `course.recolor {from, to}`: replace every use of a colour, course-wide.
 pub(super) fn course_recolor(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.recolor";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let from: String = req(C, p, "from")?;
     let to: String = req(C, p, "to")?;
     color_param(C, "`from`", &from)?;
