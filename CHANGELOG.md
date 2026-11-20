@@ -2,6 +2,19 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.2.4
+
+Everyday speed and fewer clicks.
+
+- **Faster editor:** big courses stay smooth; the accessibility check runs once you pause; saving and publishing use much less memory.
+- **Rename in place:** double-click a slide title or a timeline object name (or press F2). Timeline durations show in seconds.
+- **Publish loop:** Publish remembers your last settings, finishes instantly, and has "Open in browser" to preview the result.
+- **Triggers:** new triggers start on the selected object; double-click a trigger to edit it; Esc cancels and Cmd+Enter saves; filter and group the list.
+- **Canvas:** Alt-drag duplicates, Shift-drag keeps one axis, Space-drag pans, and Cmd+B/I/U work while typing. Set animation, outline, opacity and font on many objects at once. Fixed: changing the fill of several buttons no longer removes their gradient.
+- **Smaller web player:** about 30% smaller (3.3 MB gzipped), starts faster, and loads the next slide's pictures early. The browser console stays quiet unless the address has `?debug=1`.
+- **Small fixes:** drop a `.ccraft` file to open it; one-click Hover / Selected / Visited / Disabled states; Enter adds a variable; double-click a media row to insert it; a note when an SVG has text; a note when old undo steps are dropped; `coursecraft-cli simulate --strict`, plainer `validate` errors, and `publish` finds the built player on its own.
+- **Checked by two stress-test passes:** fixed Undo after Publish (remembering the publish standard no longer adds an Undo step), Cmd+B with only a caret, the state preset buttons shifting under the mouse, a rename box left open after deleting its slide, the preview server waiting on a stuck browser, and the command line picking a half-built player folder.
+
 ## 0.2.3
 
 Share courses on any website, start from a template, give learners a second try, branch on variables, and time slides to narration. Also a fix so published courses load in SCORM Cloud.

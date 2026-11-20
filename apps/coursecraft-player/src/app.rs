@@ -110,6 +110,12 @@ pub struct Playing {
     /// Iframes over web objects (wasm only).
     #[cfg(target_arch = "wasm32")]
     pub web_objects: crate::web_object::WebObjects,
+    /// Last slide id whose media was marked protected in `media_source` (wasm only).
+    #[cfg(target_arch = "wasm32")]
+    last_slide_id: Option<String>,
+    /// Last slide id for which next-slide image prefetching was triggered (wasm only).
+    #[cfg(target_arch = "wasm32")]
+    last_prefetched_slide_id: Option<String>,
 }
 
 impl Drop for Playing {
@@ -181,10 +187,19 @@ impl Playing {
         course: &'static Course,
         ctx: egui::Context,
         standard: coursecraft_lms::Standard,
+        log_effects: bool,
     ) -> Result<Self, String> {
         let (player, lms, start_ms) = crate::lms::init_player(course, standard)?;
 
-        Ok(Self::assemble(ctx, player, lms, None, None, start_ms))
+        Ok(Self::assemble(
+            ctx,
+            player,
+            lms,
+            None,
+            None,
+            start_ms,
+            log_effects,
+        ))
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -195,6 +210,7 @@ impl Playing {
         xapi: Option<crate::lrs::XapiHandle>,
         lti: Option<crate::lti::LtiHandle>,
         start_ms: f64,
+        log_effects: bool,
     ) -> Self {
         let title = player.display_text(&player.course().title);
         let a11y = crate::a11y::AccessLayer::new(ctx.clone(), &title);
@@ -213,13 +229,15 @@ impl Playing {
             log: Vec::new(),
             show_log: false,
             ended: false,
-            log_effects: false,
+            log_effects,
             lms,
             xapi,
             lti,
             start_ms,
             a11y,
             web_objects: crate::web_object::WebObjects::new(),
+            last_slide_id: None,
+            last_prefetched_slide_id: None,
         }
     }
 
@@ -228,7 +246,11 @@ impl Playing {
     /// # Errors
     /// Returns joined validation issues if the course cannot be played.
     #[cfg(target_arch = "wasm32")]
-    pub fn standalone(course: &'static Course, ctx: egui::Context) -> Result<Self, String> {
+    pub fn standalone(
+        course: &'static Course,
+        ctx: egui::Context,
+        log_effects: bool,
+    ) -> Result<Self, String> {
         let mut player = crate::lms::fresh_player(course)?;
         player.set_host_info(coursecraft_logic::HostInfo {
             learner_name: None,
@@ -241,6 +263,7 @@ impl Playing {
             None,
             None,
             crate::lms::now_ms(),
+            log_effects,
         ))
     }
 
@@ -252,9 +275,10 @@ impl Playing {
         player: Player<'static>,
         xapi: crate::lrs::XapiHandle,
         start_ms: f64,
+        log_effects: bool,
     ) -> Self {
         crate::lrs::register_page_close(&xapi, course);
-        Self::assemble(ctx, player, None, Some(xapi), None, start_ms)
+        Self::assemble(ctx, player, None, Some(xapi), None, start_ms, log_effects)
     }
 
     /// Create a web [`Playing`] for an LTI 1.3 package.
@@ -264,8 +288,9 @@ impl Playing {
         player: Player<'static>,
         lti: crate::lti::LtiHandle,
         start_ms: f64,
+        log_effects: bool,
     ) -> Self {
-        Self::assemble(ctx, player, None, None, Some(lti), start_ms)
+        Self::assemble(ctx, player, None, None, Some(lti), start_ms, log_effects)
     }
 
     /// Replace the media playback backend (useful for injecting [`NullBackend`] in tests).
@@ -296,7 +321,7 @@ impl Playing {
     /// Convenience helper that leaks the owned [`Course`] and creates [`Playing`] for web.
     #[cfg(target_arch = "wasm32")]
     pub fn from_course(course: Course, ctx: egui::Context) -> Result<Self, String> {
-        Self::from_course_with_standard(course, ctx, coursecraft_lms::Standard::Scorm12)
+        Self::from_course_with_standard(course, ctx, coursecraft_lms::Standard::Scorm12, false)
     }
 
     /// Convenience helper for web that also selects the package standard.
@@ -305,9 +330,10 @@ impl Playing {
         course: Course,
         ctx: egui::Context,
         standard: coursecraft_lms::Standard,
+        log_effects: bool,
     ) -> Result<Self, String> {
         let course_ref: &'static Course = Box::leak(Box::new(course));
-        Self::new(course_ref, ctx, standard)
+        Self::new(course_ref, ctx, standard, log_effects)
     }
 
     /// Handle a runtime input, emitting and logging each resulting effect.
@@ -323,7 +349,7 @@ impl Playing {
                     println!("{line}");
                 }
                 #[cfg(target_arch = "wasm32")]
-                {
+                if self.log_effects {
                     web_sys::console::log_1(&eframe::wasm_bindgen::JsValue::from_str(&line));
                 }
                 push_log_entry(&mut self.log, line);
@@ -441,6 +467,31 @@ impl Playing {
     pub fn layout_videos(&mut self) {
         self.media.layout_videos(&self.player, &self.view);
     }
+
+    #[cfg(target_arch = "wasm32")]
+    fn sync_web_media_prefetch(&mut self) {
+        let Some(slide) = self.player.current_slide() else {
+            return;
+        };
+        if self.last_slide_id.as_deref() != Some(slide.id.as_str()) {
+            let protected = crate::media::slide_media_srcs(self.player.course(), slide);
+            self.media_source.set_current_slide_media(&protected);
+            self.last_slide_id = Some(slide.id.clone());
+        }
+        if self.last_prefetched_slide_id.as_deref() != Some(slide.id.as_str())
+            && self.media_source.is_idle()
+        {
+            if let Some(next_slide) = self
+                .player
+                .slide_position(&slide.id)
+                .and_then(|pos| self.player.play_order().get(pos + 1).copied())
+            {
+                let next_images = crate::media::slide_image_srcs(self.player.course(), next_slide);
+                self.media_source.prefetch(&next_images);
+            }
+            self.last_prefetched_slide_id = Some(slide.id.clone());
+        }
+    }
 }
 
 /// A course waiting for its xAPI / cmi5 handshake (wasm only).
@@ -485,6 +536,8 @@ pub struct PlayerApp {
     web_loader: Option<crate::load::WebLoader>,
     #[cfg(target_arch = "wasm32")]
     ctx: egui::Context,
+    #[cfg(target_arch = "wasm32")]
+    log_effects: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -589,6 +642,7 @@ impl PlayerApp {
             state: State::Loading,
             web_loader: Some(loader),
             ctx: cc.egui_ctx.clone(),
+            log_effects: crate::load::web_log_effects(),
         }
     }
 
@@ -640,7 +694,12 @@ impl PlayerApp {
 
     /// Begin a SCORM launch with the package's standard.
     fn start_scorm(&mut self, course: Course, standard: coursecraft_lms::Standard) {
-        match Playing::from_course_with_standard(course, self.ctx.clone(), standard) {
+        match Playing::from_course_with_standard(
+            course,
+            self.ctx.clone(),
+            standard,
+            self.log_effects,
+        ) {
             Ok(mut playing) => {
                 playing.frame.reduced_motion = prefers_reduced_motion();
                 playing.handle_input(&Input::Start, None);
@@ -655,7 +714,7 @@ impl PlayerApp {
     /// Begin a standalone web session with no LMS reporting.
     fn start_web(&mut self, course: Course) {
         let course: &'static Course = Box::leak(Box::new(course));
-        match Playing::standalone(course, self.ctx.clone()) {
+        match Playing::standalone(course, self.ctx.clone(), self.log_effects) {
             Ok(mut playing) => {
                 playing.frame.reduced_motion = prefers_reduced_motion();
                 playing.handle_input(&Input::Start, None);
@@ -673,7 +732,8 @@ impl PlayerApp {
         let course: &'static Course = Box::leak(Box::new(course));
         match crate::lti::init_player(course, self.ctx.clone()) {
             Ok((player, lti, start_ms)) => {
-                let mut playing = Playing::from_lti(self.ctx.clone(), player, lti, start_ms);
+                let mut playing =
+                    Playing::from_lti(self.ctx.clone(), player, lti, start_ms, self.log_effects);
                 playing.frame.reduced_motion = prefers_reduced_motion();
                 playing.handle_input(&Input::Start, None);
                 self.state = State::Playing(Box::new(playing));
@@ -695,7 +755,7 @@ impl PlayerApp {
             Err(err) => {
                 crate::lms::log_warn(&format!("xAPI launch failed: {err}"));
                 crate::lms::log_standalone();
-                match Playing::standalone(course, self.ctx.clone()) {
+                match Playing::standalone(course, self.ctx.clone(), self.log_effects) {
                     Ok(mut playing) => {
                         playing.frame.reduced_motion = prefers_reduced_motion();
                         playing.handle_input(&Input::Start, None);
@@ -787,7 +847,14 @@ impl PlayerApp {
         });
 
         let xapi = crate::lrs::new_handle(bridge, api, player.state().clone(), start_ms);
-        let mut playing = Playing::from_connected(course, ctx.clone(), player, xapi, start_ms);
+        let mut playing = Playing::from_connected(
+            course,
+            ctx.clone(),
+            player,
+            xapi,
+            start_ms,
+            self.log_effects,
+        );
         playing.frame.reduced_motion = reduced_motion;
         playing.handle_input(&Input::Start, None);
         self.state = State::Playing(Box::new(playing));
@@ -939,6 +1006,9 @@ impl eframe::App for PlayerApp {
                             Some((&mut playing.media_cache, &source as &dyn MediaSource)),
                         );
                     });
+
+                #[cfg(target_arch = "wasm32")]
+                playing.sync_web_media_prefetch();
 
                 if let Some(volume) = frame_output.volume {
                     playing.media.set_volume(volume);

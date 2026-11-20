@@ -253,6 +253,18 @@ Plan: `docs/plans/m23-week-one-authoring.md`. Steps 1–2 by Gemini 4 Neon, step
 - Variable-to-variable set and compare, ignore-case text checks, jump to last visited slide or a scene.
 - Audio waveforms (desktop) and named slide cue points that triggers can fire on.
 
+## M24 Everyday speed ✅
+
+Plan: `docs/plans/m24-everyday-speed.md`. All steps by Gemini 4 Hydrogen; reviewed by Opus, who fixed the wasm build profile.
+
+- Faster editor on big courses (no per-frame course copies; accessibility check waits until edits pause); save streams to disk; publish no longer copies all media first.
+- Rename slides and timeline objects in place; timeline durations in seconds.
+- Publish remembers its settings, finishes at once, and can open the result in the browser through a local preview server (desktop).
+- Faster triggers: selected object by default, double-click to edit, Esc / Cmd+Enter, filter, group by object.
+- Canvas: Alt-drag duplicates, Shift-drag keeps one axis, Space-drag pans, Cmd+B/I/U while typing; animation, outline, opacity and font for many objects at once.
+- Web player 8.9 MB (was 13.0 MB), start-up files fetched together, next slide's pictures fetched early, quiet console unless `?debug=1`.
+- Small fixes: dropping a `.ccraft` opens it, state preset buttons, Enter adds a variable, double-click inserts media, SVG text warning, history limit note, CLI `simulate --strict`, clearer `validate` errors, `publish` finds the built player.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.

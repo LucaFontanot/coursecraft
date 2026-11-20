@@ -77,6 +77,20 @@ impl PublishStandard {
         }
     }
 
+    /// Parse a standard from its [`Self::file_stem`].
+    #[must_use]
+    pub fn from_stem(stem: &str) -> Option<Self> {
+        match stem {
+            "scorm12" => Some(Self::Scorm12),
+            "scorm2004" => Some(Self::Scorm2004),
+            "cmi5" => Some(Self::Cmi5),
+            "xapi" => Some(Self::Xapi),
+            "lti" => Some(Self::Lti),
+            "web" => Some(Self::Web),
+            _ => None,
+        }
+    }
+
     /// Help shown under a successful publish.
     #[must_use]
     pub fn upload_help(self) -> &'static str {
@@ -142,6 +156,14 @@ impl Editor {
         self.ui.publish.status = None;
         if !matches!(self.ui.publish.phase, PublishPhase::Busy) {
             self.ui.publish.phase = PublishPhase::Idle;
+            self.ui.publish.standard = self
+                .session
+                .course
+                .editor
+                .last_publish
+                .as_ref()
+                .and_then(|last| PublishStandard::from_stem(&last.standard))
+                .unwrap_or_default();
         }
         self.refresh_validation();
     }
@@ -315,9 +337,14 @@ pub fn show_publish_dialog(
                     } else if publish_button(ui, "Publish").clicked() {
                         editor.ui.publish.phase = PublishPhase::Idle;
                         editor.ui.publish.status = None;
-                        requests.push(EditorRequest::Publish {
-                            standard: editor.ui.publish.standard,
-                        });
+                        let standard = editor.ui.publish.standard;
+                        editor.run(
+                            "view.set",
+                            serde_json::json!({
+                                "last_publish": { "standard": standard.file_stem() }
+                            }),
+                        );
+                        requests.push(EditorRequest::Publish { standard });
                     }
                     if ui.button("Cancel").clicked() {
                         close_after = true;
@@ -379,12 +406,23 @@ fn show_success_details(editor: &mut Editor, ui: &mut egui::Ui) {
 }
 
 fn show_success_buttons(
-    _editor: &mut Editor,
+    editor: &mut Editor,
     ui: &mut egui::Ui,
     requests: &mut Vec<EditorRequest>,
     close_after: &mut bool,
 ) {
     ui.horizontal(|ui| {
+        let open_label = match editor.ui.publish.standard {
+            PublishStandard::Web => "Open in browser",
+            PublishStandard::Scorm12
+            | PublishStandard::Scorm2004
+            | PublishStandard::Cmi5
+            | PublishStandard::Xapi
+            | PublishStandard::Lti => "Open in browser (preview, no LMS)",
+        };
+        if ui.button(open_label).clicked() {
+            requests.push(EditorRequest::OpenPublishedInBrowser);
+        }
         if ui.button("Show in folder").clicked() {
             requests.push(EditorRequest::ShowPublished);
         }

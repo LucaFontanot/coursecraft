@@ -295,3 +295,80 @@ fn validation_runs_once_per_revision() {
         "a single revision bump must run course validation exactly once"
     );
 }
+
+/// Ten idle frames with the Trigger Editor open copy no course.
+#[test]
+fn trigger_editor_idle_frames_copy_no_course() {
+    let mut h = hello();
+    h.editor.selection.slide = "s-intro".into();
+    let slide = h
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .expect("s-intro")
+        .clone();
+    let form =
+        crate::triggers::TriggerFormState::new_for_owner(&slide, None, &h.editor.session.course);
+    h.editor.ui.trigger_form = Some(form);
+    let _ = h.idle_frame();
+    assert!(
+        h.find_text("New Trigger").is_some(),
+        "trigger editor window should be open"
+    );
+
+    reset_counts();
+    for _ in 0..10 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::course_copies(),
+        0,
+        "idle frames with trigger editor open must copy no course"
+    );
+}
+
+/// Ten quick edits run the accessibility audit once after 300 ms of quiet,
+/// not ten times during the burst.
+#[test]
+fn audit_debounces_across_quick_edits() {
+    let mut h = hello();
+    let _ = h.frame_at_time(0.1);
+    let _ = h.frame_at_time(0.5);
+    reset_counts();
+
+    for i in 0..10 {
+        let res = h.editor.run(
+            "slide.update",
+            serde_json::json!({
+                "slide": "s-intro",
+                "title": format!("Intro {i}"),
+            }),
+        );
+        assert!(res.is_some(), "slide.update should succeed");
+        let _ = h.frame_at_time(1.0 + (i as f64) * 0.02);
+    }
+
+    assert_eq!(
+        gc::validation_runs(),
+        10,
+        "validation still runs on every revision"
+    );
+    assert_eq!(
+        gc::audit_runs(),
+        0,
+        "audit must stay deferred while edits are less than 300 ms apart"
+    );
+
+    // 400 ms after the last edit (1.18 + 0.40 = 1.58), the audit runs once.
+    let _ = h.frame_at_time(1.60);
+    assert_eq!(
+        gc::audit_runs(),
+        1,
+        "audit must run once after 300 ms of quiet"
+    );
+
+    // Subsequent idle frames must not re-run the audit.
+    let _ = h.frame_at_time(2.00);
+    assert_eq!(gc::audit_runs(), 1, "audit must not re-run while idle");
+}

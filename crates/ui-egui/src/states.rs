@@ -107,6 +107,36 @@ fn show_state_color_field(
     .inner
 }
 
+fn push_add_state(
+    actions: &mut Vec<(&'static str, Json)>,
+    slide_id: &str,
+    obj_id: &str,
+    obj_kind: &ObjectKind,
+    name: &str,
+) {
+    let default_fill = match obj_kind {
+        ObjectKind::Button { fill, .. } | ObjectKind::Shape { fill, .. } => Some(fill.clone()),
+        ObjectKind::Path { path } if path.closed => path.fill.clone(),
+        _ => None,
+    };
+    let state_def = StateDef {
+        name: name.to_owned(),
+        fill: default_fill,
+        text: None,
+        src: None,
+    };
+    if let Ok(state_val) = serde_json::to_value(&state_def) {
+        actions.push((
+            "object.add_state",
+            serde_json::json!({
+                "slide": slide_id,
+                "object": obj_id,
+                "state": state_val,
+            }),
+        ));
+    }
+}
+
 /// Render the States panel section in the right column.
 pub fn show_states_section(
     editor: &mut Editor,
@@ -159,30 +189,25 @@ pub fn show_states_section(
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter))
             && (r_name.has_focus() || r_name.lost_focus());
         if (add_btn.clicked() || (enter && is_valid)) && is_valid {
-            let default_fill = match &obj_kind {
-                ObjectKind::Button { fill, .. } | ObjectKind::Shape { fill, .. } => {
-                    Some(fill.clone())
-                }
-                ObjectKind::Path { path } if path.closed => path.fill.clone(),
-                _ => None,
-            };
-            let state_def = StateDef {
-                name: trimmed.to_owned(),
-                fill: default_fill,
-                text: None,
-                src: None,
-            };
-            if let Ok(state_val) = serde_json::to_value(&state_def) {
-                actions.push((
-                    "object.add_state",
-                    serde_json::json!({
-                        "slide": slide_id,
-                        "object": obj_id_str,
-                        "state": state_val,
-                    }),
-                ));
-            }
+            push_add_state(actions, &slide_id, &obj_id_str, &obj_kind, trimmed);
             editor.ui.states.new_state_name.clear();
+        }
+    });
+
+    ui.horizontal_wrapped(|ui| {
+        for (state_name, button_label) in [
+            ("hover", "+ Hover"),
+            ("selected", "+ Selected"),
+            ("visited", "+ Visited"),
+            ("disabled", "+ Disabled"),
+        ] {
+            let already_added = states_copy.iter().any(|s| s.name == state_name);
+            if ui
+                .add_enabled(!already_added, egui::Button::new(button_label).small())
+                .clicked()
+            {
+                push_add_state(actions, &slide_id, &obj_id_str, &obj_kind, state_name);
+            }
         }
     });
 

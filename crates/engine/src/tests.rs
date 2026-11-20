@@ -7874,6 +7874,46 @@ fn bank_delete_refuses_while_drawn_then_undoes() {
 }
 
 #[test]
+fn view_set_last_publish_skips_undo_while_grid_settings_still_undo() {
+    let mut s = Session::blank("Title");
+    ok(
+        &mut s,
+        "slide.update",
+        json!({ "slide": "slide1", "title": "Edited" }),
+    );
+    let undos_after_edit = s.undo_len();
+
+    ok(
+        &mut s,
+        "view.set",
+        json!({ "last_publish": { "standard": "web" } }),
+    );
+    assert_eq!(
+        s.course
+            .editor
+            .last_publish
+            .as_ref()
+            .map(|p| p.standard.as_str()),
+        Some("web")
+    );
+    assert_eq!(
+        s.undo_len(),
+        undos_after_edit,
+        "remembering last_publish must not add an undo step"
+    );
+
+    ok(&mut s, "view.set", json!({ "show_grid": true }));
+    assert_eq!(
+        s.undo_len(),
+        undos_after_edit + 1,
+        "grid/guide settings must remain undoable"
+    );
+    ok(&mut s, "edit.undo", json!({}));
+    assert!(!s.course.editor.show_grid);
+    assert_eq!(s.undo_len(), undos_after_edit);
+}
+
+#[test]
 fn bank_move_and_remove_slide_with_draw_guard() {
     let mut s = Session::blank("Title");
     let bank = bank_id(&mut s);

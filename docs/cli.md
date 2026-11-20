@@ -65,7 +65,7 @@ cargo install --path apps/coursecraft-cli --locked
 cargo install --path apps/coursecraft-mcp --locked
 ```
 
-Their `publish` needs `--player <folder>`, which `cargo xtask build-player` creates in `target/player-dist` and which needs `trunk`. The app's own `CourseCraft cli publish` has the player inside and doesn't need the option.
+Their `publish` uses `target/player-dist` when present (or `--player <folder>`), which `cargo xtask build-player` creates and which needs `trunk`. The app's own `CourseCraft cli publish` has the player inside and doesn't need the option.
 
 ### If it doesn't connect
 
@@ -103,12 +103,12 @@ Run `coursecraft-cli <command> --help` for every option. A `<course>` is a `cour
 | `diff <a> <b> [--json]` | Say in plain words what differs between two courses (each a `course.json`, folder or `.ccraft`). Exits 0 when the same, 1 when different, 2 on error |
 | `unpack <a.ccraft> -o <dir>` | Unpack an archive into a project folder for git. The folder must not exist or must be empty |
 | `pack <dir> -o <a.ccraft>` | Pack a project folder into an archive. `pack` then `unpack` gives byte-identical `course.json` and media |
-| `simulate <course> <inputs.json> [--seed <n>]` | Play headlessly; prints effects as JSON lines. `--seed` picks the question-bank draw seed (default 0) |
+| `simulate <course> <inputs.json> [--seed <n>] [--strict]` | Play headlessly; prints effects as JSON lines. `--seed` picks the question-bank draw seed (default 0); `--strict` exits 1 if any runtime warning is emitted |
 | `run <course> <script.json> -o <out>` | Apply a script of engine commands |
 | `batch <script.json> <course>... [--dir <folder>] (--in-place \| --out-dir <dir>) [--publish <std> --publish-dir <dir> --player <dir>] [--replace-media <path>=<file>]... [--dry-run]` | Run one script on many courses; see below |
 | `commands` | List engine commands |
 | `manifest <course>` | Print the SCORM 1.2 `imsmanifest.xml` |
-| `publish <course> -o <zip> [--standard <std>]` | Build a package; `<std>` is `scorm12`, `scorm2004`, `cmi5`, `xapi`, `lti` or `web` |
+| `publish <course> -o <zip> [--player <dir>] [--standard <std>]` | Build a package (looks for `target/player-dist` if `--player` is omitted); `<std>` is `scorm12`, `scorm2004`, `cmi5`, `xapi`, `lti` or `web` |
 | `export-mp4 <course> -o <file.mp4> [--width 1280] [--fps 30]` | Export a video for sharing (macOS and Windows) |
 | `export-pdf <course> -o <file.pdf> [--layers] [--no-notes] [--no-text] [--width 1600]` | Export a PDF for review: one page per slide with its picture, notes and text |
 | `export-docx <course> -o <file.docx> [--layers] [--no-notes] [--no-text] [--width 1600]` | Export a Word document for review: one page per slide with its picture, notes and text |

@@ -263,6 +263,8 @@ pub struct PropertiesState {
     pub multi_italic: Option<bool>,
     pub multi_underline: Option<bool>,
     pub multi_align: Option<Align>,
+    pub multi_font: String,
+    pub multi_font_mixed: bool,
     pub multi_fill_allowed: bool,
     pub multi_fill: String,
     pub multi_fill_mixed: bool,
@@ -462,6 +464,8 @@ impl Default for PropertiesState {
             multi_italic: None,
             multi_underline: None,
             multi_align: None,
+            multi_font: String::new(),
+            multi_font_mixed: false,
             multi_fill_allowed: false,
             multi_fill: String::new(),
             multi_fill_mixed: false,
@@ -909,6 +913,59 @@ impl PropertiesState {
         (self.multi_h, self.multi_h_mixed) = common_f32(|object| object.frame.h);
         if let Some(first) = objects.first() {
             self.rotation = coursecraft_course::normalize_rotation(first.rotation);
+            self.opacity = coursecraft_course::clamp_opacity(first.opacity);
+        }
+
+        let same_entrance = objects
+            .first()
+            .is_some_and(|first| objects.iter().all(|o| o.entrance == first.entrance));
+        if same_entrance && let Some(a) = objects.first().and_then(|o| o.entrance.as_ref()) {
+            self.entrance_effect = match a.effect {
+                AnimEffect::Fade => "fade".to_owned(),
+                AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
+                AnimEffect::Zoom => "zoom".to_owned(),
+                AnimEffect::Wipe { .. } => "wipe".to_owned(),
+                AnimEffect::Float { .. } => "float".to_owned(),
+            };
+            self.entrance_direction = match a.effect {
+                AnimEffect::FlyIn { from }
+                | AnimEffect::Wipe { from }
+                | AnimEffect::Float { from } => from,
+                _ => Direction::Bottom,
+            };
+            self.entrance_duration_ms = a.duration_ms;
+            self.entrance_easing = a.easing;
+        } else {
+            self.entrance_effect = "none".to_owned();
+            self.entrance_direction = Direction::Bottom;
+            self.entrance_duration_ms = 500;
+            self.entrance_easing = Easing::EaseOut;
+        }
+
+        let same_exit = objects
+            .first()
+            .is_some_and(|first| objects.iter().all(|o| o.exit == first.exit));
+        if same_exit && let Some(a) = objects.first().and_then(|o| o.exit.as_ref()) {
+            self.exit_effect = match a.effect {
+                AnimEffect::Fade => "fade".to_owned(),
+                AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
+                AnimEffect::Zoom => "zoom".to_owned(),
+                AnimEffect::Wipe { .. } => "wipe".to_owned(),
+                AnimEffect::Float { .. } => "float".to_owned(),
+            };
+            self.exit_direction = match a.effect {
+                AnimEffect::FlyIn { from }
+                | AnimEffect::Wipe { from }
+                | AnimEffect::Float { from } => from,
+                _ => Direction::Bottom,
+            };
+            self.exit_duration_ms = a.duration_ms;
+            self.exit_easing = a.easing;
+        } else {
+            self.exit_effect = "none".to_owned();
+            self.exit_direction = Direction::Bottom;
+            self.exit_duration_ms = 500;
+            self.exit_easing = Easing::EaseOut;
         }
 
         self.multi_text = objects
@@ -922,6 +979,8 @@ impl PropertiesState {
         self.multi_italic = None;
         self.multi_underline = None;
         self.multi_align = None;
+        self.multi_font = String::new();
+        self.multi_font_mixed = false;
         if self.multi_text {
             let styles: Vec<&TextStyle> = objects
                 .iter()
@@ -951,6 +1010,17 @@ impl PropertiesState {
                 self.multi_italic = all_same_bool(styles.iter().map(|style| style.italic));
                 self.multi_underline = all_same_bool(styles.iter().map(|style| style.underline));
                 self.multi_align = all_same_align(styles.iter().map(|style| style.align));
+                let same_font = styles.iter().all(|style| style.font == first.font);
+                self.multi_font = if same_font {
+                    if first.font.eq_ignore_ascii_case("Open Sans") {
+                        "Inter".to_owned()
+                    } else {
+                        first.font.clone()
+                    }
+                } else {
+                    String::new()
+                };
+                self.multi_font_mixed = !same_font;
             }
         }
 
@@ -975,6 +1045,21 @@ impl PropertiesState {
                 let same = fills.iter().all(|fill| *fill == *first);
                 self.multi_fill = if same { first.0.clone() } else { String::new() };
                 self.multi_fill_mixed = !same;
+            }
+        }
+        if all_shapes
+            && let Some(ObjectKind::Shape { outline, .. }) =
+                objects.first().map(|object| &object.kind)
+        {
+            self.shape_outline_enabled = outline.is_some();
+            if let Some(outline) = outline {
+                self.shape_outline_color = outline.color.0.clone();
+                self.shape_outline_width = outline.width;
+                self.shape_outline_dash = outline.dash;
+            } else {
+                self.shape_outline_color = "#1F1F1F".to_owned();
+                self.shape_outline_width = 1.5;
+                self.shape_outline_dash = coursecraft_course::DashStyle::Solid;
             }
         }
 
@@ -1643,7 +1728,7 @@ fn effects_at_cursor(
     (style.strikethrough, style.baseline, style.letter_spacing)
 }
 
-fn style_at_cursor(
+pub(crate) fn style_at_cursor(
     runs: &[TextRun],
     style: &TextStyle,
     cursor_char: usize,
@@ -1986,6 +2071,7 @@ fn show_multi_properties(
     }
     let is_one_group = editor.selection.is_one_group(&editor.session.course);
     let group_ids: Vec<String> = objects.iter().map(|object| object.id.clone()).collect();
+    let font_families = editor.ui.properties_lists.font_families.clone();
     let props = &mut editor.ui.properties;
     let header = if is_one_group {
         format!("Group of {} objects", objects.len())
@@ -2123,6 +2209,58 @@ fn show_multi_properties(
     if props.multi_text {
         inspector_separator(ui);
         inspector_section_header(ui, "Text");
+
+        inspector_row(ui, "Font", |ui| {
+            let label = if props.multi_font_mixed {
+                "Mixed"
+            } else {
+                props.multi_font.as_str()
+            };
+            let selected_font = coursecraft_render::slide_font_named(
+                ui.ctx(),
+                (!props.multi_font_mixed && !props.multi_font.is_empty())
+                    .then_some(props.multi_font.as_str()),
+                false,
+                false,
+                coursecraft_render::SIZE_BODY,
+            );
+            egui::ComboBox::from_id_salt("prop_multi_font")
+                .selected_text(RichText::new(label).font(selected_font))
+                .show_ui(ui, |ui| {
+                    for name in
+                        std::iter::once("Inter".to_owned()).chain(font_families.iter().cloned())
+                    {
+                        let font = coursecraft_render::slide_font_named(
+                            ui.ctx(),
+                            Some(&name),
+                            false,
+                            false,
+                            coursecraft_render::SIZE_BODY,
+                        );
+                        let is_selected = !props.multi_font_mixed && props.multi_font == name;
+                        if ui
+                            .selectable_label(is_selected, RichText::new(&name).font(font))
+                            .clicked()
+                        {
+                            props.multi_font = name.clone();
+                            props.multi_font_mixed = false;
+                            for object in &objects {
+                                actions_to_run.push((
+                                    "text.style_range",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": object.id,
+                                        "start": 0,
+                                        "end": 0,
+                                        "font": name,
+                                    }),
+                                ));
+                            }
+                            ui.close();
+                        }
+                    }
+                });
+        });
 
         inspector_row(ui, "Style", |ui| {
             let bold = props.multi_bold;
@@ -2315,23 +2453,12 @@ fn show_multi_properties(
             let fill = props.multi_fill.trim().to_owned();
             for object in &objects {
                 let (kind, needs) = match &object.kind {
-                    ObjectKind::Shape { fill: current, .. } => {
+                    ObjectKind::Shape { fill: current, .. }
+                    | ObjectKind::Button { fill: current, .. } => {
                         let mut kind = serde_json::to_value(&object.kind).unwrap_or(Json::Null);
                         kind["fill"] = serde_json::json!(fill);
                         (kind, current.0 != fill)
                     }
-                    ObjectKind::Button {
-                        label,
-                        fill: current,
-                        ..
-                    } => (
-                        serde_json::json!({
-                            "type": "button",
-                            "label": label,
-                            "fill": fill,
-                        }),
-                        current.0 != fill,
-                    ),
                     _ => continue,
                 };
                 if needs {
@@ -2383,8 +2510,129 @@ fn show_multi_properties(
                     }
                 }
             });
+
+            inspector_separator(ui);
+            let mut outline_changed = false;
+            inspector_row(ui, "No outline", |ui| {
+                let mut no_outline = !props.shape_outline_enabled;
+                if ui.checkbox(&mut no_outline, "").changed() {
+                    props.shape_outline_enabled = !no_outline;
+                    outline_changed = true;
+                }
+            });
+            if props.shape_outline_enabled {
+                inspector_row(ui, "Colour", |ui| {
+                    let (cr, valid_color) = show_color_field(
+                        ui,
+                        "",
+                        &mut props.shape_outline_color,
+                        "prop_multi_shape_outline_color",
+                    );
+                    if is_committed(&cr, ui) && valid_color {
+                        outline_changed = true;
+                    }
+                });
+                inspector_row(ui, "Width", |ui| {
+                    let rem_w = ui.available_width().max(30.0);
+                    let r = add_drag_left(
+                        ui,
+                        [rem_w, coursecraft_render::CONTROL_COMPACT],
+                        DragValue::new(&mut props.shape_outline_width)
+                            .speed(0.25)
+                            .range(0.0..=50.0)
+                            .suffix(" px"),
+                    );
+                    let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if (r.drag_stopped() || r.lost_focus() || enter)
+                        && props.shape_outline_width.is_finite()
+                        && (0.0..=50.0).contains(&props.shape_outline_width)
+                    {
+                        outline_changed = true;
+                    }
+                });
+                inspector_row(ui, "Dash", |ui| {
+                    let label = match props.shape_outline_dash {
+                        coursecraft_course::DashStyle::Solid => "Solid",
+                        coursecraft_course::DashStyle::Dash => "Dash",
+                        coursecraft_course::DashStyle::Dot => "Dot",
+                    };
+                    let rem_w = ui.available_width().max(30.0);
+                    egui::ComboBox::from_id_salt("prop_multi_shape_outline_dash")
+                        .width(rem_w)
+                        .selected_text(label)
+                        .show_ui(ui, |ui| {
+                            for (dash, dash_label) in [
+                                (coursecraft_course::DashStyle::Solid, "Solid"),
+                                (coursecraft_course::DashStyle::Dash, "Dash"),
+                                (coursecraft_course::DashStyle::Dot, "Dot"),
+                            ] {
+                                if ui
+                                    .selectable_value(
+                                        &mut props.shape_outline_dash,
+                                        dash,
+                                        dash_label,
+                                    )
+                                    .clicked()
+                                {
+                                    outline_changed = true;
+                                }
+                            }
+                        });
+                });
+            }
+            if outline_changed {
+                let outline_json = if props.shape_outline_enabled {
+                    serde_json::json!({
+                        "color": props.shape_outline_color.trim(),
+                        "width": props.shape_outline_width,
+                        "dash": props.shape_outline_dash,
+                    })
+                } else {
+                    Json::Null
+                };
+                for object in &objects {
+                    let mut kind = serde_json::to_value(&object.kind).unwrap_or(Json::Null);
+                    kind["outline"] = outline_json.clone();
+                    actions_to_run.push((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": object.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            }
         }
     }
+
+    inspector_separator(ui);
+    inspector_row(ui, "Opacity", |ui| {
+        let rem_w = ui.available_width().max(30.0);
+        let response = ui.add_sized(
+            [rem_w, coursecraft_render::CONTROL_COMPACT],
+            egui::Slider::new(&mut props.opacity, 0.0..=1.0)
+                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
+        );
+        props.opacity_rect = Some(response.rect);
+        let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if response.drag_stopped() || response.lost_focus() || enter {
+            let opacity = coursecraft_course::clamp_opacity(props.opacity);
+            props.opacity = opacity;
+            for object in &objects {
+                if (opacity - object.opacity).abs() > 0.001 {
+                    actions_to_run.push((
+                        "object.set_opacity",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": object.id,
+                            "opacity": opacity,
+                        }),
+                    ));
+                }
+            }
+        }
+    });
 
     inspector_separator(ui);
     inspector_row(ui, "Decorative", |ui| {
@@ -2576,15 +2824,62 @@ fn show_animate_tab(
     let p = coursecraft_render::palette(ui.ctx());
 
     if editor.selection.is_multi() {
-        ui.vertical_centered(|ui| {
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("Select one object to animate it")
-                    .color(p.text_secondary)
-                    .size(coursecraft_render::SIZE_BODY),
-            );
-            ui.add_space(8.0);
-        });
+        let slide_id = editor.selection.slide.clone();
+        let ids = editor.selection.ids();
+        let props = &mut editor.ui.properties;
+        let mut entrance_action: Option<(&'static str, Json)> = None;
+        let mut exit_action: Option<(&'static str, Json)> = None;
+        show_anim_row(
+            ui,
+            "Entrance Animation",
+            "entrance",
+            &mut props.entrance_effect,
+            &mut props.entrance_direction,
+            &mut props.entrance_duration_ms,
+            &mut props.entrance_easing,
+            &slide_id,
+            "",
+            &mut entrance_action,
+        );
+        inspector_separator(ui);
+        show_anim_row(
+            ui,
+            "Exit Animation",
+            "exit",
+            &mut props.exit_effect,
+            &mut props.exit_direction,
+            &mut props.exit_duration_ms,
+            &mut props.exit_easing,
+            &slide_id,
+            "",
+            &mut exit_action,
+        );
+        if entrance_action.is_some() {
+            for id in &ids {
+                actions_to_run.push(animation_command(
+                    "entrance",
+                    &props.entrance_effect,
+                    props.entrance_direction,
+                    props.entrance_duration_ms,
+                    props.entrance_easing,
+                    &slide_id,
+                    id,
+                ));
+            }
+        }
+        if exit_action.is_some() {
+            for id in &ids {
+                actions_to_run.push(animation_command(
+                    "exit",
+                    &props.exit_effect,
+                    props.exit_direction,
+                    props.exit_duration_ms,
+                    props.exit_easing,
+                    &slide_id,
+                    id,
+                ));
+            }
+        }
         inspector_separator(ui);
     } else if editor.selection.object.is_some() {
         show_animations_section(editor, ui, actions_to_run);
@@ -5365,7 +5660,6 @@ fn show_object_properties(
 ) {
     let mut action_to_run: Option<(&'static str, Json)> = None;
     let mut font_requests: Vec<crate::EditorRequest> = Vec::new();
-    let system_fonts = editor.ui.system_fonts.clone();
     let mut replace_image_requested = false;
     let mut replace_audio_requested = false;
     let mut replace_video_requested = false;
@@ -5394,20 +5688,11 @@ fn show_object_properties(
             .unwrap_or(slide.duration_ms),
         _ => slide.duration_ms,
     };
-    let media_names: Vec<String> = editor.media.iter().map(|(name, _)| name.clone()).collect();
-    let slides: Vec<(String, String)> = editor
-        .session
-        .course
-        .slides()
-        .map(|s| (s.id.clone(), s.title.clone()))
-        .collect();
-    let font_families: Vec<String> = editor
-        .session
-        .course
-        .font_families()
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
+    editor.ui.properties_lists.ensure(
+        editor.session.revision,
+        &editor.session.course,
+        &editor.media,
+    );
     let selected_cell = editor.ui.table_cell;
     let playhead_ms = editor.ui.timeline.playhead_ms;
     // Crop mode needs the decoded picture; look it up before the props borrow.
@@ -5425,6 +5710,8 @@ fn show_object_properties(
     };
 
     let props = &mut editor.ui.properties;
+    let lists = &editor.ui.properties_lists;
+    let system_fonts = editor.ui.system_fonts.as_deref();
 
     let panels: Vec<(String, String)> = {
         let layer = slide.object(obj_id).and_then(|(_, layer)| layer);
@@ -5519,10 +5806,10 @@ fn show_object_properties(
                 runs,
                 text,
                 "text",
-                &font_families,
+                &lists.font_families,
                 None,
                 Some(*autofit),
-                system_fonts.as_deref(),
+                system_fonts,
                 &mut font_requests,
             ) {
                 action_to_run = Some(action);
@@ -5585,7 +5872,7 @@ fn show_object_properties(
                 &fill.0,
                 &slide.id,
                 &obj.id,
-                &media_names,
+                &lists.media_names,
                 actions_to_run,
             );
         }
@@ -5668,7 +5955,7 @@ fn show_object_properties(
                 &fill.0,
                 &slide.id,
                 &obj.id,
-                &media_names,
+                &lists.media_names,
                 actions_to_run,
             );
 
@@ -5872,10 +6159,10 @@ fn show_object_properties(
                     runs,
                     current_text,
                     "shape",
-                    &font_families,
+                    &lists.font_families,
                     None,
                     autofit,
-                    system_fonts.as_deref(),
+                    system_fonts,
                     &mut font_requests,
                 ) {
                     action_to_run = Some(action);
@@ -6580,7 +6867,7 @@ fn show_object_properties(
                 &editor.session.course,
                 &slide.id,
                 &obj.id,
-                &font_families,
+                &lists.font_families,
                 actions_to_run,
             );
         }
@@ -6640,10 +6927,10 @@ fn show_object_properties(
                 borders,
                 *header_row,
                 selected_cell,
-                &font_families,
-                &slides,
+                &lists.font_families,
+                &lists.slides,
                 actions_to_run,
-                system_fonts.as_deref(),
+                system_fonts,
                 &mut font_requests,
             );
         }
@@ -6895,7 +7182,16 @@ fn show_object_properties(
             ..
         } => {
             if let Some(action) = show_paragraph_controls(
-                ui, props, &slide.id, &obj.id, runs, paragraphs, &slides, text, "text", None,
+                ui,
+                props,
+                &slide.id,
+                &obj.id,
+                runs,
+                paragraphs,
+                &lists.slides,
+                text,
+                "text",
+                None,
             ) {
                 action_to_run = Some(action);
             }
@@ -6912,7 +7208,7 @@ fn show_object_properties(
                 &obj.id,
                 &text.runs,
                 &text.paragraphs,
-                &slides,
+                &lists.slides,
                 &text.text,
                 "shape",
                 None,

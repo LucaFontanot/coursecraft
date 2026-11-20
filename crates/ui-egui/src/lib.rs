@@ -83,11 +83,29 @@ mod audio_ai_tests;
 #[cfg(test)]
 mod bughunt_insert;
 #[cfg(test)]
+mod bughunt_m24_canvas;
+#[cfg(test)]
+mod bughunt_m24_rename;
+#[cfg(test)]
+mod bughunt_m24_stress;
+#[cfg(test)]
+mod bughunt_m24b_canvas;
+#[cfg(test)]
+mod bughunt_m24b_format;
+#[cfg(test)]
+mod bughunt_m24b_misc;
+#[cfg(test)]
+mod bughunt_m24b_trigger;
+#[cfg(test)]
 mod bughunt_menus;
 #[cfg(test)]
 mod bughunt_stress;
 #[cfg(test)]
 mod bughunt_undo;
+#[cfg(test)]
+mod canvas_speed_tests;
+#[cfg(test)]
+mod daily_fixes_tests;
 #[cfg(test)]
 mod document_tests;
 #[cfg(test)]
@@ -113,6 +131,10 @@ mod perf_tests;
 #[cfg(test)]
 mod preview_variables_tests;
 #[cfg(test)]
+mod publish_tests;
+#[cfg(test)]
+mod rename_tests;
+#[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
 mod spell_check_tests;
@@ -128,6 +150,8 @@ mod timeline_cue_tests;
 mod translate_tests;
 #[cfg(test)]
 mod trigger_problems_tests;
+#[cfg(test)]
+mod trigger_speed_tests;
 #[cfg(test)]
 mod try_again_tests;
 #[cfg(test)]
@@ -356,6 +380,8 @@ pub enum EditorRequest {
         options: ReviewOptionsView,
     },
     ShowPublished,
+    /// Serve the last published zip on a local server and open it in the browser (desktop only).
+    OpenPublishedInBrowser,
     SetAutomation(bool),
     /// Delete the saved crash note: it was reported or dismissed.
     DiscardCrashNote,
@@ -639,6 +665,8 @@ pub struct UiState {
     pub trigger_issues_by_path: std::collections::HashMap<String, Vec<ValidationIssueSummary>>,
     pub audit_findings: Vec<AuditFindingSummary>,
     pub audit_manual_checks: Vec<String>,
+    pub(crate) audit_dirty: bool,
+    pub(crate) audit_dirty_since: Option<f64>,
     pub show_validation_window: bool,
     pub show_error_history_window: bool,
     pub pptx_import_report: Option<String>,
@@ -725,6 +753,7 @@ pub struct UiState {
     /// Active pointer drag inside crop mode.
     pub(crate) crop_drag: Option<canvas::CropDrag>,
     pub scene_rename: Option<slides::SceneRename>,
+    pub slide_rename: Option<slides::SceneRename>,
     pub pending_delete_scene: Option<String>,
     pub properties: PropertiesState,
     pub layers: LayersState,
@@ -832,6 +861,73 @@ pub struct UiState {
     pub story_view: bool,
     /// Transient Course map state.
     pub course_map: CourseMapState,
+    /// Cached per-revision / per-media-count lists for the Properties panel.
+    pub(crate) properties_lists: PropertiesListCache,
+    /// Cached `media_references` for the Media Library window.
+    pub(crate) media_refs_cache: MediaRefsCache,
+}
+
+/// Cached per-revision / per-media-count lists for the Properties panel.
+#[derive(Debug, Default)]
+pub struct PropertiesListCache {
+    revision: SyncRevision,
+    media_count: usize,
+    pub media_names: Vec<String>,
+    pub slides: Vec<(String, String)>,
+    pub font_families: Vec<String>,
+}
+
+impl PropertiesListCache {
+    /// Ensure the cached lists match `revision`, `media`, and `course`.
+    pub fn ensure(
+        &mut self,
+        revision: u64,
+        course: &Course,
+        media: &[(String, std::sync::Arc<[u8]>)],
+    ) {
+        if self.revision.is(revision) && self.media_count == media.len() {
+            return;
+        }
+        self.revision.set(revision);
+        self.media_count = media.len();
+        self.media_names = media.iter().map(|(name, _)| name.clone()).collect();
+        self.slides = course
+            .slides()
+            .map(|s| (s.id.clone(), s.title.clone()))
+            .collect();
+        self.font_families = course
+            .font_families()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    }
+}
+
+/// Cached `media_references` for the Media Library window, keyed by revision.
+#[derive(Debug)]
+pub struct MediaRefsCache {
+    revision: SyncRevision,
+    pub references: std::sync::Arc<[coursecraft_course::MediaReference]>,
+}
+
+impl Default for MediaRefsCache {
+    fn default() -> Self {
+        Self {
+            revision: SyncRevision::default(),
+            references: std::sync::Arc::from([]),
+        }
+    }
+}
+
+impl MediaRefsCache {
+    /// Ensure `references` matches `revision` and `course`.
+    pub fn ensure(&mut self, revision: u64, course: &Course) {
+        if self.revision.is(revision) {
+            return;
+        }
+        self.revision.set(revision);
+        self.references = std::sync::Arc::from(coursecraft_course::media_references(course));
+    }
 }
 
 /// Revision a UI state was last synced to. Defaults to "never synced" (`u64::MAX`) so the
@@ -1013,6 +1109,8 @@ impl Editor {
                 trigger_issues_by_path: std::collections::HashMap::new(),
                 audit_findings: Vec::new(),
                 audit_manual_checks: Vec::new(),
+                audit_dirty: false,
+                audit_dirty_since: None,
                 show_validation_window: false,
                 show_error_history_window: false,
                 pptx_import_report: None,
@@ -1064,6 +1162,7 @@ impl Editor {
                 crop_edit: None,
                 crop_drag: None,
                 scene_rename: None,
+                slide_rename: None,
                 pending_delete_scene: None,
                 properties: PropertiesState::default(),
                 layers: LayersState::default(),
@@ -1132,6 +1231,8 @@ impl Editor {
                 pending_remove_font: None,
                 story_view: false,
                 course_map: CourseMapState::default(),
+                properties_lists: PropertiesListCache::default(),
+                media_refs_cache: MediaRefsCache::default(),
             },
             preview: None,
             recent_files: Vec::new(),
@@ -1158,6 +1259,7 @@ impl Editor {
             spell_version: 0,
         };
         editor.check_revision();
+        editor.refresh_audit_now();
         editor
     }
 
@@ -1327,6 +1429,7 @@ impl Editor {
         self.ui.crop_edit = None;
         self.ui.crop_drag = None;
         self.ui.scene_rename = None;
+        self.ui.slide_rename = None;
         self.ui.pending_delete_scene = None;
         self.ui.properties = PropertiesState::default();
         self.ui.layers = LayersState::default();
@@ -2092,6 +2195,12 @@ impl Editor {
                 src: src.clone(),
                 natural_size: (natural_width, natural_height),
             });
+        }
+
+        if is_svg && bytes.windows(5).any(|w| w.eq_ignore_ascii_case(b"<text")) {
+            self.set_status(
+                "This SVG has text, which CourseCraft draws only as shapes. Convert text to outlines in your drawing app.",
+            );
         }
 
         Some(src)
@@ -3103,7 +3212,9 @@ impl Editor {
             {
                 self.ui.group_focus = None;
             }
-            self.refresh_validation();
+            self.refresh_validate_only();
+            self.ui.audit_dirty = true;
+            self.ui.audit_dirty_since = None;
         }
         // Leaving the slide, undo, redo or a replace makes the working crop
         // stale even when the course revision did not change (a slide change
@@ -3124,10 +3235,33 @@ impl Editor {
                 self.cancel_crop();
             }
         }
+        if self
+            .ui
+            .slide_rename
+            .as_ref()
+            .is_some_and(|rename| self.session.course.slide(&rename.scene).is_none())
+        {
+            self.ui.slide_rename = None;
+        }
+        if self
+            .ui
+            .timeline
+            .object_rename
+            .as_ref()
+            .is_some_and(|rename| {
+                self.session
+                    .course
+                    .slide(&rename.slide)
+                    .and_then(|slide| slide.object(&rename.object))
+                    .is_none()
+            })
+        {
+            self.ui.timeline.object_rename = None;
+        }
     }
 
-    /// Run validation and the accessibility audit now, through the engine.
-    pub(crate) fn refresh_validation(&mut self) {
+    /// Run course validation (schema and trigger checks) now, through the engine.
+    pub(crate) fn refresh_validate_only(&mut self) {
         #[cfg(test)]
         crate::guard_counters::note_validation_run();
         if let Some(res) = self.run("course.validate", serde_json::json!({})) {
@@ -3137,11 +3271,47 @@ impl Editor {
             self.ui.validation_warnings = warns;
             self.ui.validation_issues = issues;
         }
+    }
+
+    /// Run the accessibility audit now, through the engine, and clear the dirty flag.
+    pub(crate) fn refresh_audit_now(&mut self) {
+        #[cfg(test)]
+        crate::guard_counters::note_audit_run();
         if let Some(res) = self.run("course.audit", serde_json::json!({})) {
             let (findings, manual_checks) = parse_audit_result(&res);
             self.ui.audit_findings = findings;
             self.ui.audit_manual_checks = manual_checks;
         }
+        self.ui.audit_dirty = false;
+        self.ui.audit_dirty_since = None;
+    }
+
+    /// Run the accessibility audit if it is dirty and either a panel that shows
+    /// it is open or edits have been quiet for 300 ms.
+    pub(crate) fn maybe_run_deferred_audit(&mut self, ctx: &egui::Context) {
+        if !self.ui.audit_dirty {
+            return;
+        }
+        if self.ui.show_validation_window || self.ui.publish.open {
+            self.refresh_audit_now();
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        let since = *self.ui.audit_dirty_since.get_or_insert(now);
+        let elapsed = now - since;
+        if elapsed >= 0.3 {
+            self.refresh_audit_now();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+                (0.3 - elapsed).max(0.001),
+            ));
+        }
+    }
+
+    /// Run validation and the accessibility audit now, through the engine.
+    pub(crate) fn refresh_validation(&mut self) {
+        self.refresh_validate_only();
+        self.refresh_audit_now();
     }
 
     /// Focus conditions shared by the paste event block and the desktop image
@@ -3182,6 +3352,7 @@ impl Editor {
         // Pick mode owns the pointer and Escape before anything else sees them.
         eyedropper::process_frame(ui.ctx());
         self.check_revision();
+        self.maybe_run_deferred_audit(ui.ctx());
         properties::publish_theme_colors(ui.ctx(), &self.session.course.theme);
         coursecraft_render::install_course_fonts(
             ui.ctx(),

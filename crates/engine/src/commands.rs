@@ -725,7 +725,7 @@ static REGISTRY: &[Command] = &[
         label: "Editor View Settings",
         menu: "",
         shortcut: None,
-        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool}"#,
+        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "last_publish"?: {"standard": string}}"#,
         mutates: true,
         run: view_set,
     },
@@ -5049,6 +5049,11 @@ fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
     let was_valid = s.course.is_playable();
     let sid: String = req(C, p, "slide")?;
     let objects: Option<Vec<String>> = opt(C, p, "objects")?;
+    let dx: f32 = opt(C, p, "dx")?.unwrap_or(20.0);
+    let dy: f32 = opt(C, p, "dy")?.unwrap_or(20.0);
+    if !dx.is_finite() || !dy.is_finite() {
+        return Err(bad(C, "dx and dy must be finite"));
+    }
     let mut ids: Vec<String> = Vec::new();
     if let Some(objects) = objects {
         for id in objects {
@@ -5089,8 +5094,8 @@ fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
         taken.insert(new_id.clone());
         copy_map.insert(object.id.clone(), new_id.clone());
         object.id = new_id.clone();
-        object.frame.x += 20.0;
-        object.frame.y += 20.0;
+        object.frame.x += dx;
+        object.frame.y += dy;
         if let Some(old_group) = object.group.clone() {
             let new_group = group_map.entry(old_group).or_insert_with(|| {
                 let fresh = fresh_id_in("group", &taken_groups);
@@ -5422,7 +5427,7 @@ fn check_guide_pos(cmd: &'static str, at: f32) -> Result<f32> {
 fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "view.set";
     let was_valid = s.course.is_playable();
-    let before = s.course.editor.clone();
+    let mut before = s.course.editor.clone();
     if let Some(v) = opt::<bool>(C, p, "show_rulers")? {
         s.course.editor.show_rulers = v;
     }
@@ -5435,6 +5440,12 @@ fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(v) = opt::<bool>(C, p, "show_guides")? {
         s.course.editor.show_guides = v;
     }
+    if let Some(v) = opt::<coursecraft_course::PublishSettings>(C, p, "last_publish")? {
+        s.course.editor.last_publish = Some(v);
+    }
+    // Remembering the last publish standard is not an author edit; skip undo
+    // when nothing else in `editor` changed.
+    before.last_publish = s.course.editor.last_publish.clone();
     if s.course.editor == before {
         s.skip_undo = true;
     }

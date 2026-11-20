@@ -383,6 +383,10 @@ pub fn describe(trigger: &Trigger, slide: &Slide) -> String {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TriggersState {
     pub last_synced_revision: crate::SyncRevision,
+    /// Case-insensitive substring filter over trigger description text.
+    pub filter: String,
+    /// When true, group triggers under their event object's name.
+    pub group_by_object: bool,
 }
 
 /// Tree editor node for editing conditions.
@@ -937,6 +941,17 @@ impl TriggerFormState {
             },
             error_message: None,
         }
+    }
+
+    /// Default the trigger's event object to `object_id` when it exists on `slide`.
+    #[must_use]
+    pub fn with_selected_object(mut self, slide: &Slide, object_id: Option<&str>) -> Self {
+        if let Some(id) = object_id
+            && slide.object(id).is_some()
+        {
+            self.event_object = id.to_owned();
+        }
+        self
     }
 
     /// Populate form state from an existing trigger.
@@ -1530,11 +1545,14 @@ pub fn show_triggers_tab(
                     && crate::quiet_button(ui, "+ Add trigger", crate::QuietTone::Accent, true)
                         .clicked()
                 {
-                    editor.ui.trigger_form = Some(TriggerFormState::new_for_owner(
-                        &slide_clone,
-                        selected_layer.as_deref(),
-                        &editor.session.course,
-                    ));
+                    editor.ui.trigger_form = Some(
+                        TriggerFormState::new_for_owner(
+                            &slide_clone,
+                            selected_layer.as_deref(),
+                            &editor.session.course,
+                        )
+                        .with_selected_object(&slide_clone, editor.selection.object.as_deref()),
+                    );
                 }
                 if can_paste
                     && crate::quiet_button(ui, "Paste Triggers", crate::QuietTone::Accent, true)
@@ -1608,6 +1626,23 @@ pub fn show_triggers_tab(
         });
     }
 
+    if !triggers.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut editor.ui.triggers.filter)
+                    .hint_text("Filter triggers…")
+                    .desired_width(140.0),
+            );
+            if !editor.ui.triggers.filter.is_empty()
+                && crate::widgets::icon_button(ui, coursecraft_render::Icon::X, "Clear filter")
+                    .clicked()
+            {
+                editor.ui.triggers.filter.clear();
+            }
+            ui.checkbox(&mut editor.ui.triggers.group_by_object, "Group by object");
+        });
+    }
+
     ScrollArea::vertical()
         .id_salt("triggers_list_scroll")
         .auto_shrink([false, false])
@@ -1624,31 +1659,113 @@ pub fn show_triggers_tab(
                     );
                     ui.add_space(12.0);
                     if crate::primary_button(ui, "+ Add trigger").clicked() {
-                        editor.ui.trigger_form = Some(TriggerFormState::new_for_owner(
-                            &slide_clone,
-                            selected_layer.as_deref(),
-                            &editor.session.course,
-                        ));
+                        editor.ui.trigger_form = Some(
+                            TriggerFormState::new_for_owner(
+                                &slide_clone,
+                                selected_layer.as_deref(),
+                                &editor.session.course,
+                            )
+                            .with_selected_object(
+                                &slide_clone,
+                                editor.selection.object.as_deref(),
+                            ),
+                        );
                     }
                 });
                 return;
             }
 
-            for (idx, trig) in triggers.iter().enumerate() {
-                let desc = describe(trig, &slide_clone);
-                let row_rect = egui::Rect::from_min_size(
-                    ui.cursor().min,
-                    egui::vec2(ui.available_width(), TRIGGER_ROW_HEIGHT),
-                );
-                // Registered before the row's widgets so the buttons win clicks over the row.
-                let row_resp = ui.interact(
-                    row_rect,
-                    ui.scope_id().with(("trigger_row", idx)),
-                    egui::Sense::click(),
-                );
-                if row_resp.clicked() {
-                    new_active_row = Some(idx);
+            type TriggerRow<'a> = (usize, &'a Trigger, String);
+            let filter_lower = editor.ui.triggers.filter.trim().to_ascii_lowercase();
+            let mut visible: Vec<TriggerRow<'_>> = triggers
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, trig)| {
+                    let desc = describe(trig, &slide_clone);
+                    if filter_lower.is_empty() || desc.to_ascii_lowercase().contains(&filter_lower)
+                    {
+                        Some((idx, trig, desc))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if visible.is_empty() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(16.0);
+                    ui.label(
+                        RichText::new("No triggers match the filter.")
+                            .color(p.text_secondary)
+                            .size(coursecraft_render::SIZE_BODY),
+                    );
+                });
+                return;
+            }
+
+            let groups: Vec<(Option<String>, Vec<TriggerRow<'_>>)> =
+                if editor.ui.triggers.group_by_object {
+                    let mut grouped: Vec<(Option<String>, String, Vec<TriggerRow<'_>>)> =
+                        Vec::new();
+                    for item in visible {
+                        let key = event_object_id(&item.1.when).map(str::to_owned);
+                        if let Some(existing) = grouped.iter_mut().find(|(k, _, _)| *k == key) {
+                            existing.2.push(item);
+                        } else {
+                            let label = match key.as_deref() {
+                                Some(id) => object_name(&slide_clone, id),
+                                None => "Slide".to_owned(),
+                            };
+                            grouped.push((key, label, vec![item]));
+                        }
+                    }
+                    grouped
+                        .into_iter()
+                        .map(|(_, label, rows)| (Some(label), rows))
+                        .collect()
+                } else {
+                    if let Some(sel_id) = editor.selection.object.as_deref() {
+                        visible.sort_by_key(|(idx, trig, _)| {
+                            let is_selected = event_object_id(&trig.when) == Some(sel_id);
+                            (!is_selected, *idx)
+                        });
+                    }
+                    vec![(None, visible)]
+                };
+
+            for (group_header, rows) in groups {
+                if let Some(header) = group_header {
+                    ui.add_space(coursecraft_render::SPACE_SM);
+                    ui.label(
+                        coursecraft_render::caption(header)
+                            .color(p.text_secondary)
+                            .strong(),
+                    );
                 }
+                for (idx, trig, desc) in rows {
+                    let row_rect = egui::Rect::from_min_size(
+                        ui.cursor().min,
+                        egui::vec2(ui.available_width(), TRIGGER_ROW_HEIGHT),
+                    );
+                    // Registered before the row's widgets so the buttons win clicks over the row.
+                    let row_resp = ui.interact(
+                        row_rect,
+                        ui.scope_id().with(("trigger_row", idx)),
+                        egui::Sense::click(),
+                    );
+                    if row_resp.clicked() {
+                        new_active_row = Some(idx);
+                    }
+                    if row_resp.double_clicked() {
+                        new_active_row = Some(idx);
+                        editor.ui.trigger_form = Some(TriggerFormState::from_existing(
+                            idx,
+                            trig,
+                            &slide_clone,
+                            selected_layer.as_deref(),
+                            &editor.session.course,
+                        ));
+                    }
                 let hovered = ui.rect_contains_pointer(row_rect);
                 let is_active = active_row == Some(idx);
                 let show_actions = hovered || is_active;
@@ -1669,7 +1786,9 @@ pub fn show_triggers_tab(
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.set_min_width(coursecraft_render::SPACE_20);
-                                ui.label(format!("{}.", idx + 1))
+                                ui.add(
+                                    egui::Label::new(format!("{}.", idx + 1)).selectable(false),
+                                )
                             },
                         );
                         if let Some(issues) = trigger_issues.get(idx).filter(|v| !v.is_empty()) {
@@ -1690,10 +1809,20 @@ pub fn show_triggers_tab(
                             .on_hover_text(tooltip);
                         }
                         if trig.disabled {
-                            ui.label(RichText::new(&desc).color(p.text_tertiary));
-                            ui.label(coursecraft_render::small("Off").color(p.text_tertiary));
+                            ui.add(
+                                egui::Label::new(RichText::new(&desc).color(p.text_tertiary))
+                                    .selectable(false),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    coursecraft_render::small("Off").color(p.text_tertiary),
+                                )
+                                .selectable(false),
+                            );
                         } else {
-                            ui.label(RichText::new(&desc).strong());
+                            ui.add(
+                                egui::Label::new(RichText::new(&desc).strong()).selectable(false),
+                            );
                         }
 
                         if !show_actions {
@@ -1793,6 +1922,7 @@ pub fn show_triggers_tab(
                                     }),
                                 };
                                 actions.push(("trigger.move", params));
+                                new_active_row = Some(idx + 1);
                             }
 
                             // Move Up
@@ -1819,6 +1949,7 @@ pub fn show_triggers_tab(
                                     }),
                                 };
                                 actions.push(("trigger.move", params));
+                                new_active_row = Some(idx - 1);
                             }
 
                             // Edit
@@ -1841,6 +1972,7 @@ pub fn show_triggers_tab(
                     });
                 });
                 ui.advance_cursor_after_rect(row_rect);
+                }
             }
         });
 
@@ -1954,6 +2086,31 @@ pub(crate) fn paste_triggers(editor: &mut crate::Editor, slide_id: &str, layer: 
     }
 }
 
+/// Event object id for grouping and prioritizing triggers in the list, if any.
+fn event_object_id(event: &Event) -> Option<&str> {
+    match event {
+        Event::Click { object }
+        | Event::HoverStart { object }
+        | Event::HoverEnd { object }
+        | Event::StateChanges { object, .. }
+        | Event::MediaEnds { object }
+        | Event::CueReached { object, .. }
+        | Event::DroppedOn { object, .. }
+        | Event::ObjectsIntersect { a: object, .. }
+        | Event::ObjectsStopIntersecting { a: object, .. }
+        | Event::AnimationCompletes { object, .. }
+        | Event::MarkerOpened { object }
+        | Event::MarkerClosed { object }
+        | Event::TimerEnds { timer: object } => Some(object.as_str()),
+        Event::KeyPressed { object, .. } => object.as_deref(),
+        Event::TimelineStarts { .. }
+        | Event::TimelineEnds { .. }
+        | Event::TimelineReaches { .. }
+        | Event::VariableChanges { .. }
+        | Event::Submit => None,
+    }
+}
+
 /// Height of one row in the Triggers tab list.
 const TRIGGER_ROW_HEIGHT: f32 = coursecraft_render::CONTROL_COMPACT + coursecraft_render::SPACE_SM;
 
@@ -1969,14 +2126,14 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
         "New Trigger"
     };
 
-    let Some(slide) = editor.session.course.slide(&form.owner_slide) else {
+    let course = &editor.session.course;
+    let Some(slide) = course.slide(&form.owner_slide) else {
         return;
     };
-    let slide_clone = slide.clone();
-    let course_clone = editor.session.course.clone();
 
     let mut close_dialog = false;
     let mut commit_requested = false;
+    let popup_was_open = egui::Popup::is_any_open(ctx);
 
     Dialog::new(title)
         .default_size([550.0, 600.0])
@@ -2000,7 +2157,7 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
                         }
                     });
 
-                render_action_fields(&mut form, ui, &slide_clone, &course_clone);
+                render_action_fields(&mut form, ui, slide, course);
 
                 ui.add_space(8.0);
                 ui.separator();
@@ -2015,7 +2172,7 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
                         }
                     });
 
-                render_event_fields(&mut form, ui, &slide_clone, &course_clone);
+                render_event_fields(&mut form, ui, slide, course);
 
                 ui.add_space(8.0);
                 ui.separator();
@@ -2025,13 +2182,7 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
                 ui.checkbox(&mut form.condition_enabled, "Enable condition");
                 if form.condition_enabled {
                     ui.indent("condition_tree_indent", |ui| {
-                        render_condition_editor(
-                            &mut form.condition_root,
-                            ui,
-                            &slide_clone,
-                            &course_clone,
-                            1,
-                        );
+                        render_condition_editor(&mut form.condition_root, ui, slide, course, 1);
                     });
                 }
             });
@@ -2048,6 +2199,20 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
                 });
             });
         });
+
+    if !close_dialog && !commit_requested {
+        if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)
+                || i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter)
+        }) {
+            commit_requested = true;
+        } else if !popup_was_open
+            && !egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            close_dialog = true;
+        }
+    }
 
     if commit_requested {
         let ok = form.commit_ok(editor);

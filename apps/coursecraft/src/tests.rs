@@ -1066,7 +1066,10 @@ fn publish_job_puts_in_memory_media_under_media_prefix() {
     let image = vec![0x89, 0x50, 0x4E, 0x47, 0x01];
     let job = PublishJob {
         course,
-        media: vec![("photo.png".to_string(), image.clone())],
+        media: vec![(
+            "photo.png".to_string(),
+            std::sync::Arc::from(image.as_slice()),
+        )],
         standard: PackageStandard::Scorm(Standard::Scorm12),
         player: fake_player(),
         out: dir.join("media.zip"),

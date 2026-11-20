@@ -4,8 +4,8 @@ use crate::Editor;
 use crate::dialog::Dialog;
 use coursecraft_course::{Course, Cue, ObjectKind, Timing};
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, DragValue, FontId, Rect, RichText, Sense, Stroke,
-    StrokeKind, TextEdit, Ui, pos2, vec2,
+    Align2, Color32, CornerRadius, CursorIcon, DragValue, FontId, Id, Key, Rect, RichText, Sense,
+    Stroke, StrokeKind, TextEdit, Ui, pos2, vec2,
 };
 use serde_json::Value as Json;
 use std::collections::{BTreeSet, HashMap};
@@ -123,6 +123,16 @@ pub struct SlideCueRename {
     pub error: Option<String>,
 }
 
+/// Inline rename of one object opened by double-clicking its name in the timeline's left column.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectRename {
+    pub slide: String,
+    pub object: String,
+    pub buffer: String,
+    pub original: String,
+    pub just_entered: bool,
+}
+
 /// Interaction and edit state for the Timeline panel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineState {
@@ -150,6 +160,8 @@ pub struct TimelineState {
     pub slide_cue_selected: Option<(Option<String>, String)>,
     /// Open inline slide/layer cue rename.
     pub slide_cue_rename: Option<SlideCueRename>,
+    /// Open inline object rename in the left column.
+    pub object_rename: Option<ObjectRename>,
     /// Slide/layer cue marker rects from the last frame, keyed by cue id.
     pub slide_cue_rects: HashMap<String, Rect>,
 
@@ -192,6 +204,7 @@ impl Default for TimelineState {
             slide_cue_drag: None,
             slide_cue_selected: None,
             slide_cue_rename: None,
+            object_rename: None,
             slide_cue_rects: HashMap::new(),
             panel_height: TIMELINE_PANEL_HEIGHT,
             panel_rect: None,
@@ -211,6 +224,11 @@ impl Default for TimelineState {
 
 /// Snap radius for playhead dragging, in screen points.
 pub const PLAYHEAD_SNAP_PX: f32 = 6.0;
+
+/// Format `ms` in seconds with one decimal and an `"s"` suffix (for example `5.0 s`).
+fn format_seconds(ms: u64) -> String {
+    format!("{:.1} s", ms as f64 / 1000.0)
+}
 
 /// Format `ms` as `m:ss.d` (for example `0:03.2`).
 #[must_use]
@@ -300,6 +318,9 @@ impl TimelineState {
     pub fn sync(&mut self, course: &Course, selection: &crate::Selection, revision: u64) {
         if self.last_synced_revision.is(revision) && &self.last_synced_selection == selection {
             return;
+        }
+        if self.last_synced_selection.slide != selection.slide {
+            self.object_rename = None;
         }
         self.last_synced_revision.set(revision);
         self.last_synced_selection = selection.clone();
@@ -433,12 +454,18 @@ fn render_timeline_header(
         ui.label(RichText::new(readout).color(p.text_secondary));
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut duration_s = editor.ui.timeline.duration_ms as f64 / 1000.0;
             let dur_val = ui.add(
-                DragValue::new(&mut editor.ui.timeline.duration_ms)
-                    .speed(50.0)
-                    .range(100..=86_400_000)
-                    .suffix(" ms"),
+                DragValue::new(&mut duration_s)
+                    .speed(0.1)
+                    .range(0.1..=86_400.0)
+                    .custom_formatter(|v, _| format!("{v:.1} s"))
+                    .custom_parser(|s| s.trim().trim_end_matches('s').trim().parse::<f64>().ok()),
             );
+            if dur_val.changed() {
+                editor.ui.timeline.duration_ms =
+                    (duration_s * 1000.0).round().clamp(100.0, 86_400_000.0) as u32;
+            }
             editor.ui.timeline.duration_edit_rect = Some(dur_val.rect);
             let enter = dur_val.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (dur_val.drag_stopped() || dur_val.lost_focus() || enter)
@@ -761,10 +788,10 @@ fn draw_bar_or_preview(
         );
 
         let preview_label = format!(
-            "{}ms - {}",
-            drag.current_start_ms,
+            "{} - {}",
+            format_seconds(u64::from(drag.current_start_ms)),
             drag.current_end_ms
-                .map(|e| format!("{e}ms"))
+                .map(|e| format_seconds(u64::from(e)))
                 .unwrap_or_else(|| "end".to_owned())
         );
         painter.text(
@@ -1329,31 +1356,59 @@ fn render_object_rows(
         } else {
             header_row_rect.min.x
         };
-        // The name stops short of the eye icon: elided with "...", full name on hover.
-        let name_max_w = (eye_rect.min.x - 6.0 - text_x).max(0.0);
-        let mut name_job = egui::text::LayoutJob::simple_singleline(
-            display_name.clone(),
-            FontId::proportional(13.0),
-            text_color,
-        );
-        name_job.wrap = egui::text::TextWrapping::truncate_at_width(name_max_w);
-        let name_galley = painter.layout_job(name_job);
-        let name_elided = name_galley.elided;
-        let name_rect = Rect::from_min_size(
+        let name_slot_rect = Rect::from_min_max(
+            pos2(text_x, header_row_rect.min.y + 2.0),
             pos2(
-                text_x,
-                header_row_rect.center().y - name_galley.size().y * 0.5,
+                (eye_rect.min.x - 4.0).max(text_x + 20.0),
+                header_row_rect.max.y - 2.0,
             ),
-            name_galley.size(),
         );
-        painter.galley(name_rect.min, name_galley, text_color);
-        if name_elided {
-            ui.interact(
-                name_rect,
-                ui.scope_id().with("timeline_name").with(oid),
-                Sense::hover(),
-            )
-            .on_hover_text(display_name);
+        let renaming_this = editor
+            .ui
+            .timeline
+            .object_rename
+            .as_ref()
+            .is_some_and(|r| r.object == *oid);
+        if renaming_this {
+            show_object_rename_editor(editor, ui, name_slot_rect, actions);
+        } else {
+            // The name stops short of the eye icon: elided with "...", full name on hover.
+            let name_max_w = (eye_rect.min.x - 6.0 - text_x).max(0.0);
+            let mut name_job = egui::text::LayoutJob::simple_singleline(
+                display_name.clone(),
+                FontId::proportional(13.0),
+                text_color,
+            );
+            name_job.wrap = egui::text::TextWrapping::truncate_at_width(name_max_w);
+            let name_galley = painter.layout_job(name_job);
+            let name_elided = name_galley.elided;
+            let name_rect = Rect::from_min_size(
+                pos2(
+                    text_x,
+                    header_row_rect.center().y - name_galley.size().y * 0.5,
+                ),
+                name_galley.size(),
+            );
+            painter.galley(name_rect.min, name_galley, text_color);
+            if name_elided {
+                ui.interact(
+                    name_rect,
+                    ui.scope_id().with("timeline_name").with(oid),
+                    Sense::hover(),
+                )
+                .on_hover_text(display_name);
+            }
+            if row_response.double_clicked()
+                && pointer_pos.is_some_and(|pos| header_row_rect.contains(pos) && !on_icons)
+            {
+                editor.ui.timeline.object_rename = Some(ObjectRename {
+                    slide: slide_id.clone(),
+                    object: oid.clone(),
+                    buffer: oname.clone(),
+                    original: oname.clone(),
+                    just_entered: true,
+                });
+            }
         }
 
         for (rect, icon, on) in [
@@ -1441,11 +1496,11 @@ fn render_object_rows(
             pointer_pos.is_some_and(|pos| markers.iter().any(|(_, rect)| rect.contains(pos)));
 
         let timing_label = format!(
-            "{} ms – {}",
-            eff_start,
+            "{} – {}",
+            format_seconds(u64::from(eff_start)),
             timing
                 .end_ms
-                .map(|e| format!("{e} ms"))
+                .map(|e| format_seconds(u64::from(e)))
                 .unwrap_or_else(|| "end".to_owned())
         );
         ui.interact(
@@ -1543,7 +1598,10 @@ fn render_object_rows(
                         current_end_ms: timing.end_ms,
                     });
                 }
-            } else if header_row_rect.contains(pos) && row_response.contains_pointer() {
+            } else if !renaming_this
+                && header_row_rect.contains(pos)
+                && row_response.contains_pointer()
+            {
                 ui.ctx().set_cursor_icon(CursorIcon::Grab);
                 if primary_pressed {
                     select_timeline_row(editor, objects, oid, modifiers);
@@ -1592,7 +1650,11 @@ fn render_object_rows(
                         .with(cue.id.as_str()),
                     Sense::click_and_drag(),
                 )
-                .on_hover_text(format!("{} ({} ms)", cue.name, cue.at_ms_u64()));
+                .on_hover_text(format!(
+                    "{} ({})",
+                    cue.name,
+                    format_seconds(cue.at_ms_u64())
+                ));
             draw_cue_marker(&bar_painter, rect.center(), selected);
             editor
                 .ui
@@ -1762,6 +1824,70 @@ pub fn show_timeline_panel(
     );
     right_ui.set_clip_rect(right_rect.intersect(parent_clip));
     crate::layers::show_layers_panel(editor, &mut right_ui, actions);
+}
+
+/// Inline text field for renaming an object in the timeline's left column.
+fn show_object_rename_editor(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    rect: Rect,
+    actions: &mut Vec<(&'static str, Json)>,
+) {
+    let Some(rename) = editor.ui.timeline.object_rename.clone() else {
+        return;
+    };
+    let mut buffer = rename.buffer.clone();
+    let edit_id = Id::unique(("timeline_object_rename", &rename.object));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    child.spacing_mut().item_spacing = egui::Vec2::ZERO;
+    let mut output = TextEdit::singleline(&mut buffer)
+        .id(edit_id)
+        .font(FontId::proportional(13.0))
+        .desired_width(rect.width())
+        .margin(egui::Margin::same(1))
+        .show(&mut child);
+
+    if rename.just_entered {
+        output.response.request_focus();
+        let chars = buffer.chars().count();
+        output
+            .state
+            .cursor
+            .set_char_range(Some(egui::text_selection::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(chars),
+            )));
+        output.state.store(ui.ctx(), output.response.id);
+        if let Some(state) = editor.ui.timeline.object_rename.as_mut() {
+            state.just_entered = false;
+        }
+    }
+    if let Some(state) = editor.ui.timeline.object_rename.as_mut() {
+        state.buffer = buffer.clone();
+    }
+    let enter = ui.input(|i| i.key_pressed(Key::Enter));
+    let escaped = ui.input(|i| i.key_pressed(Key::Escape));
+    let lost = output.response.lost_focus();
+    if escaped {
+        editor.ui.timeline.object_rename = None;
+    } else if enter || lost {
+        let name = buffer.trim().to_owned();
+        if !name.is_empty() && name != rename.original {
+            actions.push((
+                "object.update",
+                serde_json::json!({
+                    "slide": rename.slide,
+                    "object": rename.object,
+                    "name": name,
+                }),
+            ));
+        }
+        editor.ui.timeline.object_rename = None;
+    }
 }
 
 /// Rename window opened by double-clicking a cue marker.
@@ -1951,7 +2077,11 @@ fn render_slide_cue_markers(
                     .with(cue.id.as_str()),
                 Sense::click_and_drag(),
             )
-            .on_hover_text(format!("{} ({} ms)", cue.name, cue.at_ms));
+            .on_hover_text(format!(
+                "{} ({})",
+                cue.name,
+                format_seconds(u64::from(cue.at_ms))
+            ));
         draw_cue_marker(&ruler_cue_painter, rect.center(), selected);
         editor
             .ui

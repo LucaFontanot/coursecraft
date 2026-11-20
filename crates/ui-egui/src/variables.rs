@@ -89,7 +89,7 @@ pub fn show_variables_tab(
     ui.horizontal(|ui| {
         ui.label(coursecraft_render::caption("Add Variable").color(p.text_secondary));
 
-        ui.add(
+        let name_resp = ui.add(
             TextEdit::singleline(&mut editor.ui.variables.new_name)
                 .hint_text("Name")
                 .desired_width(120.0),
@@ -128,29 +128,33 @@ pub fn show_variables_tab(
         }
 
         let name_valid = !editor.ui.variables.new_name.trim().is_empty();
+        let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter))
+            && (name_resp.has_focus() || name_resp.lost_focus());
+        let mut add_clicked = false;
         if !vars.is_empty() {
             let add_btn = egui::Button::new(coursecraft_render::body("+ Add").color(p.accent_text))
                 .fill(egui::Color32::TRANSPARENT);
-            if ui.add_enabled(name_valid, add_btn).clicked() {
-                let name = editor.ui.variables.new_name.trim().to_owned();
-                let val = match editor.ui.variables.new_kind {
-                    ValueKind::Bool => Value::Bool(editor.ui.variables.new_val_bool),
-                    ValueKind::Number => Value::Number(editor.ui.variables.new_val_num),
-                    ValueKind::Text => Value::Text(editor.ui.variables.new_val_text.clone()),
-                };
+            add_clicked = ui.add_enabled(name_valid, add_btn).clicked();
+        }
+        if name_valid && (add_clicked || enter_pressed) {
+            let name = editor.ui.variables.new_name.trim().to_owned();
+            let val = match editor.ui.variables.new_kind {
+                ValueKind::Bool => Value::Bool(editor.ui.variables.new_val_bool),
+                ValueKind::Number => Value::Number(editor.ui.variables.new_val_num),
+                ValueKind::Text => Value::Text(editor.ui.variables.new_val_text.clone()),
+            };
 
-                actions.push((
-                    "variable.add",
-                    serde_json::json!({
-                        "name": name,
-                        "value": val,
-                    }),
-                ));
-                editor.ui.variables.new_name.clear();
-                editor.ui.variables.new_val_text.clear();
-                editor.ui.variables.new_val_num = 0.0;
-                editor.ui.variables.new_val_bool = false;
-            }
+            actions.push((
+                "variable.add",
+                serde_json::json!({
+                    "name": name,
+                    "value": val,
+                }),
+            ));
+            editor.ui.variables.new_name.clear();
+            editor.ui.variables.new_val_text.clear();
+            editor.ui.variables.new_val_num = 0.0;
+            editor.ui.variables.new_val_bool = false;
         }
     });
 

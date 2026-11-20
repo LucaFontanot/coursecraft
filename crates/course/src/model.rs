@@ -385,6 +385,13 @@ pub struct Guide {
     pub at: f32,
 }
 
+/// Last publish settings remembered for this course in the editor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublishSettings {
+    pub standard: String,
+}
+
 /// Authoring view settings saved with the course. Ignored by the player and publish.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -399,6 +406,8 @@ pub struct EditorSettings {
     pub show_guides: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guides: Vec<Guide>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_publish: Option<PublishSettings>,
 }
 
 impl EditorSettings {
@@ -409,6 +418,7 @@ impl EditorSettings {
             && !self.snap_to_grid
             && !self.show_guides
             && self.guides.is_empty()
+            && self.last_publish.is_none()
     }
 }
 

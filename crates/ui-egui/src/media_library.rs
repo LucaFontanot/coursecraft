@@ -125,8 +125,18 @@ pub fn show_media_library(editor: &mut Editor, ctx: &Context) {
 
 fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
     let p = palette(ui.ctx());
-    let references = media_references(&editor.session.course);
+    editor
+        .ui
+        .media_refs_cache
+        .ensure(editor.session.revision, &editor.session.course);
+    let references = std::sync::Arc::clone(&editor.ui.media_refs_cache.references);
     let mut action = None;
+    let has_slide = !editor.ui.master_view
+        && editor
+            .session
+            .course
+            .slide(&editor.selection.slide)
+            .is_some();
 
     ui.horizontal(|ui| {
         let import = ui.add_enabled(editor.file_ops_available, Button::new("Import…"));
@@ -143,12 +153,6 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
         let insertable = selected
             .as_deref()
             .is_some_and(|src| insert_kind(kind_for(src)));
-        let has_slide = !editor.ui.master_view
-            && editor
-                .session
-                .course
-                .slide(&editor.selection.slide)
-                .is_some();
         let insert = ui.add_enabled(insertable && has_slide, Button::new("Insert on slide"));
         let insert = if editor.ui.master_view {
             insert.on_disabled_hover_text("Not available in Master View")
@@ -255,28 +259,36 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
                         if !filter.is_empty() && !src.to_ascii_lowercase().contains(&filter) {
                             continue;
                         }
-                        let mut row_clicked = paint_thumbnail(editor, ui, src, *kind).clicked();
-                        row_clicked |= ui
-                            .selectable_label(
-                                selected.as_deref() == Some(src.as_str()),
-                                src.as_str(),
-                            )
-                            .clicked();
-                        row_clicked |= ui
-                            .add(Label::new(kind.label()).sense(Sense::click()))
-                            .clicked();
-                        row_clicked |= ui
-                            .add(Label::new(format_size(*size)).sense(Sense::click()))
-                            .clicked();
-                        row_clicked |= ui
-                            .add(
-                                Label::new(format!("Used by {}", used_count(&references, src)))
-                                    .sense(Sense::click()),
-                            )
-                            .clicked();
+                        let thumb_resp = paint_thumbnail(editor, ui, src, *kind);
+                        let name_resp = ui.selectable_label(
+                            selected.as_deref() == Some(src.as_str()),
+                            src.as_str(),
+                        );
+                        let kind_resp = ui.add(Label::new(kind.label()).sense(Sense::click()));
+                        let size_resp =
+                            ui.add(Label::new(format_size(*size)).sense(Sense::click()));
+                        let used_resp = ui.add(
+                            Label::new(format!("Used by {}", used_count(&references, src)))
+                                .sense(Sense::click()),
+                        );
+                        let row_clicked = thumb_resp.clicked()
+                            || name_resp.clicked()
+                            || kind_resp.clicked()
+                            || size_resp.clicked()
+                            || used_resp.clicked();
+                        let row_double_clicked = thumb_resp.double_clicked()
+                            || name_resp.double_clicked()
+                            || kind_resp.double_clicked()
+                            || size_resp.double_clicked()
+                            || used_resp.double_clicked();
                         if row_clicked {
                             editor.ui.media_library.selected = Some(src.clone());
                             selected = Some(src.clone());
+                        }
+                        if row_double_clicked && insert_kind(*kind) && has_slide {
+                            editor.ui.media_library.selected = Some(src.clone());
+                            selected = Some(src.clone());
+                            action = Some(Action::Insert(src.clone()));
                         }
                         ui.end_row();
                     }

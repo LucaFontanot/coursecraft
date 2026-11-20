@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use coursecraft_course::Course;
 use coursecraft_publish::{
@@ -12,13 +13,11 @@ use coursecraft_scorm::Standard;
 use coursecraft_ui_egui::PublishStandard;
 use coursecraft_xapi::Flavor;
 
-use crate::files::MediaItem;
-
 /// Everything a background publish needs. It owns the course and media, so a
 /// publish never borrows the live session while the window keeps drawing.
 pub struct PublishJob {
     pub course: Course,
-    pub media: Vec<MediaItem>,
+    pub media: Vec<(String, Arc<[u8]>)>,
     pub standard: PackageStandard,
     pub player: Vec<PackageFile>,
     pub out: PathBuf,
@@ -62,7 +61,7 @@ pub(crate) fn package_files(job: &PublishJob) -> Result<Vec<PackageFile>, String
     let media: HashMap<&str, &[u8]> = job
         .media
         .iter()
-        .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+        .map(|(name, bytes)| (name.as_str(), bytes.as_ref()))
         .collect();
     let resolve = |src: &str| media.get(src).map(|bytes| bytes.to_vec());
     let folder = |path: &str| {
@@ -71,7 +70,7 @@ pub(crate) fn package_files(job: &PublishJob) -> Result<Vec<PackageFile>, String
             .media
             .iter()
             .filter(|(name, _)| name.starts_with(&prefix))
-            .map(|(name, bytes)| (name.clone(), bytes.clone()))
+            .map(|(name, bytes)| (name.clone(), bytes.to_vec()))
             .collect();
         (!files.is_empty()).then_some(files)
     };

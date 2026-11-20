@@ -38,6 +38,18 @@ pub fn show_history_window(editor: &mut Editor, ctx: &Context) {
         .show(ctx, |ui| {
             let p = coursecraft_render::palette(ui.ctx());
 
+            if editor.session.history_truncated() {
+                ui.label(
+                    RichText::new(format!(
+                        "Older steps were removed (CourseCraft keeps the last {}).",
+                        coursecraft_engine::MAX_HISTORY
+                    ))
+                    .size(coursecraft_render::SIZE_SMALL)
+                    .color(p.text_secondary),
+                );
+                ui.add_space(4.0);
+            }
+
             for (idx, name) in redo_names.iter().enumerate().rev() {
                 if ui
                     .push_id(("redo", idx), |ui| {

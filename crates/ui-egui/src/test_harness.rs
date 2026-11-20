@@ -67,6 +67,21 @@ impl TestHarness {
         requests
     }
 
+    /// Run a frame with an explicit egui input `time` (seconds).
+    pub fn frame_at_time(&mut self, time: f64) -> Vec<EditorRequest> {
+        let raw_input = RawInput {
+            screen_rect: Some(self.screen_rect),
+            time: Some(time),
+            ..Default::default()
+        };
+        let mut requests = Vec::new();
+        let output = self.ctx.run_ui(raw_input, |ui| {
+            requests = self.editor.show(ui);
+        });
+        output.drop_without_applying_deltas();
+        requests
+    }
+
     /// Run an idle frame and return the centers of every painted text equal to
     /// `label` (searching every layer, including open popups).
     pub fn find_texts(&mut self, label: &str) -> Vec<Pos2> {
