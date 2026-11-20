@@ -85,6 +85,31 @@ impl Fnv {
     }
 }
 
+/// Fast deterministic word-at-a-time 64-bit hash for comparing media blobs.
+#[must_use]
+pub fn fast_hash64(bytes: &[u8]) -> u64 {
+    const K1: u64 = 0x517c_c1b7_2722_0a95;
+    const K2: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut h: u64 = (bytes.len() as u64).wrapping_mul(K2);
+    let (chunks, rem) = bytes.as_chunks::<8>();
+    for &arr in chunks {
+        let word = u64::from_le_bytes(arr);
+        h = (h.rotate_left(5) ^ word).wrapping_mul(K1);
+    }
+    if !rem.is_empty() {
+        let mut tail = [0u8; 8];
+        if let Some(dst) = tail.get_mut(..rem.len()) {
+            dst.copy_from_slice(rem);
+        }
+        let word = u64::from_le_bytes(tail);
+        h = (h.rotate_left(5) ^ word).wrapping_mul(K1);
+    }
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h
+}
+
 /// What is known about one file after the last open or save.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileRecord {
@@ -114,6 +139,11 @@ impl FolderRecord {
     #[must_use]
     pub fn files(&self) -> &BTreeMap<String, FileRecord> {
         &self.files
+    }
+
+    #[cfg(test)]
+    pub(crate) fn files_mut(&mut self) -> &mut BTreeMap<String, FileRecord> {
+        &mut self.files
     }
 
     /// Number of recorded files.
@@ -344,7 +374,7 @@ fn modified_time(path: &Path) -> Option<SystemTime> {
 fn file_record(path: &Path, bytes: &[u8]) -> FileRecord {
     FileRecord {
         size: bytes.len() as u64,
-        hash: fnv1a64(bytes),
+        hash: fast_hash64(bytes),
         modified: modified_time(path),
     }
 }
@@ -358,10 +388,10 @@ fn file_record(path: &Path, bytes: &[u8]) -> FileRecord {
 /// Returns [`FormatError`] when the course cannot be serialised, a media path is
 /// unsafe or duplicated, or a write fails. A failed save leaves the folder
 /// usable: the old `course.json` and every file it needs.
-pub fn save_project_folder(
+pub fn save_project_folder<B: AsRef<[u8]> + Sync>(
     dir: &Path,
     course: &Course,
-    media: &[(String, Vec<u8>)],
+    media: &[(String, B)],
     record: &mut FolderRecord,
 ) -> Result<SaveReport, FormatError> {
     save_project_folder_with(dir, course, media, record, &SaveHooks::default())
@@ -371,10 +401,10 @@ pub fn save_project_folder(
 ///
 /// # Errors
 /// Returns [`FormatError`] as [`save_project_folder`] does.
-pub fn save_project_folder_with(
+pub fn save_project_folder_with<B: AsRef<[u8]> + Sync>(
     dir: &Path,
     course: &Course,
-    media: &[(String, Vec<u8>)],
+    media: &[(String, B)],
     record: &mut FolderRecord,
     hooks: &SaveHooks<'_>,
 ) -> Result<SaveReport, FormatError> {
@@ -410,9 +440,9 @@ pub fn save_project_folder_with(
 
 /// Refuse a project that [`open_project_folder_with_limits`] would refuse, so a
 /// save never leaves a folder that cannot be opened again.
-fn check_fits(
+fn check_fits<B: AsRef<[u8]>>(
     course_json: &str,
-    media: &[(String, Vec<u8>)],
+    media: &[(String, B)],
     limits: Limits,
 ) -> Result<(), FormatError> {
     if media.len().saturating_add(1) > limits.max_entries {
@@ -426,7 +456,7 @@ fn check_fits(
     sizes.add(json_len, false, limits)?;
     for (path, bytes) in media {
         let stored = is_precompressed(path);
-        let len = bytes.len() as u64;
+        let len = bytes.as_ref().len() as u64;
         if len > entry_limit(stored, limits) {
             return Err(FormatError::EntryTooLarge(format!("{MEDIA_DIR}/{path}")));
         }
@@ -457,7 +487,7 @@ impl Writer<'_, '_> {
     /// course is the whole cost of a save, and files are independent. The record
     /// and the report are filled in media order afterwards, so the result does
     /// not depend on which worker finished first.
-    fn put_all(&mut self, media: &[(String, Vec<u8>)]) -> Result<(), FormatError> {
+    fn put_all<B: AsRef<[u8]> + Sync>(&mut self, media: &[(String, B)]) -> Result<(), FormatError> {
         let rels: Vec<String> = media
             .iter()
             .map(|(path, _)| format!("{MEDIA_DIR}/{path}"))
@@ -465,7 +495,7 @@ impl Writer<'_, '_> {
         for rel in &rels {
             self.make_parents(rel)?;
         }
-        type Slot = Mutex<Option<Result<Option<FileRecord>, FormatError>>>;
+        type Slot = Mutex<Option<Result<WriteOutcome, FormatError>>>;
         let slots: Vec<Slot> = rels.iter().map(|_| Mutex::new(None)).collect();
         let next = AtomicUsize::new(0);
         let workers = std::thread::available_parallelism()
@@ -483,7 +513,8 @@ impl Writer<'_, '_> {
                         else {
                             break;
                         };
-                        let result = write_if_changed(dir, rel, bytes, known.get(rel), delay);
+                        let result =
+                            write_if_changed(dir, rel, bytes.as_ref(), known.get(rel), delay);
                         if let Ok(mut guard) = slot.lock() {
                             *guard = Some(result);
                         }
@@ -507,14 +538,23 @@ impl Writer<'_, '_> {
     fn take(
         &mut self,
         rel: &str,
-        result: Result<Option<FileRecord>, FormatError>,
+        result: Result<WriteOutcome, FormatError>,
     ) -> Result<(), FormatError> {
-        if let Some(record) = result? {
-            self.record
-                .files
-                .retain(|k, _| k == rel || !k.eq_ignore_ascii_case(rel));
-            self.record.files.insert(rel.to_owned(), record);
-            self.report.written.push(rel.to_owned());
+        match result? {
+            WriteOutcome::Unchanged => {}
+            WriteOutcome::Rehash(record) => {
+                self.record
+                    .files
+                    .retain(|k, _| k == rel || !k.eq_ignore_ascii_case(rel));
+                self.record.files.insert(rel.to_owned(), record);
+            }
+            WriteOutcome::Written(record) => {
+                self.record
+                    .files
+                    .retain(|k, _| k == rel || !k.eq_ignore_ascii_case(rel));
+                self.record.files.insert(rel.to_owned(), record);
+                self.report.written.push(rel.to_owned());
+            }
         }
         Ok(())
     }
@@ -591,29 +631,42 @@ impl Writer<'_, '_> {
     }
 }
 
+enum WriteOutcome {
+    Unchanged,
+    Rehash(FileRecord),
+    Written(FileRecord),
+}
+
 /// Write `bytes` to `dir/rel` through a temporary file, a flush and a rename,
-/// unless `known` says the same content is already there. Returns the new
-/// record when it wrote, `None` when nothing needed writing.
+/// unless `known` says the same content is already there.
 fn write_if_changed(
     dir: &Path,
     rel: &str,
     bytes: &[u8],
     known: Option<&FileRecord>,
     delay: Duration,
-) -> Result<Option<FileRecord>, FormatError> {
+) -> Result<WriteOutcome, FormatError> {
     let path = dir.join(rel);
     let size = bytes.len() as u64;
-    let hash = fnv1a64(bytes);
+    let hash = fast_hash64(bytes);
     if let Some(known) = known
         && known.size == size
-        && known.hash == hash
         && std::fs::metadata(&path).is_ok_and(|m| {
             // A file replaced on disk with one of the same size (a git checkout)
             // has a new modified time: write ours back rather than keep theirs.
             m.is_file() && m.len() == size && m.modified().ok() == known.modified
         })
     {
-        return Ok(None);
+        if known.hash == hash {
+            return Ok(WriteOutcome::Unchanged);
+        }
+        if known.hash == fnv1a64(bytes) {
+            return Ok(WriteOutcome::Rehash(FileRecord {
+                size,
+                hash,
+                modified: known.modified,
+            }));
+        }
     }
     let tmp = temp_path(&path);
     let result = retrying(delay, || {
@@ -627,7 +680,7 @@ fn write_if_changed(
         return Err(io_error(rel, &error));
     }
     sync_parent_dir(&path);
-    Ok(Some(FileRecord {
+    Ok(WriteOutcome::Written(FileRecord {
         size,
         hash,
         modified: modified_time(&path),
@@ -694,7 +747,13 @@ pub fn changed_files(dir: &Path, record: &mut FolderRecord) -> Vec<String> {
             changed.push(rel.clone());
         } else if meta.modified().ok() != known.modified {
             match std::fs::read(&path) {
-                Ok(bytes) if fnv1a64(&bytes) == known.hash => known.modified = meta.modified().ok(),
+                Ok(bytes) if fast_hash64(&bytes) == known.hash => {
+                    known.modified = meta.modified().ok();
+                }
+                Ok(bytes) if fnv1a64(&bytes) == known.hash => {
+                    known.hash = fast_hash64(&bytes);
+                    known.modified = meta.modified().ok();
+                }
                 _ => changed.push(rel.clone()),
             }
         }

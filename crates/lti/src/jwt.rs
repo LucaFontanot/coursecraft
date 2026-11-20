@@ -46,7 +46,7 @@ pub fn split_jwt(token: &str) -> Result<(&str, &str, &str), LtiError> {
     Ok((header, payload, signature))
 }
 
-/// Sign a JWT header and payload with RS256 (SHA-256, PKCS#1 v1.5).
+/// Sign a JWT header and payload with RS256 (SHA-256, PKCS#1 v1.5) from raw PKCS#8 bytes.
 pub fn sign_rs256(
     private_key_pkcs8: &[u8],
     header: &serde_json::Value,
@@ -54,6 +54,15 @@ pub fn sign_rs256(
 ) -> Result<String, LtiError> {
     let key =
         RsaKeyPair::from_pkcs8(private_key_pkcs8).map_err(|e| LtiError::Key(e.to_string()))?;
+    sign_rs256_with_key(&key, header, payload)
+}
+
+/// Sign a JWT header and payload with RS256 using an already-parsed RSA key pair.
+pub fn sign_rs256_with_key(
+    key: &RsaKeyPair,
+    header: &serde_json::Value,
+    payload: &serde_json::Value,
+) -> Result<String, LtiError> {
     let header = serde_json::to_vec(header).map_err(|e| LtiError::Json(e.to_string()))?;
     let payload = serde_json::to_vec(payload).map_err(|e| LtiError::Json(e.to_string()))?;
     let input = format!(

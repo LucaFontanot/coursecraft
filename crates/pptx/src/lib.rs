@@ -14,8 +14,10 @@
     clippy::unreachable
 )]
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read as _;
+use std::sync::Arc;
 
 use coursecraft_course::{
     Align, Autofit, Color, ConnectorStyle, Course, DashStyle, FillStyle, Glow, Glue, GradientStop,
@@ -1053,14 +1055,12 @@ pub fn import_pptx_with_limits(
         ));
     }
 
-    let mut entries: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut total_bytes: u64 = 0;
-
+    let mut names: HashSet<String> = HashSet::new();
     for i in 0..archive.len() {
         let file = archive.by_index(i)?;
         let name = file.name()?.to_string();
 
-        if entries.contains_key(&name) {
+        if !names.insert(name.clone()) {
             return Err(PptxError::DuplicateEntry(name));
         }
 
@@ -1074,41 +1074,23 @@ pub fn import_pptx_with_limits(
         if !is_safe_relative_path(&name) {
             return Err(PptxError::UnsafePath(name));
         }
-
-        if file.size() > limits.max_entry_bytes {
-            return Err(PptxError::EntryTooLarge(name));
-        }
-
-        let mut entry_bytes = Vec::new();
-        let read_limit = limits.max_entry_bytes.saturating_add(1);
-        file.take(read_limit).read_to_end(&mut entry_bytes)?;
-
-        if entry_bytes.len() as u64 > limits.max_entry_bytes {
-            return Err(PptxError::EntryTooLarge(name));
-        }
-
-        total_bytes = total_bytes
-            .checked_add(entry_bytes.len() as u64)
-            .ok_or(PptxError::TooLarge)?;
-
-        if total_bytes > limits.max_total_bytes {
-            return Err(PptxError::TooLarge);
-        }
-
-        entries.insert(name, entry_bytes);
     }
 
+    let entries = ZipEntries::new(archive, names, limits);
+
     let pres_xml_bytes = entries
-        .get("ppt/presentation.xml")
+        .get_checked("ppt/presentation.xml")?
         .ok_or(PptxError::MissingPresentationXml)?;
     let pres_xml_str =
-        std::str::from_utf8(pres_xml_bytes).map_err(|e| PptxError::MalformedXml {
+        std::str::from_utf8(&pres_xml_bytes).map_err(|e| PptxError::MalformedXml {
             part: "ppt/presentation.xml".to_string(),
             message: e.to_string(),
         })?;
 
-    let pres_rels = if let Some(rels_bytes) = entries.get("ppt/_rels/presentation.xml.rels") {
-        let rels_str = std::str::from_utf8(rels_bytes).map_err(|e| PptxError::MalformedXml {
+    let pres_rels = if let Some(rels_bytes) =
+        entries.get_checked("ppt/_rels/presentation.xml.rels")?
+    {
+        let rels_str = std::str::from_utf8(&rels_bytes).map_err(|e| PptxError::MalformedXml {
             part: "ppt/_rels/presentation.xml.rels".to_string(),
             message: e.to_string(),
         })?;
@@ -1215,7 +1197,7 @@ pub fn import_pptx_with_limits(
             continue;
         }
 
-        let Some(slide_xml_bytes) = entries.get(&sld_ref.part_path) else {
+        let Some(slide_xml_bytes) = entries.get_checked(&sld_ref.part_path)? else {
             tracker.report_skip(
                 SkipKind::ExternalTarget,
                 format!("Missing slide part {}", sld_ref.part_path),
@@ -1225,7 +1207,7 @@ pub fn import_pptx_with_limits(
         };
 
         let slide_xml_str =
-            std::str::from_utf8(slide_xml_bytes).map_err(|e| PptxError::MalformedXml {
+            std::str::from_utf8(&slide_xml_bytes).map_err(|e| PptxError::MalformedXml {
                 part: sld_ref.part_path.clone(),
                 message: e.to_string(),
             })?;
@@ -1252,9 +1234,9 @@ pub fn import_pptx_with_limits(
             .unwrap_or("slide1.xml");
         let rels_path = format!("{slide_folder}/_rels/{slide_file_name}.rels");
 
-        let slide_rels = if let Some(rels_bytes) = entries.get(&rels_path) {
+        let slide_rels = if let Some(rels_bytes) = entries.get_checked(&rels_path)? {
             let rels_str =
-                std::str::from_utf8(rels_bytes).map_err(|e| PptxError::MalformedXml {
+                std::str::from_utf8(&rels_bytes).map_err(|e| PptxError::MalformedXml {
                     part: rels_path.clone(),
                     message: e.to_string(),
                 })?;
@@ -1279,7 +1261,7 @@ pub fn import_pptx_with_limits(
             if let Some(ref target) = rel.target
                 && target.contains("notesSlide")
                 && let Some(notes_bytes) = entries.get(target)
-                && let Ok(notes_str) = std::str::from_utf8(notes_bytes)
+                && let Ok(notes_str) = std::str::from_utf8(&notes_bytes)
                 && let Ok(notes_tree) = parse_xml_tree(notes_str, target, limits.max_xml_depth)
                 && let Some(notes_text) = extract_notes_body(&notes_tree, layout)
             {
@@ -1291,7 +1273,7 @@ pub fn import_pptx_with_limits(
         let layout_path = slide_rels
             .values()
             .filter_map(|r| r.target.as_deref())
-            .filter(|t| t.starts_with("ppt/slideLayouts/") && entries.contains_key(*t))
+            .filter(|t| t.starts_with("ppt/slideLayouts/") && entries.contains_key(t))
             .min()
             .map(str::to_string);
 
@@ -1354,6 +1336,9 @@ pub fn import_pptx_with_limits(
 
     let (mut deck_fonts, major_font, minor_font) =
         collect_theme_fonts(&entries, limits.max_xml_depth);
+    if let Some(err) = entries.take_error() {
+        return Err(err);
+    }
     resolve_theme_font_tokens(
         &mut imported_slides,
         major_font.as_deref(),
@@ -1427,20 +1412,22 @@ pub fn import_pptx_with_limits(
 /// Fonts named by the presentation's theme parts (`a:majorFont` and
 /// `a:minorFont`).
 fn collect_theme_fonts(
-    entries: &Entries,
+    entries: &Entries<'_>,
     max_depth: usize,
 ) -> (HashSet<String>, Option<String>, Option<String>) {
     let mut fonts = HashSet::new();
     let mut major = None;
     let mut minor = None;
-    for (path, bytes) in entries {
-        if !(path.starts_with("ppt/theme/") && path.ends_with(".xml")) {
-            continue;
-        }
-        let Ok(text) = std::str::from_utf8(bytes) else {
+    let theme_paths =
+        entries.names_matching(|path| path.starts_with("ppt/theme/") && path.ends_with(".xml"));
+    for path in theme_paths {
+        let Some(bytes) = entries.get(&path) else {
             continue;
         };
-        let Ok(tree) = parse_xml_tree(text, path, max_depth) else {
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
+        let Ok(tree) = parse_xml_tree(text, &path, max_depth) else {
             continue;
         };
         for (scheme_name, slot) in [("majorFont", &mut major), ("minorFont", &mut minor)] {
@@ -1545,8 +1532,102 @@ fn collect_slide_fonts(slide: &Slide, fonts: &mut HashSet<String>) {
 /// A placeholder frame in EMU: `(x, y, w, h)`.
 type EmuFrame = (f64, f64, f64, f64);
 
-/// Package parts keyed by path.
-type Entries = HashMap<String, Vec<u8>>;
+/// Package parts keyed by path, read lazily from the zip archive so unused
+/// entries are never decompressed or buffered.
+struct ZipEntries<'a> {
+    archive: RefCell<zip::ZipArchive<std::io::Cursor<&'a [u8]>>>,
+    names: HashSet<String>,
+    cache: RefCell<HashMap<String, Arc<[u8]>>>,
+    limits: Limits,
+    total_bytes: Cell<u64>,
+    error: RefCell<Option<PptxError>>,
+}
+
+impl<'a> ZipEntries<'a> {
+    fn new(
+        archive: zip::ZipArchive<std::io::Cursor<&'a [u8]>>,
+        names: HashSet<String>,
+        limits: Limits,
+    ) -> Self {
+        Self {
+            archive: RefCell::new(archive),
+            names,
+            cache: RefCell::new(HashMap::new()),
+            limits,
+            total_bytes: Cell::new(0),
+            error: RefCell::new(None),
+        }
+    }
+
+    fn contains_key(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+
+    fn names_matching(&self, mut pred: impl FnMut(&str) -> bool) -> Vec<String> {
+        self.names
+            .iter()
+            .filter(|name| pred(name.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    fn get_checked(&self, name: &str) -> Result<Option<Arc<[u8]>>, PptxError> {
+        if let Some(cached) = self.cache.borrow().get(name) {
+            return Ok(Some(Arc::clone(cached)));
+        }
+        if !self.names.contains(name) {
+            return Ok(None);
+        }
+        let mut archive = self.archive.borrow_mut();
+        let file = match archive.by_name(name) {
+            Ok(file) => file,
+            Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        if file.size() > self.limits.max_entry_bytes {
+            return Err(PptxError::EntryTooLarge(name.to_string()));
+        }
+        let mut entry_bytes = Vec::new();
+        let read_limit = self.limits.max_entry_bytes.saturating_add(1);
+        file.take(read_limit).read_to_end(&mut entry_bytes)?;
+        if entry_bytes.len() as u64 > self.limits.max_entry_bytes {
+            return Err(PptxError::EntryTooLarge(name.to_string()));
+        }
+        let total = self
+            .total_bytes
+            .get()
+            .checked_add(entry_bytes.len() as u64)
+            .ok_or(PptxError::TooLarge)?;
+        if total > self.limits.max_total_bytes {
+            return Err(PptxError::TooLarge);
+        }
+        self.total_bytes.set(total);
+        let arc: Arc<[u8]> = Arc::from(entry_bytes);
+        self.cache
+            .borrow_mut()
+            .insert(name.to_string(), Arc::clone(&arc));
+        Ok(Some(arc))
+    }
+
+    fn get(&self, name: &str) -> Option<Arc<[u8]>> {
+        match self.get_checked(name) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let mut slot = self.error.borrow_mut();
+                if slot.is_none() {
+                    *slot = Some(err);
+                }
+                None
+            }
+        }
+    }
+
+    fn take_error(&self) -> Option<PptxError> {
+        self.error.borrow_mut().take()
+    }
+}
+
+type Entries<'a> = ZipEntries<'a>;
 
 /// Resolves placeholder geometry from slide layouts and masters.
 ///
@@ -1569,32 +1650,37 @@ impl PlaceholderResolver {
     }
 
     /// Parse (once) the part at `path`; `None` if missing or malformed.
-    fn tree(&mut self, entries: &Entries, path: &str) -> Option<&XmlNode> {
+    fn tree(&mut self, entries: &Entries<'_>, path: &str) -> Option<&XmlNode> {
         if !self.trees.contains_key(path) {
             let parsed = entries
                 .get(path)
-                .and_then(|b| std::str::from_utf8(b).ok())
-                .and_then(|s| parse_xml_tree(s, path, self.max_depth).ok());
+                .and_then(|b| std::str::from_utf8(&b).ok().map(str::to_owned))
+                .and_then(|s| parse_xml_tree(&s, path, self.max_depth).ok());
             self.trees.insert(path.to_string(), parsed);
         }
         self.trees.get(path).and_then(Option::as_ref)
     }
 
     /// The first part under `prefix` that `owner_path` relates to.
-    fn related_part(&self, entries: &Entries, owner_path: &str, prefix: &str) -> Option<String> {
+    fn related_part(
+        &self,
+        entries: &Entries<'_>,
+        owner_path: &str,
+        prefix: &str,
+    ) -> Option<String> {
         let (folder, file) = owner_path.rsplit_once('/')?;
         let rels_path = format!("{folder}/_rels/{file}.rels");
         let bytes = entries.get(&rels_path)?;
-        let text = std::str::from_utf8(bytes).ok()?;
+        let text = std::str::from_utf8(&bytes).ok()?;
         let rels = parse_relationships(text, &rels_path, folder, self.max_depth).ok()?;
         rels.values()
             .filter_map(|r| r.target.as_deref())
-            .filter(|t| t.starts_with(prefix) && entries.contains_key(*t))
+            .filter(|t| t.starts_with(prefix) && entries.contains_key(t))
             .min()
             .map(str::to_string)
     }
 
-    fn master_of(&mut self, entries: &Entries, layout_path: &str) -> Option<String> {
+    fn master_of(&mut self, entries: &Entries<'_>, layout_path: &str) -> Option<String> {
         if let Some(cached) = self.masters.get(layout_path) {
             return cached.clone();
         }
@@ -1606,7 +1692,7 @@ impl PlaceholderResolver {
     /// Resolve the frame for a placeholder (`type`, `idx`) via layout then master.
     fn resolve(
         &mut self,
-        entries: &Entries,
+        entries: &Entries<'_>,
         layout_path: Option<&str>,
         ph_type: Option<&str>,
         ph_idx: Option<&str>,
@@ -1676,10 +1762,10 @@ fn sp_frame(sp: &XmlNode) -> Option<EmuFrame> {
 }
 
 /// Context passed through slide content extraction.
-struct SlideContext<'a> {
+struct SlideContext<'a, 'z> {
     layout: &'a SlideLayout,
     slide_rels: &'a HashMap<String, Relationship>,
-    entries: &'a HashMap<String, Vec<u8>>,
+    entries: &'a Entries<'z>,
     objects: &'a mut Vec<Object>,
     slide_title: &'a mut Option<String>,
     imported_media: &'a mut Vec<(String, Vec<u8>)>,
@@ -1703,7 +1789,7 @@ fn drawing_id(node: &XmlNode) -> Option<&str> {
         .and_then(|c| c.attr("id"))
 }
 
-fn record_pptx_id(node: &XmlNode, before: usize, cx: &mut SlideContext<'_>) {
+fn record_pptx_id(node: &XmlNode, before: usize, cx: &mut SlideContext<'_, '_>) {
     let Some(drawing_id) = drawing_id(node) else {
         return;
     };
@@ -1867,7 +1953,7 @@ fn process_group_children(
     parent: &XmlNode,
     transform: GroupTransform,
     depth: usize,
-    cx: &mut SlideContext<'_>,
+    cx: &mut SlideContext<'_, '_>,
 ) -> Result<(), PptxError> {
     for child in &parent.children {
         if cx.objects.len() >= cx.limits.max_shapes_per_slide {
@@ -1992,7 +2078,7 @@ fn process_group_children(
 }
 
 /// Import one `p:graphicFrame` whose graphic data holds an `a:tbl`.
-fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_>) {
+fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_, '_>) {
     let Some(tbl) = frame_node.find_descendant("tbl") else {
         return;
     };
@@ -2445,7 +2531,7 @@ fn extract_gradient_fill(grad: &XmlNode) -> Option<FillStyle> {
 /// `a:blipFill` on a shape into a picture source and fit.
 fn extract_picture_fill(
     blip_fill: &XmlNode,
-    cx: &mut SlideContext<'_>,
+    cx: &mut SlideContext<'_, '_>,
 ) -> Option<(String, PictureFillMode)> {
     let blip = blip_fill.child("blip")?;
     let (target_path, pic_bytes) = preferred_picture(blip, cx)?;
@@ -2494,7 +2580,7 @@ fn extract_effects(sp_pr: &XmlNode, layout: SlideLayout) -> (Option<Shadow>, Opt
 type PathTransform = (f64, bool, bool);
 
 fn push_path_object(
-    cx: &mut SlideContext<'_>,
+    cx: &mut SlideContext<'_, '_>,
     name: &str,
     default_name: &str,
     frame: Rect,
@@ -2570,7 +2656,7 @@ fn connection_end(node: &XmlNode, name: &str) -> Option<PendingConnectorEnd> {
 }
 
 /// Import a `p:cxnSp` connector as a two-point path.
-fn process_connector(cxn: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_>) {
+fn process_connector(cxn: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_, '_>) {
     let name = cxn
         .child("nvCxnSpPr")
         .and_then(|nv| nv.child("cNvPr"))
@@ -2835,7 +2921,7 @@ fn custom_geometry_path(
 }
 
 /// Process a single `<p:sp>` shape or text box.
-fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_>) {
+fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_, '_>) {
     let name = sp
         .child("nvSpPr")
         .and_then(|nv| nv.child("cNvPr"))
@@ -3281,7 +3367,7 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
 }
 
 /// Extract shape geometry, fill and effects from `<p:spPr>`.
-fn extract_shape_info(sp_pr: &XmlNode, cx: &mut SlideContext<'_>) -> ExtractedShape {
+fn extract_shape_info(sp_pr: &XmlNode, cx: &mut SlideContext<'_, '_>) -> ExtractedShape {
     let mut kind = None;
     let mut adjust = Vec::new();
     let mut is_custom = false;
@@ -3865,8 +3951,8 @@ fn src_rect_crop(blip_fill: &XmlNode) -> Option<coursecraft_course::CropRect> {
 /// Resolve a picture relationship to its archive bytes.
 fn relationship_picture<'a>(
     embed_id: &str,
-    cx: &'a SlideContext<'_>,
-) -> Option<(&'a str, &'a Vec<u8>)> {
+    cx: &'a SlideContext<'_, '_>,
+) -> Option<(&'a str, Arc<[u8]>)> {
     let rel = cx.slide_rels.get(embed_id)?;
     if rel.is_external {
         return None;
@@ -3892,23 +3978,23 @@ fn picture_bytes_are_valid(path: &str, bytes: &[u8]) -> bool {
 
 /// Pick the picture part for a `a:blip`: an `asvg:svgBlip` vector part wins
 /// over the PNG fallback that older PowerPoint versions need.
-fn preferred_picture(blip: &XmlNode, cx: &SlideContext<'_>) -> Option<(String, Vec<u8>)> {
+fn preferred_picture(blip: &XmlNode, cx: &SlideContext<'_, '_>) -> Option<(String, Vec<u8>)> {
     if let Some(svg) = blip.find_descendant("svgBlip")
         && let Some(embed_id) = svg.attr("r:embed").or_else(|| svg.attr("embed"))
         && let Some((path, bytes)) = relationship_picture(embed_id, cx)
         && is_svg_path(path)
-        && picture_bytes_are_valid(path, bytes)
+        && picture_bytes_are_valid(path, &bytes)
     {
-        return Some((path.to_owned(), bytes.clone()));
+        return Some((path.to_owned(), bytes.to_vec()));
     }
 
     let embed_id = blip.attr("r:embed").or_else(|| blip.attr("embed"))?;
     let (path, bytes) = relationship_picture(embed_id, cx)?;
-    picture_bytes_are_valid(path, bytes).then(|| (path.to_owned(), bytes.clone()))
+    picture_bytes_are_valid(path, &bytes).then(|| (path.to_owned(), bytes.to_vec()))
 }
 
 /// Process a `<p:pic>` picture element.
-fn process_picture(pic: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_>) {
+fn process_picture(pic: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_, '_>) {
     // Check for media (video or audio) inside pic
     if pic.find_descendant("videoFile").is_some() || pic.find_descendant("audioFile").is_some() {
         cx.tracker

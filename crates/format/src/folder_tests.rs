@@ -551,3 +551,31 @@ fn save_rejects_case_only_duplicate_media_names() {
         .expect_err("case-only duplicate should be rejected");
     assert_eq!(err, FormatError::DuplicateEntry("logo.png".to_owned()));
 }
+
+#[test]
+fn old_fnv_folder_record_saves_without_rewriting_unchanged_media() {
+    let dir = scratch("old-fnv-record").join("p.ccraft-folder");
+    let items = media();
+    let mut record = FolderRecord::new();
+    save(&dir, &hello(), &items, &mut record);
+
+    // Simulate a FolderRecord created by an older version that stored FNV-1a hashes.
+    let mut legacy_record = FolderRecord::new();
+    for (rel, file_rec) in record.files() {
+        let disk_bytes = std::fs::read(dir.join(rel)).unwrap();
+        let mut old_rec = *file_rec;
+        old_rec.hash = fnv1a64(&disk_bytes);
+        legacy_record.files_mut().insert(rel.clone(), old_rec);
+    }
+
+    let report = save_project_folder(&dir, &hello(), &items, &mut legacy_record).unwrap();
+    assert!(
+        report.written.is_empty(),
+        "unchanged media with legacy FNV-1a hash must not be rewritten: {:?}",
+        report.written
+    );
+    for (rel, file_rec) in legacy_record.files() {
+        let disk_bytes = std::fs::read(dir.join(rel)).unwrap();
+        assert_eq!(file_rec.hash, crate::fast_hash64(&disk_bytes));
+    }
+}

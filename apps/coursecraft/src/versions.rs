@@ -3,9 +3,30 @@
 //! folder so a sync service does not carry the copies around. Every function
 //! takes the config directory as a parameter, so tests never touch the real one.
 
+use std::collections::HashMap;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
+
+const VERSION_CACHE_LIMIT: usize = 512;
+
+#[derive(Clone, Copy)]
+struct CachedVersionInfo {
+    modified: SystemTime,
+    size: u64,
+    slides: Option<usize>,
+}
+
+static VERSION_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedVersionInfo>>> = OnceLock::new();
+
+#[cfg(test)]
+static VERSION_CACHE_HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn cache_hits() -> usize {
+    VERSION_CACHE_HITS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Most bytes of versions kept for one project (5 GB). The oldest go first.
 pub const CAP_BYTES: u64 = 5 * 1024 * 1024 * 1024;
@@ -150,11 +171,44 @@ fn version_file(config_dir: &Path, project: &Path, id: &str) -> PathBuf {
 
 fn describe(config_dir: &Path, project: &Path, id: &str) -> Version {
     let path = version_file(config_dir, project, id);
-    let size = std::fs::metadata(&path).map_or(0, |m| m.len());
+    let meta = std::fs::metadata(&path).ok();
+    let size = meta.as_ref().map_or(0, std::fs::Metadata::len);
+    let modified = meta.as_ref().and_then(|m| m.modified().ok());
+    let cache = VERSION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(mtime) = modified
+        && let Ok(guard) = cache.lock()
+        && let Some(entry) = guard.get(&path)
+        && entry.modified == mtime
+        && entry.size == size
+    {
+        #[cfg(test)]
+        VERSION_CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return Version {
+            id: id.to_string(),
+            path,
+            size,
+            slides: entry.slides,
+        };
+    }
     let slides = std::fs::File::open(&path)
         .ok()
         .and_then(|f| coursecraft_format::read_course(std::io::BufReader::new(f)).ok())
         .map(|course| course.slides().count());
+    if let Some(mtime) = modified
+        && let Ok(mut guard) = cache.lock()
+    {
+        if guard.len() >= VERSION_CACHE_LIMIT {
+            guard.clear();
+        }
+        guard.insert(
+            path.clone(),
+            CachedVersionInfo {
+                modified: mtime,
+                size,
+                slides,
+            },
+        );
+    }
     Version {
         id: id.to_string(),
         path,

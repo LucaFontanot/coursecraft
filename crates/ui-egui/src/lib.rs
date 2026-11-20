@@ -1684,7 +1684,7 @@ impl Editor {
     /// Unused media is excluded from the result but kept in memory so undo can restore it;
     /// in-memory media is only released when the project is replaced.
     #[must_use]
-    pub fn used_media(&self) -> Vec<(String, Vec<u8>)> {
+    pub fn used_media(&self) -> Vec<(String, std::sync::Arc<[u8]>)> {
         let referenced = referenced_media_srcs(&self.session.course);
         let folders = web_folder_prefixes(&self.session.course);
         self.media
@@ -1692,7 +1692,7 @@ impl Editor {
             .filter(|(src, _)| {
                 referenced.contains(src) || folders.iter().any(|prefix| src.starts_with(prefix))
             })
-            .map(|(src, bytes)| (src.clone(), bytes.to_vec()))
+            .map(|(src, bytes)| (src.clone(), std::sync::Arc::clone(bytes)))
             .collect()
     }
 

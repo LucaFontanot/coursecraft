@@ -2421,3 +2421,37 @@ fn import_pptx_drops_links_to_hidden_slides() {
         .collect();
     assert!(errors.is_empty(), "validation errors: {errors:?}");
 }
+
+#[test]
+fn import_skips_unused_zip_entries_without_reading_them() {
+    let slide = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+           xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+        <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>
+    </p:sld>"#;
+    let base = fixture_pptx(&[slide], &[]);
+
+    // Append an oversized unused entry that exceeds max_entry_bytes and max_total_bytes.
+    let mut reader = zip::ZipArchive::new(std::io::Cursor::new(&base)).unwrap();
+    let mut out = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut out);
+        for i in 0..reader.len() {
+            let entry = reader.by_index(i).unwrap();
+            writer.raw_copy_file(entry).unwrap();
+        }
+        let opt = zip::write::SimpleFileOptions::default();
+        writer.start_file("ppt/embeddings/unused.bin", opt).unwrap();
+        writer.write_all(&vec![0u8; 256 * 1024]).unwrap();
+        writer.finish().unwrap();
+    }
+
+    let limits = Limits {
+        max_entry_bytes: 64 * 1024,
+        max_total_bytes: 128 * 1024,
+        ..Default::default()
+    };
+    let imported = import_pptx_with_limits(&out.into_inner(), "Unused", limits)
+        .expect("unused oversized entry must not be read or fail import");
+    assert_eq!(imported.report.slides, 1);
+}

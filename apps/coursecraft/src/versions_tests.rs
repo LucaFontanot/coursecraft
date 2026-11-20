@@ -320,3 +320,35 @@ fn versions_to_keep_defaults_round_trips_and_clamps() {
     std::fs::write(dir.join("prefs.json"), "{\"versions_to_keep\": 9999}").unwrap();
     assert_eq!(load_prefs(&dir).versions_to_keep_clamped(), 100);
 }
+
+#[test]
+fn list_versions_caches_by_path_and_modified_time() {
+    let dir = scratch_dir("versions-cache");
+    let cfg = dir.join("cfg");
+    let project = dir.join("p.ccraft");
+    save_to(&project, &titled("A"), &[]).unwrap();
+    snapshot_with(&cfg, &project, 10, "A", versions::CAP_BYTES, at(0)).unwrap();
+
+    let before = versions::cache_hits();
+    let first = versions::list_versions(&cfg, &project);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].slides, Some(4));
+
+    let second = versions::list_versions(&cfg, &project);
+    assert_eq!(second, first);
+    assert!(
+        versions::cache_hits() > before,
+        "second list_versions call should hit the cache"
+    );
+
+    // Replacing the version file with different content (and size) invalidates the cache.
+    let mut five_slides = titled("B");
+    let mut extra_slide = five_slides.scenes[0].slides[0].clone();
+    extra_slide.id = "slide-extra".to_string();
+    five_slides.scenes[0].slides.push(extra_slide);
+    save_to(&first[0].path, &five_slides, &[]).unwrap();
+    let hits_before_refresh = versions::cache_hits();
+    let third = versions::list_versions(&cfg, &project);
+    assert_eq!(third[0].slides, Some(5));
+    assert_eq!(versions::cache_hits(), hits_before_refresh);
+}

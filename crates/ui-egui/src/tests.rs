@@ -5195,6 +5195,32 @@ fn save_keeps_every_file_in_a_web_folder() {
 }
 
 #[test]
+fn used_media_shares_arc_bytes_without_copying() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+
+    let png = test_png_bytes();
+    let src = harness.editor.import_image("shared.png", &png).unwrap();
+    let canvas_rect = harness.central_panel_rect();
+    harness.click_at(canvas_rect.center());
+
+    let used = harness.editor.used_media();
+    assert_eq!(used.len(), 1);
+    assert_eq!(used[0].0, src);
+    let stored = harness
+        .editor
+        .media()
+        .iter()
+        .find(|(name, _)| name == &src)
+        .expect("stored media");
+    assert!(
+        std::sync::Arc::ptr_eq(&used[0].1, &stored.1),
+        "used_media should clone the Arc handle rather than copying media bytes"
+    );
+}
+
+#[test]
 fn undo_after_delete_and_save_keeps_image_bytes() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);

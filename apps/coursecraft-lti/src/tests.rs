@@ -979,3 +979,149 @@ fn login_table_evicts_entry_with_oldest_expires_when_full() {
     assert!(!server.shared.has_pending_login("z-oldest"));
     assert!(server.shared.has_pending_login("a-newer-0000"));
 }
+
+#[test]
+fn course_files_return_cache_control_etag_304_and_206_range() {
+    let dir = temp_course_dir();
+    std::fs::write(dir.join("video.mp4"), b"0123456789abcdef").unwrap();
+    let server = start_server(
+        config_with(
+            "https://platform.example/jwks",
+            "https://platform.example/token",
+        ),
+        dir,
+    );
+
+    let (status, headers, body) = request(server.addr, "GET", "/course/video.mp4", &[], "");
+    assert_eq!(status, 200);
+    assert_eq!(body, b"0123456789abcdef");
+    assert!(headers.contains_key("cache-control"));
+    assert_eq!(
+        headers.get("accept-ranges").map(String::as_str),
+        Some("bytes")
+    );
+    let etag = headers.get("etag").expect("ETag header").clone();
+
+    // If-None-Match returns 304 Not Modified with empty body.
+    let (status_304, headers_304, body_304) = request(
+        server.addr,
+        "GET",
+        "/course/video.mp4",
+        &[("If-None-Match", &etag)],
+        "",
+    );
+    assert_eq!(status_304, 304);
+    assert!(body_304.is_empty());
+    assert_eq!(headers_304.get("etag"), Some(&etag));
+
+    // Single byte range returns 206 Partial Content.
+    let (status_206, headers_206, body_206) = request(
+        server.addr,
+        "GET",
+        "/course/video.mp4",
+        &[("Range", "bytes=4-9")],
+        "",
+    );
+    assert_eq!(status_206, 206);
+    assert_eq!(body_206, b"456789");
+    assert_eq!(
+        headers_206.get("content-range").map(String::as_str),
+        Some("bytes 4-9/16")
+    );
+
+    // Out-of-bounds range returns 416 Range Not Satisfiable.
+    let (status_416, headers_416, _) = request(
+        server.addr,
+        "GET",
+        "/course/video.mp4",
+        &[("Range", "bytes=99-120")],
+        "",
+    );
+    assert_eq!(status_416, 416);
+    assert_eq!(
+        headers_416.get("content-range").map(String::as_str),
+        Some("bytes */16")
+    );
+}
+
+#[test]
+fn ags_token_is_cached_per_server_across_learners() {
+    let token_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let token_hits_srv = Arc::clone(&token_hits);
+    let score_hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let score_hits_srv = Arc::clone(&score_hits);
+
+    let jwks = coursecraft_lti::tool_jwks(&base_config()).expect("tool jwks");
+    let platform = start_platform(move |req| match req.path.as_str() {
+        "/jwks" => Response::file(jwks.clone().into_bytes(), "application/json"),
+        "/token" => {
+            token_hits_srv.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Response::json(
+                200,
+                &json!({ "access_token": "server-wide-tok", "expires_in": 3600 }),
+            )
+        }
+        "/lineitems/1/scores" => {
+            score_hits_srv.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Response::status(204)
+        }
+        _ => Response::text(404, "not found"),
+    });
+
+    let cfg = config_with(
+        &format!("http://{}/jwks", platform.addr),
+        &format!("http://{}/token", platform.addr),
+    );
+    let server = start_server(cfg, temp_course_dir());
+
+    // Launch two different learners (two separate sessions).
+    let lineitem = format!("http://{}/lineitems/1", platform.addr);
+    let make_launch = |subject: &str| coursecraft_lti::Launch {
+        subject: subject.into(),
+        name: None,
+        context_id: None,
+        resource_link_id: "rl-1".into(),
+        roles: Vec::new(),
+        ags: Some(coursecraft_lti::Ags {
+            lineitem: Some(lineitem.clone()),
+            lineitems: None,
+            scope: vec!["https://purl.imsglobal.org/spec/lti-ags/scope/score".into()],
+        }),
+        deployment_id: DEPLOYMENT_ID.into(),
+    };
+    let cookie_a = server.shared.insert_session(make_launch("learner-a"));
+    let cookie_b = server.shared.insert_session(make_launch("learner-b"));
+    assert_ne!(cookie_a, cookie_b);
+
+    let (st_a, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/score",
+        &[
+            ("Cookie", &format!("cc_lti={cookie_a}")),
+            ("Content-Type", "application/json"),
+            ("Origin", "https://tool.example"),
+        ],
+        r#"{"percent":80,"status":"passed"}"#,
+    );
+    assert_eq!(st_a, 204);
+
+    let (st_b, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/score",
+        &[
+            ("Cookie", &format!("cc_lti={cookie_b}")),
+            ("Content-Type", "application/json"),
+            ("Origin", "https://tool.example"),
+        ],
+        r#"{"percent":90,"status":"passed"}"#,
+    );
+    assert_eq!(st_b, 204);
+    assert_eq!(score_hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        token_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "second learner must reuse the server-cached AGS token"
+    );
+}

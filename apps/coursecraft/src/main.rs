@@ -604,8 +604,12 @@ impl EditorApp {
             SaveKind::Folder => {
                 // A folder is kept in git, so there is no version history for it.
                 let mut record = self.project.folder.take().unwrap_or_default();
-                let result =
-                    files::save_folder_to(&path, &self.editor.session.course, &media, &mut record);
+                let result = files::save_folder_to_arc(
+                    &path,
+                    &self.editor.session.course,
+                    &media,
+                    &mut record,
+                );
                 self.project.folder = Some(record);
                 result.map(|_| ())
             }
@@ -629,7 +633,7 @@ impl EditorApp {
             }
             SaveKind::Ccraft => {
                 self.keep_version(&path);
-                files::save_to(&path, &self.editor.session.course, &media)
+                files::save_to_arc(&path, &self.editor.session.course, &media)
             }
         };
         match saved {
@@ -702,10 +706,7 @@ impl EditorApp {
                     course.title,
                     versions::display_when(stem)
                 );
-                let media_arc: Vec<(String, std::sync::Arc<[u8]>)> = media
-                    .iter()
-                    .map(|(k, v)| (k.clone(), std::sync::Arc::from(v.as_slice())))
-                    .collect();
+                let media_arc = into_arc_media(media);
                 self.editor.replace_course(course);
                 self.editor.set_media(media_arc);
                 self.project = Project::new(self.editor.session.revision);
@@ -798,10 +799,7 @@ impl EditorApp {
         };
         match opened {
             Ok(((course, media), record)) => {
-                let media_arc: Vec<(String, std::sync::Arc<[u8]>)> = media
-                    .iter()
-                    .map(|(k, v)| (k.clone(), std::sync::Arc::from(v.as_slice())))
-                    .collect();
+                let media_arc = into_arc_media(media);
                 self.editor.replace_course(course);
                 self.editor.set_media(media_arc);
                 self.project.path = final_path.clone();
@@ -921,7 +919,7 @@ impl EditorApp {
         let is_dirty = self.project.is_dirty(&self.editor.session);
         let rev = self.editor.session.revision;
         let editor = &self.editor;
-        self.autosaver.maybe_autosave(
+        self.autosaver.maybe_autosave_arc(
             current_time,
             is_dirty,
             rev,
@@ -2223,11 +2221,7 @@ impl EditorApp {
         match coursecraft_pptx::import_pptx(bytes, title) {
             Ok(imported) => {
                 self.editor.replace_course(imported.course);
-                let media_arc: Vec<(String, std::sync::Arc<[u8]>)> = imported
-                    .media
-                    .iter()
-                    .map(|(k, v)| (k.clone(), std::sync::Arc::from(v.as_slice())))
-                    .collect();
+                let media_arc = into_arc_media(imported.media);
                 self.editor.set_media(media_arc);
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -2444,8 +2438,12 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
                 .take()
                 .filter(|_| same)
                 .unwrap_or_default();
-            let result =
-                files::save_folder_to(&target, &self.editor.session.course, &media, &mut record);
+            let result = files::save_folder_to_arc(
+                &target,
+                &self.editor.session.course,
+                &media,
+                &mut record,
+            );
             self.project.folder = Some(record);
             result.map_err(coursecraft_control::HostError::Engine)?;
         } else if is_ccraft {
@@ -2458,7 +2456,7 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
                         .set_status("Couldn't keep a version of this file");
                 }
             }
-            files::save_to(&target, &self.editor.session.course, &media)
+            files::save_to_arc(&target, &self.editor.session.course, &media)
                 .map_err(coursecraft_control::HostError::Engine)?;
         } else {
             let is_dir = target.is_dir()
@@ -2514,10 +2512,7 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
         match opened {
             Ok(((course, media), record)) => {
                 let title = course.title.clone();
-                let media_arc: Vec<(String, std::sync::Arc<[u8]>)> = media
-                    .iter()
-                    .map(|(k, v)| (k.clone(), std::sync::Arc::from(v.as_slice())))
-                    .collect();
+                let media_arc = into_arc_media(media);
                 self.editor.replace_course(course);
                 self.editor.set_media(media_arc);
                 self.project.path = Some(path.to_path_buf());
@@ -3249,4 +3244,11 @@ fn main() {
             web_sys::console::error_1(&e);
         }
     });
+}
+
+fn into_arc_media(media: Vec<(String, Vec<u8>)>) -> Vec<(String, std::sync::Arc<[u8]>)> {
+    media
+        .into_iter()
+        .map(|(k, v)| (k, std::sync::Arc::from(v)))
+        .collect()
 }

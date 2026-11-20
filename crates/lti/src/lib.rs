@@ -174,17 +174,33 @@ pub fn validate_id_token(
     build_launch(&claims)
 }
 
+/// A parsed PKCS#8 RSA signing key for the tool, built once at startup.
+pub struct ToolSigningKey(RsaKeyPair);
+
+impl ToolSigningKey {
+    /// Parse a PKCS#8 DER-encoded RSA private key.
+    pub fn from_pkcs8(private_key_pkcs8: &[u8]) -> Result<Self, LtiError> {
+        RsaKeyPair::from_pkcs8(private_key_pkcs8)
+            .map(Self)
+            .map_err(|e| LtiError::Key(e.to_string()))
+    }
+}
+
 /// The tool's public JWKS, built from its PKCS#8 private key.
 pub fn tool_jwks(cfg: &ToolConfig) -> Result<String, LtiError> {
-    let key =
-        RsaKeyPair::from_pkcs8(&cfg.private_key_pkcs8).map_err(|e| LtiError::Key(e.to_string()))?;
-    let public = PublicKeyComponents::<Vec<u8>>::from(key.public());
+    let key = ToolSigningKey::from_pkcs8(&cfg.private_key_pkcs8)?;
+    tool_jwks_with_key(&key, &cfg.key_id)
+}
+
+/// The tool's public JWKS, built from an already-parsed [`ToolSigningKey`].
+pub fn tool_jwks_with_key(key: &ToolSigningKey, key_id: &str) -> Result<String, LtiError> {
+    let public = PublicKeyComponents::<Vec<u8>>::from(key.0.public());
     let jwks = json!({
         "keys": [{
             "kty": "RSA",
             "alg": "RS256",
             "use": "sig",
-            "kid": cfg.key_id.as_str(),
+            "kid": key_id,
             "n": jwt::base64url_encode(&public.n),
             "e": jwt::base64url_encode(&public.e),
         }]
@@ -194,6 +210,17 @@ pub fn tool_jwks(cfg: &ToolConfig) -> Result<String, LtiError> {
 
 /// A signed `client_credentials` assertion for the platform token endpoint.
 pub fn client_assertion(cfg: &ToolConfig, now_unix: i64, jti: &str) -> Result<String, LtiError> {
+    let key = ToolSigningKey::from_pkcs8(&cfg.private_key_pkcs8)?;
+    client_assertion_with_key(cfg, &key, now_unix, jti)
+}
+
+/// A signed `client_credentials` assertion using an already-parsed [`ToolSigningKey`].
+pub fn client_assertion_with_key(
+    cfg: &ToolConfig,
+    key: &ToolSigningKey,
+    now_unix: i64,
+    jti: &str,
+) -> Result<String, LtiError> {
     let header = json!({
         "alg": "RS256",
         "typ": "JWT",
@@ -207,7 +234,7 @@ pub fn client_assertion(cfg: &ToolConfig, now_unix: i64, jti: &str) -> Result<St
         "exp": now_unix.saturating_add(300),
         "jti": jti,
     });
-    jwt::sign_rs256(&cfg.private_key_pkcs8, &header, &claims)
+    jwt::sign_rs256_with_key(&key.0, &header, &claims)
 }
 
 /// The `application/x-www-form-urlencoded` body for an access-token request.
