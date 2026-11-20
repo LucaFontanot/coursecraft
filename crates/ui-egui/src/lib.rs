@@ -113,6 +113,8 @@ mod perf_tests;
 #[cfg(test)]
 mod preview_variables_tests;
 #[cfg(test)]
+mod publish_tests;
+#[cfg(test)]
 mod rename_tests;
 #[cfg(test)]
 mod spacing_tests;
@@ -358,6 +360,8 @@ pub enum EditorRequest {
         options: ReviewOptionsView,
     },
     ShowPublished,
+    /// Serve the last published zip on a local server and open it in the browser (desktop only).
+    OpenPublishedInBrowser,
     SetAutomation(bool),
     /// Delete the saved crash note: it was reported or dismissed.
     DiscardCrashNote,

@@ -725,7 +725,7 @@ static REGISTRY: &[Command] = &[
         label: "Editor View Settings",
         menu: "",
         shortcut: None,
-        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool}"#,
+        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "last_publish"?: {"standard": string}}"#,
         mutates: true,
         run: view_set,
     },
@@ -5434,6 +5434,9 @@ fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
     }
     if let Some(v) = opt::<bool>(C, p, "show_guides")? {
         s.course.editor.show_guides = v;
+    }
+    if let Some(v) = opt::<coursecraft_course::PublishSettings>(C, p, "last_publish")? {
+        s.course.editor.last_publish = Some(v);
     }
     if s.course.editor == before {
         s.skip_undo = true;

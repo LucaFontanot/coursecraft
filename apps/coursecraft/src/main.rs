@@ -31,6 +31,8 @@ pub mod player_bundle;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prefs;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod preview_server;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod publish;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod system_fonts;
@@ -166,6 +168,9 @@ struct EditorApp {
     /// Last file written by a successful publish, for "Show in folder".
     #[cfg(not(target_arch = "wasm32"))]
     published_path: Option<PathBuf>,
+    /// Local HTTP server for "Open in browser" after a publish.
+    #[cfg(not(target_arch = "wasm32"))]
+    preview_server: Option<preview_server::PreviewServer>,
     /// A file returned by the export save dialog in tests instead of opening a dialog.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     test_export_path: Option<PathBuf>,
@@ -395,6 +400,7 @@ impl EditorApp {
             system_fonts_rx: None,
             system_font_families: Vec::new(),
             published_path: None,
+            preview_server: None,
             #[cfg(test)]
             test_export_path: None,
             #[cfg(test)]
@@ -1090,7 +1096,7 @@ impl EditorApp {
                 self.save_image(&png, &suggested_name);
             }
             EditorRequest::Publish { standard } => {
-                self.start_publish(standard);
+                self.start_publish(standard, ctx);
             }
             EditorRequest::ExportMp4 { width, fps } => {
                 self.start_export_mp4(width, fps);
@@ -1100,6 +1106,9 @@ impl EditorApp {
             }
             EditorRequest::ShowPublished => {
                 self.show_published();
+            }
+            EditorRequest::OpenPublishedInBrowser => {
+                self.open_published_in_browser();
             }
             EditorRequest::SetAutomation(enabled) => {
                 self.prefs.automation_enabled = enabled;
@@ -1456,7 +1465,11 @@ impl EditorApp {
 
     /// Ask for a destination and start a background publish. Never changes the session.
     #[cfg(not(target_arch = "wasm32"))]
-    fn start_publish(&mut self, standard: coursecraft_ui_egui::PublishStandard) {
+    fn start_publish(
+        &mut self,
+        standard: coursecraft_ui_egui::PublishStandard,
+        ctx: &egui::Context,
+    ) {
         if self.publish_rx.is_some() {
             return;
         }
@@ -1475,8 +1488,10 @@ impl EditorApp {
         let (tx, rx) = std::sync::mpsc::channel();
         self.publish_rx = Some(rx);
         self.editor.set_publish_busy();
+        let repaint = ctx.clone();
         std::thread::spawn(move || {
             let _ = tx.send(publish::run_publish_job(job));
+            repaint.request_repaint();
         });
     }
 
@@ -1553,6 +1568,31 @@ impl EditorApp {
             return;
         };
         match reveal_in_folder(&path) {
+            Ok(()) => self.editor.set_publish_status(None),
+            Err(message) => self.editor.set_publish_status(Some(message)),
+        }
+    }
+
+    /// Serve the last published zip on a local server and open it in the browser.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_published_in_browser(&mut self) {
+        let Some(path) = self.published_path.clone() else {
+            self.editor
+                .set_publish_status(Some("There is no published file to open.".to_string()));
+            return;
+        };
+        // Drop any previous server before starting the replacement.
+        self.preview_server = None;
+        let server = match preview_server::PreviewServer::start_from_file(&path) {
+            Ok(server) => server,
+            Err(message) => {
+                self.editor.set_publish_status(Some(message));
+                return;
+            }
+        };
+        let url = server.url();
+        self.preview_server = Some(server);
+        match preview_server::open_url_in_browser(&url) {
             Ok(()) => self.editor.set_publish_status(None),
             Err(message) => self.editor.set_publish_status(Some(message)),
         }
