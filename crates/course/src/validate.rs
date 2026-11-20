@@ -639,6 +639,15 @@ fn check_course_results(cx: &mut Ctx<'_>) {
 }
 
 fn check_slide(cx: &mut Ctx<'_>, slide: &Slide, p: &str) {
+    if slide.duration_ms > crate::MAX_TIMELINE_DURATION_MS {
+        cx.err(
+            format!("{p}/duration_ms"),
+            format!(
+                "slide duration_ms must be at most {}",
+                crate::MAX_TIMELINE_DURATION_MS
+            ),
+        );
+    }
     if let Some(ref bg) = slide.background
         && !bg.is_valid()
     {
@@ -681,6 +690,15 @@ fn check_slide(cx: &mut Ctx<'_>, slide: &Slide, p: &str) {
     }
     for (li, layer) in slide.layers.iter().enumerate() {
         let lp = format!("{p}/layers/{li}");
+        if layer.duration_ms > crate::MAX_TIMELINE_DURATION_MS {
+            cx.err(
+                format!("{lp}/duration_ms"),
+                format!(
+                    "layer duration_ms must be at most {}",
+                    crate::MAX_TIMELINE_DURATION_MS
+                ),
+            );
+        }
         for (i, o) in layer.objects.iter().enumerate() {
             check_object(cx, o, layer.duration_ms, &format!("{lp}/objects/{i}"));
         }
@@ -1717,6 +1735,15 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
         cx.err(
             format!("{p}/frame"),
             "frame values must be finite and w/h non-negative",
+        );
+    }
+    if f.w > crate::MAX_OBJECT_FRAME_SIZE || f.h > crate::MAX_OBJECT_FRAME_SIZE {
+        cx.err(
+            format!("{p}/frame"),
+            format!(
+                "frame width and height must be at most {} px",
+                crate::MAX_OBJECT_FRAME_SIZE
+            ),
         );
     }
     if !o.rotation.is_finite() || !(0.0..360.0).contains(&o.rotation) {

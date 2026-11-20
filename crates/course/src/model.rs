@@ -1753,6 +1753,45 @@ fn is_default_meter_style(style: &MeterStyle) -> bool {
 /// Largest `content_height` a scrolling panel may store, in slide pixels.
 pub const MAX_SCROLL_CONTENT_HEIGHT: f32 = 20_000.0;
 
+/// Largest duration a slide, layer, or master may store (24 hours in ms).
+pub const MAX_TIMELINE_DURATION_MS: u32 = 86_400_000;
+
+/// Largest width or height an object frame may store, in slide pixels.
+pub const MAX_OBJECT_FRAME_SIZE: f32 = 100_000.0;
+
+/// Clamp `value` to `lo..=hi` without ever panicking.
+///
+/// If `lo > hi`, `hi` is used for both bounds. If `value` is non-finite, the
+/// ordered lower bound is returned. Non-finite bounds are handled safely.
+#[must_use]
+pub fn safe_clamp(value: f32, lo: f32, hi: f32) -> f32 {
+    let (lo, hi) = match (lo.is_nan(), hi.is_nan()) {
+        (true, true) => return 0.0,
+        (true, false) => (hi, hi),
+        (false, true) => (lo, lo),
+        (false, false) => {
+            if lo > hi {
+                (hi, hi)
+            } else {
+                (lo, hi)
+            }
+        }
+    };
+    if !value.is_finite() {
+        return lo;
+    }
+    value.clamp(lo, hi)
+}
+
+/// Clamp an ordered `value` to `lo..=hi` without ever panicking.
+///
+/// If `lo > hi`, `hi` is used for both bounds.
+#[must_use]
+pub fn safe_clamp_ord<T: Ord + Copy>(value: T, lo: T, hi: T) -> T {
+    let lo = lo.min(hi);
+    value.clamp(lo, hi)
+}
+
 fn deserialize_scroll_content_height<'de, D>(deserializer: D) -> Result<f32, D::Error>
 where
     D: serde::Deserializer<'de>,

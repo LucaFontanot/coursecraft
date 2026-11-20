@@ -4981,3 +4981,59 @@ fn try_again_layer_round_trips_and_missing_layer_warns() {
         "expected missing try_again_layer warning, got {warnings:?}"
     );
 }
+
+#[test]
+fn slide_and_layer_duration_over_24h_is_validation_error() {
+    let mut course = Course::from_json(HELLO).expect("hello");
+    course.scenes[0].slides[0].duration_ms = 86_400_001;
+    let errs = errors(&course);
+    assert!(
+        errs.iter().any(|e| e.contains("duration_ms")),
+        "expected slide duration_ms error, got {errs:?}"
+    );
+
+    let mut course = Course::from_json(HELLO).expect("hello");
+    let layer: crate::Layer = serde_json::from_value(serde_json::json!({
+        "id": "l1",
+        "name": "Layer",
+        "duration_ms": 86_400_001
+    }))
+    .expect("layer");
+    course.scenes[0].slides[0].layers.push(layer);
+    let errs = errors(&course);
+    assert!(
+        errs.iter().any(|e| e.contains("duration_ms")),
+        "expected layer duration_ms error, got {errs:?}"
+    );
+}
+
+#[test]
+fn object_frame_over_100k_px_is_validation_error() {
+    let mut course = Course::from_json(HELLO).expect("hello");
+    course.scenes[0].slides[0].objects[0].frame.w = 100_001.0;
+    let errs = errors(&course);
+    assert!(
+        errs.iter().any(|e| e.contains("100000")),
+        "expected frame width error, got {errs:?}"
+    );
+
+    let mut course = Course::from_json(HELLO).expect("hello");
+    course.scenes[0].slides[0].objects[0].frame.h = 100_001.0;
+    let errs = errors(&course);
+    assert!(
+        errs.iter().any(|e| e.contains("100000")),
+        "expected frame height error, got {errs:?}"
+    );
+}
+
+#[test]
+fn safe_clamp_orders_inverted_bounds_and_handles_non_finite() {
+    assert_eq!(crate::safe_clamp(5.0, 0.0, 10.0), 5.0);
+    assert_eq!(crate::safe_clamp(-3.0, 0.0, 10.0), 0.0);
+    assert_eq!(crate::safe_clamp(500.0, 20_000.4, 20_000.0), 20_000.0);
+    assert_eq!(crate::safe_clamp(f32::NAN, 10.0, 2.0), 2.0);
+    assert_eq!(crate::safe_clamp(f32::INFINITY, 1.0, 5.0), 1.0);
+    assert_eq!(crate::safe_clamp(f32::NAN, f32::NAN, 3.0), 3.0);
+    assert_eq!(crate::safe_clamp(1.0, f32::NAN, f32::NAN), 0.0);
+    assert_eq!(crate::safe_clamp_ord(5020_i64, 5050, 5000), 5000);
+}

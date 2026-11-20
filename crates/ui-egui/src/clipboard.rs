@@ -467,13 +467,13 @@ fn placement_delta(
     if !half_w.is_finite() || !half_h.is_finite() || half_w < 0.0 || half_h < 0.0 {
         return None;
     }
-    let target_x = if half_w <= slide_w {
-        centre.x.clamp(half_w, slide_w - half_w)
+    let target_x = if half_w * 2.0 <= slide_w {
+        coursecraft_course::safe_clamp(centre.x, half_w, slide_w - half_w)
     } else {
         slide_w * 0.5
     };
-    let target_y = if half_h <= slide_h {
-        centre.y.clamp(half_h, slide_h - half_h)
+    let target_y = if half_h * 2.0 <= slide_h {
+        coursecraft_course::safe_clamp(centre.y, half_h, slide_h - half_h)
     } else {
         slide_h * 0.5
     };
@@ -629,5 +629,30 @@ fn paste_plain_text(editor: &mut Editor, text: &str) {
         editor.selection.object = Some(id.to_owned());
         editor.selection.also.clear();
         editor.set_status("Pasted as a text box");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placement_delta_centers_copy_wider_than_slide() {
+        let obj: Object = serde_json::from_value(serde_json::json!({
+            "id": "o1",
+            "frame": { "x": 0.0, "y": 0.0, "w": 1400.0, "h": 200.0 },
+            "kind": {
+                "type": "shape",
+                "shape": "rectangle",
+                "fill": "#000000"
+            }
+        }))
+        .expect("object");
+        let delta = placement_delta(
+            &[obj],
+            egui::pos2(640.0, 360.0),
+            coursecraft_course::Size { w: 1280, h: 720 },
+        );
+        assert_eq!(delta, Some((-60.0, 260.0)));
     }
 }

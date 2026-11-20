@@ -6213,7 +6213,8 @@ fn object_set_scroll_panel(s: &mut Session, p: &Json) -> Result<Json> {
                 if !value.is_finite() {
                     return Err(bad(C, "patch.content_height must be finite"));
                 }
-                *content_height = value.clamp(
+                *content_height = coursecraft_course::safe_clamp(
+                    value,
                     object.frame.h.max(0.0),
                     coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT,
                 );

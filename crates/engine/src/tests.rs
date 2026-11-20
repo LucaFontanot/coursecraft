@@ -8748,3 +8748,27 @@ fn a_command_that_changes_nothing_adds_no_undo_step() {
         "a batch that changes nothing adds no undo step"
     );
 }
+
+#[test]
+fn set_scroll_panel_with_tall_frame_does_not_panic() {
+    let mut s = Session::blank("Scroll");
+    let added = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "frame": { "x": 0.0, "y": 0.0, "w": 200.0, "h": 20000.4 },
+            "kind": { "type": "scroll_panel", "content_height": 20000.0 }
+        }),
+    );
+    let id = added["id"].as_str().expect("id").to_owned();
+    ok(
+        &mut s,
+        "object.set_scroll_panel",
+        json!({
+            "slide": "slide1",
+            "object": id,
+            "patch": { "content_height": 500.0 }
+        }),
+    );
+}
