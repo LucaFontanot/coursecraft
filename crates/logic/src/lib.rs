@@ -869,6 +869,7 @@ impl<'c> Player<'c> {
         // Hosts rebuild a `Player` from its state every frame, so the learner's pause must
         // survive this. Suspend data never carries it, so a saved session still starts playing.
         p.st = state;
+        p.entered = p.st.started;
         // Saved states can list visible layers in a different order. Put them back
         // into `slide.layers` order (back to front), dropping nothing.
         let authored: Vec<String> = p

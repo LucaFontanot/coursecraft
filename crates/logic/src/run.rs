@@ -341,7 +341,7 @@ impl<'c> Player<'c> {
                     warn(out, "the slide menu is turned off for this course");
                     return;
                 }
-                if self.st.lightbox.is_none() && !self.can_go_to(slide) {
+                if !self.can_go_to(slide) {
                     warn(out, "that slide is locked in the slide menu");
                     return;
                 }
@@ -3851,6 +3851,7 @@ impl<'c> Player<'c> {
             warn(out, "retry_quiz on a course without any question");
             return;
         }
+        self.close_lightbox(false, out);
         let was_reviewing = self.st.reviewing_from.is_some();
         self.st.reviewing_from = None;
         self.st.answers.clear();
@@ -3862,6 +3863,19 @@ impl<'c> Player<'c> {
         self.st.hotspot_markers.clear();
         self.st.drops.clear();
         self.st.last_response = None;
+        let mut prev_id = None;
+        if !self.course.banks.is_empty() {
+            // Run leave steps before replacing `self.slides` so `self.st.slide`
+            // still indexes the old play order.
+            if self.entered {
+                self.note_timeline_completed();
+                self.save_current_slide();
+            }
+            prev_id = (self.entered || self.st.started)
+                .then(|| self.slides.get(self.st.slide).map(|s| s.id.clone()))
+                .flatten();
+            self.entered = false;
+        }
         // Saved slide state for question slides is forgotten.
         let question_ids: Vec<String> = self
             .slides
@@ -3881,7 +3895,17 @@ impl<'c> Player<'c> {
             out.push(Effect::ReviewChanged { reviewing: false });
         }
         if let Some(idx) = self.slides.iter().position(|s| s.question.is_some()) {
-            self.enter_slide(idx, q, out);
+            if let Some(prev) = prev_id {
+                if self.slides.get(idx).is_some_and(|next| next.id != prev) {
+                    if self.st.visit_history.len() >= 50 {
+                        self.st.visit_history.remove(0);
+                    }
+                    self.st.visit_history.push(prev);
+                }
+                self.enter_slide_inner(idx, false, q, out);
+            } else {
+                self.enter_slide(idx, q, out);
+            }
         } else {
             warn(out, "retry_quiz on a course without any question");
         }
@@ -3896,6 +3920,7 @@ impl<'c> Player<'c> {
             warn(out, "review_quiz with nothing answered");
             return;
         };
+        self.close_lightbox(false, out);
         let Some(current) = self.slide() else {
             warn(out, "review_quiz with no slide showing");
             return;
@@ -3910,6 +3935,7 @@ impl<'c> Player<'c> {
             warn(out, "exit_review while not reviewing");
             return;
         };
+        self.close_lightbox(false, out);
         let idx = self.slide_position(&from);
         out.push(Effect::ReviewChanged { reviewing: false });
         match idx {

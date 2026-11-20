@@ -1,6 +1,6 @@
 use coursecraft_course::{
-    Action, BACKGROUND_AUDIO_ID, BankDraw, CompletionStatus, Course, Event, ObjectKind,
-    QuestionBank, RevisitMode, Slide, Trigger, Trim, Value, VarOp, VariableDef,
+    Action, BACKGROUND_AUDIO_ID, BankDraw, CompletionStatus, Course, Event, NavMode, Object,
+    ObjectKind, QuestionBank, RevisitMode, Slide, Trigger, Trim, Value, VarOp, VariableDef,
 };
 
 use crate::{
@@ -10379,4 +10379,192 @@ fn jump_to_scene_and_last_visited_history_and_resume() {
     let fx = resumed.handle(&click("btn-start"));
     // Previous slide before sc2-b in play order is sc2-a.
     assert!(has(&fx, &slide_entered("sc2-a")));
+}
+
+fn lightbox_quiz_course() -> Course {
+    let mut c = retry_review_course();
+    // Add a button on s1 to open s-results as a lightbox, and make s1 revisit: resume.
+    c.scenes[0].slides[0].revisit = RevisitMode::Resume;
+    c.scenes[0].slides[0].objects.push(
+        serde_json::from_value::<Object>(serde_json::json!({
+            "id": "btn-lb",
+            "kind": { "type": "button", "label": "Open Results" },
+            "frame": { "x": 0.0, "y": 300.0, "w": 120.0, "h": 40.0 }
+        }))
+        .expect("btn-lb"),
+    );
+    c.scenes[0].slides[0].triggers.push(Trigger {
+        action: Action::LightboxSlide {
+            slide: "s-results".into(),
+        },
+        when: Event::Click {
+            object: "btn-lb".into(),
+        },
+        condition: None,
+        disabled: false,
+    });
+    c
+}
+
+#[test]
+fn retry_quiz_closes_open_lightbox() {
+    let c = lightbox_quiz_course();
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    answer_q1(&mut p);
+    p.handle(&click("btn-lb"));
+    assert!(p.state().lightbox.is_some());
+
+    let fx = p.handle(&click("btn-retry"));
+    assert!(p.state().lightbox.is_none(), "lightbox should be closed");
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::LightboxClosed { slide } if slide == "s-results")),
+        "expected LightboxClosed, got {fx:?}"
+    );
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-q1"));
+}
+
+#[test]
+fn review_quiz_and_exit_review_close_open_lightbox() {
+    let c = lightbox_quiz_course();
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    answer_q1(&mut p);
+    p.handle(&click("btn-lb"));
+    assert!(p.state().lightbox.is_some());
+
+    let fx = p.handle(&click("btn-review"));
+    assert!(
+        p.state().lightbox.is_none(),
+        "lightbox should be closed on review"
+    );
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::LightboxClosed { slide } if slide == "s-results")),
+        "expected LightboxClosed on review, got {fx:?}"
+    );
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-q1"));
+
+    // Open a lightbox while reviewing, then exit_review must close it too.
+    let mut c2 = c.clone();
+    let s_q1 = c2.slide_mut("s-q1").expect("s-q1");
+    s_q1.objects.push(
+        serde_json::from_value::<Object>(serde_json::json!({
+            "id": "btn-lb-rev",
+            "kind": { "type": "button", "label": "Open Results" },
+            "frame": { "x": 0.0, "y": 400.0, "w": 120.0, "h": 40.0 }
+        }))
+        .expect("btn-lb-rev"),
+    );
+    s_q1.triggers.push(Trigger {
+        action: Action::LightboxSlide {
+            slide: "s-results".into(),
+        },
+        when: Event::Click {
+            object: "btn-lb-rev".into(),
+        },
+        condition: None,
+        disabled: false,
+    });
+    let mut p2 = Player::new(&c2).expect("player");
+    p2.handle(&Input::Start);
+    answer_q1(&mut p2);
+    p2.handle(&Input::Jump {
+        slide: "s-results".into(),
+    });
+    p2.handle(&click("btn-review"));
+    p2.handle(&click("btn-lb-rev"));
+    assert!(p2.state().lightbox.is_some());
+    let fx2 = p2.handle(&Input::ExitReview);
+    assert!(
+        p2.state().lightbox.is_none(),
+        "lightbox should be closed on exit_review"
+    );
+    assert!(
+        fx2.iter()
+            .any(|e| matches!(e, Effect::LightboxClosed { slide } if slide == "s-results")),
+        "expected LightboxClosed on exit_review, got {fx2:?}"
+    );
+}
+
+#[test]
+fn resume_saves_the_resumed_slide_when_leaving_it() {
+    let mut c = Course::from_json(HELLO).expect("hello");
+    c.scenes[0].slides[0].revisit = RevisitMode::Resume;
+    c.scenes[0].slides[0].duration_ms = 5000;
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    p.handle(&Input::Tick { ms: 1000 });
+    let saved = p.state().clone();
+
+    let mut resumed = Player::resume(&c, saved).expect("resume");
+    resumed.handle(&Input::Start);
+    resumed.handle(&Input::Tick { ms: 500 });
+    resumed.handle(&Input::Jump {
+        slide: c.scenes[0].slides[1].id.clone(),
+    });
+    resumed.handle(&Input::Jump {
+        slide: c.scenes[0].slides[0].id.clone(),
+    });
+    assert_eq!(
+        resumed.state().base.ms,
+        1500,
+        "resumed slide should save its clock when left"
+    );
+}
+
+#[test]
+fn go_to_respects_navigation_lock_while_lightbox_is_open() {
+    let mut c = timer_course();
+    c.player.navigation = NavMode::Locked;
+    c.player.show_menu = true;
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    p.handle(&click("btn-open"));
+    assert!(p.state().lightbox.is_some());
+
+    let fx = p.handle(&Input::GoTo {
+        slide: "s-box".into(),
+    });
+    assert!(warned(&fx), "expected warning when navigation is locked");
+    assert!(p.state().lightbox.is_some(), "lightbox should stay open");
+}
+
+#[test]
+fn retry_quiz_with_banks_runs_leave_steps_before_replacing_slides() {
+    let mut c = course_with_draw(10, 1, "draw1");
+    for s in &mut c.banks[0].slides {
+        s.revisit = RevisitMode::Resume;
+        s.triggers.push(Trigger {
+            action: Action::RetryQuiz,
+            when: Event::Click {
+                object: "btn".into(),
+            },
+            condition: None,
+            disabled: false,
+        });
+        s.objects.push(
+            serde_json::from_value::<Object>(serde_json::json!({
+                "id": "btn",
+                "kind": { "type": "button", "label": "Retry" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 40.0 }
+            }))
+            .expect("btn"),
+        );
+    }
+    let mut p = Player::with_draw_seed(&c, 1).expect("player");
+    p.handle(&Input::Start);
+    while p.current_slide().is_some_and(|s| s.question.is_none()) {
+        p.handle(&Input::Next);
+    }
+    p.handle(&Input::Tick { ms: 1234 });
+    let old_first = p.current_slide().expect("slide").id.clone();
+    p.handle(&click("btn"));
+    let new_first = p.current_slide().expect("slide").id.clone();
+    assert_ne!(old_first, new_first);
+    assert!(
+        !p.state().saved_slides.contains_key(&new_first),
+        "new slide at draw index must not inherit old slide's saved state"
+    );
 }

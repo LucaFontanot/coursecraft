@@ -5037,3 +5037,36 @@ fn safe_clamp_orders_inverted_bounds_and_handles_non_finite() {
     assert_eq!(crate::safe_clamp(1.0, f32::NAN, f32::NAN), 0.0);
     assert_eq!(crate::safe_clamp_ord(5020_i64, 5050, 5000), 5000);
 }
+
+#[test]
+fn timer_longer_than_owning_timeline_emits_validation_warning() {
+    let mut c = timer_meter_course();
+    c.scenes[0].slides[0].duration_ms = 5000;
+    if let crate::ObjectKind::Timer { duration_ms, .. } = &mut c.scenes[0].slides[0].objects[0].kind
+    {
+        *duration_ms = 60_000;
+    }
+    let issues = c.validate();
+    assert!(c.is_playable(), "warning must not block playability");
+    assert!(
+        issues.iter().any(|i| {
+            i.severity == crate::Severity::Warning
+                && i.message.contains("t1")
+                && i.message.contains("60")
+                && i.message.contains("5")
+        }),
+        "expected timer duration warning, got {issues:?}"
+    );
+
+    if let crate::ObjectKind::Timer { duration_ms, .. } = &mut c.scenes[0].slides[0].objects[0].kind
+    {
+        *duration_ms = 5_000;
+    }
+    let issues_ok = c.validate();
+    assert!(
+        !issues_ok
+            .iter()
+            .any(|i| i.severity == crate::Severity::Warning && i.message.contains("t1")),
+        "expected no warning when timer fits timeline, got {issues_ok:?}"
+    );
+}

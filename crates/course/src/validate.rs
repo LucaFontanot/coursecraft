@@ -1542,13 +1542,38 @@ fn check_input_object(cx: &mut Ctx<'_>, kind: &ObjectKind, p: &str) {
     }
 }
 
-fn check_timer_object(cx: &mut Ctx<'_>, duration_ms: u32, style: &crate::TextStyle, p: &str) {
+fn format_secs(ms: u32) -> String {
+    if ms.is_multiple_of(1000) {
+        format!("{}", ms / 1000)
+    } else {
+        let s = format!("{:.3}", f64::from(ms) / 1000.0);
+        s.trim_end_matches('0').trim_end_matches('.').to_owned()
+    }
+}
+
+fn check_timer_object(
+    cx: &mut Ctx<'_>,
+    id: &str,
+    duration_ms: u32,
+    timeline_ms: u32,
+    style: &crate::TextStyle,
+    p: &str,
+) {
     if !(1..=crate::MAX_TIMER_DURATION_MS).contains(&duration_ms) {
         cx.err(
             format!("{p}/kind/duration_ms"),
             format!(
                 "timer duration_ms must be 1..={}",
                 crate::MAX_TIMER_DURATION_MS
+            ),
+        );
+    } else if duration_ms > timeline_ms {
+        cx.warn(
+            format!("{p}/kind/duration_ms"),
+            format!(
+                "Timer '{id}' runs {} s but its timeline ends at {} s, so it will stop early and never reach its end.",
+                format_secs(duration_ms),
+                format_secs(timeline_ms),
             ),
         );
     }
@@ -1857,7 +1882,7 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
         | ObjectKind::ProgressMeter { .. } => check_input_object(cx, &o.kind, p),
         ObjectKind::Timer {
             duration_ms, style, ..
-        } => check_timer_object(cx, *duration_ms, style, p),
+        } => check_timer_object(cx, &o.id, *duration_ms, timeline_ms, style, p),
         ObjectKind::Marker {
             body,
             runs,
