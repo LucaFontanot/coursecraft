@@ -313,8 +313,10 @@ impl MediaCache {
     }
 
     /// Bytes held by decoded picture textures, counted as RGBA (4 bytes per pixel).
+    /// Includes uploaded animated GIF/WebP frames.
     fn picture_bytes(&self) -> u64 {
-        self.entries
+        let still = self
+            .entries
             .values()
             .fold(0u64, |total, entry| match entry {
                 MediaEntry::Texture(_, [w, h]) => total.saturating_add(
@@ -323,7 +325,18 @@ impl MediaCache {
                         .saturating_mul(4),
                 ),
                 MediaEntry::Loading | MediaEntry::Failed(_) => total,
-            })
+            });
+        let anim = self.animations.values().fold(0u64, |total, entry| {
+            let Some(anim) = &entry.animation else {
+                return total;
+            };
+            let frame_bytes = u64::from(anim.width)
+                .saturating_mul(u64::from(anim.height))
+                .saturating_mul(4);
+            let uploaded = entry.frames.iter().filter(|f| f.is_some()).count() as u64;
+            total.saturating_add(frame_bytes.saturating_mul(uploaded))
+        });
+        still.saturating_add(anim)
     }
 
     /// Remember that a decoded picture was handed out on the current frame.
@@ -342,12 +355,17 @@ impl MediaCache {
         used.frame = frame;
     }
 
-    /// Drop the least recently used pictures until the decoded total fits the
-    /// budget. Pictures handed out in the current frame stay even if that means
-    /// going over budget for this frame.
+    /// Drop the least recently used pictures (including uploaded animation frames)
+    /// until the decoded total fits the budget. Pictures handed out in the current
+    /// frame stay even if that means going over budget for this frame.
     fn evict_over_budget(&mut self) {
+        enum EvictTarget {
+            Entry(String),
+            AnimFrame(String, usize, String),
+        }
+
         while self.picture_bytes() > self.picture_budget {
-            let oldest = self
+            let oldest_entry = self
                 .entries
                 .iter()
                 .filter(|(key, entry)| {
@@ -357,25 +375,82 @@ impl MediaCache {
                             .get(key.as_str())
                             .is_none_or(|used| used.frame < self.frame)
                 })
-                .min_by_key(|(key, _)| {
-                    self.picture_uses
+                .map(|(key, _)| {
+                    let counter = self
+                        .picture_uses
                         .get(key.as_str())
-                        .map_or(0, |used| used.counter)
+                        .map_or(0, |used| used.counter);
+                    (counter, EvictTarget::Entry(key.clone()))
                 })
-                .map(|(key, _)| key.clone());
-            let Some(key) = oldest else {
+                .min_by_key(|(counter, _)| *counter);
+
+            let picture_uses = &self.picture_uses;
+            let frame = self.frame;
+            let oldest_anim = self
+                .animations
+                .iter()
+                .flat_map(|(src, entry)| {
+                    entry
+                        .frames
+                        .iter()
+                        .enumerate()
+                        .filter_map(move |(idx, slot)| {
+                            slot.as_ref()?;
+                            let key = format!("{src}\u{1}anim\u{1}{idx}");
+                            let usable =
+                                picture_uses.get(&key).is_none_or(|used| used.frame < frame);
+                            if !usable {
+                                return None;
+                            }
+                            let counter = picture_uses.get(&key).map_or(0, |used| used.counter);
+                            Some((counter, EvictTarget::AnimFrame(src.clone(), idx, key)))
+                        })
+                })
+                .min_by_key(|(counter, _)| *counter);
+
+            let target = match (oldest_entry, oldest_anim) {
+                (Some((c1, t1)), Some((c2, t2))) => {
+                    if c1 <= c2 {
+                        Some(t1)
+                    } else {
+                        Some(t2)
+                    }
+                }
+                (Some((_, t)), None) | (None, Some((_, t))) => Some(t),
+                (None, None) => None,
+            };
+
+            let Some(target) = target else {
                 break;
             };
-            self.entries.remove(&key);
-            self.picture_uses.remove(&key);
+            match target {
+                EvictTarget::Entry(key) => {
+                    self.entries.remove(&key);
+                    self.picture_uses.remove(&key);
+                }
+                EvictTarget::AnimFrame(src, idx, key) => {
+                    if let Some(entry) = self.animations.get_mut(&src)
+                        && let Some(slot) = entry.frames.get_mut(idx)
+                    {
+                        *slot = None;
+                    }
+                    self.picture_uses.remove(&key);
+                }
+            }
         }
     }
 
     /// Set the clock animations follow, in milliseconds since the view started.
     ///
     /// `None` (the default) draws every animation's first frame, which is what
-    /// the canvas, thumbnails and offscreen renders need.
+    /// the canvas, thumbnails and offscreen renders need. Clearing the clock
+    /// drops decoded animation frames so preview memory is freed on close.
     pub fn set_animation_time(&mut self, time_ms: Option<u64>) {
+        if time_ms.is_none() && self.animation_time_ms.is_some() {
+            self.animations.clear();
+            self.picture_uses
+                .retain(|key, _| !key.contains("\u{1}anim\u{1}"));
+        }
         self.animation_time_ms = time_ms;
     }
 
@@ -552,6 +627,9 @@ impl MediaCache {
         source: &dyn MediaSource,
         target_px: (u32, u32),
     ) -> MediaView<'a> {
+        if matches!(self.entries.get(src), Some(MediaEntry::Failed(_))) {
+            return self.failed_view(src);
+        }
         let now = ctx.input(|input| input.time);
         let now = if now.is_finite() { now } else { 0.0 };
         if !self.svg.contains_key(src) {
@@ -590,7 +668,13 @@ impl MediaCache {
                     }
                 }
                 MediaFetch::Pending => return MediaView::Pending,
-                MediaFetch::Missing => return MediaView::Failed("image not found"),
+                MediaFetch::Missing => {
+                    self.entries.insert(
+                        src.to_owned(),
+                        MediaEntry::Failed("image not found".to_string()),
+                    );
+                    return self.failed_view(src);
+                }
             }
         }
 
@@ -759,6 +843,7 @@ impl MediaCache {
         ctx.request_repaint_after(Duration::from_millis(u64::from(delay.max(1))));
 
         let uploaded = entry.frames.get(index).is_some_and(Option::is_some);
+        let key = format!("{src}\u{1}anim\u{1}{index}");
 
         if !uploaded {
             let frame = animation.frames.get(index)?;
@@ -766,14 +851,16 @@ impl MediaCache {
                 [frame.image.width as usize, frame.image.height as usize],
                 &frame.image.pixels,
             );
-            let key = format!("{src}\u{1}anim\u{1}{index}");
-            let handle = ctx.load_texture(key, color, TextureOptions::LINEAR);
+            let handle = ctx.load_texture(key.clone(), color, TextureOptions::LINEAR);
             if let Some(entry) = self.animations.get_mut(src)
                 && let Some(slot) = entry.frames.get_mut(index)
             {
                 *slot = Some(handle);
             }
         }
+
+        self.note_picture_use(&key);
+        self.evict_over_budget();
 
         let entry = self.animations.get(src)?;
         let animation = entry.animation.as_ref()?;
@@ -1285,5 +1372,105 @@ mod tests {
             cache.get_entry("broken.png"),
             Some(MediaEntry::Failed(_))
         ));
+    }
+
+    /// Minimal 2-frame 2×2 animated GIF (100 ms per frame, looping forever).
+    fn tiny_animated_gif() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"GIF89a");
+        // Logical screen descriptor: 2x2, GCT present (2 colors).
+        out.extend_from_slice(&[2, 0, 2, 0, 0x80, 0, 0]);
+        // Global color table: red, blue.
+        out.extend_from_slice(&[255, 0, 0, 0, 0, 255]);
+        // Netscape 2.0 looping application extension.
+        out.extend_from_slice(&[0x21, 0xFF, 0x0B]);
+        out.extend_from_slice(b"NETSCAPE2.0");
+        out.extend_from_slice(&[0x03, 0x01, 0, 0, 0]);
+        // Two frames, each with 4 pixels of color 0 or 1.
+        // LZW min code size 2: clear=4 (3 bits), pixel, pixel, pixel, pixel, eoi=5 (3 bits).
+        // Frame 0 (all color 0): 100, 000, 000, 000, 000, 101 -> LSB-first bytes: 0x04, 0x00, 0x05?
+        // Actually: bits 0..2=100, 3..5=000, 6..8=000, 9..11=000, 12..14=000, 15..17=101
+        // Byte 0 (bits 0..7): 00_000_100 = 0x04
+        // Byte 1 (bits 8..15): 1_000_000_0 = 0x80
+        // Byte 2 (bits 16..17): 000000_10 = 0x02
+        for lzw_bytes in [[0x04u8, 0x80, 0x02], [0x0Cu8, 0x82, 0x02]] {
+            // Graphic control extension: 100 ms delay (10 * 10ms).
+            out.extend_from_slice(&[0x21, 0xF9, 0x04, 0x04, 10, 0, 0, 0]);
+            // Image descriptor: 2x2 at (0,0).
+            out.extend_from_slice(&[0x2C, 0, 0, 0, 0, 2, 0, 2, 0, 0]);
+            // Image data: min code size 2, sub-block of 3 bytes, terminator.
+            out.push(0x02);
+            out.push(3);
+            out.extend_from_slice(&lzw_bytes);
+            out.push(0x00);
+        }
+        out.push(0x3B);
+        out
+    }
+
+    #[test]
+    fn rejected_svg_is_not_fetched_or_parsed_again() {
+        let ctx = egui::Context::default();
+        let mut source = TestSource::new();
+        source.add("bad.svg", b"<not-valid-svg".to_vec());
+        let mut cache = MediaCache::new();
+        cache.begin_frame();
+        let first = cache.texture_for(&ctx, "bad.svg", &source, (100, 100));
+        assert!(matches!(first, MediaView::Failed(_)));
+        let fetches_after_first = source.fetches();
+
+        for _ in 0..5 {
+            cache.begin_frame();
+            let view = cache.texture_for(&ctx, "bad.svg", &source, (100, 100));
+            assert!(matches!(view, MediaView::Failed(_)));
+        }
+        assert_eq!(
+            source.fetches(),
+            fetches_after_first,
+            "rejected SVG must not be fetched or parsed again on subsequent paints"
+        );
+    }
+
+    #[test]
+    fn animation_frames_count_in_picture_budget_and_evict_lru() {
+        let ctx = egui::Context::default();
+        let mut source = TestSource::new();
+        source.add("anim.gif", tiny_animated_gif());
+        source.add("still.png", solid_png(2, 2));
+
+        let mut cache = MediaCache::new();
+        // Budget fits 1 frame (2x2x4 = 16 bytes).
+        cache.set_picture_budget(16);
+        cache.set_animation_time(Some(0));
+        cache.begin_frame();
+        let view = cache.texture_for(&ctx, "anim.gif", &source, (2, 2));
+        assert!(matches!(view, MediaView::Ready { size: [2, 2], .. }));
+        assert_eq!(cache.picture_bytes(), 16);
+
+        // Next frame advances to frame 1; frame 0 is evicted to stay within budget.
+        cache.begin_frame();
+        cache.set_animation_time(Some(100));
+        let view = cache.texture_for(&ctx, "anim.gif", &source, (2, 2));
+        assert!(matches!(view, MediaView::Ready { size: [2, 2], .. }));
+        assert!(cache.picture_bytes() <= 16);
+    }
+
+    #[test]
+    fn animation_frames_are_dropped_when_preview_closes() {
+        let ctx = egui::Context::default();
+        let mut source = TestSource::new();
+        source.add("anim.gif", tiny_animated_gif());
+
+        let mut cache = MediaCache::new();
+        cache.set_animation_time(Some(0));
+        cache.begin_frame();
+        let view = cache.texture_for(&ctx, "anim.gif", &source, (2, 2));
+        assert!(matches!(view, MediaView::Ready { size: [2, 2], .. }));
+        assert!(cache.picture_bytes() > 0);
+        assert!(!cache.animations.is_empty());
+
+        cache.set_animation_time(None);
+        assert_eq!(cache.picture_bytes(), 0);
+        assert!(cache.animations.is_empty());
     }
 }

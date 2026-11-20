@@ -372,3 +372,57 @@ fn audit_debounces_across_quick_edits() {
     let _ = h.frame_at_time(2.00);
     assert_eq!(gc::audit_runs(), 1, "audit must not re-run while idle");
 }
+
+#[test]
+fn triggers_tab_idle_frames_do_not_clone_slide() {
+    let mut h = hello();
+    h.editor.ui.bottom_tab = crate::timeline::BottomTab::Triggers;
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    for _ in 0..10 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::slide_clones(),
+        0,
+        "triggers tab must not clone the slide on idle repaints"
+    );
+}
+
+#[test]
+fn question_tab_idle_frames_do_not_clone_slide() {
+    let mut h = hello();
+    h.editor.ui.bottom_tab = crate::timeline::BottomTab::Question;
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    for _ in 0..10 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::slide_clones(),
+        0,
+        "question tab must not clone the slide on idle repaints"
+    );
+}
+
+#[test]
+fn timeline_idle_frames_reuse_cached_lists() {
+    let mut h = hello();
+    h.editor.ui.bottom_tab = crate::timeline::BottomTab::Timeline;
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    for _ in 0..10 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::timeline_list_rebuilds(),
+        0,
+        "timeline must reuse cached object and cue lists on idle repaints"
+    );
+}

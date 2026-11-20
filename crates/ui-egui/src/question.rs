@@ -103,6 +103,8 @@ pub struct QuestionState {
     pub scroll_overflow_y: f32,
     /// Rect of the scroll area's viewport in the last frame (tracked for tests).
     pub scroll_inner_rect: egui::Rect,
+    /// Cached slide for the current `(last_synced_revision, last_synced_slide)`.
+    pub cached_slide: Option<std::sync::Arc<Slide>>,
 }
 
 impl Default for QuestionState {
@@ -137,6 +139,7 @@ impl Default for QuestionState {
             scroll_offset_y: 0.0,
             scroll_overflow_y: 0.0,
             scroll_inner_rect: egui::Rect::NOTHING,
+            cached_slide: None,
         }
     }
 }
@@ -161,6 +164,9 @@ impl QuestionState {
         }
         self.last_synced_revision = revision;
         self.last_synced_slide = slide.id.clone();
+        #[cfg(test)]
+        crate::guard_counters::note_slide_clone();
+        self.cached_slide = Some(std::sync::Arc::new(slide.clone()));
 
         if let Some(ref q) = slide.question {
             self.kind = q.kind;
@@ -325,21 +331,29 @@ pub fn show_question_tab(
     ui: &mut Ui,
     actions: &mut Vec<(&'static str, Json)>,
 ) {
-    let Some(slide) = editor.session.course.slide(&editor.selection.slide) else {
-        ui.label("No slide selected");
-        return;
+    let slide_arc = {
+        let crate::Editor {
+            session,
+            selection,
+            ui: editor_ui,
+            ..
+        } = editor;
+        let Some(slide) = session.course.slide(&selection.slide) else {
+            ui.label("No slide selected");
+            return;
+        };
+        // A draw slide has no question of its own; its questions come from a bank.
+        if slide.draw.is_some() {
+            ui.label("This slide draws questions from a bank. Edit the draw in the inspector.");
+            return;
+        }
+        editor_ui.question.sync(slide, session.revision);
+        let Some(slide_arc) = editor_ui.question.cached_slide.clone() else {
+            return;
+        };
+        slide_arc
     };
-    // A draw slide has no question of its own; its questions come from a bank.
-    if slide.draw.is_some() {
-        ui.label("This slide draws questions from a bank. Edit the draw in the inspector.");
-        return;
-    }
-    let slide_clone = slide.clone();
-
-    editor
-        .ui
-        .question
-        .sync(&slide_clone, editor.session.revision);
+    let slide_clone: &Slide = &slide_arc;
 
     let p = coursecraft_render::palette(ui.ctx());
     let has_question = slide_clone.question.is_some();
@@ -362,7 +376,7 @@ pub fn show_question_tab(
     let mut committed = false;
     let mut kind_change: Option<QuestionKind> = None;
     let mut structural: Vec<(&'static str, Json)> = Vec::new();
-    let overlaps = prompt_overlap_names(&editor.session.course, &slide_clone);
+    let overlaps = prompt_overlap_names(&editor.session.course, slide_clone);
 
     // A question can only be graded by a control the learner can click. A
     // submit-event trigger is dead because no player control produces `submit`.
@@ -455,7 +469,7 @@ pub fn show_question_tab(
                             show_prompt_and_choices(
                                 editor,
                                 ui,
-                                &slide_clone,
+                                slide_clone,
                                 &mut committed,
                                 &mut structural,
                             );
@@ -471,7 +485,7 @@ pub fn show_question_tab(
                             show_settings(
                                 editor,
                                 ui,
-                                &slide_clone,
+                                slide_clone,
                                 &mut committed,
                                 &mut structural,
                                 true,
@@ -480,13 +494,13 @@ pub fn show_question_tab(
                     );
                 });
             } else {
-                show_prompt_and_choices(editor, ui, &slide_clone, &mut committed, &mut structural);
+                show_prompt_and_choices(editor, ui, slide_clone, &mut committed, &mut structural);
                 ui.add_space(8.0);
                 ui.separator();
                 show_settings(
                     editor,
                     ui,
-                    &slide_clone,
+                    slide_clone,
                     &mut committed,
                     &mut structural,
                     false,

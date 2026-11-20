@@ -133,6 +133,9 @@ pub struct ObjectRename {
     pub just_entered: bool,
 }
 
+/// Cached object summary `(id, name, timing, group)` for timeline rendering.
+pub type CachedTimelineObject = (String, String, Timing, Option<String>);
+
 /// Interaction and edit state for the Timeline panel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineState {
@@ -185,6 +188,13 @@ pub struct TimelineState {
     pub zoom: f32,
     /// How far the zoomed track is scrolled, in screen points.
     pub scroll_x: f32,
+
+    /// Cached object list for the current revision + slide/layer.
+    pub cached_objects: std::sync::Arc<[CachedTimelineObject]>,
+    /// Cached slide/layer cue points for the current revision + slide/layer.
+    pub cached_slide_cues: std::sync::Arc<[coursecraft_course::SlideCue]>,
+    /// Cached audio sources for the current revision + slide/layer.
+    pub cached_audio_srcs: std::sync::Arc<[String]>,
 }
 
 impl Default for TimelineState {
@@ -218,6 +228,9 @@ impl Default for TimelineState {
             play_button_rect: None,
             zoom: 1.0,
             scroll_x: 0.0,
+            cached_objects: std::sync::Arc::from([]),
+            cached_slide_cues: std::sync::Arc::from([]),
+            cached_audio_srcs: std::sync::Arc::from([]),
         }
     }
 }
@@ -319,6 +332,9 @@ impl TimelineState {
         if self.last_synced_revision.is(revision) && &self.last_synced_selection == selection {
             return;
         }
+        let owner_changed = !self.last_synced_revision.is(revision)
+            || self.last_synced_selection.slide != selection.slide
+            || self.last_synced_selection.layer != selection.layer;
         if self.last_synced_selection.slide != selection.slide {
             self.object_rename = None;
         }
@@ -326,6 +342,32 @@ impl TimelineState {
         self.last_synced_selection = selection.clone();
 
         if let Some(slide) = course.slide(&selection.slide) {
+            if owner_changed {
+                #[cfg(test)]
+                crate::guard_counters::note_timeline_list_rebuild();
+                let layer = selection.layer.as_deref().and_then(|lid| slide.layer(lid));
+                let objs = match (&selection.layer, layer) {
+                    (Some(_), Some(l)) => l.objects.as_slice(),
+                    (Some(_), None) => &[],
+                    (None, _) => slide.objects.as_slice(),
+                };
+                self.cached_objects = objs
+                    .iter()
+                    .map(|o| (o.id.clone(), o.name.clone(), o.timing, o.group.clone()))
+                    .collect();
+                self.cached_slide_cues = match (&selection.layer, layer) {
+                    (Some(_), Some(l)) => l.cue_points.clone().into(),
+                    (Some(_), None) => std::sync::Arc::from([]),
+                    (None, _) => slide.cue_points.clone().into(),
+                };
+                self.cached_audio_srcs = objs
+                    .iter()
+                    .filter_map(|o| match &o.kind {
+                        coursecraft_course::ObjectKind::Audio { src, .. } => Some(src.clone()),
+                        _ => None,
+                    })
+                    .collect();
+            }
             if let Some(ref lid) = selection.layer
                 && let Some(layer) = slide.layer(lid)
             {
@@ -333,6 +375,10 @@ impl TimelineState {
                 return;
             }
             self.duration_ms = slide.duration_ms;
+        } else if owner_changed {
+            self.cached_objects = std::sync::Arc::from([]);
+            self.cached_slide_cues = std::sync::Arc::from([]);
+            self.cached_audio_srcs = std::sync::Arc::from([]);
         }
     }
 }
@@ -2258,50 +2304,11 @@ fn show_timeline_content(
         None => (format!("Slide: {}", slide.title), slide.duration_ms, false),
     };
 
-    let objects: Vec<(String, String, Timing, Option<String>)> = match &selected_layer_id {
-        Some(lid) => match slide.layer(lid) {
-            Some(l) => l
-                .objects
-                .iter()
-                .map(|o| (o.id.clone(), o.name.clone(), o.timing, o.group.clone()))
-                .collect(),
-            None => Vec::new(),
-        },
-        None => slide
-            .objects
-            .iter()
-            .map(|o| (o.id.clone(), o.name.clone(), o.timing, o.group.clone()))
-            .collect(),
-    };
-
-    let slide_cues: Vec<coursecraft_course::SlideCue> = match &selected_layer_id {
-        Some(lid) => slide
-            .layer(lid)
-            .map_or_else(Vec::new, |l| l.cue_points.clone()),
-        None => slide.cue_points.clone(),
-    };
-
-    let audio_srcs: Vec<String> = match &selected_layer_id {
-        Some(lid) => slide.layer(lid).map_or_else(Vec::new, |l| {
-            l.objects
-                .iter()
-                .filter_map(|o| match &o.kind {
-                    coursecraft_course::ObjectKind::Audio { src, .. } => Some(src.clone()),
-                    _ => None,
-                })
-                .collect()
-        }),
-        None => slide
-            .objects
-            .iter()
-            .filter_map(|o| match &o.kind {
-                coursecraft_course::ObjectKind::Audio { src, .. } => Some(src.clone()),
-                _ => None,
-            })
-            .collect(),
-    };
-    for src in audio_srcs {
-        let _ = editor.ensure_audio_waveform(&src);
+    let objects = std::sync::Arc::clone(&editor.ui.timeline.cached_objects);
+    let slide_cues = std::sync::Arc::clone(&editor.ui.timeline.cached_slide_cues);
+    let audio_srcs = std::sync::Arc::clone(&editor.ui.timeline.cached_audio_srcs);
+    for src in audio_srcs.iter() {
+        let _ = editor.ensure_audio_waveform(src);
     }
 
     render_timeline_header(
@@ -2382,7 +2389,7 @@ fn show_timeline_content(
         .flat_map(|(oid, _, _, _)| object_cues(editor, oid))
         .map(|cue| cue.at_ms_u64().min(u64::from(u32::MAX)) as u32)
         .collect();
-    for cue in &slide_cues {
+    for cue in slide_cues.iter() {
         all_cue_ms.push(cue.at_ms);
     }
 
