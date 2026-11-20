@@ -600,15 +600,37 @@ impl EditorApp {
         }
 
         let media = self.editor.used_media();
-        let saved = if let Some(mut record) = self.project.folder.take() {
-            // A folder is kept in git, so there is no version history for it.
-            let result =
-                files::save_folder_to(&path, &self.editor.session.course, &media, &mut record);
-            self.project.folder = Some(record);
-            result.map(|_| ())
-        } else {
-            self.keep_version(&path);
-            files::save_to(&path, &self.editor.session.course, &media)
+        let saved = match save_kind(&path, self.project.folder.is_some(), !media.is_empty()) {
+            SaveKind::Folder => {
+                // A folder is kept in git, so there is no version history for it.
+                let mut record = self.project.folder.take().unwrap_or_default();
+                let result =
+                    files::save_folder_to(&path, &self.editor.session.course, &media, &mut record);
+                self.project.folder = Some(record);
+                result.map(|_| ())
+            }
+            SaveKind::JsonNeedsSaveAs => {
+                self.editor.set_status(
+                    "Plain JSON files cannot store imported media; save as a .ccraft project instead.",
+                );
+                return self.perform_save_as();
+            }
+            SaveKind::Json => {
+                self.keep_version(&path);
+                self.editor
+                    .session
+                    .course
+                    .to_json()
+                    .map_err(|e| format!("Save failed: {e}"))
+                    .and_then(|json| {
+                        files::write_atomic(&path, format!("{json}\n").as_bytes())
+                            .map_err(|e| format!("Failed to write file: {e}"))
+                    })
+            }
+            SaveKind::Ccraft => {
+                self.keep_version(&path);
+                files::save_to(&path, &self.editor.session.course, &media)
+            }
         };
         match saved {
             Ok(()) => {
@@ -2226,6 +2248,44 @@ impl EditorApp {
     }
 }
 
+/// Format chosen when saving an already-open project path.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveKind {
+    Folder,
+    Json,
+    JsonNeedsSaveAs,
+    Ccraft,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn has_extension_ignore_ascii_case(path: &Path, ext: &str) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn save_kind(path: &Path, is_open_folder: bool, has_media: bool) -> SaveKind {
+    if is_open_folder {
+        SaveKind::Folder
+    } else if has_extension_ignore_ascii_case(path, "json") {
+        if has_media {
+            SaveKind::JsonNeedsSaveAs
+        } else {
+            SaveKind::Json
+        }
+    } else {
+        SaveKind::Ccraft
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn control_save_is_folder(target: &Path, project: &Project) -> bool {
+    let is_open_folder = project.folder.is_some() && project.path.as_deref() == Some(target);
+    is_open_folder || has_extension_ignore_ascii_case(target, coursecraft_format::FOLDER_EXTENSION)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 struct EditorHostAdapter<'a> {
     editor: &'a mut Editor,
@@ -2372,14 +2432,8 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
         };
 
         let media = self.editor.used_media();
-        let is_ccraft = target
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
-        let is_project_folder = target
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case(coursecraft_format::FOLDER_EXTENSION));
+        let is_ccraft = has_extension_ignore_ascii_case(&target, "ccraft");
+        let is_project_folder = control_save_is_folder(&target, self.project);
 
         if is_project_folder {
             // Keep the record when saving over the folder that is already open.

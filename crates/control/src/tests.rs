@@ -530,3 +530,39 @@ fn question_insert_course_grades_by_clicking_the_button_and_reports_score() {
         "{effects:?}"
     );
 }
+
+#[test]
+fn headless_save_ccraft_preserves_opened_media() {
+    let scratch = scratch_dir("headless-save-ccraft-media");
+    let ccraft_path = scratch.join("course.ccraft");
+    let mut initial = Session::blank("With Media").course;
+    initial.title = "With Media".to_owned();
+    let media = vec![("logo.png".to_owned(), b"fake-png-payload".to_vec())];
+    let bytes = coursecraft_format::save_project(&initial, &media).expect("save initial ccraft");
+    std::fs::write(&ccraft_path, bytes).expect("write initial ccraft");
+
+    let mut host = HeadlessHost::new(Session::blank("Empty"), None);
+    let token = "test-token";
+
+    let open_req = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "file.open",
+        "params": { "token": token, "path": ccraft_path.to_string_lossy().to_string() }
+    });
+    let open_res = dispatch(&mut host, &open_req, token);
+    assert!(open_res.get("result").is_some(), "open failed: {open_res}");
+
+    let save_req = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "file.save",
+        "params": { "token": token }
+    });
+    let save_res = dispatch(&mut host, &save_req, token);
+    assert!(save_res.get("result").is_some(), "save failed: {save_res}");
+
+    let saved_bytes = std::fs::read(&ccraft_path).expect("read saved ccraft");
+    let reopened = coursecraft_format::open_project(&saved_bytes).expect("reopen saved ccraft");
+    assert_eq!(reopened.media, media);
+}
