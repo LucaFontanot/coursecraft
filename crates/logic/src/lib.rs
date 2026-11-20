@@ -779,6 +779,27 @@ pub(crate) enum SeekTarget {
     Refused,
 }
 
+/// Per-slide trigger metadata cached while the active slide is unchanged.
+#[derive(Default)]
+pub(crate) struct SlideCache<'c> {
+    pub(crate) has_intersection_trigger: bool,
+    pub(crate) pointer_trigger_objects: std::collections::HashSet<&'c str>,
+}
+
+/// Precomputed play order for a validated course and draw seed, stored without
+/// borrowing [`Course`] so hosts like the editor preview can cache it across frames.
+#[derive(Clone, Debug)]
+pub struct PlayPlan {
+    draw_seed: u32,
+    slides: Vec<SlideLoc>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SlideLoc {
+    Scene(usize, usize),
+    Bank(usize, usize),
+}
+
 /// A running course.
 pub struct Player<'c> {
     course: &'c Course,
@@ -787,6 +808,8 @@ pub struct Player<'c> {
     /// Whether `st` currently belongs to an entered slide. Not serialised; used
     /// to avoid saving a slide state that was never played.
     entered: bool,
+    slide_cache: SlideCache<'c>,
+    reach_buf: Vec<(u32, Option<&'c str>)>,
 }
 
 impl<'c> Player<'c> {
@@ -822,12 +845,16 @@ impl<'c> Player<'c> {
                 .collect(),
             ..PlayerState::default()
         };
-        Ok(Self {
+        let mut p = Self {
             course,
             slides,
             st,
             entered: false,
-        })
+            slide_cache: SlideCache::default(),
+            reach_buf: Vec::new(),
+        };
+        p.refresh_slide_cache();
+        Ok(p)
     }
 
     /// Test helper to create a player without running course validation.
@@ -844,11 +871,41 @@ impl<'c> Player<'c> {
                 .collect(),
             ..PlayerState::default()
         };
-        Self {
+        let mut p = Self {
             course,
             slides,
             st,
             entered: false,
+            slide_cache: SlideCache::default(),
+            reach_buf: Vec::new(),
+        };
+        p.refresh_slide_cache();
+        p
+    }
+
+    /// Snapshot the validated play order for use with [`Player::resume_trusted`].
+    #[must_use]
+    pub fn play_plan(&self) -> PlayPlan {
+        let mut by_ptr: std::collections::HashMap<*const Slide, SlideLoc> =
+            std::collections::HashMap::new();
+        for (si, scene) in self.course.scenes.iter().enumerate() {
+            for (li, slide) in scene.slides.iter().enumerate() {
+                by_ptr.insert(std::ptr::from_ref(slide), SlideLoc::Scene(si, li));
+            }
+        }
+        for (bi, bank) in self.course.banks.iter().enumerate() {
+            for (li, slide) in bank.slides.iter().enumerate() {
+                by_ptr.insert(std::ptr::from_ref(slide), SlideLoc::Bank(bi, li));
+            }
+        }
+        let slides = self
+            .slides
+            .iter()
+            .filter_map(|slide| by_ptr.get(&std::ptr::from_ref(*slide)).copied())
+            .collect();
+        PlayPlan {
+            draw_seed: self.st.draw_seed,
+            slides,
         }
     }
 
@@ -857,9 +914,54 @@ impl<'c> Player<'c> {
     /// # Errors
     /// Validation errors, or a state that does not fit this course.
     pub fn resume(course: &'c Course, state: PlayerState) -> Result<Self, Vec<Issue>> {
-        let seed = state.draw_seed;
-        let mut p = Self::with_draw_seed(course, seed)?;
-        if state.slide >= p.slides.len() {
+        let errors: Vec<Issue> = course
+            .validate()
+            .into_iter()
+            .filter(|i| i.severity == Severity::Error)
+            .collect();
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+        let slides = draw::play_order(course, state.draw_seed);
+        Self::finish_resume(course, slides, state)
+    }
+
+    /// Restore a player from a state produced by this same validated course
+    /// and [`PlayPlan`], skipping full course validation and draw expansion.
+    ///
+    /// Falls back to [`Player::resume`] if the draw seed changed (for example
+    /// after `RetryQuiz`) or if the plan no longer matches `course`.
+    ///
+    /// # Errors
+    /// Validation errors, or a state that does not fit this course.
+    pub fn resume_trusted(
+        course: &'c Course,
+        state: PlayerState,
+        plan: &PlayPlan,
+    ) -> Result<Self, Vec<Issue>> {
+        if plan.draw_seed != state.draw_seed {
+            return Self::resume(course, state);
+        }
+        let mut slides: Vec<&'c Slide> = Vec::with_capacity(plan.slides.len());
+        for loc in &plan.slides {
+            let resolved = match *loc {
+                SlideLoc::Scene(si, li) => course.scenes.get(si).and_then(|s| s.slides.get(li)),
+                SlideLoc::Bank(bi, li) => course.banks.get(bi).and_then(|b| b.slides.get(li)),
+            };
+            let Some(slide) = resolved else {
+                return Self::resume(course, state);
+            };
+            slides.push(slide);
+        }
+        Self::finish_resume(course, slides, state)
+    }
+
+    fn finish_resume(
+        course: &'c Course,
+        slides: Vec<&'c Slide>,
+        state: PlayerState,
+    ) -> Result<Self, Vec<Issue>> {
+        if state.slide >= slides.len() {
             return Err(vec![Issue {
                 severity: Severity::Error,
                 path: "/slide".into(),
@@ -868,8 +970,15 @@ impl<'c> Player<'c> {
         }
         // Hosts rebuild a `Player` from its state every frame, so the learner's pause must
         // survive this. Suspend data never carries it, so a saved session still starts playing.
-        p.st = state;
-        p.entered = p.st.started;
+        let entered = state.started;
+        let mut p = Self {
+            course,
+            slides,
+            st: state,
+            entered,
+            slide_cache: SlideCache::default(),
+            reach_buf: Vec::new(),
+        };
         // Saved states can list visible layers in a different order. Put them back
         // into `slide.layers` order (back to front), dropping nothing.
         let authored: Vec<String> = p
@@ -894,6 +1003,7 @@ impl<'c> Player<'c> {
                     .collect();
             p.st.timeline_completed.extend(earlier);
         }
+        p.refresh_slide_cache();
         Ok(p)
     }
 

@@ -12,7 +12,7 @@
 
 use crate::EditorRequest;
 use coursecraft_course::{Course, Issue, Object, ObjectKind, Severity, Value};
-use coursecraft_logic::{Effect, HostInfo, Input, Player, PlayerState};
+use coursecraft_logic::{Effect, HostInfo, Input, PlayPlan, Player, PlayerState};
 use coursecraft_playback::MediaBackend;
 use coursecraft_render::{
     FrameOutput, MediaDriver, MediaFetch, MediaSource, PlayerFrame, SlideView, Ticker, encode_png,
@@ -52,6 +52,18 @@ struct NoMedia;
 impl MediaSource for NoMedia {
     fn get(&self, _src: &str) -> MediaFetch {
         MediaFetch::Missing
+    }
+}
+
+/// Resume a [`Player`] using the cached [`PlayPlan`] when available.
+fn resume_with_plan<'c>(
+    course: &'c Course,
+    state: PlayerState,
+    plan: Option<&PlayPlan>,
+) -> Result<Player<'c>, Vec<Issue>> {
+    match plan {
+        Some(plan) => Player::resume_trusted(course, state, plan),
+        None => Player::resume(course, state),
     }
 }
 
@@ -150,6 +162,8 @@ pub struct Preview {
     pub has_focus: bool,
     /// Outer rect of the preview window in the last frame (tracked for tests).
     pub window_rect: Option<Rect>,
+    /// Cached play order for [`Player::resume_trusted`], updated on open/restart/retry.
+    play_plan: Option<PlayPlan>,
 }
 
 impl Drop for Preview {
@@ -489,6 +503,7 @@ impl Preview {
                 ended: false,
                 has_focus: false,
                 window_rect: None,
+                play_plan: None,
             };
         }
 
@@ -513,6 +528,7 @@ impl Preview {
                     &mut ended,
                     None,
                 );
+                let plan = player.play_plan();
                 let state = player.state().clone();
                 let last_var_values = state.variables.clone();
                 Self {
@@ -534,6 +550,7 @@ impl Preview {
                     ended,
                     has_focus: false,
                     window_rect: None,
+                    play_plan: Some(plan),
                 }
             }
             Err(issues) => Self {
@@ -555,6 +572,7 @@ impl Preview {
                 ended: false,
                 has_focus: false,
                 window_rect: None,
+                play_plan: None,
             },
         }
     }
@@ -599,6 +617,7 @@ impl Preview {
                 &mut self.ended,
                 None,
             );
+            self.play_plan = Some(player.play_plan());
             let state = player.state().clone();
             self.last_var_values = state.variables.clone();
             self.var_changed_at.clear();
@@ -614,7 +633,7 @@ impl Preview {
         let Some(state) = self.state.clone() else {
             return Vec::new();
         };
-        let Ok(mut player) = Player::resume(&self.course, state) else {
+        let Ok(mut player) = resume_with_plan(&self.course, state, self.play_plan.as_ref()) else {
             return Vec::new();
         };
         let effects = player.handle(input);
@@ -629,6 +648,7 @@ impl Preview {
             &mut self.ended,
             ctx,
         );
+        self.play_plan = Some(player.play_plan());
         self.state = Some(player.state().clone());
         effects
     }
@@ -638,7 +658,7 @@ impl Preview {
         let Some(state) = self.state.clone() else {
             return;
         };
-        if let Ok(player) = Player::resume(&self.course, state) {
+        if let Ok(player) = resume_with_plan(&self.course, state, self.play_plan.as_ref()) {
             self.media.layout_videos(&player, &self.view);
         }
     }
@@ -707,7 +727,7 @@ impl Preview {
             let var_changed_at = &mut self.var_changed_at;
             let ended = &mut self.ended;
 
-            let mut player = match Player::resume(course, state) {
+            let mut player = match resume_with_plan(course, state, self.play_plan.as_ref()) {
                 Ok(p) => p,
                 Err(issues) => {
                     self.errors = issues;
@@ -952,7 +972,7 @@ impl Preview {
         if !*open {
             self.media.stop_all();
         } else if let Some(state) = self.state.clone()
-            && let Ok(mut player) = Player::resume(&self.course, state)
+            && let Ok(mut player) = resume_with_plan(&self.course, state, self.play_plan.as_ref())
         {
             let media_source = media.as_ref().map(|(_, s)| *s);
             match media_source {
