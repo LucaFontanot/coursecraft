@@ -2034,19 +2034,35 @@ fn check_event(cx: &mut Ctx<'_>, slide: &Slide, e: &Event, p: &str) {
                 check_layer_ref(cx, slide, l, p);
             }
         }
-        Event::TimelineReaches { ms, layer } => {
-            let len = match layer {
-                Some(l) => slide.layer(l).map(|l| l.duration_ms),
-                None => Some(slide.duration_ms),
+        Event::TimelineReaches { ms, layer, cue } => {
+            let target_layer = layer.as_deref().and_then(|l| slide.layer(l));
+            if let Some(l) = layer
+                && target_layer.is_none()
+            {
+                check_layer_ref(cx, slide, l, p);
+                return;
+            }
+            let (len, cues) = match target_layer {
+                Some(l) => (l.duration_ms, l.cue_points.as_slice()),
+                None => (slide.duration_ms, slide.cue_points.as_slice()),
             };
-            match len {
-                None => {
-                    if let Some(l) = layer {
-                        check_layer_ref(cx, slide, l, p);
-                    }
+            if let Some(cue_id) = cue {
+                match cues.iter().find(|c| c.id == *cue_id) {
+                    Some(c) if c.at_ms > len => cx.warn(
+                        p,
+                        format!(
+                            "timeline_reaches cue {cue_id:?} ({} ms) is past the timeline end ({len} ms) and never fires",
+                            c.at_ms
+                        ),
+                    ),
+                    Some(_) => {}
+                    None => cx.err(p, format!("cue {cue_id:?} is not defined on this timeline")),
                 }
-                Some(len) if *ms > len => cx.warn(p, format!("timeline_reaches {ms} ms is past the timeline end ({len} ms) and never fires")),
-                Some(_) => {}
+            } else if *ms > len {
+                cx.warn(
+                    p,
+                    format!("timeline_reaches {ms} ms is past the timeline end ({len} ms) and never fires"),
+                );
             }
         }
         Event::MediaEnds { object } => {

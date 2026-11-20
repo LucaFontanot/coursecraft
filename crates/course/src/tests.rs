@@ -2266,6 +2266,7 @@ fn a_master_must_not_have_play_time_behaviour_or_media() {
         hide_when_timeline_ends: false,
         allow_seek: crate::SeekMode::Auto,
         revisit: crate::RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
     assert!(
         errors(&c)

@@ -425,6 +425,7 @@ fn timeline_reaches_and_ends_fire_once() {
         when: Event::TimelineReaches {
             ms: 2000,
             layer: None,
+            cue: None,
         },
         condition: None,
         disabled: false,
@@ -454,6 +455,67 @@ fn timeline_reaches_and_ends_fire_once() {
     assert!(has(
         &p.handle(&Input::Tick { ms: 5000 }),
         &slide_entered("s-tabs")
+    ));
+}
+
+#[test]
+fn timeline_reaches_cue_fires_at_cue_time_and_moves_with_cue() {
+    let mut c = Course::from_json(HELLO).expect("hello");
+    let s = c.slide_mut("s-intro").unwrap();
+    s.cue_points.push(coursecraft_course::SlideCue {
+        id: "beat1".into(),
+        name: "Beat 1".into(),
+        at_ms: 1500,
+    });
+    s.triggers.push(Trigger {
+        action: Action::ShowLayer {
+            layer: "about".into(),
+        },
+        when: Event::TimelineReaches {
+            ms: 0,
+            layer: None,
+            cue: Some("beat1".into()),
+        },
+        condition: None,
+        disabled: false,
+    });
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    assert!(!has(
+        &p.handle(&Input::Tick { ms: 1400 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
+    ));
+    assert!(has(
+        &p.handle(&Input::Tick { ms: 200 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
+    ));
+
+    // Moving the cue moves when the trigger fires.
+    c.slide_mut("s-intro").unwrap().cue_points[0].at_ms = 3000;
+    let mut p2 = Player::new(&c).expect("player");
+    p2.handle(&Input::Start);
+    assert!(!has(
+        &p2.handle(&Input::Tick { ms: 1600 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
+    ));
+    assert!(!has(
+        &p2.handle(&Input::Tick { ms: 1300 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
+    ));
+    assert!(has(
+        &p2.handle(&Input::Tick { ms: 200 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
     ));
 }
 
@@ -2324,6 +2386,7 @@ fn back_seek_does_not_undo_states_or_variables() {
             when: Event::TimelineReaches {
                 ms: 1000,
                 layer: None,
+                cue: None,
             },
             action: Action::ChangeState {
                 object: "txt1".into(),
@@ -2336,6 +2399,7 @@ fn back_seek_does_not_undo_states_or_variables() {
             when: Event::TimelineReaches {
                 ms: 1000,
                 layer: None,
+                cue: None,
             },
             action: Action::SetVariable {
                 variable: "flag".into(),
@@ -3627,6 +3691,7 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                 hide_when_timeline_ends: false,
                 allow_seek: coursecraft_course::SeekMode::Auto,
                 revisit: coursecraft_course::RevisitMode::Auto,
+                cue_points: Vec::new(),
             });
         }
         let question = slide.question.as_mut().expect("question");
@@ -3692,6 +3757,7 @@ fn freeform_course(attempts: u32) -> Course {
             hide_when_timeline_ends: false,
             allow_seek: coursecraft_course::SeekMode::Auto,
             revisit: RevisitMode::Auto,
+            cue_points: Vec::new(),
         });
     }
     slide.question = Some(
@@ -5514,6 +5580,7 @@ fn revisit_course(mode: RevisitMode) -> Course {
                 when: Event::TimelineReaches {
                     ms: 1000,
                     layer: Some("l1".into()),
+                    cue: None,
                 },
                 action: Action::OpenUrl {
                     url: "https://x.test/r1000".into(),
@@ -9995,6 +10062,7 @@ fn hello_with_try_again() -> Course {
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
     let q = slide.question.as_mut().expect("question");
     q.attempts = 2;

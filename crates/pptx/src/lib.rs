@@ -1288,6 +1288,7 @@ pub fn import_pptx_with_limits(
             objects,
             layers: Vec::new(),
             triggers: Vec::new(),
+            cue_points: Vec::new(),
             question: None,
             draw: None,
             transition: None,

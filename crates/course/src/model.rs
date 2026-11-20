@@ -786,6 +786,15 @@ pub struct BankDraw {
     pub count: u32,
 }
 
+/// A named cue point on a slide or layer timeline, at `at_ms` milliseconds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlideCue {
+    pub id: String,
+    pub name: String,
+    pub at_ms: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Slide {
@@ -806,6 +815,9 @@ pub struct Slide {
     /// Triggers owned by the base layer, in firing order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<Trigger>,
+    /// Named cue points on the base timeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cue_points: Vec<SlideCue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<Question>,
     /// Draw `count` questions at random from a bank. Omitted when unset.
@@ -887,6 +899,9 @@ pub struct Layer {
     /// How showing this layer again treats its clock and object states.
     #[serde(default, skip_serializing_if = "is_default_revisit")]
     pub revisit: RevisitMode,
+    /// Named cue points on this layer's timeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cue_points: Vec<SlideCue>,
 }
 
 /// How the learner's seekbar treats a visible layer.
@@ -3548,9 +3563,12 @@ pub enum Event {
         layer: Option<String>,
     },
     TimelineReaches {
+        #[serde(default)]
         ms: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         layer: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cue: Option<String>,
     },
     Click {
         object: String,

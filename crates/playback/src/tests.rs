@@ -254,6 +254,43 @@ mod record_tests {
     }
 
     #[test]
+    fn peak_envelope_of_synthetic_sine_has_expected_length_and_range() {
+        let samples: Vec<i16> = (0..44_100)
+            .map(|i| {
+                let phase = std::f64::consts::TAU * 440.0 * f64::from(i) / 44_100.0;
+                (phase.sin() * 32_000.0) as i16
+            })
+            .collect();
+        let bytes = encode_wav(&Recording {
+            sample_rate: 44_100,
+            channels: 1,
+            samples,
+            truncated: false,
+        });
+        let peaks = crate::audio_peak_envelope("sine.wav", &bytes, crate::MAX_WAVEFORM_PEAKS)
+            .expect("synthetic sine WAV should produce a peak envelope");
+        assert!(
+            !peaks.is_empty() && peaks.len() <= crate::MAX_WAVEFORM_PEAKS,
+            "expected 1..={} peaks, got {}",
+            crate::MAX_WAVEFORM_PEAKS,
+            peaks.len()
+        );
+        assert!(
+            peaks.len() >= 1900,
+            "1s 44.1kHz clip should fill ~2000 peaks, got {}",
+            peaks.len()
+        );
+        for &p in &peaks {
+            assert!((0.0..=1.0).contains(&p), "peak {p} out of 0.0..=1.0 range");
+        }
+        let max_peak = peaks.iter().copied().fold(0.0_f32, f32::max);
+        assert!(
+            max_peak > 0.9,
+            "expected max peak near ~0.98 for amplitude 32000/32768, got {max_peak}"
+        );
+    }
+
+    #[test]
     fn downmix_to_mono_averages_each_frame() {
         let recording = Recording {
             sample_rate: 48_000,

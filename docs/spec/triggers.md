@@ -96,7 +96,7 @@ A run may carry a URL or a slide link. The renderer draws it underlined in the t
 
 - Each slide has a base clock. Each visible layer has its own clock, which starts at 0 when the layer is shown.
 - `tick` advances every running clock by `ms`, clamped to that timeline's duration.
-- `timeline_reaches {ms}` fires when a tick crosses `ms` (`old < ms <= new`). Use `timeline_starts` for 0.
+- `timeline_reaches {ms, cue?}` fires when a tick crosses `ms` (`old < ms <= new`), or—when `cue` names a `SlideCue` id on that slide or layer—when the clock crosses that cue's `at_ms`. Moving the cue moves when the trigger fires. Use `timeline_starts` for 0.
 - `timeline_ends` fires once, when the clock reaches the duration.
 - `pause_timeline` / `resume_timeline` act on the **owner's** timeline. **[verify]**
 - A visible layer with `pause_base_timeline` holds the base clock.

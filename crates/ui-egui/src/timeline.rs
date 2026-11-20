@@ -102,6 +102,27 @@ pub struct CueRename {
     pub error: Option<String>,
 }
 
+/// Active drag of one slide/layer timeline cue marker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlideCueDrag {
+    pub layer: Option<String>,
+    pub cue_id: String,
+    pub orig_at_ms: u32,
+    pub current_at_ms: u32,
+    pub start_pointer_x: f32,
+    pub duration_ms: u32,
+}
+
+/// Inline rename of one slide/layer timeline cue opened by double-clicking its marker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SlideCueRename {
+    pub slide: String,
+    pub layer: Option<String>,
+    pub cue: String,
+    pub text: String,
+    pub error: Option<String>,
+}
+
 /// Interaction and edit state for the Timeline panel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineState {
@@ -121,6 +142,16 @@ pub struct TimelineState {
     pub cue_rename: Option<CueRename>,
     /// Cue marker rects from the last frame, keyed by (object id, cue id).
     pub cue_marker_rects: HashMap<(String, String), Rect>,
+    /// True when the timeline panel was the last-clicked panel (for `C` shortcut).
+    pub focused: bool,
+    /// Active slide/layer cue marker drag.
+    pub slide_cue_drag: Option<SlideCueDrag>,
+    /// Selected slide/layer cue marker `(layer, cue_id)`, for Delete.
+    pub slide_cue_selected: Option<(Option<String>, String)>,
+    /// Open inline slide/layer cue rename.
+    pub slide_cue_rename: Option<SlideCueRename>,
+    /// Slide/layer cue marker rects from the last frame, keyed by cue id.
+    pub slide_cue_rects: HashMap<String, Rect>,
 
     /// Height the user last chose for the bottom panel (kept for the session).
     pub panel_height: f32,
@@ -157,6 +188,11 @@ impl Default for TimelineState {
             cue_selected: None,
             cue_rename: None,
             cue_marker_rects: HashMap::new(),
+            focused: false,
+            slide_cue_drag: None,
+            slide_cue_selected: None,
+            slide_cue_rename: None,
+            slide_cue_rects: HashMap::new(),
             panel_height: TIMELINE_PANEL_HEIGHT,
             panel_rect: None,
             duration_edit_rect: None,
@@ -195,6 +231,40 @@ pub fn format_timeline_readout(playhead_ms: u32, duration_ms: u32) -> String {
     )
 }
 
+/// Nearest cue time in `cue_ms` within [`PLAYHEAD_SNAP_PX`] points of `pointer_x`.
+#[must_use]
+pub fn nearest_cue_ms(
+    pointer_x: f32,
+    track_x: f32,
+    track_width: f32,
+    duration_ms: u32,
+    cue_ms: &[u32],
+) -> Option<u32> {
+    let duration_ms = duration_ms.max(100);
+    if !pointer_x.is_finite()
+        || !track_x.is_finite()
+        || !track_width.is_finite()
+        || track_width <= 0.0
+    {
+        return None;
+    }
+    let mut nearest: Option<u32> = None;
+    let mut nearest_dist = f32::INFINITY;
+    for &cue in cue_ms {
+        let cue = cue.min(duration_ms);
+        let cue_x = track_x + ((cue as f32) / duration_ms as f32) * track_width;
+        if !cue_x.is_finite() {
+            continue;
+        }
+        let dist = (pointer_x - cue_x).abs();
+        if dist <= PLAYHEAD_SNAP_PX && dist < nearest_dist {
+            nearest = Some(cue);
+            nearest_dist = dist;
+        }
+    }
+    nearest.map(|cue| cue.min(duration_ms))
+}
+
 /// The playhead `pointer_x` asks for, snapping to the nearest cue within
 /// [`PLAYHEAD_SNAP_PX`] points unless Shift is held.
 #[must_use]
@@ -214,24 +284,10 @@ pub fn snapped_playhead_ms(
     {
         return 0;
     }
-    if !shift {
-        let mut nearest: Option<u32> = None;
-        let mut nearest_dist = f32::INFINITY;
-        for &cue in cue_ms {
-            let cue = cue.min(duration_ms);
-            let cue_x = track_x + ((cue as f32) / duration_ms as f32) * track_width;
-            if !cue_x.is_finite() {
-                continue;
-            }
-            let dist = (pointer_x - cue_x).abs();
-            if dist <= PLAYHEAD_SNAP_PX && dist < nearest_dist {
-                nearest = Some(cue);
-                nearest_dist = dist;
-            }
-        }
-        if let Some(cue) = nearest {
-            return cue.min(duration_ms);
-        }
+    if !shift
+        && let Some(cue) = nearest_cue_ms(pointer_x, track_x, track_width, duration_ms, cue_ms)
+    {
+        return cue;
     }
     let fraction = ((pointer_x - track_x) / track_width).clamp(0.0, 1.0);
     (fraction * duration_ms as f32)
@@ -495,14 +551,27 @@ fn render_time_ruler(
     }
 }
 
+struct ActiveDragContext<'a> {
+    duration_ms: u32,
+    track_x: f32,
+    track_width: f32,
+    cue_ms: &'a [u32],
+    slide_id: &'a str,
+}
+
 fn handle_active_drag(
     editor: &mut Editor,
     ui: &mut Ui,
-    duration_ms: u32,
-    track_width: f32,
-    slide_id: &str,
+    ctx: &ActiveDragContext<'_>,
     actions: &mut Vec<(&'static str, Json)>,
 ) {
+    let ActiveDragContext {
+        duration_ms,
+        track_x,
+        track_width,
+        cue_ms,
+        slide_id,
+    } = *ctx;
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         editor.ui.timeline.active_drag = None;
         return;
@@ -521,19 +590,48 @@ fn handle_active_drag(
         let snap_step: i64 = if is_shift { 10 } else { 100 };
         let delta_ms_raw = (delta_x / track_width * duration_ms as f32).round() as i64;
         let delta_ms = (delta_ms_raw / snap_step) * snap_step;
+        let ms_to_x = |ms: i64| -> f32 { track_x + (ms as f32 / duration_ms as f32) * track_width };
 
         match drag.op {
             TimelineDragOp::ResizeStart => {
                 let eff_end = drag.orig_end_ms.unwrap_or(drag.orig_duration_ms);
                 let max_start = eff_end.saturating_sub(snap_step as u32);
-                let raw_start = drag.orig_start_ms as i64 + delta_ms;
-                drag.current_start_ms = raw_start.clamp(0, max_start as i64) as u32;
+                let raw_unrounded = drag.orig_start_ms as i64 + delta_ms_raw;
+                let snapped_cue = if is_shift {
+                    None
+                } else {
+                    nearest_cue_ms(
+                        ms_to_x(raw_unrounded),
+                        track_x,
+                        track_width,
+                        duration_ms,
+                        cue_ms,
+                    )
+                };
+                let new_start = snapped_cue
+                    .map(i64::from)
+                    .unwrap_or(drag.orig_start_ms as i64 + delta_ms);
+                drag.current_start_ms = new_start.clamp(0, max_start as i64) as u32;
                 drag.current_end_ms = drag.orig_end_ms;
             }
             TimelineDragOp::ResizeEnd => {
                 let eff_end = drag.orig_end_ms.unwrap_or(drag.orig_duration_ms);
                 let min_end = drag.orig_start_ms + snap_step as u32;
-                let raw_end = eff_end as i64 + delta_ms;
+                let raw_unrounded = eff_end as i64 + delta_ms_raw;
+                let snapped_cue = if is_shift {
+                    None
+                } else {
+                    nearest_cue_ms(
+                        ms_to_x(raw_unrounded),
+                        track_x,
+                        track_width,
+                        duration_ms,
+                        cue_ms,
+                    )
+                };
+                let raw_end = snapped_cue
+                    .map(i64::from)
+                    .unwrap_or(eff_end as i64 + delta_ms);
                 let new_end = raw_end.clamp(min_end as i64, drag.orig_duration_ms as i64) as u32;
                 drag.current_start_ms = drag.orig_start_ms;
                 drag.current_end_ms = Some(new_end);
@@ -544,13 +642,51 @@ fn handle_active_drag(
                         .saturating_sub(drag.orig_start_ms)
                         .max(snap_step as u32);
                     let max_start = drag.orig_duration_ms.saturating_sub(len);
-                    let raw_start = drag.orig_start_ms as i64 + delta_ms;
+                    let raw_unrounded = drag.orig_start_ms as i64 + delta_ms_raw;
+                    let snapped_start = if is_shift {
+                        None
+                    } else {
+                        nearest_cue_ms(
+                            ms_to_x(raw_unrounded),
+                            track_x,
+                            track_width,
+                            duration_ms,
+                            cue_ms,
+                        )
+                        .or_else(|| {
+                            nearest_cue_ms(
+                                ms_to_x(raw_unrounded + i64::from(len)),
+                                track_x,
+                                track_width,
+                                duration_ms,
+                                cue_ms,
+                            )
+                            .map(|cue| cue.saturating_sub(len))
+                        })
+                    };
+                    let raw_start = snapped_start
+                        .map(i64::from)
+                        .unwrap_or(drag.orig_start_ms as i64 + delta_ms);
                     let new_start = raw_start.clamp(0, max_start as i64) as u32;
                     drag.current_start_ms = new_start;
                     drag.current_end_ms = Some(new_start + len);
                 } else {
                     let max_start = drag.orig_duration_ms.saturating_sub(snap_step as u32);
-                    let raw_start = drag.orig_start_ms as i64 + delta_ms;
+                    let raw_unrounded = drag.orig_start_ms as i64 + delta_ms_raw;
+                    let snapped_start = if is_shift {
+                        None
+                    } else {
+                        nearest_cue_ms(
+                            ms_to_x(raw_unrounded),
+                            track_x,
+                            track_width,
+                            duration_ms,
+                            cue_ms,
+                        )
+                    };
+                    let raw_start = snapped_start
+                        .map(i64::from)
+                        .unwrap_or(drag.orig_start_ms as i64 + delta_ms);
                     let new_start = raw_start.clamp(0, max_start as i64) as u32;
                     drag.current_start_ms = new_start;
                     drag.current_end_ms = None;
@@ -642,6 +778,34 @@ fn draw_bar_or_preview(
         let radius = CornerRadius::same(coursecraft_render::RADIUS_MD as u8);
         let bar_color = if is_selected { p.accent } else { p.pressed };
         painter.rect_filled(bar_rect, radius, bar_color);
+
+        if let Some(peaks) = audio_peaks_for_object(editor, oid)
+            && !peaks.is_empty()
+            && bar_rect.width() >= 4.0
+        {
+            let wf_painter = painter.with_clip_rect(painter.clip_rect().intersect(bar_rect));
+            let center_y = bar_rect.center().y;
+            let max_half_h = (bar_rect.height() * 0.42).max(1.0);
+            let wf_color = Color32::from_white_alpha(if is_selected { 175 } else { 135 });
+            let stroke = Stroke::new(1.0, wf_color);
+            let step = 2.0_f32;
+            let width = bar_rect.width().max(1.0);
+            let n = peaks.len();
+            let mut x = bar_rect.min.x + 1.0;
+            while x < bar_rect.max.x - 1.0 {
+                let t0 = ((x - bar_rect.min.x) / width).clamp(0.0, 1.0);
+                let t1 = ((x + step - bar_rect.min.x) / width).clamp(0.0, 1.0);
+                let i0 = ((t0 * n as f32).floor() as usize).min(n - 1);
+                let i1 = ((t1 * n as f32).ceil() as usize).max(i0 + 1).min(n);
+                let peak = peaks[i0..i1].iter().copied().fold(0.0_f32, f32::max);
+                let half_h = (peak * max_half_h).max(1.0);
+                wf_painter.line_segment(
+                    [pos2(x, center_y - half_h), pos2(x, center_y + half_h)],
+                    stroke,
+                );
+                x += step;
+            }
+        }
 
         // Trim grips only on the selected bar; the resize cursor teaches the rest.
         if is_selected {
@@ -919,6 +1083,15 @@ fn handle_row_drag(
 }
 
 /// Cues on the object `oid` on the current timeline, when it is a video.
+fn audio_peaks_for_object<'a>(editor: &'a Editor, oid: &str) -> Option<&'a [f32]> {
+    let slide = editor.session.course.slide(&editor.selection.slide)?;
+    let (obj, _) = slide.object(oid)?;
+    let coursecraft_course::ObjectKind::Audio { src, .. } = &obj.kind else {
+        return None;
+    };
+    editor.audio_waveforms.get(src)?.as_deref()
+}
+
 fn object_cues(editor: &Editor, oid: &str) -> Vec<Cue> {
     let Some(slide) = editor.session.course.slide(&editor.selection.slide) else {
         return Vec::new();
@@ -1645,6 +1818,220 @@ fn show_cue_rename_window(
     }
 }
 
+fn show_slide_cue_rename_window(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    actions: &mut Vec<(&'static str, Json)>,
+) {
+    let Some(mut rename) = editor.ui.timeline.slide_cue_rename.take() else {
+        return;
+    };
+    let mut commit = false;
+    let mut cancel = false;
+    Dialog::new("Rename timeline cue").show(ui.ctx(), |ui| {
+        ui.label("Cue name");
+        let response = ui
+            .add(TextEdit::singleline(&mut rename.text).id_salt("timeline_slide_cue_rename_text"));
+        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            commit = true;
+        }
+        if let Some(error) = &rename.error {
+            ui.colored_label(coursecraft_render::palette(ui.ctx()).danger, error.clone());
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Rename").clicked() {
+                commit = true;
+            }
+            if ui.button("Cancel").clicked() {
+                cancel = true;
+            }
+        });
+    });
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        cancel = true;
+    }
+    if commit {
+        let name = rename.text.trim();
+        if name.is_empty() {
+            rename.error = Some("Cue name cannot be empty".to_owned());
+            editor.ui.timeline.slide_cue_rename = Some(rename);
+        } else {
+            let mut params = serde_json::json!({
+                "slide": rename.slide,
+                "cue": rename.cue,
+                "patch": { "name": name },
+            });
+            if let Some(lid) = rename.layer {
+                params["layer"] = serde_json::json!(lid);
+            }
+            actions.push(("slide.set_cue", params));
+        }
+    } else if !cancel {
+        editor.ui.timeline.slide_cue_rename = Some(rename);
+    }
+}
+
+struct SlideCueRulerContext<'a> {
+    slide_id: &'a str,
+    selected_layer_id: &'a Option<String>,
+    slide_cues: &'a [coursecraft_course::SlideCue],
+    track_rect: Rect,
+    ruler_rect: Rect,
+    visible_track: Rect,
+    duration_ms: u32,
+    track_width: f32,
+    pointer_pos: Option<egui::Pos2>,
+}
+
+fn render_slide_cue_markers(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    painter: &egui::Painter,
+    ctx: &SlideCueRulerContext<'_>,
+    actions: &mut Vec<(&'static str, Json)>,
+) -> bool {
+    let SlideCueRulerContext {
+        slide_id,
+        selected_layer_id,
+        slide_cues,
+        track_rect,
+        ruler_rect,
+        visible_track,
+        duration_ms,
+        track_width,
+        pointer_pos,
+    } = ctx;
+    let duration_ms = *duration_ms;
+    let track_width = *track_width;
+
+    editor.ui.timeline.slide_cue_rects.clear();
+    let mut slide_cue_markers: Vec<(coursecraft_course::SlideCue, Rect)> = Vec::new();
+    for cue in *slide_cues {
+        let dragging_this = editor
+            .ui
+            .timeline
+            .slide_cue_drag
+            .as_ref()
+            .is_some_and(|d| &d.layer == *selected_layer_id && d.cue_id == cue.id);
+        let at_ms = if dragging_this {
+            editor
+                .ui
+                .timeline
+                .slide_cue_drag
+                .as_ref()
+                .map_or(cue.at_ms, |d| d.current_at_ms)
+        } else {
+            cue.at_ms
+        };
+        let cx =
+            track_rect.min.x + (at_ms.min(duration_ms) as f32 / duration_ms as f32) * track_width;
+        let rect = Rect::from_center_size(pos2(cx, ruler_rect.max.y - 6.0), vec2(12.0, 12.0));
+        if visible_track.x_range().contains(cx) {
+            slide_cue_markers.push((cue.clone(), rect));
+        }
+    }
+    let on_slide_cue =
+        pointer_pos.is_some_and(|pos| slide_cue_markers.iter().any(|(_, r)| r.contains(pos)));
+
+    let ruler_cue_painter = painter.with_clip_rect(painter.clip_rect().intersect(
+        Rect::from_x_y_ranges(visible_track.x_range(), ruler_rect.y_range()),
+    ));
+    for (cue, rect) in &slide_cue_markers {
+        let selected = editor
+            .ui
+            .timeline
+            .slide_cue_selected
+            .as_ref()
+            .is_some_and(|(l, id)| l == *selected_layer_id && id == &cue.id);
+        let response = ui
+            .interact(
+                *rect,
+                ui.scope_id()
+                    .with("timeline_slide_cue")
+                    .with(cue.id.as_str()),
+                Sense::click_and_drag(),
+            )
+            .on_hover_text(format!("{} ({} ms)", cue.name, cue.at_ms));
+        draw_cue_marker(&ruler_cue_painter, rect.center(), selected);
+        editor
+            .ui
+            .timeline
+            .slide_cue_rects
+            .insert(cue.id.clone(), *rect);
+        if response.clicked() {
+            editor.ui.timeline.cue_selected = None;
+            editor.ui.timeline.slide_cue_selected =
+                Some(((*selected_layer_id).clone(), cue.id.clone()));
+        }
+        if response.double_clicked() {
+            editor.ui.timeline.cue_selected = None;
+            editor.ui.timeline.slide_cue_selected =
+                Some(((*selected_layer_id).clone(), cue.id.clone()));
+            editor.ui.timeline.slide_cue_rename = Some(SlideCueRename {
+                slide: (*slide_id).to_owned(),
+                layer: (*selected_layer_id).clone(),
+                cue: cue.id.clone(),
+                text: cue.name.clone(),
+                error: None,
+            });
+        }
+        if response.secondary_clicked() {
+            let mut params = serde_json::json!({
+                "slide": *slide_id,
+                "cue": cue.id,
+            });
+            if let Some(lid) = *selected_layer_id {
+                params["layer"] = serde_json::json!(lid);
+            }
+            actions.push(("slide.remove_cue", params));
+            editor.ui.timeline.slide_cue_selected = None;
+        }
+        if response.drag_started() {
+            editor.ui.timeline.slide_cue_drag = Some(SlideCueDrag {
+                layer: (*selected_layer_id).clone(),
+                cue_id: cue.id.clone(),
+                orig_at_ms: cue.at_ms,
+                current_at_ms: cue.at_ms,
+                start_pointer_x: rect.center().x,
+                duration_ms,
+            });
+        }
+        if response.dragged()
+            && let Some(pos) = *pointer_pos
+            && let Some(drag) = &mut editor.ui.timeline.slide_cue_drag
+            && &drag.layer == *selected_layer_id
+            && drag.cue_id == cue.id
+        {
+            let delta_x = pos.x - drag.start_pointer_x;
+            let raw = f64::from(drag.orig_at_ms)
+                + f64::from(delta_x / track_width.max(1.0) * duration_ms as f32);
+            let snapped = if ui.input(|i| i.modifiers.shift) {
+                raw
+            } else {
+                (raw / 100.0).round() * 100.0
+            };
+            drag.current_at_ms = snapped.clamp(0.0, f64::from(duration_ms)).round() as u32;
+        }
+        if response.drag_stopped()
+            && let Some(drag) = editor.ui.timeline.slide_cue_drag.take()
+            && &drag.layer == *selected_layer_id
+            && drag.cue_id == cue.id
+            && drag.current_at_ms != drag.orig_at_ms
+        {
+            let mut params = serde_json::json!({
+                "slide": *slide_id,
+                "cue": drag.cue_id,
+                "patch": { "at_ms": drag.current_at_ms },
+            });
+            if let Some(ref lid) = drag.layer {
+                params["layer"] = serde_json::json!(lid);
+            }
+            actions.push(("slide.set_cue", params));
+        }
+    }
+    on_slide_cue
+}
+
 fn show_timeline_content(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -1693,6 +2080,36 @@ fn show_timeline_content(
             .map(|o| (o.id.clone(), o.name.clone(), o.timing, o.group.clone()))
             .collect(),
     };
+
+    let slide_cues: Vec<coursecraft_course::SlideCue> = match &selected_layer_id {
+        Some(lid) => slide
+            .layer(lid)
+            .map_or_else(Vec::new, |l| l.cue_points.clone()),
+        None => slide.cue_points.clone(),
+    };
+
+    let audio_srcs: Vec<String> = match &selected_layer_id {
+        Some(lid) => slide.layer(lid).map_or_else(Vec::new, |l| {
+            l.objects
+                .iter()
+                .filter_map(|o| match &o.kind {
+                    coursecraft_course::ObjectKind::Audio { src, .. } => Some(src.clone()),
+                    _ => None,
+                })
+                .collect()
+        }),
+        None => slide
+            .objects
+            .iter()
+            .filter_map(|o| match &o.kind {
+                coursecraft_course::ObjectKind::Audio { src, .. } => Some(src.clone()),
+                _ => None,
+            })
+            .collect(),
+    };
+    for src in audio_srcs {
+        let _ = editor.ensure_audio_waveform(&src);
+    }
 
     render_timeline_header(
         editor,
@@ -1766,29 +2183,53 @@ fn show_timeline_content(
 
     editor.ui.timeline.playhead_ms = editor.ui.timeline.playhead_ms.min(duration_ms);
     let accent = coursecraft_render::palette(ui.ctx()).accent;
+
+    let mut all_cue_ms: Vec<u32> = objects
+        .iter()
+        .flat_map(|(oid, _, _, _)| object_cues(editor, oid))
+        .map(|cue| cue.at_ms_u64().min(u64::from(u32::MAX)) as u32)
+        .collect();
+    for cue in &slide_cues {
+        all_cue_ms.push(cue.at_ms);
+    }
+
+    // Slide/layer cue markers on the ruler.
+    let pointer_pos = ui
+        .input(|i| i.pointer.interact_pos())
+        .filter(|pos| crate::widgets::pointer_reaches(ui, *pos));
+    let cue_ctx = SlideCueRulerContext {
+        slide_id: &slide_id,
+        selected_layer_id: &selected_layer_id,
+        slide_cues: &slide_cues,
+        track_rect,
+        ruler_rect,
+        visible_track,
+        duration_ms,
+        track_width,
+        pointer_pos,
+    };
+    let on_slide_cue = render_slide_cue_markers(editor, ui, &painter, &cue_ctx, actions);
+
     let playhead_response = ui.interact(
         ruler_rect,
         ui.scope_id().with("timeline_playhead"),
         Sense::click_and_drag(),
     );
-    if (playhead_response.clicked() || playhead_response.dragged())
+    if !on_slide_cue
+        && editor.ui.timeline.slide_cue_drag.is_none()
+        && (playhead_response.clicked() || playhead_response.dragged())
         && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
     {
         // Dragging within PLAYHEAD_SNAP_PX of a cue marker snaps to it;
         // Shift disables snapping. Clicking or dragging while playing
         // seeks and keeps playing.
-        let cue_ms: Vec<u32> = objects
-            .iter()
-            .flat_map(|(oid, _, _, _)| object_cues(editor, oid))
-            .map(|cue| cue.at_ms_u64().min(u64::from(u32::MAX)) as u32)
-            .collect();
         let shift = ui.input(|i| i.modifiers.shift);
         let snapped = snapped_playhead_ms(
             pos.x,
             track_rect.min.x,
             track_width,
             duration_ms,
-            &cue_ms,
+            &all_cue_ms,
             shift,
         );
         editor.ui.timeline.playhead_ms = snapped;
@@ -1831,9 +2272,17 @@ fn show_timeline_content(
         painter.rect_filled(thumb, CornerRadius::same(1), p.text_tertiary);
     }
 
-    handle_active_drag(editor, ui, duration_ms, track_width, &slide_id, actions);
+    let drag_ctx = ActiveDragContext {
+        duration_ms,
+        track_x: track_rect.min.x,
+        track_width,
+        cue_ms: &all_cue_ms,
+        slide_id: &slide_id,
+    };
+    handle_active_drag(editor, ui, &drag_ctx, actions);
 
     show_cue_rename_window(editor, ui, actions);
+    show_slide_cue_rename_window(editor, ui, actions);
 
     let row_area = Rect::from_min_max(pos2(total_area.min.x, ruler_rect.max.y), total_area.max);
     if row_area.height() > 0.0 {

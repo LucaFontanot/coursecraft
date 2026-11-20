@@ -233,10 +233,27 @@ pub fn describe_event(event: &Event, slide: &Slide) -> String {
             Some(l) => format!("timeline ends on layer {}", layer_name(slide, l)),
             None => "the timeline ends".to_owned(),
         },
-        Event::TimelineReaches { ms, layer } => match layer {
-            Some(l) => format!("timeline reaches {ms}ms on layer {}", layer_name(slide, l)),
-            None => format!("timeline reaches {ms}ms"),
-        },
+        Event::TimelineReaches { ms, layer, cue } => {
+            let cue_label = cue.as_deref().map(|cid| {
+                let cues = match layer.as_deref() {
+                    Some(l) => slide.layer(l).map_or(&[][..], |l| l.cue_points.as_slice()),
+                    None => slide.cue_points.as_slice(),
+                };
+                cues.iter()
+                    .find(|c| c.id == cid)
+                    .map_or_else(|| cid.to_owned(), |c| format!("cue \"{}\"", c.name))
+            });
+            match (layer, cue_label) {
+                (Some(l), Some(c)) => {
+                    format!("timeline reaches {c} on layer {}", layer_name(slide, l))
+                }
+                (None, Some(c)) => format!("timeline reaches {c}"),
+                (Some(l), None) => {
+                    format!("timeline reaches {ms}ms on layer {}", layer_name(slide, l))
+                }
+                (None, None) => format!("timeline reaches {ms}ms"),
+            }
+        }
         Event::Click { object } => format!("the user clicks {}", object_name(slide, object)),
         Event::HoverStart { object } => {
             format!("the user hovers over {}", object_name(slide, object))
@@ -791,6 +808,7 @@ pub struct TriggerFormState {
     pub event_tag: EventKindTag,
     pub event_layer: Option<String>,
     pub event_ms: u32,
+    pub event_timeline_cue: Option<String>,
     pub event_object: String,
     pub event_cue: String,
     pub event_var: String,
@@ -899,6 +917,7 @@ impl TriggerFormState {
             event_tag: EventKindTag::Click,
             event_layer: None,
             event_ms: 0,
+            event_timeline_cue: None,
             event_object: first_obj_id.clone(),
             event_cue: first_cue,
             event_var: first_var,
@@ -1054,10 +1073,11 @@ impl TriggerFormState {
                 s.event_tag = EventKindTag::TimelineEnds;
                 s.event_layer = layer.clone();
             }
-            Event::TimelineReaches { ms, layer } => {
+            Event::TimelineReaches { ms, layer, cue } => {
                 s.event_tag = EventKindTag::TimelineReaches;
                 s.event_ms = *ms;
                 s.event_layer = layer.clone();
+                s.event_timeline_cue = cue.clone();
             }
             Event::Click { object } => {
                 s.event_tag = EventKindTag::Click;
@@ -1301,6 +1321,7 @@ impl TriggerFormState {
             EventKindTag::TimelineReaches => Event::TimelineReaches {
                 ms: self.event_ms,
                 layer: self.event_layer.clone(),
+                cue: self.event_timeline_cue.clone(),
             },
             EventKindTag::Click => Event::Click {
                 object: self.event_object.clone(),
@@ -2610,23 +2631,68 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                             .clicked()
                         {
                             form.event_layer = None;
+                            form.event_timeline_cue = None;
                         }
                         for l in &slide.layers {
                             let label = format!("Layer: {}", layer_name(slide, &l.id));
                             let sel = form.event_layer.as_deref() == Some(&l.id);
                             if ui.selectable_label(sel, label).clicked() {
                                 form.event_layer = Some(l.id.clone());
+                                form.event_timeline_cue = None;
                             }
                         }
                     });
             });
-            trigger_row(ui, "Time (ms)", |ui| {
-                ui.add(
-                    DragValue::new(&mut form.event_ms)
-                        .speed(50.0)
-                        .range(0..=86_400_000),
-                );
-            });
+            let cues: &[coursecraft_course::SlideCue] = match form.event_layer.as_deref() {
+                Some(lid) => slide.layer(lid).map_or(&[], |l| l.cue_points.as_slice()),
+                None => slide.cue_points.as_slice(),
+            };
+            if !cues.is_empty() {
+                trigger_row(ui, "At", |ui| {
+                    let cue_text = match form.event_timeline_cue.as_deref() {
+                        Some(cid) => cues
+                            .iter()
+                            .find(|c| c.id == cid)
+                            .map_or_else(|| cid.to_owned(), |c| format!("Cue: {}", c.name)),
+                        None => "Specific time (ms)".to_owned(),
+                    };
+                    tall_combo(ui, "event_reach_cue_combo")
+                        .selected_text(cue_text)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    form.event_timeline_cue.is_none(),
+                                    "Specific time (ms)",
+                                )
+                                .clicked()
+                            {
+                                form.event_timeline_cue = None;
+                            }
+                            for c in cues {
+                                let sel = form.event_timeline_cue.as_deref() == Some(c.id.as_str());
+                                if ui
+                                    .selectable_label(
+                                        sel,
+                                        format!("Cue: {} ({} ms)", c.name, c.at_ms),
+                                    )
+                                    .clicked()
+                                {
+                                    form.event_timeline_cue = Some(c.id.clone());
+                                    form.event_ms = c.at_ms;
+                                }
+                            }
+                        });
+                });
+            }
+            if form.event_timeline_cue.is_none() {
+                trigger_row(ui, "Time (ms)", |ui| {
+                    ui.add(
+                        DragValue::new(&mut form.event_ms)
+                            .speed(50.0)
+                            .range(0..=86_400_000),
+                    );
+                });
+            }
         }
         EventKindTag::VariableChanges => {
             trigger_row(ui, "Variable", |ui| {

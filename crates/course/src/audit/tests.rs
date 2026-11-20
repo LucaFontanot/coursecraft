@@ -748,6 +748,7 @@ fn a_pause_trigger_on_a_layer_also_counts() {
         hide_when_timeline_ends: false,
         allow_seek: crate::SeekMode::Auto,
         revisit: crate::RevisitMode::Auto,
+        cue_points: Vec::new(),
     };
     layer.duration_ms = 5000;
     slide(&mut course).layers.push(layer);

@@ -145,6 +145,27 @@ fn matches(pattern: &Event, fired: &Event) -> bool {
             Event::ObjectsStopIntersecting { a: p_a, b: p_b },
             Event::ObjectsStopIntersecting { a: f_a, b: f_b },
         ) => (p_a == f_a && p_b == f_b) || (p_a == f_b && p_b == f_a),
+        (
+            Event::TimelineReaches {
+                ms: pm,
+                layer: pl,
+                cue: pc,
+            },
+            Event::TimelineReaches {
+                ms: fm,
+                layer: fl,
+                cue: fc,
+            },
+        ) => {
+            if pl != fl {
+                return false;
+            }
+            match (pc, fc) {
+                (Some(pc), Some(fc)) => pc == fc,
+                (None, None) => pm == fm,
+                _ => false,
+            }
+        }
         _ => pattern == fired,
     }
 }
@@ -2818,13 +2839,14 @@ impl<'c> Player<'c> {
         let old = clock.ms;
         let new = old.saturating_add(dt).min(duration);
         let layer_owned = layer.map(str::to_owned);
-        for ms in self.reach_points(layer) {
+        for (ms, cue) in self.reach_points(layer) {
             if old < ms && ms <= new {
                 self.push(
                     q,
                     Event::TimelineReaches {
                         ms,
                         layer: layer_owned.clone(),
+                        cue,
                     },
                 );
             }
@@ -3167,17 +3189,29 @@ impl<'c> Player<'c> {
     }
 
     /// Distinct `timeline_reaches` points for one timeline, ascending.
-    fn reach_points(&self, layer: Option<&str>) -> Vec<u32> {
+    fn reach_points(&self, layer: Option<&str>) -> Vec<(u32, Option<String>)> {
         let Some(slide) = self.slide() else {
             return Vec::new();
         };
-        let mut v: Vec<u32> = slide
+        let cues: &[coursecraft_course::SlideCue] = match layer {
+            Some(lid) => slide.layer(lid).map_or(&[], |l| l.cue_points.as_slice()),
+            None => slide.cue_points.as_slice(),
+        };
+        let mut v: Vec<(u32, Option<String>)> = slide
             .triggers
             .iter()
             .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
             .filter(|t| !t.disabled)
             .filter_map(|t| match &t.when {
-                Event::TimelineReaches { ms, layer: l } if l.as_deref() == layer => Some(*ms),
+                Event::TimelineReaches { ms, layer: l, cue } if l.as_deref() == layer => {
+                    match cue {
+                        Some(cue_id) => cues
+                            .iter()
+                            .find(|c| c.id == *cue_id)
+                            .map(|c| (c.at_ms, Some(cue_id.clone()))),
+                        None => Some((*ms, None)),
+                    }
+                }
                 _ => None,
             })
             .collect();

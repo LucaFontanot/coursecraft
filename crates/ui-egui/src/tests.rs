@@ -2824,6 +2824,7 @@ fn describe_covers_all_action_and_event_variants() {
         notes: String::new(),
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     };
 
     // Every Action variant
@@ -3025,6 +3026,7 @@ fn describe_covers_all_action_and_event_variants() {
             CourseEvent::TimelineReaches {
                 ms: 1200,
                 layer: None,
+                cue: None,
             },
             "timeline reaches 1200ms",
         ),
@@ -3032,6 +3034,7 @@ fn describe_covers_all_action_and_event_variants() {
             CourseEvent::TimelineReaches {
                 ms: 1200,
                 layer: Some("layer1".into()),
+                cue: None,
             },
             "timeline reaches 1200ms on layer layer1",
         ),
@@ -3379,6 +3382,7 @@ fn adding_multiple_choice_question_with_choices_commits_question_set() {
         hide_when_timeline_ends: false,
         allow_seek: coursecraft_course::SeekMode::Auto,
         revisit: coursecraft_course::RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
     intro.layers.push(Layer {
         id: "incorrect".to_owned(),
@@ -3393,6 +3397,7 @@ fn adding_multiple_choice_question_with_choices_commits_question_set() {
         hide_when_timeline_ends: false,
         allow_seek: coursecraft_course::SeekMode::Auto,
         revisit: coursecraft_course::RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
 
     let mut harness = TestHarness::new(course);

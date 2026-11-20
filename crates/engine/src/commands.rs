@@ -8,12 +8,12 @@ use coursecraft_course::{
     MAX_CUES, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, MatchPair, MotionPath, Object, ObjectKind,
     Outline, OutlineProblem, OutlineQuestion, OutlineSlide, Paragraph, Point, Question,
     QuestionBank, QuestionKind, QuizSettings, RadioOption, Rect, RevisitMode, Scene, Scoring,
-    SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide, SlideTarget, StateDef, TableBorders,
-    TableCell, TableRow, TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition, Trigger,
-    Trim, VAlign, Value, VarOp, VariableDef, WebSource, align_paragraphs, apply_link_to_range,
-    apply_style_to_range, apply_text_edit, course_strings, find_in_course, is_valid_link_url,
-    normalize_table_fractions, paragraphs_for, parse_color, relative_luminance, replace_in_target,
-    string_mut, table_cell_owners,
+    SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide, SlideCue, SlideTarget, StateDef,
+    TableBorders, TableCell, TableRow, TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition,
+    Trigger, Trim, VAlign, Value, VarOp, VariableDef, WebSource, align_paragraphs,
+    apply_link_to_range, apply_style_to_range, apply_text_edit, course_strings, find_in_course,
+    is_valid_link_url, normalize_table_fractions, paragraphs_for, parse_color, relative_luminance,
+    replace_in_target, string_mut, table_cell_owners,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value as Json, json};
@@ -953,6 +953,33 @@ static REGISTRY: &[Command] = &[
         params: r#"{"slide": id, "object": id, "at_ms"?: number, "name"?: string}"#,
         mutates: true,
         run: video_add_question_cue,
+    },
+    Command {
+        id: "slide.add_cue",
+        label: "Add Timeline Cue Point",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}"#,
+        mutates: true,
+        run: slide_add_cue,
+    },
+    Command {
+        id: "slide.set_cue",
+        label: "Edit Timeline Cue Point",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}"#,
+        mutates: true,
+        run: slide_set_cue,
+    },
+    Command {
+        id: "slide.remove_cue",
+        label: "Delete Timeline Cue Point",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "layer"?: id, "cue": id}"#,
+        mutates: true,
+        run: slide_remove_cue,
     },
     Command {
         id: "object.add_state",
@@ -2309,6 +2336,7 @@ fn slide_add(s: &mut Session, p: &Json) -> Result<Json> {
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -2633,6 +2661,7 @@ fn master_add(s: &mut Session, p: &Json) -> Result<Json> {
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -2807,6 +2836,7 @@ fn new_bank_slide(
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -2943,6 +2973,7 @@ fn draw_insert(s: &mut Session, p: &Json) -> Result<Json> {
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: Some(BankDraw {
@@ -3452,6 +3483,7 @@ fn outline_slide(
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -3632,6 +3664,7 @@ fn layer_add(s: &mut Session, p: &Json) -> Result<Json> {
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
     keep_valid(s, was_valid)?;
     Ok(json!({ "id": id }))
@@ -6666,6 +6699,160 @@ fn video_remove_cue(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(Json::Null)
 }
 
+fn slide_cues_mut<'a>(
+    slide: &'a mut Slide,
+    layer: Option<&str>,
+) -> Result<(u32, &'a mut Vec<SlideCue>)> {
+    match layer {
+        Some(lid) => {
+            let l = slide
+                .layers
+                .iter_mut()
+                .find(|l| l.id == lid)
+                .ok_or_else(|| {
+                    EngineError::NotFound(format!("layer {lid:?} is not on this slide"))
+                })?;
+            Ok((l.duration_ms, &mut l.cue_points))
+        }
+        None => Ok((slide.duration_ms, &mut slide.cue_points)),
+    }
+}
+
+fn slide_add_cue(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "slide.add_cue";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let lid: Option<String> = opt(C, p, "layer")?;
+    let at_ms: u32 = opt(C, p, "at_ms")?.unwrap_or(0);
+    let name_opt: Option<String> = opt(C, p, "name")?;
+    let id_opt: Option<String> = opt(C, p, "id")?;
+    let slide = slide_mut(s, &sid)?;
+    let (duration, cues) = slide_cues_mut(slide, lid.as_deref())?;
+    if cues.len() >= MAX_CUES {
+        return Err(bad(
+            C,
+            format!("a timeline may have at most {MAX_CUES} cues"),
+        ));
+    }
+    if at_ms > duration {
+        return Err(bad(
+            C,
+            format!("cue time {at_ms} ms exceeds timeline duration {duration} ms"),
+        ));
+    }
+    let name = match name_opt {
+        Some(name) => cue_name(C, name)?,
+        None => format!("Cue {}", cues.len() + 1),
+    };
+    let id = match id_opt {
+        Some(id) => {
+            validate_id(C, &id)?;
+            if cues.iter().any(|cue| cue.id == id) {
+                return Err(bad(C, format!("cue id {id:?} is already used")));
+            }
+            id
+        }
+        None => fresh_id("cue", cues.iter().map(|cue| cue.id.as_str())),
+    };
+    cues.push(SlideCue {
+        id: id.clone(),
+        name,
+        at_ms,
+    });
+    cues.sort_by_key(|c| c.at_ms);
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "id": id, "cue": id }))
+}
+
+fn slide_set_cue(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "slide.set_cue";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let lid: Option<String> = opt(C, p, "layer")?;
+    let cue_id: String = req(C, p, "cue")?;
+    let patch = obj(C, p)?
+        .get("patch")
+        .and_then(Json::as_object)
+        .ok_or_else(|| bad(C, "missing `patch` object"))?;
+    let slide = slide_mut(s, &sid)?;
+    let mut updated_at_ms: Option<u32> = None;
+    {
+        let (duration, cues) = slide_cues_mut(slide, lid.as_deref())?;
+        let cue = cues
+            .iter_mut()
+            .find(|cue| cue.id == cue_id)
+            .ok_or_else(|| EngineError::NotFound(format!("cue {cue_id:?} not found")))?;
+        if let Some(value) = patch.get("at_ms") {
+            let at_ms: u32 = serde_json::from_value(value.clone())
+                .map_err(|e| bad(C, format!("`at_ms`: {e}")))?;
+            if at_ms > duration {
+                return Err(bad(
+                    C,
+                    format!("cue time {at_ms} ms exceeds timeline duration {duration} ms"),
+                ));
+            }
+            cue.at_ms = at_ms;
+            updated_at_ms = Some(at_ms);
+        }
+        if let Some(value) = patch.get("name") {
+            let name: String = serde_json::from_value(value.clone())
+                .map_err(|e| bad(C, format!("`name`: {e}")))?;
+            cue.name = cue_name(C, name)?;
+        }
+        cues.sort_by_key(|c| c.at_ms);
+    }
+    if let Some(new_ms) = updated_at_ms {
+        let sync_trigger = |t: &mut Trigger| {
+            if let Event::TimelineReaches { ms, layer, cue } = &mut t.when
+                && cue.as_deref() == Some(cue_id.as_str())
+                && layer.as_deref() == lid.as_deref()
+            {
+                *ms = new_ms;
+            }
+        };
+        for t in &mut slide.triggers {
+            sync_trigger(t);
+        }
+        for l in &mut slide.layers {
+            for t in &mut l.triggers {
+                sync_trigger(t);
+            }
+        }
+    }
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+fn slide_remove_cue(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "slide.remove_cue";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let lid: Option<String> = opt(C, p, "layer")?;
+    let cue_id: String = req(C, p, "cue")?;
+    let slide = slide_mut(s, &sid)?;
+    {
+        let (_, cues) = slide_cues_mut(slide, lid.as_deref())?;
+        let before = cues.len();
+        cues.retain(|cue| cue.id != cue_id);
+        if cues.len() == before {
+            return Err(EngineError::NotFound(format!("cue {cue_id:?} not found")));
+        }
+    }
+    let matches_cue = |trigger: &Trigger| {
+        matches!(
+            &trigger.when,
+            Event::TimelineReaches { layer, cue: Some(c), .. }
+                if c == &cue_id && layer.as_deref() == lid.as_deref()
+        )
+    };
+    slide.triggers.retain(|trigger| !matches_cue(trigger));
+    for layer in &mut slide.layers {
+        layer.triggers.retain(|trigger| !matches_cue(trigger));
+    }
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
 fn video_add_question_cue(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "video.add_question_cue";
     let was_valid = s.course.is_playable();
@@ -6786,6 +6973,7 @@ fn video_add_question_cue(s: &mut Session, p: &Json) -> Result<Json> {
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     };
     slide.layers.push(layer);
     slide.triggers.push(interaction_trigger(
@@ -8630,6 +8818,7 @@ fn add_feedback_layers(slide: &mut Slide, theme: &Theme, slide_size: Size) -> (S
             hide_when_timeline_ends: false,
             allow_seek: SeekMode::Auto,
             revisit: RevisitMode::Auto,
+            cue_points: Vec::new(),
         });
         layer_id
     };
@@ -8724,6 +8913,7 @@ fn add_try_again_layer(slide: &mut Slide, theme: &Theme, slide_size: Size) -> St
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
     if let Some(question) = slide.question.as_mut() {
         question.try_again_layer = Some(layer_id.clone());
@@ -8814,6 +9004,7 @@ fn results_layer(
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     }
 }
 
@@ -8843,6 +9034,7 @@ fn build_results_slide(id: &str, theme: &Theme, size: Size, passing_percent: u8)
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -9068,6 +9260,7 @@ fn build_certificate_slide(id: &str, theme: &Theme, size: Size) -> Slide {
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -9554,6 +9747,7 @@ fn interaction_callout_layer(
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     }
 }
 
@@ -9693,6 +9887,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     hide_when_timeline_ends: false,
                     allow_seek: SeekMode::Auto,
                     revisit: RevisitMode::Auto,
+                    cue_points: Vec::new(),
                 });
             }
             // Clicking a tab shows its layer and moves the selected state.
@@ -9778,6 +9973,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     hide_when_timeline_ends: false,
                     allow_seek: SeekMode::Auto,
                     revisit: RevisitMode::Auto,
+                    cue_points: Vec::new(),
                 };
                 let mut layer_headers = Vec::new();
                 for (i, base) in base_headers.iter().copied().enumerate() {
