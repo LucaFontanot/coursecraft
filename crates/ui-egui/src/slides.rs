@@ -954,11 +954,40 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
     let row_height = thumb_h + TITLE_GAP + TITLE_HEIGHT + ROW_GAP;
     let thumb_x = panel_rect.min.x + GUTTER_WIDTH;
 
+    struct SlideSummary {
+        id: String,
+        title: String,
+        is_question: bool,
+    }
+    struct SceneSummary {
+        id: String,
+        title: String,
+        slides: Vec<SlideSummary>,
+    }
+
     let total_course_slides = editor.session.course.slides().count();
     let scene_count = editor.session.course.scenes.len();
-    // Clone the scenes so the header can start a rename or a delete while the
-    // loop still needs the course for thumbnails.
-    let scenes = editor.session.course.scenes.clone();
+    // Copy only the ids, titles and question flags so the loop can still
+    // mutate `editor.ui` and `editor.media_cache` without cloning whole `Slide`s.
+    let scenes: Vec<SceneSummary> = editor
+        .session
+        .course
+        .scenes
+        .iter()
+        .map(|scene| SceneSummary {
+            id: scene.id.clone(),
+            title: scene.title.clone(),
+            slides: scene
+                .slides
+                .iter()
+                .map(|slide| SlideSummary {
+                    id: slide.id.clone(),
+                    title: slide.title.clone(),
+                    is_question: slide.question.is_some(),
+                })
+                .collect(),
+        })
+        .collect();
     // Question banks for the "Move to bank" submenu.
     let bank_menu: Vec<(String, String)> = editor
         .session
@@ -1098,36 +1127,46 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             }
 
             // Thumbnail background & items
-            let items = compose_authoring(&editor.session.course, slide, None);
-            let thumb_bg =
-                coursecraft_render::parse_color(editor.session.course.slide_background(slide))
-                    .unwrap_or(Color32::WHITE);
-            let painter = ui.painter_at(thumb_rect);
-            painter.rect_filled(
-                thumb_rect,
-                CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
-                thumb_bg,
-            );
-            // Off-screen thumbnails are clipped away by the scroll area anyway.
-            // Skipping their paint keeps their pictures from being handed out
-            // (and pinned as "used this frame") on every frame.
-            if thumb_rect.intersects(ui.clip_rect())
-                && let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
+            if let Some(slide_ref) = editor
+                .session
+                .course
+                .scenes
+                .get(scene_idx)
+                .and_then(|sc| sc.slides.get(slide_idx))
             {
-                #[cfg(test)]
-                crate::guard_counters::note_thumbnail_paint(&slide.id, slide);
-                let source = crate::MemoryMediaSource {
-                    media: &editor.media,
-                };
-                paint(
-                    &painter,
-                    &t,
-                    &items,
-                    Highlight::default(),
-                    Some((&mut editor.media_cache, &source)),
-                    Some(&editor.session.course.theme),
-                    Some(editor.session.course.slide_background(slide)),
+                let items = compose_authoring(&editor.session.course, slide_ref, None);
+                let thumb_bg = coursecraft_render::parse_color(
+                    editor.session.course.slide_background(slide_ref),
+                )
+                .unwrap_or(Color32::WHITE);
+                let painter = ui.painter_at(thumb_rect);
+                painter.rect_filled(
+                    thumb_rect,
+                    CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
+                    thumb_bg,
                 );
+                // Off-screen thumbnails are clipped away by the scroll area anyway.
+                // Skipping their paint keeps their pictures from being handed out
+                // (and pinned as "used this frame") on every frame.
+                if thumb_rect.intersects(ui.clip_rect())
+                    && let Some(t) =
+                        SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
+                {
+                    #[cfg(test)]
+                    crate::guard_counters::note_thumbnail_paint(&slide.id, slide_ref);
+                    let source = crate::MemoryMediaSource {
+                        media: &editor.media,
+                    };
+                    paint(
+                        &painter,
+                        &t,
+                        &items,
+                        Highlight::default(),
+                        Some((&mut editor.media_cache, &source)),
+                        Some(&editor.session.course.theme),
+                        Some(editor.session.course.slide_background(slide_ref)),
+                    );
+                }
             }
 
             crate::content_region::mark_content_region(ui.ctx(), ui.layer_id(), thumb_rect);
@@ -1178,7 +1217,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     total_in_scene,
                     total_course_slides,
                     can_paste,
-                    slide.question.is_some(),
+                    slide.is_question,
                     &bank_menu,
                     &mut action_to_run,
                     &mut slide_action,
@@ -1261,7 +1300,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                         total_in_scene,
                         total_course_slides,
                         can_paste,
-                        slide.question.is_some(),
+                        slide.is_question,
                         &bank_menu,
                         &mut action_to_run,
                         &mut slide_action,

@@ -1969,11 +1969,10 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
         "New Trigger"
     };
 
-    let Some(slide) = editor.session.course.slide(&form.owner_slide) else {
+    let course = &editor.session.course;
+    let Some(slide) = course.slide(&form.owner_slide) else {
         return;
     };
-    let slide_clone = slide.clone();
-    let course_clone = editor.session.course.clone();
 
     let mut close_dialog = false;
     let mut commit_requested = false;
@@ -2000,7 +1999,7 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
                         }
                     });
 
-                render_action_fields(&mut form, ui, &slide_clone, &course_clone);
+                render_action_fields(&mut form, ui, slide, course);
 
                 ui.add_space(8.0);
                 ui.separator();
@@ -2015,7 +2014,7 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
                         }
                     });
 
-                render_event_fields(&mut form, ui, &slide_clone, &course_clone);
+                render_event_fields(&mut form, ui, slide, course);
 
                 ui.add_space(8.0);
                 ui.separator();
@@ -2025,13 +2024,7 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
                 ui.checkbox(&mut form.condition_enabled, "Enable condition");
                 if form.condition_enabled {
                     ui.indent("condition_tree_indent", |ui| {
-                        render_condition_editor(
-                            &mut form.condition_root,
-                            ui,
-                            &slide_clone,
-                            &course_clone,
-                            1,
-                        );
+                        render_condition_editor(&mut form.condition_root, ui, slide, course, 1);
                     });
                 }
             });

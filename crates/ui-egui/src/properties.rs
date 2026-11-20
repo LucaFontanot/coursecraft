@@ -5365,7 +5365,6 @@ fn show_object_properties(
 ) {
     let mut action_to_run: Option<(&'static str, Json)> = None;
     let mut font_requests: Vec<crate::EditorRequest> = Vec::new();
-    let system_fonts = editor.ui.system_fonts.clone();
     let mut replace_image_requested = false;
     let mut replace_audio_requested = false;
     let mut replace_video_requested = false;
@@ -5394,20 +5393,11 @@ fn show_object_properties(
             .unwrap_or(slide.duration_ms),
         _ => slide.duration_ms,
     };
-    let media_names: Vec<String> = editor.media.iter().map(|(name, _)| name.clone()).collect();
-    let slides: Vec<(String, String)> = editor
-        .session
-        .course
-        .slides()
-        .map(|s| (s.id.clone(), s.title.clone()))
-        .collect();
-    let font_families: Vec<String> = editor
-        .session
-        .course
-        .font_families()
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
+    editor.ui.properties_lists.ensure(
+        editor.session.revision,
+        &editor.session.course,
+        &editor.media,
+    );
     let selected_cell = editor.ui.table_cell;
     let playhead_ms = editor.ui.timeline.playhead_ms;
     // Crop mode needs the decoded picture; look it up before the props borrow.
@@ -5425,6 +5415,8 @@ fn show_object_properties(
     };
 
     let props = &mut editor.ui.properties;
+    let lists = &editor.ui.properties_lists;
+    let system_fonts = editor.ui.system_fonts.as_deref();
 
     let panels: Vec<(String, String)> = {
         let layer = slide.object(obj_id).and_then(|(_, layer)| layer);
@@ -5519,10 +5511,10 @@ fn show_object_properties(
                 runs,
                 text,
                 "text",
-                &font_families,
+                &lists.font_families,
                 None,
                 Some(*autofit),
-                system_fonts.as_deref(),
+                system_fonts,
                 &mut font_requests,
             ) {
                 action_to_run = Some(action);
@@ -5585,7 +5577,7 @@ fn show_object_properties(
                 &fill.0,
                 &slide.id,
                 &obj.id,
-                &media_names,
+                &lists.media_names,
                 actions_to_run,
             );
         }
@@ -5668,7 +5660,7 @@ fn show_object_properties(
                 &fill.0,
                 &slide.id,
                 &obj.id,
-                &media_names,
+                &lists.media_names,
                 actions_to_run,
             );
 
@@ -5872,10 +5864,10 @@ fn show_object_properties(
                     runs,
                     current_text,
                     "shape",
-                    &font_families,
+                    &lists.font_families,
                     None,
                     autofit,
-                    system_fonts.as_deref(),
+                    system_fonts,
                     &mut font_requests,
                 ) {
                     action_to_run = Some(action);
@@ -6580,7 +6572,7 @@ fn show_object_properties(
                 &editor.session.course,
                 &slide.id,
                 &obj.id,
-                &font_families,
+                &lists.font_families,
                 actions_to_run,
             );
         }
@@ -6640,10 +6632,10 @@ fn show_object_properties(
                 borders,
                 *header_row,
                 selected_cell,
-                &font_families,
-                &slides,
+                &lists.font_families,
+                &lists.slides,
                 actions_to_run,
-                system_fonts.as_deref(),
+                system_fonts,
                 &mut font_requests,
             );
         }
@@ -6895,7 +6887,16 @@ fn show_object_properties(
             ..
         } => {
             if let Some(action) = show_paragraph_controls(
-                ui, props, &slide.id, &obj.id, runs, paragraphs, &slides, text, "text", None,
+                ui,
+                props,
+                &slide.id,
+                &obj.id,
+                runs,
+                paragraphs,
+                &lists.slides,
+                text,
+                "text",
+                None,
             ) {
                 action_to_run = Some(action);
             }
@@ -6912,7 +6913,7 @@ fn show_object_properties(
                 &obj.id,
                 &text.runs,
                 &text.paragraphs,
-                &slides,
+                &lists.slides,
                 &text.text,
                 "shape",
                 None,

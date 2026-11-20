@@ -1464,12 +1464,7 @@ impl EditorApp {
         let Some(path) = files::pick_publish_save_file(&title, standard.file_stem()) else {
             return;
         };
-        let media: Vec<files::MediaItem> = self
-            .editor
-            .media()
-            .iter()
-            .map(|(name, bytes)| (name.clone(), bytes.to_vec()))
-            .collect();
+        let media = self.editor.media().to_vec();
         let job = publish::PublishJob {
             course: self.editor.session.course.clone(),
             media,
@@ -1573,12 +1568,7 @@ impl EditorApp {
         let Some(path) = self.pick_export_path(&title) else {
             return;
         };
-        let media: Vec<files::MediaItem> = self
-            .editor
-            .media()
-            .iter()
-            .map(|(name, bytes)| (name.clone(), bytes.to_vec()))
-            .collect();
+        let media = self.editor.media().to_vec();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let job = export::ExportMp4Job {
             course: self.editor.session.course.clone(),
@@ -1630,12 +1620,7 @@ impl EditorApp {
         let Some(path) = self.pick_review_export_path(&title, format) else {
             return;
         };
-        let media: Vec<files::MediaItem> = self
-            .editor
-            .media()
-            .iter()
-            .map(|(name, bytes)| (name.clone(), bytes.to_vec()))
-            .collect();
+        let media = self.editor.media().to_vec();
         let job = export::ExportReviewJob {
             course: self.editor.session.course.clone(),
             media,

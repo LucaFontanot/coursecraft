@@ -25,6 +25,7 @@ thread_local! {
     static SUGGESTION_LOOKUPS: Cell<u64> = const { Cell::new(0) };
     static THUMBNAIL_REDRAWS: Cell<u64> = const { Cell::new(0) };
     static VALIDATION_RUNS: Cell<u64> = const { Cell::new(0) };
+    static AUDIT_RUNS: Cell<u64> = const { Cell::new(0) };
     static FRAME: Cell<u64> = const { Cell::new(0) };
     /// Last slide drawn in each row, and the frame it was drawn on.
     static LAST_THUMB_SLIDES: RefCell<HashMap<String, (Slide, u64)>> =
@@ -48,6 +49,7 @@ pub(crate) fn reset() {
     SUGGESTION_LOOKUPS.set(0);
     THUMBNAIL_REDRAWS.set(0);
     VALIDATION_RUNS.set(0);
+    AUDIT_RUNS.set(0);
 }
 
 /// Forget which rows were painted where, so the next frame counts every row
@@ -88,6 +90,10 @@ pub(crate) fn note_validation_run() {
     bump(&VALIDATION_RUNS);
 }
 
+pub(crate) fn note_audit_run() {
+    bump(&AUDIT_RUNS);
+}
+
 pub(crate) fn course_copies() -> u64 {
     COURSE_COPIES.get()
 }
@@ -106,4 +112,8 @@ pub(crate) fn thumbnail_redraws() -> u64 {
 
 pub(crate) fn validation_runs() -> u64 {
     VALIDATION_RUNS.get()
+}
+
+pub(crate) fn audit_runs() -> u64 {
+    AUDIT_RUNS.get()
 }

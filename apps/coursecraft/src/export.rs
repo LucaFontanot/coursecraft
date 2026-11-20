@@ -12,13 +12,11 @@ use coursecraft_export::{ExportMedia, ExportProgress, ExportReport, Mp4Options, 
 use coursecraft_ui_egui::coursecraft_render::{MediaFetch, MediaSource};
 use coursecraft_ui_egui::{ReviewFormat, ReviewOptionsView};
 
-use crate::files::MediaItem;
-
 /// Everything a background export needs. It owns the course and media, so an
 /// export never borrows the live session while the window keeps drawing.
 pub struct ExportMp4Job {
     pub course: Course,
-    pub media: Vec<MediaItem>,
+    pub media: Vec<(String, Arc<[u8]>)>,
     pub out: PathBuf,
     pub width: u32,
     pub fps: u32,
@@ -90,7 +88,7 @@ fn default_file_stem(default_title: &str) -> String {
 /// Everything a background review export needs.
 pub struct ExportReviewJob {
     pub course: Course,
-    pub media: Vec<MediaItem>,
+    pub media: Vec<(String, Arc<[u8]>)>,
     pub out: PathBuf,
     pub format: ReviewFormat,
     pub options: ReviewOptionsView,
@@ -108,12 +106,7 @@ pub fn run_export_review_job(job: ExportReviewJob) -> Result<PathBuf, String> {
         format,
         options,
     } = job;
-    let media = InMemoryExportMedia(
-        media
-            .into_iter()
-            .map(|(name, bytes)| (name, Arc::from(bytes)))
-            .collect(),
-    );
+    let media = InMemoryExportMedia(media.into_iter().collect());
     let options = coursecraft_export::ReviewOptions {
         include_notes: options.include_notes,
         include_text: options.include_text,
@@ -165,12 +158,7 @@ pub fn run_export_job(
         fps,
         cancel,
     } = job;
-    let media = InMemoryExportMedia(
-        media
-            .into_iter()
-            .map(|(name, bytes)| (name, Arc::from(bytes)))
-            .collect(),
-    );
+    let media = InMemoryExportMedia(media.into_iter().collect());
     let options = Mp4Options {
         width,
         fps,

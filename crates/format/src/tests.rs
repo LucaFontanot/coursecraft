@@ -651,6 +651,23 @@ fn save_project_to_writes_the_same_bytes_as_save_project() {
 }
 
 #[test]
+fn save_project_to_reopens_equal_to_original() {
+    let media = vec![
+        ("img/logo.png".to_string(), vec![42u8; 256]),
+        (
+            "captions/intro.vtt".to_string(),
+            b"WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n".to_vec(),
+        ),
+    ];
+    let course = minimal_course("streamed");
+    let mut out = std::io::Cursor::new(Vec::new());
+    save_project_to(&course, &media, &mut out).expect("save_project_to");
+    let reopened = open_project(&out.into_inner()).expect("reopen streamed project");
+    assert_eq!(reopened.course, course);
+    assert_eq!(reopened.media, media);
+}
+
+#[test]
 fn precompressed_check_ignores_case_and_folders() {
     assert!(is_precompressed("img/Photo.JPG"));
     assert!(is_precompressed("video/clip.webm"));

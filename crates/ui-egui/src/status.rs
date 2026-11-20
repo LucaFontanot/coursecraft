@@ -262,6 +262,9 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
 
     // Validation issues popup window
     if editor.ui.show_validation_window {
+        if editor.ui.audit_dirty {
+            editor.refresh_audit_now();
+        }
         let mut path_to_navigate = None;
         let mut audit_to_navigate = None;
         let mut suggest_alt = false;

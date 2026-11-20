@@ -125,7 +125,11 @@ pub fn show_media_library(editor: &mut Editor, ctx: &Context) {
 
 fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
     let p = palette(ui.ctx());
-    let references = media_references(&editor.session.course);
+    editor
+        .ui
+        .media_refs_cache
+        .ensure(editor.session.revision, &editor.session.course);
+    let references = std::sync::Arc::clone(&editor.ui.media_refs_cache.references);
     let mut action = None;
 
     ui.horizontal(|ui| {

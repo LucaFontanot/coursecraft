@@ -2,7 +2,7 @@
 
 use coursecraft_course::Course;
 use coursecraft_engine::Session;
-use coursecraft_format::{FolderRecord, open_project, save_project};
+use coursecraft_format::{FolderRecord, open_project};
 use std::path::{Path, PathBuf};
 
 /// A media entry stored alongside the course.
@@ -123,9 +123,18 @@ pub fn save_to(path: &Path, course: &Course, media: &[MediaItem]) -> Result<(), 
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let bytes = save_project(course, media).map_err(|e| format!("Save failed: {e}"))?;
-    write_atomic_with(path, &bytes, Some(&verify_ccraft_file), &Hooks::default())
-        .map_err(|e| format!("Failed to write file: {e}"))?;
+    write_atomic_stream_with(
+        path,
+        &mut |file| {
+            let mut buf = std::io::BufWriter::new(file);
+            coursecraft_format::save_project_to(course, media, &mut buf)
+                .map_err(|e| std::io::Error::other(format!("Save failed: {e}")))?;
+            std::io::Write::flush(&mut buf)
+        },
+        Some(&verify_ccraft_file),
+        &Hooks::default(),
+    )
+    .map_err(|e| format!("Failed to write file: {e}"))?;
     remove_stale_temps(path);
     Ok(())
 }
@@ -276,9 +285,23 @@ pub fn write_atomic_with(
     verify: Option<&Verify<'_>>,
     hooks: &Hooks<'_>,
 ) -> std::io::Result<()> {
+    write_atomic_stream_with(
+        path,
+        &mut |file| std::io::Write::write_all(file, bytes),
+        verify,
+        hooks,
+    )
+}
+
+fn write_atomic_stream_with(
+    path: &Path,
+    write_file: &mut dyn FnMut(&mut std::fs::File) -> std::io::Result<()>,
+    verify: Option<&Verify<'_>>,
+    hooks: &Hooks<'_>,
+) -> std::io::Result<()> {
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let tmp = path.with_file_name(format!("{file_name}.tmp-{}", std::process::id()));
-    let result = write_and_swap(path, &tmp, bytes, verify, hooks);
+    let result = write_and_swap(path, &tmp, write_file, verify, hooks);
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -288,13 +311,13 @@ pub fn write_atomic_with(
 fn write_and_swap(
     path: &Path,
     tmp: &Path,
-    bytes: &[u8],
+    write_file: &mut dyn FnMut(&mut std::fs::File) -> std::io::Result<()>,
     verify: Option<&Verify<'_>>,
     hooks: &Hooks<'_>,
 ) -> std::io::Result<()> {
     with_retries(hooks.retry_delay, || {
         let mut file = std::fs::File::create(tmp)?;
-        std::io::Write::write_all(&mut file, bytes)?;
+        write_file(&mut file)?;
         file.sync_all()
     })?;
     (hooks.after_write)(tmp)?;
