@@ -89,6 +89,14 @@ mod bughunt_m24_rename;
 #[cfg(test)]
 mod bughunt_m24_stress;
 #[cfg(test)]
+mod bughunt_m24b_canvas;
+#[cfg(test)]
+mod bughunt_m24b_format;
+#[cfg(test)]
+mod bughunt_m24b_misc;
+#[cfg(test)]
+mod bughunt_m24b_trigger;
+#[cfg(test)]
 mod bughunt_menus;
 #[cfg(test)]
 mod bughunt_stress;
