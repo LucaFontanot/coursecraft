@@ -81,6 +81,8 @@ pub enum LtiError {
     BadRequest(String),
     #[error("invalid token: {0}")]
     InvalidToken(String),
+    #[error("unknown key id: {0}")]
+    UnknownKeyId(String),
     #[error("key: {0}")]
     Key(String),
     #[error("json: {0}")]
@@ -284,7 +286,7 @@ fn find_jwk<'a>(jwks: &'a Value, kid: Option<&str>) -> Result<&'a Value, LtiErro
                 key.get("kid").and_then(Value::as_str) == Some(kid)
                     && key.get("kty").and_then(Value::as_str) == Some("RSA")
             })
-            .ok_or_else(|| invalid(format!("no RSA key with kid {kid:?}")));
+            .ok_or_else(|| LtiError::UnknownKeyId(kid.into()));
     }
     let mut rsa = keys
         .iter()
@@ -319,6 +321,13 @@ fn check_claims(
     }
     if !audience_has(claims.get("aud"), &cfg.client_id) {
         return Err(invalid("audience does not contain the client_id"));
+    }
+    let multiple_audiences =
+        matches!(claims.get("aud"), Some(Value::Array(values)) if values.len() > 1);
+    if multiple_audiences
+        && claims.get("azp").and_then(Value::as_str) != Some(cfg.client_id.as_str())
+    {
+        return Err(invalid("azp does not match client_id"));
     }
     let exp = claims
         .get("exp")

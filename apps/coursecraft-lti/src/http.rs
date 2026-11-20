@@ -248,6 +248,14 @@ impl Response {
         ));
     }
 
+    /// Set the short-lived OIDC state binding cookie.
+    pub fn set_state_cookie(&mut self, value: &str) {
+        self.headers.push((
+            "Set-Cookie".into(),
+            format!("cc_lti_state={value}; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=None"),
+        ));
+    }
+
     fn text_body(status: u16, body: Vec<u8>) -> Self {
         Self {
             status,

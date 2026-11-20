@@ -155,3 +155,26 @@ fn report_json_uses_a_null_percentage_for_progress_only() {
         r#"{"percent":null,"status":"completed"}"#
     );
 }
+
+#[test]
+fn a_sent_pass_cannot_be_overwritten_by_a_later_fail_or_lower_score() {
+    let mut reporter = LtiReporter::new();
+    reporter.record(&[score(85, CompletionStatus::Passed)]);
+    assert!(reporter.take_pending().is_some());
+    reporter.mark_sent();
+
+    reporter.record(&[score(40, CompletionStatus::Failed)]);
+    assert_eq!(reporter.take_pending(), None);
+
+    reporter.record(&[score(70, CompletionStatus::Passed)]);
+    assert_eq!(reporter.take_pending(), None);
+
+    reporter.record(&[score(95, CompletionStatus::Passed)]);
+    assert_eq!(
+        reporter.take_pending(),
+        Some(ScoreReport {
+            percent: Some(95),
+            status: "passed",
+        })
+    );
+}

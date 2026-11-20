@@ -30,8 +30,10 @@ const MAX_LOGINS: usize = 10_000;
 const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_SESSIONS: usize = 10_000;
 const JWKS_TTL: Duration = Duration::from_secs(60 * 60);
+const JWKS_REFRESH_COOLDOWN: Duration = Duration::from_secs(60);
 const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(60);
 const SESSION_COOKIE: &str = "cc_lti";
+const STATE_COOKIE: &str = "cc_lti_state";
 const SCORE_SCOPE: &str = "https://purl.imsglobal.org/spec/lti-ags/scope/score";
 const SCORE_CONTENT_TYPE: &str = "application/vnd.ims.lis.v1.score+json";
 const MAX_PLATFORM_BODY: u64 = 2 * 1024 * 1024;
@@ -52,13 +54,19 @@ struct Session {
     token: Option<CachedToken>,
 }
 
+struct JwksCache {
+    jwks: String,
+    expires: Instant,
+    last_kid_refresh: Option<Instant>,
+}
+
 /// State shared by every connection thread.
 pub struct Shared {
     cfg: ToolConfig,
     course_dir: PathBuf,
     logins: Mutex<BTreeMap<String, PendingLogin>>,
     sessions: Mutex<BTreeMap<String, Session>>,
-    jwks: Mutex<Option<(String, Instant)>>,
+    jwks: Mutex<Option<JwksCache>>,
 }
 
 /// A bound LTI server. Call [`Server::run`] to accept connections.
@@ -230,28 +238,35 @@ fn login(shared: &Shared, request: &Request) -> Response {
         Ok(token) => token,
         Err(error) => return Response::text(500, error.to_string()),
     };
+    let url = match login_redirect(&shared.cfg, &login_request, &state, &nonce) {
+        Ok(url) => url,
+        Err(error) => return Response::text(400, error.to_string()),
+    };
     let now = Instant::now();
     {
         let mut logins = lock(&shared.logins);
         logins.retain(|_, pending| pending.expires > now);
         while logins.len() >= MAX_LOGINS {
-            let Some(first) = logins.keys().next().cloned() else {
+            let Some(oldest) = logins
+                .iter()
+                .min_by_key(|(_, pending)| pending.expires)
+                .map(|(key, _)| key.clone())
+            else {
                 break;
             };
-            logins.remove(&first);
+            logins.remove(&oldest);
         }
         logins.insert(
             state.clone(),
             PendingLogin {
-                nonce: nonce.clone(),
+                nonce,
                 expires: now + LOGIN_TTL,
             },
         );
     }
-    match login_redirect(&shared.cfg, &login_request, &state, &nonce) {
-        Ok(url) => Response::redirect(&url),
-        Err(error) => Response::text(400, error.to_string()),
-    }
+    let mut response = Response::redirect(&url);
+    response.set_state_cookie(&state_cookie_value(&state));
+    response
 }
 
 fn launch(shared: &Shared, request: &Request) -> Response {
@@ -259,6 +274,13 @@ fn launch(shared: &Shared, request: &Request) -> Response {
     let (Some(state), Some(id_token)) = (form.get("state"), form.get("id_token")) else {
         return Response::text(400, "state and id_token are required");
     };
+    let expected_cookie = state_cookie_value(state);
+    let Some(cookie) = request.cookie(STATE_COOKIE) else {
+        return Response::text(400, "missing state cookie");
+    };
+    if !constant_time_eq(cookie.as_bytes(), expected_cookie.as_bytes()) {
+        return Response::text(400, "invalid state cookie");
+    }
     let now = Instant::now();
     let pending = {
         let mut logins = lock(&shared.logins);
@@ -283,6 +305,20 @@ fn launch(shared: &Shared, request: &Request) -> Response {
         now_unix,
     ) {
         Ok(launch) => launch,
+        Err(LtiError::UnknownKeyId(kid)) => match refresh_platform_jwks(shared) {
+            Ok(Some(fresh_jwks)) => match validate_id_token(
+                &shared.cfg,
+                id_token,
+                &fresh_jwks,
+                &pending.nonce,
+                now_unix,
+            ) {
+                Ok(launch) => launch,
+                Err(error) => return Response::text(400, error.to_string()),
+            },
+            Ok(None) => return Response::text(400, LtiError::UnknownKeyId(kid).to_string()),
+            Err(message) => return Response::text(502, message),
+        },
         Err(error) => return Response::text(400, error.to_string()),
     };
     let id = match random_token() {
@@ -308,15 +344,34 @@ fn launch(shared: &Shared, request: &Request) -> Response {
             },
         );
     }
-    let mut response = Response::redirect(&launch_location(&request.path, learner_name.as_deref()));
+    let mut response = Response::redirect(&launch_location(
+        &shared.cfg.tool_url,
+        learner_name.as_deref(),
+    ));
     response.set_session_cookie(&id);
     response
 }
 
-fn launch_location(path: &str, name: Option<&str>) -> String {
-    let base = match path.strip_suffix("/lti/launch") {
-        Some(prefix) => format!("{prefix}/course/index.html"),
-        None => "/course/index.html".into(),
+fn state_cookie_value(state: &str) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, state.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest.as_ref())
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn launch_location(tool_url: &str, name: Option<&str>) -> String {
+    let after_scheme = tool_url
+        .split_once("://")
+        .map_or(tool_url, |(_, rest)| rest);
+    let raw_path = after_scheme.split_once('/').map_or("", |(_, path)| path);
+    let path = raw_path.split(['?', '#']).next().unwrap_or("");
+    let prefix = path.trim_matches('/');
+    let base = if prefix.is_empty() {
+        "/course/index.html".to_string()
+    } else {
+        format!("/{prefix}/course/index.html")
     };
     match name.filter(|name| !name.trim().is_empty()) {
         Some(name) => format!("{base}?name={}", encode_query(name)),
@@ -341,16 +396,44 @@ fn platform_jwks(shared: &Shared) -> Result<String, String> {
     let now = Instant::now();
     {
         let cache = lock(&shared.jwks);
-        if let Some((jwks, expires)) = cache.as_ref()
-            && *expires > now
+        if let Some(entry) = cache.as_ref()
+            && entry.expires > now
         {
-            return Ok(jwks.clone());
+            return Ok(entry.jwks.clone());
         }
     }
     let jwks = http_get(&shared.cfg.jwks_url)?;
+    let now = Instant::now();
     let mut cache = lock(&shared.jwks);
-    *cache = Some((jwks.clone(), now + JWKS_TTL));
+    *cache = Some(JwksCache {
+        jwks: jwks.clone(),
+        expires: now + JWKS_TTL,
+        last_kid_refresh: None,
+    });
     Ok(jwks)
+}
+
+fn refresh_platform_jwks(shared: &Shared) -> Result<Option<String>, String> {
+    let now = Instant::now();
+    {
+        let cache = lock(&shared.jwks);
+        if let Some(entry) = cache.as_ref()
+            && entry
+                .last_kid_refresh
+                .is_some_and(|last| last + JWKS_REFRESH_COOLDOWN > now)
+        {
+            return Ok(None);
+        }
+    }
+    let jwks = http_get(&shared.cfg.jwks_url)?;
+    let now = Instant::now();
+    let mut cache = lock(&shared.jwks);
+    *cache = Some(JwksCache {
+        jwks: jwks.clone(),
+        expires: now + JWKS_TTL,
+        last_kid_refresh: Some(now),
+    });
+    Ok(Some(jwks))
 }
 
 fn course(shared: &Shared, path: &str) -> Response {
@@ -701,6 +784,20 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Shared {
     pub(crate) fn pending_logins(&self) -> usize {
         lock(&self.logins).len()
+    }
+
+    pub(crate) fn insert_pending_login(&self, state: &str, expires: Instant) {
+        lock(&self.logins).insert(
+            state.into(),
+            PendingLogin {
+                nonce: "nonce".into(),
+                expires,
+            },
+        );
+    }
+
+    pub(crate) fn has_pending_login(&self, state: &str) -> bool {
+        lock(&self.logins).contains_key(state)
     }
 
     pub(crate) fn insert_session(&self, launch: Launch) -> String {

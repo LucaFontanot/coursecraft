@@ -2202,3 +2202,72 @@ fn graded_question_still_writes_correct_result() {
         Some("correct")
     );
 }
+
+#[test]
+fn scorm_does_not_overwrite_a_pass_with_a_later_fail_or_lower_score() {
+    let course = showcase_course();
+    let state = PlayerState::default();
+    let mut api = FakeApi::new();
+    let mut bridge = LmsBridge::new();
+    let _ = bridge.start(&mut api, &course);
+
+    let pass_85 = [Effect::Score {
+        raw: 85,
+        max: 100,
+        percent: 85,
+        status: CompletionStatus::Passed,
+    }];
+    let _ = bridge.after_input(&mut api, &course, &state, &pass_85, 100);
+    assert_eq!(
+        api.store.get("cmi.core.lesson_status").map(String::as_str),
+        Some("passed")
+    );
+    assert_eq!(
+        api.store.get("cmi.core.score.raw").map(String::as_str),
+        Some("85")
+    );
+
+    let fail_40 = [Effect::Score {
+        raw: 40,
+        max: 100,
+        percent: 40,
+        status: CompletionStatus::Failed,
+    }];
+    let _ = bridge.after_input(&mut api, &course, &state, &fail_40, 200);
+    assert_eq!(
+        api.store.get("cmi.core.lesson_status").map(String::as_str),
+        Some("passed")
+    );
+    assert_eq!(
+        api.store.get("cmi.core.score.raw").map(String::as_str),
+        Some("85")
+    );
+
+    let pass_70 = [Effect::Score {
+        raw: 70,
+        max: 100,
+        percent: 70,
+        status: CompletionStatus::Passed,
+    }];
+    let _ = bridge.after_input(&mut api, &course, &state, &pass_70, 300);
+    assert_eq!(
+        api.store.get("cmi.core.score.raw").map(String::as_str),
+        Some("85")
+    );
+
+    let pass_95 = [Effect::Score {
+        raw: 95,
+        max: 100,
+        percent: 95,
+        status: CompletionStatus::Passed,
+    }];
+    let _ = bridge.after_input(&mut api, &course, &state, &pass_95, 400);
+    assert_eq!(
+        api.store.get("cmi.core.lesson_status").map(String::as_str),
+        Some("passed")
+    );
+    assert_eq!(
+        api.store.get("cmi.core.score.raw").map(String::as_str),
+        Some("95")
+    );
+}

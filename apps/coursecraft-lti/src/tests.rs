@@ -214,7 +214,7 @@ fn read_response(stream: &mut TcpStream) -> (u16, BTreeMap<String, String>, Vec<
     (status, headers, body)
 }
 
-fn login(server: &TestServer) -> (String, String) {
+fn login_with_cookie(server: &TestServer) -> (String, String, String, String) {
     let path = format!(
         "/lti/login?iss={}&login_hint=user-1&target_link_uri={}&client_id={}",
         encode(ISSUER),
@@ -231,6 +231,13 @@ fn login(server: &TestServer) -> (String, String) {
     let params = parse_form(query);
     let state = params.get("state").expect("state").clone();
     let nonce = params.get(NONCE_FIELD).expect("nonce").clone();
+    let set_cookie = headers.get("set-cookie").cloned().unwrap_or_default();
+    let cookie_pair = set_cookie.split(';').next().unwrap_or_default().to_string();
+    (state, nonce, cookie_pair, set_cookie)
+}
+
+fn login(server: &TestServer) -> (String, String) {
+    let (state, nonce, _, _) = login_with_cookie(server);
     (state, nonce)
 }
 
@@ -335,14 +342,17 @@ fn launch_with_platform_token_sets_a_cookie() {
         ),
         temp_course_dir(),
     );
-    let (state, nonce) = login(&server);
+    let (state, nonce, state_cookie, _) = login_with_cookie(&server);
     let token = platform_token(&nonce);
     let body = format!("state={}&id_token={}", encode(&state), encode(&token));
     let (status, headers, _) = request(
         server.addr,
         "POST",
         "/lti/launch",
-        &[("Content-Type", "application/x-www-form-urlencoded")],
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Cookie", &state_cookie),
+        ],
         &body,
     );
     assert_eq!(status, 302);
@@ -724,4 +734,248 @@ fn check_prints_the_tool_urls() {
     assert!(text.contains("https://tool.example/lti/launch"));
     assert!(text.contains("https://tool.example/.well-known/jwks.json"));
     assert!(text.contains("tool-key"));
+}
+
+#[test]
+fn launch_redirect_keeps_tool_url_path_prefix() {
+    let jwks = coursecraft_lti::tool_jwks(&base_config()).expect("tool jwks");
+    let platform =
+        start_platform(move |_| Response::file(jwks.clone().into_bytes(), "application/json"));
+    let mut cfg = config_with(
+        &format!("http://{}/jwks", platform.addr),
+        "https://platform.example/token",
+    );
+    cfg.tool_url = "https://tool.example/lti-app".into();
+    let server = start_server(cfg, temp_course_dir());
+    let (state, nonce, state_cookie, _) = login_with_cookie(&server);
+    let token = platform_token(&nonce);
+    let body = format!("state={}&id_token={}", encode(&state), encode(&token));
+    let (status, headers, _) = request(
+        server.addr,
+        "POST",
+        "/lti/launch",
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Cookie", &state_cookie),
+        ],
+        &body,
+    );
+    assert_eq!(status, 302);
+    assert_eq!(
+        headers.get("location").map(String::as_str),
+        Some("/lti-app/course/index.html?name=Ada%20Lovelace")
+    );
+}
+
+#[test]
+fn launch_refetches_jwks_once_on_unknown_kid_and_rate_limits_retries() {
+    let base_jwks: Value =
+        serde_json::from_str(&coursecraft_lti::tool_jwks(&base_config()).expect("tool jwks"))
+            .expect("jwks json");
+    let mut rotated_jwks = base_jwks.clone();
+    rotated_jwks["keys"][0]["kid"] = json!("rotated-key");
+
+    let serve_rotated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let serve_flag = std::sync::Arc::clone(&serve_rotated);
+    let initial_bytes = serde_json::to_vec(&base_jwks).expect("initial jwks");
+    let rotated_bytes = serde_json::to_vec(&rotated_jwks).expect("rotated jwks");
+    let platform = start_platform(move |_| {
+        let bytes = if serve_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            rotated_bytes.clone()
+        } else {
+            initial_bytes.clone()
+        };
+        Response::file(bytes, "application/json")
+    });
+    let server = start_server(
+        config_with(
+            &format!("http://{}/jwks", platform.addr),
+            "https://platform.example/token",
+        ),
+        temp_course_dir(),
+    );
+
+    // First launch caches "tool-key".
+    let (state, nonce, state_cookie, _) = login_with_cookie(&server);
+    let body = format!(
+        "state={}&id_token={}",
+        encode(&state),
+        encode(&platform_token(&nonce))
+    );
+    let (status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/launch",
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Cookie", &state_cookie),
+        ],
+        &body,
+    );
+    assert_eq!(status, 302);
+    assert_eq!(platform_requests(&platform).len(), 1);
+
+    // Platform rotates its key; launch with "rotated-key" triggers one JWKS refetch.
+    serve_rotated.store(true, std::sync::atomic::Ordering::SeqCst);
+    let (state, nonce, state_cookie, _) = login_with_cookie(&server);
+    let header = json!({"alg": "RS256", "typ": "JWT", "kid": "rotated-key"});
+    let now = unix_now();
+    let claims = json!({
+        "iss": ISSUER,
+        "aud": CLIENT_ID,
+        "sub": "user-1",
+        "exp": now + 600,
+        "iat": now - 10,
+        "nonce": nonce,
+        "https://purl.imsglobal.org/spec/lti/claim/message_type": "LtiResourceLinkRequest",
+        "https://purl.imsglobal.org/spec/lti/claim/version": "1.3.0",
+        "https://purl.imsglobal.org/spec/lti/claim/deployment_id": DEPLOYMENT_ID,
+        "https://purl.imsglobal.org/spec/lti/claim/resource_link": {"id": "link-1"}
+    });
+    let rotated_token = jwt::sign_rs256(TEST_KEY, &header, &claims).expect("sign rotated");
+    let body = format!(
+        "state={}&id_token={}",
+        encode(&state),
+        encode(&rotated_token)
+    );
+    let (status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/launch",
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Cookie", &state_cookie),
+        ],
+        &body,
+    );
+    assert_eq!(status, 302);
+    assert_eq!(platform_requests(&platform).len(), 2);
+
+    // Another unknown kid within 60 s is rate-limited and does not refetch JWKS.
+    let (state, nonce, state_cookie, _) = login_with_cookie(&server);
+    let header = json!({"alg": "RS256", "typ": "JWT", "kid": "missing-key"});
+    let mut claims = claims;
+    claims["nonce"] = json!(nonce);
+    let missing_token = jwt::sign_rs256(TEST_KEY, &header, &claims).expect("sign missing");
+    let body = format!(
+        "state={}&id_token={}",
+        encode(&state),
+        encode(&missing_token)
+    );
+    let (status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/launch",
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Cookie", &state_cookie),
+        ],
+        &body,
+    );
+    assert_eq!(status, 400);
+    assert_eq!(platform_requests(&platform).len(), 2);
+}
+
+#[test]
+fn login_sets_state_cookie_and_launch_requires_it() {
+    let jwks = coursecraft_lti::tool_jwks(&base_config()).expect("tool jwks");
+    let platform =
+        start_platform(move |_| Response::file(jwks.clone().into_bytes(), "application/json"));
+    let server = start_server(
+        config_with(
+            &format!("http://{}/jwks", platform.addr),
+            "https://platform.example/token",
+        ),
+        temp_course_dir(),
+    );
+    let (state, nonce, state_cookie, set_cookie) = login_with_cookie(&server);
+    assert!(set_cookie.contains("cc_lti_state="), "{set_cookie}");
+    assert!(set_cookie.contains("Max-Age=600"), "{set_cookie}");
+    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+    assert!(set_cookie.contains("Secure"), "{set_cookie}");
+    assert!(set_cookie.contains("SameSite=None"), "{set_cookie}");
+
+    let token = platform_token(&nonce);
+    let body = format!("state={}&id_token={}", encode(&state), encode(&token));
+    let (status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/launch",
+        &[("Content-Type", "application/x-www-form-urlencoded")],
+        &body,
+    );
+    assert_eq!(status, 400);
+
+    let (status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/launch",
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Cookie", "cc_lti_state=wrong-hash"),
+        ],
+        &body,
+    );
+    assert_eq!(status, 400);
+
+    // The legitimate browser still has its pending login intact.
+    let (status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/launch",
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Cookie", &state_cookie),
+        ],
+        &body,
+    );
+    assert_eq!(status, 302);
+}
+
+#[test]
+fn invalid_login_does_not_insert_into_login_table() {
+    let server = start_server(
+        config_with(
+            "https://platform.example/jwks",
+            "https://platform.example/token",
+        ),
+        temp_course_dir(),
+    );
+    let path = format!(
+        "/lti/login?iss={}&login_hint=user-1&target_link_uri={}",
+        encode("https://wrong-issuer.example"),
+        encode("https://tool.example/lti/launch"),
+    );
+    let (status, _, _) = request(server.addr, "GET", &path, &[], "");
+    assert_eq!(status, 400);
+    assert_eq!(server.shared.pending_logins(), 0);
+}
+
+#[test]
+fn login_table_evicts_entry_with_oldest_expires_when_full() {
+    let server = start_server(
+        config_with(
+            "https://platform.example/jwks",
+            "https://platform.example/token",
+        ),
+        temp_course_dir(),
+    );
+    let now = std::time::Instant::now();
+    // "z-oldest" is lexicographically last, so key-order eviction would keep it,
+    // but it has the oldest expires and must be evicted first.
+    server
+        .shared
+        .insert_pending_login("z-oldest", now + std::time::Duration::from_secs(30));
+    for i in 0..9_999 {
+        server.shared.insert_pending_login(
+            &format!("a-newer-{i:04}"),
+            now + std::time::Duration::from_secs(300),
+        );
+    }
+    assert_eq!(server.shared.pending_logins(), 10_000);
+
+    let _ = login_with_cookie(&server);
+    assert_eq!(server.shared.pending_logins(), 10_000);
+    assert!(!server.shared.has_pending_login("z-oldest"));
+    assert!(server.shared.has_pending_login("a-newer-0000"));
 }
