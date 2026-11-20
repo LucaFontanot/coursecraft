@@ -133,7 +133,6 @@ fn request_without_newline_is_abandoned_within_the_read_timeout() {
 }
 
 #[test]
-#[ignore = "BUG (low): one stalled connection blocks every other preview request for about 5 s (single-threaded accept loop)"]
 fn stalled_client_does_not_block_other_requests() {
     let server = PreviewServer::start_from_zip_bytes(&small_zip()).expect("start");
     let port = port_of(&server);
@@ -174,7 +173,6 @@ fn zip_with_leading_slash_entry_is_served_at_root() {
 }
 
 #[test]
-#[ignore = "BUG (low): a zip entry named ./index.html is not served at the root"]
 fn zip_with_dot_slash_entry_is_not_served_at_root() {
     // Entries written as "./index.html" are a common zip-tool quirk. Serving them
     // would be the friendly behaviour; the server currently answers 404.

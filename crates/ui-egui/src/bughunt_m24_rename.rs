@@ -163,7 +163,6 @@ fn rename_then_click_another_slide_commits_to_the_renamed_slide() {
 }
 
 #[test]
-#[ignore = "BUG: deleting the slide mid-rename leaves the rename open for a missing slide"]
 fn rename_then_delete_the_slide_leaves_no_rename_open() {
     let mut h = TestHarness::new(hello());
     h.idle_frame();
@@ -267,7 +266,6 @@ fn timeline_duration_seconds_undo_restores_previous_value() {
 /// The Publish button stores its standard with `view.set`. Check whether that
 /// adds a visible undo step (a Cmd+Z that changes nothing the author sees).
 #[test]
-#[ignore = "BUG: pressing Publish with a new standard adds an undo step (view.set last_publish)"]
 fn publish_remembered_standard_is_not_an_undo_step() {
     let mut h = TestHarness::new(hello());
     h.editor.set_publish_available(true);

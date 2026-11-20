@@ -1921,7 +1921,7 @@ fn test_cli_publish_missing_player_mentions_build_player() {
             standard: StandardArg::Scorm12,
         },
     });
-    if !Path::new("target/player-dist").is_dir() {
+    if !crate::is_valid_player_dir(Path::new("target/player-dist")) {
         let err = res.expect_err("publish without player-dist should fail");
         assert!(
             err.contains("cargo xtask build-player"),
@@ -1930,4 +1930,23 @@ fn test_cli_publish_missing_player_mentions_build_player() {
     } else {
         assert!(res.is_ok());
     }
+}
+
+#[test]
+fn test_resolve_player_dir_ignores_incomplete_player_dist() {
+    let scratch = scratch_dir("test-resolve-player-incomplete");
+    let broken = scratch.join("target/player-dist");
+    std::fs::create_dir_all(&broken).expect("mkdir");
+    std::fs::write(broken.join("course.json"), "{}").expect("write course.json");
+
+    let err = crate::resolve_player_dir_in(None, &scratch, None)
+        .expect_err("incomplete target/player-dist must be skipped");
+    assert!(
+        err.contains("cargo xtask build-player"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        err.contains("--player"),
+        "error should mention --player: {err}"
+    );
 }

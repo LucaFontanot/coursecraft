@@ -3227,6 +3227,29 @@ impl Editor {
                 self.cancel_crop();
             }
         }
+        if self
+            .ui
+            .slide_rename
+            .as_ref()
+            .is_some_and(|rename| self.session.course.slide(&rename.scene).is_none())
+        {
+            self.ui.slide_rename = None;
+        }
+        if self
+            .ui
+            .timeline
+            .object_rename
+            .as_ref()
+            .is_some_and(|rename| {
+                self.session
+                    .course
+                    .slide(&rename.slide)
+                    .and_then(|slide| slide.object(&rename.object))
+                    .is_none()
+            })
+        {
+            self.ui.timeline.object_rename = None;
+        }
     }
 
     /// Run course validation (schema and trigger checks) now, through the engine.

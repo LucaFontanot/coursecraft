@@ -5427,7 +5427,7 @@ fn check_guide_pos(cmd: &'static str, at: f32) -> Result<f32> {
 fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "view.set";
     let was_valid = s.course.is_playable();
-    let before = s.course.editor.clone();
+    let mut before = s.course.editor.clone();
     if let Some(v) = opt::<bool>(C, p, "show_rulers")? {
         s.course.editor.show_rulers = v;
     }
@@ -5443,6 +5443,9 @@ fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(v) = opt::<coursecraft_course::PublishSettings>(C, p, "last_publish")? {
         s.course.editor.last_publish = Some(v);
     }
+    // Remembering the last publish standard is not an author edit; skip undo
+    // when nothing else in `editor` changed.
+    before.last_publish = s.course.editor.last_publish.clone();
     if s.course.editor == before {
         s.skip_undo = true;
     }

@@ -5,11 +5,21 @@ use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use coursecraft_pptx::zip::ZipArchive;
+
+const MAX_CONCURRENT_CONNECTIONS: usize = 16;
+
+struct ConnGuard(Arc<AtomicUsize>);
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// A background HTTP server serving the files of one published zip from memory.
 ///
@@ -47,6 +57,7 @@ impl PreviewServer {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_bg = Arc::clone(&stop);
         let files = Arc::new(files);
+        let active = Arc::new(AtomicUsize::new(0));
 
         let thread = std::thread::spawn(move || {
             while !stop_bg.load(Ordering::SeqCst) {
@@ -55,7 +66,21 @@ impl PreviewServer {
                         if stop_bg.load(Ordering::SeqCst) {
                             break;
                         }
-                        handle_connection(stream, &files);
+                        if active
+                            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                                (n < MAX_CONCURRENT_CONNECTIONS).then_some(n + 1)
+                            })
+                            .is_ok()
+                        {
+                            let files = Arc::clone(&files);
+                            let guard = ConnGuard(Arc::clone(&active));
+                            let _ = std::thread::Builder::new()
+                                .name("preview-conn".into())
+                                .spawn(move || {
+                                    let _guard = guard;
+                                    handle_connection(stream, &files);
+                                });
+                        }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(_) => break,
@@ -121,6 +146,26 @@ pub fn open_url_in_browser(url: &str) -> Result<(), String> {
     }
 }
 
+fn normalize_zip_entry_name(raw: &str) -> Option<String> {
+    if raw.ends_with('/') || raw.ends_with('\\') {
+        return None;
+    }
+    let mut s = raw;
+    loop {
+        if let Some(rest) = s.strip_prefix('/') {
+            s = rest;
+        } else if let Some(rest) = s.strip_prefix("./") {
+            s = rest;
+        } else {
+            break;
+        }
+    }
+    if s.is_empty() || s.contains("..") || s.contains('\\') || s.contains('\0') {
+        return None;
+    }
+    Some(s.to_string())
+}
+
 fn read_zip_entries(zip_bytes: &[u8]) -> Result<HashMap<String, Vec<u8>>, String> {
     let mut archive = ZipArchive::new(Cursor::new(zip_bytes))
         .map_err(|e| format!("Couldn't open the published zip: {e}"))?;
@@ -132,11 +177,12 @@ fn read_zip_entries(zip_bytes: &[u8]) -> Result<HashMap<String, Vec<u8>>, String
         if entry.is_dir() {
             continue;
         }
-        let name = entry
+        let raw_name = entry
             .name()
-            .map_err(|e| format!("Couldn't read the published zip: {e}"))?
-            .trim_start_matches('/')
-            .to_string();
+            .map_err(|e| format!("Couldn't read the published zip: {e}"))?;
+        let Some(name) = normalize_zip_entry_name(&raw_name) else {
+            continue;
+        };
         let mut buf = Vec::new();
         entry
             .read_to_end(&mut buf)

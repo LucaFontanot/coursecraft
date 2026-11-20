@@ -1136,17 +1136,36 @@ fn collect_web_folder_files(media_dir: &Path, path: &str) -> Option<Vec<(String,
     Some(out)
 }
 
+fn is_valid_player_dir(dir: &Path) -> bool {
+    if !dir.is_dir() || !dir.join("index.html").is_file() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("wasm")
+    })
+}
+
 fn resolve_player_dir(player: Option<PathBuf>) -> Res<PathBuf> {
+    resolve_player_dir_in(
+        player,
+        Path::new("."),
+        std::env::current_exe().ok().as_deref(),
+    )
+}
+
+fn resolve_player_dir_in(player: Option<PathBuf>, cwd: &Path, exe: Option<&Path>) -> Res<PathBuf> {
     if let Some(p) = player {
         return Ok(p);
     }
-    let cwd_candidate = PathBuf::from("target/player-dist");
-    if cwd_candidate.is_dir() {
+    let cwd_candidate = cwd.join("target/player-dist");
+    if is_valid_player_dir(&cwd_candidate) {
         return Ok(cwd_candidate);
     }
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(exe_dir) = exe.parent()
-    {
+    if let Some(exe_dir) = exe.and_then(Path::parent) {
         let candidates = [
             exe_dir.join("target/player-dist"),
             exe_dir.join("player-dist"),
@@ -1161,7 +1180,7 @@ fn resolve_player_dir(player: Option<PathBuf>) -> Res<PathBuf> {
                 .unwrap_or_default(),
         ];
         for candidate in candidates {
-            if !candidate.as_os_str().is_empty() && candidate.is_dir() {
+            if !candidate.as_os_str().is_empty() && is_valid_player_dir(&candidate) {
                 return Ok(candidate);
             }
         }
