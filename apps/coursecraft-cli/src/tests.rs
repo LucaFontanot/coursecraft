@@ -12,7 +12,7 @@ use coursecraft_logic::{Effect, Input, Player};
 use coursecraft_pptx::zip;
 use coursecraft_render::{MediaFetch, MediaSource, RenderMode, RenderOptions, render_slide_rgba};
 
-use crate::{Cli, Cmd, StandardArg, run};
+use crate::{Cli, Cmd, StandardArg, run, run_simulate};
 
 const HELLO_JSON: &str = include_str!("../../../examples/hello-course/course.json");
 const SHOWCASE_JSON: &str = include_str!("../../../examples/showcase/course.json");
@@ -1987,18 +1987,22 @@ fn simulate_strict_click_on_an_object_not_on_screen_fails() {
         "test-cli-strict-hidden",
         r#"[{"input": "start"}, {"input": "click", "object": "about-panel"}]"#,
     );
-    let code = run(Cli {
-        cmd: Cmd::Simulate {
-            course: course_path,
-            inputs: inputs_path,
-            seed: 0,
-            strict: true,
-        },
-    })
-    .expect("strict simulate");
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code = run_simulate(&course_path, &inputs_path, 0, true, &mut out, &mut err)
+        .expect("strict simulate");
     assert_eq!(
         code,
         ExitCode::FAILURE,
         "a warning in --strict exits non-zero"
+    );
+    let stderr = String::from_utf8(err).expect("utf8 stderr");
+    assert!(
+        stderr.starts_with("simulate --strict: 1 runtime warning(s); first: "),
+        "expected plain-text summary on stderr, got: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("about-panel"),
+        "expected first warning message in stderr, got: {stderr:?}"
     );
 }

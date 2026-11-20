@@ -25,7 +25,6 @@ fn hover_states(h: &TestHarness) -> usize {
 }
 
 #[test]
-#[ignore = "BUG: an extra click where a + state button used to be adds a second, unrelated state (selected, visited)"]
 fn plus_hover_clicked_twice_adds_one_state_and_one_undo_step() {
     let mut h = TestHarness::new_with_size(hello(), (1280.0, 1400.0));
     h.editor.selection.slide = "s-intro".into();

@@ -201,8 +201,10 @@ pub fn show_states_section(
             ("visited", "+ Visited"),
             ("disabled", "+ Disabled"),
         ] {
-            if !states_copy.iter().any(|s| s.name == state_name)
-                && ui.small_button(button_label).clicked()
+            let already_added = states_copy.iter().any(|s| s.name == state_name);
+            if ui
+                .add_enabled(!already_added, egui::Button::new(button_label).small())
+                .clicked()
             {
                 push_add_state(actions, &slide_id, &obj_id_str, &obj_kind, state_name);
             }

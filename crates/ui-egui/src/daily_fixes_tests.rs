@@ -73,8 +73,23 @@ fn states_panel_shortcut_buttons_add_and_hide() {
     assert!(
         harness
             .find_text_in("+ Hover", harness.right_panel_rect())
-            .is_none(),
-        "+ Hover should be hidden once the object has a hover state"
+            .is_some(),
+        "+ Hover should stay in place (disabled) once the object has a hover state"
+    );
+    harness.click_at(hover_pos);
+    harness.idle_frame();
+    let obj_after = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .and_then(|s| s.object("btn-start"))
+        .map(|(o, _)| o)
+        .expect("btn-start");
+    assert_eq!(
+        obj_after.states.len(),
+        1,
+        "clicking disabled + Hover again should not add another state"
     );
 }
 

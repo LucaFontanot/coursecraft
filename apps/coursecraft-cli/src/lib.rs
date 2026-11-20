@@ -706,6 +706,49 @@ fn json_line<T: serde::Serialize>(v: &T) -> Res<()> {
     Ok(())
 }
 
+pub(crate) fn run_simulate(
+    course: &Path,
+    inputs: &Path,
+    seed: u32,
+    strict: bool,
+    out: &mut impl std::io::Write,
+    err: &mut impl std::io::Write,
+) -> Res<ExitCode> {
+    let c = load(course)?;
+    let inputs: Vec<Input> =
+        serde_json::from_str(&read(inputs)?).map_err(|e| format!("inputs: {e}"))?;
+    let mut p = Player::with_draw_seed(&c, seed).map_err(|errs| {
+        errs.iter()
+            .map(|i| format!("{}: {}", i.path, i.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    let mut warning_count: usize = 0;
+    let mut first_warning: Option<String> = None;
+    for input in &inputs {
+        for effect in p.handle(input) {
+            if let Effect::Warning { ref message } = effect {
+                warning_count += 1;
+                if first_warning.is_none() {
+                    first_warning = Some(message.clone());
+                }
+            }
+            let line = serde_json::to_string(&effect).map_err(|e| e.to_string())?;
+            writeln!(out, "{line}").map_err(|e| e.to_string())?;
+        }
+    }
+    if strict && let Some(first) = first_warning {
+        writeln!(
+            err,
+            "simulate --strict: {warning_count} runtime warning(s); first: {first}"
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(ExitCode::FAILURE)
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
+}
+
 fn collect_player_files(dir: &Path) -> Res<Vec<PackageFile>> {
     if !dir.is_dir() {
         return Err(format!("player directory not found: {}", dir.display()));
@@ -1799,29 +1842,9 @@ fn run(cli: Cli) -> Res<ExitCode> {
             seed,
             strict,
         } => {
-            let c = load(&course)?;
-            let inputs: Vec<Input> =
-                serde_json::from_str(&read(&inputs)?).map_err(|e| format!("inputs: {e}"))?;
-            let mut p = Player::with_draw_seed(&c, seed).map_err(|errs| {
-                errs.iter()
-                    .map(|i| format!("{}: {}", i.path, i.message))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })?;
-            let mut warned = false;
-            for input in &inputs {
-                for effect in p.handle(input) {
-                    if matches!(effect, Effect::Warning { .. }) {
-                        warned = true;
-                    }
-                    json_line(&effect)?;
-                }
-            }
-            Ok(if strict && warned {
-                ExitCode::FAILURE
-            } else {
-                ExitCode::SUCCESS
-            })
+            let mut out = std::io::stdout().lock();
+            let mut err = std::io::stderr().lock();
+            run_simulate(&course, &inputs, seed, strict, &mut out, &mut err)
         }
         Cmd::Run {
             course,

@@ -219,7 +219,6 @@ fn space_drag_while_editing_does_not_move_the_object() {
 }
 
 #[test]
-#[ignore = "BUG: Cmd+B with a caret and no selection bolds the whole text box (apply_style_to_range treats an empty range as the whole text)"]
 fn cmd_b_with_caret_only_does_not_bold_the_existing_text() {
     // Expected: with no selection, Cmd+B changes the typing style only. The existing
     // text keeps its weight. Typing after it is the only thing that should turn bold.
@@ -315,11 +314,11 @@ fn cmd_b_on_an_object_not_being_edited_changes_nothing() {
 }
 
 #[test]
-#[ignore = "BUG (unconfirmed, low confidence): middle-button drag does not pan the canvas in the harness; not yet ruled out as a harness artefact"]
 fn middle_mouse_drag_pans_without_moving_the_object() {
     let mut h = TestHarness::new(hello());
     h.editor.selection.slide = "s-intro".into();
     h.editor.selection.object = Some("btn-start".into());
+    h.editor.ui.zoom = crate::ZoomLevel::Custom(2.0);
     h.idle_frame();
     h.idle_frame();
     let slide_before = h.editor.ui.last_slide_rect.expect("slide rect").min;
@@ -332,7 +331,7 @@ fn middle_mouse_drag_pans_without_moving_the_object() {
         .expect("btn")
         .0
         .frame;
-    let start = h.editor.ui.last_slide_rect.expect("slide rect").center();
+    let start = h.editor.ui.last_slide_rect.expect("slide rect").min + vec2(100.0, 100.0);
     let undo_before = h.editor.session.undo_len();
 
     h.frame(vec![Event::PointerMoved(start)]);

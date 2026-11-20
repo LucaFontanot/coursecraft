@@ -4335,16 +4335,15 @@ fn apply_inline_edit_style_shortcut(
     toggle_italic: bool,
     toggle_underline: bool,
 ) {
-    let (char_range, cursor_pos): ((usize, usize), usize) = if let Some(cr) = cursor_range {
-        if !cr.is_empty() {
-            let sorted = cr.as_sorted_char_range();
-            ((sorted.start.0, sorted.end.0), sorted.start.0)
-        } else {
-            ((0, 0), cr.primary.index.0)
-        }
-    } else {
-        ((0, 0), 0)
+    let Some(cr) = cursor_range.filter(|cr| !cr.is_empty()) else {
+        return;
     };
+    let sorted = cr.as_sorted_char_range();
+    if sorted.start.0 == sorted.end.0 {
+        return;
+    }
+    let char_range = (sorted.start.0, sorted.end.0);
+    let cursor_pos = sorted.start.0;
     let eff = editor
         .session
         .course
@@ -5454,7 +5453,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
                 let delta = ui.input(|i| i.pointer.delta());
                 if delta != egui::Vec2::ZERO && delta.x.is_finite() && delta.y.is_finite() {
-                    ui.scroll_with_delta(delta);
+                    ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
                 }
             } else if space_held {
                 ui.ctx().set_cursor_icon(CursorIcon::Grab);
