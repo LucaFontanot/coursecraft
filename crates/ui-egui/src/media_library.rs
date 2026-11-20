@@ -138,9 +138,11 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
             .slide(&editor.selection.slide)
             .is_some();
 
+    let desktop_file_ops = editor.file_ops_available && !cfg!(target_arch = "wasm32");
+
     ui.horizontal(|ui| {
-        let import = ui.add_enabled(editor.file_ops_available, Button::new("Import…"));
-        let import = if editor.file_ops_available {
+        let import = ui.add_enabled(desktop_file_ops, Button::new("Import…"));
+        let import = if desktop_file_ops {
             import
         } else {
             import.on_disabled_hover_text("Available in the desktop app")
@@ -168,10 +170,10 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
         }
 
         let replace = ui.add_enabled(
-            selected.is_some() && editor.file_ops_available,
+            selected.is_some() && desktop_file_ops,
             Button::new("Replace file…"),
         );
-        let replace = if editor.file_ops_available {
+        let replace = if desktop_file_ops {
             replace
         } else {
             replace.on_disabled_hover_text("Available in the desktop app")

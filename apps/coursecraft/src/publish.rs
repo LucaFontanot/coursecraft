@@ -1,13 +1,16 @@
-//! Publishing from the desktop editor: no egui, so the package logic stays testable.
+//! Publishing from the editor: no egui, so the package logic stays testable.
 
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use coursecraft_course::Course;
+#[cfg(not(target_arch = "wasm32"))]
+use coursecraft_publish::zip_package_to;
 use coursecraft_publish::{
     PackageFile, PackageInput, PackageStandard, PublishError, build_package_standard_with_folders,
-    zip_package_to,
+    zip_package,
 };
 use coursecraft_scorm::Standard;
 use coursecraft_ui_egui::PublishStandard;
@@ -15,6 +18,7 @@ use coursecraft_xapi::Flavor;
 
 /// Everything a background publish needs. It owns the course and media, so a
 /// publish never borrows the live session while the window keeps drawing.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct PublishJob {
     pub course: Course,
     pub media: Vec<(String, Arc<[u8]>)>,
@@ -24,6 +28,7 @@ pub struct PublishJob {
 }
 
 /// The written file and its size in bytes.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishOutcome {
     pub path: PathBuf,
@@ -43,31 +48,33 @@ pub fn package_standard(standard: PublishStandard) -> PackageStandard {
     }
 }
 
-/// Build the package files for a job, resolving media from the in-memory items
-/// exactly like the CLI's `.ccraft` path.
+/// Build the package files for a course and its in-memory media, resolving
+/// media from the in-memory items exactly like the CLI's `.ccraft` path.
 ///
 /// # Errors
 /// Returns a plain sentence naming the object and file when media is missing,
 /// or describing another package problem.
-pub(crate) fn package_files(job: &PublishJob) -> Result<Vec<PackageFile>, String> {
-    let course_json = job
-        .course
+pub(crate) fn package_files_from(
+    course: &Course,
+    media: &[(String, Arc<[u8]>)],
+    standard: PackageStandard,
+    player: &[PackageFile],
+) -> Result<Vec<PackageFile>, String> {
+    let course_json = course
         .to_json()
         .map_err(|e| format!("Couldn't prepare the course for publishing: {e}"))?;
     let mut course_json = course_json;
     // Save writes a trailing newline; publish stays byte-identical to that form.
     course_json.push('\n');
 
-    let media: HashMap<&str, &[u8]> = job
-        .media
+    let media_map: HashMap<&str, &[u8]> = media
         .iter()
         .map(|(name, bytes)| (name.as_str(), bytes.as_ref()))
         .collect();
-    let resolve = |src: &str| media.get(src).map(|bytes| bytes.to_vec());
+    let resolve = |src: &str| media_map.get(src).map(|bytes| bytes.to_vec());
     let folder = |path: &str| {
         let prefix = format!("{path}/");
-        let files: Vec<(String, Vec<u8>)> = job
-            .media
+        let files: Vec<(String, Vec<u8>)> = media
             .iter()
             .filter(|(name, _)| name.starts_with(&prefix))
             .map(|(name, bytes)| (name.clone(), bytes.to_vec()))
@@ -76,18 +83,38 @@ pub(crate) fn package_files(job: &PublishJob) -> Result<Vec<PackageFile>, String
     };
 
     let input = PackageInput {
-        course: &job.course,
+        course,
         course_json: &course_json,
-        player_files: &job.player,
+        player_files: player,
         media: &resolve,
     };
-    build_package_standard_with_folders(&input, job.standard, &folder).map_err(readable_error)
+    build_package_standard_with_folders(&input, standard, &folder).map_err(readable_error)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn package_files(job: &PublishJob) -> Result<Vec<PackageFile>, String> {
+    package_files_from(&job.course, &job.media, job.standard, &job.player)
+}
+
+/// Build a published package zip in memory (used by the web editor).
+///
+/// # Errors
+/// Returns a plain sentence an author can act on.
+pub fn run_publish_bytes(
+    course: &Course,
+    media: &[(String, Arc<[u8]>)],
+    standard: PackageStandard,
+    player: &[PackageFile],
+) -> Result<Vec<u8>, String> {
+    let files = package_files_from(course, media, standard, player)?;
+    zip_package(&files).map_err(|e| format!("Couldn't create the zip file: {e}"))
 }
 
 /// Build the package and write it to the job's output path atomically.
 ///
 /// # Errors
 /// Returns a plain sentence an author can act on.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_publish_job(job: PublishJob) -> Result<PublishOutcome, String> {
     let files = package_files(&job)?;
 
@@ -144,5 +171,41 @@ fn readable_error(error: PublishError) -> String {
             "The path '{src}' used by object {object} can't be included in a published package."
         ),
         other => format!("Couldn't build the package: {other}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coursecraft_engine::Session;
+
+    #[test]
+    fn run_publish_bytes_builds_valid_scorm12_zip_in_memory() {
+        let course = Session::blank("Web Publish Test").course;
+        let player = vec![PackageFile {
+            path: "index.html".to_string(),
+            bytes: b"<!doctype html><html></html>".to_vec(),
+        }];
+        let files = package_files_from(
+            &course,
+            &[],
+            PackageStandard::Scorm(Standard::Scorm12),
+            &player,
+        )
+        .expect("package files succeed");
+        let names: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(names.contains(&"imsmanifest.xml"));
+        assert!(names.contains(&"course.json"));
+        assert!(names.contains(&"index.html"));
+
+        let zip_bytes = run_publish_bytes(
+            &course,
+            &[],
+            PackageStandard::Scorm(Standard::Scorm12),
+            &player,
+        )
+        .expect("in-memory publish succeeds");
+        assert!(zip_bytes.starts_with(b"PK\x03\x04"));
+        assert!(!zip_bytes.is_empty());
     }
 }

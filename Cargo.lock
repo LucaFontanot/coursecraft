@@ -832,6 +832,7 @@ dependencies = [
  "egui",
  "egui-winit",
  "ehttp",
+ "js-sys",
  "rfd",
  "serde",
  "serde_json",

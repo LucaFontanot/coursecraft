@@ -26,13 +26,11 @@ pub mod export;
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod paste_image;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod player_bundle;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prefs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preview_server;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod publish;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod system_fonts;
@@ -206,6 +204,11 @@ struct EditorApp {
     document_tx: std::sync::mpsc::Sender<(String, Vec<u8>)>,
     #[cfg(target_arch = "wasm32")]
     document_rx: std::sync::mpsc::Receiver<(String, Vec<u8>)>,
+    /// Chosen `.ccraft` or `course.json` bytes in the browser.
+    #[cfg(target_arch = "wasm32")]
+    project_open_tx: std::sync::mpsc::Sender<(String, Vec<u8>)>,
+    #[cfg(target_arch = "wasm32")]
+    project_open_rx: std::sync::mpsc::Receiver<(String, Vec<u8>)>,
 }
 
 /// Whether a close request must be intercepted to ask about unsaved changes.
@@ -2896,6 +2899,10 @@ impl eframe::App for EditorApp {
 
         #[cfg(target_arch = "wasm32")]
         {
+            while let Ok((name, bytes)) = self.project_open_rx.try_recv() {
+                self.open_web_project_bytes(&name, &bytes);
+            }
+
             while let Ok((name, bytes)) = self.document_rx.try_recv() {
                 self.apply_document_file(&name, &bytes);
             }
@@ -3152,6 +3159,83 @@ impl eframe::App for EditorApp {
                         self.editor.ui.system_fonts = Some(Vec::new());
                     }
                     EditorRequest::AddSystemFont { .. } => {}
+                    EditorRequest::Open => {
+                        let tx = self.project_open_tx.clone();
+                        let ctx = ui.ctx().clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let file = rfd::AsyncFileDialog::new()
+                                .add_filter(
+                                    "CourseCraft Project (*.ccraft, *.json)",
+                                    &["ccraft", "json"],
+                                )
+                                .pick_file()
+                                .await;
+                            if let Some(file) = file {
+                                let name = file.file_name();
+                                let bytes = file.read().await;
+                                let _ = tx.send((name, bytes));
+                                ctx.request_repaint();
+                            }
+                        });
+                    }
+                    EditorRequest::Save | EditorRequest::SaveAs => {
+                        match coursecraft_format::save_project(
+                            &self.editor.session.course,
+                            &self.editor.media,
+                        ) {
+                            Ok(bytes) => {
+                                let stem = sanitize_filename_stem(
+                                    &self.editor.session.course.title,
+                                    "Untitled",
+                                );
+                                let file_name = format!("{stem}.ccraft");
+                                match web_download_bytes(
+                                    &file_name,
+                                    &bytes,
+                                    "application/octet-stream",
+                                ) {
+                                    Ok(()) => {
+                                        self.editor.set_status(format!("Downloaded {file_name}"))
+                                    }
+                                    Err(err) => self.editor.set_status(format!(
+                                        "Couldn't download {file_name}: {err}"
+                                    )),
+                                }
+                            }
+                            Err(err) => {
+                                self.editor
+                                    .set_status(format!("Couldn't save project: {err}"));
+                            }
+                        }
+                    }
+                    EditorRequest::Publish { standard } => {
+                        self.editor.set_publish_busy();
+                        let pkg_standard = publish::package_standard(standard);
+                        let player = player_bundle::player_files();
+                        match publish::run_publish_bytes(
+                            &self.editor.session.course,
+                            &self.editor.media,
+                            pkg_standard,
+                            &player,
+                        ) {
+                            Ok(bytes) => {
+                                let stem = sanitize_filename_stem(
+                                    &self.editor.session.course.title,
+                                    "course",
+                                );
+                                let file_name = format!("{stem}-{}.zip", standard.file_stem());
+                                match web_download_bytes(&file_name, &bytes, "application/zip") {
+                                    Ok(()) => self
+                                        .editor
+                                        .set_publish_success(file_name, bytes.len() as u64),
+                                    Err(err) => self.editor.set_publish_failure(format!(
+                                        "Couldn't download {file_name}: {err}"
+                                    )),
+                                }
+                            }
+                            Err(err) => self.editor.set_publish_failure(err),
+                        }
+                    }
                     EditorRequest::SaveImage { .. } => {
                         self.editor.set_status("Saving works in the desktop app.");
                     }
@@ -3284,8 +3368,7 @@ fn main() {
         let (course, media) = initial_course_and_media(blank);
         let mut editor = Editor::new(course);
         editor.set_media(media);
-        editor.set_file_ops_available(false);
-        editor.set_publish_available(false);
+        editor.set_publish_available(player_bundle::has_player());
         editor.set_coach_marks_done(false);
         if !blank {
             editor.ui.show_welcome = true;
@@ -3295,6 +3378,7 @@ fn main() {
         let (import_tx, import_rx) = std::sync::mpsc::channel();
         let (background_audio_tx, background_audio_rx) = std::sync::mpsc::channel();
         let (document_tx, document_rx) = std::sync::mpsc::channel();
+        let (project_open_tx, project_open_rx) = std::sync::mpsc::channel();
         if let Err(e) = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -3314,6 +3398,8 @@ fn main() {
                         background_audio_rx,
                         document_tx,
                         document_rx,
+                        project_open_tx,
+                        project_open_rx,
                     }))
                 }),
             )
@@ -3322,6 +3408,94 @@ fn main() {
             web_sys::console::error_1(&e);
         }
     });
+}
+
+#[cfg(target_arch = "wasm32")]
+impl EditorApp {
+    fn open_web_project_bytes(&mut self, name: &str, bytes: &[u8]) {
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".ccraft") {
+            match coursecraft_format::open_project(bytes) {
+                Ok(project) => {
+                    self.editor.replace_course(project.course);
+                    self.editor.set_media(into_arc_media(project.media));
+                    self.editor.set_status(format!("Opened {name}"));
+                }
+                Err(err) => {
+                    self.editor
+                        .set_status(format!("Couldn't open {name}: {err}"));
+                }
+            }
+        } else if lower.ends_with(".json") {
+            match std::str::from_utf8(bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|text| Course::from_json(text).map_err(|e| e.to_string()))
+            {
+                Ok(course) => {
+                    self.editor.replace_course(course);
+                    self.editor.set_media(Vec::new());
+                    self.editor.set_status(format!("Opened {name}"));
+                }
+                Err(err) => {
+                    self.editor
+                        .set_status(format!("Couldn't open {name}: {err}"));
+                }
+            }
+        } else {
+            self.editor
+                .set_status("Choose a .ccraft or course.json file to open.");
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn sanitize_filename_stem(title: &str, fallback: &str) -> String {
+    let sanitized = title
+        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+        .trim()
+        .to_string();
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_download_bytes(file_name: &str, bytes: &[u8], mime: &str) -> Result<(), String> {
+    use eframe::wasm_bindgen::JsCast as _;
+
+    let window = web_sys::window().ok_or_else(|| "no browser window".to_string())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "no browser document".to_string())?;
+    let body = document
+        .body()
+        .ok_or_else(|| "no document body".to_string())?;
+
+    let array = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::of1(&array.into());
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type(mime);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
+        .map_err(|e| format!("Blob failed: {e:?}"))?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|e| format!("Object URL failed: {e:?}"))?;
+
+    let anchor_el = document
+        .create_element("a")
+        .map_err(|e| format!("create_element failed: {e:?}"))?;
+    let anchor = anchor_el
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| "created element is not an anchor".to_string())?;
+    anchor.set_href(&url);
+    anchor.set_download(file_name);
+    let _ = anchor.style().set_property("display", "none");
+    let _ = body.append_child(&anchor);
+    anchor.click();
+    let _ = body.remove_child(&anchor);
+    let _ = web_sys::Url::revoke_object_url(&url);
+    Ok(())
 }
 
 fn into_arc_media(media: Vec<(String, Vec<u8>)>) -> Vec<(String, std::sync::Arc<[u8]>)> {

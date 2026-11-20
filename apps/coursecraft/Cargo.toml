@@ -19,6 +19,9 @@ coursecraft-ui-egui.workspace = true
 coursecraft-ai.workspace = true
 coursecraft-format.workspace = true
 coursecraft-pptx.workspace = true
+coursecraft-publish.workspace = true
+coursecraft-scorm.workspace = true
+coursecraft-xapi.workspace = true
 eframe.workspace = true
 egui.workspace = true
 ehttp.workspace = true
@@ -31,18 +34,16 @@ serde_json.workspace = true
 coursecraft-cli.workspace = true
 coursecraft-control.workspace = true
 coursecraft-mcp.workspace = true
-coursecraft-publish.workspace = true
 coursecraft-export.workspace = true
-coursecraft-scorm.workspace = true
-coursecraft-xapi.workspace = true
 # The system clipboard on the desktop: egui-winit's clipboard feature for text,
 # arboard directly to read pasted images.
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard"] }
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys.workspace = true
 wasm-bindgen-futures.workspace = true
-web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlCanvasElement", "console", "Location"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlAnchorElement", "HtmlCanvasElement", "HtmlElement", "Blob", "BlobPropertyBag", "Url", "console", "Location"] }
 
 # Embeds the icon in the Windows .exe; build.rs only calls it when the target is Windows.
 [build-dependencies]

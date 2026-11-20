@@ -576,6 +576,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
 
             const FILE_OPS_DISABLED_MSG: &str =
                 "Opening and saving files is desktop-only in this version";
+            let desktop_file_ops = editor.file_ops_available && !cfg!(target_arch = "wasm32");
 
             if editor.file_ops_available {
                 if ui.button("Open…").clicked() {
@@ -589,14 +590,14 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
 
             file_op_item(
                 ui,
-                editor.file_ops_available,
+                desktop_file_ops,
                 "Open Folder…",
                 "Open a project folder, such as one kept in git",
                 EditorRequest::OpenFolder,
                 requests,
             );
 
-            if editor.file_ops_available {
+            if desktop_file_ops {
                 ui.menu_button("Open Recent", |ui| {
                     if editor.recent_files.is_empty() {
                         ui.add_enabled(false, Button::new("(No recent files)"));
@@ -642,16 +643,16 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
 
             file_op_item(
                 ui,
-                editor.file_ops_available,
+                desktop_file_ops,
                 "Save As Project Folder (for git)…",
                 "Save as a folder of plain files that git can track",
                 EditorRequest::SaveAsFolder,
                 requests,
             );
 
-            let history_ready = editor.file_ops_available && editor.ui.versions.has_file;
+            let history_ready = desktop_file_ops && editor.ui.versions.has_file;
             let history = ui.add_enabled(history_ready, Button::new("Version History…"));
-            let history = if editor.file_ops_available {
+            let history = if desktop_file_ops {
                 history.on_disabled_hover_text("Save the course first to start its history.")
             } else {
                 history.on_disabled_hover_text(FILE_OPS_DISABLED_MSG)
@@ -699,7 +700,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 ui.close();
             }
 
-            if editor.file_ops_available {
+            if desktop_file_ops {
                 if ui.button("Export Translation…").clicked() {
                     editor.ui.show_export_translation = true;
                     ui.close();
