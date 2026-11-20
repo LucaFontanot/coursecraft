@@ -143,3 +143,125 @@ fn lock_and_hide_survive_save_reload_and_undo_in_editor() {
             .locked
     );
 }
+
+fn click_requests(h: &mut TestHarness, pos: egui::Pos2) -> Vec<crate::EditorRequest> {
+    h.frame(vec![egui::Event::PointerMoved(pos)]);
+    let mut requests = h.frame(vec![egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    }]);
+    requests.extend(h.frame(vec![egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    }]));
+    requests
+}
+
+#[test]
+fn template_picker_shows_my_library_and_save_to_library_when_available() {
+    let course = template_course(TemplateId::Blank).expect("blank");
+    let mut h = TestHarness::new(course);
+    h.editor.ui.show_welcome = false;
+    h.editor.set_library_templates_available(true);
+    h.editor
+        .set_library_templates(vec![crate::LibraryTemplateEntry {
+            id: "intro-card".to_owned(),
+            title: "Intro Card".to_owned(),
+        }]);
+    let first_slide = h.editor.session.course.scenes[0].slides[0].id.clone();
+    h.editor
+        .run(
+            "template.save",
+            serde_json::json!({ "slide": first_slide, "title": "Course Tpl" }),
+        )
+        .expect("template saved");
+    h.idle_frame();
+
+    let caret = h
+        .find_icon(coursecraft_render::Icon::CaretDown)
+        .expect("toolbar caret");
+    h.click_at(caret);
+    h.idle_frame();
+
+    assert!(h.find_text("Your templates").is_some());
+    assert!(h.find_text("Save to my library").is_some());
+    assert!(h.find_text("My library").is_some());
+    assert!(h.find_text("Intro Card").is_some());
+
+    let save_pos = h.find_text("Save to my library").expect("save button");
+    let requests = click_requests(&mut h, save_pos);
+    assert!(
+        requests
+            .iter()
+            .any(|r| matches!(r, crate::EditorRequest::SaveTemplateToLibrary { .. })),
+        "clicking Save to my library should request SaveTemplateToLibrary"
+    );
+}
+
+#[test]
+fn template_picker_delete_requires_confirm_before_requesting_delete() {
+    let course = template_course(TemplateId::Blank).expect("blank");
+    let mut h = TestHarness::new(course);
+    h.editor.ui.show_welcome = false;
+    h.editor.set_library_templates_available(true);
+    h.editor
+        .set_library_templates(vec![crate::LibraryTemplateEntry {
+            id: "intro-card".to_owned(),
+            title: "Intro Card".to_owned(),
+        }]);
+    h.idle_frame();
+
+    let caret = h
+        .find_icon(coursecraft_render::Icon::CaretDown)
+        .expect("toolbar caret");
+    h.click_at(caret);
+    h.idle_frame();
+
+    let del_pos = h.find_text("Delete").expect("Delete button");
+    let requests = click_requests(&mut h, del_pos);
+    assert!(
+        !requests
+            .iter()
+            .any(|r| matches!(r, crate::EditorRequest::DeleteLibraryTemplate { .. })),
+        "first click on Delete should ask for confirmation, not delete immediately"
+    );
+    h.idle_frame();
+    assert!(h.find_text("Confirm").is_some());
+
+    let confirm_pos = h.find_text("Confirm").expect("Confirm button");
+    let requests = click_requests(&mut h, confirm_pos);
+    assert!(
+        requests.iter().any(|r| matches!(
+            r,
+            crate::EditorRequest::DeleteLibraryTemplate { id } if id == "intro-card"
+        )),
+        "clicking Confirm should request DeleteLibraryTemplate"
+    );
+}
+
+#[test]
+fn template_picker_hides_my_library_when_unavailable() {
+    let course = template_course(TemplateId::Blank).expect("blank");
+    let mut h = TestHarness::new(course);
+    h.editor.ui.show_welcome = false;
+    h.editor.set_library_templates_available(false);
+    h.editor
+        .set_library_templates(vec![crate::LibraryTemplateEntry {
+            id: "intro-card".to_owned(),
+            title: "Intro Card".to_owned(),
+        }]);
+    h.idle_frame();
+
+    let caret = h
+        .find_icon(coursecraft_render::Icon::CaretDown)
+        .expect("toolbar caret");
+    h.click_at(caret);
+    h.idle_frame();
+
+    assert!(h.find_text("My library").is_none());
+    assert!(h.find_text("Save to my library").is_none());
+}

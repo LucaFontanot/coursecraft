@@ -393,26 +393,28 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     }
 
     let caret_resp = widgets::toolbar_caret_button(&mut left_ui, "More slide options");
-    egui::Popup::menu(&caret_resp).show(|ui| {
-        if master_view {
-            ui.add_enabled(false, egui::Button::new("Not available in Master View"));
-            return;
-        }
-        crate::slides::show_new_slide_popup(ui, editor);
-        ui.separator();
-        if ui.button("New scene").clicked() {
-            add_new_scene(editor);
-            ui.close();
-        }
-        let can_add_layer = !editor.selection.slide.is_empty();
-        if ui
-            .add_enabled(can_add_layer, egui::Button::new("New layer"))
-            .clicked()
-        {
-            add_new_layer(editor);
-            ui.close();
-        }
-    });
+    egui::Popup::menu(&caret_resp)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            if master_view {
+                ui.add_enabled(false, egui::Button::new("Not available in Master View"));
+                return;
+            }
+            crate::slides::show_new_slide_popup(ui, editor);
+            ui.separator();
+            if ui.button("New scene").clicked() {
+                add_new_scene(editor);
+                ui.close();
+            }
+            let can_add_layer = !editor.selection.slide.is_empty();
+            if ui
+                .add_enabled(can_add_layer, egui::Button::new("New layer"))
+                .clicked()
+            {
+                add_new_layer(editor);
+                ui.close();
+            }
+        });
 
     left_ui.add_space(coursecraft_render::SPACE_MD);
 

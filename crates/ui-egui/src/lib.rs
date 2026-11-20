@@ -413,6 +413,20 @@ pub enum EditorRequest {
     DeleteVersion {
         id: String,
     },
+    /// Save an in-course template into the shared desktop library.
+    SaveTemplateToLibrary {
+        template_id: String,
+    },
+    /// Insert a template from the shared desktop library as a new slide.
+    InsertLibraryTemplate {
+        id: String,
+        scene: Option<String>,
+        after: Option<String>,
+    },
+    /// Delete a template from the shared desktop library.
+    DeleteLibraryTemplate {
+        id: String,
+    },
     OpenExample(ExampleId),
     OpenTemplate(TemplateId),
     /// Send a chat request with the values in the AI Settings dialog.
@@ -840,6 +854,8 @@ pub struct UiState {
     pub master_view_return_slide: Option<String>,
     /// Master waiting for a delete confirmation.
     pub pending_delete_master: Option<String>,
+    /// Shared library template waiting for a delete confirmation.
+    pub confirm_delete_library_template: Option<String>,
     /// In-place rename of a master in the navigator.
     pub master_rename: Option<slides::SceneRename>,
     /// In-place rename of a question bank in the navigator.
@@ -956,6 +972,15 @@ impl SyncRevision {
     }
 }
 
+/// One template saved in the shared desktop library.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryTemplateEntry {
+    /// Safe file stem under `<config_dir>/templates/`.
+    pub id: String,
+    /// Display title of the template.
+    pub title: String,
+}
+
 /// Main CourseCraft editor component.
 pub struct Editor {
     pub session: Session,
@@ -963,6 +988,8 @@ pub struct Editor {
     pub ui: UiState,
     pub preview: Option<Preview>,
     pub recent_files: Vec<String>,
+    pub library_templates: Vec<LibraryTemplateEntry>,
+    pub library_templates_available: bool,
     pub file_ops_available: bool,
     pub publish_available: bool,
     pub title_info: Option<(String, bool)>,
@@ -1221,6 +1248,7 @@ impl Editor {
                 master_view: false,
                 master_view_return_slide: None,
                 pending_delete_master: None,
+                confirm_delete_library_template: None,
                 master_rename: None,
                 bank_rename: None,
                 bank_expanded: Vec::new(),
@@ -1238,6 +1266,8 @@ impl Editor {
             },
             preview: None,
             recent_files: Vec::new(),
+            library_templates: Vec::new(),
+            library_templates_available: false,
             file_ops_available: true,
             publish_available: true,
             title_info: None,
@@ -1273,6 +1303,16 @@ impl Editor {
     /// Update recent files list shown in the File menu.
     pub fn set_recent(&mut self, recent: Vec<String>) {
         self.recent_files = recent;
+    }
+
+    /// Update the list of templates shown under "My library".
+    pub fn set_library_templates(&mut self, templates: Vec<LibraryTemplateEntry>) {
+        self.library_templates = templates;
+    }
+
+    /// Configure whether the shared desktop template library is available.
+    pub fn set_library_templates_available(&mut self, available: bool) {
+        self.library_templates_available = available;
     }
 
     /// Configure whether file open/save operations are enabled.
@@ -1488,6 +1528,7 @@ impl Editor {
         self.ui.master_view = false;
         self.ui.master_view_return_slide = None;
         self.ui.pending_delete_master = None;
+        self.ui.confirm_delete_library_template = None;
         self.ui.master_rename = None;
         self.ui.bank_rename = None;
         self.ui.bank_expanded.clear();
@@ -1694,6 +1735,89 @@ impl Editor {
             })
             .map(|(src, bytes)| (src.clone(), std::sync::Arc::clone(bytes)))
             .collect()
+    }
+
+    /// Collect the media assets referenced by a single slide (and its layers).
+    #[must_use]
+    pub fn slide_media(&self, slide: &coursecraft_course::Slide) -> Vec<(String, Vec<u8>)> {
+        let mut referenced = std::collections::HashSet::new();
+        let mut web_prefixes = std::collections::BTreeSet::new();
+        for obj in &slide.objects {
+            collect_object_media_srcs(obj, &mut referenced);
+            if let coursecraft_course::ObjectKind::Web {
+                source: coursecraft_course::WebSource::Folder { path, .. },
+            } = &obj.kind
+            {
+                web_prefixes.insert(format!("{path}/"));
+            }
+        }
+        for layer in &slide.layers {
+            for obj in &layer.objects {
+                collect_object_media_srcs(obj, &mut referenced);
+                if let coursecraft_course::ObjectKind::Web {
+                    source: coursecraft_course::WebSource::Folder { path, .. },
+                } = &obj.kind
+                {
+                    web_prefixes.insert(format!("{path}/"));
+                }
+            }
+        }
+        self.media
+            .iter()
+            .filter(|(src, _)| {
+                referenced.contains(src)
+                    || web_prefixes.iter().any(|prefix| src.starts_with(prefix))
+            })
+            .map(|(src, bytes)| (src.clone(), bytes.to_vec()))
+            .collect()
+    }
+
+    /// Insert a template slide loaded from the shared library, adding its
+    /// media and dispatching `slide.paste`.
+    pub fn insert_library_template(
+        &mut self,
+        mut slide: coursecraft_course::Slide,
+        media: Vec<(String, Vec<u8>)>,
+        scene: Option<String>,
+        after: Option<String>,
+    ) {
+        if let Some(ref master) = slide.master
+            && self.session.course.master(master).is_none()
+        {
+            slide.master = None;
+        }
+        let mut renames = std::collections::HashMap::new();
+        let mut media_added = false;
+        for (src, bytes) in media {
+            if let Some((_, existing)) = self.media.iter().find(|(name, _)| name == &src) {
+                if existing.as_ref() != bytes.as_slice() {
+                    let new_src = sanitize_media_src(&src, &self.media);
+                    self.media.push((new_src.clone(), bytes.into()));
+                    renames.insert(src, new_src);
+                    media_added = true;
+                }
+            } else {
+                self.media.push((src, bytes.into()));
+                media_added = true;
+            }
+        }
+        if !renames.is_empty() {
+            rewrite_slide_media_srcs(&mut slide, &renames);
+        }
+        if media_added {
+            self.mark_media_changed();
+        }
+        let Ok(slide_json) = serde_json::to_value(&slide) else {
+            return;
+        };
+        let mut params = serde_json::json!({ "slide": slide_json });
+        if let Some(after) = after {
+            params["after"] = serde_json::json!(after);
+        }
+        if let Some(scene) = scene {
+            params["scene"] = serde_json::json!(scene);
+        }
+        self.run("slide.paste", params);
     }
 
     /// Media files the course references but the editor's media store does not
@@ -4138,6 +4262,54 @@ fn collect_object_media_srcs(
             && !src.is_empty()
         {
             set.insert(src.clone());
+        }
+    }
+}
+
+fn rewrite_slide_media_srcs(
+    slide: &mut coursecraft_course::Slide,
+    renames: &std::collections::HashMap<String, String>,
+) {
+    for obj in &mut slide.objects {
+        rewrite_object_media_srcs(obj, renames);
+    }
+    for layer in &mut slide.layers {
+        for obj in &mut layer.objects {
+            rewrite_object_media_srcs(obj, renames);
+        }
+    }
+}
+
+fn rewrite_object_media_srcs(
+    obj: &mut coursecraft_course::Object,
+    renames: &std::collections::HashMap<String, String>,
+) {
+    let remap = |s: &mut String| {
+        if let Some(next) = renames.get(s.as_str()) {
+            *s = next.clone();
+        }
+    };
+    match &mut obj.kind {
+        coursecraft_course::ObjectKind::Image { src, .. }
+        | coursecraft_course::ObjectKind::Lottie { src, .. } => remap(src),
+        coursecraft_course::ObjectKind::Audio { src, captions, .. }
+        | coursecraft_course::ObjectKind::Video { src, captions, .. } => {
+            remap(src);
+            if let Some(captions) = captions {
+                remap(captions);
+            }
+        }
+        coursecraft_course::ObjectKind::Shape { fill_style, .. }
+        | coursecraft_course::ObjectKind::Button { fill_style, .. } => {
+            if let Some(coursecraft_course::FillStyle::Picture { src, .. }) = fill_style {
+                remap(src);
+            }
+        }
+        _ => {}
+    }
+    for state in &mut obj.states {
+        if let Some(src) = &mut state.src {
+            remap(src);
         }
     }
 }

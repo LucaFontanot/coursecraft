@@ -37,6 +37,8 @@ pub mod publish;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod system_fonts;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod template_library;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod versions;
 
 #[cfg(test)]
@@ -326,6 +328,18 @@ impl EditorApp {
 
         let mut editor = Editor::new(course);
         editor.set_recent(prefs.recent.clone());
+        if let Some(dir) = config_dir.as_deref() {
+            editor.set_library_templates_available(true);
+            editor.set_library_templates(
+                template_library::list_templates(dir)
+                    .into_iter()
+                    .map(|t| coursecraft_ui_egui::LibraryTemplateEntry {
+                        id: t.id,
+                        title: t.title,
+                    })
+                    .collect(),
+            );
+        }
         editor.set_publish_available(player_bundle::has_player());
         editor.set_automation_available(true);
         editor.set_agent_exe_path(
@@ -1022,6 +1036,70 @@ impl EditorApp {
             }
             EditorRequest::OpenVersionCopy { id } => self.request_open_version(&id, ctx),
             EditorRequest::DeleteVersion { id } => self.request_delete_version(&id),
+            EditorRequest::SaveTemplateToLibrary { template_id } => {
+                let Some(dir) = self.config_dir.as_deref() else {
+                    return;
+                };
+                let Some(slide) = self.editor.session.course.template(&template_id).cloned() else {
+                    return;
+                };
+                let media = self.editor.slide_media(&slide);
+                let slide_size = self.editor.session.course.slide_size;
+                match template_library::save_template(dir, &slide, slide_size, &media) {
+                    Ok(saved) => {
+                        self.editor.set_library_templates(
+                            template_library::list_templates(dir)
+                                .into_iter()
+                                .map(|t| coursecraft_ui_egui::LibraryTemplateEntry {
+                                    id: t.id,
+                                    title: t.title,
+                                })
+                                .collect(),
+                        );
+                        self.editor
+                            .set_status(format!("Saved “{}” to My library.", saved.title));
+                    }
+                    Err(err) => {
+                        self.editor.set_status(err);
+                    }
+                }
+            }
+            EditorRequest::InsertLibraryTemplate { id, scene, after } => {
+                let Some(dir) = self.config_dir.as_deref() else {
+                    return;
+                };
+                match template_library::load_template(dir, &id) {
+                    Ok((slide, media)) => {
+                        self.editor
+                            .insert_library_template(slide, media, scene, after);
+                    }
+                    Err(err) => {
+                        self.editor.set_status(err);
+                    }
+                }
+            }
+            EditorRequest::DeleteLibraryTemplate { id } => {
+                let Some(dir) = self.config_dir.as_deref() else {
+                    return;
+                };
+                match template_library::delete_template(dir, &id) {
+                    Ok(()) => {
+                        self.editor.set_library_templates(
+                            template_library::list_templates(dir)
+                                .into_iter()
+                                .map(|t| coursecraft_ui_egui::LibraryTemplateEntry {
+                                    id: t.id,
+                                    title: t.title,
+                                })
+                                .collect(),
+                        );
+                        self.editor.set_status("Deleted template from My library.");
+                    }
+                    Err(err) => {
+                        self.editor.set_status(err);
+                    }
+                }
+            }
             EditorRequest::SaveAs => {
                 self.perform_save_as();
             }
