@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, VecDeque};
 use coursecraft_course::{
     Action, BACKGROUND_AUDIO_ID, CmpOp, CompletionStatus, Condition, Cue, Event, Layer, Link,
     MAX_CONDITION_DEPTH, ObjectKind, QuestionKind, RevisitMode, Scoring, SeekMode, Slide,
-    SlideTarget, Trigger, Value, VarOp, clamp_panel_offset, is_valid_link_url,
+    SlideTarget, Trigger, Value, ValueSource, VarOp, clamp_panel_offset, is_valid_link_url,
 };
 
 use crate::{
@@ -175,7 +175,7 @@ impl<'c> Player<'c> {
                     return;
                 }
                 self.st.started = true;
-                self.enter_slide(self.st.slide, &mut q, out);
+                self.enter_slide_inner(self.st.slide, false, &mut q, out);
                 self.start_background(out);
             }
             Input::Tick { ms } => {
@@ -343,7 +343,13 @@ impl<'c> Player<'c> {
                 return;
             }
             Input::SetVariable { variable, value } => {
-                self.set_variable(variable, VarOp::Assign, Some(value), &mut q, out);
+                self.set_variable(
+                    variable,
+                    VarOp::Assign,
+                    Some(&ValueSource::Constant(value.clone())),
+                    &mut q,
+                    out,
+                );
             }
             Input::SetInputValue { object, value } => {
                 self.set_input_value(object, value, &mut q, out);
@@ -585,10 +591,16 @@ impl<'c> Player<'c> {
                 variable,
                 op,
                 value,
-            } => self
-                .value(variable)
-                .as_ref()
-                .is_some_and(|cur| compare(cur, *op, value)),
+            } => {
+                let Some(cur) = self.value(variable) else {
+                    return false;
+                };
+                let rhs = match value {
+                    ValueSource::Constant(v) => Some(v.clone()),
+                    ValueSource::Variable { variable: rhs_var } => self.value(rhs_var),
+                };
+                rhs.is_some_and(|r| compare(&cur, *op, &r))
+            }
             Condition::ObjectState { object, state, is } => {
                 (self.object_state(object) == Some(state.as_str())) == *is
             }
@@ -751,13 +763,39 @@ impl<'c> Player<'c> {
             self.close_lightbox(true, out);
         }
         let cur = self.st.slide;
+        if matches!(target, SlideTarget::LastVisited) {
+            let prev_idx = self
+                .st
+                .visit_history
+                .pop()
+                .and_then(|id| self.slide_position(&id))
+                .or_else(|| cur.checked_sub(1));
+            if let Some(idx) = prev_idx {
+                self.enter_slide_inner(idx, false, q, out);
+            }
+            return;
+        }
         let idx = match target {
             SlideTarget::Next => cur.checked_add(1).filter(|i| *i < self.slides.len()),
             SlideTarget::Previous => cur.checked_sub(1),
+            SlideTarget::LastVisited => None,
             SlideTarget::Id(id) => {
                 let found = self.slide_position(id);
                 if found.is_none() {
                     warn(out, format!("slide {id:?} does not exist"));
+                }
+                found
+            }
+            SlideTarget::Scene(id) => {
+                let found = self
+                    .course
+                    .scenes
+                    .iter()
+                    .find(|s| s.id == *id)
+                    .and_then(|s| s.slides.first())
+                    .and_then(|first| self.slide_position(&first.id));
+                if found.is_none() {
+                    warn(out, format!("scene {id:?} does not exist"));
                 }
                 found
             }
@@ -1338,10 +1376,30 @@ impl<'c> Player<'c> {
     }
 
     fn enter_slide(&mut self, idx: usize, q: &mut Queue, out: &mut Vec<Effect>) {
+        self.enter_slide_inner(idx, true, q, out);
+    }
+
+    fn enter_slide_inner(
+        &mut self,
+        idx: usize,
+        record_history: bool,
+        q: &mut Queue,
+        out: &mut Vec<Effect>,
+    ) {
         let Some(slide) = self.slides.get(idx).copied() else {
             warn(out, "slide index out of range");
             return;
         };
+        if record_history
+            && (self.entered || self.st.started)
+            && self.st.slide != idx
+            && let Some(prev_slide) = self.slides.get(self.st.slide).copied()
+        {
+            if self.st.visit_history.len() >= 50 {
+                self.st.visit_history.remove(0);
+            }
+            self.st.visit_history.push(prev_slide.id.clone());
+        }
         let already_visited = self.st.visited.contains(&slide.id);
         if self.entered {
             self.note_timeline_completed();
@@ -1823,7 +1881,7 @@ impl<'c> Player<'c> {
         &mut self,
         name: &str,
         op: VarOp,
-        value: Option<&Value>,
+        value: Option<&ValueSource>,
         q: &mut Queue,
         out: &mut Vec<Effect>,
     ) {
@@ -1831,11 +1889,22 @@ impl<'c> Player<'c> {
             warn(out, format!("variable {name:?} is read-only"));
             return;
         }
+        let resolved = match value {
+            None => None,
+            Some(ValueSource::Constant(v)) => Some(v.clone()),
+            Some(ValueSource::Variable { variable: src }) => {
+                let Some(v) = self.value(src) else {
+                    warn(out, format!("variable {src:?} does not exist"));
+                    return;
+                };
+                Some(v)
+            }
+        };
         let Some(cur) = self.st.variables.get(name) else {
             warn(out, format!("variable {name:?} does not exist"));
             return;
         };
-        let new = match (op, cur, value) {
+        let new = match (op, cur, resolved.as_ref()) {
             (VarOp::Assign, cur, Some(v)) if v.kind() == cur.kind() => v.clone(),
             (VarOp::Toggle, Value::Bool(b), _) => Value::Bool(!b),
             (VarOp::Add, Value::Number(a), Some(Value::Number(b))) => Value::Number(a + b),
@@ -1972,7 +2041,13 @@ impl<'c> Player<'c> {
             }
             _ => return,
         };
-        self.set_variable(variable, VarOp::Assign, Some(&commit), q, out);
+        self.set_variable(
+            variable,
+            VarOp::Assign,
+            Some(&ValueSource::Constant(commit)),
+            q,
+            out,
+        );
     }
 
     /// Toggle one marker's label. Opening any marker closes the other.
@@ -4294,12 +4369,14 @@ fn compare(cur: &Value, op: CmpOp, rhs: &Value) -> bool {
             CmpOp::Le => a <= b,
             CmpOp::Gt => a > b,
             CmpOp::Ge => a >= b,
-            CmpOp::Contains => false,
+            CmpOp::Contains | CmpOp::EqIgnoreCase | CmpOp::ContainsIgnoreCase => false,
         },
         (Value::Text(a), Value::Text(b)) => match op {
             CmpOp::Eq => a == b,
             CmpOp::Ne => a != b,
             CmpOp::Contains => a.contains(b.as_str()),
+            CmpOp::EqIgnoreCase => a.to_lowercase() == b.to_lowercase(),
+            CmpOp::ContainsIgnoreCase => a.to_lowercase().contains(&b.to_lowercase()),
             _ => false,
         },
         (Value::Bool(a), Value::Bool(b)) => match op {

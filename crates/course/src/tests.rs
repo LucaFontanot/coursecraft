@@ -260,7 +260,7 @@ fn catches_type_errors() {
         s.triggers[6].condition = Some(crate::Condition::Compare {
             variable: "tabs_seen".into(),
             op: crate::CmpOp::Ge,
-            value: crate::Value::Text("3".into()),
+            value: crate::Value::Text("3".into()).into(),
         });
     });
     assert!(e.iter().any(|m| m.contains("compared with")), "{e:?}");
@@ -290,7 +290,7 @@ fn deep_conditions_are_rejected_not_overflowed() {
         let mut cond = crate::Condition::Compare {
             variable: "tabs_seen".into(),
             op: crate::CmpOp::Eq,
-            value: crate::Value::Number(1.0),
+            value: crate::Value::Number(1.0).into(),
         };
         // serde_json's recursion limit (128) already caps parsed input; this
         // checks courses built in code (engine, importers) too.
@@ -310,7 +310,7 @@ fn builtin_variables_validation() {
         s.triggers[6].condition = Some(crate::Condition::Compare {
             variable: "Course.Progress".into(),
             op: crate::CmpOp::Ge,
-            value: crate::Value::Number(50.0),
+            value: crate::Value::Number(50.0).into(),
         });
     });
     assert!(e.is_empty(), "expected valid compare on built-in: {e:?}");
@@ -321,7 +321,7 @@ fn builtin_variables_validation() {
         s.triggers[6].condition = Some(crate::Condition::Compare {
             variable: "Course.Progress".into(),
             op: crate::CmpOp::Eq,
-            value: crate::Value::Bool(true),
+            value: crate::Value::Bool(true).into(),
         });
     });
     assert!(e.iter().any(|m| m.contains("compared with")), "{e:?}");
@@ -332,7 +332,7 @@ fn builtin_variables_validation() {
         s.triggers[0].action = crate::Action::SetVariable {
             variable: "Course.SlideNumber".into(),
             op: crate::VarOp::Assign,
-            value: Some(crate::Value::Number(2.0)),
+            value: Some(crate::Value::Number(2.0).into()),
         };
     });
     assert!(
@@ -3943,7 +3943,7 @@ fn timer_remaining_variable_is_read_only_but_comparable() {
             action: crate::Action::SetVariable {
                 variable: "Timer.t1.Remaining".into(),
                 op: crate::VarOp::Assign,
-                value: Some(crate::Value::Number(3.0)),
+                value: Some(crate::Value::Number(3.0).into()),
             },
             when: Event::Click {
                 object: "t1".into(),
@@ -3959,7 +3959,7 @@ fn timer_remaining_variable_is_read_only_but_comparable() {
             condition: Some(crate::Condition::Compare {
                 variable: "Timer.t1.Remaining".into(),
                 op: crate::CmpOp::Le,
-                value: crate::Value::Number(5.0),
+                value: crate::Value::Number(5.0).into(),
             }),
             disabled: false,
         },
@@ -4746,6 +4746,99 @@ fn resources_glossary_and_transcript_round_trip_and_old_json_loads_empty() {
     assert_eq!(again.resources, c.resources);
     assert_eq!(again.glossary, c.glossary);
     assert!(again.player.show_transcript);
+}
+
+#[test]
+fn old_set_variable_and_compare_json_loads_unchanged_and_new_variants_round_trip() {
+    // Old JSON with literal constants loads as ValueSource::Constant and round-trips identically.
+    let old_trig = r#"{"action":{"action":"set_variable","variable":"tabs_seen","op":"assign","value":3},"when":{"event":"timeline_starts"},"condition":{"compare":{"variable":"tabs_seen","op":"ge","value":1}}}"#;
+    let t: Trigger = serde_json::from_str(old_trig).expect("old trigger");
+    let round = serde_json::to_string(&t).expect("serialize");
+    let t2: Trigger = serde_json::from_str(&round).expect("reload");
+    assert_eq!(t, t2);
+    assert_eq!(
+        t.action,
+        crate::Action::SetVariable {
+            variable: "tabs_seen".into(),
+            op: crate::VarOp::Assign,
+            value: Some(crate::ValueSource::Constant(crate::Value::Number(3.0))),
+        }
+    );
+
+    // New JSON: variable-to-variable, ignore-case ops, LastVisited, Scene.
+    let new_trigs = r#"[
+        {"action":{"action":"set_variable","variable":"Score","op":"assign","value":{"variable":"BestScore"}},"when":{"event":"timeline_starts"},"condition":{"compare":{"variable":"Score","op":"eq","value":{"variable":"BestScore"}}}},
+        {"action":{"action":"jump_to_slide","target":"last_visited"},"when":{"event":"timeline_starts"},"condition":{"compare":{"variable":"Name","op":"eq_ignore_case","value":"alice"}}},
+        {"action":{"action":"jump_to_slide","target":{"scene":"sc1"}},"when":{"event":"timeline_starts"},"condition":{"compare":{"variable":"Name","op":"contains_ignore_case","value":"LIC"}}}
+    ]"#;
+    let parsed: Vec<Trigger> = serde_json::from_str(new_trigs).expect("new triggers");
+    let back: Vec<Trigger> =
+        serde_json::from_str(&serde_json::to_string(&parsed).expect("ser")).expect("de");
+    assert_eq!(parsed, back);
+}
+
+#[test]
+fn variable_source_and_scene_target_validation() {
+    let mut c = Course::from_json(HELLO).unwrap();
+    c.variables.push(crate::VariableDef {
+        name: "Score".into(),
+        value: crate::Value::Number(0.0),
+    });
+    c.variables.push(crate::VariableDef {
+        name: "Label".into(),
+        value: crate::Value::Text("hi".into()),
+    });
+
+    // 1. Comparing a number variable to a text variable is a warning (not an error).
+    c.scenes[0].slides[0].triggers.push(Trigger {
+        action: crate::Action::PauseTimeline,
+        when: Event::TimelineStarts { layer: None },
+        condition: Some(crate::Condition::Compare {
+            variable: "Score".into(),
+            op: crate::CmpOp::Eq,
+            value: crate::ValueSource::Variable {
+                variable: "Label".into(),
+            },
+        }),
+        disabled: false,
+    });
+    let issues = c.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == crate::Severity::Warning && i.message.contains("compared with")),
+        "expected warning for number vs text variable: {issues:?}"
+    );
+    assert!(
+        !issues.iter().any(|i| i.severity == crate::Severity::Error),
+        "mismatch in Compare should be a warning, not error: {issues:?}"
+    );
+
+    // 2. Unknown variable in ValueSource::Variable is an error.
+    c.scenes[0].slides[0].triggers.push(Trigger {
+        action: crate::Action::SetVariable {
+            variable: "Score".into(),
+            op: crate::VarOp::Assign,
+            value: Some(crate::ValueSource::Variable {
+                variable: "MissingVar".into(),
+            }),
+        },
+        when: Event::TimelineStarts { layer: None },
+        condition: None,
+        disabled: false,
+    });
+    // 3. Unknown scene in SlideTarget::Scene is an error.
+    c.scenes[0].slides[0].triggers.push(Trigger {
+        action: crate::Action::JumpToSlide {
+            target: crate::SlideTarget::Scene("no-such-scene".into()),
+        },
+        when: Event::TimelineStarts { layer: None },
+        condition: None,
+        disabled: false,
+    });
+    let errs = errors(&c);
+    assert!(errs.iter().any(|m| m.contains("MissingVar")), "{errs:?}");
+    assert!(errs.iter().any(|m| m.contains("no-such-scene")), "{errs:?}");
 }
 
 #[test]

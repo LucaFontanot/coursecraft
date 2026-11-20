@@ -130,7 +130,7 @@ fn arrow_keys_fire_key_triggers_when_navigation_and_focus_do_not_use_them() {
             action: coursecraft_course::Action::SetVariable {
                 variable: "tabs_seen".into(),
                 op: coursecraft_course::VarOp::Assign,
-                value: Some(coursecraft_course::Value::Number(9.0)),
+                value: Some(coursecraft_course::Value::Number(9.0).into()),
             },
             when: coursecraft_course::Event::KeyPressed {
                 key: key.into(),

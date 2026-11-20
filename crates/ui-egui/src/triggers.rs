@@ -3,7 +3,7 @@
 use crate::dialog::Dialog;
 use coursecraft_course::{
     Action, BACKGROUND_AUDIO_ID, BUILTIN_STATES, CmpOp, CompletionStatus, Condition, Course, Event,
-    Slide, SlideTarget, Trigger, Value, ValueKind, VarOp,
+    Slide, SlideTarget, Trigger, Value, ValueKind, ValueSource, VarOp,
 };
 use egui::{DragValue, RichText, ScrollArea, TextEdit, Ui};
 use serde_json::Value as Json;
@@ -122,6 +122,14 @@ pub fn describe_value(value: &Value) -> String {
     }
 }
 
+#[must_use]
+pub fn describe_value_source(source: &ValueSource) -> String {
+    match source {
+        ValueSource::Constant(v) => describe_value(v),
+        ValueSource::Variable { variable } => variable.clone(),
+    }
+}
+
 /// Describe an Action as a human-readable sentence fragment.
 #[must_use]
 pub fn describe_action(action: &Action, slide: &Slide) -> String {
@@ -129,7 +137,9 @@ pub fn describe_action(action: &Action, slide: &Slide) -> String {
         Action::JumpToSlide { target } => match target {
             SlideTarget::Next => "Jump to next slide".to_owned(),
             SlideTarget::Previous => "Jump to previous slide".to_owned(),
+            SlideTarget::LastVisited => "Jump to last visited slide".to_owned(),
             SlideTarget::Id(sid) => format!("Jump to slide {sid}"),
+            SlideTarget::Scene(sid) => format!("Jump to scene {sid}"),
         },
         Action::ShowLayer { layer } => format!("Show layer {}", layer_name(slide, layer)),
         Action::HideLayer { layer } => match layer {
@@ -145,23 +155,23 @@ pub fn describe_action(action: &Action, slide: &Slide) -> String {
             value,
         } => match op {
             VarOp::Assign => match value {
-                Some(v) => format!("Set {variable} = {}", describe_value(v)),
+                Some(v) => format!("Set {variable} = {}", describe_value_source(v)),
                 None => format!("Set {variable}"),
             },
             VarOp::Add => match value {
-                Some(v) => format!("Set {variable} + {}", describe_value(v)),
+                Some(v) => format!("Set {variable} + {}", describe_value_source(v)),
                 None => format!("Set {variable} + 1"),
             },
             VarOp::Subtract => match value {
-                Some(v) => format!("Set {variable} - {}", describe_value(v)),
+                Some(v) => format!("Set {variable} - {}", describe_value_source(v)),
                 None => format!("Set {variable} - 1"),
             },
             VarOp::Multiply => match value {
-                Some(v) => format!("Set {variable} * {}", describe_value(v)),
+                Some(v) => format!("Set {variable} * {}", describe_value_source(v)),
                 None => format!("Set {variable} * 1"),
             },
             VarOp::Divide => match value {
-                Some(v) => format!("Set {variable} / {}", describe_value(v)),
+                Some(v) => format!("Set {variable} / {}", describe_value_source(v)),
                 None => format!("Set {variable} / 1"),
             },
             VarOp::Toggle => format!("Toggle {variable}"),
@@ -295,15 +305,17 @@ pub fn describe_condition(cond: &Condition, slide: &Slide) -> String {
             value,
         } => {
             let op_str = match op {
-                CmpOp::Eq => "==",
-                CmpOp::Ne => "!=",
+                CmpOp::Eq => "equals",
+                CmpOp::Ne => "does not equal",
                 CmpOp::Lt => "<",
                 CmpOp::Le => "<=",
                 CmpOp::Gt => ">",
                 CmpOp::Ge => ">=",
                 CmpOp::Contains => "contains",
+                CmpOp::EqIgnoreCase => "equals (ignore case)",
+                CmpOp::ContainsIgnoreCase => "contains (ignore case)",
             };
-            format!("{variable} {op_str} {}", describe_value(value))
+            format!("{variable} {op_str} {}", describe_value_source(value))
         }
         Condition::ObjectState { object, state, is } => {
             let obj = object_name(slide, object);
@@ -362,7 +374,7 @@ pub enum ConditionNode {
     Compare {
         variable: String,
         op: CmpOp,
-        value: Value,
+        value: ValueSource,
     },
     ObjectState {
         object: String,
@@ -443,7 +455,7 @@ impl ConditionNode {
                 Self::Compare {
                     variable,
                     op,
-                    value,
+                    value: ValueSource::Constant(value),
                 }
             }
             ConditionKind::ObjectState => {
@@ -481,6 +493,11 @@ impl ConditionNode {
             } => {
                 if variable.trim().is_empty() {
                     return Err("Variable name cannot be empty".to_owned());
+                }
+                if let ValueSource::Variable { variable: rhs } = value
+                    && rhs.trim().is_empty()
+                {
+                    return Err("Comparison variable cannot be empty".to_owned());
                 }
                 Ok(Condition::Compare {
                     variable: variable.clone(),
@@ -657,7 +674,9 @@ pub enum JumpTargetTag {
     #[default]
     Next,
     Previous,
+    LastVisited,
     SlideId,
+    Scene,
 }
 
 /// Event variant selector.
@@ -747,12 +766,15 @@ pub struct TriggerFormState {
     pub action_tag: ActionTag,
     pub jump_target_tag: JumpTargetTag,
     pub jump_slide_id: String,
+    pub jump_scene_id: String,
     pub show_layer_id: String,
     pub hide_layer_id: Option<String>,
     pub change_state_object: String,
     pub change_state_state: String,
     pub set_var_name: String,
     pub set_var_op: VarOp,
+    pub set_var_use_var: bool,
+    pub set_var_src_var: String,
     pub set_var_val_bool: bool,
     pub set_var_val_num: f64,
     pub set_var_val_text: String,
@@ -791,6 +813,11 @@ impl TriggerFormState {
     /// Initialize a new trigger form for the given slide and layer.
     #[must_use]
     pub fn new_for_owner(slide: &Slide, layer_id: Option<&str>, course: &Course) -> Self {
+        let first_scene_id = course
+            .scenes
+            .first()
+            .map(|s| s.id.clone())
+            .unwrap_or_default();
         let first_slide_id = course
             .slides()
             .next()
@@ -838,12 +865,15 @@ impl TriggerFormState {
             action_tag: ActionTag::JumpToSlide,
             jump_target_tag: JumpTargetTag::Next,
             jump_slide_id: first_slide_id,
+            jump_scene_id: first_scene_id,
             show_layer_id: first_layer,
             hide_layer_id: None,
             change_state_object: first_obj_id.clone(),
             change_state_state: "normal".to_owned(),
             set_var_name: first_var.clone(),
             set_var_op: VarOp::Assign,
+            set_var_use_var: false,
+            set_var_src_var: first_var.clone(),
             set_var_val_bool: false,
             set_var_val_num: 0.0,
             set_var_val_text: String::new(),
@@ -909,9 +939,14 @@ impl TriggerFormState {
                 match target {
                     SlideTarget::Next => s.jump_target_tag = JumpTargetTag::Next,
                     SlideTarget::Previous => s.jump_target_tag = JumpTargetTag::Previous,
+                    SlideTarget::LastVisited => s.jump_target_tag = JumpTargetTag::LastVisited,
                     SlideTarget::Id(id) => {
                         s.jump_target_tag = JumpTargetTag::SlideId;
                         s.jump_slide_id = id.clone();
+                    }
+                    SlideTarget::Scene(id) => {
+                        s.jump_target_tag = JumpTargetTag::Scene;
+                        s.jump_scene_id = id.clone();
                     }
                 }
             }
@@ -938,9 +973,18 @@ impl TriggerFormState {
                 s.set_var_op = *op;
                 if let Some(v) = value {
                     match v {
-                        Value::Bool(b) => s.set_var_val_bool = *b,
-                        Value::Number(n) => s.set_var_val_num = *n,
-                        Value::Text(t) => s.set_var_val_text = t.clone(),
+                        ValueSource::Constant(val) => {
+                            s.set_var_use_var = false;
+                            match val {
+                                Value::Bool(b) => s.set_var_val_bool = *b,
+                                Value::Number(n) => s.set_var_val_num = *n,
+                                Value::Text(t) => s.set_var_val_text = t.clone(),
+                            }
+                        }
+                        ValueSource::Variable { variable: src } => {
+                            s.set_var_use_var = true;
+                            s.set_var_src_var = src.clone();
+                        }
                     }
                 }
             }
@@ -1102,11 +1146,18 @@ impl TriggerFormState {
                 let target = match self.jump_target_tag {
                     JumpTargetTag::Next => SlideTarget::Next,
                     JumpTargetTag::Previous => SlideTarget::Previous,
+                    JumpTargetTag::LastVisited => SlideTarget::LastVisited,
                     JumpTargetTag::SlideId => {
                         if self.jump_slide_id.trim().is_empty() {
                             return Err("Target slide cannot be empty".to_owned());
                         }
                         SlideTarget::Id(self.jump_slide_id.clone())
+                    }
+                    JumpTargetTag::Scene => {
+                        if self.jump_scene_id.trim().is_empty() {
+                            return Err("Target scene cannot be empty".to_owned());
+                        }
+                        SlideTarget::Scene(self.jump_scene_id.clone())
                     }
                 };
                 Action::JumpToSlide { target }
@@ -1144,11 +1195,24 @@ impl TriggerFormState {
                     .unwrap_or(ValueKind::Number);
                 let value = if self.set_var_op == VarOp::Toggle {
                     None
+                } else if self.set_var_use_var {
+                    if self.set_var_src_var.trim().is_empty() {
+                        return Err("Source variable cannot be empty".to_owned());
+                    }
+                    Some(ValueSource::Variable {
+                        variable: self.set_var_src_var.clone(),
+                    })
                 } else {
                     match var_kind {
-                        ValueKind::Bool => Some(Value::Bool(self.set_var_val_bool)),
-                        ValueKind::Number => Some(Value::Number(self.set_var_val_num)),
-                        ValueKind::Text => Some(Value::Text(self.set_var_val_text.clone())),
+                        ValueKind::Bool => {
+                            Some(ValueSource::Constant(Value::Bool(self.set_var_val_bool)))
+                        }
+                        ValueKind::Number => {
+                            Some(ValueSource::Constant(Value::Number(self.set_var_val_num)))
+                        }
+                        ValueKind::Text => Some(ValueSource::Constant(Value::Text(
+                            self.set_var_val_text.clone(),
+                        ))),
                     }
                 };
                 Action::SetVariable {
@@ -2048,9 +2112,15 @@ fn render_action_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide,
                 );
                 ui.selectable_value(
                     &mut form.jump_target_tag,
+                    JumpTargetTag::LastVisited,
+                    "Last visited",
+                );
+                ui.selectable_value(
+                    &mut form.jump_target_tag,
                     JumpTargetTag::SlideId,
                     "Specific slide",
                 );
+                ui.selectable_value(&mut form.jump_target_tag, JumpTargetTag::Scene, "Scene");
             });
             if form.jump_target_tag == JumpTargetTag::SlideId {
                 trigger_row(ui, "Slide", |ui| {
@@ -2066,6 +2136,39 @@ fn render_action_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide,
                                         label,
                                     );
                                 }
+                            }
+                        });
+                });
+            }
+            if form.jump_target_tag == JumpTargetTag::Scene {
+                if form.jump_scene_id.is_empty()
+                    && let Some(first) = course.scenes.first()
+                {
+                    form.jump_scene_id = first.id.clone();
+                }
+                let scene_label = course
+                    .scenes
+                    .iter()
+                    .find(|s| s.id == form.jump_scene_id)
+                    .map(|s| {
+                        if s.title.is_empty() {
+                            s.id.clone()
+                        } else {
+                            s.title.clone()
+                        }
+                    })
+                    .unwrap_or_else(|| form.jump_scene_id.clone());
+                trigger_row(ui, "Scene", |ui| {
+                    tall_combo(ui, "action_jump_scene_combo")
+                        .selected_text(scene_label)
+                        .show_ui(ui, |ui| {
+                            for sc in &course.scenes {
+                                let label = if sc.title.is_empty() {
+                                    sc.id.as_str()
+                                } else {
+                                    sc.title.as_str()
+                                };
+                                ui.selectable_value(&mut form.jump_scene_id, sc.id.clone(), label);
                             }
                         });
                 });
@@ -2208,17 +2311,61 @@ fn render_action_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide,
             });
 
             if form.set_var_op != VarOp::Toggle {
-                trigger_row(ui, "Value", |ui| match var_kind {
-                    ValueKind::Bool => {
-                        ui.checkbox(&mut form.set_var_val_bool, "true / false");
-                    }
-                    ValueKind::Number => {
-                        ui.add(DragValue::new(&mut form.set_var_val_num).speed(1.0));
-                    }
-                    ValueKind::Text => {
-                        ui.add(TextEdit::singleline(&mut form.set_var_val_text));
-                    }
+                trigger_row(ui, "Source", |ui| {
+                    ui.selectable_value(&mut form.set_var_use_var, false, "A value");
+                    ui.selectable_value(&mut form.set_var_use_var, true, "Another variable");
                 });
+                if form.set_var_use_var {
+                    if form.set_var_src_var.is_empty() {
+                        form.set_var_src_var = course
+                            .variables
+                            .first()
+                            .map(|v| v.name.clone())
+                            .or_else(|| {
+                                coursecraft_course::BUILTIN_VARIABLES
+                                    .first()
+                                    .map(|&(n, _)| n.to_string())
+                            })
+                            .unwrap_or_default();
+                    }
+                    trigger_row(ui, "From variable", |ui| {
+                        tall_combo(ui, "action_set_var_src_combo")
+                            .selected_text(&form.set_var_src_var)
+                            .show_ui(ui, |ui| {
+                                for v in &course.variables {
+                                    ui.selectable_value(
+                                        &mut form.set_var_src_var,
+                                        v.name.clone(),
+                                        &v.name,
+                                    );
+                                }
+                                if !course.variables.is_empty()
+                                    && !coursecraft_course::BUILTIN_VARIABLES.is_empty()
+                                {
+                                    ui.separator();
+                                }
+                                for &(name, _) in coursecraft_course::BUILTIN_VARIABLES {
+                                    ui.selectable_value(
+                                        &mut form.set_var_src_var,
+                                        name.to_string(),
+                                        name,
+                                    );
+                                }
+                            });
+                    });
+                } else {
+                    trigger_row(ui, "Value", |ui| match var_kind {
+                        ValueKind::Bool => {
+                            ui.checkbox(&mut form.set_var_val_bool, "true / false");
+                        }
+                        ValueKind::Number => {
+                            ui.add(DragValue::new(&mut form.set_var_val_num).speed(1.0));
+                        }
+                        ValueKind::Text => {
+                            ui.add(TextEdit::singleline(&mut form.set_var_val_text));
+                        }
+                    });
+                }
             }
         }
         ActionTag::PlayMedia | ActionTag::PauseMedia | ActionTag::StopMedia => {
@@ -2837,13 +2984,21 @@ pub(crate) fn render_condition_editor(
                         CmpOp::Gt,
                         CmpOp::Ge,
                     ],
-                    ValueKind::Text => vec![CmpOp::Eq, CmpOp::Ne, CmpOp::Contains],
+                    ValueKind::Text => vec![
+                        CmpOp::Eq,
+                        CmpOp::Ne,
+                        CmpOp::Contains,
+                        CmpOp::EqIgnoreCase,
+                        CmpOp::ContainsIgnoreCase,
+                    ],
                     ValueKind::Bool => vec![CmpOp::Eq, CmpOp::Ne],
                 };
 
-                // Keep the stored value and operator valid for the chosen variable's type.
-                if value.kind() != var_kind {
-                    *value = match var_kind {
+                // Keep the stored constant value and operator valid for the chosen variable's type.
+                if let ValueSource::Constant(const_val) = value
+                    && const_val.kind() != var_kind
+                {
+                    *const_val = match var_kind {
                         ValueKind::Number => Value::Number(0.0),
                         ValueKind::Bool => Value::Bool(true),
                         ValueKind::Text => Value::Text(String::new()),
@@ -2853,7 +3008,7 @@ pub(crate) fn render_condition_editor(
                     *op = CmpOp::Eq;
                 }
 
-                let op_label = match op {
+                let cmp_op_label = |o: CmpOp| match o {
                     CmpOp::Eq => "==",
                     CmpOp::Ne => "!=",
                     CmpOp::Lt => "<",
@@ -2861,53 +3016,102 @@ pub(crate) fn render_condition_editor(
                     CmpOp::Gt => ">",
                     CmpOp::Ge => ">=",
                     CmpOp::Contains => "contains",
+                    CmpOp::EqIgnoreCase => "equals (ignore case)",
+                    CmpOp::ContainsIgnoreCase => "contains (ignore case)",
                 };
 
                 tall_combo(ui, ("op_picker", depth))
-                    .selected_text(op_label)
+                    .selected_text(cmp_op_label(*op))
                     .show_ui(ui, |ui| {
                         for o in ops {
-                            let label = match o {
-                                CmpOp::Eq => "==",
-                                CmpOp::Ne => "!=",
-                                CmpOp::Lt => "<",
-                                CmpOp::Le => "<=",
-                                CmpOp::Gt => ">",
-                                CmpOp::Ge => ">=",
-                                CmpOp::Contains => "contains",
-                            };
-                            ui.selectable_value(op, o, label);
+                            ui.selectable_value(op, o, cmp_op_label(o));
                         }
                     });
 
-                match var_kind {
-                    ValueKind::Bool => {
-                        let mut b = match value {
-                            Value::Bool(bv) => *bv,
-                            _ => false,
+                let mut is_var = matches!(value, ValueSource::Variable { .. });
+                let prev_is_var = is_var;
+                tall_combo(ui, ("cmp_source_picker", depth))
+                    .selected_text(if is_var {
+                        "Another variable"
+                    } else {
+                        "A value"
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut is_var, false, "A value");
+                        ui.selectable_value(&mut is_var, true, "Another variable");
+                    });
+                if is_var != prev_is_var {
+                    if is_var {
+                        let first_rhs = course
+                            .variables
+                            .first()
+                            .map(|v| v.name.clone())
+                            .or_else(|| {
+                                coursecraft_course::BUILTIN_VARIABLES
+                                    .first()
+                                    .map(|&(n, _)| n.to_string())
+                            })
+                            .unwrap_or_default();
+                        *value = ValueSource::Variable {
+                            variable: first_rhs,
                         };
-                        if ui.checkbox(&mut b, "true / false").changed() {
-                            *value = Value::Bool(b);
-                        }
-                    }
-                    ValueKind::Number => {
-                        let mut n = match value {
-                            Value::Number(nv) => *nv,
-                            _ => 0.0,
+                    } else {
+                        let default_val = match var_kind {
+                            ValueKind::Number => Value::Number(0.0),
+                            ValueKind::Bool => Value::Bool(true),
+                            ValueKind::Text => Value::Text(String::new()),
                         };
-                        if ui.add(DragValue::new(&mut n).speed(1.0)).changed() {
-                            *value = Value::Number(n);
-                        }
+                        *value = ValueSource::Constant(default_val);
                     }
-                    ValueKind::Text => {
-                        let mut t = match value {
-                            Value::Text(tv) => tv.clone(),
-                            _ => String::new(),
-                        };
-                        if ui.add(TextEdit::singleline(&mut t)).changed() {
-                            *value = Value::Text(t);
-                        }
+                }
+
+                match value {
+                    ValueSource::Variable { variable: rhs_var } => {
+                        tall_combo(ui, ("cmp_rhs_var_picker", depth))
+                            .selected_text(rhs_var.as_str())
+                            .show_ui(ui, |ui| {
+                                for v in &course.variables {
+                                    ui.selectable_value(rhs_var, v.name.clone(), &v.name);
+                                }
+                                if !course.variables.is_empty()
+                                    && !coursecraft_course::BUILTIN_VARIABLES.is_empty()
+                                {
+                                    ui.separator();
+                                }
+                                for &(name, _) in coursecraft_course::BUILTIN_VARIABLES {
+                                    ui.selectable_value(rhs_var, name.to_string(), name);
+                                }
+                            });
                     }
+                    ValueSource::Constant(const_val) => match var_kind {
+                        ValueKind::Bool => {
+                            let mut b = match const_val {
+                                Value::Bool(bv) => *bv,
+                                _ => false,
+                            };
+                            if ui.checkbox(&mut b, "true / false").changed() {
+                                *const_val = Value::Bool(b);
+                            }
+                        }
+                        ValueKind::Number => {
+                            let mut n = match const_val {
+                                Value::Number(nv) => *nv,
+                                _ => 0.0,
+                            };
+                            if ui.add(DragValue::new(&mut n).speed(1.0)).changed() {
+                                *const_val = Value::Number(n);
+                            }
+                        }
+                        ValueKind::Text => {
+                            let mut t = match const_val {
+                                Value::Text(tv) => tv.clone(),
+                                _ => String::new(),
+                            };
+                            if ui.add(TextEdit::singleline(&mut t)).changed() {
+                                *const_val = Value::Text(t);
+                            }
+                        }
+                    },
                 }
             });
         }
@@ -3065,7 +3269,7 @@ fn render_condition_group(
                 list.push(ConditionNode::Compare {
                     variable: first_var,
                     op: CmpOp::Eq,
-                    value: Value::Number(0.0),
+                    value: ValueSource::Constant(Value::Number(0.0)),
                 });
             }
             if ui.button("+ Add object state").clicked() {

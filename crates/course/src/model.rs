@@ -3643,7 +3643,7 @@ pub enum Action {
         #[serde(default)]
         op: VarOp,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        value: Option<Value>,
+        value: Option<ValueSource>,
     },
     PlayMedia {
         object: String,
@@ -3712,7 +3712,9 @@ pub const MAX_JAVASCRIPT_BYTES: usize = 64 * 1024;
 pub enum SlideTarget {
     Next,
     Previous,
+    LastVisited,
     Id(String),
+    Scene(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -3737,6 +3739,39 @@ pub enum CompletionStatus {
     Incomplete,
 }
 
+/// Right-hand side of a `set_variable` action or `compare` condition: either a
+/// literal [`Value`] or a reference to another variable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ValueSource {
+    Constant(Value),
+    Variable { variable: String },
+}
+
+impl ValueSource {
+    #[must_use]
+    pub fn as_constant(&self) -> Option<&Value> {
+        match self {
+            Self::Constant(v) => Some(v),
+            Self::Variable { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_variable(&self) -> Option<&str> {
+        match self {
+            Self::Constant(_) => None,
+            Self::Variable { variable } => Some(variable.as_str()),
+        }
+    }
+}
+
+impl From<Value> for ValueSource {
+    fn from(v: Value) -> Self {
+        Self::Constant(v)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
@@ -3746,7 +3781,7 @@ pub enum Condition {
     Compare {
         variable: String,
         op: CmpOp,
-        value: Value,
+        value: ValueSource,
     },
     ObjectState {
         object: String,
@@ -3768,6 +3803,10 @@ pub enum CmpOp {
     Ge,
     /// Text contains (case-sensitive).
     Contains,
+    /// Text equals (case-insensitive).
+    EqIgnoreCase,
+    /// Text contains (case-insensitive).
+    ContainsIgnoreCase,
 }
 
 // ---------------------------------------------------------------- questions

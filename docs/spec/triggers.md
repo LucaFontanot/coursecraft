@@ -348,11 +348,12 @@ On entry the runtime does the following:
 
 Variables, answers and visited slides are never reset by any of these.
 
-`jump_to_slide next` on the last slide and `previous` on the first slide do nothing.
+`jump_to_slide next` on the last slide and `previous` on the first slide do nothing. `jump_to_slide last_visited` pops the most recent slide from the runtime-only `visit_history` (at most 50 entries; never in `suspend_data`, so after a resume `visit_history` starts empty and `last_visited` acts like `previous`) and enters it without pushing the current slide back onto `visit_history`. `jump_to_slide { scene }` jumps to the first slide of that scene.
 
 ## Variables
 
 - Types are fixed by the initial value: `bool`, `number` or `text`.
+- `set_variable`'s `value` may be a literal constant or `{ "variable": "Name" }` to read another variable (including built-ins).
 - `assign` needs the same type. `toggle` is bool only. `add`, `subtract`, `multiply` and `divide` are number only. Divide by zero and non-finite results are refused with a `warning`.
 - `variable_changes` fires only when the value actually changes.
 - Number equality is exact `f64` equality. Keep counters as whole numbers.
@@ -381,7 +382,7 @@ The runtime provides read-only built-in variables computed on read from `PlayerS
 - **Naming and collision:** Built-in names contain a dot (`.`), whereas user variable names are restricted to `[A-Za-z0-9_-]`. They can never collide.
 - **Read-only:** Triggers cannot modify built-in variables. Any `set_variable` targeting a built-in variable is rejected by validation.
 - **No change events:** Built-in variables do not fire `variable_changes`. A trigger specifying a built-in variable in `variable_changes` is rejected by validation.
-- **Conditions:** Conditions can inspect built-in variables via `compare { variable, op, value }`, where they are type-checked. Number built-ins accept numeric comparisons; `Quiz.Passed` and `Quiz.Reviewing` are true/false and accept `eq`/`ne`; text built-ins (`Learner.Name`, `Course.Title`, `Course.Date`) accept `eq`, `ne` and `contains`.
+- **Conditions:** Conditions can inspect built-in variables via `compare { variable, op, value }`, where they are type-checked. Number built-ins accept numeric comparisons; `Quiz.Passed` and `Quiz.Reviewing` are true/false and accept `eq`/`ne`; text built-ins (`Learner.Name`, `Course.Title`, `Course.Date`) accept `eq`, `ne`, `contains`, `eq_ignore_case` and `contains_ignore_case`.
 
 **Hosts.** The host sets `Learner.Name` and `Course.Date` with `Player::set_host_info(HostInfo { learner_name, date })`, which replaces both. Names are capped at 200 characters and dates at 32, cut on a character boundary. The SCORM bridge reads `cmi.core.student_name` (1.2) or `cmi.learner_name` (2004), and the xAPI bridge reads the launch actor's `name`; standalone players leave the name empty. Hosts format today's date with `civil_date(unix_secs) -> String`, which returns `YYYY-MM-DD` for years 1970–9999 and an empty string outside that range. Host info is runtime-only (`PlayerState.host`) and never written to suspend data.
 
@@ -406,7 +407,7 @@ The runtime provides pure text reference replacement via `Player::display_text(&
 
 ## Conditions
 
-`all`, `any`, `not`, `compare {variable, op, value}` and `object_state {object, state, is}`. Conditions can be nested at most 32 levels deep. `lt`, `le`, `gt` and `ge` compare numbers only. `contains` applies to text only.
+`all`, `any`, `not`, `compare {variable, op, value}` and `object_state {object, state, is}`. Conditions can be nested at most 32 levels deep. In `compare`, `value` may be a literal constant or `{ "variable": "Name" }` to compare against another variable (comparing variables of different kinds is a validation warning and evaluates to `false`). `lt`, `le`, `gt` and `ge` compare numbers only. `contains`, `eq_ignore_case` and `contains_ignore_case` apply to text only (the ignore-case operators compare Unicode lowercase).
 
 ## Questions
 

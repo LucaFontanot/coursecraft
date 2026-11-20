@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::{
     Action, Condition, Course, Event, Layer, Object, ObjectKind, QuestionKind, SCHEMA_VERSION,
-    Scoring, Slide, SlideTarget, Trigger, ValueKind, VarOp,
+    Scoring, Slide, SlideTarget, Trigger, ValueKind, ValueSource, VarOp,
 };
 
 /// Conditions nested deeper than this are rejected (and the player refuses them).
@@ -2161,6 +2161,15 @@ fn check_action(cx: &mut Ctx<'_>, slide: &Slide, owner: Option<&Layer>, a: &Acti
                 cx.err(p, format!("slide {id:?} does not exist"));
             }
         }
+        Action::JumpToSlide {
+            target: SlideTarget::Scene(id),
+        } => match cx.course.scenes.iter().find(|s| s.id == *id) {
+            None => cx.err(p, format!("scene {id:?} does not exist")),
+            Some(sc) if sc.slides.is_empty() => {
+                cx.warn(p, format!("scene {id:?} has no slides"));
+            }
+            Some(_) => {}
+        },
         Action::JumpToSlide { .. }
         | Action::PauseTimeline
         | Action::ResumeTimeline
@@ -2201,7 +2210,7 @@ fn check_action(cx: &mut Ctx<'_>, slide: &Slide, owner: Option<&Layer>, a: &Acti
             variable,
             op,
             value,
-        } => check_set_variable(cx, variable, *op, value.as_ref(), p),
+        } => check_set_variable(cx, slide, variable, *op, value.as_ref(), p),
         Action::PlayMedia { object }
         | Action::PauseMedia { object }
         | Action::StopMedia { object } => {
@@ -2271,11 +2280,24 @@ fn check_action(cx: &mut Ctx<'_>, slide: &Slide, owner: Option<&Layer>, a: &Acti
     }
 }
 
+fn resolve_var_kind(cx: &Ctx<'_>, slide: &Slide, name: &str) -> Option<ValueKind> {
+    crate::builtin_variable_kind(name)
+        .or_else(|| {
+            if crate::is_timer_remaining_variable_on(slide, name) {
+                Some(ValueKind::Number)
+            } else {
+                None
+            }
+        })
+        .or_else(|| cx.course.variable(name).map(|def| def.value.kind()))
+}
+
 fn check_set_variable(
     cx: &mut Ctx<'_>,
+    slide: &Slide,
     variable: &str,
     op: VarOp,
-    value: Option<&crate::Value>,
+    value: Option<&ValueSource>,
     p: &str,
 ) {
     if crate::builtin_variable_kind(variable).is_some()
@@ -2300,11 +2322,26 @@ fn check_set_variable(
         }
         VarOp::Assign => match value {
             None => cx.err(p, "assign needs a value"),
-            Some(v) if v.kind() != kind => cx.err(
-                p,
-                format!("{variable:?} is {kind:?}, value is {:?}", v.kind()),
-            ),
-            Some(_) => {}
+            Some(ValueSource::Constant(v)) => {
+                if v.kind() != kind {
+                    cx.err(
+                        p,
+                        format!("{variable:?} is {kind:?}, value is {:?}", v.kind()),
+                    );
+                }
+            }
+            Some(ValueSource::Variable { variable: src }) => {
+                match resolve_var_kind(cx, slide, src) {
+                    None => cx.err(p, format!("variable {src:?} does not exist")),
+                    Some(src_kind) if src_kind != kind => cx.err(
+                        p,
+                        format!(
+                            "{variable:?} is {kind:?}, source variable {src:?} is {src_kind:?}"
+                        ),
+                    ),
+                    Some(_) => {}
+                }
+            }
         },
         VarOp::Add | VarOp::Subtract | VarOp::Multiply | VarOp::Divide => {
             if kind != ValueKind::Number {
@@ -2314,9 +2351,19 @@ fn check_set_variable(
                 );
             }
             match value {
-                Some(crate::Value::Number(n)) if n.is_finite() => {
+                Some(ValueSource::Constant(crate::Value::Number(n))) if n.is_finite() => {
                     if op == VarOp::Divide && *n == 0.0 {
                         cx.err(p, "divide by zero");
+                    }
+                }
+                Some(ValueSource::Variable { variable: src }) => {
+                    match resolve_var_kind(cx, slide, src) {
+                        None => cx.err(p, format!("variable {src:?} does not exist")),
+                        Some(src_kind) if src_kind != ValueKind::Number => cx.err(
+                            p,
+                            format!("{op:?} needs a number variable; {src:?} is {src_kind:?}"),
+                        ),
+                        Some(_) => {}
                     }
                 }
                 _ => cx.err(p, format!("{op:?} needs a finite number value")),
@@ -2444,23 +2491,34 @@ fn check_condition(cx: &mut Ctx<'_>, slide: &Slide, c: &Condition, p: &str, dept
             op,
             value,
         } => {
-            let kind = crate::builtin_variable_kind(variable)
-                .or_else(|| {
-                    if crate::is_timer_remaining_variable_on(slide, variable) {
-                        Some(ValueKind::Number)
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| cx.course.variable(variable).map(|def| def.value.kind()));
+            let kind = resolve_var_kind(cx, slide, variable);
             match kind {
                 None => cx.err(p, format!("variable {variable:?} does not exist")),
                 Some(kind) => {
-                    if value.kind() != kind {
-                        cx.err(
-                            p,
-                            format!("{variable:?} is {kind:?}, compared with {:?}", value.kind()),
-                        );
+                    match value {
+                        ValueSource::Constant(v) => {
+                            if v.kind() != kind {
+                                cx.err(
+                                    p,
+                                    format!(
+                                        "{variable:?} is {kind:?}, compared with {:?}",
+                                        v.kind()
+                                    ),
+                                );
+                            }
+                        }
+                        ValueSource::Variable { variable: rhs } => {
+                            match resolve_var_kind(cx, slide, rhs) {
+                                None => cx.err(p, format!("variable {rhs:?} does not exist")),
+                                Some(rhs_kind) if rhs_kind != kind => cx.warn(
+                                    p,
+                                    format!(
+                                        "{variable:?} is {kind:?}, compared with {rhs:?} ({rhs_kind:?})"
+                                    ),
+                                ),
+                                Some(_) => {}
+                            }
+                        }
                     }
                     let ordered = matches!(
                         op,
@@ -2469,8 +2527,19 @@ fn check_condition(cx: &mut Ctx<'_>, slide: &Slide, c: &Condition, p: &str, dept
                     if ordered && kind != ValueKind::Number {
                         cx.err(p, format!("{op:?} only compares numbers"));
                     }
-                    if *op == crate::CmpOp::Contains && kind != ValueKind::Text {
-                        cx.err(p, "contains only applies to text");
+                    if matches!(
+                        op,
+                        crate::CmpOp::Contains
+                            | crate::CmpOp::EqIgnoreCase
+                            | crate::CmpOp::ContainsIgnoreCase
+                    ) && kind != ValueKind::Text
+                    {
+                        let msg = if *op == crate::CmpOp::Contains {
+                            "contains only applies to text".to_owned()
+                        } else {
+                            format!("{op:?} only applies to text")
+                        };
+                        cx.err(p, msg);
                     }
                 }
             }

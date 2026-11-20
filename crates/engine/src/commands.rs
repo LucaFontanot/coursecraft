@@ -4016,7 +4016,7 @@ fn remap_event(event: &mut Event, r: &Remap<'_>) -> bool {
 fn remap_action(action: &mut Action, r: &Remap<'_>) -> bool {
     match action {
         Action::JumpToSlide { target } => match target {
-            SlideTarget::Next | SlideTarget::Previous => true,
+            SlideTarget::Next | SlideTarget::Previous | SlideTarget::LastVisited => true,
             SlideTarget::Id(id) => {
                 if let Some((old, new)) = r.self_slide
                     && id == old
@@ -4025,6 +4025,9 @@ fn remap_action(action: &mut Action, r: &Remap<'_>) -> bool {
                     return true;
                 }
                 r.allow_missing_jump || r.course.play_slide(id).is_some()
+            }
+            SlideTarget::Scene(id) => {
+                r.allow_missing_jump || r.course.scenes.iter().any(|s| s.id == *id)
             }
         },
         Action::ShowLayer { layer } => remap_layer(layer, r),
@@ -4040,7 +4043,15 @@ fn remap_action(action: &mut Action, r: &Remap<'_>) -> bool {
         | Action::PauseTimer { timer: object }
         | Action::ResetTimer { timer: object }
         | Action::MoveOnPath { object, .. } => remap_object(object, r),
-        Action::SetVariable { variable, .. } => variable_exists(r.course, variable),
+        Action::SetVariable {
+            variable, value, ..
+        } => {
+            variable_exists(r.course, variable)
+                && value
+                    .as_ref()
+                    .and_then(|v| v.as_variable())
+                    .is_none_or(|v| variable_exists(r.course, v))
+        }
         Action::PauseTimeline
         | Action::ResumeTimeline
         | Action::SubmitQuestion
@@ -4072,7 +4083,14 @@ fn remap_condition(condition: &mut Condition, r: &Remap<'_>) -> bool {
             list.iter_mut().all(|inner| remap_condition(inner, r))
         }
         Condition::Not(inner) => remap_condition(inner, r),
-        Condition::Compare { variable, .. } => variable_exists(r.course, variable),
+        Condition::Compare {
+            variable, value, ..
+        } => {
+            variable_exists(r.course, variable)
+                && value
+                    .as_variable()
+                    .is_none_or(|v| variable_exists(r.course, v))
+        }
         Condition::ObjectState { object, .. } => remap_object(object, r),
     }
 }
@@ -8059,7 +8077,9 @@ fn condition_references_var(c: &Condition, var_name: &str) -> bool {
             list.iter().any(|c| condition_references_var(c, var_name))
         }
         Condition::Not(inner) => condition_references_var(inner, var_name),
-        Condition::Compare { variable, .. } => variable == var_name,
+        Condition::Compare {
+            variable, value, ..
+        } => variable == var_name || value.as_variable() == Some(var_name),
         Condition::ObjectState { .. } => false,
     }
 }
@@ -8070,7 +8090,9 @@ fn trigger_references_var(t: &Trigger, var_name: &str) -> bool {
         _ => false,
     };
     let in_action = match &t.action {
-        Action::SetVariable { variable, .. } => variable == var_name,
+        Action::SetVariable {
+            variable, value, ..
+        } => variable == var_name || value.as_ref().and_then(|v| v.as_variable()) == Some(var_name),
         _ => false,
     };
     let in_condition = t
@@ -8924,7 +8946,7 @@ fn build_results_slide(id: &str, theme: &Theme, size: Size, passing_percent: u8)
         condition: Some(Condition::Compare {
             variable: "Quiz.Passed".to_owned(),
             op: CmpOp::Eq,
-            value: Value::Bool(true),
+            value: Value::Bool(true).into(),
         }),
         disabled: false,
     });
@@ -8936,7 +8958,7 @@ fn build_results_slide(id: &str, theme: &Theme, size: Size, passing_percent: u8)
         condition: Some(Condition::Compare {
             variable: "Quiz.Passed".to_owned(),
             op: CmpOp::Eq,
-            value: Value::Bool(false),
+            value: Value::Bool(false).into(),
         }),
         disabled: false,
     });
@@ -9891,7 +9913,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                         Condition::Compare {
                             variable: variable.clone(),
                             op: CmpOp::Eq,
-                            value: Value::Bool(value),
+                            value: Value::Bool(value).into(),
                         },
                     ));
                 }
@@ -10154,7 +10176,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: variable.clone(),
                         op: VarOp::Assign,
-                        value: Some(Value::Number(step)),
+                        value: Some(Value::Number(step).into()),
                     },
                     Event::Click {
                         object: circle_id.clone(),
@@ -10165,26 +10187,26 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 Action::SetVariable {
                     variable: variable.clone(),
                     op: VarOp::Add,
-                    value: Some(Value::Number(1.0)),
+                    value: Some(Value::Number(1.0).into()),
                 },
                 Event::Click { object: next_id },
                 Condition::Compare {
                     variable: variable.clone(),
                     op: CmpOp::Lt,
-                    value: Value::Number(count as f64),
+                    value: Value::Number(count as f64).into(),
                 },
             ));
             slide.triggers.push(interaction_conditional_trigger(
                 Action::SetVariable {
                     variable: variable.clone(),
                     op: VarOp::Subtract,
-                    value: Some(Value::Number(1.0)),
+                    value: Some(Value::Number(1.0).into()),
                 },
                 Event::Click { object: back_id },
                 Condition::Compare {
                     variable: variable.clone(),
                     op: CmpOp::Gt,
-                    value: Value::Number(1.0),
+                    value: Value::Number(1.0).into(),
                 },
             ));
             for i in 0..count {
@@ -10192,7 +10214,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 let condition = Condition::Compare {
                     variable: variable.clone(),
                     op: CmpOp::Eq,
-                    value: Value::Number(step),
+                    value: Value::Number(step).into(),
                 };
                 if let Some(layer_id) = layer_ids.get(i) {
                     slide.triggers.push(interaction_conditional_trigger(
@@ -10227,7 +10249,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: variable.clone(),
                         op: VarOp::Assign,
-                        value: Some(Value::Number(1.0)),
+                        value: Some(Value::Number(1.0).into()),
                     },
                     Event::TimelineStarts { layer: None },
                 ));
@@ -10462,7 +10484,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: tile_var.clone(),
                         op: VarOp::Assign,
-                        value: Some(Value::Bool(true)),
+                        value: Some(Value::Bool(true).into()),
                     },
                     Event::Click {
                         object: tile_id.clone(),
@@ -10470,7 +10492,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Condition::Compare {
                         variable: tile_var.clone(),
                         op: CmpOp::Eq,
-                        value: Value::Bool(false),
+                        value: Value::Bool(false).into(),
                     },
                 ));
                 let changed = Event::VariableChanges {
@@ -10479,7 +10501,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 let revealed = Condition::Compare {
                     variable: tile_var.clone(),
                     op: CmpOp::Eq,
-                    value: Value::Bool(true),
+                    value: Value::Bool(true).into(),
                 };
                 slide.triggers.push(interaction_conditional_trigger(
                     Action::ChangeState {
@@ -10493,7 +10515,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: explored.clone(),
                         op: VarOp::Add,
-                        value: Some(Value::Number(1.0)),
+                        value: Some(Value::Number(1.0).into()),
                     },
                     changed,
                     revealed,
@@ -10503,7 +10525,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: tile_var.clone(),
                         op: VarOp::Assign,
-                        value: Some(Value::Bool(false)),
+                        value: Some(Value::Bool(false).into()),
                     },
                     Event::TimelineStarts { layer: None },
                 ));
@@ -10519,7 +10541,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 Action::SetVariable {
                     variable: explored,
                     op: VarOp::Assign,
-                    value: Some(Value::Number(0.0)),
+                    value: Some(Value::Number(0.0).into()),
                 },
                 Event::TimelineStarts { layer: None },
             ));
@@ -10756,23 +10778,23 @@ fn freeform_default_condition(course: &Course) -> Condition {
             Value::Bool(_) => Condition::Compare {
                 variable: v.name.clone(),
                 op: CmpOp::Eq,
-                value: Value::Bool(true),
+                value: Value::Bool(true).into(),
             },
             Value::Number(_) => Condition::Compare {
                 variable: v.name.clone(),
                 op: CmpOp::Ge,
-                value: Value::Number(0.0),
+                value: Value::Number(0.0).into(),
             },
             Value::Text(_) => Condition::Compare {
                 variable: v.name.clone(),
                 op: CmpOp::Eq,
-                value: Value::Text(String::new()),
+                value: Value::Text(String::new()).into(),
             },
         },
         None => Condition::Compare {
             variable: "Course.ScorePercent".to_owned(),
             op: CmpOp::Ge,
-            value: Value::Number(0.0),
+            value: Value::Number(0.0).into(),
         },
     }
 }
@@ -11134,7 +11156,7 @@ fn apply_question_kind(
             q.correct_when = Some(Condition::Compare {
                 variable: "Course.ScorePercent".into(),
                 op: CmpOp::Ge,
-                value: Value::Number(0.0),
+                value: Value::Number(0.0).into(),
             });
         }
     }

@@ -2176,7 +2176,7 @@ fn freeform_insert_defaults_condition_and_kind_switches_clear_fields() {
     let default_condition = Condition::Compare {
         variable: "score".into(),
         op: CmpOp::Ge,
-        value: Value::Number(0.0),
+        value: Value::Number(0.0).into(),
     };
     assert_eq!(q.correct_when.as_ref(), Some(&default_condition));
 
@@ -2184,7 +2184,7 @@ fn freeform_insert_defaults_condition_and_kind_switches_clear_fields() {
     updated.correct_when = Some(Condition::Compare {
         variable: "Course.ScorePercent".into(),
         op: CmpOp::Ge,
-        value: Value::Number(50.0),
+        value: Value::Number(50.0).into(),
     });
     ok(
         &mut s,
@@ -3964,7 +3964,7 @@ fn results_insert_places_a_results_slide_after_the_given_slide() {
             } => {
                 assert_eq!(shown, layer);
                 assert_eq!(variable, "Quiz.Passed");
-                assert_eq!(*value, Value::Bool(layer == "passed"));
+                assert_eq!(*value, Value::Bool(layer == "passed").into());
             }
             other => panic!("unexpected trigger {other:?}"),
         }

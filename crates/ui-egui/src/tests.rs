@@ -2877,7 +2877,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Assign,
-                value: Some(Value::Number(10.0)),
+                value: Some(Value::Number(10.0).into()),
             },
             "Set v1 = 10",
         ),
@@ -2885,7 +2885,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Add,
-                value: Some(Value::Number(1.0)),
+                value: Some(Value::Number(1.0).into()),
             },
             "Set v1 + 1",
         ),
@@ -2893,7 +2893,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Subtract,
-                value: Some(Value::Number(2.0)),
+                value: Some(Value::Number(2.0).into()),
             },
             "Set v1 - 2",
         ),
@@ -2901,7 +2901,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Multiply,
-                value: Some(Value::Number(3.0)),
+                value: Some(Value::Number(3.0).into()),
             },
             "Set v1 * 3",
         ),
@@ -2909,7 +2909,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Divide,
-                value: Some(Value::Number(4.0)),
+                value: Some(Value::Number(4.0).into()),
             },
             "Set v1 / 4",
         ),
@@ -3911,8 +3911,8 @@ fn condition_kind_selector_builds_compare_trigger() {
         } => {
             assert_eq!(variable, "tabs_seen");
             assert_eq!(*op, CmpOp::Ge);
-            assert_eq!(*value, Value::Number(0.0));
-            *value = Value::Number(3.0);
+            assert_eq!(*value, Value::Number(0.0).into());
+            *value = Value::Number(3.0).into();
         }
         other => panic!("expected Compare root, got {other:?}"),
     }
@@ -3950,7 +3950,7 @@ fn condition_kind_selector_builds_compare_trigger() {
         condition: Some(Condition::Compare {
             variable: "tabs_seen".to_owned(),
             op: CmpOp::Ge,
-            value: Value::Number(3.0),
+            value: Value::Number(3.0).into(),
         }),
         disabled: false,
     };
@@ -3968,7 +3968,7 @@ fn condition_all_group_roundtrips_and_convert_wraps() {
         Condition::Compare {
             variable: "tabs_seen".to_owned(),
             op: CmpOp::Ge,
-            value: Value::Number(3.0),
+            value: Value::Number(3.0).into(),
         },
         Condition::ObjectState {
             object: "tab1".to_owned(),
@@ -6496,7 +6496,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
         Some(Condition::Compare {
             variable: "tabs_seen".into(),
             op: CmpOp::Ge,
-            value: Value::Number(0.0),
+            value: Value::Number(0.0).into(),
         })
     );
     assert!(harness.find_text("Correct when").is_some());
@@ -6525,7 +6525,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
         Some(Condition::Not(Box::new(Condition::Compare {
             variable: "tabs_seen".into(),
             op: CmpOp::Ge,
-            value: Value::Number(0.0),
+            value: Value::Number(0.0).into(),
         }))),
         "the form writes the changed condition through question.set"
     );
