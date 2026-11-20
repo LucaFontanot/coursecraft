@@ -514,6 +514,7 @@ fn test_cli_showcase_simulate_pass() {
             course: course_path.clone(),
             inputs: inputs_path.clone(),
             seed: 0,
+            strict: false,
         },
     })
     .expect("run simulate cmd");
@@ -559,6 +560,7 @@ fn test_cli_showcase_simulate_fail() {
             course: course_path.clone(),
             inputs: inputs_path.clone(),
             seed: 0,
+            strict: false,
         },
     })
     .expect("run simulate cmd");
@@ -638,6 +640,7 @@ fn simulate_seed_changes_the_picks_and_is_repeatable() {
                 course: course_path.clone(),
                 inputs: inputs_path.clone(),
                 seed,
+                strict: false,
             },
         })
         .expect("run simulate cmd");
@@ -685,7 +688,7 @@ fn test_cli_showcase_publish_includes_media_and_manifest() {
     let code = run(Cli {
         cmd: Cmd::Publish {
             course: course_path,
-            player: player_dir,
+            player: Some(player_dir),
             out: Some(zip_out.clone()),
             out_dir: Some(out_dir.clone()),
             standard: StandardArg::Scorm12,
@@ -729,7 +732,7 @@ fn test_cli_publish_lti_has_marker_and_no_manifest() {
     let code = run(Cli {
         cmd: Cmd::Publish {
             course: course_path,
-            player: player_dir,
+            player: Some(player_dir),
             out: Some(zip_out.clone()),
             out_dir: Some(out_dir.clone()),
             standard: StandardArg::Lti,
@@ -1823,4 +1826,108 @@ fn healthy_habits_pass_inputs_visit_every_slide_and_score_full_marks() {
             .any(|e| matches!(e, Effect::Score { percent, .. } if *percent == 100)),
         "expected a 100% score"
     );
+}
+
+#[test]
+fn test_cli_simulate_strict_fails_on_warning() {
+    let scratch = scratch_dir("test-cli-simulate-strict");
+    let course_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello-course/course.json");
+    let inputs_path = scratch.join("warn.inputs.json");
+    std::fs::write(
+        &inputs_path,
+        r#"[{"input": "start"}, {"input": "click", "object": "no_such_object"}]"#,
+    )
+    .expect("write inputs");
+
+    let non_strict = run(Cli {
+        cmd: Cmd::Simulate {
+            course: course_path.clone(),
+            inputs: inputs_path.clone(),
+            seed: 0,
+            strict: false,
+        },
+    })
+    .expect("simulate without strict");
+    assert_eq!(non_strict, ExitCode::SUCCESS);
+
+    let strict = run(Cli {
+        cmd: Cmd::Simulate {
+            course: course_path,
+            inputs: inputs_path,
+            seed: 0,
+            strict: true,
+        },
+    })
+    .expect("simulate with strict");
+    assert_eq!(strict, ExitCode::FAILURE);
+}
+
+#[test]
+fn test_cli_validate_explains_non_course_files() {
+    let scratch = scratch_dir("test-cli-validate-hints");
+
+    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/hello-course/build.script.json");
+    let script_err = run(Cli {
+        cmd: Cmd::Validate {
+            course: script_path,
+        },
+    })
+    .expect_err("build script should fail validate");
+    assert_eq!(
+        script_err,
+        "This looks like a build script, not a course. Use `coursecraft-cli run`."
+    );
+
+    let inputs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/hello-course/pass.inputs.json");
+    let inputs_err = run(Cli {
+        cmd: Cmd::Validate {
+            course: inputs_path,
+        },
+    })
+    .expect_err("inputs json should fail validate");
+    assert_eq!(
+        inputs_err,
+        "This looks like a simulate inputs file, not a course. Use `coursecraft-cli simulate`."
+    );
+
+    let csv_path = scratch.join("questions.csv");
+    std::fs::write(&csv_path, "question,a,b\n1+1?,2,3\n").expect("write csv");
+    let csv_err = run(Cli {
+        cmd: Cmd::Validate { course: csv_path },
+    })
+    .expect_err("csv should fail validate");
+    assert_eq!(
+        csv_err,
+        "This looks like a CSV file, not a course. Use `coursecraft-cli import-questions`."
+    );
+}
+
+#[test]
+fn test_cli_publish_missing_player_mentions_build_player() {
+    let scratch = scratch_dir("test-cli-publish-no-player");
+    let course_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello-course/course.json");
+    let out_zip = scratch.join("out.zip");
+
+    let res = run(Cli {
+        cmd: Cmd::Publish {
+            course: course_path,
+            player: None,
+            out: Some(out_zip),
+            out_dir: None,
+            standard: StandardArg::Scorm12,
+        },
+    });
+    if !Path::new("target/player-dist").is_dir() {
+        let err = res.expect_err("publish without player-dist should fail");
+        assert!(
+            err.contains("cargo xtask build-player"),
+            "unexpected error: {err}"
+        );
+    } else {
+        assert!(res.is_ok());
+    }
 }

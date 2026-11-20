@@ -83,6 +83,8 @@ fn initial_course_and_media(blank: bool) -> coursecraft_ui_egui::LoadedExample {
 enum PendingAction {
     New,
     Open,
+    /// Open a specific project file or folder (for example from drag-and-drop).
+    OpenPath(PathBuf),
     /// Pick a project folder to open.
     OpenFolder,
     OpenRecent(usize),
@@ -853,6 +855,9 @@ impl EditorApp {
                     self.initiate_open(path);
                 }
             }
+            PendingAction::OpenPath(path) => {
+                self.initiate_open(path);
+            }
             PendingAction::OpenFolder => {
                 if let Some(path) = files::pick_project_folder() {
                     self.initiate_open(path);
@@ -1320,22 +1325,73 @@ impl EditorApp {
                 .and_then(|n| n.to_str())
                 .unwrap_or("media")
                 .to_string();
+            let lower = name.to_ascii_lowercase();
+            if lower.ends_with(".ccraft") {
+                self.guard_unsaved(PendingAction::OpenPath(path.to_path_buf()), ctx);
+                continue;
+            }
+            if lower.ends_with(".pptx") {
+                self.import_pptx_file(path);
+                continue;
+            }
+            let is_font = lower.ends_with(".ttf") || lower.ends_with(".otf");
+            let is_audio = lower.ends_with(".mp3")
+                || lower.ends_with(".wav")
+                || lower.ends_with(".ogg")
+                || lower.ends_with(".m4a");
+            let is_video = lower.ends_with(".mp4") || lower.ends_with(".webm");
+            let is_lottie = lower.ends_with(".lottie") || lower.ends_with(".json");
+            let is_vtt = lower.ends_with(".vtt");
+            let is_image = lower.ends_with(".png")
+                || lower.ends_with(".jpg")
+                || lower.ends_with(".jpeg")
+                || lower.ends_with(".webp")
+                || lower.ends_with(".gif")
+                || lower.ends_with(".svg")
+                || lower.ends_with(".svgz")
+                || lower.ends_with(".bmp")
+                || lower.ends_with(".ico")
+                || lower.ends_with(".tif")
+                || lower.ends_with(".tiff");
+
+            if !(is_font || is_audio || is_video || is_lottie || is_vtt || is_image) {
+                let msg = match path.extension().and_then(|e| e.to_str()) {
+                    Some(ext) if !ext.is_empty() => {
+                        format!("CourseCraft can't import .{ext} files.")
+                    }
+                    _ => "CourseCraft can't import this file.".to_owned(),
+                };
+                self.editor.set_status(msg);
+                continue;
+            }
+
             if let Ok(bytes) = std::fs::read(path) {
-                let lower = name.to_ascii_lowercase();
-                if lower.ends_with(".pptx") {
-                    self.import_pptx_file(path);
-                } else if lower.ends_with(".ttf") || lower.ends_with(".otf") {
+                if is_font {
                     self.editor.import_font(&name, &bytes);
-                } else if lower.ends_with(".mp3")
-                    || lower.ends_with(".wav")
-                    || lower.ends_with(".ogg")
-                    || lower.ends_with(".m4a")
-                {
+                } else if is_audio {
                     self.editor.import_audio(&name, &bytes);
-                } else if lower.ends_with(".mp4") || lower.ends_with(".webm") {
+                } else if is_video {
                     self.editor.import_video(&name, &bytes);
-                } else if lower.ends_with(".lottie") || lower.ends_with(".json") {
+                } else if is_lottie {
                     self.editor.import_lottie(&name, &bytes);
+                } else if is_vtt {
+                    if self.editor.pending_replace_object.is_none()
+                        && let Some(obj_id) = self.editor.selection.object.clone()
+                        && let Some(slide) = self
+                            .editor
+                            .session
+                            .course
+                            .slide(&self.editor.selection.slide)
+                        && let Some((obj, _)) = slide.object(&obj_id)
+                        && matches!(
+                            obj.kind,
+                            coursecraft_course::ObjectKind::Audio { .. }
+                                | coursecraft_course::ObjectKind::Video { .. }
+                        )
+                    {
+                        self.editor.pending_replace_object = Some(obj_id);
+                    }
+                    self.editor.import_captions(&name, &bytes);
                 } else {
                     self.editor.import_image(&name, &bytes);
                 }
@@ -2546,6 +2602,37 @@ impl eframe::App for EditorApp {
             }
 
             self.handle_dropped_files(ui.ctx());
+
+            if ui.ctx().input(|i| !i.raw.hovered_files.is_empty()) {
+                let screen = ui.ctx().content_rect();
+                let accent = ui.style().visuals.selection.stroke.color;
+                egui::Area::new(egui::Id::unique("drop_import_overlay"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(screen.min)
+                    .interactable(false)
+                    .show(ui.ctx(), |ui| {
+                        let (rect, _) = ui.allocate_exact_size(screen.size(), egui::Sense::hover());
+                        let painter = ui.painter_at(rect);
+                        painter.rect_filled(
+                            rect,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 96),
+                        );
+                        painter.rect_stroke(
+                            rect.shrink(16.0),
+                            8.0,
+                            egui::Stroke::new(2.0, accent),
+                            egui::StrokeKind::Inside,
+                        );
+                        painter.text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "Drop to import",
+                            egui::FontId::proportional(20.0),
+                            egui::Color32::WHITE,
+                        );
+                    });
+            }
 
             // Unsaved changes confirmation modal
             if self.pending_action.is_some() {

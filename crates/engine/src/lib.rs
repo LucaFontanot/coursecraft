@@ -77,6 +77,8 @@ pub struct Session {
     /// revision bump. Taken by [`Session::execute`] and
     /// [`Session::execute_batch`] after every command, so it never leaks.
     skip_undo: bool,
+    /// Set once older undo steps are dropped to stay within [`MAX_HISTORY`].
+    history_truncated: bool,
 }
 
 impl Session {
@@ -88,6 +90,7 @@ impl Session {
             redo: Vec::new(),
             revision: 0,
             skip_undo: false,
+            history_truncated: false,
         }
     }
 
@@ -202,6 +205,7 @@ impl Session {
                 self.undo.push((snapshot, cmd.label.to_owned()));
                 if self.undo.len() > MAX_HISTORY {
                     self.undo.remove(0);
+                    self.history_truncated = true;
                 }
                 self.redo.clear();
                 self.revision = self.revision.wrapping_add(1);
@@ -308,6 +312,7 @@ impl Session {
             self.undo.push((snapshot, label));
             if self.undo.len() > MAX_HISTORY {
                 self.undo.remove(0);
+                self.history_truncated = true;
             }
             self.redo.clear();
             self.revision = self.revision.wrapping_add(1);
@@ -354,6 +359,12 @@ impl Session {
             self.redo()?;
         }
         Ok(())
+    }
+
+    /// Whether older undo steps were dropped because history exceeded [`MAX_HISTORY`].
+    #[must_use]
+    pub fn history_truncated(&self) -> bool {
+        self.history_truncated
     }
 }
 

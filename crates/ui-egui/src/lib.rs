@@ -91,6 +91,8 @@ mod bughunt_undo;
 #[cfg(test)]
 mod canvas_speed_tests;
 #[cfg(test)]
+mod daily_fixes_tests;
+#[cfg(test)]
 mod document_tests;
 #[cfg(test)]
 mod eyedropper_tests;
@@ -2179,6 +2181,12 @@ impl Editor {
                 src: src.clone(),
                 natural_size: (natural_width, natural_height),
             });
+        }
+
+        if is_svg && bytes.windows(5).any(|w| w.eq_ignore_ascii_case(b"<text")) {
+            self.set_status(
+                "This SVG has text, which CourseCraft draws only as shapes. Convert text to outlines in your drawing app.",
+            );
         }
 
         Some(src)

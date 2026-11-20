@@ -9,7 +9,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand, ValueEnum};
 use coursecraft_course::{AuditReport, AuditSeverity, Course, Severity};
 use coursecraft_engine::{Session, registry};
-use coursecraft_logic::{Input, Player};
+use coursecraft_logic::{Effect, Input, Player};
 use coursecraft_publish::{
     PackageFile, PackageInput, PackageStandard, build_package_standard_with_folders, zip_package,
 };
@@ -109,6 +109,9 @@ enum Cmd {
         /// Draw seed for question banks (default 0).
         #[arg(long, default_value_t = 0)]
         seed: u32,
+        /// Exit non-zero if any runtime warning is reported.
+        #[arg(long)]
+        strict: bool,
     },
     /// Apply a script of engine commands: JSON array of {"command": id, "params": {...}}.
     Run {
@@ -167,8 +170,9 @@ enum Cmd {
     /// Publish a course to a SCORM, cmi5, xAPI or LTI package.
     Publish {
         course: PathBuf,
+        /// Built player folder (defaults to `target/player-dist` if present).
         #[arg(long)]
-        player: PathBuf,
+        player: Option<PathBuf>,
         #[arg(short, long)]
         out: Option<PathBuf>,
         #[arg(long)]
@@ -1132,9 +1136,45 @@ fn collect_web_folder_files(media_dir: &Path, path: &str) -> Option<Vec<(String,
     Some(out)
 }
 
+fn resolve_player_dir(player: Option<PathBuf>) -> Res<PathBuf> {
+    if let Some(p) = player {
+        return Ok(p);
+    }
+    let cwd_candidate = PathBuf::from("target/player-dist");
+    if cwd_candidate.is_dir() {
+        return Ok(cwd_candidate);
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        let candidates = [
+            exe_dir.join("target/player-dist"),
+            exe_dir.join("player-dist"),
+            exe_dir
+                .parent()
+                .map(|p| p.join("player-dist"))
+                .unwrap_or_default(),
+            exe_dir
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.join("target/player-dist"))
+                .unwrap_or_default(),
+        ];
+        for candidate in candidates {
+            if !candidate.as_os_str().is_empty() && candidate.is_dir() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(
+        "missing --player <folder> and no built player found at target/player-dist; build it with `cargo xtask build-player`"
+            .to_string(),
+    )
+}
+
 fn run_publish(
     course: PathBuf,
-    player: PathBuf,
+    player: Option<PathBuf>,
     out: Option<PathBuf>,
     out_dir: Option<PathBuf>,
     standard: PackageStandard,
@@ -1143,6 +1183,7 @@ fn run_publish(
         return Err("at least one of -o/--out or --out-dir is required".to_string());
     }
 
+    let player = resolve_player_dir(player)?;
     let course = course_file(&course);
     let c = load(&course)?;
     let course_text = read(&course)?;
@@ -1620,6 +1661,34 @@ fn run_import_pptx(deck: PathBuf, out: PathBuf) -> Res<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn explain_non_course_file(path: &Path) -> Option<&'static str> {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("csv"))
+    {
+        return Some(
+            "This looks like a CSV file, not a course. Use `coursecraft-cli import-questions`.",
+        );
+    }
+    let text = std::fs::read_to_string(path).ok()?;
+    if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(&text)
+        && !arr.is_empty()
+    {
+        if serde_json::from_str::<Vec<Step>>(&text).is_ok() {
+            return Some(
+                "This looks like a build script, not a course. Use `coursecraft-cli run`.",
+            );
+        }
+        if serde_json::from_str::<Vec<Input>>(&text).is_ok() {
+            return Some(
+                "This looks like a simulate inputs file, not a course. Use `coursecraft-cli simulate`.",
+            );
+        }
+    }
+    None
+}
+
 fn run_editor(method: String, params: String, config_dir: Option<PathBuf>) -> Res<ExitCode> {
     let config_dir = config_dir
         .or_else(coursecraft_control::default_config_dir)
@@ -1672,7 +1741,15 @@ fn run(cli: Cli) -> Res<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Validate { course } => {
-            let c = load(&course)?;
+            let c = match load(&course) {
+                Ok(c) => c,
+                Err(err) => {
+                    if let Some(hint) = explain_non_course_file(&course) {
+                        return Err(hint.to_string());
+                    }
+                    return Err(err);
+                }
+            };
             let issues = c.validate();
             for i in &issues {
                 let tag = if i.severity == Severity::Error {
@@ -1701,6 +1778,7 @@ fn run(cli: Cli) -> Res<ExitCode> {
             course,
             inputs,
             seed,
+            strict,
         } => {
             let c = load(&course)?;
             let inputs: Vec<Input> =
@@ -1711,12 +1789,20 @@ fn run(cli: Cli) -> Res<ExitCode> {
                     .collect::<Vec<_>>()
                     .join("\n")
             })?;
+            let mut warned = false;
             for input in &inputs {
                 for effect in p.handle(input) {
+                    if matches!(effect, Effect::Warning { .. }) {
+                        warned = true;
+                    }
                     json_line(&effect)?;
                 }
             }
-            Ok(ExitCode::SUCCESS)
+            Ok(if strict && warned {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            })
         }
         Cmd::Run {
             course,
