@@ -734,3 +734,57 @@ fn verify_project_accepts_a_whole_save_and_rejects_damage() {
     assert!(verify_project(std::io::Cursor::new(&bytes[..bytes.len() / 2])).is_err());
     assert!(verify_project(std::io::Cursor::new(Vec::<u8>::new())).is_err());
 }
+
+#[test]
+fn open_project_with_limits_rejects_inflated_declared_sizes_before_reading() {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        writer
+            .start_file("course.json", opts)
+            .expect("start course");
+        let course_json = minimal_course("hostile").to_json().expect("json");
+        std::io::Write::write_all(&mut writer, course_json.as_bytes()).expect("write course");
+        writer.start_file("media/a.txt", opts).expect("start media");
+        std::io::Write::write_all(&mut writer, b"tiny").expect("write media");
+        writer.finish().expect("finish");
+    }
+    let mut bytes = buf.into_inner();
+    let inflated: u32 = 150 * 1024 * 1024;
+    let inflated_le = inflated.to_le_bytes();
+
+    // Patch local file header for media/a.txt (PK\x03\x04, uncompressed size at +22..+26).
+    let mut patched_local = 0usize;
+    for i in 0..bytes.len().saturating_sub(30) {
+        if &bytes[i..i + 4] == b"PK\x03\x04" {
+            let name_len = u16::from_le_bytes([bytes[i + 26], bytes[i + 27]]) as usize;
+            if bytes.get(i + 30..i + 30 + name_len) == Some(b"media/a.txt") {
+                bytes[i + 22..i + 26].copy_from_slice(&inflated_le);
+                patched_local += 1;
+            }
+        }
+    }
+    // Patch central directory header for media/a.txt (PK\x01\x02, uncompressed size at +24..+28).
+    let mut patched_cd = 0usize;
+    for i in 0..bytes.len().saturating_sub(46) {
+        if &bytes[i..i + 4] == b"PK\x01\x02" {
+            let name_len = u16::from_le_bytes([bytes[i + 28], bytes[i + 29]]) as usize;
+            if bytes.get(i + 46..i + 46 + name_len) == Some(b"media/a.txt") {
+                bytes[i + 24..i + 28].copy_from_slice(&inflated_le);
+                patched_cd += 1;
+            }
+        }
+    }
+    assert_eq!(patched_local, 1);
+    assert_eq!(patched_cd, 1);
+
+    let limits = Limits {
+        max_entries: 10,
+        max_entry_bytes: 256 * 1024 * 1024,
+        max_total_bytes: 100 * 1024 * 1024,
+    };
+    let err = open_project_with_limits(&bytes, limits).expect_err("inflated zip should fail");
+    assert_eq!(err, FormatError::TooLarge);
+}

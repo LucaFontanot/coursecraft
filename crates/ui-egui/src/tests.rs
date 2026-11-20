@@ -17594,3 +17594,11 @@ fn edit_menu_shows_named_undo_and_redo() {
         "Edit menu should show named Redo"
     );
 }
+
+#[test]
+fn sanitize_media_src_avoids_case_only_collisions() {
+    let existing = vec![("Logo.png".to_owned(), std::sync::Arc::from(&b"a"[..]))];
+    let picked = crate::sanitize_media_src("logo.png", &existing);
+    assert!(!picked.eq_ignore_ascii_case("Logo.png"));
+    assert_eq!(picked, "logo-2.png");
+}

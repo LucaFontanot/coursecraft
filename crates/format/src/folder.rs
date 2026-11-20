@@ -386,7 +386,7 @@ pub fn save_project_folder_with(
         if !is_safe_relative_path(path) || path.ends_with(TEMP_SUFFIX) {
             return Err(FormatError::UnsafePath(path.clone()));
         }
-        if !wanted.insert(format!("{MEDIA_DIR}/{path}")) {
+        if !wanted.insert(format!("{MEDIA_DIR}/{path}").to_ascii_lowercase()) {
             return Err(FormatError::DuplicateEntry(path.clone()));
         }
     }
@@ -510,6 +510,9 @@ impl Writer<'_, '_> {
         result: Result<Option<FileRecord>, FormatError>,
     ) -> Result<(), FormatError> {
         if let Some(record) = result? {
+            self.record
+                .files
+                .retain(|k, _| k == rel || !k.eq_ignore_ascii_case(rel));
             self.record.files.insert(rel.to_owned(), record);
             self.report.written.push(rel.to_owned());
         }
@@ -553,7 +556,7 @@ impl Writer<'_, '_> {
             .record
             .files
             .keys()
-            .filter(|rel| rel.starts_with("media/") && !wanted.contains(*rel))
+            .filter(|rel| rel.starts_with("media/") && !wanted.contains(&rel.to_ascii_lowercase()))
             .cloned()
             .collect();
         let mut emptied = BTreeSet::new();

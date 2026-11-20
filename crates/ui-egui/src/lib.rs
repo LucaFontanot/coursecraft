@@ -4237,14 +4237,17 @@ pub fn sanitize_media_src(file_name: &str, existing: &[(String, std::sync::Arc<[
     };
 
     let base = format!("{stem}.{ext}");
-    if !existing.iter().any(|(s, _)| s == &base) {
+    if !existing.iter().any(|(s, _)| s.eq_ignore_ascii_case(&base)) {
         return base;
     }
 
     let mut counter = 2;
     loop {
         let candidate = format!("{stem}-{counter}.{ext}");
-        if !existing.iter().any(|(s, _)| s == &candidate) {
+        if !existing
+            .iter()
+            .any(|(s, _)| s.eq_ignore_ascii_case(&candidate))
+        {
             return candidate;
         }
         counter += 1;

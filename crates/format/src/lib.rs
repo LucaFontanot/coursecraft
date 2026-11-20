@@ -414,13 +414,19 @@ pub fn open_project_with_limits(bytes: &[u8], limits: Limits) -> Result<Project,
         let stored = file.compression() == zip::CompressionMethod::Stored;
         let entry_limit = entry_limit(stored, limits);
 
-        if file.size() > entry_limit {
+        let declared_size = file.size();
+        if declared_size > entry_limit {
             return Err(FormatError::EntryTooLarge(name));
         }
 
-        // Reserve the declared size up front (it is within the limit) so a
-        // 100 MB video is read without regrowing its buffer.
-        let reserve = usize::try_from(file.size()).unwrap_or(0);
+        // Count the declared size before allocating or reading, so a zip that
+        // declares huge entries is refused with TooLarge rather than reading.
+        sizes.add(declared_size, stored, limits)?;
+
+        // Never reserve more than 1 MiB up front: a hostile zip can declare up
+        // to entry_limit per entry while holding only a few bytes.
+        const MAX_ENTRY_PREALLOC: u64 = 1024 * 1024;
+        let reserve = usize::try_from(declared_size.min(MAX_ENTRY_PREALLOC)).unwrap_or(0);
         let mut entry_bytes = Vec::with_capacity(reserve);
         let read_limit = entry_limit.saturating_add(1);
         file.take(read_limit).read_to_end(&mut entry_bytes)?;
@@ -429,7 +435,10 @@ pub fn open_project_with_limits(bytes: &[u8], limits: Limits) -> Result<Project,
             return Err(FormatError::EntryTooLarge(name));
         }
 
-        sizes.add(entry_bytes.len() as u64, stored, limits)?;
+        let extra = (entry_bytes.len() as u64).saturating_sub(declared_size);
+        if extra > 0 {
+            sizes.add(extra, stored, limits)?;
+        }
 
         if name == "course.json" {
             course_json_bytes = Some(entry_bytes);

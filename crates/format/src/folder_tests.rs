@@ -510,3 +510,44 @@ fn a_save_that_could_not_be_opened_again_is_refused_before_writing() {
         .expect_err("too many");
     assert_eq!(err, FormatError::TooManyEntries);
 }
+
+#[test]
+fn save_keeps_media_file_when_only_ascii_case_changes() {
+    let dir = scratch("case-only-rename").join("p.ccraft-folder");
+    let mut record = FolderRecord::new();
+    save(
+        &dir,
+        &hello(),
+        &[("Logo.png".to_owned(), vec![1, 2, 3])],
+        &mut record,
+    );
+    assert!(dir.join("media/Logo.png").exists());
+
+    save(
+        &dir,
+        &hello(),
+        &[("logo.png".to_owned(), vec![4, 5, 6])],
+        &mut record,
+    );
+    assert!(
+        dir.join("media/logo.png").exists(),
+        "logo.png should not be deleted by delete_unused"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("media/logo.png")).expect("read"),
+        vec![4, 5, 6]
+    );
+}
+
+#[test]
+fn save_rejects_case_only_duplicate_media_names() {
+    let dir = scratch("case-only-dup").join("p.ccraft-folder");
+    let mut record = FolderRecord::new();
+    let items = vec![
+        ("Logo.png".to_owned(), vec![1, 2, 3]),
+        ("logo.png".to_owned(), vec![4, 5, 6]),
+    ];
+    let err = save_project_folder_with(&dir, &hello(), &items, &mut record, &SaveHooks::default())
+        .expect_err("case-only duplicate should be rejected");
+    assert_eq!(err, FormatError::DuplicateEntry("logo.png".to_owned()));
+}
