@@ -62,6 +62,7 @@ enum SlideMenuAction {
     Copy(String),
     Cut(String),
     Paste,
+    Rename(String),
 }
 
 /// Returns the thumbnail rect for a given slide id, given the left panel rect.
@@ -515,6 +516,78 @@ fn show_master_rename_editor(editor: &mut Editor, ui: &mut Ui, rect: Rect) {
     }
 }
 
+fn start_slide_rename(editor: &mut Editor, slide_id: &str) {
+    let title = editor
+        .session
+        .course
+        .slide(slide_id)
+        .map(|slide| slide.title.clone())
+        .unwrap_or_default();
+    editor.ui.slide_rename = Some(SceneRename {
+        scene: slide_id.to_owned(),
+        buffer: title.clone(),
+        original: title,
+        just_entered: true,
+    });
+}
+
+fn show_slide_rename_editor(editor: &mut Editor, ui: &mut Ui, rect: Rect) {
+    let Some(rename) = editor.ui.slide_rename.clone() else {
+        return;
+    };
+    let mut buffer = rename.buffer.clone();
+    let edit_id = Id::unique(("slide_rename", &rename.scene));
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    child.spacing_mut().item_spacing = egui::Vec2::ZERO;
+    let mut output = TextEdit::singleline(&mut buffer)
+        .id(edit_id)
+        .font(FontId::new(
+            coursecraft_render::SIZE_SMALL,
+            egui::FontFamily::Name("inter".into()),
+        ))
+        .desired_width(rect.width())
+        .margin(egui::Margin::same(1))
+        .show(&mut child);
+
+    if rename.just_entered {
+        output.response.request_focus();
+        let chars = buffer.chars().count();
+        output
+            .state
+            .cursor
+            .set_char_range(Some(egui::text_selection::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(chars),
+            )));
+        output.state.store(ui.ctx(), output.response.id);
+        if let Some(state) = editor.ui.slide_rename.as_mut() {
+            state.just_entered = false;
+        }
+    }
+    if let Some(state) = editor.ui.slide_rename.as_mut() {
+        state.buffer = buffer.clone();
+    }
+    let enter = ui.input(|i| i.key_pressed(Key::Enter));
+    let escaped = ui.input(|i| i.key_pressed(Key::Escape));
+    let lost = output.response.lost_focus();
+    if escaped {
+        editor.ui.slide_rename = None;
+    } else if enter || lost {
+        let title = buffer.trim().to_owned();
+        if !title.is_empty() && title != rename.original {
+            editor.run(
+                "slide.update",
+                serde_json::json!({ "slide": rename.scene, "title": title }),
+            );
+        }
+        editor.ui.slide_rename = None;
+    }
+}
+
 fn slides_using_master(course: &Course, master_id: &str) -> usize {
     course
         .slides()
@@ -679,6 +752,13 @@ fn show_slide_menu_items(
     }
     if ui.button("Duplicate slide").clicked() {
         *action_to_run = Some(("slide.duplicate", serde_json::json!({ "slide": slide_id })));
+        ui.close();
+    }
+    if ui
+        .add(egui::Button::new("Rename").shortcut_text("F2"))
+        .clicked()
+    {
+        *slide_action = Some(SlideMenuAction::Rename(slide_id.to_owned()));
         ui.close();
     }
     ui.separator();
@@ -941,6 +1021,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
     let mut action_to_run: Option<(&'static str, Json)> = None;
     let mut slide_action: Option<SlideMenuAction> = None;
     let mut slide_to_select: Option<String> = None;
+    let mut slide_to_rename: Option<String> = None;
     let mut scene_to_rename: Option<String> = None;
     let mut scene_to_delete: Option<String> = None;
     let mut bank_to_rename: Option<String> = None;
@@ -1308,27 +1389,68 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 });
             }
 
-            // Slide title below thumbnail
+            // Slide title below thumbnail, or an in-place rename field.
             let title_rect = Rect::from_min_size(
                 pos2(thumb_x, thumb_rect.max.y + TITLE_GAP),
                 vec2(thumb_w, TITLE_HEIGHT),
             );
-            let title_color = if is_selected {
-                p.text
+            let renaming = editor
+                .ui
+                .slide_rename
+                .as_ref()
+                .is_some_and(|state| state.scene == slide.id);
+            if renaming {
+                show_slide_rename_editor(editor, ui, title_rect);
             } else {
-                p.text_secondary
-            };
-            let painter = ui.painter_at(title_rect);
-            painter.text(
-                title_rect.left_top(),
-                Align2::LEFT_TOP,
-                &slide.title,
-                FontId::new(
-                    coursecraft_render::SIZE_SMALL,
-                    egui::FontFamily::Name("inter".into()),
-                ),
-                title_color,
-            );
+                let title_resp = ui.interact(
+                    title_rect,
+                    ui.scope_id().with("slide_title").with(&slide.id),
+                    Sense::click(),
+                );
+                if title_resp.clicked() {
+                    editor.ui.last_active_area = crate::ActiveArea::Navigator;
+                    slide_to_select = Some(slide.id.clone());
+                }
+                if title_resp.double_clicked() {
+                    editor.ui.last_active_area = crate::ActiveArea::Navigator;
+                    slide_to_select = Some(slide.id.clone());
+                    slide_to_rename = Some(slide.id.clone());
+                }
+                if title_resp.secondary_clicked() {
+                    editor.ui.last_active_area = crate::ActiveArea::Navigator;
+                }
+                title_resp.context_menu(|ui| {
+                    show_slide_menu_items(
+                        ui,
+                        &slide.id,
+                        &scene.id,
+                        slide_idx,
+                        total_in_scene,
+                        total_course_slides,
+                        can_paste,
+                        slide.is_question,
+                        &bank_menu,
+                        &mut action_to_run,
+                        &mut slide_action,
+                    );
+                });
+                let title_color = if is_selected {
+                    p.text
+                } else {
+                    p.text_secondary
+                };
+                let painter = ui.painter_at(title_rect);
+                painter.text(
+                    title_rect.left_top(),
+                    Align2::LEFT_TOP,
+                    &slide.title,
+                    FontId::new(
+                        coursecraft_render::SIZE_SMALL,
+                        egui::FontFamily::Name("inter".into()),
+                    ),
+                    title_color,
+                );
+            }
 
             current_y += row_height;
         }
@@ -1575,6 +1697,9 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
         editor.selection.clear_objects();
     }
 
+    if let Some(id) = slide_to_rename {
+        start_slide_rename(editor, &id);
+    }
     if let Some(id) = scene_to_rename {
         start_scene_rename(editor, &id);
     }
@@ -1601,7 +1726,26 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 crate::clipboard::cut(editor);
             }
             SlideMenuAction::Paste => crate::clipboard::paste_private(editor),
+            SlideMenuAction::Rename(id) => start_slide_rename(editor, &id),
         }
+    }
+
+    if !ui.ctx().egui_wants_keyboard_input()
+        && editor.ui.last_active_area == crate::ActiveArea::Navigator
+        && !editor.ui.master_view
+        && !editor.ui.story_view
+        && editor.ui.slide_rename.is_none()
+        && editor.ui.scene_rename.is_none()
+        && editor.ui.bank_rename.is_none()
+        && editor
+            .session
+            .course
+            .slide(&editor.selection.slide)
+            .is_some()
+        && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F2))
+    {
+        let sid = editor.selection.slide.clone();
+        start_slide_rename(editor, &sid);
     }
 
     if let Some((cmd, params)) = action_to_run

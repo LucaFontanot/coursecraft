@@ -113,6 +113,8 @@ mod perf_tests;
 #[cfg(test)]
 mod preview_variables_tests;
 #[cfg(test)]
+mod rename_tests;
+#[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
 mod spell_check_tests;
@@ -727,6 +729,7 @@ pub struct UiState {
     /// Active pointer drag inside crop mode.
     pub(crate) crop_drag: Option<canvas::CropDrag>,
     pub scene_rename: Option<slides::SceneRename>,
+    pub slide_rename: Option<slides::SceneRename>,
     pub pending_delete_scene: Option<String>,
     pub properties: PropertiesState,
     pub layers: LayersState,
@@ -1135,6 +1138,7 @@ impl Editor {
                 crop_edit: None,
                 crop_drag: None,
                 scene_rename: None,
+                slide_rename: None,
                 pending_delete_scene: None,
                 properties: PropertiesState::default(),
                 layers: LayersState::default(),
@@ -1401,6 +1405,7 @@ impl Editor {
         self.ui.crop_edit = None;
         self.ui.crop_drag = None;
         self.ui.scene_rename = None;
+        self.ui.slide_rename = None;
         self.ui.pending_delete_scene = None;
         self.ui.properties = PropertiesState::default();
         self.ui.layers = LayersState::default();
