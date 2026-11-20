@@ -383,6 +383,7 @@ fn outline_text_slide() -> Slide {
         master: None,
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     }
 }
 
@@ -441,6 +442,7 @@ fn adjust_slide(text_color: Color) -> Slide {
         master: None,
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     }
 }
 
@@ -548,6 +550,7 @@ fn category_slide(category: ShapeCategory, text_color: Color) -> Slide {
         master: None,
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     }
 }
 
@@ -924,6 +927,7 @@ fn draw_slide(text_color: Color) -> Slide {
         master: None,
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     }
 }
 

@@ -274,6 +274,9 @@ slide.set_duration   -                        -          {"slide": id, "ms": u32
 slide.set_background -                        -          {"slide": id, "background": color|null}
 slide.set_transition -                        -          {"slide": id, "transition": Transition|null}
 slide.set_player_overrides -                  -          {"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}
+slide.add_cue        -                        -          {"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}
+slide.set_cue        -                        -          {"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}
+slide.remove_cue     -                        -          {"slide": id, "layer"?: id, "cue": id}
 master.add           -                        -          {"title"?: string}
 master.delete        -                        -          {"master": id}
 slide.set_master     -                        -          {"slides": id[], "master": id|null}
@@ -384,6 +387,7 @@ results.insert       Insert/Results Slide     -          {"after"?: slide id}
 certificate.insert   Insert/Certificate Slide -          {"after"?: slide id}
 question.add_submit_button -                        -          {"slide": id}
 question.add_feedback_layers -                        -          {"slide": id}
+question.add_try_again_layer -                        -          {"slide": id}
 question.set         -                        -          {"slide": id, "question": Question}
 question.delete      Edit/Delete Question     -          {"slide": id}
 question.set_kind    -                        -          {"slide": id, "kind": QuestionKind}
