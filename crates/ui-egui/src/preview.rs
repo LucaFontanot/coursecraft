@@ -625,6 +625,7 @@ impl Preview {
             self.ticker = Ticker::new();
             self.frame.restart();
             self.view = SlideView::new();
+            self.media.set_rate(1.0);
         }
     }
 
@@ -637,6 +638,9 @@ impl Preview {
             return Vec::new();
         };
         let effects = player.handle(input);
+        if matches!(input, Input::SetSpeed { .. }) {
+            self.media.set_rate(player.speed());
+        }
         record_effects(&effects, &mut self.log, &mut self.ended, ctx);
         queue_prints(&effects, &player, &NoMedia, &mut self.requests);
         dispatch_media_effects(
@@ -824,6 +828,7 @@ impl Preview {
                     |ui| {
                         ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
                         frame.ended = *ended;
+                        frame.can_speed = media_driver.supports_rate();
                         let caption = media_driver.caption_frame(
                             &player,
                             media.as_ref().map(|(_, source)| *source),
@@ -850,6 +855,9 @@ impl Preview {
                         }
                         for input in out.inputs {
                             let effects = player.handle(&input);
+                            if matches!(input, Input::SetSpeed { .. }) {
+                                media_driver.set_rate(player.speed());
+                            }
                             record_effects(&effects, log, ended, Some(ctx));
                             frame_effects.extend(effects);
                         }

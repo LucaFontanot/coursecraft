@@ -9609,3 +9609,103 @@ fn object_delete_removes_many_dangling_triggers_on_base_and_layers_in_one_pass()
     assert!(s.course.scenes[0].slides[0].layers[0].triggers.is_empty());
     assert!(s.course.is_playable());
 }
+
+fn round_trip_project(course: &coursecraft_course::Course) -> coursecraft_course::Course {
+    let media: &[(String, Vec<u8>)] = &[];
+    let bytes = coursecraft_format::save_project(course, media).expect("save_project");
+    coursecraft_format::open_project(&bytes)
+        .expect("open_project")
+        .course
+}
+
+#[test]
+fn object_locked_survives_save_and_open_project() {
+    let mut s = Session::blank("Test");
+    let id = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "kind": { "type": "button", "label": "Next" },
+            "frame": { "x": 10, "y": 10, "w": 100, "h": 40 }
+        }),
+    )["id"]
+        .as_str()
+        .expect("object id")
+        .to_owned();
+    ok(
+        &mut s,
+        "object.lock",
+        json!({ "slide": "slide1", "object": id, "locked": true }),
+    );
+    let reopened = round_trip_project(&s.course);
+    let (obj, _) = reopened
+        .slide("slide1")
+        .and_then(|sl| sl.object(&id))
+        .expect("added object");
+    assert!(obj.locked);
+}
+
+#[test]
+fn object_hidden_survives_save_and_open_project() {
+    let mut s = Session::blank("Test");
+    let id = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "kind": { "type": "button", "label": "Next" },
+            "frame": { "x": 10, "y": 10, "w": 100, "h": 40 }
+        }),
+    )["id"]
+        .as_str()
+        .expect("object id")
+        .to_owned();
+    ok(
+        &mut s,
+        "object.hide_in_editor",
+        json!({ "slide": "slide1", "object": id, "hidden": true }),
+    );
+    let reopened = round_trip_project(&s.course);
+    let (obj, _) = reopened
+        .slide("slide1")
+        .and_then(|sl| sl.object(&id))
+        .expect("added object");
+    assert!(obj.editor_hidden);
+}
+
+#[test]
+fn editor_rulers_setting_survives_save_and_open_project() {
+    let mut s = Session::blank("Test");
+    ok(&mut s, "view.set", json!({ "show_rulers": true }));
+    let reopened = round_trip_project(&s.course);
+    assert!(reopened.editor.show_rulers);
+}
+
+#[test]
+fn editor_grid_settings_survive_save_and_open_project() {
+    let mut s = Session::blank("Test");
+    ok(
+        &mut s,
+        "view.set",
+        json!({ "show_grid": true, "snap_to_grid": true }),
+    );
+    let reopened = round_trip_project(&s.course);
+    assert!(reopened.editor.show_grid);
+    assert!(reopened.editor.snap_to_grid);
+}
+
+#[test]
+fn editor_guides_survive_save_and_open_project() {
+    let mut s = Session::blank("Test");
+    ok(
+        &mut s,
+        "view.guides.add",
+        json!({ "vertical": true, "at": 250.0 }),
+    );
+    let reopened = round_trip_project(&s.course);
+    assert!(reopened.editor.show_guides);
+    assert_eq!(reopened.editor.guides.len(), 1);
+    assert!(reopened.editor.guides[0].vertical);
+    assert!((reopened.editor.guides[0].at - 250.0).abs() < 0.01);
+}

@@ -5504,6 +5504,41 @@ fn preview_backend_stop_all_on_close() {
 }
 
 #[test]
+fn desktop_preview_speed_menu_changes_player_clock_rate() {
+    let mut course = Course::from_json(COURSE_JSON).expect("valid course");
+    course.player.show_speed = true;
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+
+    harness.editor.open_preview();
+    harness.idle_frame();
+    harness.idle_frame();
+
+    let speed_btn = harness
+        .find_text("1\u{00D7}")
+        .expect("speed button visible in desktop preview");
+    harness.click_at(speed_btn);
+    harness.idle_frame();
+
+    let choice_15 = harness
+        .find_text("1.5\u{00D7}")
+        .expect("1.5× speed option in popup");
+    harness.click_at(choice_15);
+    harness.idle_frame();
+
+    let preview = harness.editor.preview.as_ref().expect("preview open");
+    let state = preview.state.as_ref().expect("preview player state");
+    assert_eq!(
+        state.speed_quarters, 6,
+        "choosing 1.5× must set player clock rate to 6 quarters (1.5×)"
+    );
+    assert!(
+        (preview.media.rate() - 1.5).abs() < f32::EPSILON,
+        "media driver rate must also update to 1.5"
+    );
+}
+
+#[test]
 fn font_picker_lists_inter_and_a_course_family() {
     const INTER_REGULAR: &[u8] = include_bytes!("../../render/fonts/Inter-Regular.ttf");
 

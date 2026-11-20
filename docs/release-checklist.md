@@ -89,7 +89,7 @@ Authoring (M8, M11, M12, M13, M16)
 - [ ] Import your real `.pptx` deck. Pass: pictures, rotation, lists, links, table and crops land close to the original.
 - [ ] Open the Course Map. Pass: it reads clearly (its look has had no review in the app).
 - [ ] Add a question bank, a results slide and a survey question; open the certificate print dialog. Pass: the editor controls make sense and the certificate prints or saves to PDF.
-- [ ] Lock and hide objects, rulers, grid and guides; colour picker on a fill; format painter; Slide Size with content scaling; copy and paste triggers; strikethrough, superscript, subscript and letter spacing. Pass: each does what its label says. (Lock, hide, rulers, grid and guides last for the session only.)
+- [ ] Lock and hide objects, rulers, grid and guides; colour picker on a fill; format painter; Slide Size with content scaling; copy and paste triggers; strikethrough, superscript, subscript and letter spacing. Pass: each does what its label says.
 
 Media (M14, M15)
 
