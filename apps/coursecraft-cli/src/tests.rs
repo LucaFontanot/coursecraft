@@ -920,7 +920,7 @@ fn cli_a11y_check_exit_codes_and_json_flag() {
 fn cli_a11y_check_accepts_a_ccraft_archive() {
     let dir = scratch_dir("test-cli-a11y-ccraft");
     let course = Course::from_json(A11Y_BAD).unwrap();
-    let bytes = save_project(&course, &[]).expect("save project");
+    let bytes = save_project::<&[u8]>(&course, &[]).expect("save project");
     let path = dir.join("bad.ccraft");
     std::fs::write(&path, bytes).unwrap();
 
@@ -1699,7 +1699,7 @@ fn unpack_refuses_a_folder_that_has_files_in_it() {
     let dir = scratch_dir("test-cli-unpack-busy");
     let course = Course::from_json(HELLO_JSON).expect("hello");
     let archive = dir.join("a.ccraft");
-    std::fs::write(&archive, save_project(&course, &[]).expect("save")).expect("write");
+    std::fs::write(&archive, save_project::<&[u8]>(&course, &[]).expect("save")).expect("write");
     let out = dir.join("busy");
     std::fs::create_dir_all(&out).expect("mkdir");
     std::fs::write(out.join("mine.txt"), "keep").expect("write");
