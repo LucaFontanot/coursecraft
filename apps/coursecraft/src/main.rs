@@ -42,6 +42,8 @@ pub mod versions;
 #[cfg(test)]
 mod bughunt_m24_preview;
 #[cfg(test)]
+mod bughunt_m25_versions;
+#[cfg(test)]
 mod files_tests;
 #[cfg(test)]
 mod tests;

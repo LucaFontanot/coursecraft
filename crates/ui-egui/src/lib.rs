@@ -97,6 +97,8 @@ mod bughunt_m24b_misc;
 #[cfg(test)]
 mod bughunt_m24b_trigger;
 #[cfg(test)]
+mod bughunt_m25_templates;
+#[cfg(test)]
 mod bughunt_menus;
 #[cfg(test)]
 mod bughunt_stress;

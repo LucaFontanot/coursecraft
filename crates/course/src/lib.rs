@@ -531,6 +531,8 @@ impl Object {
 }
 
 #[cfg(test)]
+mod bughunt_m25_strings;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod tests;
