@@ -4843,3 +4843,47 @@ fn every_example_course_opens_and_validates() {
     }
     assert!(found >= 2, "expected the shipped examples, found {found}");
 }
+
+#[test]
+fn try_again_layer_round_trips_and_missing_layer_warns() {
+    let mut course = Course::from_json(HELLO).expect("hello");
+    assert_eq!(
+        course
+            .slide("s-quiz")
+            .and_then(|s| s.question.as_ref())
+            .and_then(|q| q.try_again_layer.as_ref()),
+        None
+    );
+
+    // Omitted from JSON when None.
+    let raw = course.to_json().expect("serialize");
+    assert!(!raw.contains("try_again_layer"));
+
+    // Missing layer produces a warning, not an error.
+    let slide = course.slide_mut("s-quiz").expect("quiz slide");
+    let question = slide.question.as_mut().expect("question");
+    question.try_again_layer = Some("missing-layer".into());
+    let raw = course.to_json().expect("serialize");
+    assert!(raw.contains("\"try_again_layer\": \"missing-layer\""));
+    let round_tripped = Course::from_json(&raw).expect("round-trip");
+    assert_eq!(
+        round_tripped
+            .slide("s-quiz")
+            .and_then(|s| s.question.as_ref())
+            .and_then(|q| q.try_again_layer.as_deref()),
+        Some("missing-layer")
+    );
+    assert!(errors(&round_tripped).is_empty());
+    let warnings: Vec<String> = round_tripped
+        .validate()
+        .into_iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .map(|d| d.message)
+        .collect();
+    assert!(
+        warnings
+            .iter()
+            .any(|m| m.contains("try_again_layer") && m.contains("missing-layer")),
+        "expected missing try_again_layer warning, got {warnings:?}"
+    );
+}

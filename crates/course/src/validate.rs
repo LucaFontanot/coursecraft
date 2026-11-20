@@ -2792,39 +2792,7 @@ fn check_question(cx: &mut Ctx<'_>, slide: &Slide, p: &str) {
                 );
             }
         }
-        QuestionKind::Matching => {
-            if !q.choices.is_empty() {
-                cx.err(&qp, "matching must not have choices");
-            }
-            let n = q.pairs.len();
-            if !(2..=20).contains(&n) {
-                cx.err(&qp, format!("matching needs 2 to 20 pairs, found {n}"));
-            }
-            let mut pair_ids = BTreeSet::new();
-            for pair in &q.pairs {
-                if !valid_name(&pair.id) {
-                    cx.err(
-                        &qp,
-                        format!("pair id {:?} must be 1-128 chars of [A-Za-z0-9_-]", pair.id),
-                    );
-                }
-                if !pair_ids.insert(pair.id.as_str()) {
-                    cx.err(&qp, format!("duplicate pair id {:?}", pair.id));
-                }
-                if pair.left.is_empty() || pair.right.is_empty() {
-                    cx.err(
-                        &qp,
-                        format!("pair {:?} needs non-empty left and right text", pair.id),
-                    );
-                }
-            }
-            if q.shuffle {
-                cx.warn(
-                    &qp,
-                    "shuffle is ignored for matching; the right-hand column is shuffled every attempt",
-                );
-            }
-        }
+        QuestionKind::Matching => check_matching(cx, q, &qp),
         QuestionKind::Hotspot => check_hotspot(cx, slide, q, &qp),
         QuestionKind::DragDrop => check_drag_drop(cx, slide, q, &qp),
         QuestionKind::Likert => check_likert(cx, q, &qp),
@@ -2834,10 +2802,56 @@ fn check_question(cx: &mut Ctx<'_>, slide: &Slide, p: &str) {
     if q.kind != QuestionKind::Freeform && q.correct_when.is_some() {
         cx.err(&qp, "correct_when is only allowed on freeform questions");
     }
-    for l in [&q.correct_layer, &q.incorrect_layer].into_iter().flatten() {
-        check_layer_ref(cx, slide, l, &qp);
-    }
+    check_question_layers(cx, slide, q, &qp);
     check_question_submit(cx, slide, &qp);
+}
+
+fn check_question_layers(cx: &mut Ctx<'_>, slide: &Slide, q: &crate::Question, qp: &str) {
+    for l in [&q.correct_layer, &q.incorrect_layer].into_iter().flatten() {
+        check_layer_ref(cx, slide, l, qp);
+    }
+    if let Some(l) = &q.try_again_layer
+        && slide.layer(l).is_none()
+    {
+        cx.warn(
+            qp,
+            format!("try_again_layer {l:?} is not on slide {:?}", slide.id),
+        );
+    }
+}
+
+fn check_matching(cx: &mut Ctx<'_>, q: &crate::Question, qp: &str) {
+    if !q.choices.is_empty() {
+        cx.err(qp, "matching must not have choices");
+    }
+    let n = q.pairs.len();
+    if !(2..=20).contains(&n) {
+        cx.err(qp, format!("matching needs 2 to 20 pairs, found {n}"));
+    }
+    let mut pair_ids = BTreeSet::new();
+    for pair in &q.pairs {
+        if !valid_name(&pair.id) {
+            cx.err(
+                qp,
+                format!("pair id {:?} must be 1-128 chars of [A-Za-z0-9_-]", pair.id),
+            );
+        }
+        if !pair_ids.insert(pair.id.as_str()) {
+            cx.err(qp, format!("duplicate pair id {:?}", pair.id));
+        }
+        if pair.left.is_empty() || pair.right.is_empty() {
+            cx.err(
+                qp,
+                format!("pair {:?} needs non-empty left and right text", pair.id),
+            );
+        }
+    }
+    if q.shuffle {
+        cx.warn(
+            qp,
+            "shuffle is ignored for matching; the right-hand column is shuffled every attempt",
+        );
+    }
 }
 
 fn check_question_submit(cx: &mut Ctx<'_>, slide: &Slide, qp: &str) {

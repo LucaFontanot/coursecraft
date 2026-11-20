@@ -182,6 +182,7 @@ fn question(kind: QuestionKind, prompt: &str, choices: Vec<Choice>) -> Question 
         shuffle: false,
         correct_layer: None,
         incorrect_layer: None,
+        try_again_layer: None,
         accepted: Vec::new(),
         case_sensitive: false,
         pairs: Vec::new(),

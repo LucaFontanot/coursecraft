@@ -9933,3 +9933,215 @@ fn timed_animation_follows_entrance_timing_and_exit() {
     assert_eq!(fading, Some(0.5), "half faded halfway through the exit");
     assert!(sample(4000).is_none(), "gone at its end");
 }
+
+fn hello_with_try_again() -> Course {
+    use coursecraft_course::{
+        Action, Color, Event, Layer, Object, ObjectKind, Rect, RevisitMode, SeekMode, Timing,
+        Trigger,
+    };
+    let mut c = Course::from_json(HELLO).expect("hello");
+    let slide = c.slide_mut("s-quiz").expect("quiz slide");
+    slide.layers.push(Layer {
+        id: "l-try-again".into(),
+        name: "Try Again".into(),
+        duration_ms: 5000,
+        objects: vec![Object {
+            id: "btn-try-again-layer".into(),
+            name: "Try Again".into(),
+            kind: ObjectKind::Button {
+                label: "Try Again".into(),
+                fill: Color("#3B82F6".into()),
+                fill_style: None,
+            },
+            frame: Rect {
+                x: 80.0,
+                y: 420.0,
+                w: 160.0,
+                h: 44.0,
+            },
+            timing: Timing::default(),
+            states: Vec::new(),
+            initial_state: "normal".into(),
+            entrance: None,
+            exit: None,
+            motion_paths: Vec::new(),
+            focus_order: None,
+            decorative: false,
+            description: None,
+            group: None,
+            panel: None,
+            rotation: 0.0,
+            flip_h: false,
+            flip_v: false,
+            opacity: 1.0,
+            shadow: None,
+            glow: None,
+            drag: None,
+            locked: false,
+            editor_hidden: false,
+        }],
+        triggers: vec![Trigger {
+            when: Event::Click {
+                object: "btn-try-again-layer".into(),
+            },
+            action: Action::HideLayer { layer: None },
+            condition: None,
+            disabled: false,
+        }],
+        hide_other_layers: true,
+        pause_base_timeline: false,
+        prevent_base_clicks: true,
+        hide_base_objects: false,
+        hide_when_timeline_ends: false,
+        allow_seek: SeekMode::Auto,
+        revisit: RevisitMode::Auto,
+    });
+    let q = slide.question.as_mut().expect("question");
+    q.attempts = 2;
+    q.try_again_layer = Some("l-try-again".into());
+    c
+}
+
+#[test]
+fn try_again_layer_wrong_then_right_clears_choice_and_shows_correct() {
+    let c = hello_with_try_again();
+    let mut p = open_quiz(&c);
+
+    // Attempt 1: wrong answer -> shows try-again layer, does not lock.
+    p.handle(&Input::SelectChoice { choice: "a".into() });
+    let eff = p.handle(&click("btn-submit"));
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "l-try-again".into()
+        }
+    ));
+    assert!(!eff.iter().any(|e| matches!(
+        e,
+        Effect::LayerShown { layer } if layer == "incorrect" || layer == "correct"
+    )));
+    assert!(!p.question_locked());
+
+    // Clicking Try Again closes the layer and clears the learner's choice.
+    let eff = p.handle(&click("btn-try-again-layer"));
+    assert!(has(
+        &eff,
+        &Effect::LayerHidden {
+            layer: "l-try-again".into()
+        }
+    ));
+    assert!(p.state().selected.is_empty());
+
+    // Attempt 2: right answer -> shows correct layer and locks.
+    p.handle(&Input::SelectChoice { choice: "b".into() });
+    let eff = p.handle(&click("btn-submit"));
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "correct".into()
+        }
+    ));
+    assert!(p.question_locked());
+}
+
+#[test]
+fn try_again_layer_wrong_twice_shows_try_again_then_incorrect() {
+    let c = hello_with_try_again();
+    let mut p = open_quiz(&c);
+
+    // Attempt 1: wrong -> try-again.
+    p.handle(&Input::SelectChoice { choice: "a".into() });
+    let eff = p.handle(&click("btn-submit"));
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "l-try-again".into()
+        }
+    ));
+    assert!(!p.question_locked());
+
+    p.handle(&click("btn-try-again-layer"));
+    assert!(p.state().selected.is_empty());
+
+    // Attempt 2 (last): wrong -> incorrect layer and locked.
+    p.handle(&Input::SelectChoice { choice: "c".into() });
+    let eff = p.handle(&click("btn-submit"));
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "incorrect".into()
+        }
+    ));
+    assert!(!eff.iter().any(|e| matches!(
+        e,
+        Effect::LayerShown { layer } if layer == "l-try-again"
+    )));
+    assert!(p.question_locked());
+}
+
+#[test]
+fn safe_resume_re_shows_outcome_layer_on_answered_locked_question() {
+    // 1. Answered correctly -> suspend & resume shows correct_layer again.
+    let c = hello_with_try_again();
+    let mut p = open_quiz(&c);
+    p.handle(&Input::SelectChoice { choice: "b".into() });
+    p.handle(&click("btn-submit"));
+    assert!(p.question_locked());
+    let data = crate::encode_suspend(&c, p.state());
+
+    let restored = crate::decode_suspend(&c, &data).expect("decode suspend");
+    let mut resumed = Player::resume(&c, restored).expect("resume");
+    let eff = resumed.handle(&Input::Start);
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "correct".into()
+        }
+    ));
+    assert!(
+        resumed
+            .state()
+            .visible_layers
+            .contains(&"correct".to_owned())
+    );
+
+    // Navigating away and back also re-shows the outcome layer.
+    resumed.handle(&Input::Previous);
+    let eff = resumed.handle(&Input::Next);
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "correct".into()
+        }
+    ));
+
+    // 2. Exhausted wrong attempts -> suspend & resume shows incorrect_layer.
+    let mut p2 = open_quiz(&c);
+    p2.handle(&Input::SelectChoice { choice: "a".into() });
+    p2.handle(&click("btn-submit"));
+    // After 1 wrong attempt of 2, question is NOT locked: resuming must NOT show outcome layer.
+    let mid_data = crate::encode_suspend(&c, p2.state());
+    let mid_restored = crate::decode_suspend(&c, &mid_data).expect("decode mid");
+    let mut mid_resumed = Player::resume(&c, mid_restored).expect("resume mid");
+    let eff = mid_resumed.handle(&Input::Start);
+    assert!(
+        !eff.iter().any(|e| matches!(e, Effect::LayerShown { .. })),
+        "unlocked question should not show outcome layer on resume: {eff:?}"
+    );
+
+    // Finish second wrong attempt -> now locked.
+    p2.handle(&click("btn-try-again-layer"));
+    p2.handle(&Input::SelectChoice { choice: "c".into() });
+    p2.handle(&click("btn-submit"));
+    assert!(p2.question_locked());
+    let fail_data = crate::encode_suspend(&c, p2.state());
+    let fail_restored = crate::decode_suspend(&c, &fail_data).expect("decode fail");
+    let mut fail_resumed = Player::resume(&c, fail_restored).expect("resume fail");
+    let eff = fail_resumed.handle(&Input::Start);
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "incorrect".into()
+        }
+    ));
+}

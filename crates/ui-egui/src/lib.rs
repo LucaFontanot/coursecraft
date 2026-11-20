@@ -127,6 +127,8 @@ mod translate_tests;
 #[cfg(test)]
 mod trigger_problems_tests;
 #[cfg(test)]
+mod try_again_tests;
+#[cfg(test)]
 mod walkthrough_tests;
 
 pub use ai_settings::{

@@ -3791,6 +3791,8 @@ pub struct Question {
     pub correct_layer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incorrect_layer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub try_again_layer: Option<String>,
     /// Accepted answers for a fill-in question. Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted: Vec<String>,

@@ -3751,6 +3751,58 @@ fn question_add_feedback_layers_sets_both_targets_and_undoes() {
 }
 
 #[test]
+fn question_add_try_again_layer_creates_layer_button_and_undoes() {
+    use coursecraft_course::{Action, Event, ObjectKind};
+
+    let mut s = Session::blank("Title");
+    // Refuses a slide without a question.
+    assert!(
+        s.execute(
+            "question.add_try_again_layer",
+            &json!({ "slide": "slide1" })
+        )
+        .is_err()
+    );
+
+    ok(&mut s, "question.insert", json!({ "slide": "slide1" }));
+    let before = s.course.clone();
+    let res = ok(
+        &mut s,
+        "question.add_try_again_layer",
+        json!({ "slide": "slide1" }),
+    );
+    let layer_id = res["layer"].as_str().expect("layer id");
+    let slide = s.course.slide("slide1").expect("slide");
+    let question = slide.question.as_ref().expect("question");
+    assert_eq!(question.try_again_layer.as_deref(), Some(layer_id));
+
+    let layer = slide.layer(layer_id).expect("try again layer");
+    assert_eq!(layer.name, "Try Again");
+    assert!(
+        layer
+            .objects
+            .iter()
+            .any(|o| matches!(&o.kind, ObjectKind::Text { .. }))
+    );
+    let btn = layer
+        .objects
+        .iter()
+        .find(|o| matches!(&o.kind, ObjectKind::Button { label, .. } if label == "Try Again"))
+        .expect("Try Again button");
+    assert!(layer.triggers.iter().any(|t| {
+        t.when
+            == Event::Click {
+                object: btn.id.clone(),
+            }
+            && t.action == Action::HideLayer { layer: None }
+    }));
+    assert!(s.course.is_playable());
+
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.course, before);
+}
+
+#[test]
 fn question_insert_drag_drop_names_the_item_target_and_label() {
     use coursecraft_course::{ObjectKind, QuestionKind};
 

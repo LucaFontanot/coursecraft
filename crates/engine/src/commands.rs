@@ -1360,6 +1360,15 @@ static REGISTRY: &[Command] = &[
         run: question_add_feedback_layers,
     },
     Command {
+        id: "question.add_try_again_layer",
+        label: "Add Try Again Layer",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id}"#,
+        mutates: true,
+        run: question_add_try_again_layer,
+    },
+    Command {
         id: "question.set",
         label: "Set Question",
         menu: "",
@@ -4192,6 +4201,12 @@ fn copy_slide(
             *layer = layer_map.get(layer).cloned().unwrap_or_default();
             if layer.is_empty() {
                 question.incorrect_layer = None;
+            }
+        }
+        if let Some(layer) = &mut question.try_again_layer {
+            *layer = layer_map.get(layer).cloned().unwrap_or_default();
+            if layer.is_empty() {
+                question.try_again_layer = None;
             }
         }
         if let Some(image) = &mut question.hotspot_image {
@@ -8131,6 +8146,7 @@ fn default_multiple_choice_question() -> Question {
         shuffle: false,
         correct_layer: None,
         incorrect_layer: None,
+        try_again_layer: None,
         accepted: Vec::new(),
         case_sensitive: false,
         pairs: Vec::new(),
@@ -8602,6 +8618,95 @@ fn add_feedback_layers(slide: &mut Slide, theme: &Theme, slide_size: Size) -> (S
         question.incorrect_layer = Some(incorrect.clone());
     }
     (correct, incorrect)
+}
+
+/// Add a hidden Try Again layer with a message and a "Try Again" button wired
+/// to hide the layer, and point the question's `try_again_layer` at it.
+fn add_try_again_layer(slide: &mut Slide, theme: &Theme, slide_size: Size) -> String {
+    let text_frame = feedback_text_frame(slide_size, slide.question.as_ref());
+    let button_w = 160.0_f32.min(text_frame.w.max(80.0));
+    let button_h = 44.0;
+    let slide_h = slide_size.h.max(1) as f32;
+    let button_y = (text_frame.y + text_frame.h + 12.0).min((slide_h - button_h - 16.0).max(0.0));
+    let button_frame = Rect {
+        x: text_frame.x,
+        y: button_y,
+        w: button_w,
+        h: button_h,
+    };
+    let layer_id = fresh_id("try_again", slide.local_ids());
+    let text_id = fresh_id("try_again_text", slide.local_ids());
+    let button_id = fresh_id("try_again_button", slide.local_ids());
+    let objects = vec![
+        Object {
+            id: text_id,
+            name: "Try Again feedback".to_owned(),
+            kind: ObjectKind::Text {
+                text: "Not quite — give it another try.".to_owned(),
+                style: coursecraft_course::TextStyle {
+                    size: 28.0,
+                    bold: true,
+                    color: theme.text.clone(),
+                    ..coursecraft_course::TextStyle::default()
+                },
+                runs: Vec::new(),
+                paragraphs: Vec::new(),
+                autofit: Autofit::None,
+                text_style: None,
+            },
+            frame: text_frame,
+            timing: Timing::default(),
+            states: Vec::new(),
+            initial_state: "normal".into(),
+            entrance: None,
+            exit: None,
+            motion_paths: Vec::new(),
+            focus_order: None,
+            decorative: false,
+            description: None,
+            group: None,
+            panel: None,
+            rotation: 0.0,
+            flip_h: false,
+            flip_v: false,
+            opacity: 1.0,
+            shadow: None,
+            glow: None,
+            drag: None,
+            locked: false,
+            editor_hidden: false,
+        },
+        results_button(
+            button_id.clone(),
+            "Try Again",
+            theme.accent.clone(),
+            button_frame,
+        ),
+    ];
+    let triggers = vec![Trigger {
+        when: Event::Click { object: button_id },
+        action: Action::HideLayer { layer: None },
+        condition: None,
+        disabled: false,
+    }];
+    slide.layers.push(Layer {
+        id: layer_id.clone(),
+        name: "Try Again".to_owned(),
+        duration_ms: 5000,
+        objects,
+        triggers,
+        hide_other_layers: true,
+        pause_base_timeline: false,
+        prevent_base_clicks: true,
+        hide_base_objects: false,
+        hide_when_timeline_ends: false,
+        allow_seek: SeekMode::Auto,
+        revisit: RevisitMode::Auto,
+    });
+    if let Some(question) = slide.question.as_mut() {
+        question.try_again_layer = Some(layer_id.clone());
+    }
+    layer_id
 }
 
 /// A button with `label`, filled with the theme accent.
@@ -9102,6 +9207,23 @@ fn question_add_feedback_layers(s: &mut Session, p: &Json) -> Result<Json> {
     let (correct, incorrect) = add_feedback_layers(slide, &theme, slide_size);
     keep_valid(s, was_valid)?;
     Ok(json!({ "correct": correct, "incorrect": incorrect }))
+}
+
+fn question_add_try_again_layer(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "question.add_try_again_layer";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let theme = s.course.theme.clone();
+    let slide_size = s.course.slide_size;
+    let slide = slide_mut(s, &sid)?;
+    if slide.question.is_none() {
+        return Err(EngineError::NotFound(format!(
+            "slide {sid:?} has no question"
+        )));
+    }
+    let layer = add_try_again_layer(slide, &theme, slide_size);
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "layer": layer }))
 }
 
 /// A plain text object for an inserted interaction.

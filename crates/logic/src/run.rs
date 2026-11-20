@@ -1506,6 +1506,24 @@ impl<'c> Player<'c> {
                 );
             }
         }
+        // Safe resume: re-entering an already answered and locked question slide
+        // shows its outcome layer again (if not already visible) so its Continue
+        // button is available.
+        if self.question_locked_on_slide(slide)
+            && let (Some(question), Some(answer)) =
+                (&slide.question, self.st.answers.get(&slide.id).copied())
+        {
+            let outcome = if answer.correct {
+                question.correct_layer.clone()
+            } else {
+                question.incorrect_layer.clone()
+            };
+            if let Some(layer) = outcome
+                && !self.st.visible_layers.contains(&layer)
+            {
+                self.show_layer(&layer, q, out);
+            }
+        }
         self.check_intersections(q);
     }
 
@@ -1753,6 +1771,23 @@ impl<'c> Player<'c> {
                 layer: id.to_owned(),
             });
             self.update_base_media_pause_state(was_base_paused, out);
+            if let Some(slide) = self.slide()
+                && !self.question_locked_on_slide(slide)
+                && slide
+                    .question
+                    .as_ref()
+                    .and_then(|q| q.try_again_layer.as_deref())
+                    == Some(id)
+            {
+                self.st.selected.clear();
+                self.st.text_entry.clear();
+                self.st.matches.clear();
+                self.st.hotspot_markers.clear();
+                for item in self.st.drops.keys() {
+                    self.st.object_offsets.remove(item);
+                }
+                self.st.drops.clear();
+            }
         }
     }
 
@@ -3615,13 +3650,16 @@ impl<'c> Player<'c> {
         let limit = question.attempts;
         let choice_ids: Vec<String> = question.choices.iter().map(|c| c.id.clone()).collect();
         let slide_id = slide.id.clone();
+        let prev = self.st.answers.get(&slide_id).map_or(0, |a| a.attempts);
+        let attempts = prev.saturating_add(1);
+        let still_open = !correct && (limit == 0 || attempts < limit);
         let feedback = if correct {
             question.correct_layer.clone()
+        } else if still_open && question.try_again_layer.is_some() {
+            question.try_again_layer.clone()
         } else {
             question.incorrect_layer.clone()
         };
-        let prev = self.st.answers.get(&slide_id).map_or(0, |a| a.attempts);
-        let attempts = prev.saturating_add(1);
         let points = awarded_points(
             question,
             correct,
@@ -3659,7 +3697,6 @@ impl<'c> Player<'c> {
             points,
             attempts_left,
         });
-        let still_open = !correct && (limit == 0 || attempts < limit);
         if kind == QuestionKind::Sequence && still_open {
             self.st.sequence = sequence_order(&choice_ids, seed_for(&slide_id, attempts));
         }
