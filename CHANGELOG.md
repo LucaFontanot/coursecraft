@@ -2,7 +2,9 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
-## Unreleased
+## 0.2.2
+
+Clearer everyday editing: named undo steps with a History panel, equal-spacing guides, problems marked on triggers, and live variables in Preview.
 
 - **Undo history:** Undo and Redo in the Edit menu name the step ("Undo Set Fill Style"), and Edit ▸ History… lists every step; click one to go straight back to it.
 - **Equal-spacing guides:** while you drag an object, guides show when its gap to a neighbour matches the other gaps in the row or column, with the gap in pixels, and it snaps into place.
