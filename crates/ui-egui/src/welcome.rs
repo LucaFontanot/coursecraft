@@ -184,6 +184,77 @@ const HEALTHY_HABITS_MEDIA: &[(&str, &[u8])] = &[
 const HELLO_COURSE_JSON: &str = include_str!("../../../examples/hello-course/course.json");
 const SHOWCASE_COURSE_JSON: &str = include_str!("../../../examples/showcase/course.json");
 
+const TEMPLATE_BLANK_JSON: &str = include_str!("../../../examples/templates/blank.json");
+const TEMPLATE_QUICK_CHECK_JSON: &str =
+    include_str!("../../../examples/templates/quick-knowledge-check.json");
+const TEMPLATE_LINEAR_LESSON_JSON: &str =
+    include_str!("../../../examples/templates/linear-lesson.json");
+const TEMPLATE_BRANCHING_SCENARIO_JSON: &str =
+    include_str!("../../../examples/templates/branching-scenario.json");
+
+/// Identifier of an embedded starter template course.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateId {
+    Blank,
+    QuickKnowledgeCheck,
+    LinearLesson,
+    BranchingScenario,
+}
+
+impl TemplateId {
+    /// Every starter template, in display order.
+    pub const ALL: &'static [Self] = &[
+        Self::Blank,
+        Self::QuickKnowledgeCheck,
+        Self::LinearLesson,
+        Self::BranchingScenario,
+    ];
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Blank => "Blank",
+            Self::QuickKnowledgeCheck => "Quick Knowledge Check",
+            Self::LinearLesson => "Linear Lesson",
+            Self::BranchingScenario => "Branching Scenario",
+        }
+    }
+
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Blank => "One clean slide ready to author",
+            Self::QuickKnowledgeCheck => "Intro, two quiz questions and results",
+            Self::LinearLesson => "Objectives, tabbed steps and summary",
+            Self::BranchingScenario => "Decision point, two outcomes and debrief",
+        }
+    }
+
+    #[must_use]
+    pub const fn icon(self) -> Icon {
+        match self {
+            Self::Blank => Icon::FilePlus,
+            Self::QuickKnowledgeCheck => Icon::ListChecks,
+            Self::LinearLesson => Icon::Presentation,
+            Self::BranchingScenario => Icon::Path,
+        }
+    }
+}
+
+/// Load an embedded starter template course into memory.
+///
+/// # Errors
+/// Returns an error string if JSON deserialization fails.
+pub fn template_course(id: TemplateId) -> Result<Course, String> {
+    let json = match id {
+        TemplateId::Blank => TEMPLATE_BLANK_JSON,
+        TemplateId::QuickKnowledgeCheck => TEMPLATE_QUICK_CHECK_JSON,
+        TemplateId::LinearLesson => TEMPLATE_LINEAR_LESSON_JSON,
+        TemplateId::BranchingScenario => TEMPLATE_BRANCHING_SCENARIO_JSON,
+    };
+    Course::from_json(json).map_err(|e| format!("Failed to parse {} template: {e}", id.name()))
+}
+
 const SHOWCASE_BANNER_BYTES: &[u8] = include_bytes!("../../../examples/showcase/media/banner.png");
 const SHOWCASE_CHIME_BYTES: &[u8] = include_bytes!("../../../examples/showcase/media/chime.wav");
 const SHOWCASE_FLOORPLAN_BYTES: &[u8] =
@@ -274,7 +345,7 @@ pub fn show_welcome_screen(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<
     let max_card_w = 720.0f32;
     let card_w = (ground_rect.width() - 32.0).clamp(320.0, max_card_w);
     let card_x = ground_rect.min.x + (ground_rect.width() - card_w) * 0.5;
-    let card_y = ground_rect.min.y + ((ground_rect.height() - 560.0) * 0.5).max(16.0);
+    let card_y = ground_rect.min.y + ((ground_rect.height() - 680.0) * 0.5).max(16.0);
 
     let card_rect = Rect::from_min_size(pos2(card_x, card_y), vec2(card_w, 0.0));
 
@@ -289,242 +360,294 @@ pub fn show_welcome_screen(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<
         .corner_radius(RADIUS_XL as u8)
         .stroke(Stroke::new(1.0, p.border))
         .shadow(dialog_shadow(mode))
-        .inner_margin(32.0);
+        .inner_margin(24.0);
 
     card_frame.show(&mut card_ui, |ui| {
-        // Title row: "CourseCraft" on the left and, if a course was already open, a quiet
-        // "Back to course" on the right, both centred on the same line.
-        let title_row_h = SIZE_DISPLAY * 1.4;
-        ui.allocate_ui_with_layout(
-            vec2(ui.available_width(), title_row_h),
-            Layout::left_to_right(Align::Center),
-            |ui| {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                // Title row: "CourseCraft" on the left and, if a course was already open, a quiet
+                // "Back to course" on the right, both centred on the same line.
+                let title_row_h = SIZE_DISPLAY * 1.4;
+                ui.allocate_ui_with_layout(
+                    vec2(ui.available_width(), title_row_h),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.label(
+                            RichText::new("CourseCraft")
+                                .size(SIZE_DISPLAY)
+                                .strong()
+                                .color(p.text),
+                        );
+                        if editor.ui.has_loaded_course {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if crate::quiet_button(
+                                    ui,
+                                    "Back to course",
+                                    crate::QuietTone::Secondary,
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    editor.ui.show_welcome = false;
+                                }
+                            });
+                        }
+                    },
+                );
+                ui.add_space(4.0);
                 ui.label(
-                    RichText::new("CourseCraft")
-                        .size(SIZE_DISPLAY)
+                    RichText::new(
+                        "Build interactive eLearning courses and publish them to any LMS.",
+                    )
+                    .size(SIZE_BODY)
+                    .color(p.text_secondary),
+                );
+
+                ui.add_space(16.0);
+
+                // 2x2 grid of action tiles
+                let tile_gap = 8.0;
+                let tile_w = ((ui.available_width() - tile_gap) * 0.5).max(140.0);
+                let tile_h = 60.0;
+                let tile_size = vec2(tile_w, tile_h);
+
+                let mut clicked_example = None;
+
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = tile_gap;
+
+                    // Tile 1: New blank course
+                    if render_tile(
+                        ui,
+                        tile_size,
+                        Icon::FilePlus,
+                        "New blank course",
+                        "Start from a clean slate",
+                        true,
+                        "Create a new blank course",
+                    )
+                    .clicked()
+                    {
+                        requests.push(EditorRequest::New);
+                        editor.ui.show_welcome = false;
+                        editor.ui.has_loaded_course = true;
+                    }
+
+                    // Tile 2: Open…
+                    let open_tooltip = if editor.file_ops_available {
+                        "Open an existing course file"
+                    } else {
+                        "Opening and saving files is desktop-only in this version"
+                    };
+                    if render_tile(
+                        ui,
+                        tile_size,
+                        Icon::FolderOpen,
+                        "Open…",
+                        "Open an existing course file",
+                        editor.file_ops_available,
+                        open_tooltip,
+                    )
+                    .clicked()
+                    {
+                        requests.push(EditorRequest::Open);
+                        editor.ui.show_welcome = false;
+                        editor.ui.has_loaded_course = true;
+                    }
+                });
+
+                ui.add_space(tile_gap);
+
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = tile_gap;
+
+                    // Tile 3: Import PowerPoint…
+                    if render_tile(
+                        ui,
+                        tile_size,
+                        Icon::MicrosoftPowerpointLogo,
+                        "Import PowerPoint…",
+                        "Convert slides to course pages",
+                        true,
+                        "Import PowerPoint (.pptx) file",
+                    )
+                    .clicked()
+                    {
+                        requests.push(EditorRequest::PickPptx);
+                        editor.ui.show_welcome = false;
+                        editor.ui.has_loaded_course = true;
+                    }
+
+                    // Tile 4: Explore an example
+                    let resp = render_tile(
+                        ui,
+                        tile_size,
+                        Icon::BookOpen,
+                        "Explore an example",
+                        "Healthy Habits, Hello course or feature showcase",
+                        true,
+                        "Explore built-in sample courses",
+                    );
+
+                    egui::Popup::menu(&resp).show(|ui| {
+                        if ui.button(ExampleId::HealthyHabits.name()).clicked() {
+                            clicked_example = Some(ExampleId::HealthyHabits);
+                            ui.close();
+                        }
+                        if ui.button("Hello course").clicked() {
+                            clicked_example = Some(ExampleId::HelloCourse);
+                            ui.close();
+                        }
+                        if ui.button("Feature showcase").clicked() {
+                            clicked_example = Some(ExampleId::FeatureShowcase);
+                            ui.close();
+                        }
+                    });
+                });
+
+                if let Some(id) = clicked_example {
+                    editor.open_example(id);
+                    requests.push(EditorRequest::OpenExample(id));
+                }
+
+                ui.add_space(14.0);
+
+                // Start from a template section
+                ui.label(
+                    RichText::new("Start from a template")
+                        .size(SIZE_TITLE)
                         .strong()
                         .color(p.text),
                 );
-                if editor.ui.has_loaded_course {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if crate::quiet_button(
-                            ui,
-                            "Back to course",
-                            crate::QuietTone::Secondary,
-                            true,
-                        )
-                        .clicked()
-                        {
-                            editor.ui.show_welcome = false;
+                ui.add_space(6.0);
+
+                let tpl_gap = 8.0;
+                let tpl_w = ((ui.available_width() - tpl_gap) * 0.5).max(140.0);
+                let tpl_size = vec2(tpl_w, 54.0);
+                let mut clicked_template = None;
+
+                for pair in TemplateId::ALL.chunks(2) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = tpl_gap;
+                        for &tpl in pair {
+                            if render_tile(
+                                ui,
+                                tpl_size,
+                                tpl.icon(),
+                                tpl.name(),
+                                tpl.description(),
+                                true,
+                                tpl.description(),
+                            )
+                            .clicked()
+                            {
+                                clicked_template = Some(tpl);
+                            }
                         }
                     });
+                    ui.add_space(tpl_gap);
                 }
-            },
-        );
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new("Build interactive eLearning courses and publish them to any LMS.")
-                .size(SIZE_BODY)
-                .color(p.text_secondary),
-        );
 
-        ui.add_space(24.0);
-
-        // 2x2 grid of action tiles
-        let tile_gap = 12.0;
-        let tile_w = ((ui.available_width() - tile_gap) * 0.5).max(140.0);
-        let tile_h = 76.0;
-        let tile_size = vec2(tile_w, tile_h);
-
-        let mut clicked_example = None;
-
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = tile_gap;
-
-            // Tile 1: New blank course
-            if render_tile(
-                ui,
-                tile_size,
-                Icon::FilePlus,
-                "New blank course",
-                "Start from a clean slate",
-                true,
-                "Create a new blank course",
-            )
-            .clicked()
-            {
-                requests.push(EditorRequest::New);
-                editor.ui.show_welcome = false;
-                editor.ui.has_loaded_course = true;
-            }
-
-            // Tile 2: Open…
-            let open_tooltip = if editor.file_ops_available {
-                "Open an existing course file"
-            } else {
-                "Opening and saving files is desktop-only in this version"
-            };
-            if render_tile(
-                ui,
-                tile_size,
-                Icon::FolderOpen,
-                "Open…",
-                "Open an existing course file",
-                editor.file_ops_available,
-                open_tooltip,
-            )
-            .clicked()
-            {
-                requests.push(EditorRequest::Open);
-                editor.ui.show_welcome = false;
-                editor.ui.has_loaded_course = true;
-            }
-        });
-
-        ui.add_space(tile_gap);
-
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = tile_gap;
-
-            // Tile 3: Import PowerPoint…
-            if render_tile(
-                ui,
-                tile_size,
-                Icon::MicrosoftPowerpointLogo,
-                "Import PowerPoint…",
-                "Convert slides to course pages",
-                true,
-                "Import PowerPoint (.pptx) file",
-            )
-            .clicked()
-            {
-                requests.push(EditorRequest::PickPptx);
-                editor.ui.show_welcome = false;
-                editor.ui.has_loaded_course = true;
-            }
-
-            // Tile 4: Explore an example
-            let resp = render_tile(
-                ui,
-                tile_size,
-                Icon::BookOpen,
-                "Explore an example",
-                "Healthy Habits, Hello course or feature showcase",
-                true,
-                "Explore built-in sample courses",
-            );
-
-            egui::Popup::menu(&resp).show(|ui| {
-                if ui.button(ExampleId::HealthyHabits.name()).clicked() {
-                    clicked_example = Some(ExampleId::HealthyHabits);
-                    ui.close();
+                if let Some(id) = clicked_template {
+                    editor.open_template(id);
+                    requests.push(EditorRequest::OpenTemplate(id));
                 }
-                if ui.button("Hello course").clicked() {
-                    clicked_example = Some(ExampleId::HelloCourse);
-                    ui.close();
-                }
-                if ui.button("Feature showcase").clicked() {
-                    clicked_example = Some(ExampleId::FeatureShowcase);
-                    ui.close();
-                }
-            });
-        });
 
-        if let Some(id) = clicked_example {
-            editor.open_example(id);
-            requests.push(EditorRequest::OpenExample(id));
-        }
+                ui.add_space(10.0);
 
-        ui.add_space(28.0);
+                // Recent courses section
+                ui.label(
+                    RichText::new("Recent courses")
+                        .size(SIZE_TITLE)
+                        .strong()
+                        .color(p.text),
+                );
+                ui.add_space(8.0);
 
-        // Recent courses section
-        ui.label(
-            RichText::new("Recent courses")
-                .size(SIZE_TITLE)
-                .strong()
-                .color(p.text),
-        );
-        ui.add_space(8.0);
+                let filtered_recent: Vec<(usize, String)> = editor
+                    .recent_files
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| (i, s.clone()))
+                    .collect();
 
-        let filtered_recent: Vec<(usize, String)> = editor
-            .recent_files
-            .iter()
-            .enumerate()
-            .map(|(i, s)| (i, s.clone()))
-            .collect();
-
-        if filtered_recent.is_empty() {
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("No recent courses yet")
-                    .size(SIZE_BODY)
-                    .color(p.text_tertiary),
-            );
-            ui.add_space(14.0);
-        } else {
-            for (idx, path_str) in filtered_recent.into_iter().take(5) {
-                let file_path = std::path::Path::new(&path_str);
-                let name = file_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(&path_str);
-                let dir_display = file_path.parent().and_then(|p| p.to_str()).unwrap_or("");
-
-                let (row_rect, resp) =
-                    ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-                if ui.is_rect_visible(row_rect) {
-                    if resp.hovered() {
-                        ui.painter().rect_filled(
-                            row_rect,
-                            CornerRadius::same(RADIUS_LG as u8),
-                            p.hover,
-                        );
-                    }
-                    let text_y = row_rect.center().y - 7.0;
-                    ui.painter().text(
-                        pos2(row_rect.min.x + 8.0, text_y),
-                        Align2::LEFT_CENTER,
-                        name,
-                        egui::FontId::proportional(SIZE_BODY),
-                        p.text,
+                if filtered_recent.is_empty() {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("No recent courses yet")
+                            .size(SIZE_BODY)
+                            .color(p.text_tertiary),
                     );
-                    if !dir_display.is_empty() {
-                        let truncated = if dir_display.len() > 50 {
-                            format!("…{}", &dir_display[dir_display.len().saturating_sub(47)..])
-                        } else {
-                            dir_display.to_owned()
-                        };
-                        ui.painter().text(
-                            pos2(row_rect.max.x - 8.0, text_y),
-                            Align2::RIGHT_CENTER,
-                            truncated,
-                            egui::FontId::proportional(SIZE_SMALL),
-                            p.text_tertiary,
-                        );
+                    ui.add_space(14.0);
+                } else {
+                    for (idx, path_str) in filtered_recent.into_iter().take(5) {
+                        let file_path = std::path::Path::new(&path_str);
+                        let name = file_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(&path_str);
+                        let dir_display = file_path.parent().and_then(|p| p.to_str()).unwrap_or("");
+
+                        let (row_rect, resp) = ui
+                            .allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                        if ui.is_rect_visible(row_rect) {
+                            if resp.hovered() {
+                                ui.painter().rect_filled(
+                                    row_rect,
+                                    CornerRadius::same(RADIUS_LG as u8),
+                                    p.hover,
+                                );
+                            }
+                            let text_y = row_rect.center().y - 7.0;
+                            ui.painter().text(
+                                pos2(row_rect.min.x + 8.0, text_y),
+                                Align2::LEFT_CENTER,
+                                name,
+                                egui::FontId::proportional(SIZE_BODY),
+                                p.text,
+                            );
+                            if !dir_display.is_empty() {
+                                let truncated = if dir_display.len() > 50 {
+                                    format!(
+                                        "…{}",
+                                        &dir_display[dir_display.len().saturating_sub(47)..]
+                                    )
+                                } else {
+                                    dir_display.to_owned()
+                                };
+                                ui.painter().text(
+                                    pos2(row_rect.max.x - 8.0, text_y),
+                                    Align2::RIGHT_CENTER,
+                                    truncated,
+                                    egui::FontId::proportional(SIZE_SMALL),
+                                    p.text_tertiary,
+                                );
+                            }
+                        }
+
+                        if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                            requests.push(EditorRequest::OpenRecent(idx));
+                            editor.ui.show_welcome = false;
+                            editor.ui.has_loaded_course = true;
+                        }
                     }
+                    ui.add_space(8.0);
                 }
 
-                if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
-                    requests.push(EditorRequest::OpenRecent(idx));
-                    editor.ui.show_welcome = false;
-                    editor.ui.has_loaded_course = true;
-                }
-            }
-            ui.add_space(8.0);
-        }
+                ui.add_space(16.0);
+                ui.separator();
+                ui.add_space(8.0);
 
-        ui.add_space(16.0);
-        ui.separator();
-        ui.add_space(8.0);
-
-        // Footer: Version info
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("CourseCraft v{}", env!("CARGO_PKG_VERSION")))
-                    .size(SIZE_SMALL)
-                    .color(p.text_tertiary),
-            );
-        });
+                // Footer: Version info
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("CourseCraft v{}", env!("CARGO_PKG_VERSION")))
+                            .size(SIZE_SMALL)
+                            .color(p.text_tertiary),
+                    );
+                });
+            });
     });
 }
 

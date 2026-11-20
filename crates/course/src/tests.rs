@@ -260,7 +260,7 @@ fn catches_type_errors() {
         s.triggers[6].condition = Some(crate::Condition::Compare {
             variable: "tabs_seen".into(),
             op: crate::CmpOp::Ge,
-            value: crate::Value::Text("3".into()),
+            value: crate::Value::Text("3".into()).into(),
         });
     });
     assert!(e.iter().any(|m| m.contains("compared with")), "{e:?}");
@@ -290,7 +290,7 @@ fn deep_conditions_are_rejected_not_overflowed() {
         let mut cond = crate::Condition::Compare {
             variable: "tabs_seen".into(),
             op: crate::CmpOp::Eq,
-            value: crate::Value::Number(1.0),
+            value: crate::Value::Number(1.0).into(),
         };
         // serde_json's recursion limit (128) already caps parsed input; this
         // checks courses built in code (engine, importers) too.
@@ -310,7 +310,7 @@ fn builtin_variables_validation() {
         s.triggers[6].condition = Some(crate::Condition::Compare {
             variable: "Course.Progress".into(),
             op: crate::CmpOp::Ge,
-            value: crate::Value::Number(50.0),
+            value: crate::Value::Number(50.0).into(),
         });
     });
     assert!(e.is_empty(), "expected valid compare on built-in: {e:?}");
@@ -321,7 +321,7 @@ fn builtin_variables_validation() {
         s.triggers[6].condition = Some(crate::Condition::Compare {
             variable: "Course.Progress".into(),
             op: crate::CmpOp::Eq,
-            value: crate::Value::Bool(true),
+            value: crate::Value::Bool(true).into(),
         });
     });
     assert!(e.iter().any(|m| m.contains("compared with")), "{e:?}");
@@ -332,7 +332,7 @@ fn builtin_variables_validation() {
         s.triggers[0].action = crate::Action::SetVariable {
             variable: "Course.SlideNumber".into(),
             op: crate::VarOp::Assign,
-            value: Some(crate::Value::Number(2.0)),
+            value: Some(crate::Value::Number(2.0).into()),
         };
     });
     assert!(
@@ -858,6 +858,8 @@ fn animation_and_transition_serialization_and_validation() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     assert_eq!(errors(&c), Vec::<String>::new());
@@ -1534,6 +1536,8 @@ fn course_with_media(kind: crate::ObjectKind) -> Course {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course
 }
@@ -2262,6 +2266,7 @@ fn a_master_must_not_have_play_time_behaviour_or_media() {
         hide_when_timeline_ends: false,
         allow_seek: crate::SeekMode::Auto,
         revisit: crate::RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
     assert!(
         errors(&c)
@@ -2304,6 +2309,8 @@ fn a_master_must_not_have_play_time_behaviour_or_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     assert!(
         errors(&c)
@@ -2398,6 +2405,8 @@ fn shape_outline_and_text_round_trip() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     assert!(errors(&c).is_empty(), "{:?}", errors(&c));
     let json = c.to_json().unwrap();
@@ -2485,6 +2494,8 @@ fn invalid_outline_and_shape_text_are_rejected() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     assert!(errors(&c).iter().any(|e| e.contains("outline width")));
 
@@ -3525,6 +3536,8 @@ fn panel_membership_and_nesting_are_validated() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
         let mut child = slide.objects[0].clone();
         child.id = "child".into();
@@ -3931,7 +3944,7 @@ fn timer_remaining_variable_is_read_only_but_comparable() {
             action: crate::Action::SetVariable {
                 variable: "Timer.t1.Remaining".into(),
                 op: crate::VarOp::Assign,
-                value: Some(crate::Value::Number(3.0)),
+                value: Some(crate::Value::Number(3.0).into()),
             },
             when: Event::Click {
                 object: "t1".into(),
@@ -3947,7 +3960,7 @@ fn timer_remaining_variable_is_read_only_but_comparable() {
             condition: Some(crate::Condition::Compare {
                 variable: "Timer.t1.Remaining".into(),
                 op: crate::CmpOp::Le,
-                value: crate::Value::Number(5.0),
+                value: crate::Value::Number(5.0).into(),
             }),
             disabled: false,
         },
@@ -4737,6 +4750,99 @@ fn resources_glossary_and_transcript_round_trip_and_old_json_loads_empty() {
 }
 
 #[test]
+fn old_set_variable_and_compare_json_loads_unchanged_and_new_variants_round_trip() {
+    // Old JSON with literal constants loads as ValueSource::Constant and round-trips identically.
+    let old_trig = r#"{"action":{"action":"set_variable","variable":"tabs_seen","op":"assign","value":3},"when":{"event":"timeline_starts"},"condition":{"compare":{"variable":"tabs_seen","op":"ge","value":1}}}"#;
+    let t: Trigger = serde_json::from_str(old_trig).expect("old trigger");
+    let round = serde_json::to_string(&t).expect("serialize");
+    let t2: Trigger = serde_json::from_str(&round).expect("reload");
+    assert_eq!(t, t2);
+    assert_eq!(
+        t.action,
+        crate::Action::SetVariable {
+            variable: "tabs_seen".into(),
+            op: crate::VarOp::Assign,
+            value: Some(crate::ValueSource::Constant(crate::Value::Number(3.0))),
+        }
+    );
+
+    // New JSON: variable-to-variable, ignore-case ops, LastVisited, Scene.
+    let new_trigs = r#"[
+        {"action":{"action":"set_variable","variable":"Score","op":"assign","value":{"variable":"BestScore"}},"when":{"event":"timeline_starts"},"condition":{"compare":{"variable":"Score","op":"eq","value":{"variable":"BestScore"}}}},
+        {"action":{"action":"jump_to_slide","target":"last_visited"},"when":{"event":"timeline_starts"},"condition":{"compare":{"variable":"Name","op":"eq_ignore_case","value":"alice"}}},
+        {"action":{"action":"jump_to_slide","target":{"scene":"sc1"}},"when":{"event":"timeline_starts"},"condition":{"compare":{"variable":"Name","op":"contains_ignore_case","value":"LIC"}}}
+    ]"#;
+    let parsed: Vec<Trigger> = serde_json::from_str(new_trigs).expect("new triggers");
+    let back: Vec<Trigger> =
+        serde_json::from_str(&serde_json::to_string(&parsed).expect("ser")).expect("de");
+    assert_eq!(parsed, back);
+}
+
+#[test]
+fn variable_source_and_scene_target_validation() {
+    let mut c = Course::from_json(HELLO).unwrap();
+    c.variables.push(crate::VariableDef {
+        name: "Score".into(),
+        value: crate::Value::Number(0.0),
+    });
+    c.variables.push(crate::VariableDef {
+        name: "Label".into(),
+        value: crate::Value::Text("hi".into()),
+    });
+
+    // 1. Comparing a number variable to a text variable is a warning (not an error).
+    c.scenes[0].slides[0].triggers.push(Trigger {
+        action: crate::Action::PauseTimeline,
+        when: Event::TimelineStarts { layer: None },
+        condition: Some(crate::Condition::Compare {
+            variable: "Score".into(),
+            op: crate::CmpOp::Eq,
+            value: crate::ValueSource::Variable {
+                variable: "Label".into(),
+            },
+        }),
+        disabled: false,
+    });
+    let issues = c.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == crate::Severity::Warning && i.message.contains("compared with")),
+        "expected warning for number vs text variable: {issues:?}"
+    );
+    assert!(
+        !issues.iter().any(|i| i.severity == crate::Severity::Error),
+        "mismatch in Compare should be a warning, not error: {issues:?}"
+    );
+
+    // 2. Unknown variable in ValueSource::Variable is an error.
+    c.scenes[0].slides[0].triggers.push(Trigger {
+        action: crate::Action::SetVariable {
+            variable: "Score".into(),
+            op: crate::VarOp::Assign,
+            value: Some(crate::ValueSource::Variable {
+                variable: "MissingVar".into(),
+            }),
+        },
+        when: Event::TimelineStarts { layer: None },
+        condition: None,
+        disabled: false,
+    });
+    // 3. Unknown scene in SlideTarget::Scene is an error.
+    c.scenes[0].slides[0].triggers.push(Trigger {
+        action: crate::Action::JumpToSlide {
+            target: crate::SlideTarget::Scene("no-such-scene".into()),
+        },
+        when: Event::TimelineStarts { layer: None },
+        condition: None,
+        disabled: false,
+    });
+    let errs = errors(&c);
+    assert!(errs.iter().any(|m| m.contains("MissingVar")), "{errs:?}");
+    assert!(errs.iter().any(|m| m.contains("no-such-scene")), "{errs:?}");
+}
+
+#[test]
 fn bad_resources_and_glossary_entries_are_errors() {
     let mut c = Course::from_json(HELLO).unwrap();
     c.resources = vec![
@@ -4830,4 +4936,48 @@ fn every_example_course_opens_and_validates() {
         found += 1;
     }
     assert!(found >= 2, "expected the shipped examples, found {found}");
+}
+
+#[test]
+fn try_again_layer_round_trips_and_missing_layer_warns() {
+    let mut course = Course::from_json(HELLO).expect("hello");
+    assert_eq!(
+        course
+            .slide("s-quiz")
+            .and_then(|s| s.question.as_ref())
+            .and_then(|q| q.try_again_layer.as_ref()),
+        None
+    );
+
+    // Omitted from JSON when None.
+    let raw = course.to_json().expect("serialize");
+    assert!(!raw.contains("try_again_layer"));
+
+    // Missing layer produces a warning, not an error.
+    let slide = course.slide_mut("s-quiz").expect("quiz slide");
+    let question = slide.question.as_mut().expect("question");
+    question.try_again_layer = Some("missing-layer".into());
+    let raw = course.to_json().expect("serialize");
+    assert!(raw.contains("\"try_again_layer\": \"missing-layer\""));
+    let round_tripped = Course::from_json(&raw).expect("round-trip");
+    assert_eq!(
+        round_tripped
+            .slide("s-quiz")
+            .and_then(|s| s.question.as_ref())
+            .and_then(|q| q.try_again_layer.as_deref()),
+        Some("missing-layer")
+    );
+    assert!(errors(&round_tripped).is_empty());
+    let warnings: Vec<String> = round_tripped
+        .validate()
+        .into_iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .map(|d| d.message)
+        .collect();
+    assert!(
+        warnings
+            .iter()
+            .any(|m| m.contains("try_again_layer") && m.contains("missing-layer")),
+        "expected missing try_again_layer warning, got {warnings:?}"
+    );
 }

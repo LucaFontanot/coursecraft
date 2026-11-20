@@ -117,13 +117,21 @@ mod spacing_tests;
 #[cfg(test)]
 mod spell_check_tests;
 #[cfg(test)]
+mod templates_tests;
+#[cfg(test)]
 pub(crate) mod test_harness;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod timeline_cue_tests;
+#[cfg(test)]
 mod translate_tests;
 #[cfg(test)]
 mod trigger_problems_tests;
+#[cfg(test)]
+mod try_again_tests;
+#[cfg(test)]
+mod var_compare_tests;
 #[cfg(test)]
 mod walkthrough_tests;
 
@@ -217,7 +225,10 @@ pub use triggers::{
 };
 pub use variables::{VariablesState, show_variables_tab};
 pub use web_insert::{insert_web_object, show_web_insert_window};
-pub use welcome::{ExampleId, LoadedExample, example_course_and_media, show_welcome_screen};
+pub use welcome::{
+    ExampleId, LoadedExample, TemplateId, example_course_and_media, show_welcome_screen,
+    template_course,
+};
 pub use widgets::{
     IconTone, icon_button, icon_button_danger, icon_button_enabled, icon_toggle, toolbar_button,
     toolbar_button_active, toolbar_button_enabled, toolbar_caret_button, toolbar_primary_button,
@@ -375,6 +386,7 @@ pub enum EditorRequest {
         id: String,
     },
     OpenExample(ExampleId),
+    OpenTemplate(TemplateId),
     /// Send a chat request with the values in the AI Settings dialog.
     AiChat {
         /// Which feature is asking.
@@ -679,10 +691,6 @@ pub struct UiState {
     pub review_options: ReviewOptionsView,
     pub current_time: f64,
     pub placement_tool: Option<PlacementTool>,
-    /// Objects not drawn on the authoring canvas. Editor only.
-    pub hidden_objects: std::collections::BTreeSet<String>,
-    /// Objects the canvas cannot select or move. Editor only.
-    pub locked_objects: std::collections::BTreeSet<String>,
     /// Armed format painter, if any.
     pub format_painter: Option<format_painter::FormatPainter>,
     pub placement_drag: Option<canvas::PlacementDrag>,
@@ -862,6 +870,8 @@ pub struct Editor {
     pub title_info: Option<(String, bool)>,
     pub media: Vec<(String, std::sync::Arc<[u8]>)>,
     pub media_cache: coursecraft_render::MediaCache,
+    /// Cached audio waveform peak envelopes (`0.0..=1.0`, <= 2,000 peaks) keyed by media id (`src`).
+    pub audio_waveforms: std::collections::HashMap<String, Option<Vec<f32>>>,
     pub pending_replace_object: Option<String>,
     /// The shape or button (slide id, object id) whose picture fill the next
     /// picked image becomes, instead of placing or replacing an object.
@@ -1034,8 +1044,6 @@ impl Editor {
                 review_options: ReviewOptionsView::default(),
                 current_time: 0.0,
                 placement_tool: None,
-                hidden_objects: std::collections::BTreeSet::new(),
-                locked_objects: std::collections::BTreeSet::new(),
                 format_painter: None,
                 placement_drag: None,
                 draw: None,
@@ -1132,6 +1140,7 @@ impl Editor {
             title_info: None,
             media: Vec::new(),
             media_cache: coursecraft_render::MediaCache::new(),
+            audio_waveforms: std::collections::HashMap::new(),
             pending_replace_object: None,
             pending_picture_fill: None,
             pending_requests: Vec::new(),
@@ -1294,13 +1303,16 @@ impl Editor {
         self.ui.slides_scrolled_to = None;
         self.ui.slide_drag = None;
         self.ui.timeline.active_row_drag = None;
+        self.ui.timeline.slide_cue_drag = None;
+        self.ui.timeline.slide_cue_selected = None;
+        self.ui.timeline.slide_cue_rename = None;
+        self.audio_waveforms.clear();
         self.ui.last_seen_revision = u64::MAX;
         self.ui.last_error = None;
         self.ui.error_history.clear();
         self.ui.placement_tool = None;
-        self.ui.hidden_objects.clear();
         self.ui.copied_triggers.clear();
-        self.ui.locked_objects.clear();
+        self.ui.rulers.drag = None;
         self.ui.placement_drag = None;
         self.ui.shape_gallery_query.clear();
         self.ui.shape_gallery_rects.clear();
@@ -1405,6 +1417,16 @@ impl Editor {
         if let Ok((course, media)) = welcome::example_course_and_media(id) {
             self.replace_course(course);
             self.set_media(media);
+            self.ui.show_welcome = false;
+            self.ui.has_loaded_course = true;
+        }
+    }
+
+    /// Open one of the built-in starter template courses.
+    pub fn open_template(&mut self, id: TemplateId) {
+        if let Ok(course) = welcome::template_course(id) {
+            self.replace_course(course);
+            self.set_media(Vec::new());
             self.ui.show_welcome = false;
             self.ui.has_loaded_course = true;
         }
@@ -1544,6 +1566,8 @@ impl Editor {
         };
         *slot = bytes.into();
         self.media_cache = coursecraft_render::MediaCache::new();
+        self.audio_waveforms.remove(src);
+        self.ensure_audio_waveform(src);
         self.mark_media_changed();
         self.set_status(format!("Replaced {src}. File operations are not undoable."));
         true
@@ -2111,7 +2135,28 @@ impl Editor {
 
     /// Import an audio file into the editor's media library and arm placement or replace selected object.
     pub fn import_audio(&mut self, file_name: &str, bytes: &[u8]) -> Option<String> {
-        self.import_media(MediaKind::Audio, file_name, bytes)
+        let src = self.import_media(MediaKind::Audio, file_name, bytes)?;
+        self.ensure_audio_waveform(&src);
+        Some(src)
+    }
+
+    /// Compute (once) and return the cached peak envelope for audio `src`.
+    pub(crate) fn ensure_audio_waveform(&mut self, src: &str) -> Option<&[f32]> {
+        if !self.audio_waveforms.contains_key(src) {
+            let peaks = self
+                .media
+                .iter()
+                .find(|(name, _)| name == src)
+                .and_then(|(_, bytes)| {
+                    coursecraft_playback::audio_peak_envelope(
+                        src,
+                        bytes,
+                        coursecraft_playback::MAX_WAVEFORM_PEAKS,
+                    )
+                });
+            self.audio_waveforms.insert(src.to_owned(), peaks);
+        }
+        self.audio_waveforms.get(src).and_then(|v| v.as_deref())
     }
 
     /// Import a video file into the editor's media library and arm placement or replace selected object.
@@ -3297,6 +3342,17 @@ impl Editor {
                                     "cue": cue,
                                 }),
                             );
+                        } else if let Some((layer, cue)) =
+                            self.ui.timeline.slide_cue_selected.take()
+                        {
+                            let mut params = serde_json::json!({
+                                "slide": self.selection.slide,
+                                "cue": cue,
+                            });
+                            if let Some(lid) = layer {
+                                params["layer"] = serde_json::json!(lid);
+                            }
+                            self.run("slide.remove_cue", params);
                         } else {
                             self.delete_selection();
                         }
@@ -3345,9 +3401,31 @@ impl Editor {
                             "cue": cue,
                         }),
                     );
+                } else if let Some((layer, cue)) = self.ui.timeline.slide_cue_selected.take() {
+                    let mut params = serde_json::json!({
+                        "slide": self.selection.slide,
+                        "cue": cue,
+                    });
+                    if let Some(lid) = layer {
+                        params["layer"] = serde_json::json!(lid);
+                    }
+                    self.run("slide.remove_cue", params);
                 } else {
                     self.delete_selection();
                 }
+            }
+            if self.ui.bottom_tab == BottomTab::Timeline
+                && self.ui.timeline.focused
+                && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::C))
+            {
+                let mut params = serde_json::json!({
+                    "slide": self.selection.slide,
+                    "at_ms": self.ui.timeline.playhead_ms,
+                });
+                if let Some(ref lid) = self.selection.layer {
+                    params["layer"] = serde_json::json!(lid);
+                }
+                self.run("slide.add_cue", params);
             }
 
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::A)) {
@@ -3554,6 +3632,11 @@ impl Editor {
         ui.style_mut().interaction.resize_grab_radius_side = old_grab;
         self.ui.timeline.panel_rect = Some(timeline_panel.response.rect);
         self.ui.timeline.panel_height = timeline_panel.response.rect.height();
+        if ui.input(|i| i.pointer.primary_pressed())
+            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+        {
+            self.ui.timeline.focused = timeline_panel.response.rect.contains(pos);
+        }
 
         // 4. Left slides panel
         Panel::left("editor_slides_panel")

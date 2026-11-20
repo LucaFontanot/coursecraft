@@ -1,6 +1,8 @@
-//! Rulers, grid and user guides for the authoring canvas. Editor only: nothing
-//! here reaches the course, the preview or a published package.
+//! Rulers, grid and user guides for the authoring canvas. Settings and guides
+//! are saved on `Course.editor`; the player and publish ignore them.
 
+use coursecraft_course::EditorSettings;
+pub use coursecraft_course::Guide;
 use coursecraft_render::{SlideTransform, palette};
 use egui::{Align2, FontId, Painter, Pos2, Rect, Stroke, Ui, pos2};
 
@@ -16,30 +18,20 @@ pub const MIN_GRID_SCREEN: f32 = 6.0;
 /// How close a press must be to a guide to grab it, in screen points.
 const GRAB: f32 = 4.0;
 
-/// One guide line across the slide.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Guide {
-    /// True for a vertical line (`at` is an x coordinate in slide pixels).
-    pub vertical: bool,
-    pub at: f32,
-}
-
 /// A guide being dragged.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GuideDrag {
-    pub index: usize,
+    /// Index of the existing guide being moved, or `None` when pulling a new guide off a ruler.
+    pub existing: Option<usize>,
+    pub vertical: bool,
+    pub at: f32,
     /// The pointer has left the guide's own ruler, so dropping it back deletes it.
     pub left_ruler: bool,
 }
 
-/// View settings and guides, kept for the session and the whole course.
+/// Transient pointer state for dragging guides. Persistent settings live on `Course.editor`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RulerState {
-    pub show_rulers: bool,
-    pub show_grid: bool,
-    pub snap_to_grid: bool,
-    pub show_guides: bool,
-    pub guides: Vec<Guide>,
     pub drag: Option<GuideDrag>,
 }
 
@@ -76,21 +68,33 @@ fn guide_screen(t: &SlideTransform, guide: Guide) -> f32 {
 
 /// Whether a press at `pos` belongs to a ruler or a guide, not the canvas.
 #[must_use]
-pub fn captures(state: &RulerState, canvas: Rect, t: &SlideTransform, pos: Pos2) -> bool {
+pub fn captures(
+    settings: &EditorSettings,
+    state: &RulerState,
+    canvas: Rect,
+    t: &SlideTransform,
+    pos: Pos2,
+) -> bool {
     if state.drag.is_some() {
         return true;
     }
-    if state.show_rulers && (top_strip(canvas).contains(pos) || left_strip(canvas).contains(pos)) {
+    if settings.show_rulers && (top_strip(canvas).contains(pos) || left_strip(canvas).contains(pos))
+    {
         return true;
     }
-    state.show_guides && guide_at(state, canvas, t, pos).is_some()
+    settings.show_guides && guide_at(settings, canvas, t, pos).is_some()
 }
 
-fn guide_at(state: &RulerState, canvas: Rect, t: &SlideTransform, pos: Pos2) -> Option<usize> {
+fn guide_at(
+    settings: &EditorSettings,
+    canvas: Rect,
+    t: &SlideTransform,
+    pos: Pos2,
+) -> Option<usize> {
     if !canvas.contains(pos) {
         return None;
     }
-    state.guides.iter().position(|guide| {
+    settings.guides.iter().position(|guide| {
         let at = guide_screen(t, *guide);
         let pointer = if guide.vertical { pos.x } else { pos.y };
         at.is_finite() && (at - pointer).abs() <= GRAB
@@ -99,10 +103,10 @@ fn guide_at(state: &RulerState, canvas: Rect, t: &SlideTransform, pos: Pos2) -> 
 
 /// Snap lines for moves and resizes: user guides and the grid.
 #[must_use]
-pub fn snap_lines(state: &RulerState) -> LineSnaps {
+pub fn snap_lines(settings: &EditorSettings) -> LineSnaps {
     let mut lines = LineSnaps::default();
-    if state.show_guides {
-        for guide in &state.guides {
+    if settings.show_guides {
+        for guide in &settings.guides {
             if !guide.at.is_finite() {
                 continue;
             }
@@ -113,7 +117,7 @@ pub fn snap_lines(state: &RulerState) -> LineSnaps {
             }
         }
     }
-    if state.snap_to_grid {
+    if settings.snap_to_grid {
         lines.grid = Some(GRID_STEP);
     }
     lines
@@ -139,7 +143,7 @@ pub fn tick_step(scale: f32) -> f32 {
 
 /// Draw the grid dots over the slide. Hidden when too dense to be useful.
 pub fn draw_grid(editor: &Editor, painter: &Painter, t: &SlideTransform) {
-    if !editor.ui.rulers.show_grid {
+    if !editor.session.course.editor.show_grid {
         return;
     }
     let scale = t.scale();
@@ -170,8 +174,10 @@ pub fn draw_grid(editor: &Editor, painter: &Painter, t: &SlideTransform) {
 
 /// Handle the pointer for rulers and guides, then paint them.
 pub fn show(editor: &mut Editor, ui: &Ui, painter: &Painter, t: &SlideTransform, canvas: Rect) {
-    if !editor.ui.rulers.show_rulers && editor.ui.rulers.guides.is_empty() {
-        editor.ui.rulers.drag = None;
+    if !editor.session.course.editor.show_rulers
+        && editor.session.course.editor.guides.is_empty()
+        && editor.ui.rulers.drag.is_none()
+    {
         return;
     }
     let pos = ui.input(|i| i.pointer.interact_pos());
@@ -184,27 +190,31 @@ pub fn show(editor: &mut Editor, ui: &Ui, painter: &Painter, t: &SlideTransform,
         && pressed
         && let Some(pos) = pos
     {
-        let state = &mut editor.ui.rulers;
-        let existing = if state.show_guides {
-            guide_at(state, canvas, t, pos)
+        let settings = &editor.session.course.editor;
+        let existing = if settings.show_guides {
+            guide_at(settings, canvas, t, pos)
         } else {
             None
         };
-        if let Some(index) = existing {
-            state.drag = Some(GuideDrag {
-                index,
+        if let Some(index) = existing
+            && let Some(guide) = settings.guides.get(index).copied()
+        {
+            editor.ui.rulers.drag = Some(GuideDrag {
+                existing: Some(index),
+                vertical: guide.vertical,
+                at: guide.at,
                 left_ruler: true,
             });
-        } else if state.show_rulers {
+        } else if settings.show_rulers {
             let vertical = left_strip(canvas).contains(pos);
             if vertical || top_strip(canvas).contains(pos) {
                 let slide = t.to_slide_pos(pos);
                 let at = if vertical { slide.x } else { slide.y };
                 if at.is_finite() {
-                    state.guides.push(Guide { vertical, at });
-                    state.show_guides = true;
-                    state.drag = Some(GuideDrag {
-                        index: state.guides.len() - 1,
+                    editor.ui.rulers.drag = Some(GuideDrag {
+                        existing: None,
+                        vertical,
+                        at: at.round(),
                         left_ruler: false,
                     });
                 }
@@ -213,32 +223,37 @@ pub fn show(editor: &mut Editor, ui: &Ui, painter: &Painter, t: &SlideTransform,
     }
 
     if let Some(mut drag) = editor.ui.rulers.drag {
-        let state = &mut editor.ui.rulers;
-        let Some(guide) = state.guides.get(drag.index).copied() else {
-            state.drag = None;
-            return;
-        };
-        let on_ruler = pos.is_some_and(|p| own_strip(canvas, guide.vertical).contains(p));
+        let on_ruler = pos.is_some_and(|p| own_strip(canvas, drag.vertical).contains(p));
         if down {
             if let Some(pos) = pos {
                 let slide = t.to_slide_pos(pos);
-                let at = if guide.vertical { slide.x } else { slide.y };
-                if at.is_finite()
-                    && let Some(g) = state.guides.get_mut(drag.index)
-                {
-                    g.at = at.round();
+                let at = if drag.vertical { slide.x } else { slide.y };
+                if at.is_finite() {
+                    drag.at = at.round();
                 }
             }
             if !on_ruler {
                 drag.left_ruler = true;
             }
-            state.drag = Some(drag);
+            editor.ui.rulers.drag = Some(drag);
             ui.ctx().request_repaint();
         } else {
+            editor.ui.rulers.drag = None;
             if on_ruler && drag.left_ruler {
-                state.guides.remove(drag.index);
+                if let Some(index) = drag.existing {
+                    editor.run("view.guides.remove", serde_json::json!({ "index": index }));
+                }
+            } else if let Some(index) = drag.existing {
+                editor.run(
+                    "view.guides.move",
+                    serde_json::json!({ "index": index, "at": drag.at.round() }),
+                );
+            } else {
+                editor.run(
+                    "view.guides.add",
+                    serde_json::json!({ "vertical": drag.vertical, "at": drag.at.round() }),
+                );
             }
-            state.drag = None;
         }
     }
 
@@ -247,23 +262,36 @@ pub fn show(editor: &mut Editor, ui: &Ui, painter: &Painter, t: &SlideTransform,
 
 fn paint(editor: &Editor, painter: &Painter, t: &SlideTransform, canvas: Rect) {
     let p = palette(painter.ctx());
-    let state = &editor.ui.rulers;
+    let settings = &editor.session.course.editor;
+    let drag = editor.ui.rulers.drag;
     let clip = painter.with_clip_rect(painter.clip_rect().intersect(canvas));
-    if state.show_guides {
-        for guide in &state.guides {
-            let at = guide_screen(t, *guide);
-            if !at.is_finite() {
+    let draw_guide = |guide: Guide| {
+        let at = guide_screen(t, guide);
+        if !at.is_finite() {
+            return;
+        }
+        let (a, b) = if guide.vertical {
+            (pos2(at, canvas.min.y), pos2(at, canvas.max.y))
+        } else {
+            (pos2(canvas.min.x, at), pos2(canvas.max.x, at))
+        };
+        clip.line_segment([a, b], Stroke::new(1.0, p.accent));
+    };
+    if settings.show_guides {
+        for (i, guide) in settings.guides.iter().enumerate() {
+            if drag.and_then(|d| d.existing) == Some(i) {
                 continue;
             }
-            let (a, b) = if guide.vertical {
-                (pos2(at, canvas.min.y), pos2(at, canvas.max.y))
-            } else {
-                (pos2(canvas.min.x, at), pos2(canvas.max.x, at))
-            };
-            clip.line_segment([a, b], Stroke::new(1.0, p.accent));
+            draw_guide(*guide);
         }
     }
-    if !state.show_rulers {
+    if let Some(drag) = drag {
+        draw_guide(Guide {
+            vertical: drag.vertical,
+            at: drag.at,
+        });
+    }
+    if !settings.show_rulers {
         return;
     }
     let scale = t.scale();

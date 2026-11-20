@@ -108,7 +108,7 @@ Run `coursecraft-cli <command> --help` for every option. A `<course>` is a `cour
 | `batch <script.json> <course>... [--dir <folder>] (--in-place \| --out-dir <dir>) [--publish <std> --publish-dir <dir> --player <dir>] [--replace-media <path>=<file>]... [--dry-run]` | Run one script on many courses; see below |
 | `commands` | List engine commands |
 | `manifest <course>` | Print the SCORM 1.2 `imsmanifest.xml` |
-| `publish <course> -o <zip> [--standard <std>]` | Build a package; `<std>` is `scorm12`, `scorm2004`, `cmi5`, `xapi` or `lti` |
+| `publish <course> -o <zip> [--standard <std>]` | Build a package; `<std>` is `scorm12`, `scorm2004`, `cmi5`, `xapi`, `lti` or `web` |
 | `export-mp4 <course> -o <file.mp4> [--width 1280] [--fps 30]` | Export a video for sharing (macOS and Windows) |
 | `export-pdf <course> -o <file.pdf> [--layers] [--no-notes] [--no-text] [--width 1600]` | Export a PDF for review: one page per slide with its picture, notes and text |
 | `export-docx <course> -o <file.docx> [--layers] [--no-notes] [--no-text] [--width 1600]` | Export a Word document for review: one page per slide with its picture, notes and text |
@@ -274,6 +274,9 @@ slide.set_duration   -                        -          {"slide": id, "ms": u32
 slide.set_background -                        -          {"slide": id, "background": color|null}
 slide.set_transition -                        -          {"slide": id, "transition": Transition|null}
 slide.set_player_overrides -                  -          {"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}
+slide.add_cue        -                        -          {"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}
+slide.set_cue        -                        -          {"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}
+slide.remove_cue     -                        -          {"slide": id, "layer"?: id, "cue": id}
 master.add           -                        -          {"title"?: string}
 master.delete        -                        -          {"master": id}
 slide.set_master     -                        -          {"slides": id[], "master": id|null}
@@ -309,6 +312,12 @@ object.paste         -                        -          {"slide": id, "layer"?:
 object.set_frame     -                        -          {"slide": id, "object": id, "frame": Rect}
 object.set_rotation  -                        -          {"slide": id, "object"?: id, "objects"?: id[], "degrees": number}
 object.flip          -                        -          {"slide": id, "object"?: id, "objects"?: id[], "axis": "horizontal"|"vertical"}
+object.lock          -                        -          {"slide": id, "object"?: id, "objects"?: id[], "locked": bool}
+object.hide_in_editor -                       -          {"slide": id, "object"?: id, "objects"?: id[], "hidden": bool}
+view.set             -                        -          {"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool}
+view.guides.add      -                        -          {"vertical": bool, "at": number}
+view.guides.move     -                        -          {"index": usize, "at": number}
+view.guides.remove   -                        -          {"index": usize}
 object.set_opacity   -                        -          {"slide": id, "object"?: id, "objects"?: id[], "opacity": number}
 object.set_fill_style -                       -          {"slide": id, "object"?: id, "objects"?: id[], "fill_style": FillStyle|null}
 object.set_shadow    -                        -          {"slide": id, "object"?: id, "objects"?: id[], "shadow": Shadow|null}
@@ -378,6 +387,7 @@ results.insert       Insert/Results Slide     -          {"after"?: slide id}
 certificate.insert   Insert/Certificate Slide -          {"after"?: slide id}
 question.add_submit_button -                        -          {"slide": id}
 question.add_feedback_layers -                        -          {"slide": id}
+question.add_try_again_layer -                        -          {"slide": id}
 question.set         -                        -          {"slide": id, "question": Question}
 question.delete      Edit/Delete Question     -          {"slide": id}
 question.set_kind    -                        -          {"slide": id, "kind": QuestionKind}

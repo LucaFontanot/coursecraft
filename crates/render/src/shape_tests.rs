@@ -247,6 +247,8 @@ fn shape_object(id: &str, kind: ShapeKind, frame: ModelRect) -> Object {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -308,6 +310,8 @@ fn shape_with_text(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -379,6 +383,7 @@ fn outline_text_slide() -> Slide {
         master: None,
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     }
 }
 
@@ -437,6 +442,7 @@ fn adjust_slide(text_color: Color) -> Slide {
         master: None,
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     }
 }
 
@@ -476,6 +482,8 @@ fn label_object(id: &str, text: &str, frame: ModelRect, color: Color) -> Object 
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -542,6 +550,7 @@ fn category_slide(category: ShapeCategory, text_color: Color) -> Slide {
         master: None,
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     }
 }
 
@@ -756,6 +765,8 @@ fn draw_slide(text_color: Color) -> Slide {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
         objects.push(label_object(
             &format!("draw-label{index}"),
@@ -818,6 +829,8 @@ fn draw_slide(text_color: Color) -> Slide {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
     }
     let connector_start = ModelRect {
@@ -885,6 +898,8 @@ fn draw_slide(text_color: Color) -> Slide {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     objects.push(label_object(
         "connected-label",
@@ -912,6 +927,7 @@ fn draw_slide(text_color: Color) -> Slide {
         master: None,
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     }
 }
 
@@ -1049,6 +1065,8 @@ fn no_fill_is_a_transparent_colour() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     };
     let item = crate::compose_object(&object, "normal").expect("compose shape");
     let crate::Visual::Shape {
@@ -1174,6 +1192,7 @@ fn shape_gallery_course_is_written_for_review() {
         fonts: Vec::new(),
         background_audio: None,
         glossary: Vec::new(),
+        editor: Default::default(),
         resources: Vec::new(),
         text_styles: Vec::new(),
     };

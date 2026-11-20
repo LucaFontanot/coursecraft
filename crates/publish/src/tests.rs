@@ -33,6 +33,7 @@ fn minimal_course(title: &str) -> Course {
                 master: None,
                 revisit: coursecraft_course::RevisitMode::Auto,
                 player: None,
+                cue_points: Vec::new(),
             }],
         }],
         masters: Vec::new(),
@@ -46,6 +47,7 @@ fn minimal_course(title: &str) -> Course {
         fonts: Vec::new(),
         background_audio: None,
         glossary: Vec::new(),
+        editor: Default::default(),
         resources: Vec::new(),
         text_styles: Vec::new(),
     }
@@ -106,6 +108,8 @@ fn web_object(id: &str, path: &str, entry: &str) -> Object {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -323,6 +327,8 @@ fn course_with_image_packaged_under_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let fake_png = vec![0x89, 0x50, 0x4e, 0x47];
@@ -392,6 +398,8 @@ fn course_with_svg_image_packaged_under_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#123456"/></svg>"##.to_vec();
@@ -495,6 +503,8 @@ fn missing_media_errors() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let no_media = |_src: &str| -> Option<Vec<u8>> { None };
@@ -569,6 +579,8 @@ fn each_unsafe_path_case_errors() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
 
         let dummy_media = |_src: &str| -> Option<Vec<u8>> { Some(vec![1, 2, 3]) };
@@ -732,6 +744,8 @@ fn dedupes_identical_media_sources() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course.scenes[0].slides[0].objects.push(Object {
         id: "img2".into(),
@@ -765,6 +779,8 @@ fn dedupes_identical_media_sources() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let resolve_count = std::sync::atomic::AtomicUsize::new(0);
@@ -836,6 +852,8 @@ fn skips_remote_http_and_https_sources() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course.scenes[0].slides[0].objects.push(Object {
         id: "video1".into(),
@@ -872,6 +890,8 @@ fn skips_remote_http_and_https_sources() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let no_media = |_src: &str| -> Option<Vec<u8>> { None };
@@ -955,6 +975,8 @@ fn distinct_sources_never_collide_in_package() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
     }
     let media = |src: &str| -> Option<Vec<u8>> {
@@ -1012,6 +1034,8 @@ fn editor_saved_project_roundtrips_to_publish_package() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let media_bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -1083,6 +1107,8 @@ fn course_with_audio_and_video_packaged_under_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course.scenes[0].slides[0].objects.push(Object {
         id: "vid1".into(),
@@ -1119,6 +1145,8 @@ fn course_with_audio_and_video_packaged_under_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let wav_bytes = vec![b'R', b'I', b'F', b'F', 0, 0, 0, 0];
@@ -1199,6 +1227,8 @@ fn course_with_a_lottie_animation_packages_its_file() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     let lottie_bytes = b"PK\x03\x04fake lottie".to_vec();
     let media =
@@ -1380,6 +1410,60 @@ fn lti_package_has_the_marker_no_manifest_and_the_same_media_as_scorm12() {
 }
 
 #[test]
+fn web_package_has_marker_index_and_no_manifest() {
+    let mut course = minimal_course("Web Course");
+    course.scenes[0].slides[0].objects.push(media_object(
+        "media1",
+        ObjectKind::Audio {
+            src: "sound.wav".into(),
+            autoplay: false,
+            captions: None,
+            volume: 1.0,
+            trim: None,
+        },
+    ));
+    let media =
+        |src: &str| -> Option<Vec<u8>> { (src == "sound.wav").then(|| b"audio bytes".to_vec()) };
+    let course_json = course.to_json().expect("serialize");
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &fake_player(),
+        media: &media,
+    };
+
+    let web = build_package_standard(&input, PackageStandard::Web).expect("web package");
+    let scorm = build_package_standard(&input, PackageStandard::Scorm(Standard::Scorm12))
+        .expect("scorm package");
+
+    let web_paths: Vec<&str> = web.iter().map(|file| file.path.as_str()).collect();
+    let scorm_paths: Vec<&str> = scorm.iter().map(|file| file.path.as_str()).collect();
+
+    assert!(
+        web_paths.contains(&"index.html"),
+        "web packages must include index.html: {web_paths:?}"
+    );
+    let marker = web
+        .iter()
+        .find(|file| file.path == PACKAGE_MARKER)
+        .expect("web marker");
+    assert_eq!(marker.bytes, b"{\"standard\":\"web\"}".as_slice());
+    assert!(
+        !web_paths.contains(&"imsmanifest.xml"),
+        "web packages have no imsmanifest: {web_paths:?}"
+    );
+
+    // The same files as SCORM 1.2, plus the marker and minus the manifest.
+    let mut expected: Vec<&str> = scorm_paths
+        .into_iter()
+        .filter(|path| *path != "imsmanifest.xml")
+        .collect();
+    expected.push(PACKAGE_MARKER);
+    expected.sort_unstable();
+    assert_eq!(web_paths, expected);
+}
+
+#[test]
 fn scorm12_via_the_standard_entry_point_is_byte_identical() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
     let no_media = |_src: &str| -> Option<Vec<u8>> { None };
@@ -1456,6 +1540,8 @@ fn media_object(id: &str, kind: ObjectKind) -> Object {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -1583,6 +1669,8 @@ fn master_media_is_packaged_templates_are_stripped_and_their_media_is_not() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     };
 
     let mut master = course.scenes[0].slides[0].clone();
@@ -1686,6 +1774,8 @@ fn a_picture_shape_fill_is_packaged_as_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let media = |src: &str| -> Option<Vec<u8>> {
@@ -1746,6 +1836,8 @@ fn media_used_only_on_a_bank_slide_is_packaged() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course.banks.push(coursecraft_course::QuestionBank {
         id: "bank1".into(),

@@ -370,6 +370,46 @@ pub struct Course {
     /// Terms the learner can look up in the player. Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub glossary: Vec<GlossaryEntry>,
+    /// Authoring view settings (rulers, grid, guides). Ignored by the player and publish.
+    /// Omitted when default.
+    #[serde(default, skip_serializing_if = "EditorSettings::is_default")]
+    pub editor: EditorSettings,
+}
+
+/// One guide line across the authoring canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Guide {
+    /// True for a vertical line (`at` is an x coordinate in slide pixels).
+    pub vertical: bool,
+    pub at: f32,
+}
+
+/// Authoring view settings saved with the course. Ignored by the player and publish.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditorSettings {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub show_rulers: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub show_grid: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub snap_to_grid: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub show_guides: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<Guide>,
+}
+
+impl EditorSettings {
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        !self.show_rulers
+            && !self.show_grid
+            && !self.snap_to_grid
+            && !self.show_guides
+            && self.guides.is_empty()
+    }
 }
 
 /// One entry in the player's Resources tab.
@@ -746,6 +786,15 @@ pub struct BankDraw {
     pub count: u32,
 }
 
+/// A named cue point on a slide or layer timeline, at `at_ms` milliseconds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlideCue {
+    pub id: String,
+    pub name: String,
+    pub at_ms: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Slide {
@@ -766,6 +815,9 @@ pub struct Slide {
     /// Triggers owned by the base layer, in firing order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<Trigger>,
+    /// Named cue points on the base timeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cue_points: Vec<SlideCue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<Question>,
     /// Draw `count` questions at random from a bank. Omitted when unset.
@@ -847,6 +899,9 @@ pub struct Layer {
     /// How showing this layer again treats its clock and object states.
     #[serde(default, skip_serializing_if = "is_default_revisit")]
     pub revisit: RevisitMode,
+    /// Named cue points on this layer's timeline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cue_points: Vec<SlideCue>,
 }
 
 /// How the learner's seekbar treats a visible layer.
@@ -952,6 +1007,13 @@ pub struct Object {
     /// Drag-and-drop specification for freeform draggable objects. Omitted when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drag: Option<DragSpec>,
+    /// Locked on the authoring canvas so clicks and drags ignore it. Player and publish
+    /// ignore this. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    /// Hidden on the authoring canvas. Player and publish ignore this. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub editor_hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3501,9 +3563,12 @@ pub enum Event {
         layer: Option<String>,
     },
     TimelineReaches {
+        #[serde(default)]
         ms: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         layer: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cue: Option<String>,
     },
     Click {
         object: String,
@@ -3596,7 +3661,7 @@ pub enum Action {
         #[serde(default)]
         op: VarOp,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        value: Option<Value>,
+        value: Option<ValueSource>,
     },
     PlayMedia {
         object: String,
@@ -3665,7 +3730,9 @@ pub const MAX_JAVASCRIPT_BYTES: usize = 64 * 1024;
 pub enum SlideTarget {
     Next,
     Previous,
+    LastVisited,
     Id(String),
+    Scene(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -3690,6 +3757,39 @@ pub enum CompletionStatus {
     Incomplete,
 }
 
+/// Right-hand side of a `set_variable` action or `compare` condition: either a
+/// literal [`Value`] or a reference to another variable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ValueSource {
+    Constant(Value),
+    Variable { variable: String },
+}
+
+impl ValueSource {
+    #[must_use]
+    pub fn as_constant(&self) -> Option<&Value> {
+        match self {
+            Self::Constant(v) => Some(v),
+            Self::Variable { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_variable(&self) -> Option<&str> {
+        match self {
+            Self::Constant(_) => None,
+            Self::Variable { variable } => Some(variable.as_str()),
+        }
+    }
+}
+
+impl From<Value> for ValueSource {
+    fn from(v: Value) -> Self {
+        Self::Constant(v)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Condition {
@@ -3699,7 +3799,7 @@ pub enum Condition {
     Compare {
         variable: String,
         op: CmpOp,
-        value: Value,
+        value: ValueSource,
     },
     ObjectState {
         object: String,
@@ -3721,6 +3821,10 @@ pub enum CmpOp {
     Ge,
     /// Text contains (case-sensitive).
     Contains,
+    /// Text equals (case-insensitive).
+    EqIgnoreCase,
+    /// Text contains (case-insensitive).
+    ContainsIgnoreCase,
 }
 
 // ---------------------------------------------------------------- questions
@@ -3744,6 +3848,8 @@ pub struct Question {
     pub correct_layer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incorrect_layer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub try_again_layer: Option<String>,
     /// Accepted answers for a fill-in question. Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted: Vec<String>,

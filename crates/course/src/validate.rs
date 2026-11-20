@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::{
     Action, Condition, Course, Event, Layer, Object, ObjectKind, QuestionKind, SCHEMA_VERSION,
-    Scoring, Slide, SlideTarget, Trigger, ValueKind, VarOp,
+    Scoring, Slide, SlideTarget, Trigger, ValueKind, ValueSource, VarOp,
 };
 
 /// Conditions nested deeper than this are rejected (and the player refuses them).
@@ -2034,19 +2034,35 @@ fn check_event(cx: &mut Ctx<'_>, slide: &Slide, e: &Event, p: &str) {
                 check_layer_ref(cx, slide, l, p);
             }
         }
-        Event::TimelineReaches { ms, layer } => {
-            let len = match layer {
-                Some(l) => slide.layer(l).map(|l| l.duration_ms),
-                None => Some(slide.duration_ms),
+        Event::TimelineReaches { ms, layer, cue } => {
+            let target_layer = layer.as_deref().and_then(|l| slide.layer(l));
+            if let Some(l) = layer
+                && target_layer.is_none()
+            {
+                check_layer_ref(cx, slide, l, p);
+                return;
+            }
+            let (len, cues) = match target_layer {
+                Some(l) => (l.duration_ms, l.cue_points.as_slice()),
+                None => (slide.duration_ms, slide.cue_points.as_slice()),
             };
-            match len {
-                None => {
-                    if let Some(l) = layer {
-                        check_layer_ref(cx, slide, l, p);
-                    }
+            if let Some(cue_id) = cue {
+                match cues.iter().find(|c| c.id == *cue_id) {
+                    Some(c) if c.at_ms > len => cx.warn(
+                        p,
+                        format!(
+                            "timeline_reaches cue {cue_id:?} ({} ms) is past the timeline end ({len} ms) and never fires",
+                            c.at_ms
+                        ),
+                    ),
+                    Some(_) => {}
+                    None => cx.err(p, format!("cue {cue_id:?} is not defined on this timeline")),
                 }
-                Some(len) if *ms > len => cx.warn(p, format!("timeline_reaches {ms} ms is past the timeline end ({len} ms) and never fires")),
-                Some(_) => {}
+            } else if *ms > len {
+                cx.warn(
+                    p,
+                    format!("timeline_reaches {ms} ms is past the timeline end ({len} ms) and never fires"),
+                );
             }
         }
         Event::MediaEnds { object } => {
@@ -2161,6 +2177,15 @@ fn check_action(cx: &mut Ctx<'_>, slide: &Slide, owner: Option<&Layer>, a: &Acti
                 cx.err(p, format!("slide {id:?} does not exist"));
             }
         }
+        Action::JumpToSlide {
+            target: SlideTarget::Scene(id),
+        } => match cx.course.scenes.iter().find(|s| s.id == *id) {
+            None => cx.err(p, format!("scene {id:?} does not exist")),
+            Some(sc) if sc.slides.is_empty() => {
+                cx.warn(p, format!("scene {id:?} has no slides"));
+            }
+            Some(_) => {}
+        },
         Action::JumpToSlide { .. }
         | Action::PauseTimeline
         | Action::ResumeTimeline
@@ -2201,7 +2226,7 @@ fn check_action(cx: &mut Ctx<'_>, slide: &Slide, owner: Option<&Layer>, a: &Acti
             variable,
             op,
             value,
-        } => check_set_variable(cx, variable, *op, value.as_ref(), p),
+        } => check_set_variable(cx, slide, variable, *op, value.as_ref(), p),
         Action::PlayMedia { object }
         | Action::PauseMedia { object }
         | Action::StopMedia { object } => {
@@ -2271,11 +2296,24 @@ fn check_action(cx: &mut Ctx<'_>, slide: &Slide, owner: Option<&Layer>, a: &Acti
     }
 }
 
+fn resolve_var_kind(cx: &Ctx<'_>, slide: &Slide, name: &str) -> Option<ValueKind> {
+    crate::builtin_variable_kind(name)
+        .or_else(|| {
+            if crate::is_timer_remaining_variable_on(slide, name) {
+                Some(ValueKind::Number)
+            } else {
+                None
+            }
+        })
+        .or_else(|| cx.course.variable(name).map(|def| def.value.kind()))
+}
+
 fn check_set_variable(
     cx: &mut Ctx<'_>,
+    slide: &Slide,
     variable: &str,
     op: VarOp,
-    value: Option<&crate::Value>,
+    value: Option<&ValueSource>,
     p: &str,
 ) {
     if crate::builtin_variable_kind(variable).is_some()
@@ -2300,11 +2338,26 @@ fn check_set_variable(
         }
         VarOp::Assign => match value {
             None => cx.err(p, "assign needs a value"),
-            Some(v) if v.kind() != kind => cx.err(
-                p,
-                format!("{variable:?} is {kind:?}, value is {:?}", v.kind()),
-            ),
-            Some(_) => {}
+            Some(ValueSource::Constant(v)) => {
+                if v.kind() != kind {
+                    cx.err(
+                        p,
+                        format!("{variable:?} is {kind:?}, value is {:?}", v.kind()),
+                    );
+                }
+            }
+            Some(ValueSource::Variable { variable: src }) => {
+                match resolve_var_kind(cx, slide, src) {
+                    None => cx.err(p, format!("variable {src:?} does not exist")),
+                    Some(src_kind) if src_kind != kind => cx.err(
+                        p,
+                        format!(
+                            "{variable:?} is {kind:?}, source variable {src:?} is {src_kind:?}"
+                        ),
+                    ),
+                    Some(_) => {}
+                }
+            }
         },
         VarOp::Add | VarOp::Subtract | VarOp::Multiply | VarOp::Divide => {
             if kind != ValueKind::Number {
@@ -2314,9 +2367,19 @@ fn check_set_variable(
                 );
             }
             match value {
-                Some(crate::Value::Number(n)) if n.is_finite() => {
+                Some(ValueSource::Constant(crate::Value::Number(n))) if n.is_finite() => {
                     if op == VarOp::Divide && *n == 0.0 {
                         cx.err(p, "divide by zero");
+                    }
+                }
+                Some(ValueSource::Variable { variable: src }) => {
+                    match resolve_var_kind(cx, slide, src) {
+                        None => cx.err(p, format!("variable {src:?} does not exist")),
+                        Some(src_kind) if src_kind != ValueKind::Number => cx.err(
+                            p,
+                            format!("{op:?} needs a number variable; {src:?} is {src_kind:?}"),
+                        ),
+                        Some(_) => {}
                     }
                 }
                 _ => cx.err(p, format!("{op:?} needs a finite number value")),
@@ -2444,23 +2507,34 @@ fn check_condition(cx: &mut Ctx<'_>, slide: &Slide, c: &Condition, p: &str, dept
             op,
             value,
         } => {
-            let kind = crate::builtin_variable_kind(variable)
-                .or_else(|| {
-                    if crate::is_timer_remaining_variable_on(slide, variable) {
-                        Some(ValueKind::Number)
-                    } else {
-                        None
-                    }
-                })
-                .or_else(|| cx.course.variable(variable).map(|def| def.value.kind()));
+            let kind = resolve_var_kind(cx, slide, variable);
             match kind {
                 None => cx.err(p, format!("variable {variable:?} does not exist")),
                 Some(kind) => {
-                    if value.kind() != kind {
-                        cx.err(
-                            p,
-                            format!("{variable:?} is {kind:?}, compared with {:?}", value.kind()),
-                        );
+                    match value {
+                        ValueSource::Constant(v) => {
+                            if v.kind() != kind {
+                                cx.err(
+                                    p,
+                                    format!(
+                                        "{variable:?} is {kind:?}, compared with {:?}",
+                                        v.kind()
+                                    ),
+                                );
+                            }
+                        }
+                        ValueSource::Variable { variable: rhs } => {
+                            match resolve_var_kind(cx, slide, rhs) {
+                                None => cx.err(p, format!("variable {rhs:?} does not exist")),
+                                Some(rhs_kind) if rhs_kind != kind => cx.warn(
+                                    p,
+                                    format!(
+                                        "{variable:?} is {kind:?}, compared with {rhs:?} ({rhs_kind:?})"
+                                    ),
+                                ),
+                                Some(_) => {}
+                            }
+                        }
                     }
                     let ordered = matches!(
                         op,
@@ -2469,8 +2543,19 @@ fn check_condition(cx: &mut Ctx<'_>, slide: &Slide, c: &Condition, p: &str, dept
                     if ordered && kind != ValueKind::Number {
                         cx.err(p, format!("{op:?} only compares numbers"));
                     }
-                    if *op == crate::CmpOp::Contains && kind != ValueKind::Text {
-                        cx.err(p, "contains only applies to text");
+                    if matches!(
+                        op,
+                        crate::CmpOp::Contains
+                            | crate::CmpOp::EqIgnoreCase
+                            | crate::CmpOp::ContainsIgnoreCase
+                    ) && kind != ValueKind::Text
+                    {
+                        let msg = if *op == crate::CmpOp::Contains {
+                            "contains only applies to text".to_owned()
+                        } else {
+                            format!("{op:?} only applies to text")
+                        };
+                        cx.err(p, msg);
                     }
                 }
             }
@@ -2792,39 +2877,7 @@ fn check_question(cx: &mut Ctx<'_>, slide: &Slide, p: &str) {
                 );
             }
         }
-        QuestionKind::Matching => {
-            if !q.choices.is_empty() {
-                cx.err(&qp, "matching must not have choices");
-            }
-            let n = q.pairs.len();
-            if !(2..=20).contains(&n) {
-                cx.err(&qp, format!("matching needs 2 to 20 pairs, found {n}"));
-            }
-            let mut pair_ids = BTreeSet::new();
-            for pair in &q.pairs {
-                if !valid_name(&pair.id) {
-                    cx.err(
-                        &qp,
-                        format!("pair id {:?} must be 1-128 chars of [A-Za-z0-9_-]", pair.id),
-                    );
-                }
-                if !pair_ids.insert(pair.id.as_str()) {
-                    cx.err(&qp, format!("duplicate pair id {:?}", pair.id));
-                }
-                if pair.left.is_empty() || pair.right.is_empty() {
-                    cx.err(
-                        &qp,
-                        format!("pair {:?} needs non-empty left and right text", pair.id),
-                    );
-                }
-            }
-            if q.shuffle {
-                cx.warn(
-                    &qp,
-                    "shuffle is ignored for matching; the right-hand column is shuffled every attempt",
-                );
-            }
-        }
+        QuestionKind::Matching => check_matching(cx, q, &qp),
         QuestionKind::Hotspot => check_hotspot(cx, slide, q, &qp),
         QuestionKind::DragDrop => check_drag_drop(cx, slide, q, &qp),
         QuestionKind::Likert => check_likert(cx, q, &qp),
@@ -2834,10 +2887,56 @@ fn check_question(cx: &mut Ctx<'_>, slide: &Slide, p: &str) {
     if q.kind != QuestionKind::Freeform && q.correct_when.is_some() {
         cx.err(&qp, "correct_when is only allowed on freeform questions");
     }
-    for l in [&q.correct_layer, &q.incorrect_layer].into_iter().flatten() {
-        check_layer_ref(cx, slide, l, &qp);
-    }
+    check_question_layers(cx, slide, q, &qp);
     check_question_submit(cx, slide, &qp);
+}
+
+fn check_question_layers(cx: &mut Ctx<'_>, slide: &Slide, q: &crate::Question, qp: &str) {
+    for l in [&q.correct_layer, &q.incorrect_layer].into_iter().flatten() {
+        check_layer_ref(cx, slide, l, qp);
+    }
+    if let Some(l) = &q.try_again_layer
+        && slide.layer(l).is_none()
+    {
+        cx.warn(
+            qp,
+            format!("try_again_layer {l:?} is not on slide {:?}", slide.id),
+        );
+    }
+}
+
+fn check_matching(cx: &mut Ctx<'_>, q: &crate::Question, qp: &str) {
+    if !q.choices.is_empty() {
+        cx.err(qp, "matching must not have choices");
+    }
+    let n = q.pairs.len();
+    if !(2..=20).contains(&n) {
+        cx.err(qp, format!("matching needs 2 to 20 pairs, found {n}"));
+    }
+    let mut pair_ids = BTreeSet::new();
+    for pair in &q.pairs {
+        if !valid_name(&pair.id) {
+            cx.err(
+                qp,
+                format!("pair id {:?} must be 1-128 chars of [A-Za-z0-9_-]", pair.id),
+            );
+        }
+        if !pair_ids.insert(pair.id.as_str()) {
+            cx.err(qp, format!("duplicate pair id {:?}", pair.id));
+        }
+        if pair.left.is_empty() || pair.right.is_empty() {
+            cx.err(
+                qp,
+                format!("pair {:?} needs non-empty left and right text", pair.id),
+            );
+        }
+    }
+    if q.shuffle {
+        cx.warn(
+            qp,
+            "shuffle is ignored for matching; the right-hand column is shuffled every attempt",
+        );
+    }
 }
 
 fn check_question_submit(cx: &mut Ctx<'_>, slide: &Slide, qp: &str) {

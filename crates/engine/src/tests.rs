@@ -2176,7 +2176,7 @@ fn freeform_insert_defaults_condition_and_kind_switches_clear_fields() {
     let default_condition = Condition::Compare {
         variable: "score".into(),
         op: CmpOp::Ge,
-        value: Value::Number(0.0),
+        value: Value::Number(0.0).into(),
     };
     assert_eq!(q.correct_when.as_ref(), Some(&default_condition));
 
@@ -2184,7 +2184,7 @@ fn freeform_insert_defaults_condition_and_kind_switches_clear_fields() {
     updated.correct_when = Some(Condition::Compare {
         variable: "Course.ScorePercent".into(),
         op: CmpOp::Ge,
-        value: Value::Number(50.0),
+        value: Value::Number(50.0).into(),
     });
     ok(
         &mut s,
@@ -3751,6 +3751,58 @@ fn question_add_feedback_layers_sets_both_targets_and_undoes() {
 }
 
 #[test]
+fn question_add_try_again_layer_creates_layer_button_and_undoes() {
+    use coursecraft_course::{Action, Event, ObjectKind};
+
+    let mut s = Session::blank("Title");
+    // Refuses a slide without a question.
+    assert!(
+        s.execute(
+            "question.add_try_again_layer",
+            &json!({ "slide": "slide1" })
+        )
+        .is_err()
+    );
+
+    ok(&mut s, "question.insert", json!({ "slide": "slide1" }));
+    let before = s.course.clone();
+    let res = ok(
+        &mut s,
+        "question.add_try_again_layer",
+        json!({ "slide": "slide1" }),
+    );
+    let layer_id = res["layer"].as_str().expect("layer id");
+    let slide = s.course.slide("slide1").expect("slide");
+    let question = slide.question.as_ref().expect("question");
+    assert_eq!(question.try_again_layer.as_deref(), Some(layer_id));
+
+    let layer = slide.layer(layer_id).expect("try again layer");
+    assert_eq!(layer.name, "Try Again");
+    assert!(
+        layer
+            .objects
+            .iter()
+            .any(|o| matches!(&o.kind, ObjectKind::Text { .. }))
+    );
+    let btn = layer
+        .objects
+        .iter()
+        .find(|o| matches!(&o.kind, ObjectKind::Button { label, .. } if label == "Try Again"))
+        .expect("Try Again button");
+    assert!(layer.triggers.iter().any(|t| {
+        t.when
+            == Event::Click {
+                object: btn.id.clone(),
+            }
+            && t.action == Action::HideLayer { layer: None }
+    }));
+    assert!(s.course.is_playable());
+
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.course, before);
+}
+
+#[test]
 fn question_insert_drag_drop_names_the_item_target_and_label() {
     use coursecraft_course::{ObjectKind, QuestionKind};
 
@@ -3912,7 +3964,7 @@ fn results_insert_places_a_results_slide_after_the_given_slide() {
             } => {
                 assert_eq!(shown, layer);
                 assert_eq!(variable, "Quiz.Passed");
-                assert_eq!(*value, Value::Bool(layer == "passed"));
+                assert_eq!(*value, Value::Bool(layer == "passed").into());
             }
             other => panic!("unexpected trigger {other:?}"),
         }
@@ -6297,6 +6349,113 @@ fn text_commands_format_a_table_cell() {
         cell.paragraphs[0].list,
         coursecraft_course::ListKind::Bullet
     );
+}
+
+#[test]
+fn object_lock_hide_and_view_settings_survive_round_trip_and_undo() {
+    let mut s = Session::blank("LockHide");
+    let obj = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+            "frame": { "x": 100, "y": 100, "w": 200, "h": 120 },
+        }),
+    )["id"]
+        .as_str()
+        .expect("object id")
+        .to_owned();
+
+    // Default values are omitted from JSON.
+    let initial_json = s.course.to_json().expect("json");
+    assert!(!initial_json.contains("\"locked\""));
+    assert!(!initial_json.contains("\"editor_hidden\""));
+    assert!(!initial_json.contains("\"editor\""));
+
+    ok(
+        &mut s,
+        "object.lock",
+        json!({ "slide": "slide1", "object": obj, "locked": true }),
+    );
+    ok(
+        &mut s,
+        "object.hide_in_editor",
+        json!({ "slide": "slide1", "object": obj, "hidden": true }),
+    );
+    ok(
+        &mut s,
+        "view.set",
+        json!({ "show_rulers": true, "show_grid": true, "snap_to_grid": true }),
+    );
+    ok(
+        &mut s,
+        "view.guides.add",
+        json!({ "vertical": true, "at": 320.0 }),
+    );
+    ok(
+        &mut s,
+        "view.guides.move",
+        json!({ "index": 0, "at": 400.0 }),
+    );
+
+    // Save and reload (serialize round trip) preserves lock, hide, and editor settings.
+    let saved = s.course.to_json().expect("save");
+    let reloaded = coursecraft_course::Course::from_json(&saved).expect("reload");
+    let reloaded_obj = reloaded
+        .slide("slide1")
+        .expect("slide")
+        .object(&obj)
+        .expect("obj")
+        .0;
+    assert!(reloaded_obj.locked);
+    assert!(reloaded_obj.editor_hidden);
+    assert!(reloaded.editor.show_rulers);
+    assert!(reloaded.editor.show_grid);
+    assert!(reloaded.editor.snap_to_grid);
+    assert!(reloaded.editor.show_guides);
+    assert_eq!(reloaded.editor.guides.len(), 1);
+    assert!(reloaded.editor.guides[0].vertical);
+    assert!((reloaded.editor.guides[0].at - 400.0).abs() < 0.01);
+
+    // Undo restores guide move, guide add, view settings, hide, and lock in reverse order.
+    ok(&mut s, "edit.undo", json!({}));
+    assert!((s.course.editor.guides[0].at - 320.0).abs() < 0.01);
+    ok(&mut s, "edit.undo", json!({}));
+    assert!(s.course.editor.guides.is_empty());
+    ok(&mut s, "edit.undo", json!({}));
+    assert!(s.course.editor.is_default());
+    ok(&mut s, "edit.undo", json!({}));
+    assert!(
+        !s.course
+            .slide("slide1")
+            .expect("s")
+            .object(&obj)
+            .expect("o")
+            .0
+            .editor_hidden
+    );
+    ok(&mut s, "edit.undo", json!({}));
+    assert!(
+        !s.course
+            .slide("slide1")
+            .expect("s")
+            .object(&obj)
+            .expect("o")
+            .0
+            .locked
+    );
+
+    // Remove guide and undo.
+    ok(
+        &mut s,
+        "view.guides.add",
+        json!({ "vertical": false, "at": 180.0 }),
+    );
+    ok(&mut s, "view.guides.remove", json!({ "index": 0 }));
+    assert!(s.course.editor.guides.is_empty());
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.course.editor.guides.len(), 1);
 }
 
 #[test]

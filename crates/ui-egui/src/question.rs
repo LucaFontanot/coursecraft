@@ -80,6 +80,7 @@ pub struct QuestionState {
     pub shuffle: bool,
     pub correct_layer: Option<String>,
     pub incorrect_layer: Option<String>,
+    pub try_again_layer: Option<String>,
     pub accepted: Vec<String>,
     pub case_sensitive: bool,
     pub pairs: Vec<MatchPair>,
@@ -118,6 +119,7 @@ impl Default for QuestionState {
             shuffle: false,
             correct_layer: None,
             incorrect_layer: None,
+            try_again_layer: None,
             accepted: Vec::new(),
             case_sensitive: false,
             pairs: Vec::new(),
@@ -170,6 +172,7 @@ impl QuestionState {
             self.shuffle = q.shuffle;
             self.correct_layer = q.correct_layer.clone();
             self.incorrect_layer = q.incorrect_layer.clone();
+            self.try_again_layer = q.try_again_layer.clone();
             self.accepted = q.accepted.clone();
             self.case_sensitive = q.case_sensitive;
             self.pairs = q.pairs.clone();
@@ -199,6 +202,7 @@ impl QuestionState {
             self.shuffle = false;
             self.correct_layer = None;
             self.incorrect_layer = None;
+            self.try_again_layer = None;
             self.accepted.clear();
             self.case_sensitive = false;
             self.pairs.clear();
@@ -228,6 +232,7 @@ impl QuestionState {
             shuffle: self.shuffle,
             correct_layer: self.correct_layer.clone(),
             incorrect_layer: self.incorrect_layer.clone(),
+            try_again_layer: self.try_again_layer.clone(),
             accepted: self.accepted.clone(),
             case_sensitive: self.case_sensitive,
             pairs: self.pairs.clone(),
@@ -1668,7 +1673,21 @@ fn show_settings(
                 committed,
             );
         });
+        if editor.ui.question.attempts != 1 || editor.ui.question.try_again_layer.is_some() {
+            ui.horizontal(|ui| {
+                let q = &mut editor.ui.question;
+                layer_picker(
+                    ui,
+                    "Try Again layer",
+                    "try_again_layer_combo",
+                    &mut q.try_again_layer,
+                    slide,
+                    committed,
+                );
+            });
+        }
         add_feedback_button(editor, ui, slide, structural);
+        add_try_again_button(editor, ui, slide, structural);
         return;
     }
     ui.horizontal(|ui| {
@@ -1705,7 +1724,29 @@ fn show_settings(
             committed,
         );
     });
-    add_feedback_button(editor, ui, slide, structural);
+    if editor.ui.question.attempts != 1 || editor.ui.question.try_again_layer.is_some() {
+        ui.horizontal(|ui| {
+            let q = &mut editor.ui.question;
+            layer_picker(
+                ui,
+                "Try Again layer",
+                "try_again_layer_combo",
+                &mut q.try_again_layer,
+                slide,
+                committed,
+            );
+        });
+    }
+    let show_feedback =
+        editor.ui.question.correct_layer.is_none() && editor.ui.question.incorrect_layer.is_none();
+    let show_try_again =
+        editor.ui.question.attempts != 1 && editor.ui.question.try_again_layer.is_none();
+    if show_feedback || show_try_again {
+        ui.horizontal(|ui| {
+            add_feedback_button(editor, ui, slide, structural);
+            add_try_again_button(editor, ui, slide, structural);
+        });
+    }
 }
 
 /// Offer the two default feedback layers while the question has neither.
@@ -1721,6 +1762,24 @@ fn add_feedback_button(
     if crate::quiet_primary_button(ui, "Add feedback layers").clicked() {
         structural.push((
             "question.add_feedback_layers",
+            serde_json::json!({ "slide": slide.id }),
+        ));
+    }
+}
+
+/// Offer a Try Again layer while the question allows more than one attempt and has none yet.
+fn add_try_again_button(
+    editor: &mut crate::Editor,
+    ui: &mut Ui,
+    slide: &Slide,
+    structural: &mut Vec<(&'static str, Json)>,
+) {
+    if editor.ui.question.attempts == 1 || editor.ui.question.try_again_layer.is_some() {
+        return;
+    }
+    if crate::quiet_primary_button(ui, "Add Try Again layer").clicked() {
+        structural.push((
+            "question.add_try_again_layer",
             serde_json::json!({ "slide": slide.id }),
         ));
     }

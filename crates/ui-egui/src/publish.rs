@@ -8,7 +8,7 @@ use egui::{Color32, RichText};
 
 use crate::{Editor, EditorRequest};
 
-/// The five package standards an author can pick, without pulling the
+/// The package standards an author can pick, without pulling the
 /// publishing crate into the UI layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PublishStandard {
@@ -23,16 +23,19 @@ pub enum PublishStandard {
     Xapi,
     /// LTI 1.3, for the CourseCraft LTI server.
     Lti,
+    /// Standalone web hosting with no LMS.
+    Web,
 }
 
 impl PublishStandard {
     /// Every standard, in the order shown in the dialog.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Scorm12,
         Self::Scorm2004,
         Self::Cmi5,
         Self::Xapi,
         Self::Lti,
+        Self::Web,
     ];
 
     /// Learner-facing name for the standard picker.
@@ -44,6 +47,7 @@ impl PublishStandard {
             Self::Cmi5 => "cmi5",
             Self::Xapi => "xAPI (Tin Can)",
             Self::Lti => "LTI 1.3 (for the CourseCraft LTI server)",
+            Self::Web => "Web (any website, no LMS)",
         }
     }
 
@@ -56,6 +60,7 @@ impl PublishStandard {
             Self::Cmi5 => "A modern standard using xAPI. Your LMS must support cmi5.",
             Self::Xapi => "Sends results to a Learning Record Store.",
             Self::Lti => "Launch from an LTI 1.3 platform through your own CourseCraft LTI server.",
+            Self::Web => "Upload the folder to any web server. Results are not reported to an LMS.",
         }
     }
 
@@ -68,6 +73,7 @@ impl PublishStandard {
             Self::Cmi5 => "cmi5",
             Self::Xapi => "xapi",
             Self::Lti => "lti",
+            Self::Web => "web",
         }
     }
 
@@ -80,6 +86,9 @@ impl PublishStandard {
             }
             Self::Lti => {
                 "Publish this folder to the CourseCraft LTI server, then launch it from your platform."
+            }
+            Self::Web => {
+                "Unzip and upload the folder to any web server. Results are not reported to an LMS."
             }
             Self::Scorm12 | Self::Scorm2004 | Self::Cmi5 => {
                 "Upload this zip to your LMS as a new course."

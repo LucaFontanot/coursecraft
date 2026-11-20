@@ -4,16 +4,16 @@
 use coursecraft_course::{
     Action, Align, Animation, Autofit, BackgroundAudio, BankDraw, Choice, CmpOp, Color, Condition,
     Course, CourseOutline, CropRect, Cue, DashStyle, DragItem, Easing, Event, FillStyle, FontFace,
-    FontStyle, Glow, Glue, HotspotRegion, HotspotShape, Layer, Link, ListKind, Location, MAX_CUES,
-    MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, MatchPair, MotionPath, Object, ObjectKind, Outline,
-    OutlineProblem, OutlineQuestion, OutlineSlide, Paragraph, Point, Question, QuestionBank,
-    QuestionKind, QuizSettings, RadioOption, Rect, RevisitMode, Scene, Scoring, SeekMode, Shadow,
-    ShapeKind, ShapeText, Size, Slide, SlideTarget, StateDef, TableBorders, TableCell, TableRow,
-    TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition, Trigger, Trim, VAlign, Value,
-    VarOp, VariableDef, WebSource, align_paragraphs, apply_link_to_range, apply_style_to_range,
-    apply_text_edit, course_strings, find_in_course, is_valid_link_url, normalize_table_fractions,
-    paragraphs_for, parse_color, relative_luminance, replace_in_target, string_mut,
-    table_cell_owners,
+    FontStyle, Glow, Glue, Guide, HotspotRegion, HotspotShape, Layer, Link, ListKind, Location,
+    MAX_CUES, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, MatchPair, MotionPath, Object, ObjectKind,
+    Outline, OutlineProblem, OutlineQuestion, OutlineSlide, Paragraph, Point, Question,
+    QuestionBank, QuestionKind, QuizSettings, RadioOption, Rect, RevisitMode, Scene, Scoring,
+    SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide, SlideCue, SlideTarget, StateDef,
+    TableBorders, TableCell, TableRow, TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition,
+    Trigger, Trim, VAlign, Value, VarOp, VariableDef, WebSource, align_paragraphs,
+    apply_link_to_range, apply_style_to_range, apply_text_edit, course_strings, find_in_course,
+    is_valid_link_url, normalize_table_fractions, paragraphs_for, parse_color, relative_luminance,
+    replace_in_target, string_mut, table_cell_owners,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value as Json, json};
@@ -703,6 +703,60 @@ static REGISTRY: &[Command] = &[
         run: object_flip,
     },
     Command {
+        id: "object.lock",
+        label: "Lock Object",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object"?: id, "objects"?: id[], "locked": bool}"#,
+        mutates: true,
+        run: object_lock,
+    },
+    Command {
+        id: "object.hide_in_editor",
+        label: "Hide Object in Editor",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object"?: id, "objects"?: id[], "hidden": bool}"#,
+        mutates: true,
+        run: object_hide_in_editor,
+    },
+    Command {
+        id: "view.set",
+        label: "Editor View Settings",
+        menu: "",
+        shortcut: None,
+        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool}"#,
+        mutates: true,
+        run: view_set,
+    },
+    Command {
+        id: "view.guides.add",
+        label: "Add Guide",
+        menu: "",
+        shortcut: None,
+        params: r#"{"vertical": bool, "at": number}"#,
+        mutates: true,
+        run: view_guides_add,
+    },
+    Command {
+        id: "view.guides.move",
+        label: "Move Guide",
+        menu: "",
+        shortcut: None,
+        params: r#"{"index": usize, "at": number}"#,
+        mutates: true,
+        run: view_guides_move,
+    },
+    Command {
+        id: "view.guides.remove",
+        label: "Remove Guide",
+        menu: "",
+        shortcut: None,
+        params: r#"{"index": usize}"#,
+        mutates: true,
+        run: view_guides_remove,
+    },
+    Command {
         id: "object.set_opacity",
         label: "Set Opacity",
         menu: "",
@@ -899,6 +953,33 @@ static REGISTRY: &[Command] = &[
         params: r#"{"slide": id, "object": id, "at_ms"?: number, "name"?: string}"#,
         mutates: true,
         run: video_add_question_cue,
+    },
+    Command {
+        id: "slide.add_cue",
+        label: "Add Timeline Cue Point",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}"#,
+        mutates: true,
+        run: slide_add_cue,
+    },
+    Command {
+        id: "slide.set_cue",
+        label: "Edit Timeline Cue Point",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}"#,
+        mutates: true,
+        run: slide_set_cue,
+    },
+    Command {
+        id: "slide.remove_cue",
+        label: "Delete Timeline Cue Point",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "layer"?: id, "cue": id}"#,
+        mutates: true,
+        run: slide_remove_cue,
     },
     Command {
         id: "object.add_state",
@@ -1304,6 +1385,15 @@ static REGISTRY: &[Command] = &[
         params: r#"{"slide": id}"#,
         mutates: true,
         run: question_add_feedback_layers,
+    },
+    Command {
+        id: "question.add_try_again_layer",
+        label: "Add Try Again Layer",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id}"#,
+        mutates: true,
+        run: question_add_try_again_layer,
     },
     Command {
         id: "question.set",
@@ -2246,6 +2336,7 @@ fn slide_add(s: &mut Session, p: &Json) -> Result<Json> {
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -2570,6 +2661,7 @@ fn master_add(s: &mut Session, p: &Json) -> Result<Json> {
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -2744,6 +2836,7 @@ fn new_bank_slide(
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -2880,6 +2973,7 @@ fn draw_insert(s: &mut Session, p: &Json) -> Result<Json> {
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: Some(BankDraw {
@@ -3019,6 +3113,8 @@ fn layout_text(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -3159,6 +3255,8 @@ fn layout_objects(layout: &str, slide: &Slide, size: Size, theme: &Theme) -> Vec
                 shadow: None,
                 glow: None,
                 drag: None,
+                locked: false,
+                editor_hidden: false,
             },
             role => layout_text(
                 next(p.prefix),
@@ -3385,6 +3483,7 @@ fn outline_slide(
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -3565,6 +3664,7 @@ fn layer_add(s: &mut Session, p: &Json) -> Result<Json> {
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
     keep_valid(s, was_valid)?;
     Ok(json!({ "id": id }))
@@ -3949,7 +4049,7 @@ fn remap_event(event: &mut Event, r: &Remap<'_>) -> bool {
 fn remap_action(action: &mut Action, r: &Remap<'_>) -> bool {
     match action {
         Action::JumpToSlide { target } => match target {
-            SlideTarget::Next | SlideTarget::Previous => true,
+            SlideTarget::Next | SlideTarget::Previous | SlideTarget::LastVisited => true,
             SlideTarget::Id(id) => {
                 if let Some((old, new)) = r.self_slide
                     && id == old
@@ -3958,6 +4058,9 @@ fn remap_action(action: &mut Action, r: &Remap<'_>) -> bool {
                     return true;
                 }
                 r.allow_missing_jump || r.course.play_slide(id).is_some()
+            }
+            SlideTarget::Scene(id) => {
+                r.allow_missing_jump || r.course.scenes.iter().any(|s| s.id == *id)
             }
         },
         Action::ShowLayer { layer } => remap_layer(layer, r),
@@ -3973,7 +4076,15 @@ fn remap_action(action: &mut Action, r: &Remap<'_>) -> bool {
         | Action::PauseTimer { timer: object }
         | Action::ResetTimer { timer: object }
         | Action::MoveOnPath { object, .. } => remap_object(object, r),
-        Action::SetVariable { variable, .. } => variable_exists(r.course, variable),
+        Action::SetVariable {
+            variable, value, ..
+        } => {
+            variable_exists(r.course, variable)
+                && value
+                    .as_ref()
+                    .and_then(|v| v.as_variable())
+                    .is_none_or(|v| variable_exists(r.course, v))
+        }
         Action::PauseTimeline
         | Action::ResumeTimeline
         | Action::SubmitQuestion
@@ -4005,7 +4116,14 @@ fn remap_condition(condition: &mut Condition, r: &Remap<'_>) -> bool {
             list.iter_mut().all(|inner| remap_condition(inner, r))
         }
         Condition::Not(inner) => remap_condition(inner, r),
-        Condition::Compare { variable, .. } => variable_exists(r.course, variable),
+        Condition::Compare {
+            variable, value, ..
+        } => {
+            variable_exists(r.course, variable)
+                && value
+                    .as_variable()
+                    .is_none_or(|v| variable_exists(r.course, v))
+        }
         Condition::ObjectState { object, .. } => remap_object(object, r),
     }
 }
@@ -4134,6 +4252,12 @@ fn copy_slide(
             *layer = layer_map.get(layer).cloned().unwrap_or_default();
             if layer.is_empty() {
                 question.incorrect_layer = None;
+            }
+        }
+        if let Some(layer) = &mut question.try_again_layer {
+            *layer = layer_map.get(layer).cloned().unwrap_or_default();
+            if layer.is_empty() {
+                question.try_again_layer = None;
             }
         }
         if let Some(image) = &mut question.hotspot_image {
@@ -4284,6 +4408,8 @@ fn object_add(s: &mut Session, p: &Json) -> Result<Json> {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     };
     match layer {
         Some(l) => layer_mut(slide, &l)?.objects.push(o),
@@ -5234,6 +5360,130 @@ fn object_flip(s: &mut Session, p: &Json) -> Result<Json> {
     }
     keep_valid(s, was_valid)?;
     Ok(json!({ "changed": changed }))
+}
+
+fn object_lock(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.lock";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let ids = object_or_objects_param(C, p)?;
+    let locked: bool = req(C, p, "locked")?;
+    let mut changed = 0;
+    {
+        let slide = slide_mut(s, &sid)?;
+        for id in &ids {
+            let object = find_object_mut(slide, id)?;
+            if object.locked != locked {
+                object.locked = locked;
+                changed += 1;
+            }
+        }
+    }
+    if changed == 0 {
+        s.skip_undo = true;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "changed": changed }))
+}
+
+fn object_hide_in_editor(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.hide_in_editor";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let ids = object_or_objects_param(C, p)?;
+    let hidden: bool = req(C, p, "hidden")?;
+    let mut changed = 0;
+    {
+        let slide = slide_mut(s, &sid)?;
+        for id in &ids {
+            let object = find_object_mut(slide, id)?;
+            if object.editor_hidden != hidden {
+                object.editor_hidden = hidden;
+                changed += 1;
+            }
+        }
+    }
+    if changed == 0 {
+        s.skip_undo = true;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "changed": changed }))
+}
+
+const MAX_GUIDES: usize = 256;
+
+fn check_guide_pos(cmd: &'static str, at: f32) -> Result<f32> {
+    if !at.is_finite() || !(-100_000.0..=100_000.0).contains(&at) {
+        return Err(bad(cmd, "`at` must be a finite coordinate"));
+    }
+    Ok(at)
+}
+
+fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "view.set";
+    let was_valid = s.course.is_playable();
+    let before = s.course.editor.clone();
+    if let Some(v) = opt::<bool>(C, p, "show_rulers")? {
+        s.course.editor.show_rulers = v;
+    }
+    if let Some(v) = opt::<bool>(C, p, "show_grid")? {
+        s.course.editor.show_grid = v;
+    }
+    if let Some(v) = opt::<bool>(C, p, "snap_to_grid")? {
+        s.course.editor.snap_to_grid = v;
+    }
+    if let Some(v) = opt::<bool>(C, p, "show_guides")? {
+        s.course.editor.show_guides = v;
+    }
+    if s.course.editor == before {
+        s.skip_undo = true;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "editor": s.course.editor }))
+}
+
+fn view_guides_add(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "view.guides.add";
+    let was_valid = s.course.is_playable();
+    let vertical: bool = req(C, p, "vertical")?;
+    let at = check_guide_pos(C, req::<f32>(C, p, "at")?)?;
+    if s.course.editor.guides.len() >= MAX_GUIDES {
+        return Err(bad(C, "too many guides"));
+    }
+    s.course.editor.guides.push(Guide { vertical, at });
+    s.course.editor.show_guides = true;
+    let index = s.course.editor.guides.len().saturating_sub(1);
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "index": index }))
+}
+
+fn view_guides_move(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "view.guides.move";
+    let was_valid = s.course.is_playable();
+    let index: usize = req(C, p, "index")?;
+    let at = check_guide_pos(C, req::<f32>(C, p, "at")?)?;
+    let Some(guide) = s.course.editor.guides.get_mut(index) else {
+        return Err(bad(C, "guide index out of range"));
+    };
+    if (guide.at - at).abs() <= f32::EPSILON {
+        s.skip_undo = true;
+    } else {
+        guide.at = at;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "index": index, "at": at }))
+}
+
+fn view_guides_remove(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "view.guides.remove";
+    let was_valid = s.course.is_playable();
+    let index: usize = req(C, p, "index")?;
+    if index >= s.course.editor.guides.len() {
+        return Err(bad(C, "guide index out of range"));
+    }
+    s.course.editor.guides.remove(index);
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "removed": index }))
 }
 
 /// The appearance of one object, as copied by the format painter.
@@ -6449,6 +6699,160 @@ fn video_remove_cue(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(Json::Null)
 }
 
+fn slide_cues_mut<'a>(
+    slide: &'a mut Slide,
+    layer: Option<&str>,
+) -> Result<(u32, &'a mut Vec<SlideCue>)> {
+    match layer {
+        Some(lid) => {
+            let l = slide
+                .layers
+                .iter_mut()
+                .find(|l| l.id == lid)
+                .ok_or_else(|| {
+                    EngineError::NotFound(format!("layer {lid:?} is not on this slide"))
+                })?;
+            Ok((l.duration_ms, &mut l.cue_points))
+        }
+        None => Ok((slide.duration_ms, &mut slide.cue_points)),
+    }
+}
+
+fn slide_add_cue(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "slide.add_cue";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let lid: Option<String> = opt(C, p, "layer")?;
+    let at_ms: u32 = opt(C, p, "at_ms")?.unwrap_or(0);
+    let name_opt: Option<String> = opt(C, p, "name")?;
+    let id_opt: Option<String> = opt(C, p, "id")?;
+    let slide = slide_mut(s, &sid)?;
+    let (duration, cues) = slide_cues_mut(slide, lid.as_deref())?;
+    if cues.len() >= MAX_CUES {
+        return Err(bad(
+            C,
+            format!("a timeline may have at most {MAX_CUES} cues"),
+        ));
+    }
+    if at_ms > duration {
+        return Err(bad(
+            C,
+            format!("cue time {at_ms} ms exceeds timeline duration {duration} ms"),
+        ));
+    }
+    let name = match name_opt {
+        Some(name) => cue_name(C, name)?,
+        None => format!("Cue {}", cues.len() + 1),
+    };
+    let id = match id_opt {
+        Some(id) => {
+            validate_id(C, &id)?;
+            if cues.iter().any(|cue| cue.id == id) {
+                return Err(bad(C, format!("cue id {id:?} is already used")));
+            }
+            id
+        }
+        None => fresh_id("cue", cues.iter().map(|cue| cue.id.as_str())),
+    };
+    cues.push(SlideCue {
+        id: id.clone(),
+        name,
+        at_ms,
+    });
+    cues.sort_by_key(|c| c.at_ms);
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "id": id, "cue": id }))
+}
+
+fn slide_set_cue(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "slide.set_cue";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let lid: Option<String> = opt(C, p, "layer")?;
+    let cue_id: String = req(C, p, "cue")?;
+    let patch = obj(C, p)?
+        .get("patch")
+        .and_then(Json::as_object)
+        .ok_or_else(|| bad(C, "missing `patch` object"))?;
+    let slide = slide_mut(s, &sid)?;
+    let mut updated_at_ms: Option<u32> = None;
+    {
+        let (duration, cues) = slide_cues_mut(slide, lid.as_deref())?;
+        let cue = cues
+            .iter_mut()
+            .find(|cue| cue.id == cue_id)
+            .ok_or_else(|| EngineError::NotFound(format!("cue {cue_id:?} not found")))?;
+        if let Some(value) = patch.get("at_ms") {
+            let at_ms: u32 = serde_json::from_value(value.clone())
+                .map_err(|e| bad(C, format!("`at_ms`: {e}")))?;
+            if at_ms > duration {
+                return Err(bad(
+                    C,
+                    format!("cue time {at_ms} ms exceeds timeline duration {duration} ms"),
+                ));
+            }
+            cue.at_ms = at_ms;
+            updated_at_ms = Some(at_ms);
+        }
+        if let Some(value) = patch.get("name") {
+            let name: String = serde_json::from_value(value.clone())
+                .map_err(|e| bad(C, format!("`name`: {e}")))?;
+            cue.name = cue_name(C, name)?;
+        }
+        cues.sort_by_key(|c| c.at_ms);
+    }
+    if let Some(new_ms) = updated_at_ms {
+        let sync_trigger = |t: &mut Trigger| {
+            if let Event::TimelineReaches { ms, layer, cue } = &mut t.when
+                && cue.as_deref() == Some(cue_id.as_str())
+                && layer.as_deref() == lid.as_deref()
+            {
+                *ms = new_ms;
+            }
+        };
+        for t in &mut slide.triggers {
+            sync_trigger(t);
+        }
+        for l in &mut slide.layers {
+            for t in &mut l.triggers {
+                sync_trigger(t);
+            }
+        }
+    }
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+fn slide_remove_cue(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "slide.remove_cue";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let lid: Option<String> = opt(C, p, "layer")?;
+    let cue_id: String = req(C, p, "cue")?;
+    let slide = slide_mut(s, &sid)?;
+    {
+        let (_, cues) = slide_cues_mut(slide, lid.as_deref())?;
+        let before = cues.len();
+        cues.retain(|cue| cue.id != cue_id);
+        if cues.len() == before {
+            return Err(EngineError::NotFound(format!("cue {cue_id:?} not found")));
+        }
+    }
+    let matches_cue = |trigger: &Trigger| {
+        matches!(
+            &trigger.when,
+            Event::TimelineReaches { layer, cue: Some(c), .. }
+                if c == &cue_id && layer.as_deref() == lid.as_deref()
+        )
+    };
+    slide.triggers.retain(|trigger| !matches_cue(trigger));
+    for layer in &mut slide.layers {
+        layer.triggers.retain(|trigger| !matches_cue(trigger));
+    }
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
 fn video_add_question_cue(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "video.add_question_cue";
     let was_valid = s.course.is_playable();
@@ -6569,6 +6973,7 @@ fn video_add_question_cue(s: &mut Session, p: &Json) -> Result<Json> {
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     };
     slide.layers.push(layer);
     slide.triggers.push(interaction_trigger(
@@ -7860,7 +8265,9 @@ fn condition_references_var(c: &Condition, var_name: &str) -> bool {
             list.iter().any(|c| condition_references_var(c, var_name))
         }
         Condition::Not(inner) => condition_references_var(inner, var_name),
-        Condition::Compare { variable, .. } => variable == var_name,
+        Condition::Compare {
+            variable, value, ..
+        } => variable == var_name || value.as_variable() == Some(var_name),
         Condition::ObjectState { .. } => false,
     }
 }
@@ -7871,7 +8278,9 @@ fn trigger_references_var(t: &Trigger, var_name: &str) -> bool {
         _ => false,
     };
     let in_action = match &t.action {
-        Action::SetVariable { variable, .. } => variable == var_name,
+        Action::SetVariable {
+            variable, value, ..
+        } => variable == var_name || value.as_ref().and_then(|v| v.as_variable()) == Some(var_name),
         _ => false,
     };
     let in_condition = t
@@ -7947,6 +8356,7 @@ fn default_multiple_choice_question() -> Question {
         shuffle: false,
         correct_layer: None,
         incorrect_layer: None,
+        try_again_layer: None,
         accepted: Vec::new(),
         case_sensitive: false,
         pairs: Vec::new(),
@@ -8005,6 +8415,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
             }
         }
@@ -8045,6 +8457,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
             }
             if !has_named(slide, "Drop target") {
@@ -8085,6 +8499,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
                 let label_id = fresh_id("text", slide.local_ids());
                 slide.objects.push(Object {
@@ -8129,6 +8545,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
             }
         }
@@ -8217,6 +8635,8 @@ fn add_finish_button(slide: &mut Slide, theme: &Theme, slide_size: Size) -> Stri
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     slide.triggers.push(Trigger {
         action: Action::SubmitResults,
@@ -8272,6 +8692,8 @@ fn add_submit_button(slide: &mut Slide, theme: &Theme, slide_size: Size) -> Stri
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     slide.triggers.push(Trigger {
         action: Action::SubmitQuestion,
@@ -8385,6 +8807,8 @@ fn add_feedback_layers(slide: &mut Slide, theme: &Theme, slide_size: Size) -> (S
                 shadow: None,
                 glow: None,
                 drag: None,
+                locked: false,
+                editor_hidden: false,
             }],
             triggers: Vec::new(),
             hide_other_layers: true,
@@ -8394,6 +8818,7 @@ fn add_feedback_layers(slide: &mut Slide, theme: &Theme, slide_size: Size) -> (S
             hide_when_timeline_ends: false,
             allow_seek: SeekMode::Auto,
             revisit: RevisitMode::Auto,
+            cue_points: Vec::new(),
         });
         layer_id
     };
@@ -8404,6 +8829,96 @@ fn add_feedback_layers(slide: &mut Slide, theme: &Theme, slide_size: Size) -> (S
         question.incorrect_layer = Some(incorrect.clone());
     }
     (correct, incorrect)
+}
+
+/// Add a hidden Try Again layer with a message and a "Try Again" button wired
+/// to hide the layer, and point the question's `try_again_layer` at it.
+fn add_try_again_layer(slide: &mut Slide, theme: &Theme, slide_size: Size) -> String {
+    let text_frame = feedback_text_frame(slide_size, slide.question.as_ref());
+    let button_w = 160.0_f32.min(text_frame.w.max(80.0));
+    let button_h = 44.0;
+    let slide_h = slide_size.h.max(1) as f32;
+    let button_y = (text_frame.y + text_frame.h + 12.0).min((slide_h - button_h - 16.0).max(0.0));
+    let button_frame = Rect {
+        x: text_frame.x,
+        y: button_y,
+        w: button_w,
+        h: button_h,
+    };
+    let layer_id = fresh_id("try_again", slide.local_ids());
+    let text_id = fresh_id("try_again_text", slide.local_ids());
+    let button_id = fresh_id("try_again_button", slide.local_ids());
+    let objects = vec![
+        Object {
+            id: text_id,
+            name: "Try Again feedback".to_owned(),
+            kind: ObjectKind::Text {
+                text: "Not quite — give it another try.".to_owned(),
+                style: coursecraft_course::TextStyle {
+                    size: 28.0,
+                    bold: true,
+                    color: theme.text.clone(),
+                    ..coursecraft_course::TextStyle::default()
+                },
+                runs: Vec::new(),
+                paragraphs: Vec::new(),
+                autofit: Autofit::None,
+                text_style: None,
+            },
+            frame: text_frame,
+            timing: Timing::default(),
+            states: Vec::new(),
+            initial_state: "normal".into(),
+            entrance: None,
+            exit: None,
+            motion_paths: Vec::new(),
+            focus_order: None,
+            decorative: false,
+            description: None,
+            group: None,
+            panel: None,
+            rotation: 0.0,
+            flip_h: false,
+            flip_v: false,
+            opacity: 1.0,
+            shadow: None,
+            glow: None,
+            drag: None,
+            locked: false,
+            editor_hidden: false,
+        },
+        results_button(
+            button_id.clone(),
+            "Try Again",
+            theme.accent.clone(),
+            button_frame,
+        ),
+    ];
+    let triggers = vec![Trigger {
+        when: Event::Click { object: button_id },
+        action: Action::HideLayer { layer: None },
+        condition: None,
+        disabled: false,
+    }];
+    slide.layers.push(Layer {
+        id: layer_id.clone(),
+        name: "Try Again".to_owned(),
+        duration_ms: 5000,
+        objects,
+        triggers,
+        hide_other_layers: true,
+        pause_base_timeline: false,
+        prevent_base_clicks: true,
+        hide_base_objects: false,
+        hide_when_timeline_ends: false,
+        allow_seek: SeekMode::Auto,
+        revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
+    });
+    if let Some(question) = slide.question.as_mut() {
+        question.try_again_layer = Some(layer_id.clone());
+    }
+    layer_id
 }
 
 /// A button with `label`, filled with the theme accent.
@@ -8435,6 +8950,8 @@ fn results_button(id: String, label: &str, fill: Color, frame: Rect) -> Object {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -8487,6 +9004,7 @@ fn results_layer(
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     }
 }
 
@@ -8516,6 +9034,7 @@ fn build_results_slide(id: &str, theme: &Theme, size: Size, passing_percent: u8)
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -8619,7 +9138,7 @@ fn build_results_slide(id: &str, theme: &Theme, size: Size, passing_percent: u8)
         condition: Some(Condition::Compare {
             variable: "Quiz.Passed".to_owned(),
             op: CmpOp::Eq,
-            value: Value::Bool(true),
+            value: Value::Bool(true).into(),
         }),
         disabled: false,
     });
@@ -8631,7 +9150,7 @@ fn build_results_slide(id: &str, theme: &Theme, size: Size, passing_percent: u8)
         condition: Some(Condition::Compare {
             variable: "Quiz.Passed".to_owned(),
             op: CmpOp::Eq,
-            value: Value::Bool(false),
+            value: Value::Bool(false).into(),
         }),
         disabled: false,
     });
@@ -8717,6 +9236,8 @@ fn certificate_text(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -8739,6 +9260,7 @@ fn build_certificate_slide(id: &str, theme: &Theme, size: Size) -> Slide {
         objects: Vec::new(),
         layers: Vec::new(),
         triggers: Vec::new(),
+        cue_points: Vec::new(),
         transition: None,
         question: None,
         draw: None,
@@ -8783,6 +9305,8 @@ fn build_certificate_slide(id: &str, theme: &Theme, size: Size) -> Slide {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let mut push = |prefix: &str, name: &str, text: String, size: f32, bold: bool, frame: Rect| {
@@ -8900,6 +9424,23 @@ fn question_add_feedback_layers(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({ "correct": correct, "incorrect": incorrect }))
 }
 
+fn question_add_try_again_layer(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "question.add_try_again_layer";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let theme = s.course.theme.clone();
+    let slide_size = s.course.slide_size;
+    let slide = slide_mut(s, &sid)?;
+    if slide.question.is_none() {
+        return Err(EngineError::NotFound(format!(
+            "slide {sid:?} has no question"
+        )));
+    }
+    let layer = add_try_again_layer(slide, &theme, slide_size);
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "layer": layer }))
+}
+
 /// A plain text object for an inserted interaction.
 fn interaction_text(id: String, name: String, text: String, frame: Rect, theme: &Theme) -> Object {
     Object {
@@ -8936,6 +9477,8 @@ fn interaction_text(id: String, name: String, text: String, frame: Rect, theme: 
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -8986,6 +9529,8 @@ fn interaction_button(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -9077,6 +9622,8 @@ fn interaction_shape(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -9115,6 +9662,8 @@ fn interaction_plain_button(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -9198,6 +9747,7 @@ fn interaction_callout_layer(
         hide_when_timeline_ends: false,
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
     }
 }
 
@@ -9337,6 +9887,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     hide_when_timeline_ends: false,
                     allow_seek: SeekMode::Auto,
                     revisit: RevisitMode::Auto,
+                    cue_points: Vec::new(),
                 });
             }
             // Clicking a tab shows its layer and moves the selected state.
@@ -9422,6 +9973,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     hide_when_timeline_ends: false,
                     allow_seek: SeekMode::Auto,
                     revisit: RevisitMode::Auto,
+                    cue_points: Vec::new(),
                 };
                 let mut layer_headers = Vec::new();
                 for (i, base) in base_headers.iter().copied().enumerate() {
@@ -9557,7 +10109,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                         Condition::Compare {
                             variable: variable.clone(),
                             op: CmpOp::Eq,
-                            value: Value::Bool(value),
+                            value: Value::Bool(value).into(),
                         },
                     ));
                 }
@@ -9820,7 +10372,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: variable.clone(),
                         op: VarOp::Assign,
-                        value: Some(Value::Number(step)),
+                        value: Some(Value::Number(step).into()),
                     },
                     Event::Click {
                         object: circle_id.clone(),
@@ -9831,26 +10383,26 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 Action::SetVariable {
                     variable: variable.clone(),
                     op: VarOp::Add,
-                    value: Some(Value::Number(1.0)),
+                    value: Some(Value::Number(1.0).into()),
                 },
                 Event::Click { object: next_id },
                 Condition::Compare {
                     variable: variable.clone(),
                     op: CmpOp::Lt,
-                    value: Value::Number(count as f64),
+                    value: Value::Number(count as f64).into(),
                 },
             ));
             slide.triggers.push(interaction_conditional_trigger(
                 Action::SetVariable {
                     variable: variable.clone(),
                     op: VarOp::Subtract,
-                    value: Some(Value::Number(1.0)),
+                    value: Some(Value::Number(1.0).into()),
                 },
                 Event::Click { object: back_id },
                 Condition::Compare {
                     variable: variable.clone(),
                     op: CmpOp::Gt,
-                    value: Value::Number(1.0),
+                    value: Value::Number(1.0).into(),
                 },
             ));
             for i in 0..count {
@@ -9858,7 +10410,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 let condition = Condition::Compare {
                     variable: variable.clone(),
                     op: CmpOp::Eq,
-                    value: Value::Number(step),
+                    value: Value::Number(step).into(),
                 };
                 if let Some(layer_id) = layer_ids.get(i) {
                     slide.triggers.push(interaction_conditional_trigger(
@@ -9893,7 +10445,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: variable.clone(),
                         op: VarOp::Assign,
-                        value: Some(Value::Number(1.0)),
+                        value: Some(Value::Number(1.0).into()),
                     },
                     Event::TimelineStarts { layer: None },
                 ));
@@ -10128,7 +10680,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: tile_var.clone(),
                         op: VarOp::Assign,
-                        value: Some(Value::Bool(true)),
+                        value: Some(Value::Bool(true).into()),
                     },
                     Event::Click {
                         object: tile_id.clone(),
@@ -10136,7 +10688,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Condition::Compare {
                         variable: tile_var.clone(),
                         op: CmpOp::Eq,
-                        value: Value::Bool(false),
+                        value: Value::Bool(false).into(),
                     },
                 ));
                 let changed = Event::VariableChanges {
@@ -10145,7 +10697,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 let revealed = Condition::Compare {
                     variable: tile_var.clone(),
                     op: CmpOp::Eq,
-                    value: Value::Bool(true),
+                    value: Value::Bool(true).into(),
                 };
                 slide.triggers.push(interaction_conditional_trigger(
                     Action::ChangeState {
@@ -10159,7 +10711,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: explored.clone(),
                         op: VarOp::Add,
-                        value: Some(Value::Number(1.0)),
+                        value: Some(Value::Number(1.0).into()),
                     },
                     changed,
                     revealed,
@@ -10169,7 +10721,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     Action::SetVariable {
                         variable: tile_var.clone(),
                         op: VarOp::Assign,
-                        value: Some(Value::Bool(false)),
+                        value: Some(Value::Bool(false).into()),
                     },
                     Event::TimelineStarts { layer: None },
                 ));
@@ -10185,7 +10737,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                 Action::SetVariable {
                     variable: explored,
                     op: VarOp::Assign,
-                    value: Some(Value::Number(0.0)),
+                    value: Some(Value::Number(0.0).into()),
                 },
                 Event::TimelineStarts { layer: None },
             ));
@@ -10422,23 +10974,23 @@ fn freeform_default_condition(course: &Course) -> Condition {
             Value::Bool(_) => Condition::Compare {
                 variable: v.name.clone(),
                 op: CmpOp::Eq,
-                value: Value::Bool(true),
+                value: Value::Bool(true).into(),
             },
             Value::Number(_) => Condition::Compare {
                 variable: v.name.clone(),
                 op: CmpOp::Ge,
-                value: Value::Number(0.0),
+                value: Value::Number(0.0).into(),
             },
             Value::Text(_) => Condition::Compare {
                 variable: v.name.clone(),
                 op: CmpOp::Eq,
-                value: Value::Text(String::new()),
+                value: Value::Text(String::new()).into(),
             },
         },
         None => Condition::Compare {
             variable: "Course.ScorePercent".to_owned(),
             op: CmpOp::Ge,
-            value: Value::Number(0.0),
+            value: Value::Number(0.0).into(),
         },
     }
 }
@@ -10800,7 +11352,7 @@ fn apply_question_kind(
             q.correct_when = Some(Condition::Compare {
                 variable: "Course.ScorePercent".into(),
                 op: CmpOp::Ge,
-                value: Value::Number(0.0),
+                value: Value::Number(0.0).into(),
             });
         }
     }

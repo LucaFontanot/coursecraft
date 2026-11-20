@@ -31,6 +31,7 @@ fn minimal_course(title: &str) -> Course {
                 master: None,
                 revisit: coursecraft_course::RevisitMode::Auto,
                 player: None,
+                cue_points: Vec::new(),
             }],
         }],
         masters: Vec::new(),
@@ -44,6 +45,7 @@ fn minimal_course(title: &str) -> Course {
         fonts: Vec::new(),
         background_audio: None,
         glossary: Vec::new(),
+        editor: Default::default(),
         resources: Vec::new(),
         text_styles: Vec::new(),
     }
@@ -494,6 +496,8 @@ fn lottie_animation_survives_a_ccraft_round_trip() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     let media = vec![("motion.lottie".to_string(), b"PK\x03\x04".to_vec())];
     let bytes = save_project(&course, &media).expect("save");
@@ -567,6 +571,8 @@ fn caption_files_survive_a_ccraft_round_trip_for_audio_and_video() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
         let media = vec![(vtt.to_string(), b"WEBVTT".to_vec())];
         let bytes = save_project(&course, &media).expect("save");

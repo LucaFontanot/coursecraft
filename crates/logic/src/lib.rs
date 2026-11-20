@@ -751,6 +751,11 @@ pub struct PlayerState {
     /// Runtime-only: the course-wide background track. Never in suspend data.
     #[serde(default, skip_serializing_if = "BackgroundState::is_idle")]
     pub background: BackgroundState,
+    /// Runtime-only: recently visited slide IDs in visit order (at most 50).
+    /// Never in suspend data; after a resume this starts empty and
+    /// `SlideTarget::LastVisited` falls back to `Previous`.
+    #[serde(default, skip_serializing)]
+    pub visit_history: Vec<String>,
 }
 
 /// Read-only view of the current slide's player-clock state for the UI.

@@ -82,7 +82,7 @@ fn link_clicks_run_open_url_and_slide_jumps_without_firing_object_clicks() {
             action: Action::SetVariable {
                 variable: "tabs_seen".into(),
                 op: VarOp::Assign,
-                value: Some(Value::Number(99.0)),
+                value: Some(Value::Number(99.0).into()),
             },
             when: Event::Click {
                 object: "title".into(),
@@ -425,6 +425,7 @@ fn timeline_reaches_and_ends_fire_once() {
         when: Event::TimelineReaches {
             ms: 2000,
             layer: None,
+            cue: None,
         },
         condition: None,
         disabled: false,
@@ -458,6 +459,67 @@ fn timeline_reaches_and_ends_fire_once() {
 }
 
 #[test]
+fn timeline_reaches_cue_fires_at_cue_time_and_moves_with_cue() {
+    let mut c = Course::from_json(HELLO).expect("hello");
+    let s = c.slide_mut("s-intro").unwrap();
+    s.cue_points.push(coursecraft_course::SlideCue {
+        id: "beat1".into(),
+        name: "Beat 1".into(),
+        at_ms: 1500,
+    });
+    s.triggers.push(Trigger {
+        action: Action::ShowLayer {
+            layer: "about".into(),
+        },
+        when: Event::TimelineReaches {
+            ms: 0,
+            layer: None,
+            cue: Some("beat1".into()),
+        },
+        condition: None,
+        disabled: false,
+    });
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    assert!(!has(
+        &p.handle(&Input::Tick { ms: 1400 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
+    ));
+    assert!(has(
+        &p.handle(&Input::Tick { ms: 200 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
+    ));
+
+    // Moving the cue moves when the trigger fires.
+    c.slide_mut("s-intro").unwrap().cue_points[0].at_ms = 3000;
+    let mut p2 = Player::new(&c).expect("player");
+    p2.handle(&Input::Start);
+    assert!(!has(
+        &p2.handle(&Input::Tick { ms: 1600 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
+    ));
+    assert!(!has(
+        &p2.handle(&Input::Tick { ms: 1300 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
+    ));
+    assert!(has(
+        &p2.handle(&Input::Tick { ms: 200 }),
+        &Effect::LayerShown {
+            layer: "about".into()
+        }
+    ));
+}
+
+#[test]
 fn trigger_loops_are_cut_off_not_hung() {
     let mut c = course();
     c.variables.push(VariableDef {
@@ -468,7 +530,7 @@ fn trigger_loops_are_cut_off_not_hung() {
         action: Action::SetVariable {
             variable: "x".into(),
             op: VarOp::Add,
-            value: Some(Value::Number(1.0)),
+            value: Some(Value::Number(1.0).into()),
         },
         when: Event::VariableChanges {
             variable: "x".into(),
@@ -480,7 +542,7 @@ fn trigger_loops_are_cut_off_not_hung() {
         action: Action::SetVariable {
             variable: "x".into(),
             op: VarOp::Add,
-            value: Some(Value::Number(1.0)),
+            value: Some(Value::Number(1.0).into()),
         },
         when: Event::TimelineStarts { layer: None },
         condition: None,
@@ -2324,6 +2386,7 @@ fn back_seek_does_not_undo_states_or_variables() {
             when: Event::TimelineReaches {
                 ms: 1000,
                 layer: None,
+                cue: None,
             },
             action: Action::ChangeState {
                 object: "txt1".into(),
@@ -2336,11 +2399,12 @@ fn back_seek_does_not_undo_states_or_variables() {
             when: Event::TimelineReaches {
                 ms: 1000,
                 layer: None,
+                cue: None,
             },
             action: Action::SetVariable {
                 variable: "flag".into(),
                 op: VarOp::Assign,
-                value: Some(Value::Bool(true)),
+                value: Some(Value::Bool(true).into()),
             },
             condition: None,
             disabled: false,
@@ -2687,7 +2751,7 @@ fn compare_condition_on_builtin_fires() {
     c.scenes[0].slides[1].triggers[0].condition = Some(coursecraft_course::Condition::Compare {
         variable: "Course.Progress".into(),
         op: coursecraft_course::CmpOp::Ge,
-        value: Value::Number(50.0),
+        value: Value::Number(50.0).into(),
     });
 
     let mut p = Player::new(&c).expect("player");
@@ -3382,7 +3446,7 @@ fn entrance_animation_completes_event_fires_once_at_right_tick() {
         action: Action::SetVariable {
             variable: "completed_count".into(),
             op: VarOp::Add,
-            value: Some(Value::Number(1.0)),
+            value: Some(Value::Number(1.0).into()),
         },
         when: Event::AnimationCompletes {
             object: "btn-start".into(),
@@ -3458,7 +3522,7 @@ fn entrance_trigger_ignores_path_and_exit_completions() {
         action: Action::SetVariable {
             variable: "entrances".into(),
             op: VarOp::Add,
-            value: Some(Value::Number(1.0)),
+            value: Some(Value::Number(1.0).into()),
         },
         when: Event::AnimationCompletes {
             object: "btn-start".into(),
@@ -3616,6 +3680,8 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 }],
                 triggers: Vec::new(),
                 hide_other_layers: true,
@@ -3625,6 +3691,7 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                 hide_when_timeline_ends: false,
                 allow_seek: coursecraft_course::SeekMode::Auto,
                 revisit: coursecraft_course::RevisitMode::Auto,
+                cue_points: Vec::new(),
             });
         }
         let question = slide.question.as_mut().expect("question");
@@ -3690,6 +3757,7 @@ fn freeform_course(attempts: u32) -> Course {
             hide_when_timeline_ends: false,
             allow_seek: coursecraft_course::SeekMode::Auto,
             revisit: RevisitMode::Auto,
+            cue_points: Vec::new(),
         });
     }
     slide.question = Some(
@@ -5512,6 +5580,7 @@ fn revisit_course(mode: RevisitMode) -> Course {
                 when: Event::TimelineReaches {
                     ms: 1000,
                     layer: Some("l1".into()),
+                    cue: None,
                 },
                 action: Action::OpenUrl {
                     url: "https://x.test/r1000".into(),
@@ -5869,12 +5938,14 @@ fn input_course(kind: coursecraft_course::ObjectKind) -> Course {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     slide.triggers.push(Trigger {
         action: Action::SetVariable {
             variable: "seen".into(),
             op: VarOp::Assign,
-            value: Some(Value::Bool(true)),
+            value: Some(Value::Bool(true).into()),
         },
         when: Event::VariableChanges {
             variable: "input_number".into(),
@@ -5886,7 +5957,7 @@ fn input_course(kind: coursecraft_course::ObjectKind) -> Course {
         action: Action::SetVariable {
             variable: "seen".into(),
             op: VarOp::Assign,
-            value: Some(Value::Bool(false)),
+            value: Some(Value::Bool(false).into()),
         },
         when: Event::VariableChanges {
             variable: "input_text".into(),
@@ -6550,6 +6621,8 @@ fn opening_a_lightbox_on_the_current_slide_is_a_warning() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
         slide.triggers.push(Trigger {
             action: Action::LightboxSlide {
@@ -9926,4 +9999,384 @@ fn timed_animation_follows_entrance_timing_and_exit() {
     let fading = sample(3750).map(|s| s.opacity);
     assert_eq!(fading, Some(0.5), "half faded halfway through the exit");
     assert!(sample(4000).is_none(), "gone at its end");
+}
+
+fn hello_with_try_again() -> Course {
+    use coursecraft_course::{
+        Action, Color, Event, Layer, Object, ObjectKind, Rect, RevisitMode, SeekMode, Timing,
+        Trigger,
+    };
+    let mut c = Course::from_json(HELLO).expect("hello");
+    let slide = c.slide_mut("s-quiz").expect("quiz slide");
+    slide.layers.push(Layer {
+        id: "l-try-again".into(),
+        name: "Try Again".into(),
+        duration_ms: 5000,
+        objects: vec![Object {
+            id: "btn-try-again-layer".into(),
+            name: "Try Again".into(),
+            kind: ObjectKind::Button {
+                label: "Try Again".into(),
+                fill: Color("#3B82F6".into()),
+                fill_style: None,
+            },
+            frame: Rect {
+                x: 80.0,
+                y: 420.0,
+                w: 160.0,
+                h: 44.0,
+            },
+            timing: Timing::default(),
+            states: Vec::new(),
+            initial_state: "normal".into(),
+            entrance: None,
+            exit: None,
+            motion_paths: Vec::new(),
+            focus_order: None,
+            decorative: false,
+            description: None,
+            group: None,
+            panel: None,
+            rotation: 0.0,
+            flip_h: false,
+            flip_v: false,
+            opacity: 1.0,
+            shadow: None,
+            glow: None,
+            drag: None,
+            locked: false,
+            editor_hidden: false,
+        }],
+        triggers: vec![Trigger {
+            when: Event::Click {
+                object: "btn-try-again-layer".into(),
+            },
+            action: Action::HideLayer { layer: None },
+            condition: None,
+            disabled: false,
+        }],
+        hide_other_layers: true,
+        pause_base_timeline: false,
+        prevent_base_clicks: true,
+        hide_base_objects: false,
+        hide_when_timeline_ends: false,
+        allow_seek: SeekMode::Auto,
+        revisit: RevisitMode::Auto,
+        cue_points: Vec::new(),
+    });
+    let q = slide.question.as_mut().expect("question");
+    q.attempts = 2;
+    q.try_again_layer = Some("l-try-again".into());
+    c
+}
+
+#[test]
+fn try_again_layer_wrong_then_right_clears_choice_and_shows_correct() {
+    let c = hello_with_try_again();
+    let mut p = open_quiz(&c);
+
+    // Attempt 1: wrong answer -> shows try-again layer, does not lock.
+    p.handle(&Input::SelectChoice { choice: "a".into() });
+    let eff = p.handle(&click("btn-submit"));
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "l-try-again".into()
+        }
+    ));
+    assert!(!eff.iter().any(|e| matches!(
+        e,
+        Effect::LayerShown { layer } if layer == "incorrect" || layer == "correct"
+    )));
+    assert!(!p.question_locked());
+
+    // Clicking Try Again closes the layer and clears the learner's choice.
+    let eff = p.handle(&click("btn-try-again-layer"));
+    assert!(has(
+        &eff,
+        &Effect::LayerHidden {
+            layer: "l-try-again".into()
+        }
+    ));
+    assert!(p.state().selected.is_empty());
+
+    // Attempt 2: right answer -> shows correct layer and locks.
+    p.handle(&Input::SelectChoice { choice: "b".into() });
+    let eff = p.handle(&click("btn-submit"));
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "correct".into()
+        }
+    ));
+    assert!(p.question_locked());
+}
+
+#[test]
+fn try_again_layer_wrong_twice_shows_try_again_then_incorrect() {
+    let c = hello_with_try_again();
+    let mut p = open_quiz(&c);
+
+    // Attempt 1: wrong -> try-again.
+    p.handle(&Input::SelectChoice { choice: "a".into() });
+    let eff = p.handle(&click("btn-submit"));
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "l-try-again".into()
+        }
+    ));
+    assert!(!p.question_locked());
+
+    p.handle(&click("btn-try-again-layer"));
+    assert!(p.state().selected.is_empty());
+
+    // Attempt 2 (last): wrong -> incorrect layer and locked.
+    p.handle(&Input::SelectChoice { choice: "c".into() });
+    let eff = p.handle(&click("btn-submit"));
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "incorrect".into()
+        }
+    ));
+    assert!(!eff.iter().any(|e| matches!(
+        e,
+        Effect::LayerShown { layer } if layer == "l-try-again"
+    )));
+    assert!(p.question_locked());
+}
+
+#[test]
+fn safe_resume_re_shows_outcome_layer_on_answered_locked_question() {
+    // 1. Answered correctly -> suspend & resume shows correct_layer again.
+    let c = hello_with_try_again();
+    let mut p = open_quiz(&c);
+    p.handle(&Input::SelectChoice { choice: "b".into() });
+    p.handle(&click("btn-submit"));
+    assert!(p.question_locked());
+    let data = crate::encode_suspend(&c, p.state());
+
+    let restored = crate::decode_suspend(&c, &data).expect("decode suspend");
+    let mut resumed = Player::resume(&c, restored).expect("resume");
+    let eff = resumed.handle(&Input::Start);
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "correct".into()
+        }
+    ));
+    assert!(
+        resumed
+            .state()
+            .visible_layers
+            .contains(&"correct".to_owned())
+    );
+
+    // Navigating away and back also re-shows the outcome layer.
+    resumed.handle(&Input::Previous);
+    let eff = resumed.handle(&Input::Next);
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "correct".into()
+        }
+    ));
+
+    // 2. Exhausted wrong attempts -> suspend & resume shows incorrect_layer.
+    let mut p2 = open_quiz(&c);
+    p2.handle(&Input::SelectChoice { choice: "a".into() });
+    p2.handle(&click("btn-submit"));
+    // After 1 wrong attempt of 2, question is NOT locked: resuming must NOT show outcome layer.
+    let mid_data = crate::encode_suspend(&c, p2.state());
+    let mid_restored = crate::decode_suspend(&c, &mid_data).expect("decode mid");
+    let mut mid_resumed = Player::resume(&c, mid_restored).expect("resume mid");
+    let eff = mid_resumed.handle(&Input::Start);
+    assert!(
+        !eff.iter().any(|e| matches!(e, Effect::LayerShown { .. })),
+        "unlocked question should not show outcome layer on resume: {eff:?}"
+    );
+
+    // Finish second wrong attempt -> now locked.
+    p2.handle(&click("btn-try-again-layer"));
+    p2.handle(&Input::SelectChoice { choice: "c".into() });
+    p2.handle(&click("btn-submit"));
+    assert!(p2.question_locked());
+    let fail_data = crate::encode_suspend(&c, p2.state());
+    let fail_restored = crate::decode_suspend(&c, &fail_data).expect("decode fail");
+    let mut fail_resumed = Player::resume(&c, fail_restored).expect("resume fail");
+    let eff = fail_resumed.handle(&Input::Start);
+    assert!(has(
+        &eff,
+        &Effect::LayerShown {
+            layer: "incorrect".into()
+        }
+    ));
+}
+
+#[test]
+fn variable_to_variable_set_and_compare_and_ignore_case_text_ops() {
+    use coursecraft_course::{CmpOp, Condition, ValueSource};
+
+    let mut c = course();
+    c.variables.push(coursecraft_course::VariableDef {
+        name: "Score".into(),
+        value: Value::Number(10.0),
+    });
+    c.variables.push(coursecraft_course::VariableDef {
+        name: "BestScore".into(),
+        value: Value::Number(25.0),
+    });
+    c.variables.push(coursecraft_course::VariableDef {
+        name: "Greeting".into(),
+        value: Value::Text("Hello World".into()),
+    });
+    c.variables.push(coursecraft_course::VariableDef {
+        name: "Target".into(),
+        value: Value::Text("hello world".into()),
+    });
+    c.variables.push(coursecraft_course::VariableDef {
+        name: "Matched".into(),
+        value: Value::Bool(false),
+    });
+
+    // Click btn-start: Score = BestScore (25), then if Score == BestScore && Greeting eq_ignore_case Target && Greeting contains_ignore_case "WORLD", set Matched = true.
+    let s = c.slide_mut("s-intro").unwrap();
+    s.triggers.clear();
+    s.triggers.push(Trigger {
+        action: Action::SetVariable {
+            variable: "Score".into(),
+            op: VarOp::Assign,
+            value: Some(ValueSource::Variable {
+                variable: "BestScore".into(),
+            }),
+        },
+        when: Event::Click {
+            object: "btn-start".into(),
+        },
+        condition: None,
+        disabled: false,
+    });
+    s.triggers.push(Trigger {
+        action: Action::SetVariable {
+            variable: "Matched".into(),
+            op: VarOp::Assign,
+            value: Some(Value::Bool(true).into()),
+        },
+        when: Event::Click {
+            object: "btn-start".into(),
+        },
+        condition: Some(Condition::All(vec![
+            Condition::Compare {
+                variable: "Score".into(),
+                op: CmpOp::Eq,
+                value: ValueSource::Variable {
+                    variable: "BestScore".into(),
+                },
+            },
+            Condition::Compare {
+                variable: "Greeting".into(),
+                op: CmpOp::EqIgnoreCase,
+                value: ValueSource::Variable {
+                    variable: "Target".into(),
+                },
+            },
+            Condition::Compare {
+                variable: "Greeting".into(),
+                op: CmpOp::ContainsIgnoreCase,
+                value: Value::Text("WORLD".into()).into(),
+            },
+        ])),
+        disabled: false,
+    });
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    p.handle(&Input::Tick { ms: 1000 });
+    p.handle(&click("btn-start"));
+    assert_eq!(p.variable("Score"), Some(&Value::Number(25.0)));
+    assert_eq!(p.variable("Matched"), Some(&Value::Bool(true)));
+}
+
+#[test]
+fn jump_to_scene_and_last_visited_history_and_resume() {
+    use coursecraft_course::SlideTarget;
+
+    let mut c = course();
+    // Add a second scene "sc2" with two slides "sc2-a" and "sc2-b".
+    let mut sc2_a = c.slide("s-intro").unwrap().clone();
+    sc2_a.id = "sc2-a".into();
+    sc2_a.triggers.clear();
+    sc2_a.triggers.push(Trigger {
+        action: Action::JumpToSlide {
+            target: SlideTarget::LastVisited,
+        },
+        when: Event::Click {
+            object: "btn-start".into(),
+        },
+        condition: None,
+        disabled: false,
+    });
+    let mut sc2_b = sc2_a.clone();
+    sc2_b.id = "sc2-b".into();
+    c.scenes.push(coursecraft_course::Scene {
+        id: "sc2".into(),
+        title: "Scene 2".into(),
+        slides: vec![sc2_a, sc2_b],
+    });
+
+    // On s-intro, clicking btn-start jumps to Scene("sc2").
+    let s0 = c.slide_mut("s-intro").unwrap();
+    s0.triggers.clear();
+    s0.triggers.push(Trigger {
+        action: Action::JumpToSlide {
+            target: SlideTarget::Scene("sc2".into()),
+        },
+        when: Event::Click {
+            object: "btn-start".into(),
+        },
+        condition: None,
+        disabled: false,
+    });
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    p.handle(&Input::Tick { ms: 1000 });
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-intro"));
+
+    // Jump from s-intro to sc2 -> lands on sc2-a, history has ["s-intro"].
+    let fx = p.handle(&click("btn-start"));
+    assert!(has(&fx, &slide_entered("sc2-a")));
+    assert_eq!(p.state().visit_history, vec!["s-intro".to_owned()]);
+
+    // Jump to LastVisited on sc2-a -> returns to s-intro, history is now empty.
+    p.handle(&Input::Tick { ms: 1000 });
+    let fx = p.handle(&click("btn-start"));
+    assert!(has(&fx, &slide_entered("s-intro")));
+    assert!(p.state().visit_history.is_empty());
+
+    // Cap at 50 entries.
+    for i in 0..60 {
+        let target = if i % 2 == 0 { "s-tabs" } else { "s-quiz" };
+        p.handle(&Input::Jump {
+            slide: target.into(),
+        });
+    }
+    assert_eq!(p.state().visit_history.len(), 50);
+
+    // Suspend data does NOT carry visit_history; after resume, LastVisited acts like Previous.
+    p.handle(&Input::Jump {
+        slide: "sc2-b".into(),
+    });
+    p.handle(&Input::Tick { ms: 1000 });
+    let suspend = crate::encode_suspend(&c, p.state());
+    let decoded = crate::decode_suspend(&c, &suspend).expect("decode");
+    assert!(decoded.visit_history.is_empty());
+
+    let mut resumed = Player::resume(&c, decoded).expect("resume");
+    resumed.handle(&Input::Start);
+    resumed.handle(&Input::Tick { ms: 1000 });
+    let fx = resumed.handle(&click("btn-start"));
+    // Previous slide before sc2-b in play order is sc2-a.
+    assert!(has(&fx, &slide_entered("sc2-a")));
 }

@@ -2780,6 +2780,8 @@ fn describe_covers_all_action_and_event_variants() {
                 shadow: None,
                 glow: None,
                 drag: None,
+                locked: false,
+                editor_hidden: false,
             },
             Object {
                 id: "obj2".to_owned(),
@@ -2811,6 +2813,8 @@ fn describe_covers_all_action_and_event_variants() {
                 shadow: None,
                 glow: None,
                 drag: None,
+                locked: false,
+                editor_hidden: false,
             },
         ],
         layers: Vec::new(),
@@ -2820,6 +2824,7 @@ fn describe_covers_all_action_and_event_variants() {
         notes: String::new(),
         revisit: coursecraft_course::RevisitMode::Auto,
         player: None,
+        cue_points: Vec::new(),
     };
 
     // Every Action variant
@@ -2873,7 +2878,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Assign,
-                value: Some(Value::Number(10.0)),
+                value: Some(Value::Number(10.0).into()),
             },
             "Set v1 = 10",
         ),
@@ -2881,7 +2886,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Add,
-                value: Some(Value::Number(1.0)),
+                value: Some(Value::Number(1.0).into()),
             },
             "Set v1 + 1",
         ),
@@ -2889,7 +2894,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Subtract,
-                value: Some(Value::Number(2.0)),
+                value: Some(Value::Number(2.0).into()),
             },
             "Set v1 - 2",
         ),
@@ -2897,7 +2902,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Multiply,
-                value: Some(Value::Number(3.0)),
+                value: Some(Value::Number(3.0).into()),
             },
             "Set v1 * 3",
         ),
@@ -2905,7 +2910,7 @@ fn describe_covers_all_action_and_event_variants() {
             Action::SetVariable {
                 variable: "v1".into(),
                 op: VarOp::Divide,
-                value: Some(Value::Number(4.0)),
+                value: Some(Value::Number(4.0).into()),
             },
             "Set v1 / 4",
         ),
@@ -3021,6 +3026,7 @@ fn describe_covers_all_action_and_event_variants() {
             CourseEvent::TimelineReaches {
                 ms: 1200,
                 layer: None,
+                cue: None,
             },
             "timeline reaches 1200ms",
         ),
@@ -3028,6 +3034,7 @@ fn describe_covers_all_action_and_event_variants() {
             CourseEvent::TimelineReaches {
                 ms: 1200,
                 layer: Some("layer1".into()),
+                cue: None,
             },
             "timeline reaches 1200ms on layer layer1",
         ),
@@ -3375,6 +3382,7 @@ fn adding_multiple_choice_question_with_choices_commits_question_set() {
         hide_when_timeline_ends: false,
         allow_seek: coursecraft_course::SeekMode::Auto,
         revisit: coursecraft_course::RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
     intro.layers.push(Layer {
         id: "incorrect".to_owned(),
@@ -3389,6 +3397,7 @@ fn adding_multiple_choice_question_with_choices_commits_question_set() {
         hide_when_timeline_ends: false,
         allow_seek: coursecraft_course::SeekMode::Auto,
         revisit: coursecraft_course::RevisitMode::Auto,
+        cue_points: Vec::new(),
     });
 
     let mut harness = TestHarness::new(course);
@@ -3907,8 +3916,8 @@ fn condition_kind_selector_builds_compare_trigger() {
         } => {
             assert_eq!(variable, "tabs_seen");
             assert_eq!(*op, CmpOp::Ge);
-            assert_eq!(*value, Value::Number(0.0));
-            *value = Value::Number(3.0);
+            assert_eq!(*value, Value::Number(0.0).into());
+            *value = Value::Number(3.0).into();
         }
         other => panic!("expected Compare root, got {other:?}"),
     }
@@ -3946,7 +3955,7 @@ fn condition_kind_selector_builds_compare_trigger() {
         condition: Some(Condition::Compare {
             variable: "tabs_seen".to_owned(),
             op: CmpOp::Ge,
-            value: Value::Number(3.0),
+            value: Value::Number(3.0).into(),
         }),
         disabled: false,
     };
@@ -3964,7 +3973,7 @@ fn condition_all_group_roundtrips_and_convert_wraps() {
         Condition::Compare {
             variable: "tabs_seen".to_owned(),
             op: CmpOp::Ge,
-            value: Value::Number(3.0),
+            value: Value::Number(3.0).into(),
         },
         Condition::ObjectState {
             object: "tab1".to_owned(),
@@ -6492,7 +6501,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
         Some(Condition::Compare {
             variable: "tabs_seen".into(),
             op: CmpOp::Ge,
-            value: Value::Number(0.0),
+            value: Value::Number(0.0).into(),
         })
     );
     assert!(harness.find_text("Correct when").is_some());
@@ -6521,7 +6530,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
         Some(Condition::Not(Box::new(Condition::Compare {
             variable: "tabs_seen".into(),
             op: CmpOp::Ge,
-            value: Value::Number(0.0),
+            value: Value::Number(0.0).into(),
         }))),
         "the form writes the changed condition through question.set"
     );
@@ -7720,6 +7729,43 @@ fn publish_dialog_offers_lti_and_requests_it() {
 }
 
 #[test]
+fn publish_dialog_offers_web_and_requests_it() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+    harness.editor.open_publish_dialog();
+    harness.idle_frame();
+
+    assert!(
+        harness
+            .find_text_containing(
+                "Upload the folder to any web server. Results are not reported to an LMS."
+            )
+            .is_some(),
+        "the Web help text is painted"
+    );
+
+    let web = harness
+        .find_text_last("Web (any website, no LMS)")
+        .expect("Web radio label");
+    harness.click_at(web);
+    harness.idle_frame();
+    assert_eq!(harness.editor.ui.publish.standard, PublishStandard::Web);
+
+    let publish = harness.find_text_last("Publish").expect("Publish button");
+    let requests = click_for_requests(&mut harness, publish);
+    assert!(
+        requests.iter().any(|r| matches!(
+            r,
+            EditorRequest::Publish {
+                standard: PublishStandard::Web
+            }
+        )),
+        "the Web standard is sent with the request: {requests:?}"
+    );
+}
+
+#[test]
 fn publish_unavailable_disables_publish() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
@@ -7867,6 +7913,8 @@ fn image_object(src: &str) -> Object {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -7909,6 +7957,8 @@ fn accessibility_section_renders_and_a_click_selects_the_object() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
 
     let mut harness = TestHarness::new(course);
@@ -16588,7 +16638,10 @@ fn lock_hide_setup() -> (TestHarness, SlideTransform) {
 #[test]
 fn a_locked_object_is_not_picked_moved_or_marqueed() {
     let (mut h, t) = lock_hide_setup();
-    h.editor.ui.locked_objects.insert("a".into());
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": "slide1", "object": "a", "locked": true }),
+    );
     h.click_at(t.to_screen_pos(pos2(200.0, 160.0)));
     assert_eq!(h.editor.selection.object, None, "click passes through");
 
@@ -16619,7 +16672,10 @@ fn a_locked_object_is_not_picked_moved_or_marqueed() {
 #[test]
 fn a_hidden_object_is_not_on_the_canvas_but_still_in_the_course() {
     let (mut h, t) = lock_hide_setup();
-    h.editor.ui.hidden_objects.insert("b".into());
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": "slide1", "object": "b", "hidden": true }),
+    );
     h.idle_frame();
     h.click_at(t.to_screen_pos(pos2(600.0, 160.0)));
     assert_eq!(h.editor.selection.object, None, "nothing drawn to click");
@@ -16637,27 +16693,38 @@ fn a_hidden_object_is_not_on_the_canvas_but_still_in_the_course() {
 }
 
 #[test]
-fn opening_a_course_clears_hidden_and_locked_objects() {
+fn opening_a_course_uses_its_own_hidden_and_locked_objects() {
     let (mut h, _t) = lock_hide_setup();
-    h.editor.ui.hidden_objects.insert("a".into());
-    h.editor.ui.locked_objects.insert("b".into());
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": "slide1", "object": "a", "hidden": true }),
+    );
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": "slide1", "object": "b", "locked": true }),
+    );
     h.editor.replace_course(lock_hide_course());
-    assert!(h.editor.ui.hidden_objects.is_empty());
-    assert!(h.editor.ui.locked_objects.is_empty());
+    let slide = h.editor.session.course.slide("slide1").expect("slide");
+    assert!(!slide.object("a").expect("a").0.editor_hidden);
+    assert!(!slide.object("b").expect("b").0.locked);
 }
 
 #[test]
 fn view_menu_toggles_rulers_grid_snap_and_guides() {
     let (mut h, _t) = lock_hide_setup();
-    assert!(!h.editor.ui.rulers.show_rulers && !h.editor.ui.rulers.show_grid);
+    assert!(
+        !h.editor.session.course.editor.show_rulers && !h.editor.session.course.editor.show_grid
+    );
     for (label, get) in [
         (
             "Rulers",
-            (|e: &Editor| e.ui.rulers.show_rulers) as fn(&Editor) -> bool,
+            (|e: &Editor| e.session.course.editor.show_rulers) as fn(&Editor) -> bool,
         ),
-        ("Grid", |e: &Editor| e.ui.rulers.show_grid),
-        ("Snap to Grid", |e: &Editor| e.ui.rulers.snap_to_grid),
-        ("Guides", |e: &Editor| e.ui.rulers.show_guides),
+        ("Grid", |e: &Editor| e.session.course.editor.show_grid),
+        ("Snap to Grid", |e: &Editor| {
+            e.session.course.editor.snap_to_grid
+        }),
+        ("Guides", |e: &Editor| e.session.course.editor.show_guides),
     ] {
         let view = h.find_text("View").expect("View menu");
         h.click_at(view);
@@ -16672,13 +16739,14 @@ fn view_menu_toggles_rulers_grid_snap_and_guides() {
 #[test]
 fn dragging_from_a_ruler_makes_a_guide_and_dragging_it_back_deletes_it() {
     let (mut h, t) = lock_hide_setup();
-    h.editor.ui.rulers.show_rulers = true;
+    h.editor
+        .run("view.set", serde_json::json!({ "show_rulers": true }));
     h.idle_frame();
     let canvas = canvas_rect(h.central_panel_rect());
     let start = crate::rulers::left_strip(canvas).center();
     let onto = t.to_screen_pos(pos2(400.0, 300.0));
     h.drag_by(start, onto - start, 4, Modifiers::NONE);
-    let guides = h.editor.ui.rulers.guides.clone();
+    let guides = h.editor.session.course.editor.guides.clone();
     assert_eq!(guides.len(), 1, "{guides:?}");
     assert!(guides[0].vertical);
     assert!((guides[0].at - 400.0).abs() < 2.0, "{}", guides[0].at);
@@ -16687,17 +16755,16 @@ fn dragging_from_a_ruler_makes_a_guide_and_dragging_it_back_deletes_it() {
     let guide_screen = t.to_screen_pos(pos2(guides[0].at, 300.0));
     let back = crate::rulers::left_strip(canvas).center();
     h.drag_by(guide_screen, back - guide_screen, 4, Modifiers::NONE);
-    assert!(h.editor.ui.rulers.guides.is_empty());
+    assert!(h.editor.session.course.editor.guides.is_empty());
 }
 
 #[test]
 fn a_move_snaps_to_a_guide() {
     let (mut h, t) = lock_hide_setup();
-    h.editor.ui.rulers.show_guides = true;
-    h.editor.ui.rulers.guides.push(crate::rulers::Guide {
-        vertical: true,
-        at: 400.0,
-    });
+    h.editor.run(
+        "view.guides.add",
+        serde_json::json!({ "vertical": true, "at": 400.0 }),
+    );
     h.idle_frame();
     // Object "a" spans x 100..300; moving it 97px puts its right edge at 397.
     h.drag_by(

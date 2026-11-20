@@ -54,6 +54,8 @@ fn object(id: &str, kind: ObjectKind, (x, y, w, h): (f32, f32, f32, f32)) -> Obj
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -180,6 +182,7 @@ fn question(kind: QuestionKind, prompt: &str, choices: Vec<Choice>) -> Question 
         shuffle: false,
         correct_layer: None,
         incorrect_layer: None,
+        try_again_layer: None,
         accepted: Vec::new(),
         case_sensitive: false,
         pairs: Vec::new(),
@@ -745,6 +748,7 @@ fn a_pause_trigger_on_a_layer_also_counts() {
         hide_when_timeline_ends: false,
         allow_seek: crate::SeekMode::Auto,
         revisit: crate::RevisitMode::Auto,
+        cue_points: Vec::new(),
     };
     layer.duration_ms = 5000;
     slide(&mut course).layers.push(layer);

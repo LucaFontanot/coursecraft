@@ -167,6 +167,13 @@ fn lti_marker_selects_the_lti_player() {
 }
 
 #[test]
+fn web_marker_selects_the_web_player() {
+    let (standard, warning) = parse_package_standard(Some(r#"{"standard":"web"}"#));
+    assert_eq!(standard, PlayerStandard::Web);
+    assert!(warning.is_none());
+}
+
+#[test]
 fn missing_marker_defaults_to_scorm12_without_a_warning() {
     let (standard, warning) = parse_package_standard(None);
     assert_eq!(standard, PlayerStandard::Scorm12);

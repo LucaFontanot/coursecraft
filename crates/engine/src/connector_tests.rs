@@ -655,6 +655,8 @@ fn big_slide_reroutes_quickly() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
     }
     for index in 0..200usize {
@@ -704,6 +706,8 @@ fn big_slide_reroutes_quickly() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         };
         slide.objects.push(connector);
     }

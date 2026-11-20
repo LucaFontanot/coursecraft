@@ -3540,6 +3540,8 @@ fn plain_text_renders_as_one_run() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     };
     let item = compose_object(&obj, "normal").expect("composed item");
     match item.visual {
@@ -6320,6 +6322,8 @@ fn a_diagonal_path_hits_its_line_not_its_bounding_box() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     let player = Player::new(&course).expect("valid player");
     let items = compose(&player);
@@ -6389,6 +6393,8 @@ fn a_closed_filled_path_hits_inside_its_outline() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     };
     let item = compose_object(&object, "normal").expect("composed path");
     assert!(crate::compose::item_hit_test(&item, pos2(200.0, 200.0)));
@@ -7611,6 +7617,50 @@ fn bar_and_ring_meters_paint_accent_over_the_track_token() {
         });
         output.drop_without_applying_deltas();
     }
+}
+
+#[test]
+fn editor_hidden_and_locked_objects_are_drawn_in_player() {
+    let json = r##"{
+      "schema_version": 1,
+      "id": "hidden-in-editor",
+      "title": "Hidden In Editor",
+      "scenes": [{
+        "id": "sc1",
+        "title": "Main",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide 1",
+          "duration_ms": 3000,
+          "objects": [{
+            "id": "secret-box",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+            "frame": { "x": 100, "y": 100, "w": 240, "h": 120 },
+            "locked": true,
+            "editor_hidden": true
+          }]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let obj = course
+        .slide("s1")
+        .expect("slide")
+        .object("secret-box")
+        .expect("obj")
+        .0;
+    assert!(obj.locked);
+    assert!(obj.editor_hidden);
+
+    let mut player = Player::new(&course).expect("playable");
+    player.handle(&Input::Start);
+    let items = compose(&player);
+    assert!(
+        items
+            .iter()
+            .any(|item| item.hit == Hit::Object("secret-box".into())),
+        "an object hidden/locked in the editor must still be drawn in the player"
+    );
 }
 
 #[test]

@@ -9,7 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Action, CmpOp, Condition, Course, Event, Link, ObjectKind, SlideTarget, Value};
+use crate::{
+    Action, CmpOp, Condition, Course, Event, Link, ObjectKind, SlideTarget, Value, ValueSource,
+};
 
 /// What an edge means, for colouring and for the CLI's `kind` field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -256,6 +258,7 @@ fn resolve_target(course: &Course, index: usize, target: &SlideTarget) -> Option
                     .map(|slide| slide.id.clone())
             }
         }
+        SlideTarget::LastVisited => None,
         SlideTarget::Id(id) => {
             if course.play_slide(id).is_some() {
                 Some(id.clone())
@@ -263,6 +266,12 @@ fn resolve_target(course: &Course, index: usize, target: &SlideTarget) -> Option
                 None
             }
         }
+        SlideTarget::Scene(id) => course
+            .scenes
+            .iter()
+            .find(|s| s.id == *id)
+            .and_then(|s| s.slides.first())
+            .map(|s| s.id.clone()),
     }
 }
 
@@ -348,8 +357,13 @@ pub fn describe_condition(condition: &Condition) -> String {
                 CmpOp::Gt => ">",
                 CmpOp::Ge => ">=",
                 CmpOp::Contains => "contains",
+                CmpOp::EqIgnoreCase => "equals (ignore case)",
+                CmpOp::ContainsIgnoreCase => "contains (ignore case)",
             },
-            describe_value(value)
+            match value {
+                ValueSource::Constant(v) => describe_value(v),
+                ValueSource::Variable { variable: rhs } => rhs.clone(),
+            }
         ),
         Condition::ObjectState { object, state, is } => {
             if *is {
@@ -729,7 +743,7 @@ mod tests {
             Condition::Compare {
                 variable: "score".to_owned(),
                 op: CmpOp::Ge,
-                value: Value::Number(10.0),
+                value: Value::Number(10.0).into(),
             },
             Condition::ObjectState {
                 object: "btn".to_owned(),
@@ -744,7 +758,7 @@ mod tests {
         let not = Condition::Not(Box::new(Condition::Compare {
             variable: "done".to_owned(),
             op: CmpOp::Eq,
-            value: Value::Bool(true),
+            value: Value::Bool(true).into(),
         }));
         assert_eq!(describe_condition(&not), "NOT (done = true)");
     }

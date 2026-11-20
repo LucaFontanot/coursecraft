@@ -727,6 +727,112 @@ fn audio_duration_ms(src: &str, bytes: &[u8]) -> Option<u64> {
     Some(samples.saturating_mul(1000) / per_second).filter(|ms| *ms > 0)
 }
 
+/// Maximum number of peaks computed for a timeline audio waveform.
+pub const MAX_WAVEFORM_PEAKS: usize = 2_000;
+
+/// Compute a peak amplitude envelope (`0.0..=1.0`, at most `max_peaks` entries)
+/// for an audio clip, or `None` when the file cannot be decoded (or on wasm).
+#[must_use]
+pub fn audio_peak_envelope(src: &str, bytes: &[u8], max_peaks: usize) -> Option<Vec<f32>> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src, bytes, max_peaks);
+        None
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        audio_peak_envelope_native(src, bytes, max_peaks)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn audio_peak_envelope_native(src: &str, bytes: &[u8], max_peaks: usize) -> Option<Vec<f32>> {
+    use rodio::Source;
+    let max_peaks = max_peaks.min(MAX_WAVEFORM_PEAKS);
+    if max_peaks == 0 || bytes.is_empty() {
+        return None;
+    }
+    let bytes: Arc<[u8]> = Arc::from(bytes);
+    let decoder = seekable_decoder(&bytes, src).ok()?;
+    let rate = u64::from(decoder.sample_rate());
+    let channels = u64::from(decoder.channels()).max(1);
+    let per_second = rate.saturating_mul(channels);
+    if per_second == 0 {
+        return None;
+    }
+    let cap = per_second.saturating_mul(3 * 60 * 60);
+    let cap_usize = usize::try_from(cap).unwrap_or(usize::MAX);
+
+    let mut peaks = if let Some(total) = decoder.total_duration() {
+        let est_samples = ((total.as_secs_f64() * per_second as f64).round() as u64)
+            .min(cap)
+            .max(channels);
+        let est_frames = (est_samples / channels).max(1);
+        let num_peaks = usize::try_from(est_frames)
+            .unwrap_or(max_peaks)
+            .min(max_peaks);
+        let bucket_samples = (usize::try_from(est_samples).unwrap_or(usize::MAX) / num_peaks)
+            .max(usize::try_from(channels).unwrap_or(1));
+        let mut out = Vec::with_capacity(num_peaks);
+        let mut cur_peak = 0.0_f32;
+        let mut count = 0_usize;
+        for sample in decoder.take(cap_usize) {
+            let amp = sample.abs();
+            if amp.is_finite() {
+                cur_peak = cur_peak.max(amp.min(1.0));
+            }
+            count += 1;
+            if count >= bucket_samples {
+                out.push(cur_peak);
+                cur_peak = 0.0;
+                count = 0;
+            }
+        }
+        if count > 0 {
+            out.push(cur_peak);
+        }
+        out
+    } else {
+        // Container did not report total duration: collect mini-peaks then downsample.
+        let mini_bucket = usize::try_from(channels).unwrap_or(1).saturating_mul(1024);
+        let mut mini = Vec::new();
+        let mut cur_peak = 0.0_f32;
+        let mut count = 0_usize;
+        for sample in decoder.take(cap_usize) {
+            let amp = sample.abs();
+            if amp.is_finite() {
+                cur_peak = cur_peak.max(amp.min(1.0));
+            }
+            count += 1;
+            if count >= mini_bucket {
+                mini.push(cur_peak);
+                cur_peak = 0.0;
+                count = 0;
+            }
+        }
+        if count > 0 {
+            mini.push(cur_peak);
+        }
+        mini
+    };
+
+    if peaks.is_empty() {
+        return None;
+    }
+    if peaks.len() > max_peaks {
+        let mut downsampled = Vec::with_capacity(max_peaks);
+        let len = peaks.len();
+        for i in 0..max_peaks {
+            let start = (i * len) / max_peaks;
+            let end = (((i + 1) * len) / max_peaks).max(start + 1).min(len);
+            let max_val = peaks[start..end].iter().copied().fold(0.0_f32, f32::max);
+            downsampled.push(max_val);
+        }
+        peaks = downsampled;
+    }
+    Some(peaks)
+}
+
 /// Kind of media asset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MediaKind {

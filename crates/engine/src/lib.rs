@@ -112,6 +112,7 @@ impl Session {
                     objects: Vec::new(),
                     layers: Vec::new(),
                     triggers: Vec::new(),
+                    cue_points: Vec::new(),
                     transition: None,
                     question: None,
                     draw: None,
@@ -132,6 +133,7 @@ impl Session {
             fonts: Vec::new(),
             background_audio: None,
             glossary: Vec::new(),
+            editor: Default::default(),
             resources: Vec::new(),
             text_styles: Vec::new(),
         })

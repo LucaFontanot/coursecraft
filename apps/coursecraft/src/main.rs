@@ -85,6 +85,7 @@ enum PendingAction {
     OpenFolder,
     OpenRecent(usize),
     OpenExample(coursecraft_ui_egui::ExampleId),
+    OpenTemplate(coursecraft_ui_egui::TemplateId),
     Quit,
     CloseRequested,
     ImportPptx,
@@ -859,6 +860,11 @@ impl EditorApp {
                 self.project = Project::new(self.editor.session.revision);
                 self.autosaver = Autosaver::new();
             }
+            PendingAction::OpenTemplate(id) => {
+                self.editor.open_template(id);
+                self.project = Project::new(self.editor.session.revision);
+                self.autosaver = Autosaver::new();
+            }
             PendingAction::Quit | PendingAction::CloseRequested => {
                 self.allow_close = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -965,6 +971,9 @@ impl EditorApp {
             }
             EditorRequest::OpenExample(id) => {
                 self.guard_unsaved(PendingAction::OpenExample(id), ctx);
+            }
+            EditorRequest::OpenTemplate(id) => {
+                self.guard_unsaved(PendingAction::OpenTemplate(id), ctx);
             }
             EditorRequest::Save => {
                 self.perform_save();
@@ -2852,6 +2861,9 @@ impl eframe::App for EditorApp {
                     }
                     EditorRequest::OpenExample(id) => {
                         self.editor.open_example(id);
+                    }
+                    EditorRequest::OpenTemplate(id) => {
+                        self.editor.open_template(id);
                     }
                     EditorRequest::AiChat { purpose, request } => {
                         self.start_ai(purpose, request, ui.ctx());
