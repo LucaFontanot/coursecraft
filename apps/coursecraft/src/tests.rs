@@ -1454,3 +1454,41 @@ fn a_new_course_uses_the_default_slide_size() {
     let default = Prefs::default().blank_course();
     assert_eq!((default.slide_size.w, default.slide_size.h), (1280, 720));
 }
+
+#[test]
+fn write_autosave_streams_arc_media_byte_identical_to_save_project() {
+    let dir = std::env::temp_dir().join("cc_test_streaming_autosave");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let auto_path = dir.join("course.autosave.ccraft");
+    let course = Course::from_json(HELLO_JSON).unwrap();
+    let arc_media: Vec<(String, std::sync::Arc<[u8]>)> = vec![
+        (
+            "a.png".to_string(),
+            std::sync::Arc::from(b"pngdata".as_slice()),
+        ),
+        (
+            "b.txt".to_string(),
+            std::sync::Arc::from(b"hello".as_slice()),
+        ),
+    ];
+    crate::autosave::write_autosave_arc(&course, &arc_media, &auto_path).unwrap();
+    let on_disk = std::fs::read(&auto_path).unwrap();
+    let expected = coursecraft_format::save_project(&course, &arc_media).unwrap();
+    assert_eq!(on_disk, expected);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn into_arc_media_preserves_entries_without_extra_vec_copies() {
+    let input = vec![
+        ("one.png".to_string(), vec![1_u8, 2, 3]),
+        ("two.mp3".to_string(), vec![4_u8, 5]),
+    ];
+    let arcs = crate::into_arc_media(input);
+    assert_eq!(arcs.len(), 2);
+    assert_eq!(arcs[0].0, "one.png");
+    assert_eq!(&*arcs[0].1, &[1, 2, 3]);
+    assert_eq!(arcs[1].0, "two.mp3");
+    assert_eq!(&*arcs[1].1, &[4, 5]);
+}

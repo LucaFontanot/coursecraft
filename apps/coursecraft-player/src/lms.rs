@@ -278,7 +278,7 @@ pub fn log_standalone() {
 }
 
 /// A random draw seed for a fresh start, from `js_sys::Math::random`.
-fn fresh_seed() -> u32 {
+pub(crate) fn fresh_seed() -> u32 {
     let value = (js_sys::Math::random() * 4294967296.0).floor();
     if !value.is_finite() || value <= 0.0 {
         0

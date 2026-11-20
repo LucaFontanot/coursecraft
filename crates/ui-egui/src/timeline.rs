@@ -133,6 +133,9 @@ pub struct ObjectRename {
     pub just_entered: bool,
 }
 
+/// Cached object summary `(id, name, timing, group)` for timeline rendering.
+pub type CachedTimelineObject = (String, String, Timing, Option<String>);
+
 /// Interaction and edit state for the Timeline panel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineState {
@@ -185,6 +188,13 @@ pub struct TimelineState {
     pub zoom: f32,
     /// How far the zoomed track is scrolled, in screen points.
     pub scroll_x: f32,
+
+    /// Cached object list for the current revision + slide/layer.
+    pub cached_objects: std::sync::Arc<[CachedTimelineObject]>,
+    /// Cached slide/layer cue points for the current revision + slide/layer.
+    pub cached_slide_cues: std::sync::Arc<[coursecraft_course::SlideCue]>,
+    /// Cached audio sources for the current revision + slide/layer.
+    pub cached_audio_srcs: std::sync::Arc<[String]>,
 }
 
 impl Default for TimelineState {
@@ -218,6 +228,9 @@ impl Default for TimelineState {
             play_button_rect: None,
             zoom: 1.0,
             scroll_x: 0.0,
+            cached_objects: std::sync::Arc::from([]),
+            cached_slide_cues: std::sync::Arc::from([]),
+            cached_audio_srcs: std::sync::Arc::from([]),
         }
     }
 }
@@ -319,6 +332,9 @@ impl TimelineState {
         if self.last_synced_revision.is(revision) && &self.last_synced_selection == selection {
             return;
         }
+        let owner_changed = !self.last_synced_revision.is(revision)
+            || self.last_synced_selection.slide != selection.slide
+            || self.last_synced_selection.layer != selection.layer;
         if self.last_synced_selection.slide != selection.slide {
             self.object_rename = None;
         }
@@ -326,6 +342,32 @@ impl TimelineState {
         self.last_synced_selection = selection.clone();
 
         if let Some(slide) = course.slide(&selection.slide) {
+            if owner_changed {
+                #[cfg(test)]
+                crate::guard_counters::note_timeline_list_rebuild();
+                let layer = selection.layer.as_deref().and_then(|lid| slide.layer(lid));
+                let objs = match (&selection.layer, layer) {
+                    (Some(_), Some(l)) => l.objects.as_slice(),
+                    (Some(_), None) => &[],
+                    (None, _) => slide.objects.as_slice(),
+                };
+                self.cached_objects = objs
+                    .iter()
+                    .map(|o| (o.id.clone(), o.name.clone(), o.timing, o.group.clone()))
+                    .collect();
+                self.cached_slide_cues = match (&selection.layer, layer) {
+                    (Some(_), Some(l)) => l.cue_points.clone().into(),
+                    (Some(_), None) => std::sync::Arc::from([]),
+                    (None, _) => slide.cue_points.clone().into(),
+                };
+                self.cached_audio_srcs = objs
+                    .iter()
+                    .filter_map(|o| match &o.kind {
+                        coursecraft_course::ObjectKind::Audio { src, .. } => Some(src.clone()),
+                        _ => None,
+                    })
+                    .collect();
+            }
             if let Some(ref lid) = selection.layer
                 && let Some(layer) = slide.layer(lid)
             {
@@ -333,6 +375,10 @@ impl TimelineState {
                 return;
             }
             self.duration_ms = slide.duration_ms;
+        } else if owner_changed {
+            self.cached_objects = std::sync::Arc::from([]);
+            self.cached_slide_cues = std::sync::Arc::from([]);
+            self.cached_audio_srcs = std::sync::Arc::from([]);
         }
     }
 }
@@ -498,6 +544,61 @@ fn render_timeline_header(
     });
 }
 
+fn visible_ruler_ticks(
+    duration_ms: u32,
+    track_min_x: f32,
+    track_width: f32,
+    vis_min_x: f32,
+    vis_max_x: f32,
+) -> Vec<u32> {
+    if duration_ms == 0
+        || !track_width.is_finite()
+        || track_width <= 0.0
+        || !vis_min_x.is_finite()
+        || !vis_max_x.is_finite()
+        || vis_max_x < vis_min_x
+    {
+        return Vec::new();
+    }
+    let half_second_px = 500.0 / duration_ms as f32 * track_width;
+    let tick_step: u32 = if half_second_px >= 120.0 {
+        100
+    } else if half_second_px >= 4.0 {
+        500
+    } else {
+        const STEPS: &[u32] = &[
+            1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000,
+            1_800_000, 3_600_000, 7_200_000, 14_400_000, 28_800_000, 86_400_000,
+        ];
+        STEPS
+            .iter()
+            .copied()
+            .find(|&step| (step as f64 / duration_ms as f64) * track_width as f64 >= 4.0)
+            .unwrap_or_else(|| {
+                ((4.0 / track_width as f64) * duration_ms as f64)
+                    .ceil()
+                    .clamp(1.0, u32::MAX as f64) as u32
+            })
+    };
+    let start_frac = ((vis_min_x - track_min_x) as f64 / track_width as f64).clamp(0.0, 1.0);
+    let end_frac = ((vis_max_x - track_min_x) as f64 / track_width as f64).clamp(0.0, 1.0);
+    let start_ms = (start_frac * duration_ms as f64).floor() as u32;
+    let end_ms = (end_frac * duration_ms as f64)
+        .ceil()
+        .min(duration_ms as f64) as u32;
+    let mut ms_tick = (start_ms / tick_step) * tick_step;
+    let mut ticks = Vec::new();
+    while ms_tick <= end_ms {
+        ticks.push(ms_tick);
+        let next = ms_tick.saturating_add(tick_step);
+        if next <= ms_tick {
+            break;
+        }
+        ms_tick = next;
+    }
+    ticks
+}
+
 fn render_time_ruler(
     painter: &egui::Painter,
     track_rect: Rect,
@@ -516,18 +617,22 @@ fn render_time_ruler(
         ],
         Stroke::new(1.0, p.border),
     );
+    if duration_ms == 0 || !track_width.is_finite() || track_width <= 0.0 {
+        return;
+    }
 
     let ms_to_x =
         |ms: u32| -> f32 { track_rect.min.x + (ms as f32 / duration_ms as f32) * track_width };
 
     // Ticks and grid lines stay in the track when it is zoomed and scrolled.
     let label_painter = painter;
-    let painter = &painter.with_clip_rect(painter.clip_rect().intersect(Rect::from_x_y_ranges(
+    let clipped_rect = painter.clip_rect().intersect(Rect::from_x_y_ranges(
         ruler_rect.x_range(),
         painter.clip_rect().y_range(),
-    )));
-    let half_second_px = 500.0 / duration_ms as f32 * track_width;
-    let tick_step: u32 = if half_second_px >= 120.0 { 100 } else { 500 };
+    ));
+    let painter = &painter.with_clip_rect(clipped_rect);
+    let vis_min_x = clipped_rect.min.x;
+    let vis_max_x = clipped_rect.max.x;
     // Label every 1, 2, 5, 10, ... seconds, whatever keeps labels about 40 px apart.
     let second_px = 1000.0 / duration_ms.max(1) as f32 * track_width;
     let label_every_s: u32 = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
@@ -535,8 +640,13 @@ fn render_time_ruler(
         .find(|step| *step as f32 * second_px >= 40.0)
         .unwrap_or(600);
     let mut last_label_right = f32::NEG_INFINITY;
-    let mut ms_tick: u32 = 0;
-    while ms_tick <= duration_ms {
+    for ms_tick in visible_ruler_ticks(
+        duration_ms,
+        track_rect.min.x,
+        track_width,
+        vis_min_x,
+        vis_max_x,
+    ) {
         let x = ms_to_x(ms_tick);
         let is_sec = ms_tick.is_multiple_of(1000);
         let labelled = is_sec && (ms_tick / 1000).is_multiple_of(label_every_s);
@@ -571,10 +681,6 @@ fn render_time_ruler(
             [pos2(x, ruler_rect.max.y), pos2(x, total_area.max.y)],
             Stroke::new(1.0, p.border),
         );
-        ms_tick = ms_tick.saturating_add(tick_step);
-        if ms_tick == 0 {
-            break;
-        }
     }
 }
 
@@ -643,7 +749,8 @@ fn handle_active_drag(
             }
             TimelineDragOp::ResizeEnd => {
                 let eff_end = drag.orig_end_ms.unwrap_or(drag.orig_duration_ms);
-                let min_end = drag.orig_start_ms + snap_step as u32;
+                let min_end = drag.orig_start_ms.saturating_add(snap_step as u32);
+                let max_end = drag.orig_duration_ms.max(min_end);
                 let raw_unrounded = eff_end as i64 + delta_ms_raw;
                 let snapped_cue = if is_shift {
                     None
@@ -659,7 +766,9 @@ fn handle_active_drag(
                 let raw_end = snapped_cue
                     .map(i64::from)
                     .unwrap_or(eff_end as i64 + delta_ms);
-                let new_end = raw_end.clamp(min_end as i64, drag.orig_duration_ms as i64) as u32;
+                let new_end =
+                    coursecraft_course::safe_clamp_ord(raw_end, min_end as i64, max_end as i64)
+                        as u32;
                 drag.current_start_ms = drag.orig_start_ms;
                 drag.current_end_ms = Some(new_end);
             }
@@ -2195,50 +2304,11 @@ fn show_timeline_content(
         None => (format!("Slide: {}", slide.title), slide.duration_ms, false),
     };
 
-    let objects: Vec<(String, String, Timing, Option<String>)> = match &selected_layer_id {
-        Some(lid) => match slide.layer(lid) {
-            Some(l) => l
-                .objects
-                .iter()
-                .map(|o| (o.id.clone(), o.name.clone(), o.timing, o.group.clone()))
-                .collect(),
-            None => Vec::new(),
-        },
-        None => slide
-            .objects
-            .iter()
-            .map(|o| (o.id.clone(), o.name.clone(), o.timing, o.group.clone()))
-            .collect(),
-    };
-
-    let slide_cues: Vec<coursecraft_course::SlideCue> = match &selected_layer_id {
-        Some(lid) => slide
-            .layer(lid)
-            .map_or_else(Vec::new, |l| l.cue_points.clone()),
-        None => slide.cue_points.clone(),
-    };
-
-    let audio_srcs: Vec<String> = match &selected_layer_id {
-        Some(lid) => slide.layer(lid).map_or_else(Vec::new, |l| {
-            l.objects
-                .iter()
-                .filter_map(|o| match &o.kind {
-                    coursecraft_course::ObjectKind::Audio { src, .. } => Some(src.clone()),
-                    _ => None,
-                })
-                .collect()
-        }),
-        None => slide
-            .objects
-            .iter()
-            .filter_map(|o| match &o.kind {
-                coursecraft_course::ObjectKind::Audio { src, .. } => Some(src.clone()),
-                _ => None,
-            })
-            .collect(),
-    };
-    for src in audio_srcs {
-        let _ = editor.ensure_audio_waveform(&src);
+    let objects = std::sync::Arc::clone(&editor.ui.timeline.cached_objects);
+    let slide_cues = std::sync::Arc::clone(&editor.ui.timeline.cached_slide_cues);
+    let audio_srcs = std::sync::Arc::clone(&editor.ui.timeline.cached_audio_srcs);
+    for src in audio_srcs.iter() {
+        let _ = editor.ensure_audio_waveform(src);
     }
 
     render_timeline_header(
@@ -2319,7 +2389,7 @@ fn show_timeline_content(
         .flat_map(|(oid, _, _, _)| object_cues(editor, oid))
         .map(|cue| cue.at_ms_u64().min(u64::from(u32::MAX)) as u32)
         .collect();
-    for cue in &slide_cues {
+    for cue in slide_cues.iter() {
         all_cue_ms.push(cue.at_ms);
     }
 
@@ -2442,5 +2512,58 @@ fn show_timeline_content(
                     (objects.len() as f32 * OBJECT_ROW_HEIGHT).max(row_area.height());
                 ui.allocate_space(vec2(row_area.width(), content_height));
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize_end_near_timeline_end_does_not_panic() {
+        let course = coursecraft_engine::Session::blank("Timeline").course;
+        let mut editor = Editor::new(course);
+        editor.ui.timeline.active_drag = Some(TimelineDrag {
+            op: TimelineDragOp::ResizeEnd,
+            object_id: "obj1".to_owned(),
+            orig_start_ms: 4950,
+            orig_end_ms: None,
+            orig_duration_ms: 5000,
+            start_pointer_x: 100.0,
+            start_pointer_y: 10.0,
+            current_start_ms: 4950,
+            current_end_ms: None,
+        });
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input
+            .events
+            .push(egui::Event::PointerMoved(pos2(100.0, 10.0)));
+        input.events.push(egui::Event::PointerButton {
+            pos: pos2(100.0, 10.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let out = ctx.run_ui(input, |ui| {
+            let drag_ctx = ActiveDragContext {
+                duration_ms: 5000,
+                track_x: 0.0,
+                track_width: 500.0,
+                cue_ms: &[],
+                slide_id: "slide1",
+            };
+            let mut actions = Vec::new();
+            handle_active_drag(&mut editor, ui, &drag_ctx, &mut actions);
+        });
+        out.drop_without_applying_deltas();
+        assert!(editor.ui.timeline.active_drag.is_some());
+    }
+
+    #[test]
+    fn visible_ruler_ticks_with_u32_max_duration_returns_quickly() {
+        let ticks = visible_ruler_ticks(u32::MAX, 0.0, 800.0, 0.0, 800.0);
+        assert!(!ticks.is_empty());
+        assert!(ticks.len() <= 500, "too many ticks: {}", ticks.len());
     }
 }

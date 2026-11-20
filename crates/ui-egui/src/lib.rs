@@ -125,6 +125,8 @@ mod idle_tests;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
+mod m25_input_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -409,6 +411,20 @@ pub enum EditorRequest {
     },
     /// Delete the earlier save named `id`.
     DeleteVersion {
+        id: String,
+    },
+    /// Save an in-course template into the shared desktop library.
+    SaveTemplateToLibrary {
+        template_id: String,
+    },
+    /// Insert a template from the shared desktop library as a new slide.
+    InsertLibraryTemplate {
+        id: String,
+        scene: Option<String>,
+        after: Option<String>,
+    },
+    /// Delete a template from the shared desktop library.
+    DeleteLibraryTemplate {
         id: String,
     },
     OpenExample(ExampleId),
@@ -838,6 +854,8 @@ pub struct UiState {
     pub master_view_return_slide: Option<String>,
     /// Master waiting for a delete confirmation.
     pub pending_delete_master: Option<String>,
+    /// Shared library template waiting for a delete confirmation.
+    pub confirm_delete_library_template: Option<String>,
     /// In-place rename of a master in the navigator.
     pub master_rename: Option<slides::SceneRename>,
     /// In-place rename of a question bank in the navigator.
@@ -954,6 +972,15 @@ impl SyncRevision {
     }
 }
 
+/// One template saved in the shared desktop library.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryTemplateEntry {
+    /// Safe file stem under `<config_dir>/templates/`.
+    pub id: String,
+    /// Display title of the template.
+    pub title: String,
+}
+
 /// Main CourseCraft editor component.
 pub struct Editor {
     pub session: Session,
@@ -961,6 +988,8 @@ pub struct Editor {
     pub ui: UiState,
     pub preview: Option<Preview>,
     pub recent_files: Vec<String>,
+    pub library_templates: Vec<LibraryTemplateEntry>,
+    pub library_templates_available: bool,
     pub file_ops_available: bool,
     pub publish_available: bool,
     pub title_info: Option<(String, bool)>,
@@ -1219,6 +1248,7 @@ impl Editor {
                 master_view: false,
                 master_view_return_slide: None,
                 pending_delete_master: None,
+                confirm_delete_library_template: None,
                 master_rename: None,
                 bank_rename: None,
                 bank_expanded: Vec::new(),
@@ -1236,6 +1266,8 @@ impl Editor {
             },
             preview: None,
             recent_files: Vec::new(),
+            library_templates: Vec::new(),
+            library_templates_available: false,
             file_ops_available: true,
             publish_available: true,
             title_info: None,
@@ -1271,6 +1303,16 @@ impl Editor {
     /// Update recent files list shown in the File menu.
     pub fn set_recent(&mut self, recent: Vec<String>) {
         self.recent_files = recent;
+    }
+
+    /// Update the list of templates shown under "My library".
+    pub fn set_library_templates(&mut self, templates: Vec<LibraryTemplateEntry>) {
+        self.library_templates = templates;
+    }
+
+    /// Configure whether the shared desktop template library is available.
+    pub fn set_library_templates_available(&mut self, available: bool) {
+        self.library_templates_available = available;
     }
 
     /// Configure whether file open/save operations are enabled.
@@ -1486,6 +1528,7 @@ impl Editor {
         self.ui.master_view = false;
         self.ui.master_view_return_slide = None;
         self.ui.pending_delete_master = None;
+        self.ui.confirm_delete_library_template = None;
         self.ui.master_rename = None;
         self.ui.bank_rename = None;
         self.ui.bank_expanded.clear();
@@ -1648,7 +1691,7 @@ impl Editor {
         self.pending_picture_fill = previous_picture_fill;
         let src = src?;
         self.mark_media_changed();
-        self.set_status(format!("Added {src}. File operations are not undoable."));
+        self.set_status(format!("Added “{src}”. File operations are not undoable."));
         Some(src)
     }
 
@@ -1672,7 +1715,9 @@ impl Editor {
         self.audio_waveforms.remove(src);
         self.ensure_audio_waveform(src);
         self.mark_media_changed();
-        self.set_status(format!("Replaced {src}. File operations are not undoable."));
+        self.set_status(format!(
+            "Replaced “{src}”. File operations are not undoable."
+        ));
         true
     }
 
@@ -1680,7 +1725,7 @@ impl Editor {
     /// Unused media is excluded from the result but kept in memory so undo can restore it;
     /// in-memory media is only released when the project is replaced.
     #[must_use]
-    pub fn used_media(&self) -> Vec<(String, Vec<u8>)> {
+    pub fn used_media(&self) -> Vec<(String, std::sync::Arc<[u8]>)> {
         let referenced = referenced_media_srcs(&self.session.course);
         let folders = web_folder_prefixes(&self.session.course);
         self.media
@@ -1688,8 +1733,91 @@ impl Editor {
             .filter(|(src, _)| {
                 referenced.contains(src) || folders.iter().any(|prefix| src.starts_with(prefix))
             })
+            .map(|(src, bytes)| (src.clone(), std::sync::Arc::clone(bytes)))
+            .collect()
+    }
+
+    /// Collect the media assets referenced by a single slide (and its layers).
+    #[must_use]
+    pub fn slide_media(&self, slide: &coursecraft_course::Slide) -> Vec<(String, Vec<u8>)> {
+        let mut referenced = std::collections::HashSet::new();
+        let mut web_prefixes = std::collections::BTreeSet::new();
+        for obj in &slide.objects {
+            collect_object_media_srcs(obj, &mut referenced);
+            if let coursecraft_course::ObjectKind::Web {
+                source: coursecraft_course::WebSource::Folder { path, .. },
+            } = &obj.kind
+            {
+                web_prefixes.insert(format!("{path}/"));
+            }
+        }
+        for layer in &slide.layers {
+            for obj in &layer.objects {
+                collect_object_media_srcs(obj, &mut referenced);
+                if let coursecraft_course::ObjectKind::Web {
+                    source: coursecraft_course::WebSource::Folder { path, .. },
+                } = &obj.kind
+                {
+                    web_prefixes.insert(format!("{path}/"));
+                }
+            }
+        }
+        self.media
+            .iter()
+            .filter(|(src, _)| {
+                referenced.contains(src)
+                    || web_prefixes.iter().any(|prefix| src.starts_with(prefix))
+            })
             .map(|(src, bytes)| (src.clone(), bytes.to_vec()))
             .collect()
+    }
+
+    /// Insert a template slide loaded from the shared library, adding its
+    /// media and dispatching `slide.paste`.
+    pub fn insert_library_template(
+        &mut self,
+        mut slide: coursecraft_course::Slide,
+        media: Vec<(String, Vec<u8>)>,
+        scene: Option<String>,
+        after: Option<String>,
+    ) {
+        if let Some(ref master) = slide.master
+            && self.session.course.master(master).is_none()
+        {
+            slide.master = None;
+        }
+        let mut renames = std::collections::HashMap::new();
+        let mut media_added = false;
+        for (src, bytes) in media {
+            if let Some((_, existing)) = self.media.iter().find(|(name, _)| name == &src) {
+                if existing.as_ref() != bytes.as_slice() {
+                    let new_src = sanitize_media_src(&src, &self.media);
+                    self.media.push((new_src.clone(), bytes.into()));
+                    renames.insert(src, new_src);
+                    media_added = true;
+                }
+            } else {
+                self.media.push((src, bytes.into()));
+                media_added = true;
+            }
+        }
+        if !renames.is_empty() {
+            rewrite_slide_media_srcs(&mut slide, &renames);
+        }
+        if media_added {
+            self.mark_media_changed();
+        }
+        let Ok(slide_json) = serde_json::to_value(&slide) else {
+            return;
+        };
+        let mut params = serde_json::json!({ "slide": slide_json });
+        if let Some(after) = after {
+            params["after"] = serde_json::json!(after);
+        }
+        if let Some(scene) = scene {
+            params["scene"] = serde_json::json!(scene);
+        }
+        self.run("slide.paste", params);
     }
 
     /// Media files the course references but the editor's media store does not
@@ -2144,7 +2272,7 @@ impl Editor {
             {
                 // The first frame still shows; say why the animation won't play.
                 let msg =
-                    format!("Animated image '{file_name}' will show only its first frame: {e}");
+                    format!("Animated image “{file_name}” will show only its first frame: {e}");
                 self.ui.error_history.push(msg.clone());
                 self.set_status(msg);
             }
@@ -3459,31 +3587,30 @@ impl Editor {
         // shortcuts: egui matches Ctrl+Z logically (extra Shift ignored), so
         // Ctrl+Shift+Z must be consumed before edit.undo's Ctrl+Z.
         if !preview_has_focus
+            && !text_focus
             && !self.is_cropping()
             && !self.ui.ai.open
             && !self.ui.document.open
             && !self.ui.alt.open
             && !self.ui.translate.open
             && let Some(sc) = menu::parse_shortcut("Ctrl+Shift+Z")
+            && ui.input_mut(|i| i.consume_shortcut(&sc))
+            && let Some(params) = menu::adapter(self, "edit.redo")
         {
-            let conflict = sc.conflicts_with_text_editing()
-                && (ui.ctx().egui_wants_keyboard_input() || ui.memory(|m| m.focused().is_some()));
-            if !conflict
-                && ui.input_mut(|i| i.consume_shortcut(&sc))
-                && let Some(params) = menu::adapter(self, "edit.redo")
-            {
-                self.run("edit.redo", params);
-            }
+            self.run("edit.redo", params);
         }
 
         // Handle keyboard shortcuts from registry. More specific shortcuts run
-        // first so Cmd+Shift+G is not swallowed by Cmd+G.
+        // first so Cmd+Shift+G is not swallowed by Cmd+G. While a text field or
+        // the inline text editor has focus, skip registry shortcuts (Save, Save
+        // As, Open, Preview, and Cmd+B/I/U are handled outside the registry).
         let mut shortcuts: Vec<(&coursecraft_engine::Command, &str)> = registry()
             .iter()
             // Crop mode owns the keyboard until Enter applies or Escape cancels,
             // and AI Settings owns it while the dialog is open.
             .filter(|_| {
                 !preview_has_focus
+                    && !text_focus
                     && !self.is_cropping()
                     && !self.ui.ai.open
                     && !self.ui.document.open
@@ -3494,42 +3621,37 @@ impl Editor {
             .collect();
         shortcuts.sort_by_key(|(_, shortcut)| std::cmp::Reverse(shortcut.matches('+').count()));
         for (cmd, sc_str) in shortcuts {
-            if let Some(sc) = menu::parse_shortcut(sc_str) {
-                let conflict = sc.conflicts_with_text_editing()
-                    && (ui.ctx().egui_wants_keyboard_input()
-                        || ui.memory(|m| m.focused().is_some()));
-                if !conflict && ui.input_mut(|i| i.consume_shortcut(&sc)) {
-                    if cmd.id == "course.find" {
-                        find::open(self);
-                    } else if cmd.id == "object.duplicate" && self.selection.is_multi() {
-                        self.duplicate_selection();
-                    } else if cmd.id == "object.delete" {
-                        if let Some((object, cue)) = self.ui.timeline.cue_selected.take() {
-                            self.run(
-                                "video.remove_cue",
-                                serde_json::json!({
-                                    "slide": self.selection.slide,
-                                    "object": object,
-                                    "cue": cue,
-                                }),
-                            );
-                        } else if let Some((layer, cue)) =
-                            self.ui.timeline.slide_cue_selected.take()
-                        {
-                            let mut params = serde_json::json!({
+            if let Some(sc) = menu::parse_shortcut(sc_str)
+                && ui.input_mut(|i| i.consume_shortcut(&sc))
+            {
+                if cmd.id == "course.find" {
+                    find::open(self);
+                } else if cmd.id == "object.duplicate" && self.selection.is_multi() {
+                    self.duplicate_selection();
+                } else if cmd.id == "object.delete" {
+                    if let Some((object, cue)) = self.ui.timeline.cue_selected.take() {
+                        self.run(
+                            "video.remove_cue",
+                            serde_json::json!({
                                 "slide": self.selection.slide,
+                                "object": object,
                                 "cue": cue,
-                            });
-                            if let Some(lid) = layer {
-                                params["layer"] = serde_json::json!(lid);
-                            }
-                            self.run("slide.remove_cue", params);
-                        } else {
-                            self.delete_selection();
+                            }),
+                        );
+                    } else if let Some((layer, cue)) = self.ui.timeline.slide_cue_selected.take() {
+                        let mut params = serde_json::json!({
+                            "slide": self.selection.slide,
+                            "cue": cue,
+                        });
+                        if let Some(lid) = layer {
+                            params["layer"] = serde_json::json!(lid);
                         }
-                    } else if let Some(params) = menu::adapter(self, cmd.id) {
-                        self.run(cmd.id, params);
+                        self.run("slide.remove_cue", params);
+                    } else {
+                        self.delete_selection();
                     }
+                } else if let Some(params) = menu::adapter(self, cmd.id) {
+                    self.run(cmd.id, params);
                 }
             }
         }
@@ -4144,6 +4266,54 @@ fn collect_object_media_srcs(
     }
 }
 
+fn rewrite_slide_media_srcs(
+    slide: &mut coursecraft_course::Slide,
+    renames: &std::collections::HashMap<String, String>,
+) {
+    for obj in &mut slide.objects {
+        rewrite_object_media_srcs(obj, renames);
+    }
+    for layer in &mut slide.layers {
+        for obj in &mut layer.objects {
+            rewrite_object_media_srcs(obj, renames);
+        }
+    }
+}
+
+fn rewrite_object_media_srcs(
+    obj: &mut coursecraft_course::Object,
+    renames: &std::collections::HashMap<String, String>,
+) {
+    let remap = |s: &mut String| {
+        if let Some(next) = renames.get(s.as_str()) {
+            *s = next.clone();
+        }
+    };
+    match &mut obj.kind {
+        coursecraft_course::ObjectKind::Image { src, .. }
+        | coursecraft_course::ObjectKind::Lottie { src, .. } => remap(src),
+        coursecraft_course::ObjectKind::Audio { src, captions, .. }
+        | coursecraft_course::ObjectKind::Video { src, captions, .. } => {
+            remap(src);
+            if let Some(captions) = captions {
+                remap(captions);
+            }
+        }
+        coursecraft_course::ObjectKind::Shape { fill_style, .. }
+        | coursecraft_course::ObjectKind::Button { fill_style, .. } => {
+            if let Some(coursecraft_course::FillStyle::Picture { src, .. }) = fill_style {
+                remap(src);
+            }
+        }
+        _ => {}
+    }
+    for state in &mut obj.states {
+        if let Some(src) = &mut state.src {
+            remap(src);
+        }
+    }
+}
+
 /// Sanitize a file name into a safe, unique media source key matching `[A-Za-z0-9._-]`.
 #[must_use]
 /// Whether any text in `object` names the family matched by `matches`.
@@ -4237,14 +4407,17 @@ pub fn sanitize_media_src(file_name: &str, existing: &[(String, std::sync::Arc<[
     };
 
     let base = format!("{stem}.{ext}");
-    if !existing.iter().any(|(s, _)| s == &base) {
+    if !existing.iter().any(|(s, _)| s.eq_ignore_ascii_case(&base)) {
         return base;
     }
 
     let mut counter = 2;
     loop {
         let candidate = format!("{stem}-{counter}.{ext}");
-        if !existing.iter().any(|(s, _)| s == &candidate) {
+        if !existing
+            .iter()
+            .any(|(s, _)| s.eq_ignore_ascii_case(&candidate))
+        {
             return candidate;
         }
         counter += 1;

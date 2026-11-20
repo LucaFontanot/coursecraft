@@ -1,7 +1,7 @@
 //! Routes, sessions and the accept loop for the LTI tool server.
 
 use std::collections::BTreeMap;
-use std::io::Read as _;
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
@@ -12,8 +12,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use coursecraft_lti::{
-    Launch, LtiError, ToolConfig, client_assertion, lineitem_score_url, login_redirect,
-    score_payload, token_request_body, tool_jwks, validate_id_token,
+    Launch, LtiError, ToolConfig, ToolSigningKey, client_assertion_with_key, lineitem_score_url,
+    login_redirect, score_payload, token_request_body, tool_jwks_with_key, validate_id_token,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::Deserialize;
@@ -30,8 +30,10 @@ const MAX_LOGINS: usize = 10_000;
 const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_SESSIONS: usize = 10_000;
 const JWKS_TTL: Duration = Duration::from_secs(60 * 60);
+const JWKS_REFRESH_COOLDOWN: Duration = Duration::from_secs(60);
 const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(60);
 const SESSION_COOKIE: &str = "cc_lti";
+const STATE_COOKIE: &str = "cc_lti_state";
 const SCORE_SCOPE: &str = "https://purl.imsglobal.org/spec/lti-ags/scope/score";
 const SCORE_CONTENT_TYPE: &str = "application/vnd.ims.lis.v1.score+json";
 const MAX_PLATFORM_BODY: u64 = 2 * 1024 * 1024;
@@ -49,16 +51,24 @@ struct CachedToken {
 struct Session {
     launch: Launch,
     created: Instant,
-    token: Option<CachedToken>,
+}
+
+struct JwksCache {
+    jwks: String,
+    expires: Instant,
+    last_kid_refresh: Option<Instant>,
 }
 
 /// State shared by every connection thread.
 pub struct Shared {
     cfg: ToolConfig,
+    signing_key: ToolSigningKey,
+    jwks_json: String,
     course_dir: PathBuf,
     logins: Mutex<BTreeMap<String, PendingLogin>>,
     sessions: Mutex<BTreeMap<String, Session>>,
-    jwks: Mutex<Option<(String, Instant)>>,
+    tokens: Mutex<BTreeMap<Vec<String>, CachedToken>>,
+    jwks: Mutex<Option<JwksCache>>,
 }
 
 /// A bound LTI server. Call [`Server::run`] to accept connections.
@@ -71,16 +81,24 @@ impl Server {
     /// Bind `listen` and prepare the shared state.
     ///
     /// # Errors
-    /// Returns the bind error, such as an address already in use.
+    /// Returns the bind error, such as an address already in use, or an invalid
+    /// signing key.
     pub fn bind(cfg: ToolConfig, course_dir: PathBuf, listen: &str) -> std::io::Result<Self> {
+        let signing_key = ToolSigningKey::from_pkcs8(&cfg.private_key_pkcs8)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+        let jwks_json = tool_jwks_with_key(&signing_key, &cfg.key_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
         let listener = TcpListener::bind(listen)?;
         Ok(Self {
             listener,
             shared: Arc::new(Shared {
                 cfg,
+                signing_key,
+                jwks_json,
                 course_dir,
                 logins: Mutex::new(BTreeMap::new()),
                 sessions: Mutex::new(BTreeMap::new()),
+                tokens: Mutex::new(BTreeMap::new()),
                 jwks: Mutex::new(None),
             }),
         })
@@ -176,7 +194,7 @@ fn handle(shared: &Shared, request: &Request) -> Response {
         ("POST", "/lti/launch") => launch(shared, request),
         ("POST", "/lti/score") => score(shared, request),
         ("GET", "/lti/health") => Response::text(200, "ok"),
-        ("GET", path) if is_course_path(path) => course(shared, path),
+        ("GET", path) if is_course_path(path) => course(shared, request, path),
         (_, path) if path == "/course" || path.starts_with("/course/") => {
             Response::text(405, "method not allowed")
         }
@@ -193,10 +211,7 @@ fn is_course_path(path: &str) -> bool {
 }
 
 fn jwks_response(shared: &Shared) -> Response {
-    match tool_jwks(&shared.cfg) {
-        Ok(text) => Response::file(text.into_bytes(), "application/json"),
-        Err(error) => Response::text(500, error.to_string()),
-    }
+    Response::file(shared.jwks_json.as_bytes().to_vec(), "application/json")
 }
 
 fn login(shared: &Shared, request: &Request) -> Response {
@@ -230,28 +245,35 @@ fn login(shared: &Shared, request: &Request) -> Response {
         Ok(token) => token,
         Err(error) => return Response::text(500, error.to_string()),
     };
+    let url = match login_redirect(&shared.cfg, &login_request, &state, &nonce) {
+        Ok(url) => url,
+        Err(error) => return Response::text(400, error.to_string()),
+    };
     let now = Instant::now();
     {
         let mut logins = lock(&shared.logins);
         logins.retain(|_, pending| pending.expires > now);
         while logins.len() >= MAX_LOGINS {
-            let Some(first) = logins.keys().next().cloned() else {
+            let Some(oldest) = logins
+                .iter()
+                .min_by_key(|(_, pending)| pending.expires)
+                .map(|(key, _)| key.clone())
+            else {
                 break;
             };
-            logins.remove(&first);
+            logins.remove(&oldest);
         }
         logins.insert(
             state.clone(),
             PendingLogin {
-                nonce: nonce.clone(),
+                nonce,
                 expires: now + LOGIN_TTL,
             },
         );
     }
-    match login_redirect(&shared.cfg, &login_request, &state, &nonce) {
-        Ok(url) => Response::redirect(&url),
-        Err(error) => Response::text(400, error.to_string()),
-    }
+    let mut response = Response::redirect(&url);
+    response.set_state_cookie(&state_cookie_value(&state));
+    response
 }
 
 fn launch(shared: &Shared, request: &Request) -> Response {
@@ -259,6 +281,13 @@ fn launch(shared: &Shared, request: &Request) -> Response {
     let (Some(state), Some(id_token)) = (form.get("state"), form.get("id_token")) else {
         return Response::text(400, "state and id_token are required");
     };
+    let expected_cookie = state_cookie_value(state);
+    let Some(cookie) = request.cookie(STATE_COOKIE) else {
+        return Response::text(400, "missing state cookie");
+    };
+    if !constant_time_eq(cookie.as_bytes(), expected_cookie.as_bytes()) {
+        return Response::text(400, "invalid state cookie");
+    }
     let now = Instant::now();
     let pending = {
         let mut logins = lock(&shared.logins);
@@ -283,6 +312,20 @@ fn launch(shared: &Shared, request: &Request) -> Response {
         now_unix,
     ) {
         Ok(launch) => launch,
+        Err(LtiError::UnknownKeyId(kid)) => match refresh_platform_jwks(shared) {
+            Ok(Some(fresh_jwks)) => match validate_id_token(
+                &shared.cfg,
+                id_token,
+                &fresh_jwks,
+                &pending.nonce,
+                now_unix,
+            ) {
+                Ok(launch) => launch,
+                Err(error) => return Response::text(400, error.to_string()),
+            },
+            Ok(None) => return Response::text(400, LtiError::UnknownKeyId(kid).to_string()),
+            Err(message) => return Response::text(502, message),
+        },
         Err(error) => return Response::text(400, error.to_string()),
     };
     let id = match random_token() {
@@ -304,19 +347,37 @@ fn launch(shared: &Shared, request: &Request) -> Response {
             Session {
                 launch,
                 created: now,
-                token: None,
             },
         );
     }
-    let mut response = Response::redirect(&launch_location(&request.path, learner_name.as_deref()));
+    let mut response = Response::redirect(&launch_location(
+        &shared.cfg.tool_url,
+        learner_name.as_deref(),
+    ));
     response.set_session_cookie(&id);
     response
 }
 
-fn launch_location(path: &str, name: Option<&str>) -> String {
-    let base = match path.strip_suffix("/lti/launch") {
-        Some(prefix) => format!("{prefix}/course/index.html"),
-        None => "/course/index.html".into(),
+fn state_cookie_value(state: &str) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, state.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest.as_ref())
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn launch_location(tool_url: &str, name: Option<&str>) -> String {
+    let after_scheme = tool_url
+        .split_once("://")
+        .map_or(tool_url, |(_, rest)| rest);
+    let raw_path = after_scheme.split_once('/').map_or("", |(_, path)| path);
+    let path = raw_path.split(['?', '#']).next().unwrap_or("");
+    let prefix = path.trim_matches('/');
+    let base = if prefix.is_empty() {
+        "/course/index.html".to_string()
+    } else {
+        format!("/{prefix}/course/index.html")
     };
     match name.filter(|name| !name.trim().is_empty()) {
         Some(name) => format!("{base}?name={}", encode_query(name)),
@@ -341,19 +402,49 @@ fn platform_jwks(shared: &Shared) -> Result<String, String> {
     let now = Instant::now();
     {
         let cache = lock(&shared.jwks);
-        if let Some((jwks, expires)) = cache.as_ref()
-            && *expires > now
+        if let Some(entry) = cache.as_ref()
+            && entry.expires > now
         {
-            return Ok(jwks.clone());
+            return Ok(entry.jwks.clone());
         }
     }
     let jwks = http_get(&shared.cfg.jwks_url)?;
+    let now = Instant::now();
     let mut cache = lock(&shared.jwks);
-    *cache = Some((jwks.clone(), now + JWKS_TTL));
+    *cache = Some(JwksCache {
+        jwks: jwks.clone(),
+        expires: now + JWKS_TTL,
+        last_kid_refresh: None,
+    });
     Ok(jwks)
 }
 
-fn course(shared: &Shared, path: &str) -> Response {
+fn refresh_platform_jwks(shared: &Shared) -> Result<Option<String>, String> {
+    let now = Instant::now();
+    {
+        let cache = lock(&shared.jwks);
+        if let Some(entry) = cache.as_ref()
+            && entry
+                .last_kid_refresh
+                .is_some_and(|last| last + JWKS_REFRESH_COOLDOWN > now)
+        {
+            return Ok(None);
+        }
+    }
+    let jwks = http_get(&shared.cfg.jwks_url)?;
+    let now = Instant::now();
+    let mut cache = lock(&shared.jwks);
+    *cache = Some(JwksCache {
+        jwks: jwks.clone(),
+        expires: now + JWKS_TTL,
+        last_kid_refresh: Some(now),
+    });
+    Ok(Some(jwks))
+}
+
+const COURSE_CACHE_CONTROL: &str = "public, max-age=3600";
+
+fn course(shared: &Shared, request: &Request, path: &str) -> Response {
     let relative = path.strip_prefix("/course/").unwrap_or_default();
     let relative = if relative.is_empty() {
         "index.html"
@@ -367,18 +458,186 @@ fn course(shared: &Shared, path: &str) -> Response {
         return Response::text(404, "not found");
     }
     let file = shared.course_dir.join(&relative);
+    let Ok(meta) = std::fs::metadata(&file) else {
+        return Response::text(404, "not found");
+    };
+    if !meta.is_file() {
+        return Response::text(404, "not found");
+    }
+    let size = meta.len();
+    let mtime_nanos = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    let etag = format!("\"{size:x}-{mtime_nanos:x}\"");
+
+    if let Some(inm) = request.headers.get("if-none-match")
+        && etag_matches(inm, &etag)
+    {
+        let mut response = Response::status(304);
+        response.headers.push(("ETag".into(), etag));
+        response
+            .headers
+            .push(("Cache-Control".into(), COURSE_CACHE_CONTROL.into()));
+        return response;
+    }
+
+    let content_type = content_type_for(&relative);
+
+    if let Some(range_header) = request.headers.get("range")
+        && !range_header.contains(',')
+        && let Some(parsed) = parse_byte_range(range_header, size)
+    {
+        let (start, end) = match parsed {
+            Ok(bounds) => bounds,
+            Err(()) => {
+                let mut response = Response::status(416);
+                response
+                    .headers
+                    .push(("Content-Range".into(), format!("bytes */{size}")));
+                return response;
+            }
+        };
+        let len = end.saturating_sub(start).saturating_add(1);
+        let Ok(mut opened) = std::fs::File::open(&file) else {
+            return Response::text(404, "not found");
+        };
+        if opened.seek(SeekFrom::Start(start)).is_err() {
+            return Response::text(500, "failed to seek course file");
+        }
+        let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0).min(1024 * 1024));
+        if opened.take(len).read_to_end(&mut buf).is_err() {
+            return Response::text(500, "failed to read course file");
+        }
+        let mut response = Response::file(buf, content_type);
+        response.status = 206;
+        response.headers.push((
+            "Content-Range".into(),
+            format!("bytes {start}-{end}/{size}"),
+        ));
+        response
+            .headers
+            .push(("Accept-Ranges".into(), "bytes".into()));
+        response.headers.push(("ETag".into(), etag));
+        response
+            .headers
+            .push(("Cache-Control".into(), COURSE_CACHE_CONTROL.into()));
+        return response;
+    }
+
     match std::fs::read(&file) {
-        Ok(bytes) => Response::file(bytes, content_type_for(&relative)),
+        Ok(bytes) => {
+            let mut response = Response::file(bytes, content_type);
+            response
+                .headers
+                .push(("Accept-Ranges".into(), "bytes".into()));
+            response.headers.push(("ETag".into(), etag));
+            response
+                .headers
+                .push(("Cache-Control".into(), COURSE_CACHE_CONTROL.into()));
+            response
+        }
         Err(_) => Response::text(404, "not found"),
     }
 }
 
+fn etag_matches(header: &str, etag: &str) -> bool {
+    let trimmed = header.trim();
+    if trimmed == "*" {
+        return true;
+    }
+    trimmed.split(',').any(|candidate| candidate.trim() == etag)
+}
+
+/// Parse a single `Range: bytes=...` header. Returns `None` if the header is
+/// not a `bytes=` range, `Err(())` if unsatisfiable, or `Ok((start, end))` inclusive.
+fn parse_byte_range(header: &str, size: u64) -> Option<Result<(u64, u64), ()>> {
+    let spec = header.trim().strip_prefix("bytes=")?;
+    let (start_str, end_str) = spec.split_once('-')?;
+    let start_str = start_str.trim();
+    let end_str = end_str.trim();
+    if size == 0 {
+        return Some(Err(()));
+    }
+    if start_str.is_empty() {
+        let suffix: u64 = end_str.parse().ok()?;
+        if suffix == 0 {
+            return Some(Err(()));
+        }
+        let start = size.saturating_sub(suffix);
+        return Some(Ok((start, size - 1)));
+    }
+    let start: u64 = start_str.parse().ok()?;
+    if start >= size {
+        return Some(Err(()));
+    }
+    let end = if end_str.is_empty() {
+        size - 1
+    } else {
+        let end: u64 = end_str.parse().ok()?;
+        if end < start {
+            return Some(Err(()));
+        }
+        end.min(size - 1)
+    };
+    Some(Ok((start, end)))
+}
+
+fn is_json_content_type(request: &Request) -> bool {
+    let Some(raw) = request.headers.get("content-type") else {
+        return false;
+    };
+    let mut parts = raw.split(';');
+    let Some(media_type) = parts.next().map(str::trim) else {
+        return false;
+    };
+    if !media_type.eq_ignore_ascii_case("application/json") {
+        return false;
+    }
+    parts.all(|param| {
+        let trimmed = param.trim();
+        trimmed.is_empty()
+            || trimmed
+                .get(..8)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("charset="))
+    })
+}
+
+fn url_origin(url: &str) -> Option<&str> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme.is_empty()
+        || !scheme
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+    {
+        return None;
+    }
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    if authority_end == 0 {
+        return None;
+    }
+    url.get(..scheme.len() + 3 + authority_end)
+}
+
 fn score(shared: &Shared, request: &Request) -> Response {
+    if !is_json_content_type(request) {
+        return Response::text(403, "forbidden: content-type must be application/json");
+    }
+    let Some(expected_origin) = url_origin(&shared.cfg.tool_url) else {
+        return Response::text(403, "forbidden: invalid tool origin");
+    };
+    let Some(origin) = request.headers.get("origin").map(String::as_str) else {
+        return Response::text(403, "forbidden: origin required");
+    };
+    if !origin.eq_ignore_ascii_case(expected_origin) {
+        return Response::text(403, "forbidden: cross-site origin");
+    }
     let Some(cookie) = request.cookie(SESSION_COOKIE) else {
         return Response::text(401, "no launch session");
     };
     let now = Instant::now();
-    let (launch, cached) = {
+    let launch = {
         let mut sessions = lock(&shared.sessions);
         let Some(session) = sessions.get(cookie) else {
             return Response::text(401, "no launch session");
@@ -387,12 +646,7 @@ fn score(shared: &Shared, request: &Request) -> Response {
             sessions.remove(cookie);
             return Response::text(401, "no launch session");
         }
-        let cached = session
-            .token
-            .as_ref()
-            .filter(|token| token.expires > now)
-            .map(|token| token.token.clone());
-        (session.launch.clone(), cached)
+        session.launch.clone()
     };
     let Some(lineitem) = launch.ags.as_ref().and_then(|ags| ags.lineitem.clone()) else {
         return Response::text(403, "this launch has no line item");
@@ -408,12 +662,10 @@ fn score(shared: &Shared, request: &Request) -> Response {
         Ok(body) => body,
         Err(error) => return Response::text(400, error.to_string()),
     };
-    let token = match cached {
-        Some(token) => token,
-        None => match fetch_token(shared, cookie, now) {
-            Ok(token) => token,
-            Err(response) => return response,
-        },
+    let scopes = [SCORE_SCOPE.to_string()];
+    let token = match ags_token(shared, &scopes, now) {
+        Ok(token) => token,
+        Err(response) => return response,
     };
     let url = lineitem_score_url(&lineitem);
     let sent = http_post(
@@ -463,11 +715,22 @@ fn score_body(launch: &Launch, percent: Option<u8>, status: &str) -> Result<Stri
     }
 }
 
-fn fetch_token(shared: &Shared, cookie: &str, now: Instant) -> Result<String, Response> {
+fn ags_token(shared: &Shared, scopes: &[String], now: Instant) -> Result<String, Response> {
+    let mut scope_key = scopes.to_vec();
+    scope_key.sort();
+    scope_key.dedup();
+    {
+        let tokens = lock(&shared.tokens);
+        if let Some(entry) = tokens.get(&scope_key)
+            && entry.expires > now
+        {
+            return Ok(entry.token.clone());
+        }
+    }
     let jti = random_token().map_err(|error| Response::text(500, error.to_string()))?;
-    let assertion = client_assertion(&shared.cfg, unix_now(), &jti)
+    let assertion = client_assertion_with_key(&shared.cfg, &shared.signing_key, unix_now(), &jti)
         .map_err(|error| Response::text(500, error.to_string()))?;
-    let body = token_request_body(&shared.cfg, &assertion, &[SCORE_SCOPE.to_string()]);
+    let body = token_request_body(&shared.cfg, &assertion, &scope_key);
     let (status, bytes) = http_post(
         &shared.cfg.auth_token_url,
         "application/x-www-form-urlencoded",
@@ -496,13 +759,14 @@ fn fetch_token(shared: &Shared, cookie: &str, now: Instant) -> Result<String, Re
         .unwrap_or(3600);
     let ttl = expires_in.saturating_sub(TOKEN_REFRESH_MARGIN.as_secs());
     {
-        let mut sessions = lock(&shared.sessions);
-        if let Some(session) = sessions.get_mut(cookie) {
-            session.token = Some(CachedToken {
+        let mut tokens = lock(&shared.tokens);
+        tokens.insert(
+            scope_key,
+            CachedToken {
                 token: token.clone(),
                 expires: now + Duration::from_secs(ttl),
-            });
-        }
+            },
+        );
     }
     Ok(token)
 }
@@ -655,6 +919,20 @@ impl Shared {
         lock(&self.logins).len()
     }
 
+    pub(crate) fn insert_pending_login(&self, state: &str, expires: Instant) {
+        lock(&self.logins).insert(
+            state.into(),
+            PendingLogin {
+                nonce: "nonce".into(),
+                expires,
+            },
+        );
+    }
+
+    pub(crate) fn has_pending_login(&self, state: &str) -> bool {
+        lock(&self.logins).contains_key(state)
+    }
+
     pub(crate) fn insert_session(&self, launch: Launch) -> String {
         let id = random_token().unwrap_or_default();
         let now = Instant::now();
@@ -663,7 +941,6 @@ impl Shared {
             Session {
                 launch,
                 created: now,
-                token: None,
             },
         );
         id

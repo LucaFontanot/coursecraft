@@ -265,6 +265,15 @@ Plan: `docs/plans/m24-everyday-speed.md`. All steps by Gemini 4 Hydrogen; review
 - Web player 8.9 MB (was 13.0 MB), start-up files fetched together, next slide's pictures fetched early, quiet console unless `?debug=1`.
 - Small fixes: dropping a `.ccraft` opens it, state preset buttons, Enter adds a variable, double-click inserts media, SVG text warning, history limit note, CLI `simulate --strict`, clearer `validate` errors, `publish` finds the built player.
 
+## M25 Code review fixes ✅
+
+Review: `docs/bug-hunt/2026-11-20-code-review.md`. 20 steps by Gemini 4 Hydrogen (agy CLI); checked by Opus.
+
+- Sections 1–4: data loss, crashes, Windows video streams, wrong behaviour, LMS and LTI security fixes, each with a test.
+- Section 5: speed-ups in the engine, runtime, editor, save/open and LTI server.
+- Section 6: validation limits and a safe clamp, desktop playback speed, editor settings persistence checked, Web resume, long AI documents in parts, shared template library, web editor open/save/publish.
+- Open decisions (spec rules, not changed): 3.16 timers keep the "only while its timeline runs" rule (a validation warning was added); 4.2 cmi5 pass after a fail in the same session; 4.9 SCORM 1.2 response identifiers.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.

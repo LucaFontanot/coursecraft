@@ -41,6 +41,8 @@ impl ScoreReport {
 pub struct LtiReporter {
     pending: VecDeque<ScoreReport>,
     sent_final: bool,
+    passed: bool,
+    best_passed_score: Option<u8>,
     in_flight: Option<ScoreReport>,
     retried: bool,
     lost: bool,
@@ -98,6 +100,27 @@ impl LtiReporter {
             // replace it with a progress-only report.
             return;
         }
+        let pending_pass = self.pending.front().filter(|r| r.status == "passed");
+        let in_flight_pass = self.in_flight.as_ref().filter(|r| r.status == "passed");
+        let has_passed = self.passed || in_flight_pass.is_some() || pending_pass.is_some();
+        if has_passed {
+            if report.status != "passed" {
+                return;
+            }
+            let best_score = [
+                self.best_passed_score,
+                in_flight_pass.and_then(|r| r.percent),
+                pending_pass.and_then(|r| r.percent),
+            ]
+            .into_iter()
+            .flatten()
+            .max();
+            match (report.percent, best_score) {
+                (None, _) => return,
+                (Some(new_percent), Some(best)) if new_percent <= best => return,
+                _ => {}
+            }
+        }
         if self.in_flight.is_none() {
             self.retried = false;
         }
@@ -122,6 +145,15 @@ impl LtiReporter {
         };
         if report.status != "incomplete" {
             self.sent_final = true;
+        }
+        if report.status == "passed" {
+            self.passed = true;
+            if let Some(percent) = report.percent {
+                self.best_passed_score = Some(
+                    self.best_passed_score
+                        .map_or(percent, |best| best.max(percent)),
+                );
+            }
         }
         self.last_sent = Some(report);
         self.retried = false;

@@ -341,17 +341,54 @@ fn a_truncated_answer_warns_in_the_review_window() {
 }
 
 #[test]
-fn a_long_document_shows_the_character_warning() {
+fn a_long_document_shows_the_part_count_instead_of_cutting() {
     let mut h = harness();
     h.editor.open_document_dialog();
-    h.editor.set_document_text_for_test(&"a".repeat(60_001));
+    h.editor.set_document_text_for_test(&format!(
+        "{}\n\n{}",
+        "a".repeat(35_000),
+        "b".repeat(35_000)
+    ));
     h.idle_frame();
 
     assert!(
         h.find_text("Only the first 60,000 characters will be sent.")
+            .is_none()
+    );
+    assert!(h.find_text("Will be sent in 2 parts.").is_some());
+    assert!(h.find_text_containing("70002 characters").is_some());
+}
+
+#[test]
+fn a_document_over_twenty_parts_warns_and_caps_at_twenty_parts() {
+    let mut h = harness();
+    h.editor.open_document_dialog();
+    let para = "a".repeat(50_000);
+    let doc = vec![para; 21].join("\n\n");
+    h.editor.set_document_text_for_test(&doc);
+    h.idle_frame();
+
+    assert!(
+        h.find_text("This document is over 20 parts; only the first 20 parts will be sent.")
             .is_some()
     );
-    assert!(h.find_text_containing("60001 characters").is_some());
+
+    let generate = h
+        .find_text("Generate outline")
+        .expect("Generate outline button");
+    let requests = click_for_requests(&mut h, generate);
+    let first_req = requests
+        .iter()
+        .find_map(|r| match r {
+            EditorRequest::AiChat { request, .. } => Some(request),
+            _ => None,
+        })
+        .expect("first part request");
+    assert!(matches!(
+        &first_req.messages[0].content,
+        MessageContent::Text(s) if s.contains("part 1 of 20")
+    ));
+    assert!(h.find_text_containing("Reading part 1 of 20").is_some());
 }
 
 #[test]
@@ -372,4 +409,79 @@ fn the_window_takes_the_keyboard_from_the_canvas() {
     h.press(egui::Key::ArrowRight, Modifiers::NONE);
     h.idle_frame();
     assert_eq!(h.editor.ui.document.text, "a");
+}
+
+#[test]
+fn a_long_document_is_sent_in_parts_and_merged() {
+    let mut h = harness();
+    h.editor.open_document_dialog();
+    let part_one = "a".repeat(40_000);
+    let part_two = "b".repeat(40_000);
+    let document = format!("{part_one}\n\n{part_two}");
+    h.editor.set_document_text_for_test(&document);
+    h.idle_frame();
+
+    let generate = h
+        .find_text("Generate outline")
+        .expect("Generate outline button");
+    let requests = click_for_requests(&mut h, generate);
+    let first_req = requests
+        .iter()
+        .find_map(|r| match r {
+            EditorRequest::AiChat { purpose, request } => Some((purpose.clone(), request)),
+            _ => None,
+        })
+        .expect("first part request");
+    assert_eq!(first_req.0, AiPurpose::Outline);
+    assert!(matches!(
+        &first_req.1.messages[0].content,
+        MessageContent::Text(s) if s.contains("part 1 of 2")
+    ));
+    assert!(matches!(
+        &first_req.1.messages[1].content,
+        MessageContent::Text(s) if s.contains(&part_one) && !s.contains(&part_two)
+    ));
+    assert!(h.find_text_containing("Reading part 1 of 2").is_some());
+
+    h.editor.set_ai_result(
+        AiPurpose::Outline,
+        Ok(ChatReply {
+            text: "# Scene One\n## Slide A\n- First".to_string(),
+            truncated: false,
+        }),
+    );
+    let requests = h.idle_frame();
+    let second_req = requests
+        .iter()
+        .find_map(|r| match r {
+            EditorRequest::AiChat { purpose, request } => Some((purpose.clone(), request)),
+            _ => None,
+        })
+        .expect("second part request");
+    assert_eq!(second_req.0, AiPurpose::Outline);
+    assert!(matches!(
+        &second_req.1.messages[0].content,
+        MessageContent::Text(s) if s.contains("part 2 of 2")
+    ));
+    assert!(matches!(
+        &second_req.1.messages[1].content,
+        MessageContent::Text(s) if s.contains(&part_two) && !s.contains(&part_one)
+    ));
+    assert!(h.find_text_containing("Reading part 2 of 2").is_some());
+
+    h.editor.set_ai_result(
+        AiPurpose::Outline,
+        Ok(ChatReply {
+            text: "# Scene Two\n## Slide B\n- Second".to_string(),
+            truncated: false,
+        }),
+    );
+    h.idle_frame();
+
+    assert!(!h.editor.document_dialog_open_for_test());
+    assert!(h.editor.outline_dialog_open_for_test());
+    assert_eq!(
+        h.editor.ui.outline_text,
+        "# Scene One\n## Slide A\n- First\n\n# Scene Two\n## Slide B\n- Second"
+    );
 }

@@ -45,7 +45,9 @@ pub use elevenlabs::{
     parse_speech as parse_elevenlabs_speech, parse_voice, parse_voices,
 };
 pub use outline_prompt::{
-    MAX_DOCUMENT_CHARS, OutlineOptions, document_is_truncated, outline_request,
+    MAX_DOCUMENT_CHARS, MAX_DOCUMENT_PARTS, OutlineOptions, document_is_truncated,
+    merge_outline_parts, merge_question_parts, outline_part_request, outline_request,
+    split_document, split_document_with_limit,
 };
 pub use translate_prompt::{
     MAX_BATCH_CHARS, MAX_BATCH_UNITS, TranslationBatch, TranslationOutcome, TranslationResult,

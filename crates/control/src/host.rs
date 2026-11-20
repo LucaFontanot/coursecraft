@@ -156,6 +156,16 @@ impl HeadlessMediaSource {
         }
     }
 
+    /// Return a snapshot of all in-memory media entries as `(name, bytes)` pairs.
+    #[must_use]
+    pub fn snapshot_in_memory(&self) -> Vec<(String, Vec<u8>)> {
+        let map = self.in_memory.lock().unwrap_or_else(|p| p.into_inner());
+        let mut items: Vec<(String, Vec<u8>)> =
+            map.iter().map(|(k, v)| (k.clone(), v.to_vec())).collect();
+        items.sort_by(|a, b| a.0.cmp(&b.0));
+        items
+    }
+
     /// Update the current course path.
     pub fn set_path(&mut self, path: Option<PathBuf>) {
         self.course_path = path;
@@ -394,9 +404,38 @@ impl ControlHost for HeadlessHost {
             .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
 
         if is_ccraft {
-            let bytes = coursecraft_format::save_project(&self.session.course, &[])
-                .map_err(|e| HostError::Engine(format!("save failed: {e}")))?;
-            std::fs::write(&target, bytes).map_err(|e| HostError::Io(e.to_string()))?;
+            let media = self.media_source.snapshot_in_memory();
+            let file_name = target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file");
+            let tmp = target.with_file_name(format!("{file_name}.tmp-{}", std::process::id()));
+            let result = (|| -> Result<(), HostError> {
+                {
+                    let file =
+                        std::fs::File::create(&tmp).map_err(|e| HostError::Io(e.to_string()))?;
+                    let mut buf = std::io::BufWriter::new(file);
+                    coursecraft_format::save_project_to(&self.session.course, &media, &mut buf)
+                        .map_err(|e| HostError::Engine(format!("save failed: {e}")))?;
+                    std::io::Write::flush(&mut buf).map_err(|e| HostError::Io(e.to_string()))?;
+                    let file = buf
+                        .into_inner()
+                        .map_err(|e| HostError::Io(e.error().to_string()))?;
+                    file.sync_all().map_err(|e| HostError::Io(e.to_string()))?;
+                }
+                {
+                    let file =
+                        std::fs::File::open(&tmp).map_err(|e| HostError::Io(e.to_string()))?;
+                    coursecraft_format::verify_project(std::io::BufReader::new(file))
+                        .map_err(|e| HostError::Engine(format!("save verification failed: {e}")))?;
+                }
+                std::fs::rename(&tmp, &target).map_err(|e| HostError::Io(e.to_string()))?;
+                Ok(())
+            })();
+            if result.is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
+            result?;
         } else {
             let is_dir = target.is_dir()
                 || target

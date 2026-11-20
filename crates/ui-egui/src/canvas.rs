@@ -139,16 +139,19 @@ pub enum DragOp {
         orig_points: Vec<coursecraft_course::Point>,
         relative: bool,
         obj_origin: Pos2,
+        press_offset: egui::Vec2,
     },
     Adjust {
         index: usize,
         original: Vec<f32>,
+        press_offset: egui::Vec2,
     },
     /// Dragging one point of a path (an end handle or a point-edit handle).
     PathPoint {
         index: usize,
         original: Vec<coursecraft_course::PathPoint>,
         two_point: bool,
+        press_offset: egui::Vec2,
     },
     /// Dragging an inner table column (`column` true) or row border.
     TableBorder {
@@ -2809,15 +2812,22 @@ fn start_drag_if_pressed(
                 if !editing && connector && index != 0 && index != last_index {
                     continue;
                 }
-                let centre = t.to_screen_pos(pos2(
+                let point_slide = pos2(
                     obj.frame.x + point.x * obj.frame.w,
                     obj.frame.y + point.y * obj.frame.h,
-                ));
+                );
+                let centre = t.to_screen_pos(point_slide);
                 let hit_rect = Rect::from_center_size(centre, vec2(12.0, 12.0));
                 if hit_rect.contains(start_pos) {
                     if editing && let Some(edit) = editor.ui.path_edit.as_mut() {
                         edit.selected_point = Some(index);
                     }
+                    let start_slide = t.to_slide_pos(start_pos);
+                    let press_offset = if finite_pos(start_slide) {
+                        point_slide - start_slide
+                    } else {
+                        egui::Vec2::ZERO
+                    };
                     path_point_hit = Some((
                         sel_id.clone(),
                         index,
@@ -2827,18 +2837,20 @@ fn start_drag_if_pressed(
                             pos2(obj.frame.x, obj.frame.y),
                             vec2(obj.frame.w, obj.frame.h),
                         ),
+                        press_offset,
                     ));
                     break;
                 }
             }
         }
     }
-    if let Some((id, index, original, two_point, orig_frame)) = path_point_hit {
+    if let Some((id, index, original, two_point, orig_frame, press_offset)) = path_point_hit {
         editor.ui.canvas_drag = Some(CanvasDrag {
             op: DragOp::PathPoint {
                 index,
                 original,
                 two_point,
+                press_offset,
             },
             object_id: id,
             orig_frame,
@@ -2867,6 +2879,12 @@ fn start_drag_if_pressed(
                 let screen_pt = t.to_screen_pos(slide_pt);
                 let h_rect = Rect::from_center_size(screen_pt, vec2(10.0, 10.0));
                 if h_rect.contains(start_pos) {
+                    let start_slide = t.to_slide_pos(start_pos);
+                    let press_offset = if finite_pos(start_slide) {
+                        slide_pt - start_slide
+                    } else {
+                        egui::Vec2::ZERO
+                    };
                     path_handle_hit = Some((
                         sel_id.clone(),
                         path.id.clone(),
@@ -2874,6 +2892,7 @@ fn start_drag_if_pressed(
                         path.points.clone(),
                         path.relative,
                         pos2(obj.frame.x, obj.frame.y),
+                        press_offset,
                     ));
                     break;
                 }
@@ -2926,10 +2945,17 @@ fn start_drag_if_pressed(
     {
         let hits = coursecraft_render::adjust_handles(*shape, obj.frame.w, obj.frame.h, adjust);
         for (index, (x, y)) in hits.iter().enumerate() {
-            let screen = t.to_screen_pos(pos2(obj.frame.x + x, obj.frame.y + y));
+            let handle_slide = pos2(obj.frame.x + x, obj.frame.y + y);
+            let screen = t.to_screen_pos(handle_slide);
             let hit_rect = Rect::from_center_size(screen, vec2(12.0, 12.0));
             if hit_rect.contains(start_pos) {
-                adjust_handle_hit = Some((sel_id.clone(), index, adjust.clone()));
+                let start_slide = t.to_slide_pos(start_pos);
+                let press_offset = if finite_pos(start_slide) {
+                    handle_slide - start_slide
+                } else {
+                    egui::Vec2::ZERO
+                };
+                adjust_handle_hit = Some((sel_id.clone(), index, adjust.clone(), press_offset));
                 break;
             }
         }
@@ -3031,7 +3057,8 @@ fn start_drag_if_pressed(
         }
     }
 
-    if let Some((sel_id, path_id, point_index, orig_points, relative, obj_origin)) = path_handle_hit
+    if let Some((sel_id, path_id, point_index, orig_points, relative, obj_origin, press_offset)) =
+        path_handle_hit
     {
         editor.ui.canvas_drag = Some(CanvasDrag {
             op: DragOp::MotionPathPoint {
@@ -3040,6 +3067,7 @@ fn start_drag_if_pressed(
                 orig_points,
                 relative,
                 obj_origin,
+                press_offset,
             },
             object_id: sel_id,
             orig_frame: Rect::ZERO,
@@ -3047,7 +3075,7 @@ fn start_drag_if_pressed(
             frames: Vec::new(),
             alt_duplicate: false,
         });
-    } else if let Some((sel_id, index, original)) = adjust_handle_hit {
+    } else if let Some((sel_id, index, original, press_offset)) = adjust_handle_hit {
         let orig_frame = editor
             .session
             .course
@@ -3061,7 +3089,11 @@ fn start_drag_if_pressed(
             })
             .unwrap_or(Rect::ZERO);
         editor.ui.canvas_drag = Some(CanvasDrag {
-            op: DragOp::Adjust { index, original },
+            op: DragOp::Adjust {
+                index,
+                original,
+                press_offset,
+            },
             object_id: sel_id,
             orig_frame,
             start_screen: start_pos,
@@ -3194,13 +3226,23 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
     let primary_released = ui.input(|i| i.pointer.primary_released());
 
     let curr_screen = current_pointer.unwrap_or(drag.start_screen);
+    let is_move = (curr_screen - drag.start_screen).length() >= 3.0;
 
     if let DragOp::PathPoint {
         index,
         ref original,
         two_point,
+        press_offset,
     } = drag.op
     {
+        if primary_released || !primary_down {
+            editor.ui.canvas_drag = None;
+            if !is_move {
+                return;
+            }
+        } else if !is_move {
+            return;
+        }
         let frame = drag.orig_frame;
         if !finite_rect(frame) || frame.width() <= 0.0 || frame.height() <= 0.0 {
             editor.ui.canvas_drag = None;
@@ -3217,7 +3259,7 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
                 }
                 _ => None,
             });
-        if let Some(slide_pos) = current_pointer.map(|pos| t.to_slide_pos(pos))
+        if let Some(slide_pos) = current_pointer.map(|pos| t.to_slide_pos(pos) + press_offset)
             && finite_pos(slide_pos)
         {
             let mut target = slide_pos;
@@ -3308,8 +3350,17 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
     if let DragOp::Adjust {
         index,
         ref original,
+        press_offset,
     } = drag.op
     {
+        if primary_released || !primary_down {
+            editor.ui.canvas_drag = None;
+            if !is_move {
+                return;
+            }
+        } else if !is_move {
+            return;
+        }
         let shape = editor
             .session
             .course
@@ -3325,7 +3376,7 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
             editor.ui.canvas_drag = None;
             return;
         };
-        let slide_point = t.to_slide_pos(curr_screen);
+        let slide_point = t.to_slide_pos(curr_screen) + press_offset;
         let point = (
             slide_point.x - drag.orig_frame.min.x,
             slide_point.y - drag.orig_frame.min.y,
@@ -3374,34 +3425,37 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
         ref orig_points,
         relative,
         obj_origin,
+        press_offset,
     } = drag.op
     {
         if primary_released || !primary_down {
             editor.ui.canvas_drag = None;
-            let current_slide_pos = t.to_slide_pos(curr_screen);
-            let mut new_points = orig_points.clone();
-            let new_pt = if relative {
-                coursecraft_course::Point {
-                    x: (current_slide_pos.x - obj_origin.x).round(),
-                    y: (current_slide_pos.y - obj_origin.y).round(),
+            if is_move {
+                let current_slide_pos = t.to_slide_pos(curr_screen) + press_offset;
+                let mut new_points = orig_points.clone();
+                let new_pt = if relative {
+                    coursecraft_course::Point {
+                        x: (current_slide_pos.x - obj_origin.x).round(),
+                        y: (current_slide_pos.y - obj_origin.y).round(),
+                    }
+                } else {
+                    coursecraft_course::Point {
+                        x: current_slide_pos.x.round(),
+                        y: current_slide_pos.y.round(),
+                    }
+                };
+                if point_index < new_points.len() {
+                    new_points[point_index] = new_pt;
+                    editor.run(
+                        "object.update_motion_path",
+                        serde_json::json!({
+                            "slide": editor.selection.slide,
+                            "object": drag.object_id,
+                            "path": path_id,
+                            "points": new_points,
+                        }),
+                    );
                 }
-            } else {
-                coursecraft_course::Point {
-                    x: current_slide_pos.x.round(),
-                    y: current_slide_pos.y.round(),
-                }
-            };
-            if point_index < new_points.len() {
-                new_points[point_index] = new_pt;
-                editor.run(
-                    "object.update_motion_path",
-                    serde_json::json!({
-                        "slide": editor.selection.slide,
-                        "object": drag.object_id,
-                        "path": path_id,
-                        "points": new_points,
-                    }),
-                );
             }
         }
         return;
@@ -5174,13 +5228,15 @@ fn draw_motion_paths(
                     point_index,
                     relative,
                     obj_origin,
+                    press_offset,
                     ..
                 } = drag.op
                 && path_id == &path.id
                 && point_index == idx
                 && let Some(cur_pos) = current_pointer
+                && (cur_pos - drag.start_screen).length() >= 3.0
             {
-                let slide_pos = t.to_slide_pos(cur_pos);
+                let slide_pos = t.to_slide_pos(cur_pos) + press_offset;
                 if relative {
                     pt_coords.x = slide_pos.x - obj_origin.x;
                     pt_coords.y = slide_pos.y - obj_origin.y;
@@ -5460,23 +5516,33 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             }
         }
 
+        let gesture_active = editor.ui.canvas_drag.is_some()
+            || editor.ui.placement_drag.is_some()
+            || editor.ui.draw.is_some();
         let was_cropping = editor.ui.crop_edit.is_some();
         if was_cropping {
             crop_input(editor, ui, &t, current_pointer, canvas_rect, pointer_in_hud);
-        } else if !eyedropper_owns_input && !pointer_in_hud && !was_editing && !pan_active {
+        } else if !eyedropper_owns_input
+            && (!pointer_in_hud || gesture_active)
+            && !was_editing
+            && !pan_active
+        {
             if matches!(editor.ui.placement_tool, Some(PlacementTool::Draw(_))) {
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
                 process_draw_tool(editor, &t, ui, &response);
             } else if editor.ui.placement_tool.is_some() {
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
-                let press_pos = ui
-                    .input(|i| {
+                let press_pos = if pointer_in_hud {
+                    None
+                } else {
+                    ui.input(|i| {
                         i.pointer
                             .primary_pressed()
                             .then(|| i.pointer.interact_pos())
                     })
                     .flatten()
-                    .filter(|p| canvas_rect.contains(*p));
+                    .filter(|p| canvas_rect.contains(*p))
+                };
                 if let Some(pos) = press_pos {
                     let start_slide = t.to_slide_pos(pos);
                     if finite_pos(start_slide) {
@@ -5490,7 +5556,8 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                     process_placement_drag(editor, &t, ui);
                 }
             } else {
-                if editor.ui.canvas_drag.is_none()
+                if !pointer_in_hud
+                    && editor.ui.canvas_drag.is_none()
                     && (response.is_pointer_button_down_on() || response.drag_started())
                     && primary_pressed
                     && let Some(start_pos) = current_pointer
@@ -5501,7 +5568,8 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 if editor.ui.canvas_drag.is_some() {
                     process_active_drag(editor, &mut items, &t, ui);
                 }
-                if response.clicked()
+                if !pointer_in_hud
+                    && response.clicked()
                     && let Some(pos) = current_pointer
                 {
                     if response.double_clicked() {

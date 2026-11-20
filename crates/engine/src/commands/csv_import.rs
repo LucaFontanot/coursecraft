@@ -5,10 +5,12 @@
 //! Every row is checked first; if any row is wrong nothing is imported and the
 //! error lists every problem with its row number.
 
+use std::collections::BTreeSet;
+
 use coursecraft_course::{Choice, Question, QuestionKind, Slide};
 use serde_json::{Value as Json, json};
 
-use super::{bad, bank_create, keep_valid, new_bank_slide, opt, req};
+use super::{bad, bank_create, keep_valid, new_bank_slide_with_id, next_fresh_id, opt, req};
 use crate::{EngineError, Result, Session};
 
 /// Largest CSV text accepted.
@@ -82,7 +84,7 @@ fn finish_record(
     field: &mut String,
     field_started: &mut bool,
 ) -> std::result::Result<(), String> {
-    let blank = record.is_empty() && field.is_empty() && !*field_started;
+    let blank = record.iter().all(|s| s.trim().is_empty()) && field.trim().is_empty();
     if !blank {
         record.push(std::mem::take(field));
         records.push(std::mem::take(record));
@@ -535,7 +537,7 @@ fn target_bank(s: &mut Session, name: Option<&str>) -> Result<String> {
 /// named bank (made if it does not exist) or in a new bank. All or nothing.
 pub(super) fn bank_import_csv(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "bank.import_csv";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let csv: String = req(C, p, "csv")?;
     let name: Option<String> = opt(C, p, "bank")?;
     let parsed = parse_questions(&csv).map_err(|problems| {
@@ -550,11 +552,22 @@ pub(super) fn bank_import_csv(s: &mut Session, p: &Json) -> Result<Json> {
         )
     })?;
     let bank_id = target_bank(s, name.as_deref())?;
+    let mut taken: BTreeSet<String> = s.course.all_slide_ids().map(str::to_owned).collect();
+    let mut next_id = 1u64;
+    let theme = &s.course.theme;
+    let slide_size = s.course.slide_size;
     let mut ids = Vec::with_capacity(parsed.len());
+    let mut new_slides = Vec::with_capacity(parsed.len());
     for item in &parsed {
-        let mut slide = new_bank_slide(&s.course, item.kind, slide_title(&item.prompt), &|q| {
-            fill_question(q, item)
-        })?;
+        let id = next_fresh_id("slide", &mut taken, &mut next_id);
+        let mut slide = new_bank_slide_with_id(
+            theme,
+            slide_size,
+            id,
+            item.kind,
+            slide_title(&item.prompt),
+            &|q| fill_question(q, item),
+        )?;
         let (correct, incorrect) = slide
             .question
             .as_ref()
@@ -571,14 +584,15 @@ pub(super) fn bank_import_csv(s: &mut Session, p: &Json) -> Result<Json> {
             item.feedback_incorrect.as_deref(),
         );
         ids.push(slide.id.clone());
-        let bank = s
-            .course
-            .banks
-            .iter_mut()
-            .find(|b| b.id == bank_id)
-            .ok_or_else(|| EngineError::NotFound(format!("bank {bank_id:?} does not exist")))?;
-        bank.slides.push(slide);
+        new_slides.push(slide);
     }
+    let bank = s
+        .course
+        .banks
+        .iter_mut()
+        .find(|b| b.id == bank_id)
+        .ok_or_else(|| EngineError::NotFound(format!("bank {bank_id:?} does not exist")))?;
+    bank.slides.extend(new_slides);
     keep_valid(s, was_valid)?;
     Ok(json!({ "bank": bank_id, "imported": ids.len(), "slides": ids }))
 }

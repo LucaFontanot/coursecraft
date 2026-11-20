@@ -1,7 +1,6 @@
 //! Periodic autosave and recovery management.
 
 use coursecraft_course::Course;
-use coursecraft_format::save_project;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -110,16 +109,40 @@ pub fn write_autosave(
     media: &[(String, Vec<u8>)],
     autosave_path: &Path,
 ) -> Result<(), String> {
+    write_autosave_slices(course, media, autosave_path)
+}
+
+/// Write an autosave archive to disk from `Arc`-shared media without copying.
+///
+/// # Errors
+/// Returns an error if directory creation or file writing fails.
+pub fn write_autosave_arc(
+    course: &Course,
+    media: &[(String, std::sync::Arc<[u8]>)],
+    autosave_path: &Path,
+) -> Result<(), String> {
+    write_autosave_slices(course, media, autosave_path)
+}
+
+fn write_autosave_slices<B: AsRef<[u8]>>(
+    course: &Course,
+    media: &[(String, B)],
+    autosave_path: &Path,
+) -> Result<(), String> {
     if let Some(parent) = autosave_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let bytes =
-        save_project(course, media).map_err(|e| format!("Autosave serialization failed: {e}"))?;
-    // The same checked path as a manual save, but a different file: autosave
-    // never prompts and never touches the project file itself.
-    crate::files::write_atomic_with(
+    // Stream the zip to a temp file and verify it before renaming over the
+    // previous autosave, avoiding holding the whole archive in memory.
+    crate::files::write_atomic_stream_with(
         autosave_path,
-        &bytes,
+        &mut |file| {
+            let mut buf = std::io::BufWriter::new(file);
+            coursecraft_format::save_project_to(course, media, &mut buf).map_err(|e| {
+                std::io::Error::other(format!("Autosave serialization failed: {e}"))
+            })?;
+            std::io::Write::flush(&mut buf)
+        },
         Some(&crate::files::verify_ccraft_file),
         &crate::files::Hooks::default(),
     )
@@ -213,6 +236,29 @@ impl Autosaver {
         target: AutosaveTarget<'_>,
         media: impl FnOnce() -> Vec<(String, Vec<u8>)>,
     ) -> bool {
+        self.maybe_autosave_slices(current_time, is_dirty, current_revision, target, media)
+    }
+
+    /// Check if autosave should be performed and stream it using `Arc`-shared media.
+    pub fn maybe_autosave_arc(
+        &mut self,
+        current_time: f64,
+        is_dirty: bool,
+        current_revision: u64,
+        target: AutosaveTarget<'_>,
+        media: impl FnOnce() -> Vec<(String, std::sync::Arc<[u8]>)>,
+    ) -> bool {
+        self.maybe_autosave_slices(current_time, is_dirty, current_revision, target, media)
+    }
+
+    fn maybe_autosave_slices<B: AsRef<[u8]>>(
+        &mut self,
+        current_time: f64,
+        is_dirty: bool,
+        current_revision: u64,
+        target: AutosaveTarget<'_>,
+        media: impl FnOnce() -> Vec<(String, B)>,
+    ) -> bool {
         let Some(interval) = self.interval_secs() else {
             return false;
         };
@@ -226,7 +272,7 @@ impl Autosaver {
             else {
                 return false;
             };
-            if write_autosave(target.course, &media(), &auto_path).is_ok() {
+            if write_autosave_slices(target.course, &media(), &auto_path).is_ok() {
                 self.last_autosaved_revision = Some(current_revision);
                 return true;
             }

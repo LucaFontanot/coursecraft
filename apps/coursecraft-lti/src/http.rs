@@ -248,6 +248,14 @@ impl Response {
         ));
     }
 
+    /// Set the short-lived OIDC state binding cookie.
+    pub fn set_state_cookie(&mut self, value: &str) {
+        self.headers.push((
+            "Set-Cookie".into(),
+            format!("cc_lti_state={value}; Path=/; Max-Age=600; HttpOnly; Secure; SameSite=None"),
+        ));
+    }
+
     fn text_body(status: u16, body: Vec<u8>) -> Self {
         Self {
             status,
@@ -396,13 +404,16 @@ fn reason(status: u16) -> &'static str {
     match status {
         200 => "OK",
         204 => "No Content",
+        206 => "Partial Content",
         302 => "Found",
+        304 => "Not Modified",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         413 => "Payload Too Large",
+        416 => "Range Not Satisfiable",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
         503 => "Service Unavailable",

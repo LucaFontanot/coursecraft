@@ -152,6 +152,7 @@ enum WorkerCmd {
     Play,
     Pause,
     Seek(u64),
+    SetRate(f32),
     Stop,
 }
 
@@ -334,6 +335,7 @@ fn play_one_frame<D: VideoDecoder, C: VideoClock>(
     last_pts: &mut Option<u64>,
     anchor_master_ms: u64,
     anchor_clock_ms: u64,
+    rate: f32,
 ) -> bool {
     match decoder.next_frame() {
         Ok(Some(frame)) => {
@@ -343,7 +345,7 @@ fn play_one_frame<D: VideoDecoder, C: VideoClock>(
                 .filter(|gap| *gap > 0)
                 .unwrap_or(33);
             *last_pts = Some(pts);
-            let now = master_now(shared, clock, anchor_master_ms, anchor_clock_ms);
+            let now = master_now(shared, clock, anchor_master_ms, anchor_clock_ms, rate);
             match pace_frame(pts, now, interval) {
                 Pace::Publish => publish_frame(shared, clock, frame, duration, position_ms),
                 Pace::Drop => {
@@ -364,12 +366,13 @@ fn play_one_frame<D: VideoDecoder, C: VideoClock>(
                         }
                         // The master may have jumped (audio sink):
                         // recompute what is left of the wait.
-                        let now = master_now(shared, clock, anchor_master_ms, anchor_clock_ms);
+                        let now =
+                            master_now(shared, clock, anchor_master_ms, anchor_clock_ms, rate);
                         remaining = pts.saturating_sub(now);
                     }
                     // Re-check lateness after waiting: a slow decode may
                     // have made this frame late.
-                    let now = master_now(shared, clock, anchor_master_ms, anchor_clock_ms);
+                    let now = master_now(shared, clock, anchor_master_ms, anchor_clock_ms, rate);
                     if pace_frame(pts, now, interval) == Pace::Publish {
                         publish_frame(shared, clock, frame, duration, position_ms);
                     } else {
@@ -421,13 +424,21 @@ fn master_now<C: VideoClock>(
     clock: &C,
     anchor_master_ms: u64,
     anchor_clock_ms: u64,
+    rate: f32,
 ) -> u64 {
     if let Ok(state) = shared.lock()
         && let Some(audio_pos) = state.audio_position_ms
     {
         return audio_pos;
     }
-    anchor_master_ms.saturating_add(clock.now_ms().saturating_sub(anchor_clock_ms))
+    let elapsed = clock.now_ms().saturating_sub(anchor_clock_ms);
+    let scaled = ((elapsed as f64) * f64::from(rate)).round();
+    let delta = if scaled.is_finite() && scaled >= 0.0 {
+        scaled.min(u64::MAX as f64) as u64
+    } else {
+        0
+    };
+    anchor_master_ms.saturating_add(delta)
 }
 
 pub(crate) fn run_video_worker<D: VideoDecoder, C: VideoClock>(
@@ -451,6 +462,7 @@ pub(crate) fn run_video_worker<D: VideoDecoder, C: VideoClock>(
     // published position is the master instead (see `audio_position_ms`).
     let mut anchor_master_ms: u64 = 0;
     let mut anchor_clock_ms: u64 = clock.now_ms();
+    let mut rate: f32 = 1.0;
     // Previous frame's pts, for estimating the frame interval.
     let mut last_pts: Option<u64> = None;
     // Publish PCM for decoders that can decode synchronously (in-memory
@@ -469,14 +481,29 @@ pub(crate) fn run_video_worker<D: VideoDecoder, C: VideoClock>(
         // Drain commands, keeping only the newest seek/state.
         let mut pending_seek: Option<u64> = None;
         let mut pending_play: Option<bool> = None;
+        let mut pending_rate: Option<f32> = None;
         let mut stop = false;
         while let Some(cmd) = pending.pop_front().or_else(|| cmd_rx.try_recv().ok()) {
             match cmd {
                 WorkerCmd::Play => pending_play = Some(true),
                 WorkerCmd::Pause => pending_play = Some(false),
                 WorkerCmd::Seek(ms) => pending_seek = Some(ms),
+                WorkerCmd::SetRate(r) => pending_rate = Some(r),
                 WorkerCmd::Stop => stop = true,
             }
+        }
+        if let Some(new_rate) = pending_rate {
+            let sanitized = if new_rate.is_finite() {
+                new_rate.clamp(0.5, 2.0)
+            } else {
+                1.0
+            };
+            if playing {
+                anchor_master_ms =
+                    master_now(&shared, &clock, anchor_master_ms, anchor_clock_ms, rate);
+                anchor_clock_ms = clock.now_ms();
+            }
+            rate = sanitized;
         }
         if stop {
             if let Ok(mut state) = shared.lock() {
@@ -545,6 +572,7 @@ pub(crate) fn run_video_worker<D: VideoDecoder, C: VideoClock>(
                 &mut last_pts,
                 anchor_master_ms,
                 anchor_clock_ms,
+                rate,
             );
         } else {
             // Block briefly waiting for commands (seek-while-playing coalescing
@@ -559,6 +587,7 @@ pub(crate) fn run_video_worker<D: VideoDecoder, C: VideoClock>(
                     &mut paused_seek,
                     &mut anchor_master_ms,
                     &mut anchor_clock_ms,
+                    &mut rate,
                     &clock,
                     &mut pending,
                     cmd,
@@ -595,6 +624,7 @@ fn paused_command<D: VideoDecoder, C: VideoClock>(
     paused_seek: &mut Option<u64>,
     anchor_master_ms: &mut u64,
     anchor_clock_ms: &mut u64,
+    rate: &mut f32,
     clock: &C,
     _pending: &mut std::collections::VecDeque<WorkerCmd>,
     cmd: WorkerCmd,
@@ -636,6 +666,14 @@ fn paused_command<D: VideoDecoder, C: VideoClock>(
                     FrameOutcome::Retry => *paused_seek = Some(ms),
                 }
             }
+            false
+        }
+        WorkerCmd::SetRate(r) => {
+            *rate = if r.is_finite() {
+                r.clamp(0.5, 2.0)
+            } else {
+                1.0
+            };
             false
         }
         WorkerCmd::Stop => {
@@ -1129,6 +1167,7 @@ pub struct RodioBackend {
     videos: std::collections::HashMap<String, WorkerHandle>,
     ended: Vec<String>,
     volume: f32,
+    rate: f32,
     /// Per-object volume, applied on top of the player volume. Missing is 1.0.
     object_volumes: std::collections::HashMap<String, f32>,
 }
@@ -1154,6 +1193,7 @@ impl RodioBackend {
             videos: std::collections::HashMap::new(),
             ended: Vec::new(),
             volume: 1.0,
+            rate: 1.0,
             object_volumes: std::collections::HashMap::new(),
         }
     }
@@ -1170,6 +1210,7 @@ impl RodioBackend {
             videos: std::collections::HashMap::new(),
             ended: Vec::new(),
             volume: 1.0,
+            rate: 1.0,
             object_volumes: std::collections::HashMap::new(),
         }
     }
@@ -1245,6 +1286,9 @@ impl RodioBackend {
                 SystemClock::new(),
             );
         });
+        if (self.rate - 1.0).abs() > f32::EPSILON {
+            let _ = cmd_tx.send(WorkerCmd::SetRate(self.rate));
+        }
         self.videos.insert(
             object.to_string(),
             WorkerHandle {
@@ -1309,6 +1353,7 @@ impl RodioBackend {
         let f32_samples = pcm_to_f32(&pcm.samples);
         let source = rodio::buffer::SamplesBuffer::new(pcm.channels, pcm.sample_rate, f32_samples);
         sink.set_volume(self.effective_volume(object));
+        sink.set_speed(self.rate);
         sink.append(source);
         if let Some(pos) = position {
             let _ = sink.try_seek(std::time::Duration::from_millis(pos));
@@ -1418,6 +1463,7 @@ impl MediaBackend for RodioBackend {
         match seekable_decoder(&bytes, src) {
             Ok(decoder) => {
                 sink.set_volume(self.effective_volume(object));
+                sink.set_speed(self.rate);
                 sink.append(decoder);
                 self.tracks.insert(
                     object.to_string(),
@@ -1497,6 +1543,24 @@ impl MediaBackend for RodioBackend {
         if let Some(track) = self.tracks.get(object) {
             track.sink.set_volume(self.effective_volume(object));
         }
+    }
+
+    fn set_rate(&mut self, rate: f32) {
+        self.rate = if rate.is_finite() {
+            rate.clamp(0.5, 2.0)
+        } else {
+            1.0
+        };
+        for track in self.tracks.values() {
+            track.sink.set_speed(self.rate);
+        }
+        for worker in self.videos.values() {
+            let _ = worker.cmd_tx.send(WorkerCmd::SetRate(self.rate));
+        }
+    }
+
+    fn supports_rate(&self) -> bool {
+        true
     }
 
     fn take_ended(&mut self) -> Vec<String> {

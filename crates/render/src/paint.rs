@@ -2680,7 +2680,10 @@ fn paint_progress_meter(
         }
         MeterStyle::Ring => {
             let side = rect.width().min(rect.height());
-            let thickness = (side * 0.18).clamp(2.0 * scale, side * 0.5);
+            if !side.is_finite() || side <= 0.0 {
+                return;
+            }
+            let thickness = coursecraft_course::safe_clamp(side * 0.18, 2.0 * scale, side * 0.5);
             let center = rect.center();
             let radius = (side * 0.5 - thickness * 0.5).max(1.0);
             let stroke = Stroke::new(thickness, track);
@@ -3415,5 +3418,29 @@ mod marker_card_tests {
         assert_eq!(light_fill, Color32::WHITE);
         let (dark_fill, _) = marker_card_colors(Color32::from_rgb(0xF0, 0xF0, 0xF0));
         assert!(dark_fill.r() < 80, "{dark_fill:?}");
+    }
+
+    #[test]
+    fn ring_progress_meter_in_tiny_and_zero_rect_does_not_panic() {
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let painter = ui.painter();
+            for size in [vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(-2.0, 4.0)] {
+                paint_progress_meter(
+                    painter,
+                    Rect::from_min_size(pos2(0.0, 0.0), size),
+                    1.0,
+                    0.5,
+                    MeterStyle::Ring,
+                    true,
+                    50,
+                    false,
+                    1.0,
+                    Color32::BLUE,
+                    Color32::BLACK,
+                );
+            }
+        });
+        out.drop_without_applying_deltas();
     }
 }

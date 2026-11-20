@@ -138,9 +138,11 @@ pub fn show_slides_panel(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     .frame(false)
                     .min_size(vec2(caret_w, coursecraft_render::CONTROL_COMPACT)),
                 );
-                egui::Popup::menu(&caret).show(|ui| {
-                    show_new_slide_popup(ui, editor);
-                });
+                egui::Popup::menu(&caret)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| {
+                        show_new_slide_popup(ui, editor);
+                    });
             });
         });
 
@@ -683,6 +685,10 @@ pub fn show_new_slide_popup(ui: &mut Ui, editor: &mut Editor) {
         }
     }
 
+    let library_available = !cfg!(target_arch = "wasm32")
+        && editor.file_ops_available
+        && editor.library_templates_available;
+
     if !editor.session.course.templates.is_empty() {
         ui.separator();
         ui.label(coursecraft_render::small("Your templates").strong());
@@ -704,6 +710,22 @@ pub fn show_new_slide_popup(ui: &mut Ui, editor: &mut Editor) {
                             add = Some(("template.add_slide", params));
                             ui.close();
                         }
+                        if library_available
+                            && crate::quiet_button(
+                                ui,
+                                "Save to my library",
+                                crate::QuietTone::Accent,
+                                true,
+                            )
+                            .clicked()
+                        {
+                            editor.pending_requests.push(
+                                crate::EditorRequest::SaveTemplateToLibrary {
+                                    template_id: template.id.clone(),
+                                },
+                            );
+                            ui.close();
+                        }
                         if crate::quiet_button(ui, "Remove", crate::QuietTone::Danger, true)
                             .clicked()
                         {
@@ -716,6 +738,77 @@ pub fn show_new_slide_popup(ui: &mut Ui, editor: &mut Editor) {
                     });
                 }
             });
+    }
+
+    if library_available {
+        ui.separator();
+        ui.label(coursecraft_render::small("My library").strong());
+        if editor.library_templates.is_empty() {
+            ui.label(coursecraft_render::design::caption(
+                "No saved templates yet.",
+            ));
+        } else {
+            let library = editor.library_templates.clone();
+            egui::ScrollArea::vertical()
+                .max_height(160.0)
+                .id_salt("layout_popup_library_templates")
+                .show(ui, |ui| {
+                    for tpl in &library {
+                        ui.horizontal(|ui| {
+                            if ui.button(&tpl.title).clicked() {
+                                editor.pending_requests.push(
+                                    crate::EditorRequest::InsertLibraryTemplate {
+                                        id: tpl.id.clone(),
+                                        scene: scene.clone(),
+                                        after: after.clone(),
+                                    },
+                                );
+                                editor.ui.confirm_delete_library_template = None;
+                                ui.close();
+                            }
+                            if editor.ui.confirm_delete_library_template.as_deref()
+                                == Some(tpl.id.as_str())
+                            {
+                                if crate::quiet_button(
+                                    ui,
+                                    "Confirm",
+                                    crate::QuietTone::Danger,
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    editor.pending_requests.push(
+                                        crate::EditorRequest::DeleteLibraryTemplate {
+                                            id: tpl.id.clone(),
+                                        },
+                                    );
+                                    editor.ui.confirm_delete_library_template = None;
+                                    ui.close();
+                                }
+                                if crate::quiet_button(
+                                    ui,
+                                    "Cancel",
+                                    crate::QuietTone::Secondary,
+                                    true,
+                                )
+                                .clicked()
+                                {
+                                    editor.ui.confirm_delete_library_template = None;
+                                }
+                            } else if crate::quiet_button(
+                                ui,
+                                "Delete",
+                                crate::QuietTone::Danger,
+                                true,
+                            )
+                            .clicked()
+                            {
+                                editor.ui.confirm_delete_library_template = Some(tpl.id.clone());
+                            }
+                        });
+                    }
+                });
+        }
     }
 
     if let Some((cmd, params)) = add {

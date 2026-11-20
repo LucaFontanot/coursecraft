@@ -5195,6 +5195,32 @@ fn save_keeps_every_file_in_a_web_folder() {
 }
 
 #[test]
+fn used_media_shares_arc_bytes_without_copying() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+
+    let png = test_png_bytes();
+    let src = harness.editor.import_image("shared.png", &png).unwrap();
+    let canvas_rect = harness.central_panel_rect();
+    harness.click_at(canvas_rect.center());
+
+    let used = harness.editor.used_media();
+    assert_eq!(used.len(), 1);
+    assert_eq!(used[0].0, src);
+    let stored = harness
+        .editor
+        .media()
+        .iter()
+        .find(|(name, _)| name == &src)
+        .expect("stored media");
+    assert!(
+        std::sync::Arc::ptr_eq(&used[0].1, &stored.1),
+        "used_media should clone the Arc handle rather than copying media bytes"
+    );
+}
+
+#[test]
 fn undo_after_delete_and_save_keeps_image_bytes() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
@@ -5474,6 +5500,41 @@ fn preview_backend_stop_all_on_close() {
         null_backend
             .recorded_calls()
             .contains(&"stop_all".to_string())
+    );
+}
+
+#[test]
+fn desktop_preview_speed_menu_changes_player_clock_rate() {
+    let mut course = Course::from_json(COURSE_JSON).expect("valid course");
+    course.player.show_speed = true;
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+
+    harness.editor.open_preview();
+    harness.idle_frame();
+    harness.idle_frame();
+
+    let speed_btn = harness
+        .find_text("1\u{00D7}")
+        .expect("speed button visible in desktop preview");
+    harness.click_at(speed_btn);
+    harness.idle_frame();
+
+    let choice_15 = harness
+        .find_text("1.5\u{00D7}")
+        .expect("1.5× speed option in popup");
+    harness.click_at(choice_15);
+    harness.idle_frame();
+
+    let preview = harness.editor.preview.as_ref().expect("preview open");
+    let state = preview.state.as_ref().expect("preview player state");
+    assert_eq!(
+        state.speed_quarters, 6,
+        "choosing 1.5× must set player clock rate to 6 quarters (1.5×)"
+    );
+    assert!(
+        (preview.media.rate() - 1.5).abs() < f32::EPSILON,
+        "media driver rate must also update to 1.5"
     );
 }
 
@@ -17593,4 +17654,12 @@ fn edit_menu_shows_named_undo_and_redo() {
         harness.find_text_last("Redo Course Title").is_some(),
         "Edit menu should show named Redo"
     );
+}
+
+#[test]
+fn sanitize_media_src_avoids_case_only_collisions() {
+    let existing = vec![("Logo.png".to_owned(), std::sync::Arc::from(&b"a"[..]))];
+    let picked = crate::sanitize_media_src("logo.png", &existing);
+    assert!(!picked.eq_ignore_ascii_case("Logo.png"));
+    assert_eq!(picked, "logo-2.png");
 }

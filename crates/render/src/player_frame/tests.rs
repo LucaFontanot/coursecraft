@@ -1562,3 +1562,28 @@ fn drawer_reports_its_settled_place_and_ignores_row_clicks_while_sliding() {
         output.inputs
     );
 }
+
+#[test]
+fn start_over_button_in_menu_sets_restart_when_enabled() {
+    let (_course, player) = hello();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.open_drawer();
+    harness.run(&player, Vec::new());
+    assert!(
+        harness
+            .frame
+            .chrome_rect(&ChromeButton::StartOver)
+            .is_none(),
+        "hidden when can_restart is false"
+    );
+
+    harness.frame.can_restart = true;
+    harness.run(&player, Vec::new());
+    let btn = harness
+        .frame
+        .chrome_rect(&ChromeButton::StartOver)
+        .expect("start over button");
+    let output = harness.run(&player, click(btn.center()));
+    assert!(output.restart, "clicking Start over requests restart");
+    assert!(!harness.frame.drawer_open(), "drawer closes on Start over");
+}

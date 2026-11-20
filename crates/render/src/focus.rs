@@ -67,6 +67,8 @@ pub enum ChromeButton {
     GlossaryTerm(String),
     /// The transcript text in the drawer's Transcript tab.
     TranscriptText,
+    /// Start the course over from the beginning.
+    StartOver,
     /// The × button at the top-right of an open lightbox.
     CloseLightbox,
 }
@@ -82,6 +84,8 @@ pub enum ChromeRequest {
     SetVolume(f32),
     /// Ask the host to toggle full screen.
     ToggleFullscreen,
+    /// Ask the host to clear saved progress and restart.
+    StartOver,
     /// Move keyboard focus into the glossary search field.
     FocusGlossarySearch,
 }
@@ -103,6 +107,7 @@ pub struct ChromeVisibility {
     pub next: bool,
     pub speed: bool,
     pub fullscreen: bool,
+    pub can_restart: bool,
 }
 
 impl ChromeVisibility {
@@ -121,6 +126,7 @@ impl ChromeVisibility {
             next: false,
             speed: false,
             fullscreen: false,
+            can_restart: false,
         }
     }
 }
@@ -140,6 +146,7 @@ impl Default for ChromeVisibility {
             // Opt-in controls: only a layout that placed them turns these on.
             speed: false,
             fullscreen: false,
+            can_restart: false,
         }
     }
 }
@@ -252,7 +259,7 @@ pub fn build_list(
 }
 
 /// The open drawer's focus order: close, the tabs, then the chosen tab's items.
-fn drawer_targets(player: &Player<'_>, drawer: &DrawerView) -> Vec<FocusTarget> {
+fn drawer_targets(player: &Player<'_>, drawer: &DrawerView, can_restart: bool) -> Vec<FocusTarget> {
     let course = player.course();
     let mut list = vec![FocusTarget::Chrome(ChromeButton::DrawerClose)];
     let tabs = available_tabs(course);
@@ -268,6 +275,9 @@ fn drawer_targets(player: &Player<'_>, drawer: &DrawerView) -> Vec<FocusTarget> 
                 list.push(FocusTarget::Chrome(ChromeButton::DrawerRow(
                     slide.id.clone(),
                 )));
+            }
+            if can_restart {
+                list.push(FocusTarget::Chrome(ChromeButton::StartOver));
             }
         }
         DrawerTab::Resources => {
@@ -358,7 +368,7 @@ pub(crate) fn build_list_with_visibility(
     drawer: &DrawerView,
 ) -> Vec<FocusTarget> {
     if drawer_open && !player.lightbox_open() {
-        return drawer_targets(player, drawer);
+        return drawer_targets(player, drawer, visibility.can_restart);
     }
     let Some(slide) = player.current_slide() else {
         return Vec::new();
@@ -1974,6 +1984,9 @@ impl FocusManager {
                 if !current && player.can_go_to(&slide) {
                     inputs.push(Input::GoTo { slide });
                 }
+            }
+            Some(FocusTarget::Chrome(ChromeButton::StartOver)) => {
+                self.chrome_request = Some(ChromeRequest::StartOver);
             }
             Some(FocusTarget::Chrome(ChromeButton::CloseLightbox)) => {
                 inputs.push(Input::CloseLightbox);

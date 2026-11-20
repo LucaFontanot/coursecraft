@@ -412,19 +412,21 @@ fn show_success_buttons(
     close_after: &mut bool,
 ) {
     ui.horizontal(|ui| {
-        let open_label = match editor.ui.publish.standard {
-            PublishStandard::Web => "Open in browser",
-            PublishStandard::Scorm12
-            | PublishStandard::Scorm2004
-            | PublishStandard::Cmi5
-            | PublishStandard::Xapi
-            | PublishStandard::Lti => "Open in browser (preview, no LMS)",
-        };
-        if ui.button(open_label).clicked() {
-            requests.push(EditorRequest::OpenPublishedInBrowser);
-        }
-        if ui.button("Show in folder").clicked() {
-            requests.push(EditorRequest::ShowPublished);
+        if !cfg!(target_arch = "wasm32") {
+            let open_label = match editor.ui.publish.standard {
+                PublishStandard::Web => "Open in browser",
+                PublishStandard::Scorm12
+                | PublishStandard::Scorm2004
+                | PublishStandard::Cmi5
+                | PublishStandard::Xapi
+                | PublishStandard::Lti => "Open in browser (preview, no LMS)",
+            };
+            if ui.button(open_label).clicked() {
+                requests.push(EditorRequest::OpenPublishedInBrowser);
+            }
+            if ui.button("Show in folder").clicked() {
+                requests.push(EditorRequest::ShowPublished);
+            }
         }
         if publish_button(ui, "Done").clicked() {
             *close_after = true;

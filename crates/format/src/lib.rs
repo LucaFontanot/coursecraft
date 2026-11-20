@@ -26,7 +26,7 @@ mod folder;
 #[cfg(not(target_arch = "wasm32"))]
 pub use folder::{
     COURSE_FILE, FOLDER_EXTENSION, FileRecord, FolderRecord, MEDIA_DIR, OpenedFolder, SaveHooks,
-    SaveReport, changed_files, fnv1a64, is_project_folder, open_project_folder,
+    SaveReport, changed_files, fast_hash64, fnv1a64, is_project_folder, open_project_folder,
     open_project_folder_with_limits, save_project_folder, save_project_folder_with,
 };
 
@@ -198,12 +198,15 @@ pub fn is_safe_relative_path(path: &str) -> bool {
 /// # Errors
 /// Returns [`FormatError`] if JSON serialization fails, a media path is unsafe,
 /// duplicate media paths are provided, or zip writing fails.
-pub fn save_project(course: &Course, media: &[(String, Vec<u8>)]) -> Result<Vec<u8>, FormatError> {
+pub fn save_project<B: AsRef<[u8]>>(
+    course: &Course,
+    media: &[(String, B)],
+) -> Result<Vec<u8>, FormatError> {
     // Size the buffer once so a 1 GB project is not copied again on every
     // doubling. Stored media is the bulk and stays its own size.
     let capacity = media
         .iter()
-        .map(|(_, bytes)| bytes.len().saturating_add(256))
+        .map(|(_, bytes)| bytes.as_ref().len().saturating_add(256))
         .fold(1 << 20, usize::saturating_add);
     let mut out = Vec::with_capacity(capacity);
     save_project_to(course, media, std::io::Cursor::new(&mut out))?;
@@ -216,9 +219,9 @@ pub fn save_project(course: &Course, media: &[(String, Vec<u8>)]) -> Result<Vec<
 /// # Errors
 /// Returns [`FormatError`] for the same reasons as [`save_project`], plus any
 /// write error from `out`.
-pub fn save_project_to<W: std::io::Write + std::io::Seek>(
+pub fn save_project_to<W: std::io::Write + std::io::Seek, B: AsRef<[u8]>>(
     course: &Course,
-    media: &[(String, Vec<u8>)],
+    media: &[(String, B)],
     out: W,
 ) -> Result<(), FormatError> {
     let mut course_json = course.to_json()?;
@@ -241,7 +244,7 @@ pub fn save_project_to<W: std::io::Write + std::io::Seek>(
     for (path, bytes) in media {
         let zip_path = format!("media/{path}");
         writer.start_file(&zip_path, zip_options_for(path))?;
-        writer.write_all(bytes)?;
+        writer.write_all(bytes.as_ref())?;
     }
 
     writer.finish()?;
@@ -414,13 +417,19 @@ pub fn open_project_with_limits(bytes: &[u8], limits: Limits) -> Result<Project,
         let stored = file.compression() == zip::CompressionMethod::Stored;
         let entry_limit = entry_limit(stored, limits);
 
-        if file.size() > entry_limit {
+        let declared_size = file.size();
+        if declared_size > entry_limit {
             return Err(FormatError::EntryTooLarge(name));
         }
 
-        // Reserve the declared size up front (it is within the limit) so a
-        // 100 MB video is read without regrowing its buffer.
-        let reserve = usize::try_from(file.size()).unwrap_or(0);
+        // Count the declared size before allocating or reading, so a zip that
+        // declares huge entries is refused with TooLarge rather than reading.
+        sizes.add(declared_size, stored, limits)?;
+
+        // Never reserve more than 1 MiB up front: a hostile zip can declare up
+        // to entry_limit per entry while holding only a few bytes.
+        const MAX_ENTRY_PREALLOC: u64 = 1024 * 1024;
+        let reserve = usize::try_from(declared_size.min(MAX_ENTRY_PREALLOC)).unwrap_or(0);
         let mut entry_bytes = Vec::with_capacity(reserve);
         let read_limit = entry_limit.saturating_add(1);
         file.take(read_limit).read_to_end(&mut entry_bytes)?;
@@ -429,7 +438,10 @@ pub fn open_project_with_limits(bytes: &[u8], limits: Limits) -> Result<Project,
             return Err(FormatError::EntryTooLarge(name));
         }
 
-        sizes.add(entry_bytes.len() as u64, stored, limits)?;
+        let extra = (entry_bytes.len() as u64).saturating_sub(declared_size);
+        if extra > 0 {
+            sizes.add(extra, stored, limits)?;
+        }
 
         if name == "course.json" {
             course_json_bytes = Some(entry_bytes);

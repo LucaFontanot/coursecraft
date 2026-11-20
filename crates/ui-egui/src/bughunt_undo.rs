@@ -88,6 +88,9 @@ fn insert_text_box(h: &mut TestHarness) {
     let c = h.central_panel_rect().center();
     h.click_at(c);
     h.idle_frame();
+    if h.editor.ui.inline_edit.is_some() {
+        key(h, Key::Escape, Modifiers::NONE);
+    }
 }
 
 fn check_action(name: &str, act: Action) -> Vec<String> {

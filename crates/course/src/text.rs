@@ -362,18 +362,7 @@ pub fn apply_style_to_range(
 
     let normalized = normalize_runs(&split_runs);
 
-    let all_no_overrides = normalized.iter().all(|r| {
-        r.bold.is_none()
-            && r.italic.is_none()
-            && r.underline.is_none()
-            && r.strikethrough.is_none()
-            && r.baseline.is_none()
-            && r.letter_spacing.is_none()
-            && r.size.is_none()
-            && r.color.is_none()
-            && r.link.is_none()
-            && r.font.is_none()
-    });
+    let all_no_overrides = normalized.iter().all(TextRun::is_plain);
 
     if all_no_overrides {
         Vec::new()

@@ -443,3 +443,41 @@ fn reordering_objects_is_a_stacking_move() {
     assert_eq!(lines.len(), 1, "{lines:#?}");
     assert!(lines[0].contains("moved in stacking order"));
 }
+
+#[test]
+fn diff_reports_added_removed_and_changed_text_styles() {
+    let mut a = hello();
+    let style = crate::NamedTextStyle {
+        id: "heading".to_owned(),
+        name: "Heading".to_owned(),
+        style: crate::TextStyle::default(),
+        paragraphs: None,
+    };
+    let mut b = hello();
+    b.text_styles.push(style.clone());
+    let added = sentences(&diff(&a, &b));
+    assert!(
+        added
+            .iter()
+            .any(|l| l.contains("text style") && l.contains("Heading") && l.contains("added")),
+        "expected added text style: {added:#?}"
+    );
+
+    let removed = sentences(&diff(&b, &a));
+    assert!(
+        removed
+            .iter()
+            .any(|l| l.contains("text style") && l.contains("Heading") && l.contains("removed")),
+        "expected removed text style: {removed:#?}"
+    );
+
+    a.text_styles.push(style);
+    b.text_styles[0].style.size = 32.0;
+    let changed = sentences(&diff(&a, &b));
+    assert!(
+        changed
+            .iter()
+            .any(|l| l.contains("Heading") && l.contains("32")),
+        "expected changed text style: {changed:#?}"
+    );
+}

@@ -26,6 +26,8 @@ thread_local! {
     static THUMBNAIL_REDRAWS: Cell<u64> = const { Cell::new(0) };
     static VALIDATION_RUNS: Cell<u64> = const { Cell::new(0) };
     static AUDIT_RUNS: Cell<u64> = const { Cell::new(0) };
+    static SLIDE_CLONES: Cell<u64> = const { Cell::new(0) };
+    static TIMELINE_LIST_REBUILDS: Cell<u64> = const { Cell::new(0) };
     static FRAME: Cell<u64> = const { Cell::new(0) };
     /// Last slide drawn in each row, and the frame it was drawn on.
     static LAST_THUMB_SLIDES: RefCell<HashMap<String, (Slide, u64)>> =
@@ -50,6 +52,8 @@ pub(crate) fn reset() {
     THUMBNAIL_REDRAWS.set(0);
     VALIDATION_RUNS.set(0);
     AUDIT_RUNS.set(0);
+    SLIDE_CLONES.set(0);
+    TIMELINE_LIST_REBUILDS.set(0);
 }
 
 /// Forget which rows were painted where, so the next frame counts every row
@@ -94,6 +98,14 @@ pub(crate) fn note_audit_run() {
     bump(&AUDIT_RUNS);
 }
 
+pub(crate) fn note_slide_clone() {
+    bump(&SLIDE_CLONES);
+}
+
+pub(crate) fn note_timeline_list_rebuild() {
+    bump(&TIMELINE_LIST_REBUILDS);
+}
+
 pub(crate) fn course_copies() -> u64 {
     COURSE_COPIES.get()
 }
@@ -116,4 +128,12 @@ pub(crate) fn validation_runs() -> u64 {
 
 pub(crate) fn audit_runs() -> u64 {
     AUDIT_RUNS.get()
+}
+
+pub(crate) fn slide_clones() -> u64 {
+    SLIDE_CLONES.get()
+}
+
+pub(crate) fn timeline_list_rebuilds() -> u64 {
+    TIMELINE_LIST_REBUILDS.get()
 }

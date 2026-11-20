@@ -1488,496 +1488,517 @@ pub fn show_triggers_tab(
     ui: &mut Ui,
     actions: &mut Vec<(&'static str, Json)>,
 ) {
-    let Some(slide) = editor.session.course.slide(&editor.selection.slide) else {
-        ui.label("No slide selected");
-        return;
-    };
-    let slide_clone = slide.clone();
+    let slide_id = editor.selection.slide.clone();
     let selected_layer = editor.selection.layer.clone();
-
-    let triggers: Vec<Trigger> = match &selected_layer {
-        Some(lid) => match slide_clone.layer(lid) {
-            Some(l) => l.triggers.clone(),
-            None => Vec::new(),
-        },
-        None => slide_clone.triggers.clone(),
-    };
-
-    let trigger_prefix = trigger_list_path_prefix(
-        &editor.session.course,
-        &slide_clone.id,
-        selected_layer.as_deref(),
-    );
-    let trigger_issues: Vec<Vec<crate::ValidationIssueSummary>> = (0..triggers.len())
-        .map(|idx| {
-            trigger_prefix
-                .as_ref()
-                .and_then(|prefix| {
-                    editor
-                        .ui
-                        .trigger_issues_by_path
-                        .get(&format!("{prefix}/{idx}"))
-                })
-                .cloned()
-                .unwrap_or_default()
-        })
-        .collect();
-    let problem_indices: Vec<usize> = trigger_issues
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, issues)| (!issues.is_empty()).then_some(idx))
-        .collect();
-
-    let p = coursecraft_render::palette(ui.ctx());
-    // Header row: caption on the left, quiet "+ Add trigger" on the right.
-    ui.horizontal(|ui| {
-        let owner_name = match &selected_layer {
-            Some(lid) => format!("on layer {}", layer_name(&slide_clone, lid)),
-            None => "on this slide".to_owned(),
+    let mut paste_clicked = false;
+    {
+        let crate::Editor {
+            session,
+            selection,
+            ui: editor_ui,
+            ..
+        } = editor;
+        let Some(slide) = session.course.slide(&selection.slide) else {
+            ui.label("No slide selected");
+            return;
         };
-        ui.label(
-            coursecraft_render::caption(format!("Triggers {owner_name}")).color(p.text_secondary),
-        );
-        let can_paste = !editor.ui.copied_triggers.is_empty();
-        if !triggers.is_empty() || can_paste {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if !triggers.is_empty()
-                    && crate::quiet_button(ui, "+ Add trigger", crate::QuietTone::Accent, true)
+
+        let triggers: &[Trigger] = match &selected_layer {
+            Some(lid) => match slide.layer(lid) {
+                Some(l) => &l.triggers,
+                None => &[],
+            },
+            None => &slide.triggers,
+        };
+
+        let trigger_prefix =
+            trigger_list_path_prefix(&session.course, &slide.id, selected_layer.as_deref());
+        let trigger_issues: Vec<Vec<crate::ValidationIssueSummary>> = (0..triggers.len())
+            .map(|idx| {
+                trigger_prefix
+                    .as_ref()
+                    .and_then(|prefix| {
+                        editor_ui
+                            .trigger_issues_by_path
+                            .get(&format!("{prefix}/{idx}"))
+                    })
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+        let problem_indices: Vec<usize> = trigger_issues
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, issues)| (!issues.is_empty()).then_some(idx))
+            .collect();
+
+        let p = coursecraft_render::palette(ui.ctx());
+        // Header row: caption on the left, quiet "+ Add trigger" on the right.
+        ui.horizontal(|ui| {
+            let owner_name = match &selected_layer {
+                Some(lid) => format!("on layer {}", layer_name(slide, lid)),
+                None => "on this slide".to_owned(),
+            };
+            ui.label(
+                coursecraft_render::caption(format!("Triggers {owner_name}"))
+                    .color(p.text_secondary),
+            );
+            let can_paste = !editor_ui.copied_triggers.is_empty();
+            if !triggers.is_empty() || can_paste {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !triggers.is_empty()
+                        && crate::quiet_button(ui, "+ Add trigger", crate::QuietTone::Accent, true)
+                            .clicked()
+                    {
+                        editor_ui.trigger_form = Some(
+                            TriggerFormState::new_for_owner(
+                                slide,
+                                selected_layer.as_deref(),
+                                &session.course,
+                            )
+                            .with_selected_object(slide, selection.object.as_deref()),
+                        );
+                    }
+                    if can_paste
+                        && crate::quiet_button(ui, "Paste Triggers", crate::QuietTone::Accent, true)
+                            .clicked()
+                    {
+                        paste_clicked = true;
+                    }
+                });
+            }
+        });
+
+        ui.separator();
+
+        // The row the user last clicked keeps its actions visible. It is remembered per owner
+        // (slide and layer) so switching slides starts clean.
+        let owner_key = format!("{}/{}", slide.id, selected_layer.as_deref().unwrap_or(""));
+        let active_id = ui.make_persistent_id("triggers_active_row");
+        let active_row: Option<usize> = ui.data(|d| {
+            d.get_temp::<(String, usize)>(active_id)
+                .and_then(|(k, i)| (k == owner_key).then_some(i))
+        });
+        let mut new_active_row: Option<usize> = None;
+
+        if !problem_indices.is_empty() {
+            let has_error = problem_indices.iter().any(|&idx| {
+                trigger_issues
+                    .get(idx)
+                    .is_some_and(|issues| issues.iter().any(|i| i.severity == "error"))
+            });
+            let note_color = if has_error { p.danger } else { p.warning };
+            let scope = if selected_layer.is_some() {
+                "layer"
+            } else {
+                "slide"
+            };
+            let note = if problem_indices.len() == 1 {
+                format!("1 trigger on this {scope} needs attention")
+            } else {
+                format!(
+                    "{} triggers on this {scope} need attention",
+                    problem_indices.len()
+                )
+            };
+            ui.horizontal(|ui| {
+                ui.label(
+                    coursecraft_render::icon(
+                        coursecraft_render::Icon::Warning,
+                        coursecraft_render::ICON_SM,
+                    )
+                    .color(note_color),
+                );
+                ui.label(coursecraft_render::small(note).color(note_color));
+                if let Some(&first_idx) = problem_indices.first()
+                    && let Some(trig) = triggers.get(first_idx)
+                    && crate::quiet_button(ui, "Fix the first one", crate::QuietTone::Accent, true)
                         .clicked()
                 {
-                    editor.ui.trigger_form = Some(
-                        TriggerFormState::new_for_owner(
-                            &slide_clone,
-                            selected_layer.as_deref(),
-                            &editor.session.course,
-                        )
-                        .with_selected_object(&slide_clone, editor.selection.object.as_deref()),
-                    );
-                }
-                if can_paste
-                    && crate::quiet_button(ui, "Paste Triggers", crate::QuietTone::Accent, true)
-                        .clicked()
-                {
-                    paste_triggers(editor, &slide_clone.id, selected_layer.as_deref());
+                    new_active_row = Some(first_idx);
+                    editor_ui.trigger_form = Some(TriggerFormState::from_existing(
+                        first_idx,
+                        trig,
+                        slide,
+                        selected_layer.as_deref(),
+                        &session.course,
+                    ));
                 }
             });
         }
-    });
 
-    ui.separator();
+        if !triggers.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut editor_ui.triggers.filter)
+                        .hint_text("Filter triggers…")
+                        .desired_width(140.0),
+                );
+                if !editor_ui.triggers.filter.is_empty()
+                    && crate::widgets::icon_button(ui, coursecraft_render::Icon::X, "Clear filter")
+                        .clicked()
+                {
+                    editor_ui.triggers.filter.clear();
+                }
+                ui.checkbox(&mut editor_ui.triggers.group_by_object, "Group by object");
+            });
+        }
 
-    // The row the user last clicked keeps its actions visible. It is remembered per owner
-    // (slide and layer) so switching slides starts clean.
-    let owner_key = format!(
-        "{}/{}",
-        slide_clone.id,
-        selected_layer.as_deref().unwrap_or("")
-    );
-    let active_id = ui.make_persistent_id("triggers_active_row");
-    let active_row: Option<usize> = ui.data(|d| {
-        d.get_temp::<(String, usize)>(active_id)
-            .and_then(|(k, i)| (k == owner_key).then_some(i))
-    });
-    let mut new_active_row: Option<usize> = None;
-
-    if !problem_indices.is_empty() {
-        let has_error = problem_indices.iter().any(|&idx| {
-            trigger_issues
-                .get(idx)
-                .is_some_and(|issues| issues.iter().any(|i| i.severity == "error"))
-        });
-        let note_color = if has_error { p.danger } else { p.warning };
-        let scope = if selected_layer.is_some() {
-            "layer"
-        } else {
-            "slide"
-        };
-        let note = if problem_indices.len() == 1 {
-            format!("1 trigger on this {scope} needs attention")
-        } else {
-            format!(
-                "{} triggers on this {scope} need attention",
-                problem_indices.len()
-            )
-        };
-        ui.horizontal(|ui| {
-            ui.label(
-                coursecraft_render::icon(
-                    coursecraft_render::Icon::Warning,
-                    coursecraft_render::ICON_SM,
-                )
-                .color(note_color),
-            );
-            ui.label(coursecraft_render::small(note).color(note_color));
-            if let Some(&first_idx) = problem_indices.first()
-                && let Some(trig) = triggers.get(first_idx)
-                && crate::quiet_button(ui, "Fix the first one", crate::QuietTone::Accent, true)
-                    .clicked()
-            {
-                new_active_row = Some(first_idx);
-                editor.ui.trigger_form = Some(TriggerFormState::from_existing(
-                    first_idx,
-                    trig,
-                    &slide_clone,
-                    selected_layer.as_deref(),
-                    &editor.session.course,
-                ));
-            }
-        });
-    }
-
-    if !triggers.is_empty() {
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut editor.ui.triggers.filter)
-                    .hint_text("Filter triggers…")
-                    .desired_width(140.0),
-            );
-            if !editor.ui.triggers.filter.is_empty()
-                && crate::widgets::icon_button(ui, coursecraft_render::Icon::X, "Clear filter")
-                    .clicked()
-            {
-                editor.ui.triggers.filter.clear();
-            }
-            ui.checkbox(&mut editor.ui.triggers.group_by_object, "Group by object");
-        });
-    }
-
-    ScrollArea::vertical()
-        .id_salt("triggers_list_scroll")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            if triggers.is_empty() {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(20.0);
-                    ui.label(
-                        RichText::new(
-                            "No triggers on this slide yet. Triggers make objects respond to clicks, timing and variables.",
-                        )
-                        .color(p.text_secondary)
-                        .size(coursecraft_render::SIZE_BODY),
-                    );
-                    ui.add_space(12.0);
-                    if crate::primary_button(ui, "+ Add trigger").clicked() {
-                        editor.ui.trigger_form = Some(
-                            TriggerFormState::new_for_owner(
-                                &slide_clone,
-                                selected_layer.as_deref(),
-                                &editor.session.course,
+        ScrollArea::vertical()
+            .id_salt("triggers_list_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if triggers.is_empty() {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(
+                            RichText::new(
+                                "No triggers on this slide yet. Triggers make objects respond to clicks, timing and variables.",
                             )
-                            .with_selected_object(
-                                &slide_clone,
-                                editor.selection.object.as_deref(),
-                            ),
-                        );
-                    }
-                });
-                return;
-            }
-
-            type TriggerRow<'a> = (usize, &'a Trigger, String);
-            let filter_lower = editor.ui.triggers.filter.trim().to_ascii_lowercase();
-            let mut visible: Vec<TriggerRow<'_>> = triggers
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, trig)| {
-                    let desc = describe(trig, &slide_clone);
-                    if filter_lower.is_empty() || desc.to_ascii_lowercase().contains(&filter_lower)
-                    {
-                        Some((idx, trig, desc))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if visible.is_empty() {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(16.0);
-                    ui.label(
-                        RichText::new("No triggers match the filter.")
                             .color(p.text_secondary)
                             .size(coursecraft_render::SIZE_BODY),
-                    );
-                });
-                return;
-            }
-
-            let groups: Vec<(Option<String>, Vec<TriggerRow<'_>>)> =
-                if editor.ui.triggers.group_by_object {
-                    let mut grouped: Vec<(Option<String>, String, Vec<TriggerRow<'_>>)> =
-                        Vec::new();
-                    for item in visible {
-                        let key = event_object_id(&item.1.when).map(str::to_owned);
-                        if let Some(existing) = grouped.iter_mut().find(|(k, _, _)| *k == key) {
-                            existing.2.push(item);
-                        } else {
-                            let label = match key.as_deref() {
-                                Some(id) => object_name(&slide_clone, id),
-                                None => "Slide".to_owned(),
-                            };
-                            grouped.push((key, label, vec![item]));
-                        }
-                    }
-                    grouped
-                        .into_iter()
-                        .map(|(_, label, rows)| (Some(label), rows))
-                        .collect()
-                } else {
-                    if let Some(sel_id) = editor.selection.object.as_deref() {
-                        visible.sort_by_key(|(idx, trig, _)| {
-                            let is_selected = event_object_id(&trig.when) == Some(sel_id);
-                            (!is_selected, *idx)
-                        });
-                    }
-                    vec![(None, visible)]
-                };
-
-            for (group_header, rows) in groups {
-                if let Some(header) = group_header {
-                    ui.add_space(coursecraft_render::SPACE_SM);
-                    ui.label(
-                        coursecraft_render::caption(header)
-                            .color(p.text_secondary)
-                            .strong(),
-                    );
-                }
-                for (idx, trig, desc) in rows {
-                    let row_rect = egui::Rect::from_min_size(
-                        ui.cursor().min,
-                        egui::vec2(ui.available_width(), TRIGGER_ROW_HEIGHT),
-                    );
-                    // Registered before the row's widgets so the buttons win clicks over the row.
-                    let row_resp = ui.interact(
-                        row_rect,
-                        ui.scope_id().with(("trigger_row", idx)),
-                        egui::Sense::click(),
-                    );
-                    if row_resp.clicked() {
-                        new_active_row = Some(idx);
-                    }
-                    if row_resp.double_clicked() {
-                        new_active_row = Some(idx);
-                        editor.ui.trigger_form = Some(TriggerFormState::from_existing(
-                            idx,
-                            trig,
-                            &slide_clone,
-                            selected_layer.as_deref(),
-                            &editor.session.course,
-                        ));
-                    }
-                let hovered = ui.rect_contains_pointer(row_rect);
-                let is_active = active_row == Some(idx);
-                let show_actions = hovered || is_active;
-                if is_active || hovered {
-                    ui.painter().rect_filled(
-                        row_rect,
-                        egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
-                        if is_active { p.accent_subtle } else { p.hover },
-                    );
-                }
-
-                ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
-                    ui.horizontal_centered(|ui| {
-                        ui.add_space(coursecraft_render::SPACE_SM);
-                        // Fixed-width index column keeps the descriptions aligned.
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(coursecraft_render::SPACE_20, TRIGGER_ROW_HEIGHT),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.set_min_width(coursecraft_render::SPACE_20);
-                                ui.add(
-                                    egui::Label::new(format!("{}.", idx + 1)).selectable(false),
-                                )
-                            },
                         );
-                        if let Some(issues) = trigger_issues.get(idx).filter(|v| !v.is_empty()) {
-                            let is_error = issues.iter().any(|i| i.severity == "error");
-                            let icon_color = if is_error { p.danger } else { p.warning };
-                            let tooltip = issues
-                                .iter()
-                                .map(|i| i.message.as_str())
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            ui.label(
-                                coursecraft_render::icon(
-                                    coursecraft_render::Icon::Warning,
-                                    coursecraft_render::ICON_SM,
-                                )
-                                .color(icon_color),
-                            )
-                            .on_hover_text(tooltip);
-                        }
-                        if trig.disabled {
-                            ui.add(
-                                egui::Label::new(RichText::new(&desc).color(p.text_tertiary))
-                                    .selectable(false),
-                            );
-                            ui.add(
-                                egui::Label::new(
-                                    coursecraft_render::small("Off").color(p.text_tertiary),
-                                )
-                                .selectable(false),
-                            );
-                        } else {
-                            ui.add(
-                                egui::Label::new(RichText::new(&desc).strong()).selectable(false),
-                            );
-                        }
-
-                        if !show_actions {
-                            return;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // More: duplicate, copy, disable or enable
-                            let more = crate::widgets::icon_button(
-                                ui,
-                                coursecraft_render::Icon::DotsThree,
-                                "More trigger actions",
-                            );
-                            // The row stays active so the menu below survives the pointer leaving it.
-                            if more.clicked() {
-                                new_active_row = Some(idx);
-                            }
-                            egui::Popup::menu(&more).show(|ui| {
-                                if ui.button("Duplicate").clicked() {
-                                    actions.push((
-                                        "trigger.add",
-                                        trigger_params(
-                                            &slide_clone.id,
-                                            selected_layer.as_deref(),
-                                            trig,
-                                            Some(idx + 1),
-                                            None,
-                                        ),
-                                    ));
-                                    ui.close();
-                                }
-                                if ui.button("Copy").clicked() {
-                                    editor.ui.copied_triggers = vec![trig.clone()];
-                                    ui.close();
-                                }
-                                let label = if trig.disabled { "Enable" } else { "Disable" };
-                                if ui.button(label).clicked() {
-                                    let mut toggled = trig.clone();
-                                    toggled.disabled = !toggled.disabled;
-                                    actions.push((
-                                        "trigger.update",
-                                        trigger_params(
-                                            &slide_clone.id,
-                                            selected_layer.as_deref(),
-                                            &toggled,
-                                            None,
-                                            Some(idx),
-                                        ),
-                                    ));
-                                    ui.close();
-                                }
-                            });
-
-                            // Delete
-                            if crate::widgets::icon_button_danger(
-                                ui,
-                                coursecraft_render::Icon::Trash,
-                                true,
-                                "Delete trigger",
-                            )
-                            .clicked()
-                            {
-                                let params = match &selected_layer {
-                                    Some(lid) => serde_json::json!({
-                                        "slide": slide_clone.id,
-                                        "layer": lid,
-                                        "index": idx,
-                                    }),
-                                    None => serde_json::json!({
-                                        "slide": slide_clone.id,
-                                        "index": idx,
-                                    }),
-                                };
-                                actions.push(("trigger.delete", params));
-                            }
-
-                            // Move Down
-                            let can_down = idx + 1 < triggers.len();
-                            if crate::widgets::icon_button_enabled(
-                                ui,
-                                coursecraft_render::Icon::ArrowDown,
-                                can_down,
-                                "Move trigger down",
-                            )
-                            .clicked()
-                            {
-                                let params = match &selected_layer {
-                                    Some(lid) => serde_json::json!({
-                                        "slide": slide_clone.id,
-                                        "layer": lid,
-                                        "from": idx,
-                                        "to": idx + 1,
-                                    }),
-                                    None => serde_json::json!({
-                                        "slide": slide_clone.id,
-                                        "from": idx,
-                                        "to": idx + 1,
-                                    }),
-                                };
-                                actions.push(("trigger.move", params));
-                                new_active_row = Some(idx + 1);
-                            }
-
-                            // Move Up
-                            let can_up = idx > 0;
-                            if crate::widgets::icon_button_enabled(
-                                ui,
-                                coursecraft_render::Icon::ArrowUp,
-                                can_up,
-                                "Move trigger up",
-                            )
-                            .clicked()
-                            {
-                                let params = match &selected_layer {
-                                    Some(lid) => serde_json::json!({
-                                        "slide": slide_clone.id,
-                                        "layer": lid,
-                                        "from": idx,
-                                        "to": idx - 1,
-                                    }),
-                                    None => serde_json::json!({
-                                        "slide": slide_clone.id,
-                                        "from": idx,
-                                        "to": idx - 1,
-                                    }),
-                                };
-                                actions.push(("trigger.move", params));
-                                new_active_row = Some(idx - 1);
-                            }
-
-                            // Edit
-                            if crate::widgets::icon_button(
-                                ui,
-                                coursecraft_render::Icon::PencilSimple,
-                                "Edit trigger",
-                            )
-                            .clicked()
-                            {
-                                editor.ui.trigger_form = Some(TriggerFormState::from_existing(
-                                    idx,
-                                    trig,
-                                    &slide_clone,
+                        ui.add_space(12.0);
+                        if crate::primary_button(ui, "+ Add trigger").clicked() {
+                            editor_ui.trigger_form = Some(
+                                TriggerFormState::new_for_owner(
+                                    slide,
                                     selected_layer.as_deref(),
-                                    &editor.session.course,
-                                ));
-                            }
-                        });
+                                    &session.course,
+                                )
+                                .with_selected_object(slide, selection.object.as_deref()),
+                            );
+                        }
                     });
-                });
-                ui.advance_cursor_after_rect(row_rect);
+                    return;
                 }
-            }
-        });
 
-    if let Some(idx) = new_active_row {
-        ui.data_mut(|d| d.insert_temp(active_id, (owner_key, idx)));
+                type TriggerRow<'a> = (usize, &'a Trigger, String);
+                let filter_lower = editor_ui.triggers.filter.trim().to_ascii_lowercase();
+                let mut visible: Vec<TriggerRow<'_>> = triggers
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, trig)| {
+                        let desc = describe(trig, slide);
+                        if filter_lower.is_empty()
+                            || desc.to_ascii_lowercase().contains(&filter_lower)
+                        {
+                            Some((idx, trig, desc))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if visible.is_empty() {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(16.0);
+                        ui.label(
+                            RichText::new("No triggers match the filter.")
+                                .color(p.text_secondary)
+                                .size(coursecraft_render::SIZE_BODY),
+                        );
+                    });
+                    return;
+                }
+
+                let groups: Vec<(Option<String>, Vec<TriggerRow<'_>>)> =
+                    if editor_ui.triggers.group_by_object {
+                        let mut grouped: Vec<(Option<String>, String, Vec<TriggerRow<'_>>)> =
+                            Vec::new();
+                        for item in visible {
+                            let key = event_object_id(&item.1.when).map(str::to_owned);
+                            if let Some(existing) = grouped.iter_mut().find(|(k, _, _)| *k == key) {
+                                existing.2.push(item);
+                            } else {
+                                let label = match key.as_deref() {
+                                    Some(id) => object_name(slide, id),
+                                    None => "Slide".to_owned(),
+                                };
+                                grouped.push((key, label, vec![item]));
+                            }
+                        }
+                        grouped
+                            .into_iter()
+                            .map(|(_, label, rows)| (Some(label), rows))
+                            .collect()
+                    } else {
+                        if let Some(sel_id) = selection.object.as_deref() {
+                            visible.sort_by_key(|(idx, trig, _)| {
+                                let is_selected = event_object_id(&trig.when) == Some(sel_id);
+                                (!is_selected, *idx)
+                            });
+                        }
+                        vec![(None, visible)]
+                    };
+
+                for (group_header, rows) in groups {
+                    if let Some(header) = group_header {
+                        ui.add_space(coursecraft_render::SPACE_SM);
+                        ui.label(
+                            coursecraft_render::caption(header)
+                                .color(p.text_secondary)
+                                .strong(),
+                        );
+                    }
+                    for (idx, trig, desc) in rows {
+                        let row_rect = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(ui.available_width(), TRIGGER_ROW_HEIGHT),
+                        );
+                        // Registered before the row's widgets so the buttons win clicks over the row.
+                        let row_resp = ui.interact(
+                            row_rect,
+                            ui.scope_id().with(("trigger_row", idx)),
+                            egui::Sense::click(),
+                        );
+                        if row_resp.clicked() {
+                            new_active_row = Some(idx);
+                        }
+                        if row_resp.double_clicked() {
+                            new_active_row = Some(idx);
+                            editor_ui.trigger_form = Some(TriggerFormState::from_existing(
+                                idx,
+                                trig,
+                                slide,
+                                selected_layer.as_deref(),
+                                &session.course,
+                            ));
+                        }
+                        let hovered = ui.rect_contains_pointer(row_rect);
+                        let is_active = active_row == Some(idx);
+                        let show_actions = hovered || is_active;
+                        if is_active || hovered {
+                            ui.painter().rect_filled(
+                                row_rect,
+                                egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+                                if is_active { p.accent_subtle } else { p.hover },
+                            );
+                        }
+
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
+                            ui.horizontal_centered(|ui| {
+                                ui.add_space(coursecraft_render::SPACE_SM);
+                                // Fixed-width index column keeps the descriptions aligned.
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(coursecraft_render::SPACE_20, TRIGGER_ROW_HEIGHT),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(coursecraft_render::SPACE_20);
+                                        ui.add(
+                                            egui::Label::new(format!("{}.", idx + 1))
+                                                .selectable(false),
+                                        )
+                                    },
+                                );
+                                if let Some(issues) =
+                                    trigger_issues.get(idx).filter(|v| !v.is_empty())
+                                {
+                                    let is_error = issues.iter().any(|i| i.severity == "error");
+                                    let icon_color = if is_error { p.danger } else { p.warning };
+                                    let tooltip = issues
+                                        .iter()
+                                        .map(|i| i.message.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join("\n");
+                                    ui.label(
+                                        coursecraft_render::icon(
+                                            coursecraft_render::Icon::Warning,
+                                            coursecraft_render::ICON_SM,
+                                        )
+                                        .color(icon_color),
+                                    )
+                                    .on_hover_text(tooltip);
+                                }
+                                if trig.disabled {
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&desc).color(p.text_tertiary),
+                                        )
+                                        .selectable(false),
+                                    );
+                                    ui.add(
+                                        egui::Label::new(
+                                            coursecraft_render::small("Off").color(p.text_tertiary),
+                                        )
+                                        .selectable(false),
+                                    );
+                                } else {
+                                    ui.add(
+                                        egui::Label::new(RichText::new(&desc).strong())
+                                            .selectable(false),
+                                    );
+                                }
+
+                                if !show_actions {
+                                    return;
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let form_open = editor_ui.trigger_form.is_some();
+                                        // More: duplicate, copy, disable or enable
+                                        let more = crate::widgets::icon_button(
+                                            ui,
+                                            coursecraft_render::Icon::DotsThree,
+                                            "More trigger actions",
+                                        );
+                                        // The row stays active so the menu below survives the pointer leaving it.
+                                        if more.clicked() {
+                                            new_active_row = Some(idx);
+                                        }
+                                        egui::Popup::menu(&more).show(|ui| {
+                                            if ui
+                                                .add_enabled(!form_open, egui::Button::new("Duplicate"))
+                                                .clicked()
+                                            {
+                                                actions.push((
+                                                    "trigger.add",
+                                                    trigger_params(
+                                                        &slide.id,
+                                                        selected_layer.as_deref(),
+                                                        trig,
+                                                        Some(idx + 1),
+                                                        None,
+                                                    ),
+                                                ));
+                                                ui.close();
+                                            }
+                                            if ui.button("Copy").clicked() {
+                                                editor_ui.copied_triggers = vec![trig.clone()];
+                                                ui.close();
+                                            }
+                                            let label = if trig.disabled {
+                                                "Enable"
+                                            } else {
+                                                "Disable"
+                                            };
+                                            if ui.button(label).clicked() {
+                                                let mut toggled = trig.clone();
+                                                toggled.disabled = !toggled.disabled;
+                                                actions.push((
+                                                    "trigger.update",
+                                                    trigger_params(
+                                                        &slide.id,
+                                                        selected_layer.as_deref(),
+                                                        &toggled,
+                                                        None,
+                                                        Some(idx),
+                                                    ),
+                                                ));
+                                                ui.close();
+                                            }
+                                        });
+
+                                        // Delete
+                                        if crate::widgets::icon_button_danger(
+                                            ui,
+                                            coursecraft_render::Icon::Trash,
+                                            !form_open,
+                                            "Delete trigger",
+                                        )
+                                        .clicked()
+                                        {
+                                            let params = match &selected_layer {
+                                                Some(lid) => serde_json::json!({
+                                                    "slide": slide.id,
+                                                    "layer": lid,
+                                                    "index": idx,
+                                                }),
+                                                None => serde_json::json!({
+                                                    "slide": slide.id,
+                                                    "index": idx,
+                                                }),
+                                            };
+                                            actions.push(("trigger.delete", params));
+                                        }
+
+                                        // Move Down
+                                        let can_down = !form_open && idx + 1 < triggers.len();
+                                        if crate::widgets::icon_button_enabled(
+                                            ui,
+                                            coursecraft_render::Icon::ArrowDown,
+                                            can_down,
+                                            "Move trigger down",
+                                        )
+                                        .clicked()
+                                        {
+                                            let params = match &selected_layer {
+                                                Some(lid) => serde_json::json!({
+                                                    "slide": slide.id,
+                                                    "layer": lid,
+                                                    "from": idx,
+                                                    "to": idx + 1,
+                                                }),
+                                                None => serde_json::json!({
+                                                    "slide": slide.id,
+                                                    "from": idx,
+                                                    "to": idx + 1,
+                                                }),
+                                            };
+                                            actions.push(("trigger.move", params));
+                                            new_active_row = Some(idx + 1);
+                                        }
+
+                                        // Move Up
+                                        let can_up = !form_open && idx > 0;
+                                        if crate::widgets::icon_button_enabled(
+                                            ui,
+                                            coursecraft_render::Icon::ArrowUp,
+                                            can_up,
+                                            "Move trigger up",
+                                        )
+                                        .clicked()
+                                        {
+                                            let params = match &selected_layer {
+                                                Some(lid) => serde_json::json!({
+                                                    "slide": slide.id,
+                                                    "layer": lid,
+                                                    "from": idx,
+                                                    "to": idx - 1,
+                                                }),
+                                                None => serde_json::json!({
+                                                    "slide": slide.id,
+                                                    "from": idx,
+                                                    "to": idx - 1,
+                                                }),
+                                            };
+                                            actions.push(("trigger.move", params));
+                                            new_active_row = Some(idx - 1);
+                                        }
+
+                                        // Edit
+                                        if crate::widgets::icon_button(
+                                            ui,
+                                            coursecraft_render::Icon::PencilSimple,
+                                            "Edit trigger",
+                                        )
+                                        .clicked()
+                                        {
+                                            editor_ui.trigger_form =
+                                                Some(TriggerFormState::from_existing(
+                                                    idx,
+                                                    trig,
+                                                    slide,
+                                                    selected_layer.as_deref(),
+                                                    &session.course,
+                                                ));
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                        ui.advance_cursor_after_rect(row_rect);
+                    }
+                }
+            });
+
+        if let Some(idx) = new_active_row {
+            ui.data_mut(|d| d.insert_temp(active_id, (owner_key, idx)));
+        }
+    }
+    if paste_clicked {
+        paste_triggers(editor, &slide_id, selected_layer.as_deref());
     }
 }
 
@@ -2120,6 +2141,10 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
         return;
     };
 
+    if editor.selection.slide != form.owner_slide || editor.selection.layer != form.owner_layer {
+        return;
+    }
+
     let title = if form.editing_index.is_some() {
         "Edit Trigger"
     } else {
@@ -2130,6 +2155,20 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
     let Some(slide) = course.slide(&form.owner_slide) else {
         return;
     };
+    let owner_triggers = match &form.owner_layer {
+        Some(lid) => {
+            let Some(layer) = slide.layer(lid) else {
+                return;
+            };
+            &layer.triggers
+        }
+        None => &slide.triggers,
+    };
+    if let Some(idx) = form.editing_index
+        && idx >= owner_triggers.len()
+    {
+        return;
+    }
 
     let mut close_dialog = false;
     let mut commit_requested = false;

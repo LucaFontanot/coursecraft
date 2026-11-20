@@ -77,26 +77,40 @@ fn object_links(object: &coursecraft_course::Object) -> Vec<Link> {
     out
 }
 
-/// Does any trigger on the slide listen for a pointer event from `object`?
-fn has_pointer_trigger(slide: &Slide, object: &str) -> bool {
-    let matches = |event: &Event| {
-        matches!(
-            event,
-            Event::Click { object: o }
-                | Event::HoverStart { object: o }
-                | Event::HoverEnd { object: o }
-                if o == object
-        )
-    };
-    slide
-        .triggers
-        .iter()
-        .any(|t| !t.disabled && matches(&t.when))
-        || slide
-            .layers
+impl<'c> Player<'c> {
+    /// Recompute per-slide trigger metadata when the active slide changes.
+    pub(crate) fn refresh_slide_cache(&mut self) {
+        let Some(slide) = self.slide() else {
+            self.slide_cache = crate::SlideCache::default();
+            return;
+        };
+        let mut has_intersection_trigger = false;
+        let mut pointer_trigger_objects = std::collections::HashSet::new();
+        for t in slide
+            .triggers
             .iter()
-            .flat_map(|l| l.triggers.iter())
-            .any(|t| !t.disabled && matches(&t.when))
+            .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+        {
+            if t.disabled {
+                continue;
+            }
+            match &t.when {
+                Event::ObjectsIntersect { .. } | Event::ObjectsStopIntersecting { .. } => {
+                    has_intersection_trigger = true;
+                }
+                Event::Click { object }
+                | Event::HoverStart { object }
+                | Event::HoverEnd { object } => {
+                    pointer_trigger_objects.insert(object.as_str());
+                }
+                _ => {}
+            }
+        }
+        self.slide_cache = crate::SlideCache {
+            has_intersection_trigger,
+            pointer_trigger_objects,
+        };
+    }
 }
 
 /// Does a trigger's `when` match a fired event?
@@ -341,7 +355,7 @@ impl<'c> Player<'c> {
                     warn(out, "the slide menu is turned off for this course");
                     return;
                 }
-                if self.st.lightbox.is_none() && !self.can_go_to(slide) {
+                if !self.can_go_to(slide) {
                     warn(out, "that slide is locked in the slide menu");
                     return;
                 }
@@ -850,11 +864,11 @@ impl<'c> Player<'c> {
         Some(obj)
     }
 
-    fn video_cues(&self, object: &str) -> Option<Vec<Cue>> {
+    fn video_cues(&self, object: &str) -> Option<&'c [Cue]> {
         let slide = self.slide()?;
         let (obj, _) = slide.object(object)?;
         match &obj.kind {
-            ObjectKind::Video { cues, .. } => Some(cues.clone()),
+            ObjectKind::Video { cues, .. } => Some(cues.as_slice()),
             _ => None,
         }
     }
@@ -885,7 +899,7 @@ impl<'c> Player<'c> {
         q: &mut Queue,
         out: &mut Vec<Effect>,
     ) -> bool {
-        let (cues, trim_end) = {
+        let (cues, trim_end): (&'c [Cue], Option<u64>) = {
             let Some(slide) = self.slide() else {
                 return false;
             };
@@ -895,11 +909,9 @@ impl<'c> Player<'c> {
             };
             match &obj.kind {
                 ObjectKind::Video { cues, trim, .. } => {
-                    (cues.clone(), trim.as_ref().and_then(|trim| trim.end_ms))
+                    (cues.as_slice(), trim.as_ref().and_then(|trim| trim.end_ms))
                 }
-                ObjectKind::Audio { trim, .. } => {
-                    (Vec::new(), trim.as_ref().and_then(|trim| trim.end_ms))
-                }
+                ObjectKind::Audio { trim, .. } => (&[], trim.as_ref().and_then(|trim| trim.end_ms)),
                 _ => {
                     warn(out, format!("object {object:?} is not audio or video"));
                     return false;
@@ -958,7 +970,7 @@ impl<'c> Player<'c> {
         }
 
         let mut queued = false;
-        for cue in &cues {
+        for cue in cues {
             if progress.fired.contains(&cue.id) || cue.at_ms < old || cue.at_ms > at_ms {
                 continue;
             }
@@ -1035,7 +1047,7 @@ impl<'c> Player<'c> {
                 .fired
                 .retain(|id| cues.iter().any(|cue| cue.id == *id && cue.at_ms < at_ms));
         } else {
-            for cue in &cues {
+            for cue in cues {
                 if cue.at_ms <= at_ms {
                     progress.fired.insert(cue.id.clone());
                 }
@@ -1121,7 +1133,7 @@ impl<'c> Player<'c> {
         if let Some(cue_id) = &held_cue
             && let Some(cue) = self
                 .video_cues(object)
-                .and_then(|cues| cues.into_iter().find(|cue| cue.id == *cue_id))
+                .and_then(|cues| cues.iter().find(|cue| cue.id == *cue_id))
         {
             let mut progress = self.st.cue_progress.remove(object).unwrap_or_default();
             progress.last_ms = cue.at_ms;
@@ -1444,6 +1456,7 @@ impl<'c> Player<'c> {
 
         self.st.epoch = self.st.epoch.wrapping_add(1);
         self.st.slide = idx;
+        self.refresh_slide_cache();
         // The learner's pause belongs to the slide they paused on.
         self.st.player_paused = false;
         self.st.base = Clock::default();
@@ -1607,6 +1620,9 @@ impl<'c> Player<'c> {
     }
 
     fn check_intersections(&mut self, q: &mut Queue) {
+        if !self.slide_cache.has_intersection_trigger {
+            return;
+        }
         let Some(slide) = self.slide() else { return };
         // Collect all object IDs on the current slide (base objects + visible layers)
         let mut object_ids = Vec::new();
@@ -2268,6 +2284,7 @@ impl<'c> Player<'c> {
         };
         self.st.epoch = self.st.epoch.wrapping_add(1);
         self.st.slide = idx;
+        self.refresh_slide_cache();
         self.st.base = Clock::default();
         self.st.visible_layers.clear();
         self.st.layer_clocks.clear();
@@ -2350,6 +2367,7 @@ impl<'c> Player<'c> {
         }
         self.st.epoch = self.st.epoch.wrapping_add(1);
         self.st.slide = lb.base_slide;
+        self.refresh_slide_cache();
         self.st.base = lb.base;
         self.st.visible_layers = lb.base_visible_layers;
         self.st.layer_clocks = lb.base_layer_clocks;
@@ -2525,7 +2543,10 @@ impl<'c> Player<'c> {
                         | ObjectKind::Marker { .. }
                         | ObjectKind::ScrollPanel { .. }
                 )
-                || has_pointer_trigger(slide, &obj.id)
+                || self
+                    .slide_cache
+                    .pointer_trigger_objects
+                    .contains(obj.id.as_str())
         };
         let mut out = Vec::new();
         for obj in &slide.objects {
@@ -2839,18 +2860,21 @@ impl<'c> Player<'c> {
         let old = clock.ms;
         let new = old.saturating_add(dt).min(duration);
         let layer_owned = layer.map(str::to_owned);
-        for (ms, cue) in self.reach_points(layer) {
+        let mut buf = std::mem::take(&mut self.reach_buf);
+        self.fill_reach_points(layer, &mut buf);
+        for &(ms, cue) in &buf {
             if old < ms && ms <= new {
                 self.push(
                     q,
                     Event::TimelineReaches {
                         ms,
                         layer: layer_owned.clone(),
-                        cue,
+                        cue: cue.map(str::to_owned),
                     },
                 );
             }
         }
+        self.reach_buf = buf;
         for o in objects {
             if let Some(ref anim) = o.entrance {
                 let finish_ms = o.timing.start_ms.saturating_add(anim.duration_ms);
@@ -3189,35 +3213,38 @@ impl<'c> Player<'c> {
     }
 
     /// Distinct `timeline_reaches` points for one timeline, ascending.
-    fn reach_points(&self, layer: Option<&str>) -> Vec<(u32, Option<String>)> {
+    fn fill_reach_points(&self, layer: Option<&str>, out: &mut Vec<(u32, Option<&'c str>)>) {
+        out.clear();
         let Some(slide) = self.slide() else {
-            return Vec::new();
+            return;
         };
         let cues: &[coursecraft_course::SlideCue] = match layer {
             Some(lid) => slide.layer(lid).map_or(&[], |l| l.cue_points.as_slice()),
             None => slide.cue_points.as_slice(),
         };
-        let mut v: Vec<(u32, Option<String>)> = slide
+        for t in slide
             .triggers
             .iter()
             .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
-            .filter(|t| !t.disabled)
-            .filter_map(|t| match &t.when {
-                Event::TimelineReaches { ms, layer: l, cue } if l.as_deref() == layer => {
-                    match cue {
-                        Some(cue_id) => cues
-                            .iter()
-                            .find(|c| c.id == *cue_id)
-                            .map(|c| (c.at_ms, Some(cue_id.clone()))),
-                        None => Some((*ms, None)),
+        {
+            if t.disabled {
+                continue;
+            }
+            if let Event::TimelineReaches { ms, layer: l, cue } = &t.when
+                && l.as_deref() == layer
+            {
+                match cue {
+                    Some(cue_id) => {
+                        if let Some(c) = cues.iter().find(|c| c.id == *cue_id) {
+                            out.push((c.at_ms, Some(cue_id.as_str())));
+                        }
                     }
+                    None => out.push((*ms, None)),
                 }
-                _ => None,
-            })
-            .collect();
-        v.sort_unstable();
-        v.dedup();
-        v
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
     }
 
     // ------------------------------------------------------------ quiz
@@ -3851,6 +3878,7 @@ impl<'c> Player<'c> {
             warn(out, "retry_quiz on a course without any question");
             return;
         }
+        self.close_lightbox(false, out);
         let was_reviewing = self.st.reviewing_from.is_some();
         self.st.reviewing_from = None;
         self.st.answers.clear();
@@ -3862,6 +3890,19 @@ impl<'c> Player<'c> {
         self.st.hotspot_markers.clear();
         self.st.drops.clear();
         self.st.last_response = None;
+        let mut prev_id = None;
+        if !self.course.banks.is_empty() {
+            // Run leave steps before replacing `self.slides` so `self.st.slide`
+            // still indexes the old play order.
+            if self.entered {
+                self.note_timeline_completed();
+                self.save_current_slide();
+            }
+            prev_id = (self.entered || self.st.started)
+                .then(|| self.slides.get(self.st.slide).map(|s| s.id.clone()))
+                .flatten();
+            self.entered = false;
+        }
         // Saved slide state for question slides is forgotten.
         let question_ids: Vec<String> = self
             .slides
@@ -3881,7 +3922,17 @@ impl<'c> Player<'c> {
             out.push(Effect::ReviewChanged { reviewing: false });
         }
         if let Some(idx) = self.slides.iter().position(|s| s.question.is_some()) {
-            self.enter_slide(idx, q, out);
+            if let Some(prev) = prev_id {
+                if self.slides.get(idx).is_some_and(|next| next.id != prev) {
+                    if self.st.visit_history.len() >= 50 {
+                        self.st.visit_history.remove(0);
+                    }
+                    self.st.visit_history.push(prev);
+                }
+                self.enter_slide_inner(idx, false, q, out);
+            } else {
+                self.enter_slide(idx, q, out);
+            }
         } else {
             warn(out, "retry_quiz on a course without any question");
         }
@@ -3896,6 +3947,7 @@ impl<'c> Player<'c> {
             warn(out, "review_quiz with nothing answered");
             return;
         };
+        self.close_lightbox(false, out);
         let Some(current) = self.slide() else {
             warn(out, "review_quiz with no slide showing");
             return;
@@ -3910,6 +3962,7 @@ impl<'c> Player<'c> {
             warn(out, "exit_review while not reviewing");
             return;
         };
+        self.close_lightbox(false, out);
         let idx = self.slide_position(&from);
         out.push(Effect::ReviewChanged { reviewing: false });
         match idx {

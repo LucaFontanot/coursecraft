@@ -26,16 +26,16 @@ pub mod export;
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod paste_image;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod player_bundle;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod prefs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod preview_server;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod publish;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod system_fonts;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod template_library;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod versions;
 
@@ -204,6 +204,11 @@ struct EditorApp {
     document_tx: std::sync::mpsc::Sender<(String, Vec<u8>)>,
     #[cfg(target_arch = "wasm32")]
     document_rx: std::sync::mpsc::Receiver<(String, Vec<u8>)>,
+    /// Chosen `.ccraft` or `course.json` bytes in the browser.
+    #[cfg(target_arch = "wasm32")]
+    project_open_tx: std::sync::mpsc::Sender<(String, Vec<u8>)>,
+    #[cfg(target_arch = "wasm32")]
+    project_open_rx: std::sync::mpsc::Receiver<(String, Vec<u8>)>,
 }
 
 /// Whether a close request must be intercepted to ask about unsaved changes.
@@ -326,6 +331,18 @@ impl EditorApp {
 
         let mut editor = Editor::new(course);
         editor.set_recent(prefs.recent.clone());
+        if let Some(dir) = config_dir.as_deref() {
+            editor.set_library_templates_available(true);
+            editor.set_library_templates(
+                template_library::list_templates(dir)
+                    .into_iter()
+                    .map(|t| coursecraft_ui_egui::LibraryTemplateEntry {
+                        id: t.id,
+                        title: t.title,
+                    })
+                    .collect(),
+            );
+        }
         editor.set_publish_available(player_bundle::has_player());
         editor.set_automation_available(true);
         editor.set_agent_exe_path(
@@ -600,15 +617,41 @@ impl EditorApp {
         }
 
         let media = self.editor.used_media();
-        let saved = if let Some(mut record) = self.project.folder.take() {
-            // A folder is kept in git, so there is no version history for it.
-            let result =
-                files::save_folder_to(&path, &self.editor.session.course, &media, &mut record);
-            self.project.folder = Some(record);
-            result.map(|_| ())
-        } else {
-            self.keep_version(&path);
-            files::save_to(&path, &self.editor.session.course, &media)
+        let saved = match save_kind(&path, self.project.folder.is_some(), !media.is_empty()) {
+            SaveKind::Folder => {
+                // A folder is kept in git, so there is no version history for it.
+                let mut record = self.project.folder.take().unwrap_or_default();
+                let result = files::save_folder_to_arc(
+                    &path,
+                    &self.editor.session.course,
+                    &media,
+                    &mut record,
+                );
+                self.project.folder = Some(record);
+                result.map(|_| ())
+            }
+            SaveKind::JsonNeedsSaveAs => {
+                self.editor.set_status(
+                    "Plain JSON files cannot store imported media; save as a .ccraft project instead.",
+                );
+                return self.perform_save_as();
+            }
+            SaveKind::Json => {
+                self.keep_version(&path);
+                self.editor
+                    .session
+                    .course
+                    .to_json()
+                    .map_err(|e| format!("Save failed: {e}"))
+                    .and_then(|json| {
+                        files::write_atomic(&path, format!("{json}\n").as_bytes())
+                            .map_err(|e| format!("Failed to write file: {e}"))
+                    })
+            }
+            SaveKind::Ccraft => {
+                self.keep_version(&path);
+                files::save_to_arc(&path, &self.editor.session.course, &media)
+            }
         };
         match saved {
             Ok(()) => {
@@ -680,10 +723,7 @@ impl EditorApp {
                     course.title,
                     versions::display_when(stem)
                 );
-                let media_arc: Vec<(String, std::sync::Arc<[u8]>)> = media
-                    .iter()
-                    .map(|(k, v)| (k.clone(), std::sync::Arc::from(v.as_slice())))
-                    .collect();
+                let media_arc = into_arc_media(media);
                 self.editor.replace_course(course);
                 self.editor.set_media(media_arc);
                 self.project = Project::new(self.editor.session.revision);
@@ -776,10 +816,7 @@ impl EditorApp {
         };
         match opened {
             Ok(((course, media), record)) => {
-                let media_arc: Vec<(String, std::sync::Arc<[u8]>)> = media
-                    .iter()
-                    .map(|(k, v)| (k.clone(), std::sync::Arc::from(v.as_slice())))
-                    .collect();
+                let media_arc = into_arc_media(media);
                 self.editor.replace_course(course);
                 self.editor.set_media(media_arc);
                 self.project.path = final_path.clone();
@@ -899,7 +936,7 @@ impl EditorApp {
         let is_dirty = self.project.is_dirty(&self.editor.session);
         let rev = self.editor.session.revision;
         let editor = &self.editor;
-        self.autosaver.maybe_autosave(
+        self.autosaver.maybe_autosave_arc(
             current_time,
             is_dirty,
             rev,
@@ -1002,6 +1039,70 @@ impl EditorApp {
             }
             EditorRequest::OpenVersionCopy { id } => self.request_open_version(&id, ctx),
             EditorRequest::DeleteVersion { id } => self.request_delete_version(&id),
+            EditorRequest::SaveTemplateToLibrary { template_id } => {
+                let Some(dir) = self.config_dir.as_deref() else {
+                    return;
+                };
+                let Some(slide) = self.editor.session.course.template(&template_id).cloned() else {
+                    return;
+                };
+                let media = self.editor.slide_media(&slide);
+                let slide_size = self.editor.session.course.slide_size;
+                match template_library::save_template(dir, &slide, slide_size, &media) {
+                    Ok(saved) => {
+                        self.editor.set_library_templates(
+                            template_library::list_templates(dir)
+                                .into_iter()
+                                .map(|t| coursecraft_ui_egui::LibraryTemplateEntry {
+                                    id: t.id,
+                                    title: t.title,
+                                })
+                                .collect(),
+                        );
+                        self.editor
+                            .set_status(format!("Saved “{}” to My library.", saved.title));
+                    }
+                    Err(err) => {
+                        self.editor.set_status(err);
+                    }
+                }
+            }
+            EditorRequest::InsertLibraryTemplate { id, scene, after } => {
+                let Some(dir) = self.config_dir.as_deref() else {
+                    return;
+                };
+                match template_library::load_template(dir, &id) {
+                    Ok((slide, media)) => {
+                        self.editor
+                            .insert_library_template(slide, media, scene, after);
+                    }
+                    Err(err) => {
+                        self.editor.set_status(err);
+                    }
+                }
+            }
+            EditorRequest::DeleteLibraryTemplate { id } => {
+                let Some(dir) = self.config_dir.as_deref() else {
+                    return;
+                };
+                match template_library::delete_template(dir, &id) {
+                    Ok(()) => {
+                        self.editor.set_library_templates(
+                            template_library::list_templates(dir)
+                                .into_iter()
+                                .map(|t| coursecraft_ui_egui::LibraryTemplateEntry {
+                                    id: t.id,
+                                    title: t.title,
+                                })
+                                .collect(),
+                        );
+                        self.editor.set_status("Deleted template from My library.");
+                    }
+                    Err(err) => {
+                        self.editor.set_status(err);
+                    }
+                }
+            }
             EditorRequest::SaveAs => {
                 self.perform_save_as();
             }
@@ -2201,11 +2302,7 @@ impl EditorApp {
         match coursecraft_pptx::import_pptx(bytes, title) {
             Ok(imported) => {
                 self.editor.replace_course(imported.course);
-                let media_arc: Vec<(String, std::sync::Arc<[u8]>)> = imported
-                    .media
-                    .iter()
-                    .map(|(k, v)| (k.clone(), std::sync::Arc::from(v.as_slice())))
-                    .collect();
+                let media_arc = into_arc_media(imported.media);
                 self.editor.set_media(media_arc);
                 #[cfg(not(target_arch = "wasm32"))]
                 {
@@ -2224,6 +2321,44 @@ impl EditorApp {
             }
         }
     }
+}
+
+/// Format chosen when saving an already-open project path.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveKind {
+    Folder,
+    Json,
+    JsonNeedsSaveAs,
+    Ccraft,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn has_extension_ignore_ascii_case(path: &Path, ext: &str) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn save_kind(path: &Path, is_open_folder: bool, has_media: bool) -> SaveKind {
+    if is_open_folder {
+        SaveKind::Folder
+    } else if has_extension_ignore_ascii_case(path, "json") {
+        if has_media {
+            SaveKind::JsonNeedsSaveAs
+        } else {
+            SaveKind::Json
+        }
+    } else {
+        SaveKind::Ccraft
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn control_save_is_folder(target: &Path, project: &Project) -> bool {
+    let is_open_folder = project.folder.is_some() && project.path.as_deref() == Some(target);
+    is_open_folder || has_extension_ignore_ascii_case(target, coursecraft_format::FOLDER_EXTENSION)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2372,14 +2507,8 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
         };
 
         let media = self.editor.used_media();
-        let is_ccraft = target
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
-        let is_project_folder = target
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case(coursecraft_format::FOLDER_EXTENSION));
+        let is_ccraft = has_extension_ignore_ascii_case(&target, "ccraft");
+        let is_project_folder = control_save_is_folder(&target, self.project);
 
         if is_project_folder {
             // Keep the record when saving over the folder that is already open.
@@ -2390,8 +2519,12 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
                 .take()
                 .filter(|_| same)
                 .unwrap_or_default();
-            let result =
-                files::save_folder_to(&target, &self.editor.session.course, &media, &mut record);
+            let result = files::save_folder_to_arc(
+                &target,
+                &self.editor.session.course,
+                &media,
+                &mut record,
+            );
             self.project.folder = Some(record);
             result.map_err(coursecraft_control::HostError::Engine)?;
         } else if is_ccraft {
@@ -2404,7 +2537,7 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
                         .set_status("Couldn't keep a version of this file");
                 }
             }
-            files::save_to(&target, &self.editor.session.course, &media)
+            files::save_to_arc(&target, &self.editor.session.course, &media)
                 .map_err(coursecraft_control::HostError::Engine)?;
         } else {
             let is_dir = target.is_dir()
@@ -2460,10 +2593,7 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
         match opened {
             Ok(((course, media), record)) => {
                 let title = course.title.clone();
-                let media_arc: Vec<(String, std::sync::Arc<[u8]>)> = media
-                    .iter()
-                    .map(|(k, v)| (k.clone(), std::sync::Arc::from(v.as_slice())))
-                    .collect();
+                let media_arc = into_arc_media(media);
                 self.editor.replace_course(course);
                 self.editor.set_media(media_arc);
                 self.project.path = Some(path.to_path_buf());
@@ -2769,6 +2899,10 @@ impl eframe::App for EditorApp {
 
         #[cfg(target_arch = "wasm32")]
         {
+            while let Ok((name, bytes)) = self.project_open_rx.try_recv() {
+                self.open_web_project_bytes(&name, &bytes);
+            }
+
             while let Ok((name, bytes)) = self.document_rx.try_recv() {
                 self.apply_document_file(&name, &bytes);
             }
@@ -3025,6 +3159,83 @@ impl eframe::App for EditorApp {
                         self.editor.ui.system_fonts = Some(Vec::new());
                     }
                     EditorRequest::AddSystemFont { .. } => {}
+                    EditorRequest::Open => {
+                        let tx = self.project_open_tx.clone();
+                        let ctx = ui.ctx().clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let file = rfd::AsyncFileDialog::new()
+                                .add_filter(
+                                    "CourseCraft Project (*.ccraft, *.json)",
+                                    &["ccraft", "json"],
+                                )
+                                .pick_file()
+                                .await;
+                            if let Some(file) = file {
+                                let name = file.file_name();
+                                let bytes = file.read().await;
+                                let _ = tx.send((name, bytes));
+                                ctx.request_repaint();
+                            }
+                        });
+                    }
+                    EditorRequest::Save | EditorRequest::SaveAs => {
+                        match coursecraft_format::save_project(
+                            &self.editor.session.course,
+                            &self.editor.media,
+                        ) {
+                            Ok(bytes) => {
+                                let stem = sanitize_filename_stem(
+                                    &self.editor.session.course.title,
+                                    "Untitled",
+                                );
+                                let file_name = format!("{stem}.ccraft");
+                                match web_download_bytes(
+                                    &file_name,
+                                    &bytes,
+                                    "application/octet-stream",
+                                ) {
+                                    Ok(()) => {
+                                        self.editor.set_status(format!("Downloaded {file_name}"))
+                                    }
+                                    Err(err) => self.editor.set_status(format!(
+                                        "Couldn't download {file_name}: {err}"
+                                    )),
+                                }
+                            }
+                            Err(err) => {
+                                self.editor
+                                    .set_status(format!("Couldn't save project: {err}"));
+                            }
+                        }
+                    }
+                    EditorRequest::Publish { standard } => {
+                        self.editor.set_publish_busy();
+                        let pkg_standard = publish::package_standard(standard);
+                        let player = player_bundle::player_files();
+                        match publish::run_publish_bytes(
+                            &self.editor.session.course,
+                            &self.editor.media,
+                            pkg_standard,
+                            &player,
+                        ) {
+                            Ok(bytes) => {
+                                let stem = sanitize_filename_stem(
+                                    &self.editor.session.course.title,
+                                    "course",
+                                );
+                                let file_name = format!("{stem}-{}.zip", standard.file_stem());
+                                match web_download_bytes(&file_name, &bytes, "application/zip") {
+                                    Ok(()) => self
+                                        .editor
+                                        .set_publish_success(file_name, bytes.len() as u64),
+                                    Err(err) => self.editor.set_publish_failure(format!(
+                                        "Couldn't download {file_name}: {err}"
+                                    )),
+                                }
+                            }
+                            Err(err) => self.editor.set_publish_failure(err),
+                        }
+                    }
                     EditorRequest::SaveImage { .. } => {
                         self.editor.set_status("Saving works in the desktop app.");
                     }
@@ -3157,8 +3368,7 @@ fn main() {
         let (course, media) = initial_course_and_media(blank);
         let mut editor = Editor::new(course);
         editor.set_media(media);
-        editor.set_file_ops_available(false);
-        editor.set_publish_available(false);
+        editor.set_publish_available(player_bundle::has_player());
         editor.set_coach_marks_done(false);
         if !blank {
             editor.ui.show_welcome = true;
@@ -3168,6 +3378,7 @@ fn main() {
         let (import_tx, import_rx) = std::sync::mpsc::channel();
         let (background_audio_tx, background_audio_rx) = std::sync::mpsc::channel();
         let (document_tx, document_rx) = std::sync::mpsc::channel();
+        let (project_open_tx, project_open_rx) = std::sync::mpsc::channel();
         if let Err(e) = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -3187,6 +3398,8 @@ fn main() {
                         background_audio_rx,
                         document_tx,
                         document_rx,
+                        project_open_tx,
+                        project_open_rx,
                     }))
                 }),
             )
@@ -3195,4 +3408,99 @@ fn main() {
             web_sys::console::error_1(&e);
         }
     });
+}
+
+#[cfg(target_arch = "wasm32")]
+impl EditorApp {
+    fn open_web_project_bytes(&mut self, name: &str, bytes: &[u8]) {
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".ccraft") {
+            match coursecraft_format::open_project(bytes) {
+                Ok(project) => {
+                    self.editor.replace_course(project.course);
+                    self.editor.set_media(into_arc_media(project.media));
+                    self.editor.set_status(format!("Opened {name}"));
+                }
+                Err(err) => {
+                    self.editor
+                        .set_status(format!("Couldn't open {name}: {err}"));
+                }
+            }
+        } else if lower.ends_with(".json") {
+            match std::str::from_utf8(bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|text| Course::from_json(text).map_err(|e| e.to_string()))
+            {
+                Ok(course) => {
+                    self.editor.replace_course(course);
+                    self.editor.set_media(Vec::new());
+                    self.editor.set_status(format!("Opened {name}"));
+                }
+                Err(err) => {
+                    self.editor
+                        .set_status(format!("Couldn't open {name}: {err}"));
+                }
+            }
+        } else {
+            self.editor
+                .set_status("Choose a .ccraft or course.json file to open.");
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn sanitize_filename_stem(title: &str, fallback: &str) -> String {
+    let sanitized = title
+        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_")
+        .trim()
+        .to_string();
+    if sanitized.is_empty() {
+        fallback.to_string()
+    } else {
+        sanitized
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_download_bytes(file_name: &str, bytes: &[u8], mime: &str) -> Result<(), String> {
+    use eframe::wasm_bindgen::JsCast as _;
+
+    let window = web_sys::window().ok_or_else(|| "no browser window".to_string())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "no browser document".to_string())?;
+    let body = document
+        .body()
+        .ok_or_else(|| "no document body".to_string())?;
+
+    let array = js_sys::Uint8Array::from(bytes);
+    let parts = js_sys::Array::of1(&array.into());
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type(mime);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
+        .map_err(|e| format!("Blob failed: {e:?}"))?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|e| format!("Object URL failed: {e:?}"))?;
+
+    let anchor_el = document
+        .create_element("a")
+        .map_err(|e| format!("create_element failed: {e:?}"))?;
+    let anchor = anchor_el
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| "created element is not an anchor".to_string())?;
+    anchor.set_href(&url);
+    anchor.set_download(file_name);
+    let _ = anchor.style().set_property("display", "none");
+    let _ = body.append_child(&anchor);
+    anchor.click();
+    let _ = body.remove_child(&anchor);
+    let _ = web_sys::Url::revoke_object_url(&url);
+    Ok(())
+}
+
+fn into_arc_media(media: Vec<(String, Vec<u8>)>) -> Vec<(String, std::sync::Arc<[u8]>)> {
+    media
+        .into_iter()
+        .map(|(k, v)| (k, std::sync::Arc::from(v)))
+        .collect()
 }

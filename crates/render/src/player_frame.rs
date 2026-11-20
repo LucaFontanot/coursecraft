@@ -83,6 +83,8 @@ pub struct FrameOutput {
     pub volume: Option<f32>,
     /// The learner asked to toggle full screen. The host acts on it.
     pub fullscreen_toggle: bool,
+    /// The learner asked to start the course over. The host clears saved progress and restarts.
+    pub restart: bool,
 }
 
 impl Default for FrameOutput {
@@ -92,6 +94,7 @@ impl Default for FrameOutput {
             slide_rect: Rect::NOTHING,
             volume: None,
             fullscreen_toggle: false,
+            restart: false,
         }
     }
 }
@@ -128,8 +131,11 @@ pub struct PlayerFrame {
     pub can_fullscreen: bool,
     /// The host is currently full screen, for the button's look and label.
     pub fullscreen: bool,
+    /// The host supports starting the course over from the player menu.
+    pub can_restart: bool,
     speed_open: bool,
     fullscreen_toggle: bool,
+    restart: bool,
     /// Where the player logo was drawn last frame, if it was.
     last_logo: Option<Rect>,
     /// The drawer's tab, glossary search and open term.
@@ -177,8 +183,10 @@ impl Default for PlayerFrame {
             can_speed: false,
             can_fullscreen: false,
             fullscreen: false,
+            can_restart: false,
             speed_open: false,
             fullscreen_toggle: false,
+            restart: false,
             last_logo: None,
             drawer_view: DrawerView::default(),
             focus_glossary_search: false,
@@ -393,6 +401,7 @@ impl PlayerFrame {
         self.last_lightbox_close = None;
         self.seek_drag = None;
         self.seek_drag_slide = None;
+        self.restart = false;
     }
 
     /// Open the outline drawer fully, without animating. Used by snapshots.
@@ -474,11 +483,11 @@ impl PlayerFrame {
             self.seek_drag = None;
             self.seek_drag_slide = slide_id;
         }
-        self.focus.set_chrome_visibility(
-            layout
-                .as_ref()
-                .map_or(ChromeVisibility::none(), |l| l.visible),
-        );
+        let mut visibility = layout
+            .as_ref()
+            .map_or(ChromeVisibility::none(), |l| l.visible);
+        visibility.can_restart = self.can_restart;
+        self.focus.set_chrome_visibility(visibility);
         self.last_chrome.clear();
         if let Some(layout) = &layout {
             for (button, rect) in [
@@ -528,6 +537,10 @@ impl PlayerFrame {
                     crate::focus::ChromeRequest::SetVolume(volume) => self.set_volume(volume),
                     crate::focus::ChromeRequest::ToggleFullscreen => {
                         self.fullscreen_toggle = true;
+                    }
+                    crate::focus::ChromeRequest::StartOver => {
+                        self.restart = true;
+                        self.drawer_open = false;
                     }
                     crate::focus::ChromeRequest::FocusGlossarySearch => {
                         self.focus_glossary_search = true;
@@ -686,7 +699,9 @@ impl PlayerFrame {
                 drawer,
                 self.drawer_progress,
                 show_nav,
+                self.can_restart,
                 &mut self.drawer_open,
+                &mut self.restart,
                 &mut inputs,
                 &self.focus,
                 &mut self.last_chrome,
@@ -736,11 +751,13 @@ impl PlayerFrame {
             None
         };
         let fullscreen_toggle = std::mem::take(&mut self.fullscreen_toggle);
+        let restart = std::mem::take(&mut self.restart);
         FrameOutput {
             inputs,
             slide_rect,
             volume,
             fullscreen_toggle,
+            restart,
         }
     }
 
@@ -1591,6 +1608,7 @@ fn strip_layout(
         next: next.is_some(),
         speed: speed.is_some(),
         fullscreen: fullscreen.is_some(),
+        can_restart: false,
     };
 
     Some(StripLayout {
@@ -2558,7 +2576,9 @@ fn draw_drawer(
     rect: Rect,
     progress: f32,
     show_nav: bool,
+    can_restart: bool,
     drawer_open: &mut bool,
+    restart: &mut bool,
     inputs: &mut Vec<Input>,
     focus: &crate::focus::FocusManager,
     chrome: &mut Vec<(crate::focus::ChromeButton, Rect)>,
@@ -2689,8 +2709,15 @@ fn draw_drawer(
 
     // Rows take clicks only once the drawer has stopped moving.
     let settled = progress >= 1.0;
+    const FOOTER_HEIGHT: f32 = 44.0;
+    let scroll_max_height = if can_restart {
+        (child.available_height() - FOOTER_HEIGHT).max(40.0)
+    } else {
+        child.available_height()
+    };
     ScrollArea::vertical()
         .auto_shrink([false, false])
+        .max_height(scroll_max_height)
         .show(&mut child, |ui| {
             // The scroll area's painter clips rows to the list, so a scrolled
             // row never draws over the drawer header or tabs.
@@ -2805,6 +2832,44 @@ fn draw_drawer(
         && can_navigate
     {
         inputs.push(Input::GoTo { slide });
+    }
+
+    if can_restart {
+        child.add_space(10.0);
+        let sense = if settled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        };
+        let (btn_rect, resp) =
+            child.allocate_exact_size(vec2(child.available_width(), 32.0), sense);
+        chrome.push((crate::focus::ChromeButton::StartOver, btn_rect));
+        let bg = if resp.hovered() {
+            Color32::from_white_alpha(0x1E)
+        } else {
+            Color32::from_white_alpha(0x10)
+        };
+        child
+            .painter()
+            .rect_filled(btn_rect, CornerRadius::same(6), bg);
+        focus.paint_chrome(
+            &child,
+            btn_rect,
+            &crate::focus::ChromeButton::StartOver,
+            accent,
+            DRAWER_BG,
+        );
+        child.painter().text(
+            btn_rect.center(),
+            Align2::CENTER_CENTER,
+            player.course().chrome_string("startOver"),
+            body_font,
+            DRAWER_TEXT,
+        );
+        if resp.clicked() && settled {
+            *restart = true;
+            *drawer_open = false;
+        }
     }
 }
 

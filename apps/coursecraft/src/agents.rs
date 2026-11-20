@@ -308,6 +308,15 @@ fn stop_child(
     stdout_handle: Option<std::thread::JoinHandle<String>>,
     stderr_handle: Option<std::thread::JoinHandle<String>>,
 ) {
+    #[cfg(windows)]
+    {
+        let pid = child.id();
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     let _ = child.kill();
     let _ = child.wait();
     join_writer(stdin_handle);

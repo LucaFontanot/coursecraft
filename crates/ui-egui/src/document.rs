@@ -10,8 +10,8 @@
 
 use crate::dialog::Dialog;
 use coursecraft_ai::{
-    ChatReply, MAX_DOCUMENT_CHARS, OutlineOptions, endpoint_host, endpoint_is_local,
-    outline_request, strip_code_fence,
+    ChatReply, MAX_DOCUMENT_CHARS, MAX_DOCUMENT_PARTS, OutlineOptions, endpoint_host,
+    endpoint_is_local, merge_outline_parts, outline_part_request, split_document, strip_code_fence,
 };
 use coursecraft_render::{SIZE_BODY, SIZE_SMALL, palette};
 use egui::{Button, Color32, Id, Key, Modifiers, RichText, ScrollArea, TextEdit};
@@ -21,8 +21,9 @@ use crate::{AiPurpose, Editor, EditorRequest};
 /// Warning shown when the endpoint hit its answer limit.
 pub const TRUNCATED_ANSWER: &str = "The answer was cut off, so the last slides may be missing.";
 
-/// Warning shown when the document is longer than what is sent.
-pub const OVER_LIMIT: &str = "Only the first 60,000 characters will be sent.";
+/// Warning shown when the document exceeds the maximum number of parts.
+pub const OVER_PART_LIMIT: &str =
+    "This document is over 20 parts; only the first 20 parts will be sent.";
 
 /// What the Generate row is showing.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -53,6 +54,16 @@ pub struct DocumentDialogState {
     pub focus: bool,
     /// Whether this build can open a file picker.
     pub file_available: bool,
+    /// Document parts for the active multi-part run.
+    pub parts: Vec<String>,
+    /// Zero-based index of the part currently in flight.
+    pub part_index: usize,
+    /// Collected replies for completed parts in the active run.
+    pub replies: Vec<String>,
+    /// True if any part's reply was truncated at `max_tokens`.
+    pub any_truncated: bool,
+    /// Options captured when the current run started.
+    pub run_options: OutlineOptions,
 }
 
 impl Default for DocumentDialogState {
@@ -65,6 +76,11 @@ impl Default for DocumentDialogState {
             state: DocumentRequestState::Idle,
             focus: false,
             file_available: true,
+            parts: Vec::new(),
+            part_index: 0,
+            replies: Vec::new(),
+            any_truncated: false,
+            run_options: OutlineOptions::default(),
         }
     }
 }
@@ -74,6 +90,13 @@ impl DocumentDialogState {
     #[must_use]
     pub fn is_running(&self) -> bool {
         matches!(self.state, DocumentRequestState::Running)
+    }
+
+    fn clear_run(&mut self) {
+        self.parts.clear();
+        self.part_index = 0;
+        self.replies.clear();
+        self.any_truncated = false;
     }
 }
 
@@ -106,6 +129,7 @@ fn close(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
     if editor.ui.document.is_running() {
         requests.push(EditorRequest::CancelAi(AiPurpose::Outline));
     }
+    editor.ui.document.clear_run();
     editor.ui.document.state = DocumentRequestState::Idle;
     editor.ui.document.open = false;
     editor.ui.document.focus = false;
@@ -123,25 +147,52 @@ pub fn consume_escape(editor: &mut Editor, ctx: &egui::Context) {
 /// Hand a finished outline request back to this window.
 ///
 /// A result only lands while this window is running the request, so a late or
-/// misrouted answer changes nothing. A good answer opens `Slides from Outline`
-/// with the stripped text; the course is untouched until the author adds it.
+/// misrouted answer changes nothing. For multi-part documents, each reply is
+/// collected and the next part is requested until all parts finish. A good
+/// answer opens `Slides from Outline` with the merged text; the course is
+/// untouched until the author adds it.
 pub fn set_result(editor: &mut Editor, result: Result<ChatReply, String>) {
     if !editor.ui.document.is_running() {
         return;
     }
     match result {
         Ok(reply) => {
-            let text = strip_code_fence(&reply.text).to_owned();
-            editor.ui.document.state = DocumentRequestState::Idle;
-            editor.ui.document.open = false;
-            editor.ui.document.focus = false;
-            editor.ui.outline_text = text;
-            editor.ui.outline_warning = reply.truncated.then(|| TRUNCATED_ANSWER.to_string());
-            editor.ui.outline_focus = true;
-            editor.ui.outline_last_first_slide = None;
-            editor.ui.show_outline_dialog = true;
+            let total = editor.ui.document.parts.len().max(1);
+            editor.ui.document.any_truncated |= reply.truncated;
+            editor
+                .ui
+                .document
+                .replies
+                .push(strip_code_fence(&reply.text).to_owned());
+            let next_index = editor.ui.document.part_index + 1;
+            if next_index < total {
+                editor.ui.document.part_index = next_index;
+                let request = outline_part_request(
+                    &editor.ui.document.parts[next_index],
+                    next_index + 1,
+                    total,
+                    &editor.ui.document.run_options,
+                );
+                editor.pending_requests.push(EditorRequest::AiChat {
+                    purpose: AiPurpose::Outline,
+                    request,
+                });
+            } else {
+                let text = merge_outline_parts(&editor.ui.document.replies);
+                let truncated = editor.ui.document.any_truncated;
+                editor.ui.document.clear_run();
+                editor.ui.document.state = DocumentRequestState::Idle;
+                editor.ui.document.open = false;
+                editor.ui.document.focus = false;
+                editor.ui.outline_text = text;
+                editor.ui.outline_warning = truncated.then(|| TRUNCATED_ANSWER.to_string());
+                editor.ui.outline_focus = true;
+                editor.ui.outline_last_first_slide = None;
+                editor.ui.show_outline_dialog = true;
+            }
         }
         Err(message) => {
+            editor.ui.document.clear_run();
             editor.ui.document.state = DocumentRequestState::Failed(message);
         }
     }
@@ -150,6 +201,7 @@ pub fn set_result(editor: &mut Editor, result: Result<ChatReply, String>) {
 /// Forget a running request after the author cancelled it.
 pub fn set_cancelled(editor: &mut Editor) {
     if editor.ui.document.is_running() {
+        editor.ui.document.clear_run();
         editor.ui.document.state = DocumentRequestState::Idle;
     }
 }
@@ -199,7 +251,15 @@ fn start_request(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
         slides: requested_slides(&editor.ui.document.slides),
         questions: editor.ui.document.questions,
     };
-    let request = outline_request(&editor.ui.document.text, &options);
+    let mut parts = split_document(&editor.ui.document.text);
+    parts.truncate(MAX_DOCUMENT_PARTS);
+    let total = parts.len();
+    let request = outline_part_request(&parts[0], 1, total, &options);
+    editor.ui.document.parts = parts;
+    editor.ui.document.part_index = 0;
+    editor.ui.document.replies.clear();
+    editor.ui.document.any_truncated = false;
+    editor.ui.document.run_options = options;
     editor.ui.document.state = DocumentRequestState::Running;
     requests.push(EditorRequest::AiChat {
         purpose: AiPurpose::Outline,
@@ -305,7 +365,20 @@ pub fn show_document_dialog(
                     }
                 });
                 if count > MAX_DOCUMENT_CHARS {
-                    ui.label(RichText::new(OVER_LIMIT).size(SIZE_SMALL).color(p.warning));
+                    let part_count = split_document(&editor.ui.document.text).len();
+                    if part_count > MAX_DOCUMENT_PARTS {
+                        ui.label(
+                            RichText::new(OVER_PART_LIMIT)
+                                .size(SIZE_SMALL)
+                                .color(p.warning),
+                        );
+                    } else if part_count > 1 {
+                        ui.label(
+                            RichText::new(format!("Will be sent in {part_count} parts."))
+                                .size(SIZE_SMALL)
+                                .color(p.text_secondary),
+                        );
+                    }
                 }
 
                 ui.add_space(8.0);
@@ -338,9 +411,18 @@ pub fn show_document_dialog(
 
                 match &editor.ui.document.state {
                     DocumentRequestState::Running => {
+                        let total = editor.ui.document.parts.len();
+                        let status = if total > 1 {
+                            format!(
+                                "Reading part {} of {total}",
+                                editor.ui.document.part_index + 1
+                            )
+                        } else {
+                            "Generating…".to_string()
+                        };
                         ui.horizontal(|ui| {
                             ui.add(egui::Spinner::new());
-                            ui.label("Generating…");
+                            ui.label(status);
                             if ui.button("Cancel").clicked() {
                                 cancel = true;
                             }
@@ -397,6 +479,7 @@ pub fn show_document_dialog(
         requests.push(EditorRequest::PickDocument);
     }
     if cancel {
+        editor.ui.document.clear_run();
         editor.ui.document.state = DocumentRequestState::Idle;
         requests.push(EditorRequest::CancelAi(AiPurpose::Outline));
         return;

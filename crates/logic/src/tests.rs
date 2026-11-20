@@ -1,6 +1,6 @@
 use coursecraft_course::{
-    Action, BACKGROUND_AUDIO_ID, BankDraw, CompletionStatus, Course, Event, ObjectKind,
-    QuestionBank, RevisitMode, Slide, Trigger, Trim, Value, VarOp, VariableDef,
+    Action, BACKGROUND_AUDIO_ID, BankDraw, CompletionStatus, Course, Event, NavMode, Object,
+    ObjectKind, QuestionBank, RevisitMode, Slide, Trigger, Trim, Value, VarOp, VariableDef,
 };
 
 use crate::{
@@ -10379,4 +10379,485 @@ fn jump_to_scene_and_last_visited_history_and_resume() {
     let fx = resumed.handle(&click("btn-start"));
     // Previous slide before sc2-b in play order is sc2-a.
     assert!(has(&fx, &slide_entered("sc2-a")));
+}
+
+fn lightbox_quiz_course() -> Course {
+    let mut c = retry_review_course();
+    // Add a button on s1 to open s-results as a lightbox, and make s1 revisit: resume.
+    c.scenes[0].slides[0].revisit = RevisitMode::Resume;
+    c.scenes[0].slides[0].objects.push(
+        serde_json::from_value::<Object>(serde_json::json!({
+            "id": "btn-lb",
+            "kind": { "type": "button", "label": "Open Results" },
+            "frame": { "x": 0.0, "y": 300.0, "w": 120.0, "h": 40.0 }
+        }))
+        .expect("btn-lb"),
+    );
+    c.scenes[0].slides[0].triggers.push(Trigger {
+        action: Action::LightboxSlide {
+            slide: "s-results".into(),
+        },
+        when: Event::Click {
+            object: "btn-lb".into(),
+        },
+        condition: None,
+        disabled: false,
+    });
+    c
+}
+
+#[test]
+fn retry_quiz_closes_open_lightbox() {
+    let c = lightbox_quiz_course();
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    answer_q1(&mut p);
+    p.handle(&click("btn-lb"));
+    assert!(p.state().lightbox.is_some());
+
+    let fx = p.handle(&click("btn-retry"));
+    assert!(p.state().lightbox.is_none(), "lightbox should be closed");
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::LightboxClosed { slide } if slide == "s-results")),
+        "expected LightboxClosed, got {fx:?}"
+    );
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-q1"));
+}
+
+#[test]
+fn review_quiz_and_exit_review_close_open_lightbox() {
+    let c = lightbox_quiz_course();
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    answer_q1(&mut p);
+    p.handle(&click("btn-lb"));
+    assert!(p.state().lightbox.is_some());
+
+    let fx = p.handle(&click("btn-review"));
+    assert!(
+        p.state().lightbox.is_none(),
+        "lightbox should be closed on review"
+    );
+    assert!(
+        fx.iter()
+            .any(|e| matches!(e, Effect::LightboxClosed { slide } if slide == "s-results")),
+        "expected LightboxClosed on review, got {fx:?}"
+    );
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-q1"));
+
+    // Open a lightbox while reviewing, then exit_review must close it too.
+    let mut c2 = c.clone();
+    let s_q1 = c2.slide_mut("s-q1").expect("s-q1");
+    s_q1.objects.push(
+        serde_json::from_value::<Object>(serde_json::json!({
+            "id": "btn-lb-rev",
+            "kind": { "type": "button", "label": "Open Results" },
+            "frame": { "x": 0.0, "y": 400.0, "w": 120.0, "h": 40.0 }
+        }))
+        .expect("btn-lb-rev"),
+    );
+    s_q1.triggers.push(Trigger {
+        action: Action::LightboxSlide {
+            slide: "s-results".into(),
+        },
+        when: Event::Click {
+            object: "btn-lb-rev".into(),
+        },
+        condition: None,
+        disabled: false,
+    });
+    let mut p2 = Player::new(&c2).expect("player");
+    p2.handle(&Input::Start);
+    answer_q1(&mut p2);
+    p2.handle(&Input::Jump {
+        slide: "s-results".into(),
+    });
+    p2.handle(&click("btn-review"));
+    p2.handle(&click("btn-lb-rev"));
+    assert!(p2.state().lightbox.is_some());
+    let fx2 = p2.handle(&Input::ExitReview);
+    assert!(
+        p2.state().lightbox.is_none(),
+        "lightbox should be closed on exit_review"
+    );
+    assert!(
+        fx2.iter()
+            .any(|e| matches!(e, Effect::LightboxClosed { slide } if slide == "s-results")),
+        "expected LightboxClosed on exit_review, got {fx2:?}"
+    );
+}
+
+#[test]
+fn resume_saves_the_resumed_slide_when_leaving_it() {
+    let mut c = Course::from_json(HELLO).expect("hello");
+    c.scenes[0].slides[0].revisit = RevisitMode::Resume;
+    c.scenes[0].slides[0].duration_ms = 5000;
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    p.handle(&Input::Tick { ms: 1000 });
+    let saved = p.state().clone();
+
+    let mut resumed = Player::resume(&c, saved).expect("resume");
+    resumed.handle(&Input::Start);
+    resumed.handle(&Input::Tick { ms: 500 });
+    resumed.handle(&Input::Jump {
+        slide: c.scenes[0].slides[1].id.clone(),
+    });
+    resumed.handle(&Input::Jump {
+        slide: c.scenes[0].slides[0].id.clone(),
+    });
+    assert_eq!(
+        resumed.state().base.ms,
+        1500,
+        "resumed slide should save its clock when left"
+    );
+}
+
+#[test]
+fn go_to_respects_navigation_lock_while_lightbox_is_open() {
+    let mut c = timer_course();
+    c.player.navigation = NavMode::Locked;
+    c.player.show_menu = true;
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    p.handle(&click("btn-open"));
+    assert!(p.state().lightbox.is_some());
+
+    let fx = p.handle(&Input::GoTo {
+        slide: "s-box".into(),
+    });
+    assert!(warned(&fx), "expected warning when navigation is locked");
+    assert!(p.state().lightbox.is_some(), "lightbox should stay open");
+}
+
+#[test]
+fn retry_quiz_with_banks_runs_leave_steps_before_replacing_slides() {
+    let mut c = course_with_draw(10, 1, "draw1");
+    for s in &mut c.banks[0].slides {
+        s.revisit = RevisitMode::Resume;
+        s.triggers.push(Trigger {
+            action: Action::RetryQuiz,
+            when: Event::Click {
+                object: "btn".into(),
+            },
+            condition: None,
+            disabled: false,
+        });
+        s.objects.push(
+            serde_json::from_value::<Object>(serde_json::json!({
+                "id": "btn",
+                "kind": { "type": "button", "label": "Retry" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 40.0 }
+            }))
+            .expect("btn"),
+        );
+    }
+    let mut p = Player::with_draw_seed(&c, 1).expect("player");
+    p.handle(&Input::Start);
+    while p.current_slide().is_some_and(|s| s.question.is_none()) {
+        p.handle(&Input::Next);
+    }
+    p.handle(&Input::Tick { ms: 1234 });
+    let old_first = p.current_slide().expect("slide").id.clone();
+    p.handle(&click("btn"));
+    let new_first = p.current_slide().expect("slide").id.clone();
+    assert_ne!(old_first, new_first);
+    assert!(
+        !p.state().saved_slides.contains_key(&new_first),
+        "new slide at draw index must not inherit old slide's saved state"
+    );
+}
+
+#[test]
+fn check_intersections_skips_when_no_intersection_triggers_and_fires_when_present() {
+    let mut c: Course = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "id": "intersections-skip",
+        "title": "Intersections Skip",
+        "slide_size": { "w": 800, "h": 600 },
+        "variables": [{ "name": "hit", "value": 0 }],
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "S1",
+                "objects": [
+                    {
+                        "id": "a",
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#ffffff" },
+                        "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "b",
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#ffffff" },
+                        "frame": { "x": 50.0, "y": 50.0, "w": 100.0, "h": 100.0 }
+                    }
+                ],
+                "triggers": []
+            }]
+        }]
+    }))
+    .expect("course");
+
+    // Without any intersection trigger, overlapping objects do not populate intersecting_pairs.
+    let mut p_no_trig = Player::new(&c).expect("player");
+    p_no_trig.handle(&Input::Start);
+    assert!(p_no_trig.state().intersecting_pairs.is_empty());
+
+    // With a disabled intersection trigger, still skipped.
+    c.scenes[0].slides[0].triggers.push(
+        serde_json::from_value(serde_json::json!({
+            "when": { "event": "objects_intersect", "a": "a", "b": "b" },
+            "action": { "action": "set_variable", "variable": "hit", "op": "assign", "value": 1 },
+            "disabled": true
+        }))
+        .expect("trigger"),
+    );
+    let mut p_disabled = Player::new(&c).expect("player");
+    p_disabled.handle(&Input::Start);
+    assert!(p_disabled.state().intersecting_pairs.is_empty());
+    assert_eq!(p_disabled.variable("hit"), Some(&Value::Number(0.0)));
+
+    // Enable the trigger: intersection is detected on slide start.
+    c.scenes[0].slides[0].triggers[0].disabled = false;
+    let mut p_enabled = Player::new(&c).expect("player");
+    p_enabled.handle(&Input::Start);
+    assert!(!p_enabled.state().intersecting_pairs.is_empty());
+    assert_eq!(p_enabled.variable("hit"), Some(&Value::Number(1.0)));
+}
+
+#[test]
+fn resume_trusted_matches_full_resume_including_draw_seed_fallback() {
+    let c = course_with_draw(4, 2, "draw1");
+    let mut p = Player::with_draw_seed(&c, 7).expect("player");
+    let plan = p.play_plan();
+    p.handle(&Input::Start);
+    p.handle(&Input::Tick { ms: 250 });
+    p.handle(&Input::Next);
+    let saved = p.state().clone();
+
+    let mut full = Player::resume(&c, saved.clone()).expect("full resume");
+    let mut trusted = Player::resume_trusted(&c, saved, &plan).expect("trusted resume");
+    assert_eq!(
+        full.current_slide().map(|s| s.id.as_str()),
+        trusted.current_slide().map(|s| s.id.as_str())
+    );
+    let full_ids: Vec<&str> = full.play_order().iter().map(|s| s.id.as_str()).collect();
+    let trusted_ids: Vec<&str> = trusted.play_order().iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(full_ids, trusted_ids);
+    assert_eq!(
+        full.handle(&Input::Tick { ms: 200 }),
+        trusted.handle(&Input::Tick { ms: 200 })
+    );
+
+    // If draw_seed changed (e.g. after RetryQuiz), resume_trusted falls back to full resume.
+    let mut other_seed_state = p.state().clone();
+    other_seed_state.draw_seed = 99;
+    let full_other = Player::resume(&c, other_seed_state.clone()).expect("full other");
+    let trusted_other =
+        Player::resume_trusted(&c, other_seed_state, &plan).expect("trusted fallback");
+    let full_other_ids: Vec<&str> = full_other
+        .play_order()
+        .iter()
+        .map(|s| s.id.as_str())
+        .collect();
+    let trusted_other_ids: Vec<&str> = trusted_other
+        .play_order()
+        .iter()
+        .map(|s| s.id.as_str())
+        .collect();
+    assert_eq!(full_other_ids, trusted_other_ids);
+}
+
+#[test]
+fn reach_points_buffer_reuse_fires_base_and_layer_reaches_in_order() {
+    let mut c: Course = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "id": "reach-buf",
+        "title": "Reach Buf",
+        "slide_size": { "w": 800, "h": 600 },
+        "variables": [{ "name": "seq", "value": "" }],
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "S1",
+                "duration_ms": 2000,
+                "cue_points": [{ "id": "cue1", "name": "C1", "at_ms": 300 }],
+                "layers": [{
+                    "id": "l1",
+                    "name": "L1",
+                    "duration_ms": 1000,
+                    "triggers": [{
+                        "when": { "event": "timeline_reaches", "ms": 400, "layer": "l1" },
+                        "action": { "action": "set_variable", "variable": "seq", "op": "assign", "value": "layer400" }
+                    }]
+                }],
+                "triggers": [
+                    {
+                        "when": { "event": "timeline_reaches", "ms": 500 },
+                        "action": { "action": "set_variable", "variable": "seq", "op": "assign", "value": "base500" }
+                    },
+                    {
+                        "when": { "event": "timeline_reaches", "ms": 0, "cue": "cue1" },
+                        "action": { "action": "show_layer", "layer": "l1" }
+                    },
+                    {
+                        "when": { "event": "timeline_reaches", "ms": 200 },
+                        "action": { "action": "set_variable", "variable": "seq", "op": "assign", "value": "disabled" },
+                        "disabled": true
+                    }
+                ]
+            }]
+        }]
+    }))
+    .expect("course");
+    c.scenes[0].slides[0].duration_ms = 2000;
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    p.handle(&Input::Tick { ms: 250 });
+    assert_eq!(p.variable("seq"), Some(&Value::Text(String::new())));
+    // Crosses cue1 at 300ms -> shows layer l1.
+    p.handle(&Input::Tick { ms: 100 });
+    assert_eq!(p.state().visible_layers, vec!["l1".to_owned()]);
+    // Base advances to 500 (fires base500), layer advances to 150.
+    p.handle(&Input::Tick { ms: 150 });
+    assert_eq!(p.variable("seq"), Some(&Value::Text("base500".into())));
+    // Layer advances to 450 (fires layer400).
+    p.handle(&Input::Tick { ms: 300 });
+    assert_eq!(p.variable("seq"), Some(&Value::Text("layer400".into())));
+}
+
+#[test]
+fn video_cues_borrow_fires_pauses_and_seeks_backwards_correctly() {
+    let c: Course = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "id": "video-cues",
+        "title": "Video Cues",
+        "slide_size": { "w": 800, "h": 600 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "S1",
+                "objects": [{
+                    "id": "vid",
+                    "kind": {
+                        "type": "video",
+                        "src": "v.mp4",
+                        "autoplay": true,
+                        "cues": [
+                            { "id": "c1", "name": "C1", "at_ms": 500.0, "pause": false },
+                            { "id": "c2", "name": "C2", "at_ms": 1000.0, "pause": true }
+                        ]
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 400.0, "h": 300.0 }
+                }]
+            }]
+        }]
+    }))
+    .expect("course");
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    let fx1 = p.handle(&Input::MediaTime {
+        object: "vid".into(),
+        at_ms: 600.0,
+    });
+    assert!(has(
+        &fx1,
+        &Effect::CueReached {
+            object: "vid".into(),
+            cue: "c1".into()
+        }
+    ));
+    // Backward seek re-arms c1.
+    p.handle(&Input::MediaTime {
+        object: "vid".into(),
+        at_ms: 100.0,
+    });
+    let fx2 = p.handle(&Input::MediaTime {
+        object: "vid".into(),
+        at_ms: 600.0,
+    });
+    assert!(has(
+        &fx2,
+        &Effect::CueReached {
+            object: "vid".into(),
+            cue: "c1".into()
+        }
+    ));
+    // Advance to pausing cue c2.
+    let fx3 = p.handle(&Input::MediaTime {
+        object: "vid".into(),
+        at_ms: 1100.0,
+    });
+    assert!(has(
+        &fx3,
+        &Effect::CueReached {
+            object: "vid".into(),
+            cue: "c2".into()
+        }
+    ));
+    assert!(has(
+        &fx3,
+        &Effect::Media {
+            object: "vid".into(),
+            op: MediaOp::Pause
+        }
+    ));
+}
+
+#[test]
+fn keyboard_objects_uses_precomputed_pointer_trigger_set() {
+    let c: Course = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "id": "ptr-cache",
+        "title": "Pointer Cache",
+        "slide_size": { "w": 800, "h": 600 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "S1",
+                "objects": [
+                    { "id": "clicked", "kind": { "type": "shape", "shape": "rectangle", "fill": "#ffffff" }, "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 } },
+                    { "id": "hovered", "kind": { "type": "shape", "shape": "rectangle", "fill": "#ffffff" }, "frame": { "x": 60.0, "y": 0.0, "w": 50.0, "h": 50.0 } },
+                    { "id": "disabled_ptr", "kind": { "type": "shape", "shape": "rectangle", "fill": "#ffffff" }, "frame": { "x": 120.0, "y": 0.0, "w": 50.0, "h": 50.0 } },
+                    { "id": "plain", "kind": { "type": "shape", "shape": "rectangle", "fill": "#ffffff" }, "frame": { "x": 180.0, "y": 0.0, "w": 50.0, "h": 50.0 } }
+                ],
+                "layers": [{
+                    "id": "l1",
+                    "name": "L1",
+                    "objects": [
+                        { "id": "layer_obj", "kind": { "type": "shape", "shape": "rectangle", "fill": "#ffffff" }, "frame": { "x": 240.0, "y": 0.0, "w": 50.0, "h": 50.0 } }
+                    ],
+                    "triggers": [
+                        { "when": { "event": "hover_end", "object": "layer_obj" }, "action": { "action": "hide_layer", "layer": "l1" } }
+                    ]
+                }],
+                "triggers": [
+                    { "when": { "event": "click", "object": "clicked" }, "action": { "action": "show_layer", "layer": "l1" } },
+                    { "when": { "event": "hover_start", "object": "hovered" }, "action": { "action": "show_layer", "layer": "l1" } },
+                    { "when": { "event": "click", "object": "disabled_ptr" }, "action": { "action": "show_layer", "layer": "l1" }, "disabled": true }
+                ]
+            }]
+        }]
+    }))
+    .expect("course");
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    assert_eq!(p.keyboard_objects(), vec!["clicked", "hovered"]);
+    p.handle(&click("clicked"));
+    assert_eq!(
+        p.keyboard_objects(),
+        vec!["clicked", "hovered", "layer_obj"]
+    );
 }

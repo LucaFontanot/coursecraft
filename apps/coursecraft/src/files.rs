@@ -120,6 +120,26 @@ pub fn disk_stamp(path: &Path) -> Option<DiskStamp> {
 /// # Errors
 /// Returns an error if serialization, verification or filesystem writing fails.
 pub fn save_to(path: &Path, course: &Course, media: &[MediaItem]) -> Result<(), String> {
+    save_to_slices(path, course, media)
+}
+
+/// Save a course and `Arc`-shared media assets to a `.ccraft` file on disk.
+///
+/// # Errors
+/// Returns an error if serialization, verification or filesystem writing fails.
+pub fn save_to_arc(
+    path: &Path,
+    course: &Course,
+    media: &[(String, std::sync::Arc<[u8]>)],
+) -> Result<(), String> {
+    save_to_slices(path, course, media)
+}
+
+fn save_to_slices<B: AsRef<[u8]>>(
+    path: &Path,
+    course: &Course,
+    media: &[(String, B)],
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -174,6 +194,28 @@ pub fn save_folder_to(
     dir: &Path,
     course: &Course,
     media: &[MediaItem],
+    record: &mut FolderRecord,
+) -> Result<coursecraft_format::SaveReport, String> {
+    save_folder_to_slices(dir, course, media, record)
+}
+
+/// Save a course and `Arc`-shared media into a project folder.
+///
+/// # Errors
+/// Returns a plain sentence when the project is too big to open again or a write fails.
+pub fn save_folder_to_arc(
+    dir: &Path,
+    course: &Course,
+    media: &[(String, std::sync::Arc<[u8]>)],
+    record: &mut FolderRecord,
+) -> Result<coursecraft_format::SaveReport, String> {
+    save_folder_to_slices(dir, course, media, record)
+}
+
+fn save_folder_to_slices<B: AsRef<[u8]> + Sync>(
+    dir: &Path,
+    course: &Course,
+    media: &[(String, B)],
     record: &mut FolderRecord,
 ) -> Result<coursecraft_format::SaveReport, String> {
     coursecraft_format::save_project_folder(dir, course, media, record).map_err(|e| match e {
@@ -293,7 +335,7 @@ pub fn write_atomic_with(
     )
 }
 
-fn write_atomic_stream_with(
+pub(crate) fn write_atomic_stream_with(
     path: &Path,
     write_file: &mut dyn FnMut(&mut std::fs::File) -> std::io::Result<()>,
     verify: Option<&Verify<'_>>,

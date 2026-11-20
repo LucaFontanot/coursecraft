@@ -1612,6 +1612,17 @@ fn target_node(
                     None,
                     None,
                 ),
+                ChromeButton::StartOver => (
+                    course.chrome_string("startOver").to_owned(),
+                    frame
+                        .chrome_rect(button)
+                        .or_else(|| frame.drawer_rect())
+                        .unwrap_or(Rect::NOTHING),
+                    AccessRole::Button,
+                    None,
+                    None,
+                    None,
+                ),
                 ChromeButton::DrawerRow(slide_id) => {
                     let label = player
                         .play_order()
@@ -1753,6 +1764,7 @@ fn chrome_key(button: &ChromeButton) -> String {
         ChromeButton::Fullscreen => "fullscreen".to_owned(),
         ChromeButton::DrawerClose => "drawer-close".to_owned(),
         ChromeButton::DrawerRow(id) => format!("drawer-row:{id}"),
+        ChromeButton::StartOver => "start-over".to_owned(),
         ChromeButton::CloseLightbox => "close-lightbox".to_owned(),
     }
 }

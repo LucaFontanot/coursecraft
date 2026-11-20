@@ -129,8 +129,20 @@ fn validates_and_fills_launch() {
 fn audience_array_is_accepted() {
     let mut claims = claims();
     claims["aud"] = json!(["other-client", "client-1"]);
+    claims["azp"] = json!("client-1");
     let cfg = cfg();
     assert!(validate(&cfg, &signed(&header(), &claims)).is_ok());
+}
+
+#[test]
+fn audience_array_without_matching_azp_is_refused() {
+    let mut claims = claims();
+    claims["aud"] = json!(["other-client", "client-1"]);
+    let cfg = cfg();
+    assert_invalid(&cfg, &signed(&header(), &claims));
+
+    claims["azp"] = json!("other-client");
+    assert_invalid(&cfg, &signed(&header(), &claims));
 }
 
 #[test]
@@ -207,7 +219,10 @@ fn unknown_kid_is_refused() {
     let mut header = header();
     header["kid"] = json!("unknown-key");
     let cfg = cfg();
-    assert_invalid(&cfg, &signed(&header, &claims()));
+    assert!(matches!(
+        validate(&cfg, &signed(&header, &claims())),
+        Err(LtiError::UnknownKeyId(_))
+    ));
 }
 
 #[test]

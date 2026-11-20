@@ -31,11 +31,9 @@ fn main() {
         println!("cargo:warning=player bundle: {}: {err}", dist.display());
     }
     println!("cargo:rerun-if-changed={}", dist.display());
-    println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
 
-    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let mut files = Vec::new();
-    if arch != "wasm32" && index.is_file() {
+    if index.is_file() {
         match collect_files(&dist, &dist) {
             Ok(mut found) => {
                 found.sort_by(|a, b| a.0.cmp(&b.0));

@@ -1145,10 +1145,12 @@ mod windows_impl {
         IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader,
         MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
         MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_PD_DURATION,
-        MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MF_SOURCE_READER_MEDIASOURCE,
-        MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_ERROR, MF_SOURCE_READERF_STREAMTICK,
-        MFAudioFormat_PCM, MFCreateAttributes, MFCreateMediaType, MFCreateSourceReaderFromURL,
-        MFMediaType_Audio, MFMediaType_Video, MFShutdown, MFStartup, MFVideoFormat_RGB32,
+        MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
+        MF_SOURCE_READER_FIRST_AUDIO_STREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+        MF_SOURCE_READER_MEDIASOURCE, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READERF_ERROR,
+        MF_SOURCE_READERF_STREAMTICK, MFAudioFormat_PCM, MFCreateAttributes, MFCreateMediaType,
+        MFCreateSourceReaderFromURL, MFMediaType_Audio, MFMediaType_Video, MFShutdown, MFStartup,
+        MFVideoFormat_RGB32,
     };
     use windows::Win32::System::Com::StructuredStorage::{PROPVARIANT, PropVariantToInt64};
     use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
@@ -1235,17 +1237,22 @@ mod windows_impl {
         let reader = unsafe { MFCreateSourceReaderFromURL(&wide, Some(&attributes)) }
             .map_err(|e| VideoError(format!("source reader: {e}")))?;
 
-        // Select video stream 0, deselect others.
-        // SAFETY: stream 0 is the video stream in the common layout.
-        let _ = unsafe { reader.SetStreamSelection(0, true) };
+        // Deselect all streams, then select the first video stream.
+        let all_streams = MF_SOURCE_READER_ALL_STREAMS.0 as u32;
+        let video_stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+        // SAFETY: deselecting all streams before selecting the first video stream.
+        let _ = unsafe { reader.SetStreamSelection(all_streams, false) };
+        // SAFETY: selecting the first video stream.
+        unsafe { reader.SetStreamSelection(video_stream, true) }
+            .map_err(|e| VideoError(format!("SetStreamSelection: {e}")))?;
 
         let media_type = make_rgb_media_type(out_width, out_height)?;
-        // SAFETY: sets the current media type for stream 0.
-        unsafe { reader.SetCurrentMediaType(0, None, &media_type) }
+        // SAFETY: sets the current media type for the first video stream.
+        unsafe { reader.SetCurrentMediaType(video_stream, None, &media_type) }
             .map_err(|e| VideoError(format!("SetCurrentMediaType: {e}")))?;
 
         // SAFETY: current media type is now RGB32 at the requested size.
-        let current = unsafe { reader.GetCurrentMediaType(0) }
+        let current = unsafe { reader.GetCurrentMediaType(video_stream) }
             .map_err(|e| VideoError(format!("GetCurrentMediaType: {e}")))?;
         // SAFETY: `current` is a live IMFMediaType; attribute missing yields default stride.
         let stride: i64 = unsafe { current.GetUINT64(&MF_MT_DEFAULT_STRIDE) }.unwrap_or(0) as i64;
@@ -1317,8 +1324,9 @@ mod windows_impl {
         // SAFETY: creates reader from URL.
         let reader = unsafe { MFCreateSourceReaderFromURL(&wide, None::<&IMFAttributes>) }
             .map_err(|e| VideoError(format!("probe reader: {e}")))?;
-        // SAFETY: native media type of stream 0.
-        let native = unsafe { reader.GetNativeMediaType(0, 0) }
+        let video_stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+        // SAFETY: native media type of the first video stream.
+        let native = unsafe { reader.GetNativeMediaType(video_stream, 0) }
             .map_err(|e| VideoError(format!("native type: {e}")))?;
         // SAFETY: `native` is a live IMFMediaType; frame size attribute read.
         let packed = unsafe { native.GetUINT64(&MF_MT_FRAME_SIZE) }
@@ -1371,9 +1379,9 @@ mod windows_impl {
         // SAFETY: reader creation.
         let has = match unsafe { MFCreateSourceReaderFromURL(&wide, None::<&IMFAttributes>) } {
             Ok(reader) => {
-                // Stream 1 is audio when present; GetNativeMediaType fails if absent.
-                // SAFETY: probing stream 1.
-                unsafe { reader.GetNativeMediaType(1, 0) }.is_ok()
+                let audio_stream = MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32;
+                // SAFETY: probing the first audio stream; GetNativeMediaType fails if absent.
+                unsafe { reader.GetNativeMediaType(audio_stream, 0) }.is_ok()
             }
             Err(_) => false,
         };
@@ -1427,10 +1435,11 @@ mod windows_impl {
         let mut stream_flags: u32 = 0;
         let mut timestamp: i64 = 0;
         let mut sample: Option<IMFSample> = None;
+        let video_stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
         // SAFETY: ReadSample fills the out params; we pass valid stack slots.
         let hr = unsafe {
             reader.reader.ReadSample(
-                0,
+                video_stream,
                 0,
                 Some(&mut actual_stream),
                 Some(&mut stream_flags),

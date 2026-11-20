@@ -510,3 +510,72 @@ fn a_save_that_could_not_be_opened_again_is_refused_before_writing() {
         .expect_err("too many");
     assert_eq!(err, FormatError::TooManyEntries);
 }
+
+#[test]
+fn save_keeps_media_file_when_only_ascii_case_changes() {
+    let dir = scratch("case-only-rename").join("p.ccraft-folder");
+    let mut record = FolderRecord::new();
+    save(
+        &dir,
+        &hello(),
+        &[("Logo.png".to_owned(), vec![1, 2, 3])],
+        &mut record,
+    );
+    assert!(dir.join("media/Logo.png").exists());
+
+    save(
+        &dir,
+        &hello(),
+        &[("logo.png".to_owned(), vec![4, 5, 6])],
+        &mut record,
+    );
+    assert!(
+        dir.join("media/logo.png").exists(),
+        "logo.png should not be deleted by delete_unused"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("media/logo.png")).expect("read"),
+        vec![4, 5, 6]
+    );
+}
+
+#[test]
+fn save_rejects_case_only_duplicate_media_names() {
+    let dir = scratch("case-only-dup").join("p.ccraft-folder");
+    let mut record = FolderRecord::new();
+    let items = vec![
+        ("Logo.png".to_owned(), vec![1, 2, 3]),
+        ("logo.png".to_owned(), vec![4, 5, 6]),
+    ];
+    let err = save_project_folder_with(&dir, &hello(), &items, &mut record, &SaveHooks::default())
+        .expect_err("case-only duplicate should be rejected");
+    assert_eq!(err, FormatError::DuplicateEntry("logo.png".to_owned()));
+}
+
+#[test]
+fn old_fnv_folder_record_saves_without_rewriting_unchanged_media() {
+    let dir = scratch("old-fnv-record").join("p.ccraft-folder");
+    let items = media();
+    let mut record = FolderRecord::new();
+    save(&dir, &hello(), &items, &mut record);
+
+    // Simulate a FolderRecord created by an older version that stored FNV-1a hashes.
+    let mut legacy_record = FolderRecord::new();
+    for (rel, file_rec) in record.files() {
+        let disk_bytes = std::fs::read(dir.join(rel)).unwrap();
+        let mut old_rec = *file_rec;
+        old_rec.hash = fnv1a64(&disk_bytes);
+        legacy_record.files_mut().insert(rel.clone(), old_rec);
+    }
+
+    let report = save_project_folder(&dir, &hello(), &items, &mut legacy_record).unwrap();
+    assert!(
+        report.written.is_empty(),
+        "unchanged media with legacy FNV-1a hash must not be rewritten: {:?}",
+        report.written
+    );
+    for (rel, file_rec) in legacy_record.files() {
+        let disk_bytes = std::fs::read(dir.join(rel)).unwrap();
+        assert_eq!(file_rec.hash, crate::fast_hash64(&disk_bytes));
+    }
+}

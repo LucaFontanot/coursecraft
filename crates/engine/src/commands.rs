@@ -11,9 +11,9 @@ use coursecraft_course::{
     SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide, SlideCue, SlideTarget, StateDef,
     TableBorders, TableCell, TableRow, TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition,
     Trigger, Trim, VAlign, Value, VarOp, VariableDef, WebSource, align_paragraphs,
-    apply_link_to_range, apply_style_to_range, apply_text_edit, course_strings, find_in_course,
-    is_valid_link_url, normalize_table_fractions, paragraphs_for, parse_color, relative_luminance,
-    replace_in_target, string_mut, table_cell_owners,
+    apply_link_to_range, apply_style_to_range, apply_text_edit, course_string_locations,
+    find_in_course, is_valid_link_url, normalize_table_fractions, paragraphs_for, parse_color,
+    relative_luminance, replace_in_target, string_mut, table_cell_owners,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value as Json, json};
@@ -1698,7 +1698,7 @@ fn layer_mut<'a>(slide: &'a mut Slide, id: &str) -> Result<&'a mut Layer> {
 }
 
 /// Reject the edit if it took a valid course to an invalid one.
-fn keep_valid(s: &Session, was_valid: bool) -> Result<()> {
+fn keep_valid(s: &mut Session, was_valid: bool) -> Result<()> {
     if !was_valid {
         return Ok(());
     }
@@ -1709,7 +1709,10 @@ fn keep_valid(s: &Session, was_valid: bool) -> Result<()> {
         .find(|i| i.severity == coursecraft_course::Severity::Error)
     {
         Some(i) => Err(EngineError::Invalid(format!("{} ({})", i.message, i.path))),
-        None => Ok(()),
+        None => {
+            s.mark_validated_valid();
+            Ok(())
+        }
     }
 }
 
@@ -1741,7 +1744,7 @@ fn course_audit(s: &mut Session, _p: &Json) -> Result<Json> {
 
 fn course_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let map = obj(C, p)?;
     if let Some(title) = opt::<String>(C, p, "title")? {
         let title = text(C, title, "title")?;
@@ -1788,7 +1791,7 @@ fn course_update(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn course_set_slide_size(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.set_slide_size";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let w: u32 = req(C, p, "w")?;
     let h: u32 = req(C, p, "h")?;
     let mode: String = req(C, p, "mode")?;
@@ -1809,7 +1812,7 @@ fn course_set_slide_size(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn course_set_title(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.set_title";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let title = text(C, req(C, p, "title")?, "title")?;
     if title.trim().is_empty() {
         return Err(bad(C, "title is empty"));
@@ -1821,7 +1824,7 @@ fn course_set_title(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn course_set_player(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.set_player";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     if let Some(v) = opt::<bool>(C, p, "show_nav")? {
         s.course.player.show_nav = v;
     }
@@ -1892,7 +1895,7 @@ fn check_next_requirement(
 
 fn course_set_quiz(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.set_quiz";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let map = obj(C, p)?;
     match map.get("passing_percent") {
         None => return Err(bad(C, "missing `passing_percent`")),
@@ -1918,7 +1921,7 @@ fn course_set_quiz(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn course_set_background_audio(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.set_background_audio";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let map = obj(C, p)?;
     let volume: Option<f32> = opt(C, p, "volume")?;
     if let Some(volume) = volume
@@ -1965,7 +1968,7 @@ fn course_set_background_audio(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn course_add_finish_button(s: &mut Session, _p: &Json) -> Result<Json> {
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let last_slide_id = s
         .course
         .scenes
@@ -1991,7 +1994,7 @@ fn validate_color(cmd: &'static str, c: &Color) -> Result<()> {
 
 fn course_set_theme(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.set_theme";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     if let Some(accent) = opt::<String>(C, p, "accent")? {
         let col = Color(accent);
         validate_color(C, &col)?;
@@ -2054,7 +2057,7 @@ fn font_src_is_valid(src: &str) -> bool {
 
 fn course_add_font(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.add_font";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let raw_family: String = req(C, p, "family")?;
     let family = clean_font_family(&raw_family);
     if family.is_empty() {
@@ -2092,7 +2095,7 @@ fn course_add_font(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn course_remove_font(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.remove_font";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let family = opt::<String>(C, p, "family")?.map(|f| clean_font_family(&f));
     let style = opt::<FontStyle>(C, p, "style")?;
     let src = opt::<String>(C, p, "src")?;
@@ -2174,7 +2177,7 @@ fn course_find(s: &mut Session, p: &Json) -> Result<Json> {
 /// counted. A replace that changes nothing makes no undo step.
 fn course_replace(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.replace";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let query = text(C, req::<String>(C, p, "query")?, "query")?;
     let replacement = text(C, req::<String>(C, p, "replacement")?, "replacement")?;
     let case_sensitive = opt::<bool>(C, p, "case")?.unwrap_or(false);
@@ -2185,9 +2188,8 @@ fn course_replace(s: &mut Session, p: &Json) -> Result<Json> {
     let mut replaced = 0usize;
     let mut skipped = 0usize;
     if !query.is_empty() {
-        let locations: Vec<Location> = course_strings(&s.course)
+        let locations: Vec<Location> = course_string_locations(&s.course)
             .into_iter()
-            .map(|item| item.location)
             .filter(|location| only.as_ref().is_none_or(|set| set.contains(location)))
             .collect();
         for location in &locations {
@@ -2237,7 +2239,7 @@ fn edit_history(s: &mut Session, _p: &Json) -> Result<Json> {
 
 fn scene_add(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "scene.add";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let id: Option<String> = opt(C, p, "id")?;
     let id = match id {
         Some(custom) => {
@@ -2265,7 +2267,7 @@ fn scene_add(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn scene_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "scene.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "scene")?;
     let title: Option<String> = opt(C, p, "title")?;
     let scene = s
@@ -2287,7 +2289,7 @@ fn scene_update(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn scene_delete(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "scene.delete";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "scene")?;
     if s.course.scenes.len() <= 1 {
         return Err(EngineError::Invalid(
@@ -2307,7 +2309,7 @@ fn scene_delete(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_add(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.add";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let scene: Option<String> = opt(C, p, "scene")?;
     let after: Option<String> = opt(C, p, "after")?;
     let id: Option<String> = opt(C, p, "id")?;
@@ -2390,7 +2392,7 @@ fn slide_add(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let title: Option<String> = opt(C, p, "title")?;
     let duration_ms: Option<u32> = opt(C, p, "duration_ms")?;
@@ -2422,7 +2424,7 @@ fn slide_update(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn slide_delete(s: &mut Session, p: &Json) -> Result<Json> {
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let id: String = req("slide.delete", p, "slide")?;
     if s.course.slides().count() <= 1 {
         return Err(EngineError::Invalid(
@@ -2446,7 +2448,7 @@ fn slide_delete(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_move(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.move";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let target_scene_id: Option<String> = opt(C, p, "scene")?;
     let index: usize = req(C, p, "index")?;
@@ -2486,7 +2488,7 @@ fn slide_move(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.duplicate";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let after: Option<String> = opt(C, p, "after")?;
     let source = s
@@ -2504,7 +2506,7 @@ fn slide_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_paste(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.paste";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let scene: Option<String> = opt(C, p, "scene")?;
     let after: Option<String> = opt(C, p, "after")?;
     let source: Slide = req(C, p, "slide")?;
@@ -2517,7 +2519,7 @@ fn slide_paste(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn slide_set_duration(s: &mut Session, p: &Json) -> Result<Json> {
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let id: String = req("slide.set_duration", p, "slide")?;
     let ms: u32 = req("slide.set_duration", p, "ms")?;
     if ms > MAX_DURATION_MS {
@@ -2533,7 +2535,7 @@ fn slide_set_duration(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_set_background(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.set_background";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let map = obj(C, p)?;
     let bg_val = map
@@ -2556,7 +2558,7 @@ fn slide_set_background(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_set_transition(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.set_transition";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let map = obj(C, p)?;
     let trans_val = map
@@ -2596,7 +2598,7 @@ fn flag_override(
 
 fn slide_set_player_overrides(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.set_player_overrides";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let map = obj(C, p)?;
     let next_requires: Option<Option<coursecraft_course::NextRequirement>> = match map
@@ -2643,7 +2645,7 @@ fn slide_set_player_overrides(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn master_add(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "master.add";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let id = fresh_id("master", s.course.all_slide_ids());
     let title = text(
         C,
@@ -2676,7 +2678,7 @@ fn master_add(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn master_delete(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "master.delete";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let id: String = req(C, p, "master")?;
     let pos = s
         .course
@@ -2703,7 +2705,7 @@ fn master_delete(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_set_master(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.set_master";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let slides: Vec<String> = req(C, p, "slides")?;
     let master: Option<String> = opt(C, p, "master")?;
     if slides.is_empty() {
@@ -2716,8 +2718,14 @@ fn slide_set_master(s: &mut Session, p: &Json) -> Result<Json> {
             "master {master:?} does not exist"
         )));
     }
-    // Only play slides can take a master; a master cannot take another master.
+    // Only play slides in scenes can take a master; masters and bank slides cannot.
     for id in &slides {
+        if s.course.bank_slide(id).is_some() {
+            return Err(bad(
+                C,
+                format!("question-bank slide {id:?} cannot take a master"),
+            ));
+        }
         if s.course.play_slide(id).is_none() {
             return Err(EngineError::NotFound(format!(
                 "slide {id:?} does not exist"
@@ -2757,7 +2765,7 @@ fn draw_total_for(s: &Session, bank_id: &str) -> usize {
 
 fn bank_create(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "bank.create";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let id = fresh_id("bank", s.course.banks.iter().map(|bank| bank.id.as_str()));
     let title = text(
         C,
@@ -2779,7 +2787,7 @@ fn bank_create(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn bank_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "bank.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let bank_id: String = req(C, p, "bank")?;
     let title: Option<String> = opt(C, p, "title")?;
     let bank = bank_mut(s, &bank_id)?;
@@ -2796,7 +2804,7 @@ fn bank_update(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn bank_delete(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "bank.delete";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let bank_id: String = req(C, p, "bank")?;
     let pos = s
         .course
@@ -2817,6 +2825,16 @@ fn bank_delete(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(Json::Null)
 }
 
+fn next_fresh_id(prefix: &str, taken: &mut BTreeSet<String>, next: &mut u64) -> String {
+    loop {
+        let id = format!("{prefix}{}", *next);
+        *next = next.saturating_add(1);
+        if taken.insert(id.clone()) {
+            return id;
+        }
+    }
+}
+
 /// A question slide as `question.insert` builds it, ready to put in a bank.
 /// `customise` edits the question before the feedback layers are laid out.
 fn new_bank_slide(
@@ -2826,8 +2844,17 @@ fn new_bank_slide(
     customise: &dyn Fn(&mut Question),
 ) -> Result<Slide> {
     let id = fresh_id("slide", course.all_slide_ids());
-    let theme = course.theme.clone();
-    let slide_size = course.slide_size;
+    new_bank_slide_with_id(&course.theme, course.slide_size, id, kind, title, customise)
+}
+
+fn new_bank_slide_with_id(
+    theme: &Theme,
+    slide_size: Size,
+    id: String,
+    kind: QuestionKind,
+    title: String,
+    customise: &dyn Fn(&mut Question),
+) -> Result<Slide> {
     let mut slide = Slide {
         id,
         title,
@@ -2845,19 +2872,19 @@ fn new_bank_slide(
         revisit: RevisitMode::Auto,
         player: None,
     };
-    ensure_question_support(&mut slide, kind, &theme);
+    ensure_question_support(&mut slide, kind, theme);
     let mut question = default_multiple_choice_question();
     apply_question_kind(&slide.objects, &mut question, kind)?;
     customise(&mut question);
     slide.question = Some(question);
-    add_feedback_layers(&mut slide, &theme, slide_size);
-    add_submit_button(&mut slide, &theme, slide_size);
+    add_feedback_layers(&mut slide, theme, slide_size);
+    add_submit_button(&mut slide, theme, slide_size);
     Ok(slide)
 }
 
 fn bank_add_question(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "bank.add_question";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let bank_id: String = req(C, p, "bank")?;
     let kind: QuestionKind = opt(C, p, "kind")?.unwrap_or(QuestionKind::MultipleChoice);
     let title = text(
@@ -2888,7 +2915,7 @@ fn bank_add_question(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn bank_move_slide(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "bank.move_slide";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let bank_id: String = req(C, p, "bank")?;
     let index: Option<usize> = opt(C, p, "index")?;
@@ -2926,7 +2953,7 @@ fn bank_move_slide(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn bank_remove_slide(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "bank.remove_slide";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let bank_id = s
         .course
@@ -2951,7 +2978,7 @@ fn bank_remove_slide(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn draw_insert(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "draw.insert";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let bank_id: String = req(C, p, "bank")?;
     let count: u32 = req(C, p, "count")?;
     let scene_id: Option<String> = opt(C, p, "scene")?;
@@ -3012,7 +3039,7 @@ fn draw_insert(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn draw_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "draw.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let bank_id: Option<String> = opt(C, p, "bank")?;
     let count: Option<u32> = opt(C, p, "count")?;
@@ -3277,7 +3304,7 @@ fn layout_objects(layout: &str, slide: &Slide, size: Size, theme: &Theme) -> Vec
 
 fn slide_add_from_layout(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.add_from_layout";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let layout: String = req(C, p, "layout")?;
     if !LAYOUTS.contains(&layout.as_str()) {
         return Err(bad(
@@ -3340,7 +3367,7 @@ fn slide_add_from_layout(s: &mut Session, p: &Json) -> Result<Json> {
 /// session also rolls back, but nothing is per-command undoable here).
 fn course_import_outline(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.import_outline";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let outline: CourseOutline = req(C, p, "outline")?;
     let after: Option<String> = opt(C, p, "after")?;
     if let Some(ref after) = after
@@ -3565,7 +3592,7 @@ fn choice_id(i: usize) -> String {
 
 fn template_save(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "template.save";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     if s.course.master(&sid).is_some() {
         return Err(bad(C, "a master cannot be saved as a template"));
@@ -3594,7 +3621,7 @@ fn template_save(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn template_add_slide(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "template.add_slide";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let tid: String = req(C, p, "template")?;
     let after: Option<String> = opt(C, p, "after")?;
     let scene: Option<String> = opt(C, p, "scene")?;
@@ -3614,7 +3641,7 @@ fn template_add_slide(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn template_delete(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "template.delete";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let tid: String = req(C, p, "template")?;
     let pos = s
         .course
@@ -3629,7 +3656,7 @@ fn template_delete(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn layer_add(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "layer.add";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let id: Option<String> = opt(C, p, "id")?;
     let name: Option<String> = opt(C, p, "name")?;
@@ -3672,7 +3699,7 @@ fn layer_add(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn layer_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "layer.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let lid: String = req(C, p, "layer")?;
     let name: Option<String> = opt(C, p, "name")?;
@@ -3727,7 +3754,7 @@ fn layer_update(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn layer_delete(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "layer.delete";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let lid: String = req(C, p, "layer")?;
     let slide = slide_mut(s, &sid)?;
@@ -3750,7 +3777,7 @@ fn layer_delete(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn layer_move(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "layer.move";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let lid: String = req(C, p, "layer")?;
     let to: usize = req(C, p, "to")?;
@@ -3791,7 +3818,7 @@ fn copied_layer_name(slide: &Slide, name: &str) -> String {
 
 fn layer_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "layer.duplicate";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let lid: String = req(C, p, "layer")?;
 
@@ -4001,6 +4028,14 @@ fn remap_object_glue(object: &mut Object, map: &BTreeMap<String, String>) {
     if let ObjectKind::Path { path } = &mut object.kind {
         remap_glue(&mut path.start_glue, map);
         remap_glue(&mut path.end_glue, map);
+    }
+    object.panel = object.panel.as_deref().and_then(|id| map.get(id).cloned());
+    if let Some(drag) = object.drag.as_mut() {
+        drag.targets = drag
+            .targets
+            .iter()
+            .filter_map(|id| map.get(id).cloned())
+            .collect();
     }
 }
 
@@ -4340,7 +4375,7 @@ fn insert_slide_after(
 
 fn object_add(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.add";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let layer: Option<String> = opt(C, p, "layer")?;
     let mut kind: ObjectKind = req(C, p, "kind")?;
@@ -4465,7 +4500,7 @@ fn keep_text_style_link(old: &ObjectKind, new: &mut ObjectKind, omitted: bool) {
 
 fn object_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let name: Option<String> = opt(C, p, "name")?;
@@ -4537,7 +4572,7 @@ fn object_update(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_reorder(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.reorder";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let index: usize = req(C, p, "index")?;
@@ -4641,7 +4676,7 @@ fn layout_units(entries: Vec<(String, Rect, Option<String>)>) -> Vec<LayoutUnit>
 
 fn object_align(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.align";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let objects = objects_param(C, p)?;
     let edge: String = req(C, p, "edge")?;
@@ -4729,7 +4764,7 @@ fn object_align(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_distribute(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.distribute";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let objects = objects_param(C, p)?;
     let axis: String = req(C, p, "axis")?;
@@ -4834,7 +4869,7 @@ fn object_distribute(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_match_size(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.match_size";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let objects = objects_param(C, p)?;
     let dimension: String = req(C, p, "dimension")?;
@@ -4917,7 +4952,7 @@ fn all_group_ids(slide: &Slide) -> Vec<String> {
 
 fn object_group(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.group";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let objects = objects_param(C, p)?;
     if objects.len() < 2 {
@@ -4999,7 +5034,7 @@ fn object_group(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_ungroup(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.ungroup";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let objects = objects_param(C, p)?;
 
@@ -5046,7 +5081,7 @@ fn object_ungroup(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.duplicate";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let objects: Option<Vec<String>> = opt(C, p, "objects")?;
     let dx: f32 = opt(C, p, "dx")?.unwrap_or(20.0);
@@ -5123,7 +5158,7 @@ fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.paste";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let layer: Option<String> = opt(C, p, "layer")?;
     let objects: Vec<Object> = req(C, p, "objects")?;
@@ -5280,7 +5315,7 @@ fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn object_set_frame(s: &mut Session, p: &Json) -> Result<Json> {
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req("object.set_frame", p, "slide")?;
     let oid: String = req("object.set_frame", p, "object")?;
     let frame: Rect = req("object.set_frame", p, "frame")?;
@@ -5309,7 +5344,7 @@ fn object_or_objects_param(c: &str, p: &Json) -> Result<Vec<String>> {
 
 fn object_set_rotation(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_rotation";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let degrees: f32 = req(C, p, "degrees")?;
@@ -5337,7 +5372,7 @@ fn object_set_rotation(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_flip(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.flip";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let axis: String = req(C, p, "axis")?;
@@ -5369,7 +5404,7 @@ fn object_flip(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_lock(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.lock";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let locked: bool = req(C, p, "locked")?;
@@ -5393,7 +5428,7 @@ fn object_lock(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_hide_in_editor(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.hide_in_editor";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let hidden: bool = req(C, p, "hidden")?;
@@ -5426,7 +5461,7 @@ fn check_guide_pos(cmd: &'static str, at: f32) -> Result<f32> {
 
 fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "view.set";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let mut before = s.course.editor.clone();
     if let Some(v) = opt::<bool>(C, p, "show_rulers")? {
         s.course.editor.show_rulers = v;
@@ -5455,7 +5490,7 @@ fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn view_guides_add(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "view.guides.add";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let vertical: bool = req(C, p, "vertical")?;
     let at = check_guide_pos(C, req::<f32>(C, p, "at")?)?;
     if s.course.editor.guides.len() >= MAX_GUIDES {
@@ -5470,7 +5505,7 @@ fn view_guides_add(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn view_guides_move(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "view.guides.move";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let index: usize = req(C, p, "index")?;
     let at = check_guide_pos(C, req::<f32>(C, p, "at")?)?;
     let Some(guide) = s.course.editor.guides.get_mut(index) else {
@@ -5487,7 +5522,7 @@ fn view_guides_move(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn view_guides_remove(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "view.guides.remove";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let index: usize = req(C, p, "index")?;
     if index >= s.course.editor.guides.len() {
         return Err(bad(C, "guide index out of range"));
@@ -5608,7 +5643,7 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
 
 fn object_apply_style(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.apply_style";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let source_slide: String = req(C, p, "source_slide")?;
     let source: String = req(C, p, "source")?;
@@ -5643,7 +5678,7 @@ fn object_apply_style(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_opacity(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_opacity";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let opacity: f32 = req(C, p, "opacity")?;
@@ -5671,7 +5706,7 @@ fn object_set_opacity(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_fill_style(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_fill_style";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let single = p.get("objects").is_none();
@@ -5708,7 +5743,7 @@ fn object_set_fill_style(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_shadow(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_shadow";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let shadow: Option<Shadow> = opt(C, p, "shadow")?;
@@ -5732,7 +5767,7 @@ fn object_set_shadow(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_glow(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_glow";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let glow: Option<Glow> = opt(C, p, "glow")?;
@@ -5756,7 +5791,7 @@ fn object_set_glow(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_drag(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_drag";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let drag: Option<coursecraft_course::DragSpec> = opt(C, p, "drag")?;
@@ -5780,7 +5815,7 @@ fn object_set_drag(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_lottie(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_lottie";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let single = p.get("objects").is_none();
@@ -5841,7 +5876,7 @@ fn object_set_lottie(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_web_source(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_web_source";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let single = p.get("objects").is_none();
@@ -5873,7 +5908,7 @@ fn object_set_web_source(s: &mut Session, p: &Json) -> Result<Json> {
 #[allow(clippy::cognitive_complexity)]
 fn object_set_input(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_input";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let single = p.get("objects").is_none();
@@ -6023,7 +6058,7 @@ fn object_set_input(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_marker(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_marker";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let single = p.get("objects").is_none();
@@ -6108,7 +6143,7 @@ fn object_set_marker(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_panel(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_panel";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let panel = match obj(C, p)?
@@ -6182,7 +6217,7 @@ fn object_set_panel(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_scroll_panel(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_scroll_panel";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let single = p.get("objects").is_none();
@@ -6213,7 +6248,8 @@ fn object_set_scroll_panel(s: &mut Session, p: &Json) -> Result<Json> {
                 if !value.is_finite() {
                     return Err(bad(C, "patch.content_height must be finite"));
                 }
-                *content_height = value.clamp(
+                *content_height = coursecraft_course::safe_clamp(
+                    value,
                     object.frame.h.max(0.0),
                     coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT,
                 );
@@ -6237,7 +6273,7 @@ fn object_set_scroll_panel(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_timer(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_timer";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let single = p.get("objects").is_none();
@@ -6300,7 +6336,7 @@ fn object_set_timer(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_meter(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_meter";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let ids = object_or_objects_param(C, p)?;
     let single = p.get("objects").is_none();
@@ -6366,7 +6402,7 @@ fn object_set_meter(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_path(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_path";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let points: Vec<coursecraft_course::Point> = req(C, p, "points")?;
@@ -6419,7 +6455,7 @@ fn object_set_path(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_crop(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_crop";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let raw = obj(C, p)?
@@ -6486,7 +6522,7 @@ fn check_crop(rect: CropRect) -> Result<()> {
 
 fn object_set_captions(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_captions";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let value = obj(C, p)?
@@ -6524,7 +6560,7 @@ fn object_set_captions(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_media(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_media";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let volume: Option<f32> = opt(C, p, "volume")?;
@@ -6601,7 +6637,7 @@ fn object_set_media(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn video_add_cue(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "video.add_cue";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let slide = slide_mut(s, &sid)?;
@@ -6641,7 +6677,7 @@ fn video_add_cue(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn video_set_cue(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "video.set_cue";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let cue_id: String = req(C, p, "cue")?;
@@ -6679,7 +6715,7 @@ fn video_set_cue(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn video_remove_cue(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "video.remove_cue";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let cue_id: String = req(C, p, "cue")?;
@@ -6731,7 +6767,7 @@ fn slide_cues_mut<'a>(
 
 fn slide_add_cue(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.add_cue";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let lid: Option<String> = opt(C, p, "layer")?;
     let at_ms: u32 = opt(C, p, "at_ms")?.unwrap_or(0);
@@ -6777,7 +6813,7 @@ fn slide_add_cue(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_set_cue(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.set_cue";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let lid: Option<String> = opt(C, p, "layer")?;
     let cue_id: String = req(C, p, "cue")?;
@@ -6836,7 +6872,7 @@ fn slide_set_cue(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn slide_remove_cue(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.remove_cue";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let lid: Option<String> = opt(C, p, "layer")?;
     let cue_id: String = req(C, p, "cue")?;
@@ -6866,7 +6902,7 @@ fn slide_remove_cue(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn video_add_question_cue(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "video.add_question_cue";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let theme = s.course.theme.clone();
@@ -7071,7 +7107,7 @@ fn cue_name(cmd: &str, name: String) -> Result<String> {
 }
 
 fn object_add_state(s: &mut Session, p: &Json) -> Result<Json> {
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req("object.add_state", p, "slide")?;
     let oid: String = req("object.add_state", p, "object")?;
     let state: StateDef = req("object.add_state", p, "state")?;
@@ -7084,7 +7120,7 @@ fn object_add_state(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_update_state(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.update_state";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let state: StateDef = req(C, p, "state")?;
@@ -7108,7 +7144,7 @@ fn object_update_state(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_delete_state(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.delete_state";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let name: String = req(C, p, "name")?;
@@ -7127,7 +7163,7 @@ fn object_delete_state(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn object_delete(s: &mut Session, p: &Json) -> Result<Json> {
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req("object.delete", p, "slide")?;
     let oid: String = req("object.delete", p, "object")?;
     let slide = slide_mut(s, &sid)?;
@@ -7185,19 +7221,34 @@ fn object_delete(s: &mut Session, p: &Json) -> Result<Json> {
 /// Validation is the single source of truth for what a trigger refers to,
 /// so the event, the action and the condition are all covered.
 fn remove_dangling_triggers(s: &mut Session, sid: &str, needles: &[String]) -> usize {
-    let Some(slide_path) = s.course.scenes.iter().enumerate().find_map(|(si, scene)| {
-        scene
-            .slides
-            .iter()
-            .position(|slide| slide.id == sid)
-            .map(|li| format!("/scenes/{si}/slides/{li}/"))
-    }) else {
+    let Some(slide_path) = s
+        .course
+        .scenes
+        .iter()
+        .enumerate()
+        .find_map(|(si, scene)| {
+            scene
+                .slides
+                .iter()
+                .position(|slide| slide.id == sid)
+                .map(|li| format!("/scenes/{si}/slides/{li}/"))
+        })
+        .or_else(|| {
+            s.course.banks.iter().enumerate().find_map(|(bi, bank)| {
+                bank.slides
+                    .iter()
+                    .position(|slide| slide.id == sid)
+                    .map(|si| format!("/banks/{bi}/slides/{si}/"))
+            })
+        })
+    else {
         return 0;
     };
-    let mut removed = 0;
-    // Each pass removes one trigger; a slide never has this many.
-    for _ in 0..10_000 {
-        let found = s.course.validate().into_iter().find_map(|issue| {
+    let targets: BTreeSet<(Option<usize>, usize)> = s
+        .course
+        .validate()
+        .into_iter()
+        .filter_map(|issue| {
             if issue.severity != coursecraft_course::Severity::Error
                 || !needles
                     .iter()
@@ -7214,25 +7265,28 @@ fn remove_dangling_triggers(s: &mut Session, sid: &str, needles: &[String]) -> u
                 }
                 _ => None,
             }
-        });
-        let Some((layer, index)) = found else {
-            break;
-        };
-        let Some(slide) = s.course.slide_mut(sid) else {
-            break;
-        };
+        })
+        .collect();
+    if targets.is_empty() {
+        return 0;
+    }
+    let Some(slide) = s.course.slide_mut(sid) else {
+        return 0;
+    };
+    let mut removed = 0;
+    // Remove in descending index order so earlier removals do not shift later indices.
+    for (layer, index) in targets.into_iter().rev() {
         let triggers = match layer {
             None => &mut slide.triggers,
             Some(l) => match slide.layers.get_mut(l) {
                 Some(layer) => &mut layer.triggers,
-                None => break,
+                None => continue,
             },
         };
-        if index >= triggers.len() {
-            break;
+        if index < triggers.len() {
+            triggers.remove(index);
+            removed += 1;
         }
-        triggers.remove(index);
-        removed += 1;
     }
     removed
 }
@@ -7339,7 +7393,7 @@ fn text_parts_at<'a>(
 
 fn text_set(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "text.set";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let new_text_raw: String = req(C, p, "text")?;
@@ -7370,7 +7424,7 @@ fn text_set(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "text.style_range";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let start: usize = req(C, p, "start")?;
@@ -7438,7 +7492,7 @@ fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn text_set_paragraph(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "text.set_paragraph";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let align_str: Option<String> = opt(C, p, "align")?;
@@ -7486,7 +7540,7 @@ fn trim_paragraphs(paragraphs: &mut Vec<Paragraph>) {
 
 fn text_set_paragraphs(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "text.set_paragraphs";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let start: Option<usize> = opt(C, p, "start")?;
@@ -7556,7 +7610,7 @@ fn text_set_paragraphs(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn text_set_link(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "text.set_link";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let start: Option<usize> = opt(C, p, "start")?;
@@ -7605,7 +7659,7 @@ fn text_set_link(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_set_autofit(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_autofit";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let autofit: Autofit = req(C, p, "autofit")?;
@@ -7654,7 +7708,7 @@ fn normalize_row_heights(rows: &mut [TableRow]) {
 
 fn table_set_cell(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.set_cell";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let row: usize = req(C, p, "row")?;
@@ -7717,7 +7771,7 @@ fn table_set_cell(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn table_insert_row(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.insert_row";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let index: Option<usize> = opt(C, p, "index")?;
@@ -7760,7 +7814,7 @@ fn table_insert_row(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn table_delete_row(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.delete_row";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let index: usize = req(C, p, "index")?;
@@ -7796,7 +7850,7 @@ fn table_delete_row(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn table_insert_column(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.insert_column";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let index: Option<usize> = opt(C, p, "index")?;
@@ -7835,7 +7889,7 @@ fn table_insert_column(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn table_delete_column(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.delete_column";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let index: usize = req(C, p, "index")?;
@@ -7872,7 +7926,7 @@ fn table_delete_column(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.resize";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let new_columns: Option<Vec<f32>> = opt(C, p, "columns")?;
@@ -7906,7 +7960,7 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn table_merge(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.merge";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let row: usize = req(C, p, "row")?;
@@ -7956,7 +8010,7 @@ fn table_merge(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn table_split(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.split";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let row: usize = req(C, p, "row")?;
@@ -7989,7 +8043,7 @@ fn table_split(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn table_set_borders(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.set_borders";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let has_outer = obj(C, p)?.contains_key("outer");
@@ -8011,7 +8065,7 @@ fn table_set_borders(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn table_set_header_row(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "table.set_header_row";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let header_row: bool = req(C, p, "header_row")?;
@@ -8030,7 +8084,7 @@ fn triggers_mut<'a>(slide: &'a mut Slide, layer: Option<&str>) -> Result<&'a mut
 
 fn trigger_add(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "trigger.add";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let layer: Option<String> = opt(C, p, "layer")?;
     let trigger: Trigger = req(C, p, "trigger")?;
@@ -8044,7 +8098,7 @@ fn trigger_add(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn trigger_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "trigger.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let layer: Option<String> = opt(C, p, "layer")?;
     let index: usize = req(C, p, "index")?;
@@ -8066,7 +8120,7 @@ fn trigger_update(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn trigger_move(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "trigger.move";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let layer: Option<String> = opt(C, p, "layer")?;
     let from: usize = req(C, p, "from")?;
@@ -8118,7 +8172,7 @@ fn glossary_index(s: &Session, id: &str) -> Result<usize> {
 
 fn resource_add(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "resource.add";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let title = text(C, req(C, p, "title")?, "title")?;
     let target: coursecraft_course::ResourceTarget = req(C, p, "target")?;
     let id = fresh_id("resource", s.course.resources.iter().map(|r| r.id.as_str()));
@@ -8133,7 +8187,7 @@ fn resource_add(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn resource_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "resource.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let id: String = req(C, p, "id")?;
     let title: Option<String> = opt(C, p, "title")?;
     let target: Option<coursecraft_course::ResourceTarget> = opt(C, p, "target")?;
@@ -8172,7 +8226,7 @@ fn resource_move(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn glossary_add(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "glossary.add";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let term = text(C, req(C, p, "term")?, "term")?;
     let definition: Option<String> = opt(C, p, "definition")?;
     let definition = text(C, definition.unwrap_or_default(), "definition")?;
@@ -8188,7 +8242,7 @@ fn glossary_add(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn glossary_update(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "glossary.update";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let id: String = req(C, p, "id")?;
     let term: Option<String> = opt(C, p, "term")?;
     let definition: Option<String> = opt(C, p, "definition")?;
@@ -8226,7 +8280,7 @@ fn glossary_move(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn variable_add(s: &mut Session, p: &Json) -> Result<Json> {
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let name: String = req("variable.add", p, "name")?;
     let value: Value = req("variable.add", p, "value")?;
     if s.course.variable(&name).is_some() {
@@ -8241,7 +8295,7 @@ fn variable_add(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn variable_set_value(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "variable.set_value";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let name: String = req(C, p, "name")?;
     let value: Value = req(C, p, "value")?;
 
@@ -8303,7 +8357,7 @@ fn trigger_references_var(t: &Trigger, var_name: &str) -> bool {
 
 fn variable_delete(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "variable.delete";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let name: String = req(C, p, "name")?;
 
     let pos = s
@@ -9170,7 +9224,7 @@ fn build_results_slide(id: &str, theme: &Theme, size: Size, passing_percent: u8)
 
 fn results_insert(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "results.insert";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let after: Option<String> = opt(C, p, "after")?;
     if !s.course.slides().any(|slide| slide.question.is_some()) {
         return Err(EngineError::Invalid(
@@ -9407,7 +9461,7 @@ fn build_certificate_slide(id: &str, theme: &Theme, size: Size) -> Slide {
 
 fn certificate_insert(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "certificate.insert";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let after: Option<String> = opt(C, p, "after")?;
     let theme = s.course.theme.clone();
     let slide_size = s.course.slide_size;
@@ -9420,7 +9474,7 @@ fn certificate_insert(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_add_feedback_layers(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.add_feedback_layers";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let theme = s.course.theme.clone();
     let slide_size = s.course.slide_size;
@@ -9437,7 +9491,7 @@ fn question_add_feedback_layers(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_add_try_again_layer(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.add_try_again_layer";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let theme = s.course.theme.clone();
     let slide_size = s.course.slide_size;
@@ -9765,7 +9819,7 @@ fn interaction_callout_layer(
 #[allow(clippy::cognitive_complexity)]
 fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "interaction.insert";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     if s.course.play_slide(&sid).is_none() {
         return Err(EngineError::NotFound(format!(
@@ -11008,7 +11062,7 @@ fn freeform_default_condition(course: &Course) -> Condition {
 
 fn question_insert(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.insert";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let kind: QuestionKind = opt(C, p, "kind")?.unwrap_or(QuestionKind::MultipleChoice);
     let freeform_default = freeform_default_condition(&s.course);
@@ -11036,7 +11090,7 @@ fn question_insert(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_add_submit_button(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.add_submit_button";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let theme = s.course.theme.clone();
     let slide_size = s.course.slide_size;
@@ -11052,7 +11106,7 @@ fn question_add_submit_button(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn question_set(s: &mut Session, p: &Json) -> Result<Json> {
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req("question.set", p, "slide")?;
     let question: Question = req("question.set", p, "question")?;
     let slide = slide_mut(s, &sid)?;
@@ -11408,7 +11462,7 @@ fn move_to<T>(items: &mut Vec<T>, from: usize, to: usize) {
 
 fn question_set_kind(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.set_kind";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let kind: QuestionKind = req(C, p, "kind")?;
     let freeform_default = freeform_default_condition(&s.course);
@@ -11427,7 +11481,7 @@ fn question_set_kind(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_add_accepted(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.add_accepted";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let value = match opt::<String>(C, p, "text")? {
         Some(t) => text(C, t, "text")?,
@@ -11444,7 +11498,7 @@ fn question_add_accepted(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_remove_accepted(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.remove_accepted";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     {
         let q = question_of(s, &sid)?;
@@ -11458,7 +11512,7 @@ fn question_remove_accepted(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_update_accepted(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.update_accepted";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let value = text(C, req(C, p, "text")?, "text")?;
     {
@@ -11475,7 +11529,7 @@ fn question_update_accepted(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_set_case_sensitive(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.set_case_sensitive";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let flag: bool = req(C, p, "case_sensitive")?;
     {
@@ -11489,7 +11543,7 @@ fn question_set_case_sensitive(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_add_pair(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.add_pair";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let left = match opt::<String>(C, p, "left")? {
         Some(v) => text(C, v, "left")?,
@@ -11516,7 +11570,7 @@ fn question_add_pair(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_remove_pair(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.remove_pair";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let id: String = req(C, p, "id")?;
     {
@@ -11533,7 +11587,7 @@ fn question_remove_pair(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_update_pair(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.update_pair";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let id: String = req(C, p, "id")?;
     let left: Option<String> = opt(C, p, "left")?;
@@ -11562,7 +11616,7 @@ fn question_update_pair(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_reorder_pair(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.reorder_pair";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let id: String = req(C, p, "id")?;
     {
@@ -11580,7 +11634,7 @@ fn question_reorder_pair(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_reorder_sequence(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.reorder_sequence";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let id: String = req(C, p, "id")?;
     {
@@ -11600,7 +11654,7 @@ fn question_reorder_sequence(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_set_hotspot_image(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.set_hotspot_image";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let image: String = req(C, p, "image")?;
     let slide = slide_mut(s, &sid)?;
@@ -11621,7 +11675,7 @@ fn question_set_hotspot_image(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_add_region(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.add_region";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let shape = opt::<HotspotShape>(C, p, "shape")?.unwrap_or(HotspotShape::Rect);
     let slide_size = s.course.slide_size;
@@ -11686,7 +11740,7 @@ fn question_add_region(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_update_region(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.update_region";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let id: String = req(C, p, "id")?;
     let shape: Option<HotspotShape> = opt(C, p, "shape")?;
@@ -11745,7 +11799,7 @@ fn question_update_region(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_remove_region(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.remove_region";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let id: String = req(C, p, "id")?;
     let q = question_of(s, &sid)?;
@@ -11768,7 +11822,7 @@ fn question_remove_region(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_set_markers(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.set_markers";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let markers: u32 = req(C, p, "markers")?;
     if !(1..=10).contains(&markers) {
@@ -11783,7 +11837,7 @@ fn question_set_markers(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_add_drag_item(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.add_drag_item";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let item: String = req(C, p, "item")?;
     let target: String = req(C, p, "target")?;
@@ -11830,7 +11884,7 @@ fn question_add_drag_item(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_update_drag_item(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.update_drag_item";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let item: String = req(C, p, "item")?;
     let target: String = req(C, p, "target")?;
@@ -11870,7 +11924,7 @@ fn question_update_drag_item(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_remove_drag_item(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.remove_drag_item";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let item: String = req(C, p, "item")?;
     let q = question_of(s, &sid)?;
@@ -11890,7 +11944,7 @@ fn question_remove_drag_item(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_set_drop_targets(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.set_drop_targets";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let targets: Vec<String> = req(C, p, "targets")?;
     if targets.is_empty() || targets.len() > 20 {
@@ -11943,7 +11997,7 @@ fn question_set_drop_targets(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn question_set_drag_options(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.set_drag_options";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let snap_to_center: Option<bool> = opt(C, p, "snap_to_center")?;
     let return_if_wrong: Option<bool> = opt(C, p, "return_if_wrong")?;
@@ -12027,7 +12081,7 @@ fn event_object(event: &Event) -> Option<&str> {
 /// else to do. Layers, feedback layers and all other objects stay.
 fn question_delete(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "question.delete";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let slide = slide_mut(s, &sid)?;
     if slide.question.is_none() {
@@ -12130,7 +12184,7 @@ fn is_untouched_feedback_layer(layer: &Layer) -> bool {
 
 fn object_set_animation(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_animation";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let which: String = req(C, p, "which")?;
@@ -12168,7 +12222,7 @@ fn object_set_animation(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_add_motion_path(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.add_motion_path";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let points: Option<Vec<Point>> = opt(C, p, "points")?;
@@ -12224,7 +12278,7 @@ fn object_add_motion_path(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_update_motion_path(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.update_motion_path";
-    let was_valid = s.course.is_playable();
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let path_id: String = req(C, p, "path")?;
@@ -12287,6 +12341,7 @@ fn object_update_motion_path(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn object_remove_motion_path(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.remove_motion_path";
+    let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let path_id: String = req(C, p, "path")?;
@@ -12304,22 +12359,18 @@ fn object_remove_motion_path(s: &mut Session, p: &Json) -> Result<Json> {
         })?;
     target.motion_paths.remove(pos);
 
-    let mut referencing = Vec::new();
-    let slide = slide_mut(s, &sid)?;
-    for (i, t) in slide.triggers.iter().enumerate() {
-        if trigger_references_path(t, &oid, &path_id) {
-            referencing.push(format!("slide:{sid}:trigger:{i}"));
-        }
-    }
-    for l in &slide.layers {
-        for (i, t) in l.triggers.iter().enumerate() {
-            if trigger_references_path(t, &oid, &path_id) {
-                referencing.push(format!("slide:{sid}:layer:{}:trigger:{i}", l.id));
-            }
-        }
+    // Triggers naming the removed path cannot run again: remove them in the
+    // same undo step so the course stays valid.
+    slide
+        .triggers
+        .retain(|t| !trigger_references_path(t, &oid, &path_id));
+    for l in &mut slide.layers {
+        l.triggers
+            .retain(|t| !trigger_references_path(t, &oid, &path_id));
     }
 
-    Ok(json!({ "triggers": referencing }))
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
 }
 
 fn trigger_references_path(t: &Trigger, obj_id: &str, path_id: &str) -> bool {

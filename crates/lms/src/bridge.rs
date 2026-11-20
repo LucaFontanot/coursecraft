@@ -176,6 +176,13 @@ impl CmiMapping {
         }
     }
 
+    fn is_passed(&self, statuses: &[String]) -> bool {
+        match self.standard {
+            Standard::Scorm12 => statuses.first().is_some_and(|s| s == "passed"),
+            Standard::Scorm2004 => statuses.get(1).is_some_and(|s| s == "passed"),
+        }
+    }
+
     fn write_status(
         &self,
         api: &mut impl CmiApi,
@@ -409,6 +416,8 @@ pub struct LmsBridge {
     last_suspend: Option<String>,
     finished: bool,
     completed: bool,
+    passed: bool,
+    best_passed_score: Option<u8>,
     /// Next `cmi.interactions.n` index, or `None` when reporting is unavailable.
     interaction_index: Option<u64>,
 }
@@ -502,6 +511,15 @@ impl LmsBridge {
                 &mut last_status,
                 &mut warnings,
             );
+        }
+        if self.mapping.is_passed(&statuses) {
+            self.passed = true;
+            self.best_passed_score = api
+                .get_value(self.mapping.score.raw)
+                .trim()
+                .parse::<u8>()
+                .ok()
+                .filter(|&percent| percent <= 100);
         }
 
         let suspend_data = api.get_value(self.mapping.suspend_key);
@@ -681,9 +699,22 @@ impl LmsBridge {
         last_status: &mut Option<CompletionStatus>,
         warnings: &mut Vec<String>,
     ) {
+        if self.passed
+            && (status != CompletionStatus::Passed
+                || self.best_passed_score.is_some_and(|best| percent < best))
+        {
+            return;
+        }
         self.mapping.write_score(api, percent, warnings);
         self.mapping
             .write_status(api, status, last_status, warnings);
+        if status == CompletionStatus::Passed {
+            self.passed = true;
+            self.best_passed_score = Some(
+                self.best_passed_score
+                    .map_or(percent, |best| best.max(percent)),
+            );
+        }
         if matches!(
             status,
             CompletionStatus::Passed | CompletionStatus::Failed | CompletionStatus::Completed
@@ -699,8 +730,19 @@ impl LmsBridge {
         last_status: &mut Option<CompletionStatus>,
         warnings: &mut Vec<String>,
     ) {
+        if self.passed
+            && matches!(
+                status,
+                CompletionStatus::Failed | CompletionStatus::Incomplete
+            )
+        {
+            return;
+        }
         self.mapping
             .write_status(api, status, last_status, warnings);
+        if status == CompletionStatus::Passed {
+            self.passed = true;
+        }
         if matches!(
             status,
             CompletionStatus::Passed | CompletionStatus::Failed | CompletionStatus::Completed
