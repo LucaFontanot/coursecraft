@@ -1788,15 +1788,22 @@ impl Editor {
         {
             slide.master = None;
         }
+        let prev_media_len = self.media.len();
         let mut renames = std::collections::HashMap::new();
         let mut media_added = false;
         for (src, bytes) in media {
-            if let Some((_, existing)) = self.media.iter().find(|(name, _)| name == &src) {
+            if let Some((existing_name, existing)) = self
+                .media
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&src))
+            {
                 if existing.as_ref() != bytes.as_slice() {
                     let new_src = sanitize_media_src(&src, &self.media);
                     self.media.push((new_src.clone(), bytes.into()));
                     renames.insert(src, new_src);
                     media_added = true;
+                } else if existing_name != &src {
+                    renames.insert(src, existing_name.clone());
                 }
             } else {
                 self.media.push((src, bytes.into()));
@@ -1806,10 +1813,8 @@ impl Editor {
         if !renames.is_empty() {
             rewrite_slide_media_srcs(&mut slide, &renames);
         }
-        if media_added {
-            self.mark_media_changed();
-        }
         let Ok(slide_json) = serde_json::to_value(&slide) else {
+            self.media.truncate(prev_media_len);
             return;
         };
         let mut params = serde_json::json!({ "slide": slide_json });
@@ -1819,7 +1824,13 @@ impl Editor {
         if let Some(scene) = scene {
             params["scene"] = serde_json::json!(scene);
         }
-        self.run("slide.paste", params);
+        if self.run("slide.paste", params).is_some() {
+            if media_added {
+                self.mark_media_changed();
+            }
+        } else {
+            self.media.truncate(prev_media_len);
+        }
     }
 
     /// Media files the course references but the editor's media store does not
@@ -4369,7 +4380,10 @@ pub fn sanitize_font_src(file_name: &str, existing: &[(String, std::sync::Arc<[u
         } else {
             format!("fonts/{stem}-{counter}.{ext}")
         };
-        if !existing.iter().any(|(src, _)| src == &name) {
+        if !existing
+            .iter()
+            .any(|(src, _)| src.eq_ignore_ascii_case(&name))
+        {
             return name;
         }
         counter = counter.saturating_add(1);

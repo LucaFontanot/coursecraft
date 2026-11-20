@@ -3181,10 +3181,9 @@ impl eframe::App for EditorApp {
                         });
                     }
                     EditorRequest::Save | EditorRequest::SaveAs => {
-                        match coursecraft_format::save_project(
-                            &self.editor.session.course,
-                            &self.editor.media,
-                        ) {
+                        let media = self.editor.used_media();
+                        match coursecraft_format::save_project(&self.editor.session.course, &media)
+                        {
                             Ok(bytes) => {
                                 let stem = sanitize_filename_stem(
                                     &self.editor.session.course.title,

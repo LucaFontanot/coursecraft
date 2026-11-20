@@ -5,7 +5,6 @@ use coursecraft_course::{NextRequirement, SlidePlayerOverrides, TextRun};
 use serde_json::json;
 
 #[test]
-#[ignore = "BUG: slide.paste fails validation when pasted slide contains a text Link::Slide to a slide not in the target course"]
 fn slide_paste_from_other_course_drops_missing_slide_link() {
     let source_session = Session::blank("Course A");
     let s1 = source_session.course.scenes[0].slides[0].id.clone();
@@ -40,7 +39,6 @@ fn slide_paste_from_other_course_drops_missing_slide_link() {
 }
 
 #[test]
-#[ignore = "BUG: slide.paste fails validation when pasted slide has next_requires referencing a variable not in the target course"]
 fn slide_paste_from_other_course_clears_missing_next_requires_variable() {
     let source_session = Session::blank("Course A");
     let mut slide = source_session.course.scenes[0].slides[0].clone();

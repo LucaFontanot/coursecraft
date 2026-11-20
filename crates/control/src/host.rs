@@ -442,19 +442,25 @@ impl ControlHost for HeadlessHost {
                     .extension()
                     .and_then(|ext| ext.to_str())
                     .is_none_or(|e| !e.eq_ignore_ascii_case("json"));
-            let json_file = if is_dir {
-                std::fs::create_dir_all(&target).map_err(|e| HostError::Io(e.to_string()))?;
-                target.join("course.json")
+            if is_dir {
+                let media = self.media_source.snapshot_in_memory();
+                let mut record = coursecraft_format::FolderRecord::default();
+                coursecraft_format::save_project_folder(
+                    &target,
+                    &self.session.course,
+                    &media,
+                    &mut record,
+                )
+                .map_err(|e| HostError::Engine(format!("save failed: {e}")))?;
             } else {
-                target.clone()
-            };
-            let json_text = self
-                .session
-                .course
-                .to_json()
-                .map_err(|e| HostError::Engine(e.to_string()))?;
-            std::fs::write(&json_file, format!("{json_text}\n"))
-                .map_err(|e| HostError::Io(e.to_string()))?;
+                let json_text = self
+                    .session
+                    .course
+                    .to_json()
+                    .map_err(|e| HostError::Engine(e.to_string()))?;
+                std::fs::write(&target, format!("{json_text}\n"))
+                    .map_err(|e| HostError::Io(e.to_string()))?;
+            }
         }
 
         self.path = Some(target.clone());
@@ -478,15 +484,14 @@ impl ControlHost for HeadlessHost {
                 .map_err(|e| HostError::Engine(e.to_string()))?;
             self.media_source.set_in_memory(&proj.media);
             proj.course
+        } else if path.is_dir() {
+            let opened = coursecraft_format::open_project_folder(path)
+                .map_err(|e| HostError::Engine(e.to_string()))?;
+            self.media_source.set_in_memory(&opened.project.media);
+            opened.project.course
         } else {
             self.media_source.set_in_memory(&[]);
-            let target_file = if path.is_dir() {
-                path.join("course.json")
-            } else {
-                path.to_path_buf()
-            };
-            let text =
-                std::fs::read_to_string(&target_file).map_err(|e| HostError::Io(e.to_string()))?;
+            let text = std::fs::read_to_string(path).map_err(|e| HostError::Io(e.to_string()))?;
             Course::from_json(&text).map_err(|e| HostError::Engine(e.to_string()))?
         };
 

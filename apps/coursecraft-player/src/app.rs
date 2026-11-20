@@ -372,6 +372,7 @@ impl Playing {
             self.ticker = Ticker::new();
             self.view = SlideView::new();
             self.frame.restart();
+            self.media.set_rate(1.0);
             self.last_slide_id = None;
             self.last_prefetched_slide_id = None;
             self.handle_input(&Input::Start, ctx);

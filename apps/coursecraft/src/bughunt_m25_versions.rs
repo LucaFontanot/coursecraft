@@ -15,7 +15,6 @@ fn scratch_dir(name: &str) -> PathBuf {
 }
 
 #[test]
-#[ignore = "BUG: Version history snapshots of plain course.json projects are saved with .ccraft extension and cannot be listed or opened"]
 fn json_project_version_snapshot_is_readable_and_openable() {
     let dir = scratch_dir("bughunt-m25-json-versions");
     let config_dir = dir.join("config");

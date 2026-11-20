@@ -4194,6 +4194,77 @@ struct SlideCopy {
     skipped: usize,
 }
 
+/// Remap self-referential `Link::Slide` links and, when `allow_missing_jump` is
+/// `false`, drop `Link::Slide` targets that do not exist in `course`.
+fn sanitize_copied_runs(
+    runs: &mut [TextRun],
+    course: &Course,
+    self_pair: (&str, &str),
+    allow_missing_jump: bool,
+) {
+    for run in runs {
+        if let Some(Link::Slide { slide }) = &mut run.link {
+            if slide == self_pair.0 {
+                *slide = self_pair.1.to_owned();
+            } else if !allow_missing_jump && course.play_slide(slide).is_none() {
+                run.link = None;
+            }
+        }
+    }
+}
+
+fn sanitize_copied_object_links(
+    obj: &mut Object,
+    course: &Course,
+    self_pair: (&str, &str),
+    allow_missing_jump: bool,
+) {
+    match &mut obj.kind {
+        ObjectKind::Text { runs, .. } | ObjectKind::Marker { runs, .. } => {
+            sanitize_copied_runs(runs, course, self_pair, allow_missing_jump);
+        }
+        ObjectKind::Shape {
+            text: Some(shape_text),
+            ..
+        } => {
+            sanitize_copied_runs(&mut shape_text.runs, course, self_pair, allow_missing_jump);
+        }
+        ObjectKind::Table { rows, .. } => {
+            for row in rows {
+                for cell in &mut row.cells {
+                    sanitize_copied_runs(&mut cell.runs, course, self_pair, allow_missing_jump);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_copied_slide_links_and_player(
+    slide: &mut Slide,
+    course: &Course,
+    self_pair: (&str, &str),
+    allow_missing_jump: bool,
+) {
+    for obj in &mut slide.objects {
+        sanitize_copied_object_links(obj, course, self_pair, allow_missing_jump);
+    }
+    for layer in &mut slide.layers {
+        for obj in &mut layer.objects {
+            sanitize_copied_object_links(obj, course, self_pair, allow_missing_jump);
+        }
+    }
+    if !allow_missing_jump
+        && let Some(overrides) = &mut slide.player
+        && let Some(coursecraft_course::NextRequirement::Variable { name }) =
+            &overrides.next_requires
+        && coursecraft_course::builtin_variable_kind(name).is_none()
+        && course.variable(name).is_none()
+    {
+        overrides.next_requires = None;
+    }
+}
+
 /// Give a slide, its layers and objects fresh ids, then rewrite every internal
 /// reference. `self_slide` is the slide id the triggers originally used.
 fn copy_slide(
@@ -4235,6 +4306,7 @@ fn copy_slide(
 
     let new_slide_id = fresh_id("slide", course.all_slide_ids());
     let self_pair = (self_slide, new_slide_id.as_str());
+    sanitize_copied_slide_links_and_player(&mut slide, course, self_pair, allow_missing_jump);
     let mut skipped = 0;
 
     let mut kept = Vec::with_capacity(slide.triggers.len());

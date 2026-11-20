@@ -18,7 +18,6 @@ fn image_object(id: &str, name: &str, src: &str) -> Object {
 }
 
 #[test]
-#[ignore = "BUG: insert_library_template allows case-only media name collisions that break folder project saves"]
 fn insert_library_template_avoids_case_only_media_collision_for_folder_save() {
     let mut course: Course = Session::blank("Target Course").course;
     course.scenes[0].slides[0]

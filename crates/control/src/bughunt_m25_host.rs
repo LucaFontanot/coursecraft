@@ -15,7 +15,6 @@ fn scratch_dir(name: &str) -> PathBuf {
 }
 
 #[test]
-#[ignore = "BUG: HeadlessHost::save drops all media when saving to a project folder"]
 fn headless_host_save_to_folder_preserves_media() {
     let dir = scratch_dir("bughunt-m25-control-folder-save");
     let ccraft_path = dir.join("source.ccraft");

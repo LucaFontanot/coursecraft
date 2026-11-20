@@ -148,16 +148,31 @@ pub fn id_is_valid(id: &str) -> bool {
     !id.is_empty() && id.len() <= 40 && id.chars().all(|c| c.is_ascii_digit() || c == '-')
 }
 
+fn is_json_project(project: &Path) -> bool {
+    project
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+}
+
+fn version_ext(project: &Path) -> &'static str {
+    if is_json_project(project) {
+        "json"
+    } else {
+        "ccraft"
+    }
+}
+
 /// Version ids of `project`, newest first.
 fn ids(config_dir: &Path, project: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(versions_dir(config_dir, project)) else {
         return Vec::new();
     };
+    let suffix = format!(".{}", version_ext(project));
     let mut ids: Vec<String> = entries
         .filter_map(Result::ok)
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            let stem = name.strip_suffix(".ccraft")?;
+            let stem = name.strip_suffix(&suffix)?;
             id_is_valid(stem).then(|| stem.to_string())
         })
         .collect();
@@ -166,7 +181,7 @@ fn ids(config_dir: &Path, project: &Path) -> Vec<String> {
 }
 
 fn version_file(config_dir: &Path, project: &Path, id: &str) -> PathBuf {
-    versions_dir(config_dir, project).join(format!("{id}.ccraft"))
+    versions_dir(config_dir, project).join(format!("{id}.{}", version_ext(project)))
 }
 
 fn describe(config_dir: &Path, project: &Path, id: &str) -> Version {
@@ -190,10 +205,17 @@ fn describe(config_dir: &Path, project: &Path, id: &str) -> Version {
             slides: entry.slides,
         };
     }
-    let slides = std::fs::File::open(&path)
-        .ok()
-        .and_then(|f| coursecraft_format::read_course(std::io::BufReader::new(f)).ok())
-        .map(|course| course.slides().count());
+    let slides = if is_json_project(project) {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| coursecraft_course::Course::from_json(&s).ok())
+            .map(|course| course.slides().count())
+    } else {
+        std::fs::File::open(&path)
+            .ok()
+            .and_then(|f| coursecraft_format::read_course(std::io::BufReader::new(f)).ok())
+            .map(|course| course.slides().count())
+    };
     if let Some(mtime) = modified
         && let Ok(mut guard) = cache.lock()
     {
@@ -342,7 +364,7 @@ pub fn snapshot_with(
         id = format!("{base}-{n}");
     }
     let target = version_file(config_dir, project, &id);
-    let part = dir.join(format!("{id}.ccraft.part"));
+    let part = dir.join(format!("{id}.{}.part", version_ext(project)));
     let copied = std::fs::copy(project, &part).and_then(|_| std::fs::rename(&part, &target));
     if let Err(e) = copied {
         let _ = std::fs::remove_file(&part);

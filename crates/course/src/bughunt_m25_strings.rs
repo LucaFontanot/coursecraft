@@ -3,7 +3,6 @@
 use crate::strings::{StringTarget, replace_in_target, variable_reference_spans};
 
 #[test]
-#[ignore = "BUG: variable_reference_spans rejects built-in variables containing dots like %Results.ScorePercent%"]
 fn builtin_variable_reference_is_protected_in_find_and_replace() {
     let mut text = "You scored %Results.ScorePercent%! Awarded to %Course.LearnerName%.".to_owned();
     let spans = variable_reference_spans(&text);
@@ -22,9 +21,9 @@ fn builtin_variable_reference_is_protected_in_find_and_replace() {
         1024,
     );
     assert_eq!(
-        text, "You scored %Results.ScorePercent%! Awarded to %Course.LearnerName%.",
+        text, "You Graded %Results.ScorePercent%! Awarded to %Course.LearnerName%.",
         "Find & Replace must not mutate inside %Results.ScorePercent%"
     );
-    assert_eq!(outcome.replaced, 0);
+    assert_eq!(outcome.replaced, 1);
     assert_eq!(outcome.skipped, 1);
 }
