@@ -7720,6 +7720,43 @@ fn publish_dialog_offers_lti_and_requests_it() {
 }
 
 #[test]
+fn publish_dialog_offers_web_and_requests_it() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.idle_frame();
+    harness.editor.open_publish_dialog();
+    harness.idle_frame();
+
+    assert!(
+        harness
+            .find_text_containing(
+                "Upload the folder to any web server. Results are not reported to an LMS."
+            )
+            .is_some(),
+        "the Web help text is painted"
+    );
+
+    let web = harness
+        .find_text_last("Web (any website, no LMS)")
+        .expect("Web radio label");
+    harness.click_at(web);
+    harness.idle_frame();
+    assert_eq!(harness.editor.ui.publish.standard, PublishStandard::Web);
+
+    let publish = harness.find_text_last("Publish").expect("Publish button");
+    let requests = click_for_requests(&mut harness, publish);
+    assert!(
+        requests.iter().any(|r| matches!(
+            r,
+            EditorRequest::Publish {
+                standard: PublishStandard::Web
+            }
+        )),
+        "the Web standard is sent with the request: {requests:?}"
+    );
+}
+
+#[test]
 fn publish_unavailable_disables_publish() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);

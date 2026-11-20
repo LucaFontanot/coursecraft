@@ -27,6 +27,8 @@ pub enum PlayerStandard {
     Xapi,
     /// LTI 1.3 through the CourseCraft LTI server.
     Lti,
+    /// Standalone web hosting with no LMS reporting.
+    Web,
 }
 
 /// Read the standard from `coursecraft-package.json`.
@@ -60,6 +62,7 @@ pub fn parse_package_standard(text: Option<&str>) -> (PlayerStandard, Option<Str
         "cmi5" => PlayerStandard::Cmi5,
         "xapi" => PlayerStandard::Xapi,
         "lti" => PlayerStandard::Lti,
+        "web" => PlayerStandard::Web,
         other => {
             return (
                 PlayerStandard::Scorm12,

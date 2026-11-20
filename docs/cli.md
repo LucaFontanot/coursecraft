@@ -108,7 +108,7 @@ Run `coursecraft-cli <command> --help` for every option. A `<course>` is a `cour
 | `batch <script.json> <course>... [--dir <folder>] (--in-place \| --out-dir <dir>) [--publish <std> --publish-dir <dir> --player <dir>] [--replace-media <path>=<file>]... [--dry-run]` | Run one script on many courses; see below |
 | `commands` | List engine commands |
 | `manifest <course>` | Print the SCORM 1.2 `imsmanifest.xml` |
-| `publish <course> -o <zip> [--standard <std>]` | Build a package; `<std>` is `scorm12`, `scorm2004`, `cmi5`, `xapi` or `lti` |
+| `publish <course> -o <zip> [--standard <std>]` | Build a package; `<std>` is `scorm12`, `scorm2004`, `cmi5`, `xapi`, `lti` or `web` |
 | `export-mp4 <course> -o <file.mp4> [--width 1280] [--fps 30]` | Export a video for sharing (macOS and Windows) |
 | `export-pdf <course> -o <file.pdf> [--layers] [--no-notes] [--no-text] [--width 1600]` | Export a PDF for review: one page per slide with its picture, notes and text |
 | `export-docx <course> -o <file.docx> [--layers] [--no-notes] [--no-text] [--width 1600]` | Export a Word document for review: one page per slide with its picture, notes and text |

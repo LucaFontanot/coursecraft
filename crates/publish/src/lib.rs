@@ -26,7 +26,7 @@ mod tests;
 /// Root marker naming the package standard. Missing means SCORM 1.2.
 pub const PACKAGE_MARKER: &str = "coursecraft-package.json";
 
-/// A package standard: SCORM, one of the xAPI flavors, or LTI.
+/// A package standard: SCORM, one of the xAPI flavors, LTI, or standalone Web.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageStandard {
     Scorm(Standard),
@@ -34,6 +34,9 @@ pub enum PackageStandard {
     /// An LTI 1.3 package for the CourseCraft LTI server: the SCORM 1.2 file
     /// set without a manifest, plus a `{"standard":"lti"}` marker.
     Lti,
+    /// A standalone web package for any static host: the SCORM 1.2 file set
+    /// without a manifest, plus a `{"standard":"web"}` marker.
+    Web,
 }
 
 /// A single file in a package, holding its relative package path and contents.
@@ -494,6 +497,12 @@ pub fn build_package_standard_with_folders(
             files.push(PackageFile {
                 path: PACKAGE_MARKER.to_string(),
                 bytes: b"{\"standard\":\"lti\"}".to_vec(),
+            });
+        }
+        PackageStandard::Web => {
+            files.push(PackageFile {
+                path: PACKAGE_MARKER.to_string(),
+                bytes: b"{\"standard\":\"web\"}".to_vec(),
             });
         }
     }

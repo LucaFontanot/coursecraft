@@ -993,6 +993,7 @@ fn publish_job_builds_all_standards_with_correct_marker_and_manifest() {
         (PackageStandard::Xapi(Flavor::Cmi5), "cmi5"),
         (PackageStandard::Xapi(Flavor::Xapi), "xapi"),
         (PackageStandard::Lti, "lti"),
+        (PackageStandard::Web, "web"),
     ];
 
     for (standard, slug) in cases {
@@ -1038,6 +1039,11 @@ fn publish_job_builds_all_standards_with_correct_marker_and_manifest() {
             PackageStandard::Lti => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
                 assert_eq!(marker.bytes.as_slice(), br#"{"standard":"lti"}"#);
+                assert!(find_file(&files, "imsmanifest.xml").is_none());
+            }
+            PackageStandard::Web => {
+                let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
+                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"web"}"#);
                 assert!(find_file(&files, "imsmanifest.xml").is_none());
             }
         }

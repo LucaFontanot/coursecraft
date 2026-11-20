@@ -624,6 +624,7 @@ impl PlayerApp {
                                 self.start_xapi(course, coursecraft_xapi::Flavor::Xapi);
                             }
                             crate::load::PlayerStandard::Lti => self.start_lti(course),
+                            crate::load::PlayerStandard::Web => self.start_web(course),
                         },
                         Err(e) => {
                             self.state = State::Failed(e);
@@ -640,6 +641,21 @@ impl PlayerApp {
     /// Begin a SCORM launch with the package's standard.
     fn start_scorm(&mut self, course: Course, standard: coursecraft_lms::Standard) {
         match Playing::from_course_with_standard(course, self.ctx.clone(), standard) {
+            Ok(mut playing) => {
+                playing.frame.reduced_motion = prefers_reduced_motion();
+                playing.handle_input(&Input::Start, None);
+                self.state = State::Playing(Box::new(playing));
+            }
+            Err(err) => {
+                self.state = State::Failed(err);
+            }
+        }
+    }
+
+    /// Begin a standalone web session with no LMS reporting.
+    fn start_web(&mut self, course: Course) {
+        let course: &'static Course = Box::leak(Box::new(course));
+        match Playing::standalone(course, self.ctx.clone()) {
             Ok(mut playing) => {
                 playing.frame.reduced_motion = prefers_reduced_motion();
                 playing.handle_input(&Input::Start, None);

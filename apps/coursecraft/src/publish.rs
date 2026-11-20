@@ -40,6 +40,7 @@ pub fn package_standard(standard: PublishStandard) -> PackageStandard {
         PublishStandard::Cmi5 => PackageStandard::Xapi(Flavor::Cmi5),
         PublishStandard::Xapi => PackageStandard::Xapi(Flavor::Xapi),
         PublishStandard::Lti => PackageStandard::Lti,
+        PublishStandard::Web => PackageStandard::Web,
     }
 }
 

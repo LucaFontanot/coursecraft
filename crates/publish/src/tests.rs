@@ -1380,6 +1380,60 @@ fn lti_package_has_the_marker_no_manifest_and_the_same_media_as_scorm12() {
 }
 
 #[test]
+fn web_package_has_marker_index_and_no_manifest() {
+    let mut course = minimal_course("Web Course");
+    course.scenes[0].slides[0].objects.push(media_object(
+        "media1",
+        ObjectKind::Audio {
+            src: "sound.wav".into(),
+            autoplay: false,
+            captions: None,
+            volume: 1.0,
+            trim: None,
+        },
+    ));
+    let media =
+        |src: &str| -> Option<Vec<u8>> { (src == "sound.wav").then(|| b"audio bytes".to_vec()) };
+    let course_json = course.to_json().expect("serialize");
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &fake_player(),
+        media: &media,
+    };
+
+    let web = build_package_standard(&input, PackageStandard::Web).expect("web package");
+    let scorm = build_package_standard(&input, PackageStandard::Scorm(Standard::Scorm12))
+        .expect("scorm package");
+
+    let web_paths: Vec<&str> = web.iter().map(|file| file.path.as_str()).collect();
+    let scorm_paths: Vec<&str> = scorm.iter().map(|file| file.path.as_str()).collect();
+
+    assert!(
+        web_paths.contains(&"index.html"),
+        "web packages must include index.html: {web_paths:?}"
+    );
+    let marker = web
+        .iter()
+        .find(|file| file.path == PACKAGE_MARKER)
+        .expect("web marker");
+    assert_eq!(marker.bytes, b"{\"standard\":\"web\"}".as_slice());
+    assert!(
+        !web_paths.contains(&"imsmanifest.xml"),
+        "web packages have no imsmanifest: {web_paths:?}"
+    );
+
+    // The same files as SCORM 1.2, plus the marker and minus the manifest.
+    let mut expected: Vec<&str> = scorm_paths
+        .into_iter()
+        .filter(|path| *path != "imsmanifest.xml")
+        .collect();
+    expected.push(PACKAGE_MARKER);
+    expected.sort_unstable();
+    assert_eq!(web_paths, expected);
+}
+
+#[test]
 fn scorm12_via_the_standard_entry_point_is_byte_identical() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
     let no_media = |_src: &str| -> Option<Vec<u8>> { None };

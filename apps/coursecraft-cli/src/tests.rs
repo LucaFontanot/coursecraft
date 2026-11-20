@@ -750,6 +750,53 @@ fn test_cli_publish_lti_has_marker_and_no_manifest() {
     assert!(zip_out.exists());
 }
 
+#[test]
+fn test_cli_publish_web_has_marker_and_no_manifest() {
+    let scratch = scratch_dir("test-cli-publish-web");
+    let course_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/showcase/course.json");
+    let player_dir = scratch.join("fake-player");
+    std::fs::create_dir_all(&player_dir).expect("create fake player dir");
+    std::fs::write(
+        player_dir.join("index.html"),
+        "<!doctype html><html></html>",
+    )
+    .expect("write fake index.html");
+
+    let out_dir = scratch.join("package");
+    let zip_out = scratch.join("showcase-web.zip");
+
+    let cli = <Cli as clap::Parser>::try_parse_from([
+        "coursecraft-cli",
+        "publish",
+        course_path.to_str().expect("utf8 course path"),
+        "--player",
+        player_dir.to_str().expect("utf8 player dir"),
+        "-o",
+        zip_out.to_str().expect("utf8 zip path"),
+        "--out-dir",
+        out_dir.to_str().expect("utf8 out dir"),
+        "--standard",
+        "web",
+    ])
+    .expect("parse --standard web");
+
+    let code = run(cli).expect("run publish web");
+    assert_eq!(code, ExitCode::SUCCESS);
+
+    let marker = std::fs::read_to_string(out_dir.join("coursecraft-package.json"))
+        .expect("read package marker");
+    assert_eq!(marker, r#"{"standard":"web"}"#);
+    assert!(
+        !out_dir.join("imsmanifest.xml").exists(),
+        "Web packages have no imsmanifest.xml"
+    );
+    assert!(out_dir.join("index.html").exists());
+    assert!(out_dir.join("media/banner.png").exists());
+    assert!(out_dir.join("media/chime.wav").exists());
+    assert!(zip_out.exists());
+}
+
 struct LocalMediaSource {
     dir: PathBuf,
 }

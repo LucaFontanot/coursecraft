@@ -32,6 +32,7 @@ enum StandardArg {
     Cmi5,
     Xapi,
     Lti,
+    Web,
 }
 
 impl From<StandardArg> for PackageStandard {
@@ -42,6 +43,7 @@ impl From<StandardArg> for PackageStandard {
             StandardArg::Cmi5 => Self::Xapi(Flavor::Cmi5),
             StandardArg::Xapi => Self::Xapi(Flavor::Xapi),
             StandardArg::Lti => Self::Lti,
+            StandardArg::Web => Self::Web,
         }
     }
 }
