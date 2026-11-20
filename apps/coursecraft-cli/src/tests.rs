@@ -1931,3 +1931,55 @@ fn test_cli_publish_missing_player_mentions_build_player() {
         assert!(res.is_ok());
     }
 }
+
+// ---------------------------------------------------------------- bug hunt (M24, second pass)
+
+fn write_inputs(name: &str, body: &str) -> PathBuf {
+    let scratch = scratch_dir(name);
+    let path = scratch.join("inputs.json");
+    std::fs::write(&path, body).expect("write inputs");
+    path
+}
+
+#[test]
+fn simulate_strict_clean_hello_run_exits_zero() {
+    let course_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello-course/course.json");
+    let inputs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/hello-course/pass.inputs.json");
+    let code = run(Cli {
+        cmd: Cmd::Simulate {
+            course: course_path,
+            inputs: inputs_path,
+            seed: 0,
+            strict: true,
+        },
+    })
+    .expect("strict simulate");
+    assert_eq!(code, ExitCode::SUCCESS, "a clean run passes --strict");
+}
+
+#[test]
+fn simulate_strict_click_on_an_object_not_on_screen_fails() {
+    let course_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello-course/course.json");
+    // about-panel lives on the "about" layer, which is hidden until btn-about is clicked.
+    let inputs_path = write_inputs(
+        "test-cli-strict-hidden",
+        r#"[{"input": "start"}, {"input": "click", "object": "about-panel"}]"#,
+    );
+    let code = run(Cli {
+        cmd: Cmd::Simulate {
+            course: course_path,
+            inputs: inputs_path,
+            seed: 0,
+            strict: true,
+        },
+    })
+    .expect("strict simulate");
+    assert_eq!(
+        code,
+        ExitCode::FAILURE,
+        "a warning in --strict exits non-zero"
+    );
+}
