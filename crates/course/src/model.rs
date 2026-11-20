@@ -86,6 +86,7 @@ pub const CHROME_STRINGS: &[(&str, &str)] = &[
     ("markMissed", "Correct answer"),
     ("printBlocked", "Allow pop-ups to print this page."),
     ("printTitle", "Certificate"),
+    ("startOver", "Start over"),
 ];
 
 /// Fill `{name}` placeholders in a chrome string.

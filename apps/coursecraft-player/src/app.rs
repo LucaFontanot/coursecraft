@@ -101,6 +101,12 @@ pub struct Playing {
     /// LTI 1.3 reporter and transport (wasm only).
     #[cfg(target_arch = "wasm32")]
     pub lti: Option<crate::lti::LtiHandle>,
+    /// Browser `localStorage` resume state for standalone web launches (wasm only).
+    #[cfg(target_arch = "wasm32")]
+    pub web_resume: Option<crate::web_resume::WebResumeHandle>,
+    /// Leaked course reference for restarting (wasm only).
+    #[cfg(target_arch = "wasm32")]
+    course: &'static Course,
     /// Course session start timestamp in milliseconds (wasm only).
     #[cfg(target_arch = "wasm32")]
     pub start_ms: f64,
@@ -137,6 +143,7 @@ impl std::fmt::Debug for Playing {
         d.field("has_lms", &self.lms.is_some())
             .field("has_xapi", &self.xapi.is_some())
             .field("has_lti", &self.lti.is_some())
+            .field("has_web_resume", &self.web_resume.is_some())
             .field("has_a11y", &self.a11y.is_some())
             .field("start_ms", &self.start_ms);
         d.finish()
@@ -192,9 +199,11 @@ impl Playing {
         let (player, lms, start_ms) = crate::lms::init_player(course, standard)?;
 
         Ok(Self::assemble(
+            course,
             ctx,
             player,
             lms,
+            None,
             None,
             None,
             start_ms,
@@ -203,12 +212,15 @@ impl Playing {
     }
 
     #[cfg(target_arch = "wasm32")]
+    #[allow(clippy::too_many_arguments)]
     fn assemble(
+        course: &'static Course,
         ctx: egui::Context,
         player: Player<'static>,
         lms: Option<crate::lms::LmsHandle>,
         xapi: Option<crate::lrs::XapiHandle>,
         lti: Option<crate::lti::LtiHandle>,
+        web_resume: Option<crate::web_resume::WebResumeHandle>,
         start_ms: f64,
         log_effects: bool,
     ) -> Self {
@@ -233,6 +245,8 @@ impl Playing {
             lms,
             xapi,
             lti,
+            web_resume,
+            course,
             start_ms,
             a11y,
             web_objects: crate::web_object::WebObjects::new(),
@@ -241,7 +255,7 @@ impl Playing {
         }
     }
 
-    /// Create a web [`Playing`] with no LMS reporting.
+    /// Create a web [`Playing`] with no LMS reporting and no `localStorage` resume.
     ///
     /// # Errors
     /// Returns joined validation issues if the course cannot be played.
@@ -257,12 +271,38 @@ impl Playing {
             date: Some(crate::lms::today_date()),
         });
         Ok(Self::assemble(
+            course,
             ctx,
             player,
             None,
             None,
             None,
+            None,
             crate::lms::now_ms(),
+            log_effects,
+        ))
+    }
+
+    /// Create a web [`Playing`] for a Publish to Web course with `localStorage` resume.
+    ///
+    /// # Errors
+    /// Returns joined validation issues if the course cannot be played.
+    #[cfg(target_arch = "wasm32")]
+    pub fn web(
+        course: &'static Course,
+        ctx: egui::Context,
+        log_effects: bool,
+    ) -> Result<Self, String> {
+        let (player, web_resume, start_ms) = crate::web_resume::init_web_player(course)?;
+        Ok(Self::assemble(
+            course,
+            ctx,
+            player,
+            None,
+            None,
+            None,
+            Some(web_resume),
+            start_ms,
             log_effects,
         ))
     }
@@ -278,19 +318,64 @@ impl Playing {
         log_effects: bool,
     ) -> Self {
         crate::lrs::register_page_close(&xapi, course);
-        Self::assemble(ctx, player, None, Some(xapi), None, start_ms, log_effects)
+        Self::assemble(
+            course,
+            ctx,
+            player,
+            None,
+            Some(xapi),
+            None,
+            None,
+            start_ms,
+            log_effects,
+        )
     }
 
     /// Create a web [`Playing`] for an LTI 1.3 package.
     #[cfg(target_arch = "wasm32")]
     pub fn from_lti(
+        course: &'static Course,
         ctx: egui::Context,
         player: Player<'static>,
         lti: crate::lti::LtiHandle,
         start_ms: f64,
         log_effects: bool,
     ) -> Self {
-        Self::assemble(ctx, player, None, None, Some(lti), start_ms, log_effects)
+        Self::assemble(
+            course,
+            ctx,
+            player,
+            None,
+            None,
+            Some(lti),
+            None,
+            start_ms,
+            log_effects,
+        )
+    }
+
+    /// Clear saved web resume data and restart the course from the beginning.
+    #[cfg(target_arch = "wasm32")]
+    pub fn restart(&mut self, ctx: Option<&egui::Context>) {
+        self.media.stop_all();
+        self.web_objects.clear();
+        if let Some(ref web_resume) = self.web_resume {
+            crate::web_resume::clear(web_resume);
+        }
+        if let Ok(mut player) = crate::lms::fresh_player(self.course) {
+            player.set_host_info(coursecraft_logic::HostInfo {
+                learner_name: None,
+                date: Some(crate::lms::today_date()),
+            });
+            self.player = player;
+            self.ended = false;
+            self.ticker = Ticker::new();
+            self.view = SlideView::new();
+            self.frame.restart();
+            self.last_slide_id = None;
+            self.last_prefetched_slide_id = None;
+            self.handle_input(&Input::Start, ctx);
+        }
     }
 
     /// Replace the media playback backend (useful for injecting [`NullBackend`] in tests).
@@ -434,6 +519,15 @@ impl Playing {
         #[cfg(target_arch = "wasm32")]
         if let Some(ref lti) = self.lti {
             crate::lti::after_input(lti, &effects);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(ref web_resume) = self.web_resume {
+            crate::web_resume::after_input(
+                web_resume,
+                self.player.course(),
+                self.player.state(),
+                &effects,
+            );
         }
         #[cfg(target_arch = "wasm32")]
         if effects.iter().any(|effect| matches!(effect, Effect::Exit))
@@ -714,7 +808,7 @@ impl PlayerApp {
     /// Begin a standalone web session with no LMS reporting.
     fn start_web(&mut self, course: Course) {
         let course: &'static Course = Box::leak(Box::new(course));
-        match Playing::standalone(course, self.ctx.clone(), self.log_effects) {
+        match Playing::web(course, self.ctx.clone(), self.log_effects) {
             Ok(mut playing) => {
                 playing.frame.reduced_motion = prefers_reduced_motion();
                 playing.handle_input(&Input::Start, None);
@@ -732,8 +826,14 @@ impl PlayerApp {
         let course: &'static Course = Box::leak(Box::new(course));
         match crate::lti::init_player(course, self.ctx.clone()) {
             Ok((player, lti, start_ms)) => {
-                let mut playing =
-                    Playing::from_lti(self.ctx.clone(), player, lti, start_ms, self.log_effects);
+                let mut playing = Playing::from_lti(
+                    course,
+                    self.ctx.clone(),
+                    player,
+                    lti,
+                    start_ms,
+                    self.log_effects,
+                );
                 playing.frame.reduced_motion = prefers_reduced_motion();
                 playing.handle_input(&Input::Start, None);
                 self.state = State::Playing(Box::new(playing));
@@ -983,6 +1083,10 @@ impl eframe::App for PlayerApp {
                         playing.frame.can_speed = playing.media.supports_rate();
                         playing.frame.can_fullscreen = fullscreen_available();
                         playing.frame.fullscreen = is_fullscreen(ui.ctx());
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            playing.frame.can_restart = playing.web_resume.is_some();
+                        }
                         let caption = playing.media.caption_frame(
                             &playing.player,
                             Some(&playing.media_source),
@@ -1015,6 +1119,10 @@ impl eframe::App for PlayerApp {
                 }
                 if frame_output.fullscreen_toggle {
                     toggle_fullscreen(ui.ctx(), is_fullscreen(ui.ctx()));
+                }
+                #[cfg(target_arch = "wasm32")]
+                if frame_output.restart {
+                    playing.restart(Some(ui.ctx()));
                 }
 
                 #[cfg(target_arch = "wasm32")]

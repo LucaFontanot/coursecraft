@@ -28,7 +28,7 @@ coursecraft-xapi.workspace = true
 ehttp.workspace = true
 js-sys.workspace = true
 wasm-bindgen-futures.workspace = true
-web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlInputElement", "HtmlSelectElement", "HtmlOptionElement", "HtmlButtonElement", "HtmlImageElement", "Node", "NodeList", "Event", "FocusEvent", "KeyboardEvent", "CssStyleDeclaration", "HtmlCollection", "console", "Performance", "EventTarget", "PageTransitionEvent", "MediaQueryList", "Location"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlInputElement", "HtmlSelectElement", "HtmlOptionElement", "HtmlButtonElement", "HtmlImageElement", "Node", "NodeList", "Event", "FocusEvent", "KeyboardEvent", "CssStyleDeclaration", "HtmlCollection", "console", "Performance", "EventTarget", "PageTransitionEvent", "MediaQueryList", "Location", "Storage"] }
 
 [lints]
 workspace = true
