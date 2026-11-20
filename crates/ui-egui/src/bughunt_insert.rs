@@ -48,6 +48,10 @@ fn place(harness: &mut TestHarness, arm: impl FnOnce(&mut Editor)) -> Vec<String
 }
 
 fn undo(harness: &mut TestHarness) {
+    if harness.editor.ui.inline_edit.is_some() {
+        harness.press(Key::Escape, Modifiers::NONE);
+        harness.idle_frame();
+    }
     harness.press(Key::Z, Modifiers::COMMAND);
     harness.idle_frame();
 }

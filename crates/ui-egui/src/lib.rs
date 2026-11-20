@@ -125,6 +125,8 @@ mod idle_tests;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
+mod m25_input_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -3459,31 +3461,30 @@ impl Editor {
         // shortcuts: egui matches Ctrl+Z logically (extra Shift ignored), so
         // Ctrl+Shift+Z must be consumed before edit.undo's Ctrl+Z.
         if !preview_has_focus
+            && !text_focus
             && !self.is_cropping()
             && !self.ui.ai.open
             && !self.ui.document.open
             && !self.ui.alt.open
             && !self.ui.translate.open
             && let Some(sc) = menu::parse_shortcut("Ctrl+Shift+Z")
+            && ui.input_mut(|i| i.consume_shortcut(&sc))
+            && let Some(params) = menu::adapter(self, "edit.redo")
         {
-            let conflict = sc.conflicts_with_text_editing()
-                && (ui.ctx().egui_wants_keyboard_input() || ui.memory(|m| m.focused().is_some()));
-            if !conflict
-                && ui.input_mut(|i| i.consume_shortcut(&sc))
-                && let Some(params) = menu::adapter(self, "edit.redo")
-            {
-                self.run("edit.redo", params);
-            }
+            self.run("edit.redo", params);
         }
 
         // Handle keyboard shortcuts from registry. More specific shortcuts run
-        // first so Cmd+Shift+G is not swallowed by Cmd+G.
+        // first so Cmd+Shift+G is not swallowed by Cmd+G. While a text field or
+        // the inline text editor has focus, skip registry shortcuts (Save, Save
+        // As, Open, Preview, and Cmd+B/I/U are handled outside the registry).
         let mut shortcuts: Vec<(&coursecraft_engine::Command, &str)> = registry()
             .iter()
             // Crop mode owns the keyboard until Enter applies or Escape cancels,
             // and AI Settings owns it while the dialog is open.
             .filter(|_| {
                 !preview_has_focus
+                    && !text_focus
                     && !self.is_cropping()
                     && !self.ui.ai.open
                     && !self.ui.document.open
@@ -3494,42 +3495,37 @@ impl Editor {
             .collect();
         shortcuts.sort_by_key(|(_, shortcut)| std::cmp::Reverse(shortcut.matches('+').count()));
         for (cmd, sc_str) in shortcuts {
-            if let Some(sc) = menu::parse_shortcut(sc_str) {
-                let conflict = sc.conflicts_with_text_editing()
-                    && (ui.ctx().egui_wants_keyboard_input()
-                        || ui.memory(|m| m.focused().is_some()));
-                if !conflict && ui.input_mut(|i| i.consume_shortcut(&sc)) {
-                    if cmd.id == "course.find" {
-                        find::open(self);
-                    } else if cmd.id == "object.duplicate" && self.selection.is_multi() {
-                        self.duplicate_selection();
-                    } else if cmd.id == "object.delete" {
-                        if let Some((object, cue)) = self.ui.timeline.cue_selected.take() {
-                            self.run(
-                                "video.remove_cue",
-                                serde_json::json!({
-                                    "slide": self.selection.slide,
-                                    "object": object,
-                                    "cue": cue,
-                                }),
-                            );
-                        } else if let Some((layer, cue)) =
-                            self.ui.timeline.slide_cue_selected.take()
-                        {
-                            let mut params = serde_json::json!({
+            if let Some(sc) = menu::parse_shortcut(sc_str)
+                && ui.input_mut(|i| i.consume_shortcut(&sc))
+            {
+                if cmd.id == "course.find" {
+                    find::open(self);
+                } else if cmd.id == "object.duplicate" && self.selection.is_multi() {
+                    self.duplicate_selection();
+                } else if cmd.id == "object.delete" {
+                    if let Some((object, cue)) = self.ui.timeline.cue_selected.take() {
+                        self.run(
+                            "video.remove_cue",
+                            serde_json::json!({
                                 "slide": self.selection.slide,
+                                "object": object,
                                 "cue": cue,
-                            });
-                            if let Some(lid) = layer {
-                                params["layer"] = serde_json::json!(lid);
-                            }
-                            self.run("slide.remove_cue", params);
-                        } else {
-                            self.delete_selection();
+                            }),
+                        );
+                    } else if let Some((layer, cue)) = self.ui.timeline.slide_cue_selected.take() {
+                        let mut params = serde_json::json!({
+                            "slide": self.selection.slide,
+                            "cue": cue,
+                        });
+                        if let Some(lid) = layer {
+                            params["layer"] = serde_json::json!(lid);
                         }
-                    } else if let Some(params) = menu::adapter(self, cmd.id) {
-                        self.run(cmd.id, params);
+                        self.run("slide.remove_cue", params);
+                    } else {
+                        self.delete_selection();
                     }
+                } else if let Some(params) = menu::adapter(self, cmd.id) {
+                    self.run(cmd.id, params);
                 }
             }
         }

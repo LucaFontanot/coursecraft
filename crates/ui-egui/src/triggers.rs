@@ -1829,6 +1829,7 @@ pub fn show_triggers_tab(
                             return;
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let form_open = editor.ui.trigger_form.is_some();
                             // More: duplicate, copy, disable or enable
                             let more = crate::widgets::icon_button(
                                 ui,
@@ -1840,7 +1841,10 @@ pub fn show_triggers_tab(
                                 new_active_row = Some(idx);
                             }
                             egui::Popup::menu(&more).show(|ui| {
-                                if ui.button("Duplicate").clicked() {
+                                if ui
+                                    .add_enabled(!form_open, egui::Button::new("Duplicate"))
+                                    .clicked()
+                                {
                                     actions.push((
                                         "trigger.add",
                                         trigger_params(
@@ -1879,7 +1883,7 @@ pub fn show_triggers_tab(
                             if crate::widgets::icon_button_danger(
                                 ui,
                                 coursecraft_render::Icon::Trash,
-                                true,
+                                !form_open,
                                 "Delete trigger",
                             )
                             .clicked()
@@ -1899,7 +1903,7 @@ pub fn show_triggers_tab(
                             }
 
                             // Move Down
-                            let can_down = idx + 1 < triggers.len();
+                            let can_down = !form_open && idx + 1 < triggers.len();
                             if crate::widgets::icon_button_enabled(
                                 ui,
                                 coursecraft_render::Icon::ArrowDown,
@@ -1926,7 +1930,7 @@ pub fn show_triggers_tab(
                             }
 
                             // Move Up
-                            let can_up = idx > 0;
+                            let can_up = !form_open && idx > 0;
                             if crate::widgets::icon_button_enabled(
                                 ui,
                                 coursecraft_render::Icon::ArrowUp,
@@ -2120,6 +2124,10 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
         return;
     };
 
+    if editor.selection.slide != form.owner_slide || editor.selection.layer != form.owner_layer {
+        return;
+    }
+
     let title = if form.editing_index.is_some() {
         "Edit Trigger"
     } else {
@@ -2130,6 +2138,20 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
     let Some(slide) = course.slide(&form.owner_slide) else {
         return;
     };
+    let owner_triggers = match &form.owner_layer {
+        Some(lid) => {
+            let Some(layer) = slide.layer(lid) else {
+                return;
+            };
+            &layer.triggers
+        }
+        None => &slide.triggers,
+    };
+    if let Some(idx) = form.editing_index
+        && idx >= owner_triggers.len()
+    {
+        return;
+    }
 
     let mut close_dialog = false;
     let mut commit_requested = false;
