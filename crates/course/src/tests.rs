@@ -858,6 +858,8 @@ fn animation_and_transition_serialization_and_validation() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     assert_eq!(errors(&c), Vec::<String>::new());
@@ -1534,6 +1536,8 @@ fn course_with_media(kind: crate::ObjectKind) -> Course {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course
 }
@@ -2304,6 +2308,8 @@ fn a_master_must_not_have_play_time_behaviour_or_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     assert!(
         errors(&c)
@@ -2398,6 +2404,8 @@ fn shape_outline_and_text_round_trip() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     assert!(errors(&c).is_empty(), "{:?}", errors(&c));
     let json = c.to_json().unwrap();
@@ -2485,6 +2493,8 @@ fn invalid_outline_and_shape_text_are_rejected() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     assert!(errors(&c).iter().any(|e| e.contains("outline width")));
 
@@ -3525,6 +3535,8 @@ fn panel_membership_and_nesting_are_validated() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
         let mut child = slide.objects[0].clone();
         child.id = "child".into();

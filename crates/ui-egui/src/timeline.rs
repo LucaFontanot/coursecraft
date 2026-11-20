@@ -1047,8 +1047,13 @@ fn render_object_rows(
             vec2(16.0, 16.0),
         );
         let eye_rect = lock_rect.translate(vec2(-18.0, 0.0));
-        let is_hidden = editor.ui.hidden_objects.contains(oid);
-        let is_locked = editor.ui.locked_objects.contains(oid);
+        let (is_hidden, is_locked) = editor
+            .session
+            .course
+            .slide(&editor.selection.slide)
+            .and_then(|s| s.object(oid))
+            .map(|(o, _)| (o.editor_hidden, o.locked))
+            .unwrap_or((false, false));
         let eye_resp = ui
             .interact(
                 eye_rect,
@@ -1071,21 +1076,31 @@ fn render_object_rows(
             .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Hide on canvas"));
         lock_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Lock"));
         if eye_resp.clicked() {
-            if is_hidden {
-                editor.ui.hidden_objects.remove(oid);
-            } else {
-                editor.ui.hidden_objects.insert(oid.clone());
-                if editor.selection.contains(oid) {
-                    editor.selection.toggle(oid);
-                }
+            let next = !is_hidden;
+            let slide_id = editor.selection.slide.clone();
+            editor.run(
+                "object.hide_in_editor",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": oid,
+                    "hidden": next,
+                }),
+            );
+            if next && editor.selection.contains(oid) {
+                editor.selection.toggle(oid);
             }
         }
         if lock_resp.clicked() {
-            if is_locked {
-                editor.ui.locked_objects.remove(oid);
-            } else {
-                editor.ui.locked_objects.insert(oid.clone());
-            }
+            let next = !is_locked;
+            let slide_id = editor.selection.slide.clone();
+            editor.run(
+                "object.lock",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": oid,
+                    "locked": next,
+                }),
+            );
         }
         let on_icons =
             pointer_pos.is_some_and(|pos| eye_rect.contains(pos) || lock_rect.contains(pos));

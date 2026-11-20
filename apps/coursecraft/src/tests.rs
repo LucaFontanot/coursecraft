@@ -979,6 +979,8 @@ fn course_with_image() -> Course {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
     course
 }

@@ -54,6 +54,8 @@ fn object(id: &str, kind: ObjectKind, (x, y, w, h): (f32, f32, f32, f32)) -> Obj
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 

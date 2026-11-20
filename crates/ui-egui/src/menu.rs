@@ -804,10 +804,31 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             ui.separator();
             ui.checkbox(&mut editor.ui.snap_to_guides, "Snap to Guides");
             ui.separator();
-            ui.checkbox(&mut editor.ui.rulers.show_rulers, "Rulers");
-            ui.checkbox(&mut editor.ui.rulers.show_grid, "Grid");
-            ui.checkbox(&mut editor.ui.rulers.snap_to_grid, "Snap to Grid");
-            ui.checkbox(&mut editor.ui.rulers.show_guides, "Guides");
+            let mut show_rulers = editor.session.course.editor.show_rulers;
+            if ui.checkbox(&mut show_rulers, "Rulers").changed() {
+                editor.run(
+                    "view.set",
+                    serde_json::json!({ "show_rulers": show_rulers }),
+                );
+            }
+            let mut show_grid = editor.session.course.editor.show_grid;
+            if ui.checkbox(&mut show_grid, "Grid").changed() {
+                editor.run("view.set", serde_json::json!({ "show_grid": show_grid }));
+            }
+            let mut snap_to_grid = editor.session.course.editor.snap_to_grid;
+            if ui.checkbox(&mut snap_to_grid, "Snap to Grid").changed() {
+                editor.run(
+                    "view.set",
+                    serde_json::json!({ "snap_to_grid": snap_to_grid }),
+                );
+            }
+            let mut show_guides = editor.session.course.editor.show_guides;
+            if ui.checkbox(&mut show_guides, "Guides").changed() {
+                editor.run(
+                    "view.set",
+                    serde_json::json!({ "show_guides": show_guides }),
+                );
+            }
         });
 
         // 3. Help menu

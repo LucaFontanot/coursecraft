@@ -132,6 +132,7 @@ impl Session {
             fonts: Vec::new(),
             background_audio: None,
             glossary: Vec::new(),
+            editor: Default::default(),
             resources: Vec::new(),
             text_styles: Vec::new(),
         })

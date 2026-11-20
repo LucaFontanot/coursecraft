@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "blank-course",
+  "title": "Untitled Course",
+  "slide_size": { "w": 1280, "h": 720 },
+  "scenes": [
+    {
+      "id": "sc-main",
+      "title": "Scene 1",
+      "slides": [
+        {
+          "id": "s-1",
+          "title": "Slide 1",
+          "duration_ms": 5000,
+          "objects": [],
+          "triggers": [
+            {
+              "action": { "action": "complete_course", "status": "completed" },
+              "when": { "event": "timeline_ends" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

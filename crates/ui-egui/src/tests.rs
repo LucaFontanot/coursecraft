@@ -2780,6 +2780,8 @@ fn describe_covers_all_action_and_event_variants() {
                 shadow: None,
                 glow: None,
                 drag: None,
+                locked: false,
+                editor_hidden: false,
             },
             Object {
                 id: "obj2".to_owned(),
@@ -2811,6 +2813,8 @@ fn describe_covers_all_action_and_event_variants() {
                 shadow: None,
                 glow: None,
                 drag: None,
+                locked: false,
+                editor_hidden: false,
             },
         ],
         layers: Vec::new(),
@@ -7904,6 +7908,8 @@ fn image_object(src: &str) -> Object {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -7946,6 +7952,8 @@ fn accessibility_section_renders_and_a_click_selects_the_object() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
 
     let mut harness = TestHarness::new(course);
@@ -16625,7 +16633,10 @@ fn lock_hide_setup() -> (TestHarness, SlideTransform) {
 #[test]
 fn a_locked_object_is_not_picked_moved_or_marqueed() {
     let (mut h, t) = lock_hide_setup();
-    h.editor.ui.locked_objects.insert("a".into());
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": "slide1", "object": "a", "locked": true }),
+    );
     h.click_at(t.to_screen_pos(pos2(200.0, 160.0)));
     assert_eq!(h.editor.selection.object, None, "click passes through");
 
@@ -16656,7 +16667,10 @@ fn a_locked_object_is_not_picked_moved_or_marqueed() {
 #[test]
 fn a_hidden_object_is_not_on_the_canvas_but_still_in_the_course() {
     let (mut h, t) = lock_hide_setup();
-    h.editor.ui.hidden_objects.insert("b".into());
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": "slide1", "object": "b", "hidden": true }),
+    );
     h.idle_frame();
     h.click_at(t.to_screen_pos(pos2(600.0, 160.0)));
     assert_eq!(h.editor.selection.object, None, "nothing drawn to click");
@@ -16674,27 +16688,38 @@ fn a_hidden_object_is_not_on_the_canvas_but_still_in_the_course() {
 }
 
 #[test]
-fn opening_a_course_clears_hidden_and_locked_objects() {
+fn opening_a_course_uses_its_own_hidden_and_locked_objects() {
     let (mut h, _t) = lock_hide_setup();
-    h.editor.ui.hidden_objects.insert("a".into());
-    h.editor.ui.locked_objects.insert("b".into());
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": "slide1", "object": "a", "hidden": true }),
+    );
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": "slide1", "object": "b", "locked": true }),
+    );
     h.editor.replace_course(lock_hide_course());
-    assert!(h.editor.ui.hidden_objects.is_empty());
-    assert!(h.editor.ui.locked_objects.is_empty());
+    let slide = h.editor.session.course.slide("slide1").expect("slide");
+    assert!(!slide.object("a").expect("a").0.editor_hidden);
+    assert!(!slide.object("b").expect("b").0.locked);
 }
 
 #[test]
 fn view_menu_toggles_rulers_grid_snap_and_guides() {
     let (mut h, _t) = lock_hide_setup();
-    assert!(!h.editor.ui.rulers.show_rulers && !h.editor.ui.rulers.show_grid);
+    assert!(
+        !h.editor.session.course.editor.show_rulers && !h.editor.session.course.editor.show_grid
+    );
     for (label, get) in [
         (
             "Rulers",
-            (|e: &Editor| e.ui.rulers.show_rulers) as fn(&Editor) -> bool,
+            (|e: &Editor| e.session.course.editor.show_rulers) as fn(&Editor) -> bool,
         ),
-        ("Grid", |e: &Editor| e.ui.rulers.show_grid),
-        ("Snap to Grid", |e: &Editor| e.ui.rulers.snap_to_grid),
-        ("Guides", |e: &Editor| e.ui.rulers.show_guides),
+        ("Grid", |e: &Editor| e.session.course.editor.show_grid),
+        ("Snap to Grid", |e: &Editor| {
+            e.session.course.editor.snap_to_grid
+        }),
+        ("Guides", |e: &Editor| e.session.course.editor.show_guides),
     ] {
         let view = h.find_text("View").expect("View menu");
         h.click_at(view);
@@ -16709,13 +16734,14 @@ fn view_menu_toggles_rulers_grid_snap_and_guides() {
 #[test]
 fn dragging_from_a_ruler_makes_a_guide_and_dragging_it_back_deletes_it() {
     let (mut h, t) = lock_hide_setup();
-    h.editor.ui.rulers.show_rulers = true;
+    h.editor
+        .run("view.set", serde_json::json!({ "show_rulers": true }));
     h.idle_frame();
     let canvas = canvas_rect(h.central_panel_rect());
     let start = crate::rulers::left_strip(canvas).center();
     let onto = t.to_screen_pos(pos2(400.0, 300.0));
     h.drag_by(start, onto - start, 4, Modifiers::NONE);
-    let guides = h.editor.ui.rulers.guides.clone();
+    let guides = h.editor.session.course.editor.guides.clone();
     assert_eq!(guides.len(), 1, "{guides:?}");
     assert!(guides[0].vertical);
     assert!((guides[0].at - 400.0).abs() < 2.0, "{}", guides[0].at);
@@ -16724,17 +16750,16 @@ fn dragging_from_a_ruler_makes_a_guide_and_dragging_it_back_deletes_it() {
     let guide_screen = t.to_screen_pos(pos2(guides[0].at, 300.0));
     let back = crate::rulers::left_strip(canvas).center();
     h.drag_by(guide_screen, back - guide_screen, 4, Modifiers::NONE);
-    assert!(h.editor.ui.rulers.guides.is_empty());
+    assert!(h.editor.session.course.editor.guides.is_empty());
 }
 
 #[test]
 fn a_move_snaps_to_a_guide() {
     let (mut h, t) = lock_hide_setup();
-    h.editor.ui.rulers.show_guides = true;
-    h.editor.ui.rulers.guides.push(crate::rulers::Guide {
-        vertical: true,
-        at: 400.0,
-    });
+    h.editor.run(
+        "view.guides.add",
+        serde_json::json!({ "vertical": true, "at": 400.0 }),
+    );
     h.idle_frame();
     // Object "a" spans x 100..300; moving it 97px puts its right edge at 397.
     h.drag_by(

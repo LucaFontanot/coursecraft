@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "id": "quick-knowledge-check",
+  "title": "Quick Knowledge Check",
+  "slide_size": { "w": 1280, "h": 720 },
+  "quiz": { "passing_percent": 80 },
+  "scenes": [
+    {
+      "id": "sc-quiz",
+      "title": "Knowledge Check",
+      "slides": [
+        {
+          "id": "s-intro",
+          "title": "Introduction",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "intro-title",
+              "name": "Title",
+              "kind": { "type": "text", "text": "Quick Knowledge Check", "style": { "size": 44, "bold": true } },
+              "frame": { "x": 80, "y": 140, "w": 1120, "h": 72 }
+            },
+            {
+              "id": "intro-body",
+              "name": "Subtitle",
+              "kind": { "type": "text", "text": "Answer two short questions to check your understanding. You need 80% to pass.", "style": { "size": 22 } },
+              "frame": { "x": 80, "y": 236, "w": 920, "h": 96 }
+            },
+            {
+              "id": "btn-start",
+              "name": "Start button",
+              "kind": { "type": "button", "label": "Start Quiz" },
+              "frame": { "x": 80, "y": 420, "w": 220, "h": 56 }
+            }
+          ],
+          "triggers": [
+            { "action": { "action": "jump_to_slide", "target": "next" }, "when": { "event": "click", "object": "btn-start" } }
+          ]
+        },
+        {
+          "id": "s-q1",
+          "title": "Question 1",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "q1-submit",
+              "name": "Submit button",
+              "kind": { "type": "button", "label": "Submit" },
+              "frame": { "x": 1000, "y": 600, "w": 200, "h": 56 }
+            }
+          ],
+          "question": {
+            "kind": "multiple_choice",
+            "prompt": "Question 1: Replace this prompt with your first knowledge check question.",
+            "choices": [
+              { "id": "a", "text": "Option A (distractor)" },
+              { "id": "b", "text": "Option B (correct answer)", "correct": true },
+              { "id": "c", "text": "Option C (distractor)" }
+            ],
+            "points": 10,
+            "attempts": 2,
+            "correct_layer": "q1-correct",
+            "incorrect_layer": "q1-incorrect"
+          },
+          "layers": [
+            {
+              "id": "q1-correct",
+              "name": "Correct",
+              "prevent_base_clicks": true,
+              "objects": [
+                {
+                  "id": "q1-ok-card",
+                  "name": "Feedback card",
+                  "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#FFFFFFF2" },
+                  "frame": { "x": 280, "y": 180, "w": 720, "h": 340 }
+                },
+                {
+                  "id": "q1-ok-text",
+                  "name": "Feedback text",
+                  "kind": { "type": "text", "text": "Correct! Add a brief explanation here.", "style": { "size": 24 } },
+                  "frame": { "x": 320, "y": 230, "w": 640, "h": 140 }
+                },
+                {
+                  "id": "q1-ok-next",
+                  "name": "Continue button",
+                  "kind": { "type": "button", "label": "Continue" },
+                  "frame": { "x": 760, "y": 430, "w": 200, "h": 56 }
+                }
+              ],
+              "triggers": [
+                { "action": { "action": "jump_to_slide", "target": "next" }, "when": { "event": "click", "object": "q1-ok-next" } }
+              ]
+            },
+            {
+              "id": "q1-incorrect",
+              "name": "Incorrect",
+              "prevent_base_clicks": true,
+              "objects": [
+                {
+                  "id": "q1-no-card",
+                  "name": "Feedback card",
+                  "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#FFFFFFF2" },
+                  "frame": { "x": 280, "y": 180, "w": 720, "h": 340 }
+                },
+                {
+                  "id": "q1-no-text",
+                  "name": "Feedback text",
+                  "kind": { "type": "text", "text": "Not quite. Give learners a helpful hint and let them try again.", "style": { "size": 24 } },
+                  "frame": { "x": 320, "y": 230, "w": 640, "h": 140 }
+                },
+                {
+                  "id": "q1-no-retry",
+                  "name": "Try again button",
+                  "kind": { "type": "button", "label": "Try Again" },
+                  "frame": { "x": 760, "y": 430, "w": 200, "h": 56 }
+                }
+              ],
+              "triggers": [
+                { "action": { "action": "hide_layer" }, "when": { "event": "click", "object": "q1-no-retry" } }
+              ]
+            }
+          ],
+          "triggers": [
+            { "action": { "action": "submit_question" }, "when": { "event": "click", "object": "q1-submit" } }
+          ]
+        },
+        {
+          "id": "s-q2",
+          "title": "Question 2",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "q2-submit",
+              "name": "Submit button",
+              "kind": { "type": "button", "label": "Submit" },
+              "frame": { "x": 1000, "y": 600, "w": 200, "h": 56 }
+            }
+          ],
+          "question": {
+            "kind": "multiple_choice",
+            "prompt": "Question 2: Replace this prompt with your second knowledge check question.",
+            "choices": [
+              { "id": "a", "text": "Option A (correct answer)", "correct": true },
+              { "id": "b", "text": "Option B (distractor)" },
+              { "id": "c", "text": "Option C (distractor)" }
+            ],
+            "points": 10,
+            "attempts": 2,
+            "correct_layer": "q2-correct",
+            "incorrect_layer": "q2-incorrect"
+          },
+          "layers": [
+            {
+              "id": "q2-correct",
+              "name": "Correct",
+              "prevent_base_clicks": true,
+              "objects": [
+                {
+                  "id": "q2-ok-card",
+                  "name": "Feedback card",
+                  "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#FFFFFFF2" },
+                  "frame": { "x": 280, "y": 180, "w": 720, "h": 340 }
+                },
+                {
+                  "id": "q2-ok-text",
+                  "name": "Feedback text",
+                  "kind": { "type": "text", "text": "Well done! Continue to view your results.", "style": { "size": 24 } },
+                  "frame": { "x": 320, "y": 230, "w": 640, "h": 140 }
+                },
+                {
+                  "id": "q2-ok-next",
+                  "name": "See results button",
+                  "kind": { "type": "button", "label": "See Results" },
+                  "frame": { "x": 760, "y": 430, "w": 200, "h": 56 }
+                }
+              ],
+              "triggers": [
+                { "action": { "action": "jump_to_slide", "target": "next" }, "when": { "event": "click", "object": "q2-ok-next" } }
+              ]
+            },
+            {
+              "id": "q2-incorrect",
+              "name": "Incorrect",
+              "prevent_base_clicks": true,
+              "objects": [
+                {
+                  "id": "q2-no-card",
+                  "name": "Feedback card",
+                  "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#FFFFFFF2" },
+                  "frame": { "x": 280, "y": 180, "w": 720, "h": 340 }
+                },
+                {
+                  "id": "q2-no-text",
+                  "name": "Feedback text",
+                  "kind": { "type": "text", "text": "Not quite. Review the prompt and try once more.", "style": { "size": 24 } },
+                  "frame": { "x": 320, "y": 230, "w": 640, "h": 140 }
+                },
+                {
+                  "id": "q2-no-retry",
+                  "name": "Try again button",
+                  "kind": { "type": "button", "label": "Try Again" },
+                  "frame": { "x": 760, "y": 430, "w": 200, "h": 56 }
+                }
+              ],
+              "triggers": [
+                { "action": { "action": "hide_layer" }, "when": { "event": "click", "object": "q2-no-retry" } }
+              ]
+            }
+          ],
+          "triggers": [
+            { "action": { "action": "submit_question" }, "when": { "event": "click", "object": "q2-submit" } }
+          ]
+        },
+        {
+          "id": "s-results",
+          "title": "Results",
+          "duration_ms": 3000,
+          "objects": [
+            {
+              "id": "results-heading",
+              "name": "Heading",
+              "kind": { "type": "text", "text": "Your Results", "style": { "size": 40, "bold": true } },
+              "frame": { "x": 80, "y": 140, "w": 1120, "h": 64 }
+            },
+            {
+              "id": "results-score",
+              "name": "Score readout",
+              "kind": { "type": "text", "text": "Score: %Results.ScorePercent%% (passing score: %Results.PassPercent%%)", "style": { "size": 24 } },
+              "frame": { "x": 80, "y": 240, "w": 1000, "h": 80 }
+            }
+          ],
+          "triggers": [
+            { "action": { "action": "submit_results" }, "when": { "event": "timeline_starts" } }
+          ]
+        }
+      ]
+    }
+  ]
+}

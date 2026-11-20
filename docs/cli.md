@@ -309,6 +309,12 @@ object.paste         -                        -          {"slide": id, "layer"?:
 object.set_frame     -                        -          {"slide": id, "object": id, "frame": Rect}
 object.set_rotation  -                        -          {"slide": id, "object"?: id, "objects"?: id[], "degrees": number}
 object.flip          -                        -          {"slide": id, "object"?: id, "objects"?: id[], "axis": "horizontal"|"vertical"}
+object.lock          -                        -          {"slide": id, "object"?: id, "objects"?: id[], "locked": bool}
+object.hide_in_editor -                       -          {"slide": id, "object"?: id, "objects"?: id[], "hidden": bool}
+view.set             -                        -          {"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool}
+view.guides.add      -                        -          {"vertical": bool, "at": number}
+view.guides.move     -                        -          {"index": usize, "at": number}
+view.guides.remove   -                        -          {"index": usize}
 object.set_opacity   -                        -          {"slide": id, "object"?: id, "objects"?: id[], "opacity": number}
 object.set_fill_style -                       -          {"slide": id, "object"?: id, "objects"?: id[], "fill_style": FillStyle|null}
 object.set_shadow    -                        -          {"slide": id, "object"?: id, "objects"?: id[], "shadow": Shadow|null}

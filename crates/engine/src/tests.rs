@@ -6300,6 +6300,113 @@ fn text_commands_format_a_table_cell() {
 }
 
 #[test]
+fn object_lock_hide_and_view_settings_survive_round_trip_and_undo() {
+    let mut s = Session::blank("LockHide");
+    let obj = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+            "frame": { "x": 100, "y": 100, "w": 200, "h": 120 },
+        }),
+    )["id"]
+        .as_str()
+        .expect("object id")
+        .to_owned();
+
+    // Default values are omitted from JSON.
+    let initial_json = s.course.to_json().expect("json");
+    assert!(!initial_json.contains("\"locked\""));
+    assert!(!initial_json.contains("\"editor_hidden\""));
+    assert!(!initial_json.contains("\"editor\""));
+
+    ok(
+        &mut s,
+        "object.lock",
+        json!({ "slide": "slide1", "object": obj, "locked": true }),
+    );
+    ok(
+        &mut s,
+        "object.hide_in_editor",
+        json!({ "slide": "slide1", "object": obj, "hidden": true }),
+    );
+    ok(
+        &mut s,
+        "view.set",
+        json!({ "show_rulers": true, "show_grid": true, "snap_to_grid": true }),
+    );
+    ok(
+        &mut s,
+        "view.guides.add",
+        json!({ "vertical": true, "at": 320.0 }),
+    );
+    ok(
+        &mut s,
+        "view.guides.move",
+        json!({ "index": 0, "at": 400.0 }),
+    );
+
+    // Save and reload (serialize round trip) preserves lock, hide, and editor settings.
+    let saved = s.course.to_json().expect("save");
+    let reloaded = coursecraft_course::Course::from_json(&saved).expect("reload");
+    let reloaded_obj = reloaded
+        .slide("slide1")
+        .expect("slide")
+        .object(&obj)
+        .expect("obj")
+        .0;
+    assert!(reloaded_obj.locked);
+    assert!(reloaded_obj.editor_hidden);
+    assert!(reloaded.editor.show_rulers);
+    assert!(reloaded.editor.show_grid);
+    assert!(reloaded.editor.snap_to_grid);
+    assert!(reloaded.editor.show_guides);
+    assert_eq!(reloaded.editor.guides.len(), 1);
+    assert!(reloaded.editor.guides[0].vertical);
+    assert!((reloaded.editor.guides[0].at - 400.0).abs() < 0.01);
+
+    // Undo restores guide move, guide add, view settings, hide, and lock in reverse order.
+    ok(&mut s, "edit.undo", json!({}));
+    assert!((s.course.editor.guides[0].at - 320.0).abs() < 0.01);
+    ok(&mut s, "edit.undo", json!({}));
+    assert!(s.course.editor.guides.is_empty());
+    ok(&mut s, "edit.undo", json!({}));
+    assert!(s.course.editor.is_default());
+    ok(&mut s, "edit.undo", json!({}));
+    assert!(
+        !s.course
+            .slide("slide1")
+            .expect("s")
+            .object(&obj)
+            .expect("o")
+            .0
+            .editor_hidden
+    );
+    ok(&mut s, "edit.undo", json!({}));
+    assert!(
+        !s.course
+            .slide("slide1")
+            .expect("s")
+            .object(&obj)
+            .expect("o")
+            .0
+            .locked
+    );
+
+    // Remove guide and undo.
+    ok(
+        &mut s,
+        "view.guides.add",
+        json!({ "vertical": false, "at": 180.0 }),
+    );
+    ok(&mut s, "view.guides.remove", json!({ "index": 0 }));
+    assert!(s.course.editor.guides.is_empty());
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.course.editor.guides.len(), 1);
+}
+
+#[test]
 fn object_set_input_edits_kinds_and_undoes() {
     let mut s = Session::blank("Inputs");
     let slide = ok(&mut s, "slide.add", json!({ "title": "Inputs" }))["id"]

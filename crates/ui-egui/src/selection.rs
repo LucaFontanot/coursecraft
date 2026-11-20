@@ -298,6 +298,8 @@ mod tests {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         }
     }
 

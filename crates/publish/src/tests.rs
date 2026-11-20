@@ -46,6 +46,7 @@ fn minimal_course(title: &str) -> Course {
         fonts: Vec::new(),
         background_audio: None,
         glossary: Vec::new(),
+        editor: Default::default(),
         resources: Vec::new(),
         text_styles: Vec::new(),
     }
@@ -106,6 +107,8 @@ fn web_object(id: &str, path: &str, entry: &str) -> Object {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -323,6 +326,8 @@ fn course_with_image_packaged_under_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let fake_png = vec![0x89, 0x50, 0x4e, 0x47];
@@ -392,6 +397,8 @@ fn course_with_svg_image_packaged_under_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#123456"/></svg>"##.to_vec();
@@ -495,6 +502,8 @@ fn missing_media_errors() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let no_media = |_src: &str| -> Option<Vec<u8>> { None };
@@ -569,6 +578,8 @@ fn each_unsafe_path_case_errors() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
 
         let dummy_media = |_src: &str| -> Option<Vec<u8>> { Some(vec![1, 2, 3]) };
@@ -732,6 +743,8 @@ fn dedupes_identical_media_sources() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course.scenes[0].slides[0].objects.push(Object {
         id: "img2".into(),
@@ -765,6 +778,8 @@ fn dedupes_identical_media_sources() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let resolve_count = std::sync::atomic::AtomicUsize::new(0);
@@ -836,6 +851,8 @@ fn skips_remote_http_and_https_sources() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course.scenes[0].slides[0].objects.push(Object {
         id: "video1".into(),
@@ -872,6 +889,8 @@ fn skips_remote_http_and_https_sources() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let no_media = |_src: &str| -> Option<Vec<u8>> { None };
@@ -955,6 +974,8 @@ fn distinct_sources_never_collide_in_package() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
     }
     let media = |src: &str| -> Option<Vec<u8>> {
@@ -1012,6 +1033,8 @@ fn editor_saved_project_roundtrips_to_publish_package() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let media_bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -1083,6 +1106,8 @@ fn course_with_audio_and_video_packaged_under_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course.scenes[0].slides[0].objects.push(Object {
         id: "vid1".into(),
@@ -1119,6 +1144,8 @@ fn course_with_audio_and_video_packaged_under_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let wav_bytes = vec![b'R', b'I', b'F', b'F', 0, 0, 0, 0];
@@ -1199,6 +1226,8 @@ fn course_with_a_lottie_animation_packages_its_file() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     let lottie_bytes = b"PK\x03\x04fake lottie".to_vec();
     let media =
@@ -1510,6 +1539,8 @@ fn media_object(id: &str, kind: ObjectKind) -> Object {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -1637,6 +1668,8 @@ fn master_media_is_packaged_templates_are_stripped_and_their_media_is_not() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     };
 
     let mut master = course.scenes[0].slides[0].clone();
@@ -1740,6 +1773,8 @@ fn a_picture_shape_fill_is_packaged_as_media() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let media = |src: &str| -> Option<Vec<u8>> {
@@ -1800,6 +1835,8 @@ fn media_used_only_on_a_bank_slide_is_packaged() {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     course.banks.push(coursecraft_course::QuestionBank {
         id: "bank1".into(),

@@ -3616,6 +3616,8 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 }],
                 triggers: Vec::new(),
                 hide_other_layers: true,
@@ -5869,6 +5871,8 @@ fn input_course(kind: coursecraft_course::ObjectKind) -> Course {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     slide.triggers.push(Trigger {
         action: Action::SetVariable {
@@ -6550,6 +6554,8 @@ fn opening_a_lightbox_on_the_current_slide_is_a_warning() {
             shadow: None,
             glow: None,
             drag: None,
+            locked: false,
+            editor_hidden: false,
         });
         slide.triggers.push(Trigger {
             action: Action::LightboxSlide {

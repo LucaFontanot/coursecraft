@@ -4,16 +4,16 @@
 use coursecraft_course::{
     Action, Align, Animation, Autofit, BackgroundAudio, BankDraw, Choice, CmpOp, Color, Condition,
     Course, CourseOutline, CropRect, Cue, DashStyle, DragItem, Easing, Event, FillStyle, FontFace,
-    FontStyle, Glow, Glue, HotspotRegion, HotspotShape, Layer, Link, ListKind, Location, MAX_CUES,
-    MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, MatchPair, MotionPath, Object, ObjectKind, Outline,
-    OutlineProblem, OutlineQuestion, OutlineSlide, Paragraph, Point, Question, QuestionBank,
-    QuestionKind, QuizSettings, RadioOption, Rect, RevisitMode, Scene, Scoring, SeekMode, Shadow,
-    ShapeKind, ShapeText, Size, Slide, SlideTarget, StateDef, TableBorders, TableCell, TableRow,
-    TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition, Trigger, Trim, VAlign, Value,
-    VarOp, VariableDef, WebSource, align_paragraphs, apply_link_to_range, apply_style_to_range,
-    apply_text_edit, course_strings, find_in_course, is_valid_link_url, normalize_table_fractions,
-    paragraphs_for, parse_color, relative_luminance, replace_in_target, string_mut,
-    table_cell_owners,
+    FontStyle, Glow, Glue, Guide, HotspotRegion, HotspotShape, Layer, Link, ListKind, Location,
+    MAX_CUES, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, MatchPair, MotionPath, Object, ObjectKind,
+    Outline, OutlineProblem, OutlineQuestion, OutlineSlide, Paragraph, Point, Question,
+    QuestionBank, QuestionKind, QuizSettings, RadioOption, Rect, RevisitMode, Scene, Scoring,
+    SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide, SlideTarget, StateDef, TableBorders,
+    TableCell, TableRow, TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition, Trigger,
+    Trim, VAlign, Value, VarOp, VariableDef, WebSource, align_paragraphs, apply_link_to_range,
+    apply_style_to_range, apply_text_edit, course_strings, find_in_course, is_valid_link_url,
+    normalize_table_fractions, paragraphs_for, parse_color, relative_luminance, replace_in_target,
+    string_mut, table_cell_owners,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value as Json, json};
@@ -701,6 +701,60 @@ static REGISTRY: &[Command] = &[
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "axis": "horizontal"|"vertical"}"#,
         mutates: true,
         run: object_flip,
+    },
+    Command {
+        id: "object.lock",
+        label: "Lock Object",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object"?: id, "objects"?: id[], "locked": bool}"#,
+        mutates: true,
+        run: object_lock,
+    },
+    Command {
+        id: "object.hide_in_editor",
+        label: "Hide Object in Editor",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object"?: id, "objects"?: id[], "hidden": bool}"#,
+        mutates: true,
+        run: object_hide_in_editor,
+    },
+    Command {
+        id: "view.set",
+        label: "Editor View Settings",
+        menu: "",
+        shortcut: None,
+        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool}"#,
+        mutates: true,
+        run: view_set,
+    },
+    Command {
+        id: "view.guides.add",
+        label: "Add Guide",
+        menu: "",
+        shortcut: None,
+        params: r#"{"vertical": bool, "at": number}"#,
+        mutates: true,
+        run: view_guides_add,
+    },
+    Command {
+        id: "view.guides.move",
+        label: "Move Guide",
+        menu: "",
+        shortcut: None,
+        params: r#"{"index": usize, "at": number}"#,
+        mutates: true,
+        run: view_guides_move,
+    },
+    Command {
+        id: "view.guides.remove",
+        label: "Remove Guide",
+        menu: "",
+        shortcut: None,
+        params: r#"{"index": usize}"#,
+        mutates: true,
+        run: view_guides_remove,
     },
     Command {
         id: "object.set_opacity",
@@ -3019,6 +3073,8 @@ fn layout_text(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -3159,6 +3215,8 @@ fn layout_objects(layout: &str, slide: &Slide, size: Size, theme: &Theme) -> Vec
                 shadow: None,
                 glow: None,
                 drag: None,
+                locked: false,
+                editor_hidden: false,
             },
             role => layout_text(
                 next(p.prefix),
@@ -4284,6 +4342,8 @@ fn object_add(s: &mut Session, p: &Json) -> Result<Json> {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     };
     match layer {
         Some(l) => layer_mut(slide, &l)?.objects.push(o),
@@ -5234,6 +5294,130 @@ fn object_flip(s: &mut Session, p: &Json) -> Result<Json> {
     }
     keep_valid(s, was_valid)?;
     Ok(json!({ "changed": changed }))
+}
+
+fn object_lock(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.lock";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let ids = object_or_objects_param(C, p)?;
+    let locked: bool = req(C, p, "locked")?;
+    let mut changed = 0;
+    {
+        let slide = slide_mut(s, &sid)?;
+        for id in &ids {
+            let object = find_object_mut(slide, id)?;
+            if object.locked != locked {
+                object.locked = locked;
+                changed += 1;
+            }
+        }
+    }
+    if changed == 0 {
+        s.skip_undo = true;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "changed": changed }))
+}
+
+fn object_hide_in_editor(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.hide_in_editor";
+    let was_valid = s.course.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let ids = object_or_objects_param(C, p)?;
+    let hidden: bool = req(C, p, "hidden")?;
+    let mut changed = 0;
+    {
+        let slide = slide_mut(s, &sid)?;
+        for id in &ids {
+            let object = find_object_mut(slide, id)?;
+            if object.editor_hidden != hidden {
+                object.editor_hidden = hidden;
+                changed += 1;
+            }
+        }
+    }
+    if changed == 0 {
+        s.skip_undo = true;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "changed": changed }))
+}
+
+const MAX_GUIDES: usize = 256;
+
+fn check_guide_pos(cmd: &'static str, at: f32) -> Result<f32> {
+    if !at.is_finite() || !(-100_000.0..=100_000.0).contains(&at) {
+        return Err(bad(cmd, "`at` must be a finite coordinate"));
+    }
+    Ok(at)
+}
+
+fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "view.set";
+    let was_valid = s.course.is_playable();
+    let before = s.course.editor.clone();
+    if let Some(v) = opt::<bool>(C, p, "show_rulers")? {
+        s.course.editor.show_rulers = v;
+    }
+    if let Some(v) = opt::<bool>(C, p, "show_grid")? {
+        s.course.editor.show_grid = v;
+    }
+    if let Some(v) = opt::<bool>(C, p, "snap_to_grid")? {
+        s.course.editor.snap_to_grid = v;
+    }
+    if let Some(v) = opt::<bool>(C, p, "show_guides")? {
+        s.course.editor.show_guides = v;
+    }
+    if s.course.editor == before {
+        s.skip_undo = true;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "editor": s.course.editor }))
+}
+
+fn view_guides_add(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "view.guides.add";
+    let was_valid = s.course.is_playable();
+    let vertical: bool = req(C, p, "vertical")?;
+    let at = check_guide_pos(C, req::<f32>(C, p, "at")?)?;
+    if s.course.editor.guides.len() >= MAX_GUIDES {
+        return Err(bad(C, "too many guides"));
+    }
+    s.course.editor.guides.push(Guide { vertical, at });
+    s.course.editor.show_guides = true;
+    let index = s.course.editor.guides.len().saturating_sub(1);
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "index": index }))
+}
+
+fn view_guides_move(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "view.guides.move";
+    let was_valid = s.course.is_playable();
+    let index: usize = req(C, p, "index")?;
+    let at = check_guide_pos(C, req::<f32>(C, p, "at")?)?;
+    let Some(guide) = s.course.editor.guides.get_mut(index) else {
+        return Err(bad(C, "guide index out of range"));
+    };
+    if (guide.at - at).abs() <= f32::EPSILON {
+        s.skip_undo = true;
+    } else {
+        guide.at = at;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "index": index, "at": at }))
+}
+
+fn view_guides_remove(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "view.guides.remove";
+    let was_valid = s.course.is_playable();
+    let index: usize = req(C, p, "index")?;
+    if index >= s.course.editor.guides.len() {
+        return Err(bad(C, "guide index out of range"));
+    }
+    s.course.editor.guides.remove(index);
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "removed": index }))
 }
 
 /// The appearance of one object, as copied by the format painter.
@@ -8005,6 +8189,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
             }
         }
@@ -8045,6 +8231,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
             }
             if !has_named(slide, "Drop target") {
@@ -8085,6 +8273,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
                 let label_id = fresh_id("text", slide.local_ids());
                 slide.objects.push(Object {
@@ -8129,6 +8319,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
             }
         }
@@ -8217,6 +8409,8 @@ fn add_finish_button(slide: &mut Slide, theme: &Theme, slide_size: Size) -> Stri
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     slide.triggers.push(Trigger {
         action: Action::SubmitResults,
@@ -8272,6 +8466,8 @@ fn add_submit_button(slide: &mut Slide, theme: &Theme, slide_size: Size) -> Stri
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     slide.triggers.push(Trigger {
         action: Action::SubmitQuestion,
@@ -8385,6 +8581,8 @@ fn add_feedback_layers(slide: &mut Slide, theme: &Theme, slide_size: Size) -> (S
                 shadow: None,
                 glow: None,
                 drag: None,
+                locked: false,
+                editor_hidden: false,
             }],
             triggers: Vec::new(),
             hide_other_layers: true,
@@ -8435,6 +8633,8 @@ fn results_button(id: String, label: &str, fill: Color, frame: Rect) -> Object {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -8717,6 +8917,8 @@ fn certificate_text(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -8783,6 +8985,8 @@ fn build_certificate_slide(id: &str, theme: &Theme, size: Size) -> Slide {
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 
     let mut push = |prefix: &str, name: &str, text: String, size: f32, bold: bool, frame: Rect| {
@@ -8936,6 +9140,8 @@ fn interaction_text(id: String, name: String, text: String, frame: Rect, theme: 
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -8986,6 +9192,8 @@ fn interaction_button(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -9077,6 +9285,8 @@ fn interaction_shape(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 
@@ -9115,6 +9325,8 @@ fn interaction_plain_button(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     }
 }
 

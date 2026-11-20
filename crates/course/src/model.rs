@@ -370,6 +370,46 @@ pub struct Course {
     /// Terms the learner can look up in the player. Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub glossary: Vec<GlossaryEntry>,
+    /// Authoring view settings (rulers, grid, guides). Ignored by the player and publish.
+    /// Omitted when default.
+    #[serde(default, skip_serializing_if = "EditorSettings::is_default")]
+    pub editor: EditorSettings,
+}
+
+/// One guide line across the authoring canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Guide {
+    /// True for a vertical line (`at` is an x coordinate in slide pixels).
+    pub vertical: bool,
+    pub at: f32,
+}
+
+/// Authoring view settings saved with the course. Ignored by the player and publish.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditorSettings {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub show_rulers: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub show_grid: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub snap_to_grid: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub show_guides: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<Guide>,
+}
+
+impl EditorSettings {
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        !self.show_rulers
+            && !self.show_grid
+            && !self.snap_to_grid
+            && !self.show_guides
+            && self.guides.is_empty()
+    }
 }
 
 /// One entry in the player's Resources tab.
@@ -952,6 +992,13 @@ pub struct Object {
     /// Drag-and-drop specification for freeform draggable objects. Omitted when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drag: Option<DragSpec>,
+    /// Locked on the authoring canvas so clicks and drags ignore it. Player and publish
+    /// ignore this. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    /// Hidden on the authoring canvas. Player and publish ignore this. Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub editor_hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

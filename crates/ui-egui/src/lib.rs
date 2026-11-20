@@ -117,6 +117,8 @@ mod spacing_tests;
 #[cfg(test)]
 mod spell_check_tests;
 #[cfg(test)]
+mod templates_tests;
+#[cfg(test)]
 pub(crate) mod test_harness;
 #[cfg(test)]
 mod tests;
@@ -217,7 +219,10 @@ pub use triggers::{
 };
 pub use variables::{VariablesState, show_variables_tab};
 pub use web_insert::{insert_web_object, show_web_insert_window};
-pub use welcome::{ExampleId, LoadedExample, example_course_and_media, show_welcome_screen};
+pub use welcome::{
+    ExampleId, LoadedExample, TemplateId, example_course_and_media, show_welcome_screen,
+    template_course,
+};
 pub use widgets::{
     IconTone, icon_button, icon_button_danger, icon_button_enabled, icon_toggle, toolbar_button,
     toolbar_button_active, toolbar_button_enabled, toolbar_caret_button, toolbar_primary_button,
@@ -375,6 +380,7 @@ pub enum EditorRequest {
         id: String,
     },
     OpenExample(ExampleId),
+    OpenTemplate(TemplateId),
     /// Send a chat request with the values in the AI Settings dialog.
     AiChat {
         /// Which feature is asking.
@@ -679,10 +685,6 @@ pub struct UiState {
     pub review_options: ReviewOptionsView,
     pub current_time: f64,
     pub placement_tool: Option<PlacementTool>,
-    /// Objects not drawn on the authoring canvas. Editor only.
-    pub hidden_objects: std::collections::BTreeSet<String>,
-    /// Objects the canvas cannot select or move. Editor only.
-    pub locked_objects: std::collections::BTreeSet<String>,
     /// Armed format painter, if any.
     pub format_painter: Option<format_painter::FormatPainter>,
     pub placement_drag: Option<canvas::PlacementDrag>,
@@ -1034,8 +1036,6 @@ impl Editor {
                 review_options: ReviewOptionsView::default(),
                 current_time: 0.0,
                 placement_tool: None,
-                hidden_objects: std::collections::BTreeSet::new(),
-                locked_objects: std::collections::BTreeSet::new(),
                 format_painter: None,
                 placement_drag: None,
                 draw: None,
@@ -1298,9 +1298,8 @@ impl Editor {
         self.ui.last_error = None;
         self.ui.error_history.clear();
         self.ui.placement_tool = None;
-        self.ui.hidden_objects.clear();
         self.ui.copied_triggers.clear();
-        self.ui.locked_objects.clear();
+        self.ui.rulers.drag = None;
         self.ui.placement_drag = None;
         self.ui.shape_gallery_query.clear();
         self.ui.shape_gallery_rects.clear();
@@ -1405,6 +1404,16 @@ impl Editor {
         if let Ok((course, media)) = welcome::example_course_and_media(id) {
             self.replace_course(course);
             self.set_media(media);
+            self.ui.show_welcome = false;
+            self.ui.has_loaded_course = true;
+        }
+    }
+
+    /// Open one of the built-in starter template courses.
+    pub fn open_template(&mut self, id: TemplateId) {
+        if let Ok(course) = welcome::template_course(id) {
+            self.replace_course(course);
+            self.set_media(Vec::new());
             self.ui.show_welcome = false;
             self.ui.has_loaded_course = true;
         }

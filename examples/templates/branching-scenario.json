@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "id": "branching-scenario",
+  "title": "Branching Scenario",
+  "slide_size": { "w": 1280, "h": 720 },
+  "scenes": [
+    {
+      "id": "sc-scenario",
+      "title": "Scenario",
+      "slides": [
+        {
+          "id": "s-setup",
+          "title": "The Situation",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "setup-title",
+              "name": "Title",
+              "kind": { "type": "text", "text": "Branching Scenario", "style": { "size": 44, "bold": true } },
+              "frame": { "x": 80, "y": 140, "w": 1120, "h": 72 }
+            },
+            {
+              "id": "setup-body",
+              "name": "Context",
+              "kind": { "type": "text", "text": "Set the scene for your learner here. Describe the situation, the stakes, and the role they are playing.", "style": { "size": 22 } },
+              "frame": { "x": 80, "y": 240, "w": 960, "h": 140 }
+            },
+            {
+              "id": "btn-enter",
+              "name": "Continue button",
+              "kind": { "type": "button", "label": "Enter Scenario" },
+              "frame": { "x": 80, "y": 440, "w": 240, "h": 56 }
+            }
+          ],
+          "triggers": [
+            { "action": { "action": "jump_to_slide", "target": "next" }, "when": { "event": "click", "object": "btn-enter" } }
+          ]
+        },
+        {
+          "id": "s-decision",
+          "title": "Decision Point",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "dec-heading",
+              "name": "Prompt",
+              "kind": { "type": "text", "text": "What do you do next?", "style": { "size": 36, "bold": true } },
+              "frame": { "x": 80, "y": 100, "w": 1120, "h": 60 }
+            },
+            {
+              "id": "dec-body",
+              "name": "Scenario detail",
+              "kind": { "type": "text", "text": "A colleague asks to bypass the standard review step to hit a tight deadline. Choose how you respond:", "style": { "size": 22 } },
+              "frame": { "x": 80, "y": 184, "w": 1000, "h": 100 }
+            },
+            {
+              "id": "btn-branch-a",
+              "name": "Choice A",
+              "kind": { "type": "button", "label": "Option A: Agree to skip the review" },
+              "frame": { "x": 80, "y": 340, "w": 480, "h": 64 }
+            },
+            {
+              "id": "btn-branch-b",
+              "name": "Choice B",
+              "kind": { "type": "button", "label": "Option B: Offer a focused 15-minute review" },
+              "frame": { "x": 80, "y": 430, "w": 480, "h": 64 }
+            }
+          ],
+          "triggers": [
+            { "action": { "action": "jump_to_slide", "target": { "id": "s-outcome-a" } }, "when": { "event": "click", "object": "btn-branch-a" } },
+            { "action": { "action": "jump_to_slide", "target": { "id": "s-outcome-b" } }, "when": { "event": "click", "object": "btn-branch-b" } }
+          ]
+        },
+        {
+          "id": "s-outcome-a",
+          "title": "Outcome A",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "out-a-title",
+              "name": "Heading",
+              "kind": { "type": "text", "text": "Outcome A: Review Skipped", "style": { "size": 36, "bold": true } },
+              "frame": { "x": 80, "y": 120, "w": 1120, "h": 60 }
+            },
+            {
+              "id": "out-a-body",
+              "name": "Consequence",
+              "kind": { "type": "text", "text": "The release goes out on time, but a preventable issue reaches customers and requires an urgent rollback.", "style": { "size": 22 } },
+              "frame": { "x": 80, "y": 210, "w": 960, "h": 140 }
+            },
+            {
+              "id": "btn-a-retry",
+              "name": "Reconsider button",
+              "kind": { "type": "button", "label": "Try Another Choice", "fill": "#5A5A5A" },
+              "frame": { "x": 80, "y": 420, "w": 260, "h": 56 }
+            },
+            {
+              "id": "btn-a-debrief",
+              "name": "Debrief button",
+              "kind": { "type": "button", "label": "Go to Debrief" },
+              "frame": { "x": 364, "y": 420, "w": 240, "h": 56 }
+            }
+          ],
+          "triggers": [
+            { "action": { "action": "jump_to_slide", "target": { "id": "s-decision" } }, "when": { "event": "click", "object": "btn-a-retry" } },
+            { "action": { "action": "jump_to_slide", "target": { "id": "s-debrief" } }, "when": { "event": "click", "object": "btn-a-debrief" } }
+          ]
+        },
+        {
+          "id": "s-outcome-b",
+          "title": "Outcome B",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "out-b-title",
+              "name": "Heading",
+              "kind": { "type": "text", "text": "Outcome B: Focused Review", "style": { "size": 36, "bold": true } },
+              "frame": { "x": 80, "y": 120, "w": 1120, "h": 60 }
+            },
+            {
+              "id": "out-b-body",
+              "name": "Consequence",
+              "kind": { "type": "text", "text": "Together you catch a subtle mistake in ten minutes and still meet the deadline with confidence.", "style": { "size": 22 } },
+              "frame": { "x": 80, "y": 210, "w": 960, "h": 140 }
+            },
+            {
+              "id": "btn-b-debrief",
+              "name": "Debrief button",
+              "kind": { "type": "button", "label": "Continue to Debrief" },
+              "frame": { "x": 80, "y": 420, "w": 260, "h": 56 }
+            }
+          ],
+          "triggers": [
+            { "action": { "action": "jump_to_slide", "target": { "id": "s-debrief" } }, "when": { "event": "click", "object": "btn-b-debrief" } }
+          ]
+        },
+        {
+          "id": "s-debrief",
+          "title": "Debrief",
+          "duration_ms": 3000,
+          "objects": [
+            {
+              "id": "deb-title",
+              "name": "Heading",
+              "kind": { "type": "text", "text": "Scenario Debrief", "style": { "size": 40, "bold": true } },
+              "frame": { "x": 80, "y": 140, "w": 1120, "h": 64 }
+            },
+            {
+              "id": "deb-body",
+              "name": "Reflection",
+              "kind": { "type": "text", "text": "Highlight why the stronger choice worked and connect it back to your team's guidelines.", "style": { "size": 22 } },
+              "frame": { "x": 80, "y": 236, "w": 960, "h": 140 }
+            }
+          ],
+          "triggers": [
+            { "action": { "action": "complete_course", "status": "completed" }, "when": { "event": "timeline_starts" } }
+          ]
+        }
+      ]
+    }
+  ]
+}

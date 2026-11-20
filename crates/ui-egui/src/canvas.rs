@@ -2669,10 +2669,18 @@ fn process_placement_drag(editor: &mut Editor, t: &SlideTransform, ui: &Ui) {
     }
 }
 
+fn is_locked(editor: &Editor, id: &str) -> bool {
+    editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .and_then(|s| s.object(id))
+        .is_some_and(|(o, _)| o.locked)
+}
+
 fn pick_object(
     course: &Course,
     selection: &crate::Selection,
-    locked: &std::collections::BTreeSet<String>,
     slide_pos: Pos2,
     items: &[DrawItem],
 ) -> Option<(String, Rect)> {
@@ -2688,7 +2696,7 @@ fn pick_object(
             }
         }
         if let Hit::Object(ref id) = item.hit
-            && !locked.contains(id)
+            && !slide.object(id).is_some_and(|(o, _)| o.locked)
             && coursecraft_render::item_hit_test(item, slide_pos)
         {
             return Some((id.clone(), item.rect));
@@ -2770,7 +2778,7 @@ fn start_drag_if_pressed(
         .selection
         .ids()
         .iter()
-        .any(|id| editor.ui.locked_objects.contains(id))
+        .any(|id| is_locked(editor, id))
     {
         editor.selection.clear_objects();
     }
@@ -3099,13 +3107,9 @@ fn start_drag_if_pressed(
         });
     } else if t.slide_rect().contains(start_pos) {
         let slide_pos = t.to_slide_pos(start_pos);
-        if let Some((id, orig_frame)) = pick_object(
-            &editor.session.course,
-            &editor.selection,
-            &editor.ui.locked_objects,
-            slide_pos,
-            items,
-        ) {
+        if let Some((id, orig_frame)) =
+            pick_object(&editor.session.course, &editor.selection, slide_pos, items)
+        {
             if modifiers.shift {
                 // Toggle on release, so a click does not also start a drag.
                 return;
@@ -3528,7 +3532,7 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
                             None => slide.objects.iter().any(|o| &o.id == id),
                         };
                         if on_layer
-                            && !editor.ui.locked_objects.contains(id)
+                            && !slide.object(id).is_some_and(|(o, _)| o.locked)
                             && coursecraft_render::item_bounds(item).intersects(slide_rect)
                             && !ids.contains(id)
                         {
@@ -3608,7 +3612,7 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
     };
 
     let command_held = ui.input(|i| i.modifiers.command);
-    let lines = crate::rulers::snap_lines(&editor.ui.rulers);
+    let lines = crate::rulers::snap_lines(&editor.session.course.editor);
     if crate::snap::snapping_active(editor.ui.snap_to_guides || !lines.is_empty(), command_held)
         && scale > 0.0
     {
@@ -3771,14 +3775,7 @@ fn handle_canvas_secondary_click(
     editor.ui.canvas_context_pos =
         (slide_pos.x.is_finite() && slide_pos.y.is_finite()).then_some(slide_pos);
     let picked = if inside && editor.ui.canvas_context_pos.is_some() {
-        pick_object(
-            &editor.session.course,
-            &editor.selection,
-            &editor.ui.locked_objects,
-            slide_pos,
-            items,
-        )
-        .map(|(id, _)| id)
+        pick_object(&editor.session.course, &editor.selection, slide_pos, items).map(|(id, _)| id)
     } else {
         None
     };
@@ -3827,14 +3824,8 @@ fn handle_canvas_click(
                 }
             }
         }
-        let picked = pick_object(
-            &editor.session.course,
-            &editor.selection,
-            &editor.ui.locked_objects,
-            slide_pos,
-            items,
-        )
-        .map(|(id, _)| id);
+        let picked = pick_object(&editor.session.course, &editor.selection, slide_pos, items)
+            .map(|(id, _)| id);
         if editor.ui.format_painter.is_some() {
             if let Some(id) = picked {
                 let targets = editor.selection.group_members(&editor.session.course, &id);
@@ -3885,14 +3876,8 @@ fn handle_canvas_double_click(
 ) {
     if t.slide_rect().contains(pos) {
         let slide_pos = t.to_slide_pos(pos);
-        let picked = pick_object(
-            &editor.session.course,
-            &editor.selection,
-            &editor.ui.locked_objects,
-            slide_pos,
-            items,
-        )
-        .map(|(id, _)| id);
+        let picked = pick_object(&editor.session.course, &editor.selection, slide_pos, items)
+            .map(|(id, _)| id);
         if let Some(id) = picked {
             let group_size = editor
                 .selection
@@ -4738,7 +4723,7 @@ fn draw_handles_and_outline(
         return;
     };
 
-    if ids.iter().any(|id| editor.ui.locked_objects.contains(id)) {
+    if ids.iter().any(|id| is_locked(editor, id)) {
         // Locked: outline and a lock marker, no handles to grab.
         let corner = t.to_screen_rect(bbox).left_top();
         let marker = Rect::from_min_size(corner + vec2(2.0, 2.0), vec2(16.0, 16.0));
@@ -5185,11 +5170,10 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             &extra_layers,
             editor.ui.layers.dim_other_layers,
         );
-        if !editor.ui.hidden_objects.is_empty() {
-            items.retain(|item| {
-                !matches!(&item.hit, Hit::Object(id) if editor.ui.hidden_objects.contains(id))
-            });
-        }
+        items.retain(|item| {
+            !matches!(&item.hit, Hit::Object(id)
+                if slide.object(id).is_some_and(|(o, _)| o.editor_hidden))
+        });
         missing_images_as_placeholders(&mut items, &editor.media);
         if let Some(selected) = &editor.selection.object {
             for item in &mut items {
@@ -5269,8 +5253,15 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         // like one over the zoom HUD: it cannot place, draw, crop or click away.
         let pointer_in_hud = current_pointer.is_some_and(|p| zoom_hud_rect.contains(p))
             || current_pointer.is_some_and(|p| !crate::widgets::pointer_reaches(ui, p))
-            || current_pointer
-                .is_some_and(|p| crate::rulers::captures(&editor.ui.rulers, canvas_rect, &t, p));
+            || current_pointer.is_some_and(|p| {
+                crate::rulers::captures(
+                    &editor.session.course.editor,
+                    &editor.ui.rulers,
+                    canvas_rect,
+                    &t,
+                    p,
+                )
+            });
         let was_editing = editor.ui.inline_edit.is_some();
 
         let was_cropping = editor.ui.crop_edit.is_some();

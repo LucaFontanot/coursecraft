@@ -1356,6 +1356,7 @@ pub fn import_pptx_with_limits(
         fonts: Vec::new(),
         background_audio: None,
         glossary: Vec::new(),
+        editor: Default::default(),
         resources: Vec::new(),
         text_styles: Vec::new(),
     };
@@ -2140,6 +2141,8 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 }
 
@@ -2484,6 +2487,8 @@ fn push_path_object(
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
     id
 }
@@ -3072,6 +3077,8 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                 shadow: shape_info.shadow.clone(),
                 glow: shape_info.glow.clone(),
                 drag: None,
+                locked: false,
+                editor_hidden: false,
             });
         }
         (Some(sk), None) => {
@@ -3116,6 +3123,8 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
             } else {
                 // Non-rectangle shape (roundRect, ellipse) defaults to #D9D9D9
@@ -3172,6 +3181,8 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                     shadow: shape_info.shadow.clone(),
                     glow: shape_info.glow.clone(),
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
             }
         }
@@ -3216,6 +3227,8 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                     shadow: None,
                     glow: None,
                     drag: None,
+                    locked: false,
+                    editor_hidden: false,
                 });
             }
         }
@@ -3932,5 +3945,7 @@ fn process_picture(pic: &XmlNode, transform: GroupTransform, cx: &mut SlideConte
         shadow: None,
         glow: None,
         drag: None,
+        locked: false,
+        editor_hidden: false,
     });
 }
