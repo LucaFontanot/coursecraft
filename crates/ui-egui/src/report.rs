@@ -176,6 +176,7 @@ pub fn scrub_paths(text: &str) -> String {
 fn opener_close(open: char) -> Option<char> {
     match open {
         '"' => Some('"'),
+        '“' => Some('”'),
         '\'' => Some('\''),
         '`' => Some('`'),
         '(' => Some(')'),
@@ -240,11 +241,37 @@ fn next_word_is_path_part(chars: &[char], at: usize) -> bool {
         .any(|c| matches!(c, '/' | '\\'))
 }
 
-/// Replace words that end in a known file extension with `<file>`.
+/// Replace `“…”`-quoted file names (which may contain spaces) and bare words
+/// that end in a known file extension with `<file>`.
 fn scrub_file_names(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut word = String::new();
-    for ch in text.chars() {
+    let mut chars = text.char_indices().peekable();
+    while let Some((idx, ch)) = chars.next() {
+        if ch == '“'
+            && let Some(after_open) = text.get(idx + ch.len_utf8()..)
+            && let Some(end_rel) = after_open.find(['”', '\n'])
+            && after_open
+                .get(end_rel..)
+                .is_some_and(|s| s.starts_with('”'))
+        {
+            flush_word(&mut out, &mut word);
+            let inner = after_open.get(..end_rel).unwrap_or_default();
+            if inner == "<path>" {
+                out.push_str("<path>");
+            } else {
+                out.push_str("<file>");
+            }
+            let close_end = idx + ch.len_utf8() + end_rel + '”'.len_utf8();
+            while let Some(&(next_idx, _)) = chars.peek() {
+                if next_idx < close_end {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            continue;
+        }
         if ch.is_alphanumeric() || matches!(ch, '.' | '_' | '-') {
             word.push(ch);
         } else {
@@ -478,6 +505,14 @@ mod tests {
         assert_eq!(
             scrub("Version 1.2 saved, e.g. fine"),
             "Version 1.2 saved, e.g. fine"
+        );
+    }
+
+    #[test]
+    fn quoted_file_names_with_spaces_are_replaced() {
+        assert_eq!(
+            scrub("Replaced “logo.png” with “Jane Doe Passport.png”."),
+            "Replaced <file> with <file>."
         );
     }
 

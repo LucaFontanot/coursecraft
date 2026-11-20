@@ -604,7 +604,7 @@ fn apply_captions(editor: &mut Editor) {
             Some("Couldn't save the captions. Nothing was changed.".to_string());
         return;
     };
-    editor.set_status(format!("Saved captions as {saved}."));
+    editor.set_status(format!("Saved captions as “{saved}”."));
     editor.ui.captions = CaptionsState::default();
 }
 

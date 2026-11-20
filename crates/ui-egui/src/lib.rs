@@ -1650,7 +1650,7 @@ impl Editor {
         self.pending_picture_fill = previous_picture_fill;
         let src = src?;
         self.mark_media_changed();
-        self.set_status(format!("Added {src}. File operations are not undoable."));
+        self.set_status(format!("Added “{src}”. File operations are not undoable."));
         Some(src)
     }
 
@@ -1674,7 +1674,9 @@ impl Editor {
         self.audio_waveforms.remove(src);
         self.ensure_audio_waveform(src);
         self.mark_media_changed();
-        self.set_status(format!("Replaced {src}. File operations are not undoable."));
+        self.set_status(format!(
+            "Replaced “{src}”. File operations are not undoable."
+        ));
         true
     }
 
@@ -2146,7 +2148,7 @@ impl Editor {
             {
                 // The first frame still shows; say why the animation won't play.
                 let msg =
-                    format!("Animated image '{file_name}' will show only its first frame: {e}");
+                    format!("Animated image “{file_name}” will show only its first frame: {e}");
                 self.ui.error_history.push(msg.clone());
                 self.set_status(msg);
             }

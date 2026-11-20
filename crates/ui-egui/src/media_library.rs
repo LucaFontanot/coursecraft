@@ -512,7 +512,9 @@ fn insert_on_slide(editor: &mut Editor, src: &str) {
     {
         editor.selection.set_many([id.to_owned()]);
     }
-    editor.set_status(format!("Inserted {src}. File operations are not undoable."));
+    editor.set_status(format!(
+        "Inserted “{src}”. File operations are not undoable."
+    ));
 }
 
 fn go_to_place(editor: &mut Editor, reference: &MediaReference) {
