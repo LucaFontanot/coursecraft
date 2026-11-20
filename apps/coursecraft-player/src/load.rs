@@ -233,7 +233,15 @@ pub fn start_web_fetch(ctx: &egui::Context) -> WebLoader {
     let loader_cb = Arc::clone(&loader);
     let ctx_cb = ctx.clone();
 
-    ehttp::fetch(ehttp::Request::get("course.json"), move |response| {
+    // Same-origin fetches must send cookies: LMSs such as SCORM Cloud protect
+    // package files with sign-in cookies, and ehttp's web default omits them.
+    #[allow(unused_mut)]
+    let mut request = ehttp::Request::get("course.json");
+    #[cfg(target_arch = "wasm32")]
+    {
+        request.credentials = ehttp::Credentials::SameOrigin;
+    }
+    ehttp::fetch(request, move |response| {
         let course_json = match response {
             Ok(resp) => {
                 if resp.status != 200 {
@@ -268,23 +276,26 @@ pub fn start_web_fetch(ctx: &egui::Context) -> WebLoader {
 
         let loader_pkg = Arc::clone(&loader_cb);
         let ctx_pkg = ctx_cb.clone();
-        ehttp::fetch(
-            ehttp::Request::get("coursecraft-package.json"),
-            move |response| {
-                let package_json = match response {
-                    Ok(resp) if resp.status == 200 => String::from_utf8(resp.bytes).ok(),
-                    _ => None,
-                };
-                store_web_result(
-                    &loader_pkg,
-                    Ok(WebCourse {
-                        course_json,
-                        package_json,
-                    }),
-                );
-                ctx_pkg.request_repaint();
-            },
-        );
+        #[allow(unused_mut)]
+        let mut package_request = ehttp::Request::get("coursecraft-package.json");
+        #[cfg(target_arch = "wasm32")]
+        {
+            package_request.credentials = ehttp::Credentials::SameOrigin;
+        }
+        ehttp::fetch(package_request, move |response| {
+            let package_json = match response {
+                Ok(resp) if resp.status == 200 => String::from_utf8(resp.bytes).ok(),
+                _ => None,
+            };
+            store_web_result(
+                &loader_pkg,
+                Ok(WebCourse {
+                    course_json,
+                    package_json,
+                }),
+            );
+            ctx_pkg.request_repaint();
+        });
     });
 
     loader

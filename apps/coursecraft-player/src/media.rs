@@ -123,7 +123,13 @@ impl WebMediaSource {
         let src_cb = next_src.clone();
         let url = format!("media/{next_src}");
 
-        ehttp::fetch(ehttp::Request::get(url), move |response| {
+        #[allow(unused_mut)]
+        let mut request = ehttp::Request::get(url);
+        #[cfg(target_arch = "wasm32")]
+        {
+            request.credentials = ehttp::Credentials::SameOrigin;
+        }
+        ehttp::fetch(request, move |response| {
             {
                 let mut s = match state_cb.lock() {
                     Ok(guard) => guard,

@@ -2,6 +2,11 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## Unreleased
+
+**Fixes**
+- Published courses load in LMSs that protect course files with sign-in cookies, such as SCORM Cloud. Before, the player showed "failed to fetch course.json: HTTP 403".
+
 ## 0.2.2
 
 Clearer everyday editing: named undo steps with a History panel, equal-spacing guides, problems marked on triggers, and live variables in Preview.
