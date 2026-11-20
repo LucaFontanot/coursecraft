@@ -414,7 +414,10 @@ fn score_without_a_cookie_is_401() {
         server.addr,
         "POST",
         "/lti/score",
-        &[("Content-Type", "application/json")],
+        &[
+            ("Content-Type", "application/json"),
+            ("Origin", "https://tool.example"),
+        ],
         r#"{"percent": 50, "status": "passed"}"#,
     );
     assert_eq!(status, 401);
@@ -460,6 +463,7 @@ fn score_posts_to_the_platform_lineitem() {
         "/lti/score",
         &[
             ("Content-Type", "application/json"),
+            ("Origin", "https://tool.example"),
             ("Cookie", &format!("cc_lti={cookie}")),
         ],
         r#"{"percent": 87, "status": "passed"}"#,
@@ -530,6 +534,7 @@ fn score_without_a_percent_sends_progress_only() {
         "/lti/score",
         &[
             ("Content-Type", "application/json"),
+            ("Origin", "https://tool.example"),
             ("Cookie", &format!("cc_lti={cookie}")),
         ],
         r#"{"percent": null, "status": "completed"}"#,
@@ -545,6 +550,126 @@ fn score_without_a_percent_sends_progress_only() {
     assert!(value.get("scoreGiven").is_none(), "{value}");
     assert_eq!(value["activityProgress"], "Completed");
     assert_eq!(value["comment"], "completed");
+}
+
+#[test]
+fn score_rejects_cross_site_origin_with_403() {
+    let server = start_server(
+        config_with(
+            "https://platform.example/jwks",
+            "https://platform.example/token",
+        ),
+        temp_course_dir(),
+    );
+    let launch = Launch {
+        subject: "user-1".into(),
+        name: None,
+        context_id: None,
+        resource_link_id: "link-1".into(),
+        roles: Vec::new(),
+        ags: Some(Ags {
+            lineitem: Some("https://platform.example/lineitems/1".into()),
+            lineitems: None,
+            scope: Vec::new(),
+        }),
+        deployment_id: DEPLOYMENT_ID.into(),
+    };
+    let cookie = server.shared.insert_session(launch);
+    let (status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/score",
+        &[
+            ("Content-Type", "application/json"),
+            ("Origin", "https://evil.example"),
+            ("Cookie", &format!("cc_lti={cookie}")),
+        ],
+        r#"{"percent": 0, "status": "failed"}"#,
+    );
+    assert_eq!(status, 403);
+}
+
+#[test]
+fn score_rejects_missing_content_type_with_403() {
+    let server = start_server(
+        config_with(
+            "https://platform.example/jwks",
+            "https://platform.example/token",
+        ),
+        temp_course_dir(),
+    );
+    let launch = Launch {
+        subject: "user-1".into(),
+        name: None,
+        context_id: None,
+        resource_link_id: "link-1".into(),
+        roles: Vec::new(),
+        ags: Some(Ags {
+            lineitem: Some("https://platform.example/lineitems/1".into()),
+            lineitems: None,
+            scope: Vec::new(),
+        }),
+        deployment_id: DEPLOYMENT_ID.into(),
+    };
+    let cookie = server.shared.insert_session(launch);
+    let (status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/score",
+        &[
+            ("Origin", "https://tool.example"),
+            ("Cookie", &format!("cc_lti={cookie}")),
+        ],
+        r#"{"percent": 0, "status": "failed"}"#,
+    );
+    assert_eq!(status, 403);
+}
+
+#[test]
+fn score_accepts_json_with_charset_and_tool_origin() {
+    let platform =
+        start_platform(
+            |request| match (request.method.as_str(), request.path.as_str()) {
+                ("POST", "/token") => Response::file(
+                    br#"{"access_token":"test-token","expires_in":3600}"#.to_vec(),
+                    "application/json",
+                ),
+                ("POST", "/lineitems/1/scores") => Response::status(204),
+                _ => Response::status(404),
+            },
+        );
+    let mut cfg = config_with(
+        "https://platform.example/jwks",
+        &format!("http://{}/token", platform.addr),
+    );
+    cfg.tool_url = "https://tool.example/lti-app".into();
+    let server = start_server(cfg, temp_course_dir());
+    let launch = Launch {
+        subject: "user-1".into(),
+        name: None,
+        context_id: None,
+        resource_link_id: "link-1".into(),
+        roles: Vec::new(),
+        ags: Some(Ags {
+            lineitem: Some(format!("http://{}/lineitems/1", platform.addr)),
+            lineitems: None,
+            scope: Vec::new(),
+        }),
+        deployment_id: DEPLOYMENT_ID.into(),
+    };
+    let cookie = server.shared.insert_session(launch);
+    let (status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/score",
+        &[
+            ("Content-Type", "application/json; charset=utf-8"),
+            ("Origin", "https://tool.example"),
+            ("Cookie", &format!("cc_lti={cookie}")),
+        ],
+        r#"{"percent": 90, "status": "passed"}"#,
+    );
+    assert_eq!(status, 204);
 }
 
 #[test]

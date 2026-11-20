@@ -373,7 +373,55 @@ fn course(shared: &Shared, path: &str) -> Response {
     }
 }
 
+fn is_json_content_type(request: &Request) -> bool {
+    let Some(raw) = request.headers.get("content-type") else {
+        return false;
+    };
+    let mut parts = raw.split(';');
+    let Some(media_type) = parts.next().map(str::trim) else {
+        return false;
+    };
+    if !media_type.eq_ignore_ascii_case("application/json") {
+        return false;
+    }
+    parts.all(|param| {
+        let trimmed = param.trim();
+        trimmed.is_empty()
+            || trimmed
+                .get(..8)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("charset="))
+    })
+}
+
+fn url_origin(url: &str) -> Option<&str> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme.is_empty()
+        || !scheme
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+    {
+        return None;
+    }
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    if authority_end == 0 {
+        return None;
+    }
+    url.get(..scheme.len() + 3 + authority_end)
+}
+
 fn score(shared: &Shared, request: &Request) -> Response {
+    if !is_json_content_type(request) {
+        return Response::text(403, "forbidden: content-type must be application/json");
+    }
+    let Some(expected_origin) = url_origin(&shared.cfg.tool_url) else {
+        return Response::text(403, "forbidden: invalid tool origin");
+    };
+    let Some(origin) = request.headers.get("origin").map(String::as_str) else {
+        return Response::text(403, "forbidden: origin required");
+    };
+    if !origin.eq_ignore_ascii_case(expected_origin) {
+        return Response::text(403, "forbidden: cross-site origin");
+    }
     let Some(cookie) = request.cookie(SESSION_COOKIE) else {
         return Response::text(401, "no launch session");
     };
