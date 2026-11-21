@@ -42,12 +42,38 @@ jobs:
       - name: Package for macOS
         if: matrix.name == 'macos'
         run: scripts/package-macos.sh "${GITHUB_REF_NAME#v}" target/release/coursecraft dist
-      - name: Package for Windows
+      - name: Package for Windows (portable)
         if: matrix.name == 'windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/coursecraft.exe "dist/CourseCraft-$($env:GITHUB_REF_NAME).exe"
+          Copy-Item target/release/coursecraft.exe "dist/CourseCraft-$($env:GITHUB_REF_NAME)-portable.exe"
+      - name: Build Windows installer
+        if: matrix.name == 'windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $cmd = Get-Command iscc -ErrorAction SilentlyContinue
+          $iscc = if ($cmd) { $cmd.Source } else { $null }
+          $defaultIscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not $iscc -and (Test-Path $defaultIscc)) {
+            $iscc = $defaultIscc
+          }
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed with exit code $LASTEXITCODE" }
+            $cmd = Get-Command iscc -ErrorAction SilentlyContinue
+            if ($cmd) {
+              $iscc = $cmd.Source
+            } elseif (Test-Path $defaultIscc) {
+              $iscc = $defaultIscc
+            }
+          }
+          if (-not $iscc) { throw "ISCC.exe not found after installation" }
+          $tag = $env:GITHUB_REF_NAME
+          $ver = $tag.TrimStart('v')
+          & $iscc "/DAppVersion=$ver" "/DOutputName=CourseCraft-$tag-setup" "/DOutputDir=$PWD\dist" "/DRepoRoot=$PWD" "packaging/windows/coursecraft.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
       - name: Package for Linux
         if: matrix.name == 'linux'
         run: |
