@@ -138,6 +138,8 @@ mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
+mod preview_close_tests;
+#[cfg(test)]
 mod preview_variables_tests;
 #[cfg(test)]
 mod publish_tests;
