@@ -14,11 +14,20 @@
     clippy::unreachable
 )]
 
+pub mod manifest;
 pub mod scorm12;
 pub mod scorm2004;
+pub mod xapi_lrs;
 
+pub use manifest::{
+    PackageStandardKind, validate_cmi5_xml, validate_package, validate_scorm12_manifest,
+    validate_scorm2004_manifest, validate_tincan_xml,
+};
 pub use scorm12::{Scorm12Config, StrictScorm12};
 pub use scorm2004::{Scorm2004Config, Scorm2004Edition, StrictScorm2004};
+pub use xapi_lrs::{
+    Flavor, LaunchSpec, LrsResponse, StateKeyView, StrictLrs, build_cmi5_launch_data, canonical_ifi,
+};
 
 use serde::Serialize;
 

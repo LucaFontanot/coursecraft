@@ -1,31 +1,25 @@
 //! A small mock LMS and LRS for testing xAPI / cmi5 packages.
 //!
 //! The server serves the published packages under `target/mock-lrs/`, hands out
-//! cmi5 fetch tokens, stores statements and the xAPI State API documents, and
-//! checks each incoming statement against the cmi5 rules. Failures are recorded
-//! as `problems` rather than refused, so the test page can show them.
+//! cmi5 fetch tokens, and delegates xAPI / cmi5 validation and State API
+//! storage to [`coursecraft_strict_lms::StrictLrs`].
 //!
 //! Everything is test tooling. It binds to `127.0.0.1` only, closes each
 //! connection after one request, and never panics on a bad request.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::{Map, Value, json};
+use coursecraft_strict_lms::{Flavor, LaunchSpec, LrsResponse, StrictLrs, build_cmi5_launch_data};
+use serde_json::{Value, json};
 
 const MAX_BODY: usize = 16 * 1024 * 1024;
 const MAX_HEADER: usize = 64 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
-const CMI5_CATEGORY: &str = "https://w3id.org/xapi/cmi5/context/categories/cmi5";
-const MOVEON_CATEGORY: &str = "https://w3id.org/xapi/cmi5/context/categories/moveon";
-const SESSION_ID_EXTENSION: &str = "https://w3id.org/xapi/cmi5/context/extensions/sessionid";
-const MASTERY_EXTENSION: &str = "https://w3id.org/xapi/cmi5/context/extensions/masteryscore";
-const VERB_BASE: &str = "http://adlnet.gov/expapi/verbs/";
-const LAUNCH_DATA: &str = "LMS.LaunchData";
 
 #[cfg(test)]
 mod tests;
@@ -43,15 +37,6 @@ pub struct Request {
     pub headers: Vec<(String, String)>,
     /// Raw request body.
     pub body: Vec<u8>,
-}
-
-impl Request {
-    fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
-            .map(|(_, value)| value.as_str())
-    }
 }
 
 /// One HTTP response.
@@ -92,60 +77,22 @@ impl Response {
             body: Vec::new(),
         }
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Flavor {
-    Cmi5,
-    Xapi,
-}
-
-impl Flavor {
-    fn id(self) -> &'static str {
-        match self {
-            Self::Cmi5 => "cmi5",
-            Self::Xapi => "xapi",
+    fn from_lrs(resp: LrsResponse) -> Self {
+        Self {
+            status: resp.status,
+            headers: resp.headers,
+            body: resp.body,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-struct Registration {
-    flavor: Flavor,
-    course: String,
-    launch_mode: String,
-    mastery: Option<f64>,
-    completed: u32,
-    passed: bool,
-}
-
-#[derive(Debug, Default)]
-struct Session {
-    initialized: bool,
-    terminated: bool,
-    verbs: HashSet<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct StateKey {
-    state_id: String,
-    activity_id: String,
-    agent: String,
-    registration: Option<String>,
 }
 
 /// Everything the mock server remembers between requests.
 pub struct LrsStore {
     port: u16,
     base_dir: PathBuf,
-    registrations: HashMap<String, Registration>,
-    sessions: HashMap<String, Session>,
-    fetches: HashMap<String, bool>,
-    tokens: HashSet<String>,
-    statements: Vec<Value>,
-    statement_ids: HashSet<String>,
-    problems: Vec<String>,
-    state: HashMap<StateKey, Vec<u8>>,
+    registrations: HashMap<(String, &'static str), String>,
+    pub(crate) strict: StrictLrs,
     fail_remaining: u32,
     fail_status: u16,
     next_session: u64,
@@ -156,33 +103,19 @@ impl LrsStore {
     /// Create an empty store for a server on `port` serving `base_dir`.
     #[must_use]
     pub fn new(port: u16, base_dir: PathBuf) -> Self {
+        let mut strict = StrictLrs::new();
+        strict.add_token("Basic mock-xapi".to_string());
         Self {
             port,
             base_dir,
             registrations: HashMap::new(),
-            sessions: HashMap::new(),
-            fetches: HashMap::new(),
-            tokens: HashSet::new(),
-            statements: Vec::new(),
-            statement_ids: HashSet::new(),
-            problems: Vec::new(),
-            state: HashMap::new(),
+            strict,
             fail_remaining: 0,
             fail_status: 500,
             next_session: 0,
             next_fetch: 0,
         }
     }
-}
-
-struct LaunchData<'a> {
-    activity: &'a str,
-    agent: &'a Value,
-    registration: &'a str,
-    session_id: &'a str,
-    mode: &'a str,
-    mastery: Option<f64>,
-    want_return: bool,
 }
 
 /// Run the server until the process ends.
@@ -240,7 +173,11 @@ pub fn handle(store: &mut LrsStore, request: &Request) -> Response {
         "/mock/returned" => returned(request),
         _ => {
             if let Some(id) = path.strip_prefix("/fetch/") {
-                return fetch(store, request, id);
+                return Response::from_lrs(store.strict.handle_fetch(
+                    &request.method,
+                    id,
+                    &request.headers,
+                ));
             }
             // Only the LRS resources: xAPI packages are also served under `/xapi/`.
             if let Some(rest) = path.strip_prefix("/xapi/")
@@ -286,36 +223,42 @@ fn launch(store: &mut LrsStore, request: &Request) -> Response {
     let want_return = params.get("return").is_some_and(|value| value == "1");
 
     let registration = registration_for(store, course, flavor);
-    if let Some(entry) = store.registrations.get_mut(&registration) {
-        entry.launch_mode = mode.to_string();
-        entry.mastery = mastery;
-    }
-
     let base = format!("http://127.0.0.1:{}", store.port);
     let endpoint = format!("{base}/xapi/");
     let activity = format!("urn:coursecraft:mock:activity:{course}");
     let actor = actor_json();
     let actor_text = actor.to_string();
 
+    store.next_session = store.next_session.saturating_add(1);
+    let session_id = format!("mock-session-{}", store.next_session);
+
     match flavor {
         Flavor::Cmi5 => {
-            store.next_session = store.next_session.saturating_add(1);
-            let session_id = format!("mock-session-{}", store.next_session);
             store.next_fetch = store.next_fetch.saturating_add(1);
             let fetch_id = format!("mock-fetch-{}", store.next_fetch);
-            store.fetches.insert(fetch_id.clone(), false);
             let fetch_url = format!("{base}/fetch/{fetch_id}");
-            write_launch_data(
-                store,
-                &LaunchData {
-                    activity: &activity,
-                    agent: &actor,
-                    registration: &registration,
-                    session_id: &session_id,
-                    mode,
-                    mastery,
-                    want_return,
+            let return_url = want_return.then(|| format!("{base}/mock/returned"));
+            let launch_doc = build_cmi5_launch_data(
+                &activity,
+                &session_id,
+                mode,
+                mastery,
+                return_url.as_deref(),
+            );
+            store.strict.register_launch(
+                LaunchSpec {
+                    flavor: Flavor::Cmi5,
+                    activity_id: activity.clone(),
+                    actor,
+                    registration: Some(registration.clone()),
+                    launch_mode: mode.to_string(),
+                    mastery_score: mastery,
+                    session_id,
+                    grouping_ids: vec![activity.clone()],
+                    fetch_id: Some(fetch_id),
+                    auth_token: None,
                 },
+                Some(launch_doc),
             );
             let url = format!(
                 "{base}/cmi5/{course}/index.html?endpoint={}&actor={}&registration={}&activityId={}&fetch={}",
@@ -328,6 +271,21 @@ fn launch(store: &mut LrsStore, request: &Request) -> Response {
             Response::json(200, &json!({ "url": url }))
         }
         Flavor::Xapi => {
+            store.strict.register_launch(
+                LaunchSpec {
+                    flavor: Flavor::Xapi,
+                    activity_id: activity.clone(),
+                    actor,
+                    registration: Some(registration.clone()),
+                    launch_mode: mode.to_string(),
+                    mastery_score: mastery,
+                    session_id,
+                    grouping_ids: Vec::new(),
+                    fetch_id: None,
+                    auth_token: Some("Basic mock-xapi".to_string()),
+                },
+                None,
+            );
             let url = format!(
                 "{base}/xapi/{course}/index.html?endpoint={}&actor={}&registration={}&activity_id={}&auth={}",
                 encode(&endpoint),
@@ -342,25 +300,16 @@ fn launch(store: &mut LrsStore, request: &Request) -> Response {
 }
 
 fn registration_for(store: &mut LrsStore, course: &str, flavor: Flavor) -> String {
-    if let Some((id, _)) = store
-        .registrations
-        .iter()
-        .find(|(_, entry)| entry.course == course && entry.flavor == flavor)
-    {
+    let flavor_id = match flavor {
+        Flavor::Cmi5 => "cmi5",
+        Flavor::Xapi => "xapi",
+    };
+    let key = (course.to_string(), flavor_id);
+    if let Some(id) = store.registrations.get(&key) {
         return id.clone();
     }
-    let id = format!("urn:coursecraft:mock:registration:{}-{course}", flavor.id());
-    store.registrations.insert(
-        id.clone(),
-        Registration {
-            flavor,
-            course: course.to_string(),
-            launch_mode: "Normal".to_string(),
-            mastery: None,
-            completed: 0,
-            passed: false,
-        },
-    );
+    let id = format!("urn:coursecraft:mock:registration:{flavor_id}-{course}");
+    store.registrations.insert(key, id.clone());
     id
 }
 
@@ -375,84 +324,13 @@ fn actor_json() -> Value {
     })
 }
 
-fn write_launch_data(store: &mut LrsStore, data: &LaunchData<'_>) {
-    let mut document = Map::new();
-    document.insert(
-        "contextTemplate".into(),
-        json!({
-            "contextActivities": {
-                "grouping": [ { "id": data.activity } ],
-            },
-            "extensions": { SESSION_ID_EXTENSION: data.session_id },
-        }),
-    );
-    document.insert("launchMode".into(), json!(data.mode));
-    document.insert(
-        "moveOn".into(),
-        json!(if data.mastery.is_some() {
-            "Passed"
-        } else {
-            "Completed"
-        }),
-    );
-    document.insert(
-        "entitlementKey".into(),
-        json!({ "alternate": "coursecraft-mock" }),
-    );
-    if let Some(score) = data.mastery {
-        document.insert("masteryScore".into(), json!(score));
-    }
-    if data.want_return {
-        document.insert(
-            "returnURL".into(),
-            json!(format!("http://127.0.0.1:{}/mock/returned", store.port)),
-        );
-    }
-    let key = StateKey {
-        state_id: LAUNCH_DATA.to_string(),
-        activity_id: data.activity.to_string(),
-        agent: data.agent.to_string(),
-        registration: Some(data.registration.to_string()),
-    };
-    store.state.insert(
-        key,
-        serde_json::to_vec(&Value::Object(document)).unwrap_or_default(),
-    );
-}
-
-fn fetch(store: &mut LrsStore, request: &Request, id: &str) -> Response {
-    if !is_method(request, "POST") {
-        return Response::text(405, "Method Not Allowed");
-    }
-    let used = match store.fetches.get(id) {
-        Some(used) => *used,
-        None => return Response::text(404, "unknown fetch id"),
-    };
-    if used {
-        store.problems.push(format!("fetch id {id} reused"));
-        return Response::json(
-            200,
-            &json!({ "error-code": "1", "error-text": "Already in use" }),
-        );
-    }
-    store.fetches.insert(id.to_string(), true);
-    let token = format!("mock-token-{id}");
-    store.tokens.insert(format!("Basic {token}"));
-    Response::json(200, &json!({ "auth-token": token }))
-}
-
 fn reset(store: &mut LrsStore, request: &Request) -> Response {
     if !is_method(request, "POST") {
         return Response::text(405, "Method Not Allowed");
     }
     store.registrations.clear();
-    store.sessions.clear();
-    store.fetches.clear();
-    store.tokens.clear();
-    store.statements.clear();
-    store.statement_ids.clear();
-    store.problems.clear();
-    store.state.clear();
+    store.strict.reset();
+    store.strict.add_token("Basic mock-xapi".to_string());
     store.fail_remaining = 0;
     store.fail_status = 500;
     store.next_session = 0;
@@ -464,24 +342,18 @@ fn log(store: &LrsStore, request: &Request) -> Response {
     if !is_method(request, "GET") {
         return Response::text(405, "Method Not Allowed");
     }
-    let state_keys: Vec<Value> = store
-        .state
-        .keys()
-        .map(|key| {
-            json!({
-                "stateId": key.state_id,
-                "activityId": key.activity_id,
-                "agent": key.agent,
-                "registration": key.registration,
-            })
-        })
+    let problems: Vec<String> = store
+        .strict
+        .violations()
+        .iter()
+        .map(|v| v.message.clone())
         .collect();
     Response::json(
         200,
         &json!({
-            "statements": store.statements.clone(),
-            "problems": store.problems.clone(),
-            "stateKeys": state_keys,
+            "statements": store.strict.statements(),
+            "problems": problems,
+            "stateKeys": store.strict.state_keys(),
         }),
     )
 }
@@ -522,340 +394,26 @@ fn returned(request: &Request) -> Response {
 }
 
 fn xapi(store: &mut LrsStore, request: &Request, rest: &str) -> Response {
-    if request
-        .header("X-Experience-API-Version")
-        .is_none_or(str::is_empty)
-    {
-        return Response::text(400, "X-Experience-API-Version header required");
-    }
-    let auth = request.header("Authorization").unwrap_or_default();
-    if !store.tokens.contains(auth) && auth != "Basic mock-xapi" {
-        return Response::text(401, "Unauthorized");
-    }
-    match (request.method.as_str(), rest) {
-        ("POST", "statements") => post_statements(store, request),
-        ("GET", "statements") => get_statements(store),
-        ("GET", "activities/state")
-        | ("PUT", "activities/state")
-        | ("DELETE", "activities/state") => state_api(store, request),
+    match rest {
+        "statements" => {
+            if is_method(request, "POST") && store.fail_remaining > 0 {
+                store.fail_remaining = store.fail_remaining.saturating_sub(1);
+                return Response::text(store.fail_status, "injected failure");
+            }
+            Response::from_lrs(store.strict.handle_statements(
+                &request.method,
+                &request.headers,
+                &request.body,
+            ))
+        }
+        "activities/state" => Response::from_lrs(store.strict.handle_state(
+            &request.method,
+            &request.query,
+            &request.headers,
+            &request.body,
+        )),
         _ => Response::text(404, "Not Found"),
     }
-}
-
-fn post_statements(store: &mut LrsStore, request: &Request) -> Response {
-    if store.fail_remaining > 0 {
-        store.fail_remaining = store.fail_remaining.saturating_sub(1);
-        return Response::text(store.fail_status, "injected failure");
-    }
-    let Ok(value) = serde_json::from_slice::<Value>(&request.body) else {
-        return Response::text(400, "invalid JSON");
-    };
-    let statements = match value {
-        Value::Array(items) => items,
-        Value::Object(_) => vec![value],
-        _ => return Response::text(400, "statement must be an object or array"),
-    };
-    let mut ids = Vec::new();
-    for statement in statements {
-        let Some(id) = statement.get("id").and_then(Value::as_str) else {
-            return Response::text(400, "statement has no string id");
-        };
-        let id = id.to_string();
-        if !store.statement_ids.contains(&id) {
-            store.statement_ids.insert(id.clone());
-            validate(store, &statement);
-            store.statements.push(statement);
-        }
-        ids.push(id);
-    }
-    Response::json(200, &json!(ids))
-}
-
-fn get_statements(store: &LrsStore) -> Response {
-    Response::json(200, &json!({ "statements": store.statements.clone() }))
-}
-
-fn state_api(store: &mut LrsStore, request: &Request) -> Response {
-    let params = query_map(&request.query);
-    let Some(state_id) = params.get("stateId") else {
-        return Response::text(400, "stateId required");
-    };
-    let Some(activity_id) = params.get("activityId") else {
-        return Response::text(400, "activityId required");
-    };
-    let Some(agent) = params.get("agent") else {
-        return Response::text(400, "agent required");
-    };
-    let key = StateKey {
-        state_id: state_id.clone(),
-        activity_id: activity_id.clone(),
-        agent: agent.clone(),
-        registration: params.get("registration").cloned(),
-    };
-    match request.method.as_str() {
-        "GET" => match store.state.get(&key) {
-            Some(body) => Response {
-                status: 200,
-                headers: vec![("Content-Type".to_string(), "application/json".to_string())],
-                body: body.clone(),
-            },
-            None => Response::text(404, "Not Found"),
-        },
-        "PUT" => {
-            if state_id == LAUNCH_DATA {
-                store
-                    .problems
-                    .push("an AU tried to write protected state LMS.LaunchData".to_string());
-                return Response::text(403, "LMS.LaunchData is written by the LMS only");
-            }
-            store.state.insert(key, request.body.clone());
-            Response::empty(204)
-        }
-        "DELETE" => {
-            if store.state.remove(&key).is_some() {
-                Response::empty(204)
-            } else {
-                Response::text(404, "Not Found")
-            }
-        }
-        _ => Response::text(405, "Method Not Allowed"),
-    }
-}
-
-fn validate(store: &mut LrsStore, statement: &Value) {
-    let verb = verb_of(statement).to_string();
-    let registration = statement
-        .pointer("/context/registration")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let session_id = statement
-        .pointer(&format!(
-            "/context/extensions/{}",
-            escape_pointer(SESSION_ID_EXTENSION)
-        ))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let info = store.registrations.get(&registration).cloned();
-    let categories = category_ids(statement);
-    let inferred_cmi5 = !session_id.is_empty() || categories.contains(&CMI5_CATEGORY);
-    let flavor = info.as_ref().map_or(
-        if inferred_cmi5 {
-            Flavor::Cmi5
-        } else {
-            Flavor::Xapi
-        },
-        |entry| entry.flavor,
-    );
-    let mode = info
-        .as_ref()
-        .map_or_else(|| "Normal".to_string(), |entry| entry.launch_mode.clone());
-    let mastery = info.as_ref().and_then(|entry| entry.mastery);
-
-    let mut problems = Vec::new();
-    if flavor == Flavor::Cmi5 {
-        if registration.is_empty() {
-            problems.push(format!("{verb}: missing registration"));
-        }
-        if session_id.is_empty() {
-            problems.push(format!("{verb}: missing sessionid"));
-        }
-    }
-
-    let session_key = if flavor == Flavor::Cmi5 && !session_id.is_empty() {
-        format!("session:{session_id}")
-    } else {
-        format!("registration:{registration}")
-    };
-    let after_terminated = {
-        let session = store.sessions.entry(session_key).or_default();
-        if session.terminated {
-            problems.push(format!("{verb}: statement after terminated"));
-            true
-        } else {
-            if verb == "initialized" {
-                if session.initialized {
-                    problems.push("repeated verb initialized".to_string());
-                } else if !session.verbs.is_empty() {
-                    problems.push("initialized: not the first statement".to_string());
-                }
-                session.initialized = true;
-            } else if !session.initialized {
-                problems.push(format!("{verb}: statement before initialized"));
-            }
-            if !session.verbs.insert(verb.clone()) && verb != "answered" {
-                problems.push(format!("repeated verb {verb}"));
-            }
-            if verb == "terminated" {
-                session.terminated = true;
-            }
-            false
-        }
-    };
-    store.problems.extend(problems);
-    if after_terminated {
-        return;
-    }
-
-    if flavor == Flavor::Cmi5 {
-        validate_categories(store, statement, &verb);
-        if mode != "Normal" && !matches!(verb.as_str(), "initialized" | "terminated") {
-            store.problems.push(format!(
-                "{mode}: may only send initialized and terminated (got {verb})"
-            ));
-        }
-    }
-    validate_duration(store, statement, &verb);
-    validate_registration(store, &registration, &verb);
-    if flavor == Flavor::Cmi5 {
-        validate_mastery(store, statement, mastery, &verb);
-    }
-}
-
-fn validate_categories(store: &mut LrsStore, statement: &Value, verb: &str) {
-    let categories = category_ids(statement);
-    let defined = matches!(
-        verb,
-        "initialized" | "completed" | "passed" | "failed" | "terminated"
-    );
-    if defined && !categories.contains(&CMI5_CATEGORY) {
-        store
-            .problems
-            .push(format!("{verb}: missing cmi5 category"));
-    }
-    if verb == "answered" && categories.contains(&CMI5_CATEGORY) {
-        store
-            .problems
-            .push("answered: unexpected cmi5 category".to_string());
-    }
-    let move_on = matches!(verb, "completed" | "passed" | "failed");
-    if move_on && !categories.contains(&MOVEON_CATEGORY) {
-        store
-            .problems
-            .push(format!("{verb}: missing moveon category"));
-    }
-    if !move_on && categories.contains(&MOVEON_CATEGORY) {
-        store
-            .problems
-            .push(format!("{verb}: unexpected moveon category"));
-    }
-}
-
-fn validate_duration(store: &mut LrsStore, statement: &Value, verb: &str) {
-    let needs_duration = matches!(verb, "completed" | "passed" | "failed" | "terminated");
-    if needs_duration
-        && statement
-            .pointer("/result/duration")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-    {
-        store.problems.push(format!("{verb}: missing duration"));
-    }
-    if verb == "completed" && statement.pointer("/result/score").is_some() {
-        store
-            .problems
-            .push("completed: must not carry a score".to_string());
-    }
-}
-
-fn validate_registration(store: &mut LrsStore, registration: &str, verb: &str) {
-    let problem = {
-        let Some(entry) = store.registrations.get_mut(registration) else {
-            return;
-        };
-        match verb {
-            "completed" => {
-                entry.completed = entry.completed.saturating_add(1);
-                (entry.completed > 1).then(|| "second completed for registration".to_string())
-            }
-            "passed" => {
-                let second = entry.passed;
-                entry.passed = true;
-                second.then(|| "second passed for registration".to_string())
-            }
-            "failed" if entry.passed => Some("failed after passed".to_string()),
-            _ => None,
-        }
-    };
-    if let Some(problem) = problem {
-        store.problems.push(problem);
-    }
-}
-
-fn validate_mastery(store: &mut LrsStore, statement: &Value, mastery: Option<f64>, verb: &str) {
-    let Some(mastery) = mastery else {
-        return;
-    };
-    if !matches!(verb, "passed" | "failed") {
-        return;
-    }
-    let extension = statement
-        .pointer(&format!(
-            "/context/extensions/{}",
-            escape_pointer(MASTERY_EXTENSION)
-        ))
-        .and_then(Value::as_f64);
-    match extension {
-        Some(value) if (value - mastery).abs() <= f64::EPSILON => {}
-        Some(_) => store.problems.push(format!(
-            "{verb}: masteryscore does not match launch mastery"
-        )),
-        None => store.problems.push(format!("{verb}: missing masteryscore")),
-    }
-    let Some(scaled) = statement
-        .pointer("/result/score/scaled")
-        .and_then(Value::as_f64)
-    else {
-        store.problems.push(format!("{verb}: missing scaled score"));
-        return;
-    };
-    let agrees = if verb == "passed" {
-        scaled >= mastery
-    } else {
-        scaled < mastery
-    };
-    if !agrees {
-        store
-            .problems
-            .push(format!("{verb}: scaled score disagrees with mastery"));
-    }
-}
-
-fn verb_of(statement: &Value) -> &str {
-    statement
-        .pointer("/verb/id")
-        .and_then(Value::as_str)
-        .and_then(|id| id.strip_prefix(VERB_BASE))
-        .unwrap_or_default()
-}
-
-fn category_ids(statement: &Value) -> Vec<&str> {
-    let mut out = Vec::new();
-    let Some(categories) = statement.pointer("/context/contextActivities/category") else {
-        return out;
-    };
-    match categories {
-        Value::Array(items) => {
-            for item in items {
-                if let Some(id) = item.get("id").and_then(Value::as_str) {
-                    out.push(id);
-                }
-            }
-        }
-        Value::Object(_) => {
-            if let Some(id) = categories.get("id").and_then(Value::as_str) {
-                out.push(id);
-            }
-        }
-        _ => {}
-    }
-    out
-}
-
-/// Escape a key for a JSON pointer path segment.
-fn escape_pointer(key: &str) -> String {
-    key.replace('~', "~0").replace('/', "~1")
 }
 
 fn static_file(store: &LrsStore, path: &str) -> Response {
@@ -1081,6 +639,7 @@ fn reason_phrase(status: u16) -> &'static str {
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
         413 => "Payload Too Large",
         431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
