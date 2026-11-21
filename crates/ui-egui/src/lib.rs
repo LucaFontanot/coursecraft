@@ -152,6 +152,8 @@ mod rename_tests;
 #[cfg(test)]
 mod shape_preview_tests;
 #[cfg(test)]
+mod slide_delete_tests;
+#[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
 mod spell_check_tests;
@@ -689,6 +691,10 @@ pub struct UiState {
     pub slides_scroll_y: f32,
     /// Slide id last scrolled into view in the slides panel.
     pub slides_scrolled_to: Option<String>,
+    /// Scene/slide order at the last seen revision, for keeping place on delete/undo.
+    pub(crate) last_known_slides: Vec<(String, Vec<String>)>,
+    /// True when the last mutating command was `edit.undo` or `edit.redo`.
+    pub(crate) pending_undo_redo: bool,
     /// Active slide-thumbnail drag in the navigator.
     pub slide_drag: Option<slides::SlideDrag>,
     pub last_seen_revision: u64,
@@ -1143,6 +1149,7 @@ impl Editor {
             .unwrap_or_default();
         let session = Session::new(course);
         let initial_revision = session.revision;
+        let initial_slides = selection::slide_layout(&session.course);
         let mut selection = Selection::new(first_slide);
         selection.repair(&session.course);
 
@@ -1152,6 +1159,8 @@ impl Editor {
             ui: UiState {
                 slides_scroll_y: 0.0,
                 slides_scrolled_to: None,
+                last_known_slides: initial_slides,
+                pending_undo_redo: false,
                 slide_drag: None,
                 last_seen_revision: u64::MAX,
                 last_error: None,
@@ -1473,6 +1482,8 @@ impl Editor {
         self.selection.repair(&self.session.course);
 
         self.ui.slides_scrolled_to = None;
+        self.ui.last_known_slides = selection::slide_layout(&self.session.course);
+        self.ui.pending_undo_redo = false;
         self.ui.slide_drag = None;
         self.ui.timeline.active_row_drag = None;
         self.ui.timeline.slide_cue_drag = None;
@@ -2917,6 +2928,38 @@ impl Editor {
         }
     }
 
+    /// Delete every selected slide as one undo step, refusing to leave the course empty.
+    pub fn delete_selected_slides(&mut self) {
+        let valid_ids: Vec<String> = self
+            .selection
+            .slide_ids()
+            .into_iter()
+            .filter(|id| self.session.course.slide(id).is_some())
+            .collect();
+        if valid_ids.is_empty() {
+            return;
+        }
+        let total = self.session.course.slides().count();
+        if valid_ids.len() >= total {
+            self.set_status("A course needs at least one slide");
+            return;
+        }
+        let steps: Vec<(String, Json)> = valid_ids
+            .iter()
+            .map(|id| {
+                (
+                    "slide.delete".to_owned(),
+                    serde_json::json!({ "slide": id }),
+                )
+            })
+            .collect();
+        if steps.len() == 1 {
+            self.run("slide.delete", steps[0].1.clone());
+        } else {
+            self.run_batch(&steps);
+        }
+    }
+
     /// Duplicate every selected object as one undo step and select the copies.
     pub fn duplicate_selection(&mut self) {
         let ids = self.selected_object_ids();
@@ -3259,6 +3302,7 @@ impl Editor {
                 {
                     log_failed_for_test(id, &params, "NO CHANGE");
                 }
+                self.ui.pending_undo_redo = matches!(id, "edit.undo" | "edit.redo");
                 self.select_created(id, &v);
                 self.note_removed_triggers(&v);
                 Some(v)
@@ -3285,6 +3329,7 @@ impl Editor {
         }
         match self.session.execute_batch(steps) {
             Ok(results) => {
+                self.ui.pending_undo_redo = false;
                 for (step, res) in steps.iter().zip(&results) {
                     self.select_created(&step.0, res);
                 }
@@ -3352,6 +3397,7 @@ impl Editor {
             | "bank.add_question"
             | "draw.insert" => {
                 self.selection.slide = new_id.to_owned();
+                self.selection.also_slides.clear();
                 self.selection.layer = None;
                 self.selection.clear_objects();
             }
@@ -3370,7 +3416,14 @@ impl Editor {
     pub fn check_revision(&mut self) {
         if self.session.revision != self.ui.last_seen_revision {
             self.ui.last_seen_revision = self.session.revision;
-            self.selection.repair(&self.session.course);
+            let reselect_restored = std::mem::take(&mut self.ui.pending_undo_redo);
+            self.selection.repair_with_prev_ex(
+                &self.session.course,
+                &self.ui.last_known_slides,
+                reselect_restored,
+            );
+            self.ui.last_known_slides = selection::slide_layout(&self.session.course);
+            self.ui.pending_undo_redo = false;
             if self.ui.master_view {
                 if self.session.course.master(&self.selection.slide).is_none() {
                     let first = self
@@ -3718,6 +3771,11 @@ impl Editor {
                             params["layer"] = serde_json::json!(lid);
                         }
                         self.run("slide.remove_cue", params);
+                    } else if self.ui.last_active_area == ActiveArea::Navigator
+                        && !self.ui.master_view
+                        && !self.ui.story_view
+                    {
+                        self.delete_selected_slides();
                     } else {
                         self.delete_selection();
                     }
@@ -3774,6 +3832,11 @@ impl Editor {
                         params["layer"] = serde_json::json!(lid);
                     }
                     self.run("slide.remove_cue", params);
+                } else if self.ui.last_active_area == ActiveArea::Navigator
+                    && !self.ui.master_view
+                    && !self.ui.story_view
+                {
+                    self.delete_selected_slides();
                 } else {
                     self.delete_selection();
                 }

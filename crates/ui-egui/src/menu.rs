@@ -1327,6 +1327,39 @@ fn render_open_window_menu_item(
     }
 }
 
+fn render_delete_slide_menu_item(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    cmd: &'static coursecraft_engine::Command,
+    label: &str,
+) {
+    let total = editor.session.course.slides().count();
+    let multi = !editor.selection.also_slides.is_empty() && editor.selection.slide_ids().len() > 1;
+    let selected_count = if multi {
+        editor.selection.slide_ids().len()
+    } else {
+        1
+    };
+    let enabled = adapter(editor, cmd.id).is_some() && total > selected_count;
+    let mut btn = Button::new(label);
+    if let Some(sc) = cmd.shortcut {
+        btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
+    }
+    let reason = if total <= selected_count {
+        "A course needs at least one slide"
+    } else {
+        adapter_reason(editor, cmd.id)
+    };
+    if ui
+        .add_enabled(enabled, btn)
+        .on_disabled_hover_text(reason)
+        .clicked()
+    {
+        editor.delete_selected_slides();
+        ui.close();
+    }
+}
+
 fn render_registry_menu_item(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -1344,6 +1377,11 @@ fn render_registry_menu_item(
         "course.find" | "course.import_outline" | "course.set_theme" | "edit.history"
     ) {
         render_open_window_menu_item(editor, ui, cmd, label);
+        return;
+    }
+
+    if cmd.id == "slide.delete" {
+        render_delete_slide_menu_item(editor, ui, cmd, label);
         return;
     }
 

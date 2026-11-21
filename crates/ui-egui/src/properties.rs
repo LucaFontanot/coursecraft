@@ -3521,6 +3521,8 @@ fn show_text_controls(
 
     // Paragraph alignment
     inspector_row(ui, "Align", |ui| {
+        ui.spacing_mut().button_padding.x = 2.0;
+        ui.spacing_mut().item_spacing.x = 2.0;
         let cur_align = style.align;
         for (align, name) in [
             (Align::Left, "left"),
@@ -3605,23 +3607,28 @@ fn show_text_controls(
     inspector_row(ui, "Insets", |ui| {
         let mut ins = style.insets.unwrap_or_default();
         let mut changed = false;
-        for (label, val) in [
-            ("L", &mut ins.left),
-            ("T", &mut ins.top),
-            ("R", &mut ins.right),
-            ("B", &mut ins.bottom),
-        ] {
-            ui.label(label);
-            let r = ui.add(
-                DragValue::new(val)
-                    .speed(0.5)
-                    .range(0.0..=200.0)
-                    .max_decimals(1),
-            );
-            if r.changed() {
-                changed = true;
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for pair in [
+                [("L", &mut ins.left), ("T", &mut ins.top)],
+                [("R", &mut ins.right), ("B", &mut ins.bottom)],
+            ] {
+                ui.horizontal(|ui| {
+                    for (label, val) in pair {
+                        ui.label(label);
+                        let r = ui.add(
+                            DragValue::new(val)
+                                .speed(0.5)
+                                .range(0.0..=200.0)
+                                .max_decimals(1),
+                        );
+                        if r.changed() {
+                            changed = true;
+                        }
+                    }
+                });
             }
-        }
+        });
         if changed {
             action_to_run = Some((
                 "text.set_paragraph",

@@ -11,6 +11,8 @@ use coursecraft_course::Course;
 pub struct Selection {
     /// Selected slide id.
     pub slide: String,
+    /// Extra selected slides beyond the primary `slide` (for multi-slide operations).
+    pub also_slides: Vec<String>,
     /// Focused layer id (`None` means the base layer).
     pub layer: Option<String>,
     /// Primary selected object id (`None` means no object is selected).
@@ -24,6 +26,7 @@ pub struct Selection {
 impl PartialEq for Selection {
     fn eq(&self, other: &Self) -> bool {
         self.slide == other.slide
+            && self.also_slides == other.also_slides
             && self.layer == other.layer
             && self.object == other.object
             && self.also == other.also
@@ -38,10 +41,77 @@ impl Selection {
     pub fn new(slide: impl Into<String>) -> Self {
         Self {
             slide: slide.into(),
+            also_slides: Vec::new(),
             layer: None,
             object: None,
             also: Vec::new(),
             scope: None,
+        }
+    }
+
+    /// Every selected slide id, primary first, without duplicates.
+    #[must_use]
+    pub fn slide_ids(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.slide.is_empty() {
+            out.push(self.slide.clone());
+        }
+        for id in &self.also_slides {
+            if !id.is_empty() && !out.contains(id) {
+                out.push(id.clone());
+            }
+        }
+        out
+    }
+
+    /// Whether `id` is part of the slide selection.
+    #[must_use]
+    pub fn is_slide_selected(&self, id: &str) -> bool {
+        self.slide == id || self.also_slides.iter().any(|other| other == id)
+    }
+
+    /// Toggle `id` in the multi-slide selection.
+    ///
+    /// Keeps at least one slide selected when possible.
+    pub fn toggle_slide(&mut self, id: &str) {
+        if self.slide == id {
+            if !self.also_slides.is_empty() {
+                self.slide = self.also_slides.remove(0);
+            }
+            return;
+        }
+        if let Some(pos) = self.also_slides.iter().position(|other| other == id) {
+            self.also_slides.remove(pos);
+            return;
+        }
+        if self.slide.is_empty() {
+            self.slide = id.to_owned();
+        } else {
+            self.also_slides.push(id.to_owned());
+        }
+    }
+
+    /// Select the inclusive range of slides from the primary `slide` to `target_id`.
+    pub fn select_slide_range(&mut self, course: &Course, target_id: &str) {
+        let ordered: Vec<String> = course.slides().map(|s| s.id.clone()).collect();
+        let Some(start) = ordered.iter().position(|id| id == &self.slide) else {
+            self.slide = target_id.to_owned();
+            self.also_slides.clear();
+            return;
+        };
+        let Some(end) = ordered.iter().position(|id| id == target_id) else {
+            return;
+        };
+        let (lo, hi) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        self.also_slides.clear();
+        for id in &ordered[lo..=hi] {
+            if id != &self.slide {
+                self.also_slides.push(id.clone());
+            }
         }
     }
 
@@ -188,20 +258,71 @@ impl Selection {
     ///    primary goes, the first remaining extra becomes primary.
     /// 4. Changing slide or layer clears the extras.
     pub fn repair(&mut self, course: &Course) {
+        self.repair_with_prev(course, &[]);
+    }
+
+    /// Repair selection using the previous scene/slide layout so deleting a
+    /// slide keeps the author's place and undoing a delete reselects the
+    /// restored slide(s).
+    pub fn repair_with_prev(&mut self, course: &Course, prev_scenes: &[(String, Vec<String>)]) {
+        self.repair_with_prev_ex(course, prev_scenes, true);
+    }
+
+    pub fn repair_with_prev_ex(
+        &mut self,
+        course: &Course,
+        prev_scenes: &[(String, Vec<String>)],
+        reselect_restored: bool,
+    ) {
         // 1. Check if the selected slide still exists.
         let slide_exists = course.slide(&self.slide).is_some();
         if !slide_exists {
-            if let Some(first) = course.slides().next() {
-                self.slide = first.id.clone();
-            } else {
-                self.slide = String::new();
-            }
+            let replacement = find_replacement_slide(&self.slide, course, prev_scenes)
+                .or_else(|| course.slides().next().map(|s| s.id.clone()))
+                .unwrap_or_default();
+            self.slide = replacement;
+            self.also_slides.clear();
             self.layer = None;
             self.object = None;
             self.also.clear();
             self.scope = Some((self.slide.clone(), None));
             return;
         }
+
+        // 1a. If slides were restored (e.g. Undo of slide.delete), reselect them.
+        if reselect_restored && !prev_scenes.is_empty() {
+            let mut restored: Vec<String> = Vec::new();
+            for slide in course.slides() {
+                let existed_before = prev_scenes
+                    .iter()
+                    .any(|(_, slides)| slides.iter().any(|id| id == &slide.id));
+                if !existed_before {
+                    restored.push(slide.id.clone());
+                }
+            }
+            if !restored.is_empty() && !restored.iter().any(|id| id == &self.slide) {
+                let mut iter = restored.into_iter();
+                if let Some(first) = iter.next() {
+                    self.slide = first;
+                    self.also_slides = iter.collect();
+                    self.layer = None;
+                    self.object = None;
+                    self.also.clear();
+                    self.scope = Some((self.slide.clone(), None));
+                    return;
+                }
+            }
+        }
+
+        // Keep only extra slides that still exist and are not the primary slide.
+        let primary_slide = self.slide.clone();
+        let mut kept_slides = Vec::new();
+        for id in std::mem::take(&mut self.also_slides) {
+            if id != primary_slide && course.slide(&id).is_some() && !kept_slides.contains(&id) {
+                kept_slides.push(id);
+            }
+        }
+        self.also_slides = kept_slides;
 
         let Some(slide) = course.slide(&self.slide) else {
             return;
@@ -257,6 +378,66 @@ impl Selection {
         self.also = extras;
         self.scope = Some((self.slide.clone(), self.layer.clone()));
     }
+}
+
+/// Snapshot of scene id -> slide ids in order, used to keep place across deletes and undos.
+#[must_use]
+pub fn slide_layout(course: &Course) -> Vec<(String, Vec<String>)> {
+    course
+        .scenes
+        .iter()
+        .map(|sc| {
+            (
+                sc.id.clone(),
+                sc.slides.iter().map(|s| s.id.clone()).collect(),
+            )
+        })
+        .collect()
+}
+
+fn find_replacement_slide(
+    deleted_id: &str,
+    course: &Course,
+    prev_scenes: &[(String, Vec<String>)],
+) -> Option<String> {
+    let (sc_idx, sl_idx) = prev_scenes
+        .iter()
+        .enumerate()
+        .find_map(|(si, (_, slides))| {
+            slides
+                .iter()
+                .position(|id| id == deleted_id)
+                .map(|li| (si, li))
+        })?;
+
+    let scene_slides = &prev_scenes[sc_idx].1;
+    // Next surviving slide in the same scene (at or after the deleted position).
+    if let Some(id) = scene_slides[sl_idx..]
+        .iter()
+        .find(|id| course.slide(id).is_some())
+    {
+        return Some(id.clone());
+    }
+    // Previous surviving slide in the same scene (e.g. deleted the last slide of the scene).
+    if let Some(id) = scene_slides[..sl_idx]
+        .iter()
+        .rev()
+        .find(|id| course.slide(id).is_some())
+    {
+        return Some(id.clone());
+    }
+    // Same scene is now empty: look in subsequent scenes, then previous scenes.
+    for (_, slides) in &prev_scenes[sc_idx + 1..] {
+        if let Some(id) = slides.iter().find(|id| course.slide(id).is_some()) {
+            return Some(id.clone());
+        }
+    }
+    for (_, slides) in prev_scenes[..sc_idx].iter().rev() {
+        if let Some(id) = slides.iter().rev().find(|id| course.slide(id).is_some()) {
+            return Some(id.clone());
+        }
+    }
+    None
 }
 
 #[cfg(test)]

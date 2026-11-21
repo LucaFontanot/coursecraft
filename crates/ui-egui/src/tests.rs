@@ -5874,14 +5874,29 @@ fn typing_in_styled_text_preserves_runs() {
     harness.idle_frame();
 
     // Now edit text_body and blur/change
-    let frame_pos = harness.find_text("Font").expect("Font label to blur");
+    let mut text_edit_pos = None;
+    for _ in 0..20 {
+        let panel = harness.right_panel_rect();
+        if let Some(pos) = harness.find_text_in("Text Content", panel) {
+            text_edit_pos = Some(pos + vec2(110.0, 0.0));
+            break;
+        }
+        harness.scroll_over(panel.center(), -120.0);
+    }
+    let text_edit_pos = text_edit_pos.expect("Text Content label");
     harness.editor.ui.properties.text_body = "Thanks a lot for completing the course.".to_owned();
     // Simulate commit via blur
-    let text_edit_pos = harness
-        .find_text("Text Content")
-        .expect("Text Content label")
-        + vec2(110.0, 0.0);
     harness.click_at(text_edit_pos);
+    let mut frame_pos = None;
+    for _ in 0..20 {
+        let panel = harness.right_panel_rect();
+        if let Some(pos) = harness.find_text_in("Font", panel) {
+            frame_pos = Some(pos);
+            break;
+        }
+        harness.scroll_over(panel.center(), 120.0);
+    }
+    let frame_pos = frame_pos.expect("Font label to blur");
     harness.click_at(frame_pos);
     harness.idle_frame();
 

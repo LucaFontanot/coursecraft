@@ -604,7 +604,8 @@ fn subdivide_mesh(mesh: &mut Mesh, max_edge: f32) {
         texture_id,
         ..Mesh::default()
     };
-    let mut stack: Vec<[egui::epaint::Vertex; 3]> = Vec::new();
+    let mut queue: std::collections::VecDeque<[egui::epaint::Vertex; 3]> =
+        std::collections::VecDeque::new();
     for triangle in mesh.indices.as_chunks::<3>().0 {
         let (Some(a), Some(b), Some(c)) = (
             mesh.vertices.get(triangle[0] as usize).copied(),
@@ -613,27 +614,28 @@ fn subdivide_mesh(mesh: &mut Mesh, max_edge: f32) {
         ) else {
             continue;
         };
-        stack.push([a, b, c]);
+        queue.push_back([a, b, c]);
     }
-    while let Some([a, b, c]) = stack.pop() {
+    while let Some([a, b, c]) = queue.pop_front() {
         let ab = (a.pos.x - b.pos.x).powi(2) + (a.pos.y - b.pos.y).powi(2);
         let bc = (b.pos.x - c.pos.x).powi(2) + (b.pos.y - c.pos.y).powi(2);
         let ca = (c.pos.x - a.pos.x).powi(2) + (c.pos.y - a.pos.y).powi(2);
         let longest = ab.max(bc).max(ca);
-        if longest > max_edge_sq && out.vertices.len().saturating_add(3) <= MAX_SHADED_FILL_VERTICES
+        if longest > max_edge_sq
+            && out.vertices.len() + queue.len() * 3 + 3 <= MAX_SHADED_FILL_VERTICES
         {
             if longest == ab {
                 let m = midpoint(&a, &b);
-                stack.push([a, m, c]);
-                stack.push([m, b, c]);
+                queue.push_back([a, m, c]);
+                queue.push_back([m, b, c]);
             } else if longest == bc {
                 let m = midpoint(&b, &c);
-                stack.push([a, b, m]);
-                stack.push([a, m, c]);
+                queue.push_back([a, b, m]);
+                queue.push_back([a, m, c]);
             } else {
                 let m = midpoint(&c, &a);
-                stack.push([a, b, m]);
-                stack.push([m, b, c]);
+                queue.push_back([a, b, m]);
+                queue.push_back([m, b, c]);
             }
         } else {
             let base = out.vertices.len() as u32;
