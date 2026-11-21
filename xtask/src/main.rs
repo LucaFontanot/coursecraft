@@ -31,6 +31,7 @@ const LAYERS: &[(&str, u8, bool)] = &[
     ("spell", 0, true),
     ("xapi", 0, true),
     ("course", 1, false),
+    ("strict-lms", 1, false),
     ("video-native", 1, true),
     ("logic", 2, false),
     ("media", 2, true),
@@ -129,6 +130,7 @@ fn cargo(args: &[&str]) -> bool {
 /// Crates that must keep building for the browser.
 const WASM_CRATES: &[&str] = &[
     "coursecraft-scorm",
+    "coursecraft-strict-lms",
     "coursecraft-course",
     "coursecraft-logic",
     "coursecraft-media",

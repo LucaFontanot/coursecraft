@@ -33,6 +33,7 @@ coursecraft-playback = { path = "crates/playback" }
 coursecraft-video-native = { path = "crates/video-native" }
 coursecraft-xapi = { path = "crates/xapi" }
 coursecraft-spell = { path = "crates/spell" }
+coursecraft-strict-lms = { path = "crates/strict-lms" }
 
 # external
 serde = { version = "1", features = ["derive"] }

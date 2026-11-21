@@ -1095,6 +1095,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "coursecraft-strict-lms"
+version = "0.3.0"
+dependencies = [
+ "coursecraft-scorm",
+ "coursecraft-xapi",
+ "quick-xml",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "coursecraft-ui-egui"
 version = "0.3.0"
 dependencies = [

@@ -1,0 +1,17 @@
+[package]
+name = "coursecraft-strict-lms"
+description = "Strict SCORM 1.2, SCORM 2004, xAPI, cmi5, and manifest conformance engines for CourseCraft testing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+coursecraft-scorm.workspace = true
+coursecraft-xapi.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+quick-xml.workspace = true
+
+[lints]
+workspace = true
