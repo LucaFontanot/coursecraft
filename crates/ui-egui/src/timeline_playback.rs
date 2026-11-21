@@ -36,6 +36,10 @@ pub trait TimelineMedia {
     fn position_ms(&self, object: &str) -> Option<u64>;
     /// Newest decoded frame, when the backend has one.
     fn video_frame(&self, object: &str) -> Option<Arc<VideoFrame>>;
+    /// Plain-language error message if video preview decoding failed.
+    fn video_error(&self, _object: &str) -> Option<String> {
+        None
+    }
     /// Objects that finished since the last call.
     fn take_ended(&mut self) -> Vec<String>;
     /// Stop every track and drop workers.
@@ -76,6 +80,10 @@ impl TimelineMedia for Box<dyn MediaBackend> {
         (**self).video_frame(object)
     }
 
+    fn video_error(&self, object: &str) -> Option<String> {
+        (**self).video_error(object).map(str::to_owned)
+    }
+
     fn take_ended(&mut self) -> Vec<String> {
         (**self).take_ended()
     }
@@ -106,6 +114,10 @@ pub struct TimelineTrack {
     pub bytes: Arc<[u8]>,
     /// The backend has a live (paused or playing) track for this object.
     pub started: bool,
+    /// Monotonic timestamp when we started waiting for a frame, if any.
+    pending_since_mono: Option<u64>,
+    /// Plain-language error message when preview decoding failed or timed out.
+    failed: Option<String>,
 }
 
 /// Tracks a timing row needs to build one [`TimelineTrack`].
@@ -166,6 +178,9 @@ fn clamp_playhead(ms: u64, duration_ms: u32) -> u32 {
     ms.min(duration).min(u64::from(u32::MAX)) as u32
 }
 
+/// Default timeout (ms) before a hung video preview decode gives up and shows a placeholder.
+const DEFAULT_VIDEO_DECODE_TIMEOUT_MS: u64 = 5_000;
+
 /// Editor timeline playback: owns the current slide's audio and video
 /// tracks and advances the playhead during Play.
 pub struct TimelinePlayback {
@@ -183,6 +198,8 @@ pub struct TimelinePlayback {
     /// The playhead was scrubbed or sought and no seek has been flushed yet.
     /// Rapid scrubs coalesce: only the newest position is ever sent.
     seek_pending: bool,
+    /// Timeout before a hung video preview decode gives up.
+    decode_timeout_ms: u64,
 }
 
 impl TimelinePlayback {
@@ -216,7 +233,22 @@ impl TimelinePlayback {
             anchor_mono: 0,
             last_mono: 0,
             seek_pending: false,
+            decode_timeout_ms: DEFAULT_VIDEO_DECODE_TIMEOUT_MS,
         }
+    }
+
+    /// Update the monotonic clock so paused video decode timeouts can be tracked.
+    pub fn update_clock(&mut self, now_mono: u64) {
+        self.last_mono = now_mono;
+    }
+
+    /// Plain-language error message if `object` failed or timed out during preview decode.
+    #[must_use]
+    pub fn video_error_for(&self, object: &str) -> Option<&str> {
+        self.tracks
+            .iter()
+            .find(|track| track.object_id == object)
+            .and_then(|track| track.failed.as_deref())
     }
 
     /// Whether Play is running.
@@ -276,6 +308,8 @@ impl TimelinePlayback {
                     end_ms,
                     bytes,
                     started: false,
+                    pending_since_mono: None,
+                    failed: None,
                 }
             })
             .collect();
@@ -309,6 +343,7 @@ impl TimelinePlayback {
             // the backend removed the worker) is re-armed here so a later
             // scrub still produces a frame.
             self.drain_ended();
+            self.update_video_decode_status(playhead_ms.min(duration_ms));
             if !self.playing {
                 self.arm_videos_at(playhead_ms.min(duration_ms));
             }
@@ -322,15 +357,35 @@ impl TimelinePlayback {
             }
             self.playing = false;
         }
-        // Keep the frame for tracks that survive the edit; forget the rest.
-        let started: std::collections::HashMap<String, bool> = self
+        // Keep the frame and error/pending state for tracks that survive the edit
+        // with the same src; forget the rest.
+        let prev_state: std::collections::HashMap<
+            String,
+            (String, bool, Option<u64>, Option<String>),
+        > = self
             .tracks
             .iter()
-            .map(|track| (track.object_id.clone(), track.started))
+            .map(|track| {
+                (
+                    track.object_id.clone(),
+                    (
+                        track.src.clone(),
+                        track.started,
+                        track.pending_since_mono,
+                        track.failed.clone(),
+                    ),
+                )
+            })
             .collect();
         self.tracks = next;
         for track in &mut self.tracks {
-            track.started = started.get(&track.object_id).copied().unwrap_or(false);
+            if let Some((prev_src, started, pending, failed)) = prev_state.get(&track.object_id)
+                && prev_src == &track.src
+            {
+                track.started = *started;
+                track.pending_since_mono = *pending;
+                track.failed = failed.clone();
+            }
         }
         self.duration_ms = duration_ms;
         if !self.playing {
@@ -340,15 +395,64 @@ impl TimelinePlayback {
 
     /// Drain finished tracks from the backend and forget their workers,
     /// so a later seek re-arms them instead of seeking a removed worker.
+    /// If a paused video ended without ever producing a frame (or reported an
+    /// error), mark it failed so we don't re-arm it in an infinite loop.
     fn drain_ended(&mut self) {
         for object in self.backend.take_ended() {
+            let backend_err = self.backend.video_error(&object);
+            let has_frame = self.backend.video_frame(&object).is_some();
             if let Some(track) = self
                 .tracks
                 .iter_mut()
                 .find(|track| track.object_id == object)
             {
+                if track.kind == MediaKind::Video
+                    && (!self.playing && !has_frame || backend_err.is_some())
+                {
+                    track.failed =
+                        Some(backend_err.unwrap_or_else(|| "Could not decode video".to_owned()));
+                }
                 track.started = false;
+                track.pending_since_mono = None;
             }
+        }
+    }
+
+    /// Check whether any pending video decode has completed, errored, or timed out.
+    fn update_video_decode_status(&mut self, playhead_ms: u32) {
+        let mut timed_out = Vec::new();
+        for track in &mut self.tracks {
+            if track.kind != MediaKind::Video || track.failed.is_some() {
+                continue;
+            }
+            if !timing_includes(track.start_ms, track.end_ms, playhead_ms) {
+                track.pending_since_mono = None;
+                continue;
+            }
+            if let Some(err) = self.backend.video_error(&track.object_id) {
+                track.failed = Some(err);
+                track.started = false;
+                track.pending_since_mono = None;
+                continue;
+            }
+            if let Some(frame) = self.backend.video_frame(&track.object_id) {
+                let expected = u64::from(playhead_ms.saturating_sub(track.start_ms));
+                if frame.pts_ms.abs_diff(expected) <= 100 {
+                    track.pending_since_mono = None;
+                    continue;
+                }
+            }
+            if let Some(since) = track.pending_since_mono
+                && self.last_mono.saturating_sub(since) >= self.decode_timeout_ms
+            {
+                track.failed = Some("Video preview timed out".to_owned());
+                track.started = false;
+                track.pending_since_mono = None;
+                timed_out.push(track.object_id.clone());
+            }
+        }
+        for object_id in timed_out {
+            self.backend.pause(&object_id);
         }
     }
 
@@ -364,7 +468,7 @@ impl TimelinePlayback {
             let Some(track) = self.tracks.get(index).cloned() else {
                 continue;
             };
-            if track.kind != MediaKind::Video || track.started {
+            if track.kind != MediaKind::Video || track.started || track.failed.is_some() {
                 continue;
             }
             if !timing_includes(track.start_ms, track.end_ms, playhead_ms) {
@@ -381,6 +485,7 @@ impl TimelinePlayback {
             self.backend.seek(&track.object_id, offset);
             if let Some(track) = self.tracks.get_mut(index) {
                 track.started = true;
+                track.pending_since_mono.get_or_insert(self.last_mono);
             }
         }
     }
@@ -506,6 +611,9 @@ impl TimelinePlayback {
                         self.backend.seek(&object_id, offset);
                     }
                 } else if kind == MediaKind::Video {
+                    if track.failed.is_some() {
+                        continue;
+                    }
                     if !started {
                         self.backend
                             .play(&object_id, &src, kind, Arc::clone(&bytes));
@@ -515,6 +623,9 @@ impl TimelinePlayback {
                         }
                     }
                     self.backend.seek(&object_id, offset);
+                    if let Some(track) = self.tracks.get_mut(index) {
+                        track.pending_since_mono.get_or_insert(self.last_mono);
+                    }
                 }
             } else if playing {
                 let Some(track) = self.tracks.get(index).cloned() else {
@@ -693,6 +804,7 @@ impl TimelinePlayback {
     pub fn has_pending_frame(&self, playhead_ms: u32) -> bool {
         self.tracks.iter().any(|track| {
             if track.kind != MediaKind::Video
+                || track.failed.is_some()
                 || !timing_includes(track.start_ms, track.end_ms, playhead_ms)
             {
                 return false;

@@ -169,6 +169,8 @@ mod try_again_tests;
 #[cfg(test)]
 mod var_compare_tests;
 #[cfg(test)]
+mod video_selection_tests;
+#[cfg(test)]
 mod walkthrough_tests;
 
 pub use ai_settings::{
@@ -1007,6 +1009,9 @@ pub struct Editor {
     pub media_cache: coursecraft_render::MediaCache,
     /// Cached audio waveform peak envelopes (`0.0..=1.0`, <= 2,000 peaks) keyed by media id (`src`).
     pub audio_waveforms: std::collections::HashMap<String, Option<Vec<f32>>>,
+    /// Cached video durations in ms keyed by media `src`, populated off the UI thread.
+    pub video_durations:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<u64>>>>,
     pub pending_replace_object: Option<String>,
     /// The shape or button (slide id, object id) whose picture fill the next
     /// picked image becomes, instead of placing or replacing an object.
@@ -1284,6 +1289,9 @@ impl Editor {
             media: Vec::new(),
             media_cache: coursecraft_render::MediaCache::new(),
             audio_waveforms: std::collections::HashMap::new(),
+            video_durations: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             pending_replace_object: None,
             pending_picture_fill: None,
             pending_requests: Vec::new(),
@@ -1400,6 +1408,7 @@ impl Editor {
             .course
             .slide(&slide_id)
             .map_or(100, |slide| slide.duration_ms.max(100));
+        self.timeline_playback.update_clock(now_mono);
         self.timeline_playback.sync_slide(
             &self.session.course,
             &slide_id,
@@ -2419,7 +2428,20 @@ impl Editor {
 
     /// Import a video file into the editor's media library and arm placement or replace selected object.
     pub fn import_video(&mut self, file_name: &str, bytes: &[u8]) -> Option<String> {
-        self.import_media(MediaKind::Video, file_name, bytes)
+        let src = self.import_media(MediaKind::Video, file_name, bytes)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((_, stored_bytes)) = self.media.iter().find(|(name, _)| name == &src) {
+            let cache = std::sync::Arc::clone(&self.video_durations);
+            let key = src.clone();
+            let bytes = std::sync::Arc::clone(stored_bytes);
+            std::thread::spawn(move || {
+                let ms = coursecraft_playback::media_duration_ms(MediaKind::Video, &key, &bytes);
+                if let Ok(mut map) = cache.lock() {
+                    map.insert(key, ms);
+                }
+            });
+        }
+        Some(src)
     }
 
     /// Import an audio file and make it the course's background track.
@@ -2451,7 +2473,25 @@ impl Editor {
         src: &str,
     ) -> Option<((String, Json), u32)> {
         let (_, bytes) = self.media.iter().find(|(name, _)| name == src)?;
-        let ms = coursecraft_playback::media_duration_ms(kind, src, bytes)?;
+        let ms = if kind == MediaKind::Video {
+            let cached = self
+                .video_durations
+                .lock()
+                .ok()
+                .and_then(|map| map.get(src).copied());
+            match cached {
+                Some(v) => v?,
+                None => {
+                    let probed = coursecraft_playback::media_duration_ms(kind, src, bytes);
+                    if let Ok(mut map) = self.video_durations.lock() {
+                        map.insert(src.to_owned(), probed);
+                    }
+                    probed?
+                }
+            }
+        } else {
+            coursecraft_playback::media_duration_ms(kind, src, bytes)?
+        };
         let slide = self.session.course.slide(slide_id)?;
         let needed = ms
             .div_ceil(100)
@@ -4159,6 +4199,10 @@ impl coursecraft_render::MediaSource for TimelineMediaSource<'_> {
 
     fn video_frame(&self, object: &str) -> Option<std::sync::Arc<VideoFrame>> {
         self.playback.video_frame_for(object, self.playhead_ms)
+    }
+
+    fn video_error(&self, object: &str) -> Option<&str> {
+        self.playback.video_error_for(object)
     }
 }
 

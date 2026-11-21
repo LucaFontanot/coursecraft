@@ -5864,6 +5864,10 @@ fn show_object_properties(
             .is_some_and(|(_, bytes)| bytes.len() <= coursecraft_ai::MAX_AUDIO_UPLOAD),
         _ => false,
     };
+    let video_preview_error: Option<&str> = match &obj.kind {
+        ObjectKind::Video { .. } => editor.timeline_playback.video_error_for(&obj.id),
+        _ => None,
+    };
 
     let props = &mut editor.ui.properties;
     let lists = &editor.ui.properties_lists;
@@ -6862,6 +6866,9 @@ fn show_object_properties(
                     replace_video_requested = true;
                 }
             });
+            if let Some(err) = video_preview_error {
+                ui.colored_label(p.danger, err);
+            }
         }
         ObjectKind::Lottie { src, speed, .. } => {
             let p = coursecraft_render::palette(ui.ctx());

@@ -171,6 +171,8 @@ pub struct WorkerState {
     pub decoding: bool,
     /// Whether the file failed to open (fallback / ended immediately).
     pub failed: bool,
+    /// Plain-language error message when decoding failed.
+    pub error: Option<String>,
     /// Decoded audio track as PCM, published by the worker once ready.
     pub audio: Option<Arc<AudioPcm>>,
     /// Master-clock position in milliseconds, published by the backend
@@ -188,10 +190,11 @@ struct WorkerHandle {
 
 impl Drop for WorkerHandle {
     fn drop(&mut self) {
+        // Send Stop and detach rather than joining on the UI thread: if the OS
+        // decoder is blocked on a corrupt or slow file, joining would freeze
+        // the UI.
         let _ = self.cmd_tx.send(WorkerCmd::Stop);
-        if let Some(handle) = self.thread.take() {
-            let _ = handle.join();
-        }
+        let _ = self.thread.take();
     }
 }
 
@@ -734,9 +737,20 @@ pub fn media_duration_ms(kind: MediaKind, src: &str, bytes: &[u8]) -> Option<u64
         match kind {
             MediaKind::Audio => audio_duration_ms(src, bytes),
             MediaKind::Video => {
-                let path = write_video_bytes(bytes)?;
-                let file = coursecraft_video_native::VideoFile::open(&path).ok()?;
-                Some(file.duration_ms()).filter(|ms| *ms > 0)
+                // Probe off-thread with a short timeout so a slow or hung OS
+                // decoder never freezes the UI thread.
+                let bytes = Arc::<[u8]>::from(bytes);
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let ms = write_video_bytes(&bytes)
+                        .and_then(|path| coursecraft_video_native::VideoFile::open(&path).ok())
+                        .map(|file| file.duration_ms())
+                        .filter(|ms| *ms > 0);
+                    let _ = tx.send(ms);
+                });
+                rx.recv_timeout(std::time::Duration::from_millis(500))
+                    .ok()
+                    .flatten()
             }
         }
     }
@@ -930,6 +944,11 @@ pub trait MediaBackend {
     fn is_video_decoding(&self, _object: &str) -> bool {
         let _ = _object;
         false
+    }
+    /// Desktop video: plain-language error message if decoding failed.
+    fn video_error(&self, _object: &str) -> Option<&str> {
+        let _ = _object;
+        None
     }
     /// Whether this backend has reported that no audio output device is
     /// available. Default is `false`. The desktop backend sets it once
@@ -1165,6 +1184,7 @@ pub struct RodioBackend {
     warned_video: bool,
     tracks: std::collections::HashMap<String, RodioTrack>,
     videos: std::collections::HashMap<String, WorkerHandle>,
+    video_errors: std::collections::HashMap<String, String>,
     ended: Vec<String>,
     volume: f32,
     rate: f32,
@@ -1191,6 +1211,7 @@ impl RodioBackend {
             warned_video: false,
             tracks: std::collections::HashMap::new(),
             videos: std::collections::HashMap::new(),
+            video_errors: std::collections::HashMap::new(),
             ended: Vec::new(),
             volume: 1.0,
             rate: 1.0,
@@ -1208,6 +1229,7 @@ impl RodioBackend {
             warned_video: false,
             tracks: std::collections::HashMap::new(),
             videos: std::collections::HashMap::new(),
+            video_errors: std::collections::HashMap::new(),
             ended: Vec::new(),
             volume: 1.0,
             rate: 1.0,
@@ -1226,56 +1248,54 @@ impl RodioBackend {
         if self.videos.contains_key(object) {
             return self.resume_video(object);
         }
-        let Some(path) = write_video_bytes(&bytes) else {
+        self.video_errors.remove(object);
+        if bytes.is_empty() {
             log::warn!("video '{object}' ({src}) has no decodable bytes");
+            self.video_errors
+                .insert(object.to_owned(), "Could not decode video".to_owned());
             return false;
-        };
-        // `VideoFile::open` runs on the worker thread, never here: the
-        // first open in a process pays AVFoundation/Media Foundation
-        // first-use init (seconds), and the UI must not wait for it.
-        // Commands sent while the worker is still opening queue in the
-        // channel, so a seek that arrives during the open is not lost and
-        // the frame appears as soon as the decoder is ready. A failed
-        // open publishes `failed` and the backend reports ended from it
-        // (see `take_ended`).
+        }
+        // `write_video_bytes` and `VideoFile::open` run on the worker thread,
+        // never here: writing up to 200 MiB and AVFoundation/Media Foundation
+        // first-use init must not block the UI thread.
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<WorkerCmd>();
         let shared = Arc::new(std::sync::Mutex::new(WorkerState {
             decoding: true,
             ..WorkerState::default()
         }));
-        // The audio track is decoded to PCM on its own dedicated thread
-        // (never the UI thread, and never the video worker, so frames keep
-        // playing while audio is still decoding); the backend turns that
-        // PCM into a rodio SamplesBuffer in poll_video_audio() when it is
-        // ready, seeking the sink to the worker's current position, and
-        // that sink is the master clock, with seek/pause/stop/volume
-        // applied like any audio track. `decode_audio` returns `None`
-        // when there is no audio track, so this runs unconditionally.
-        let audio_shared = Arc::clone(&shared);
-        let audio_path = path.clone();
-        // Detached thread: it publishes PCM once ready and then exits.
-        // If the video is stopped first, the backend has already
-        // removed its worker entry, so poll_video_audio() will not
-        // start a sink for the late PCM.
-        std::thread::spawn(move || {
-            let Ok(Some(pcm)) = coursecraft_video_native::VideoFile::decode_audio(&audio_path)
-            else {
+        let shared_thread = Arc::clone(&shared);
+        let bytes_for_worker = Arc::clone(&bytes);
+        let handle = std::thread::spawn(move || {
+            let Some(path) = write_video_bytes(&bytes_for_worker) else {
+                if let Ok(mut state) = shared_thread.lock() {
+                    state.failed = true;
+                    state.decoding = false;
+                    state.error = Some("Could not decode video".to_owned());
+                }
                 return;
             };
-            if let Ok(mut state) = audio_shared.lock() {
-                state.audio = Some(Arc::new(AudioPcm {
-                    sample_rate: pcm.sample_rate,
-                    channels: pcm.channels,
-                    samples: pcm.samples,
-                }));
-            }
-        });
-        let shared_thread = Arc::clone(&shared);
-        let handle = std::thread::spawn(move || {
+            // The audio track is decoded to PCM on its own dedicated thread
+            // (never the UI thread, and never the video worker).
+            let audio_shared = Arc::clone(&shared_thread);
+            let audio_path = path.clone();
+            std::thread::spawn(move || {
+                let Ok(Some(pcm)) = coursecraft_video_native::VideoFile::decode_audio(&audio_path)
+                else {
+                    return;
+                };
+                if let Ok(mut state) = audio_shared.lock() {
+                    state.audio = Some(Arc::new(AudioPcm {
+                        sample_rate: pcm.sample_rate,
+                        channels: pcm.channels,
+                        samples: pcm.samples,
+                    }));
+                }
+            });
             let Ok(file) = coursecraft_video_native::VideoFile::open(&path) else {
                 if let Ok(mut state) = shared_thread.lock() {
                     state.failed = true;
                     state.decoding = false;
+                    state.error = Some("Could not decode video".to_owned());
                 }
                 return;
             };
@@ -1502,6 +1522,7 @@ impl MediaBackend for RodioBackend {
             track.sink.stop();
         }
         self.videos.remove(object);
+        self.video_errors.remove(object);
     }
 
     fn stop_all(&mut self) {
@@ -1509,6 +1530,7 @@ impl MediaBackend for RodioBackend {
             track.sink.stop();
         }
         self.videos.clear();
+        self.video_errors.clear();
         self.ended.clear();
     }
 
@@ -1603,28 +1625,37 @@ impl MediaBackend for RodioBackend {
         // Video workers that reported ended (once), plus workers whose
         // file failed to open on the worker thread: clear and remove
         // their worker so take_ended fires exactly once.
-        let video_ended: Vec<(String, bool)> = self
+        let video_ended: Vec<(String, Option<String>)> = self
             .videos
             .iter()
             .filter_map(|(obj, worker)| {
                 let mut state = worker.shared.lock().ok()?;
                 if state.ended {
                     state.ended = false;
-                    Some((obj.clone(), false))
+                    Some((obj.clone(), None))
                 } else if state.failed {
                     state.failed = false;
-                    Some((obj.clone(), true))
+                    let err = state
+                        .error
+                        .take()
+                        .unwrap_or_else(|| "Could not decode video".to_owned());
+                    Some((obj.clone(), Some(err)))
                 } else {
                     None
                 }
             })
             .collect();
         for (obj, failed) in &video_ended {
-            if *failed && !self.warned_video {
-                log::warn!("video '{obj}' could not be decoded; showing poster (first failure)");
-                self.warned_video = true;
-            } else if *failed {
-                log::warn!("video '{obj}' could not be decoded");
+            if let Some(err) = failed {
+                if !self.warned_video {
+                    log::warn!(
+                        "video '{obj}' could not be decoded; showing poster (first failure)"
+                    );
+                    self.warned_video = true;
+                } else {
+                    log::warn!("video '{obj}' could not be decoded");
+                }
+                self.video_errors.insert(obj.clone(), err.clone());
             }
         }
         for (obj, _) in &video_ended {
@@ -1683,6 +1714,10 @@ impl MediaBackend for RodioBackend {
             return false;
         };
         worker.shared.lock().is_ok_and(|state| state.decoding)
+    }
+
+    fn video_error(&self, object: &str) -> Option<&str> {
+        self.video_errors.get(object).map(String::as_str)
     }
 
     fn no_device(&self) -> bool {

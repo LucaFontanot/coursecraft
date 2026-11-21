@@ -1848,16 +1848,22 @@ pub fn paint_items(
                     Stroke::NONE,
                 ));
 
-                // Poster text
+                // Poster text (or plain error message if preview decode failed)
+                let error_text = media.as_ref().and_then(|(_, source)| {
+                    if let Hit::Object(id) = &item.hit {
+                        source.video_error(id)
+                    } else {
+                        None
+                    }
+                });
+                let label = error_text
+                    .unwrap_or("Video plays in the published course")
+                    .to_string();
                 let font_size = (14.0 * scale).max(1.0);
                 let font_id = crate::font::slide_font(item_painter.ctx(), false, false, font_size);
                 let text_color = apply_dim(Color32::from_rgb(0xAA, 0xAA, 0xAA), item.dimmed, op);
-                let galley = item_painter.layout(
-                    "Video plays in the published course".to_string(),
-                    font_id,
-                    text_color,
-                    screen_rect.width().max(0.0),
-                );
+                let galley =
+                    item_painter.layout(label, font_id, text_color, screen_rect.width().max(0.0));
                 let text_pos = pos2(
                     center.x - galley.size().x * 0.5,
                     center.y + play_radius + 4.0 * scale - 12.0 * scale,

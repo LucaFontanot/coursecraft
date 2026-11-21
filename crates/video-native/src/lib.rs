@@ -1141,6 +1141,7 @@ mod windows_impl {
     use super::{MAX_AUDIO_MS, Pcm, VideoError, VideoFile, VideoFrame, scaled_size};
     use std::path::Path;
 
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
     use windows::Win32::Media::MediaFoundation::{
         IMFAttributes, IMFMediaBuffer, IMFMediaType, IMFSample, IMFSourceReader,
         MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
@@ -1163,18 +1164,24 @@ mod windows_impl {
         out_width: u32,
         out_height: u32,
         stride: i32,
+        // Dropped last so `reader` is released before `MFShutdown` / `CoUninitialize`.
+        _guard: MfGuard,
     }
 
-    // SAFETY: MFStartup/CoInitializeEx are called on this thread in open().
-    // Drop order: the reader is dropped before MFShutdown/CoUninitialize in
-    // the Drop impl below, matching the startup order.
-    pub(crate) struct MfGuard;
+    // SAFETY: MFStartup/CoInitializeEx are called on this thread.
+    // Drop order: any COM objects (e.g. `reader`) must be dropped before
+    // `MfGuard` drops so `Release()` never runs after `CoUninitialize()`.
+    pub(crate) struct MfGuard {
+        com_initialized: bool,
+    }
     impl Drop for MfGuard {
         fn drop(&mut self) {
             // SAFETY: paired with the successful MFStartup in `start_media_foundation`.
             let _ = unsafe { MFShutdown() };
-            // SAFETY: paired with CoInitializeEx; called once per reader.
-            unsafe { CoUninitialize() };
+            if self.com_initialized {
+                // SAFETY: paired with CoInitializeEx when it initialized COM on this thread.
+                unsafe { CoUninitialize() };
+            }
         }
     }
 
@@ -1183,13 +1190,19 @@ mod windows_impl {
         // the caller pairs it with MFShutdown in MfGuard.
         unsafe { MFStartup(0x0002_0000, 0) }.map_err(|e| VideoError(format!("MFStartup: {e}")))?;
         // SAFETY: MTA COM on the calling thread as the plan requires.
+        // If COM is already initialized as STA (e.g. UI thread), RPC_E_CHANGED_MODE
+        // is returned: Media Foundation still works, and we must not call CoUninitialize.
         let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        if hr.is_err() {
+        let com_initialized = if hr == RPC_E_CHANGED_MODE {
+            false
+        } else if hr.is_err() {
             // SAFETY: MFStartup succeeded, so shut it back down.
             let _ = unsafe { MFShutdown() };
             return Err(VideoError(format!("CoInitializeEx: {hr:?}")));
-        }
-        Ok(MfGuard)
+        } else {
+            true
+        };
+        Ok(MfGuard { com_initialized })
     }
 
     fn make_rgb_media_type(width: u32, height: u32) -> Result<IMFMediaType, VideoError> {
@@ -1223,7 +1236,6 @@ mod windows_impl {
         out_height: u32,
     ) -> Result<WindowsReader, VideoError> {
         let guard = start_media_foundation()?;
-        std::mem::forget(guard); // shutdown happens in Drop of WindowsReader; see below.
 
         let attributes = make_attributes()?;
         // SAFETY: attributes is live; bool value is nonzero for enable.
@@ -1254,10 +1266,13 @@ mod windows_impl {
         // SAFETY: current media type is now RGB32 at the requested size.
         let current = unsafe { reader.GetCurrentMediaType(video_stream) }
             .map_err(|e| VideoError(format!("GetCurrentMediaType: {e}")))?;
-        // SAFETY: `current` is a live IMFMediaType; attribute missing yields default stride.
-        let stride: i64 = unsafe { current.GetUINT64(&MF_MT_DEFAULT_STRIDE) }.unwrap_or(0) as i64;
+        // SAFETY: `current` is a live IMFMediaType; MF_MT_DEFAULT_STRIDE is a UINT32
+        // holding a signed i32 stride, missing yields default stride.
+        let stride = unsafe { current.GetUINT32(&MF_MT_DEFAULT_STRIDE) }
+            .map(|v| v as i32)
+            .unwrap_or(0);
         let stride = if stride != 0 {
-            stride as i32
+            stride
         } else {
             (out_width as i32) * 4
         };
@@ -1267,21 +1282,8 @@ mod windows_impl {
             out_width,
             out_height,
             stride,
+            _guard: guard,
         })
-    }
-
-    impl Drop for WindowsReader {
-        fn drop(&mut self) {
-            // Drop order: reader first (field), then MFShutdown/CoUninitialize.
-            // Fields drop after this body; we release the reader explicitly by
-            // dropping a clone is unnecessary since MFShutdown is process-wide
-            // and safe after the reader is gone. To respect order, we shut down
-            // here after `reader` is already no longer used.
-            // SAFETY: paired shutdown for the MFStartup in open_reader.
-            let _ = unsafe { MFShutdown() };
-            // SAFETY: paired with CoInitializeEx.
-            unsafe { CoUninitialize() };
-        }
     }
 
     fn source_reader_from_path(
@@ -1317,15 +1319,14 @@ mod windows_impl {
     }
 
     fn probe_size(path: &Path) -> Result<(u32, u32), VideoError> {
-        let guard = start_media_foundation()?;
-        std::mem::forget(guard);
+        let _guard = start_media_foundation()?;
         // SAFETY: attributes optional.
         let wide = HSTRING::from(path.to_string_lossy().to_string());
-        // SAFETY: creates reader from URL.
+        // SAFETY: creates reader from URL; drops before `_guard`.
         let reader = unsafe { MFCreateSourceReaderFromURL(&wide, None::<&IMFAttributes>) }
             .map_err(|e| VideoError(format!("probe reader: {e}")))?;
         let video_stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
-        // SAFETY: native media type of the first video stream.
+        // SAFETY: native media type of the first video stream; drops before `_guard`.
         let native = unsafe { reader.GetNativeMediaType(video_stream, 0) }
             .map_err(|e| VideoError(format!("native type: {e}")))?;
         // SAFETY: `native` is a live IMFMediaType; frame size attribute read.
@@ -1333,10 +1334,6 @@ mod windows_impl {
             .map_err(|e| VideoError(format!("frame size: {e}")))?;
         let width = ((packed >> 32) & 0xFFFF_FFFF) as u32;
         let height = (packed & 0xFFFF_FFFF) as u32;
-        // SAFETY: paired shutdown.
-        let _ = unsafe { MFShutdown() };
-        // SAFETY: paired with CoInitializeEx in start_media_foundation.
-        unsafe { CoUninitialize() };
         Ok((width, height))
     }
 
@@ -1344,11 +1341,10 @@ mod windows_impl {
         if !path.is_file() {
             return None;
         }
-        let guard = start_media_foundation().ok()?;
-        std::mem::forget(guard);
+        let _guard = start_media_foundation().ok()?;
         let wide = HSTRING::from(path.to_string_lossy().to_string());
-        // SAFETY: reader is live for this block; we shut MF down afterwards.
-        let duration_ms = unsafe {
+        // SAFETY: reader is live for this block and drops before `_guard`.
+        unsafe {
             let reader = MFCreateSourceReaderFromURL(&wide, None::<&IMFAttributes>).ok()?;
             let stream = MF_SOURCE_READER_MEDIASOURCE.0 as u32;
             let variant = reader
@@ -1361,35 +1357,23 @@ mod windows_impl {
             } else {
                 Some((ticks / 10_000) as u64)
             }
-        };
-        // SAFETY: paired shutdown.
-        let _ = unsafe { MFShutdown() };
-        // SAFETY: paired with CoInitializeEx in start_media_foundation.
-        unsafe { CoUninitialize() };
-        duration_ms
+        }
     }
 
     fn probe_has_audio(path: &Path) -> bool {
-        let guard = match start_media_foundation() {
-            Ok(g) => g,
-            Err(_) => return false,
+        let Ok(_guard) = start_media_foundation() else {
+            return false;
         };
-        std::mem::forget(guard);
         let wide = HSTRING::from(path.to_string_lossy().to_string());
-        // SAFETY: reader creation.
-        let has = match unsafe { MFCreateSourceReaderFromURL(&wide, None::<&IMFAttributes>) } {
+        // SAFETY: reader creation; drops before `_guard`.
+        match unsafe { MFCreateSourceReaderFromURL(&wide, None::<&IMFAttributes>) } {
             Ok(reader) => {
                 let audio_stream = MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32;
                 // SAFETY: probing the first audio stream; GetNativeMediaType fails if absent.
                 unsafe { reader.GetNativeMediaType(audio_stream, 0) }.is_ok()
             }
             Err(_) => false,
-        };
-        // SAFETY: paired shutdown.
-        let _ = unsafe { MFShutdown() };
-        // SAFETY: paired with CoInitializeEx in start_media_foundation.
-        unsafe { CoUninitialize() };
-        has
+        }
     }
 
     pub fn seek(file: &mut VideoFile, ms: u64) -> Result<(), VideoError> {
@@ -1406,7 +1390,7 @@ mod windows_impl {
             std::ptr::write(vt_ptr, windows::Win32::System::Variant::VT_I8.0);
             let val_ptr = (&mut variant as *mut PROPVARIANT).add(1) as *mut u8;
             let _ = val_ptr;
-            let ticks = (ms.saturating_mul(10_000)) as i64;
+            let ticks = i64::try_from(ms.saturating_mul(10_000)).unwrap_or(i64::MAX);
             // VT_I8 value lives at offset 8 on 64-bit (vt u16 + 6 bytes pad).
             let value_ptr = (&mut variant as *mut PROPVARIANT as *mut u8).add(8) as *mut i64;
             std::ptr::write(value_ptr, ticks);
@@ -1431,38 +1415,43 @@ mod windows_impl {
         let out_width = reader.out_width;
         let out_height = reader.out_height;
         let stride = reader.stride;
-        let mut actual_stream: u32 = 0;
-        let mut stream_flags: u32 = 0;
-        let mut timestamp: i64 = 0;
-        let mut sample: Option<IMFSample> = None;
         let video_stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
-        // SAFETY: ReadSample fills the out params; we pass valid stack slots.
-        let hr = unsafe {
-            reader.reader.ReadSample(
-                video_stream,
-                0,
-                Some(&mut actual_stream),
-                Some(&mut stream_flags),
-                Some(&mut timestamp),
-                Some(&mut sample),
-            )
-        };
-        if hr.is_err() {
-            return Err(VideoError(format!("ReadSample: {hr:?}")));
-        }
         let eof = MF_SOURCE_READERF_ENDOFSTREAM.0 as u32;
         let err_flag = MF_SOURCE_READERF_ERROR.0 as u32;
         let tick = MF_SOURCE_READERF_STREAMTICK.0 as u32;
-        if stream_flags & eof != 0 || stream_flags & err_flag != 0 || sample.is_none() {
-            if stream_flags & tick != 0 {
-                // Tick with no sample: try again once.
-                return next_frame(file);
+        let mut timestamp: i64 = 0;
+        let mut sample: Option<IMFSample> = None;
+        for _ in 0..64 {
+            let mut actual_stream: u32 = 0;
+            let mut stream_flags: u32 = 0;
+            timestamp = 0;
+            sample = None;
+            // SAFETY: ReadSample fills the out params; we pass valid stack slots.
+            let hr = unsafe {
+                reader.reader.ReadSample(
+                    video_stream,
+                    0,
+                    Some(&mut actual_stream),
+                    Some(&mut stream_flags),
+                    Some(&mut timestamp),
+                    Some(&mut sample),
+                )
+            };
+            if hr.is_err() {
+                return Err(VideoError(format!("ReadSample: {hr:?}")));
             }
-            return Ok(None);
+            if stream_flags & eof != 0 || stream_flags & err_flag != 0 {
+                return Ok(None);
+            }
+            if sample.is_some() {
+                break;
+            }
+            if stream_flags & tick == 0 {
+                return Ok(None);
+            }
         }
-        let sample = match sample {
-            Some(s) => s,
-            None => return Ok(None),
+        let Some(sample) = sample else {
+            return Ok(None);
         };
         let pts_ms = if timestamp > 0 {
             (timestamp / 10_000) as u64
@@ -1508,7 +1497,7 @@ mod windows_impl {
                 max_len as usize
             };
             let need = row_bytes.saturating_mul(height);
-            if effective_len != 0 && effective_len < need {
+            if effective_len < need {
                 return Err(VideoError(format!(
                     "buffer too small {effective_len} < {need}"
                 )));
@@ -1562,192 +1551,168 @@ mod windows_impl {
         if !path.is_file() {
             return Err(VideoError(format!("not a file: {}", path.display())));
         }
-        let guard = start_media_foundation()?;
-        std::mem::forget(guard);
-        let result = (|| -> Result<Option<Pcm>, VideoError> {
-            let wide = HSTRING::from(path.to_string_lossy().to_string());
-            // SAFETY: creates a reader from the URL; null attributes are valid.
-            let reader = unsafe { MFCreateSourceReaderFromURL(&wide, None::<&IMFAttributes>) }
-                .map_err(|e| VideoError(format!("audio source reader: {e}")))?;
-            // Find the first audio stream by native major type.
-            let mut audio_stream: Option<u32> = None;
-            for idx in 0..4 {
-                // SAFETY: probing stream `idx` for its native media type.
-                let native = unsafe { reader.GetNativeMediaType(idx, 0) };
-                let Ok(media) = native else {
-                    // Indices past the last stream fail; keep probing a
-                    // couple of slots then give up.
-                    if idx > 1 {
-                        break;
-                    }
-                    continue;
-                };
-                // SAFETY: `media` is a live IMFMediaType.
-                let major = unsafe { media.GetGUID(&MF_MT_MAJOR_TYPE) };
-                if let Ok(guid) = major
-                    && guid == MFMediaType_Audio
-                {
-                    audio_stream = Some(idx);
-                    break;
-                }
-            }
-            let Some(stream) = audio_stream else {
-                return Ok(None);
+        let _guard = start_media_foundation()?;
+        let wide = HSTRING::from(path.to_string_lossy().to_string());
+        // SAFETY: creates a reader from the URL; null attributes are valid.
+        let reader = unsafe { MFCreateSourceReaderFromURL(&wide, None::<&IMFAttributes>) }
+            .map_err(|e| VideoError(format!("audio source reader: {e}")))?;
+        let all_streams = MF_SOURCE_READER_ALL_STREAMS.0 as u32;
+        let stream = MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32;
+        // SAFETY: probing the first audio stream; missing stream returns Ok(None).
+        if unsafe { reader.GetNativeMediaType(stream, 0) }.is_err() {
+            return Ok(None);
+        }
+        // SAFETY: deselect all streams then select only the first audio stream.
+        let _ = unsafe { reader.SetStreamSelection(all_streams, false) };
+        // SAFETY: selecting the first audio stream.
+        unsafe { reader.SetStreamSelection(stream, true) }
+            .map_err(|e| VideoError(format!("SetStreamSelection audio: {e}")))?;
+        // Build a PCM media type: audio / PCM / 16-bit.
+        // SAFETY: creates a media type object owned by the caller.
+        let media_type = unsafe { MFCreateMediaType() }
+            .map_err(|e| VideoError(format!("MFCreateMediaType: {e}")))?;
+        // SAFETY: media_type is a live IMFAttributes.
+        unsafe { media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio) }
+            .map_err(|e| VideoError(format!("SetGUID major: {e}")))?;
+        // SAFETY: same as above.
+        unsafe { media_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM) }
+            .map_err(|e| VideoError(format!("SetGUID subtype: {e}")))?;
+        // SAFETY: same as above.
+        unsafe { media_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16) }
+            .map_err(|e| VideoError(format!("SetUINT32 bits: {e}")))?;
+        // SAFETY: selects PCM output for the audio stream.
+        unsafe { reader.SetCurrentMediaType(stream, None, &media_type) }
+            .map_err(|e| VideoError(format!("SetCurrentMediaType: {e}")))?;
+        // SAFETY: current media type is now PCM at the requested depth.
+        let current = unsafe { reader.GetCurrentMediaType(stream) }
+            .map_err(|e| VideoError(format!("GetCurrentMediaType: {e}")))?;
+        // SAFETY: `current` is a live IMFMediaType.
+        let rate = unsafe { current.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND) }.unwrap_or(0);
+        // SAFETY: same as above.
+        let channels = unsafe { current.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS) }.unwrap_or(0);
+        if rate == 0 || rate > 768_000 {
+            return Err(VideoError(format!("bad sample rate {rate}")));
+        }
+        if !(1..=8).contains(&channels) {
+            return Err(VideoError(format!("bad channel count {channels}")));
+        }
+        let channels_u16 = channels as u16;
+        let max_samples = (MAX_AUDIO_MS / 1000)
+            .saturating_mul(u64::from(rate))
+            .saturating_mul(u64::from(channels_u16))
+            .min(usize::MAX as u64) as usize;
+        let mut collected: Vec<i16> = Vec::new();
+        loop {
+            let mut actual_stream: u32 = 0;
+            let mut stream_flags: u32 = 0;
+            let mut timestamp: i64 = 0;
+            let mut sample: Option<IMFSample> = None;
+            // SAFETY: ReadSample fills the out params.
+            let hr = unsafe {
+                reader.ReadSample(
+                    stream,
+                    0,
+                    Some(&mut actual_stream),
+                    Some(&mut stream_flags),
+                    Some(&mut timestamp),
+                    Some(&mut sample),
+                )
             };
-            // Build a PCM media type: audio / PCM / 16-bit.
-            // SAFETY: creates a media type object owned by the caller.
-            let media_type = unsafe { MFCreateMediaType() }
-                .map_err(|e| VideoError(format!("MFCreateMediaType: {e}")))?;
-            // SAFETY: media_type is a live IMFAttributes.
-            unsafe { media_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio) }
-                .map_err(|e| VideoError(format!("SetGUID major: {e}")))?;
-            // SAFETY: same as above.
-            unsafe { media_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM) }
-                .map_err(|e| VideoError(format!("SetGUID subtype: {e}")))?;
-            // SAFETY: same as above.
-            unsafe { media_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16) }
-                .map_err(|e| VideoError(format!("SetUINT32 bits: {e}")))?;
-            // SAFETY: selects PCM output for the audio stream.
-            unsafe { reader.SetCurrentMediaType(stream, None, &media_type) }
-                .map_err(|e| VideoError(format!("SetCurrentMediaType: {e}")))?;
-            // SAFETY: current media type is now PCM at the requested depth.
-            let current = unsafe { reader.GetCurrentMediaType(stream) }
-                .map_err(|e| VideoError(format!("GetCurrentMediaType: {e}")))?;
-            // SAFETY: `current` is a live IMFMediaType.
-            let rate = unsafe { current.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND) }.unwrap_or(0);
-            // SAFETY: same as above.
-            let channels = unsafe { current.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS) }.unwrap_or(0);
-            if rate == 0 || rate > 768_000 {
-                return Err(VideoError(format!("bad sample rate {rate}")));
+            if hr.is_err() {
+                break;
             }
-            if !(1..=8).contains(&channels) {
-                return Err(VideoError(format!("bad channel count {channels}")));
+            let eof = MF_SOURCE_READERF_ENDOFSTREAM.0 as u32;
+            let err_flag = MF_SOURCE_READERF_ERROR.0 as u32;
+            let tick = MF_SOURCE_READERF_STREAMTICK.0 as u32;
+            if stream_flags & tick != 0 && sample.is_none() {
+                continue;
             }
-            let channels_u16 = channels as u16;
-            let max_samples = (MAX_AUDIO_MS / 1000)
-                .saturating_mul(u64::from(rate))
-                .saturating_mul(u64::from(channels_u16))
-                .min(usize::MAX as u64) as usize;
-            let mut collected: Vec<i16> = Vec::new();
-            loop {
-                let mut actual_stream: u32 = 0;
-                let mut stream_flags: u32 = 0;
-                let mut timestamp: i64 = 0;
-                let mut sample: Option<IMFSample> = None;
-                // SAFETY: ReadSample fills the out params.
-                let hr = unsafe {
-                    reader.ReadSample(
-                        stream,
-                        0,
-                        Some(&mut actual_stream),
-                        Some(&mut stream_flags),
-                        Some(&mut timestamp),
-                        Some(&mut sample),
-                    )
-                };
-                if hr.is_err() {
+            if stream_flags & eof != 0 || stream_flags & err_flag != 0 {
+                if sample.is_none() {
                     break;
                 }
-                let eof = MF_SOURCE_READERF_ENDOFSTREAM.0 as u32;
-                let err_flag = MF_SOURCE_READERF_ERROR.0 as u32;
-                let tick = MF_SOURCE_READERF_STREAMTICK.0 as u32;
-                if stream_flags & tick != 0 && sample.is_none() {
-                    continue;
-                }
-                if stream_flags & eof != 0 || stream_flags & err_flag != 0 {
-                    if sample.is_none() {
-                        break;
-                    }
-                    // A final sample with EOF/error still carries data; read it
-                    // below then stop.
-                }
-                let Some(sample) = sample else {
-                    continue;
+                // A final sample with EOF/error still carries data; read it
+                // below then stop.
+            }
+            let Some(sample) = sample else {
+                continue;
+            };
+            // SAFETY: buffer count for an audio sample.
+            let buffer_count = unsafe { sample.GetBufferCount() }.unwrap_or(0);
+            if buffer_count == 0 {
+                continue;
+            }
+            for buf_idx in 0..buffer_count {
+                // SAFETY: buffer index is in range.
+                let buffer: IMFMediaBuffer = match unsafe { sample.GetBufferByIndex(buf_idx) } {
+                    Ok(buf) => buf,
+                    Err(_) => continue,
                 };
-                // SAFETY: buffer count for an audio sample.
-                let buffer_count = unsafe { sample.GetBufferCount() }.unwrap_or(0);
-                if buffer_count == 0 {
+                let mut raw_ptr: *mut u8 = std::ptr::null_mut();
+                let mut max_len: u32 = 0;
+                let mut cur_len: u32 = 0;
+                // SAFETY: Lock returns a pointer we must Unlock.
+                let lock_result =
+                    unsafe { buffer.Lock(&mut raw_ptr, Some(&mut max_len), Some(&mut cur_len)) };
+                if lock_result.is_err() {
                     continue;
                 }
-                for buf_idx in 0..buffer_count {
-                    // SAFETY: buffer index is in range.
-                    let buffer: IMFMediaBuffer = match unsafe { sample.GetBufferByIndex(buf_idx) } {
-                        Ok(buf) => buf,
-                        Err(_) => continue,
-                    };
-                    let mut raw_ptr: *mut u8 = std::ptr::null_mut();
-                    let mut max_len: u32 = 0;
-                    let mut cur_len: u32 = 0;
-                    // SAFETY: Lock returns a pointer we must Unlock.
-                    let lock_result = unsafe {
-                        buffer.Lock(&mut raw_ptr, Some(&mut max_len), Some(&mut cur_len))
-                    };
-                    if lock_result.is_err() {
-                        continue;
+                let copy_result = (|| -> Result<(), VideoError> {
+                    if raw_ptr.is_null() {
+                        return Err(VideoError("null audio buffer".to_string()));
                     }
-                    let copy_result = (|| -> Result<(), VideoError> {
-                        if raw_ptr.is_null() {
-                            return Err(VideoError("null audio buffer".to_string()));
-                        }
-                        let effective_len = if cur_len != 0 {
-                            cur_len as usize
-                        } else {
-                            max_len as usize
-                        };
-                        if effective_len == 0 {
-                            return Ok(());
-                        }
-                        if !effective_len.is_multiple_of(2) {
-                            return Err(VideoError("odd audio length".to_string()));
-                        }
-                        if effective_len > 16 * 1024 * 1024 {
-                            return Err(VideoError("audio buffer too large".to_string()));
-                        }
-                        // SAFETY: raw_ptr points to `effective_len` bytes while locked.
-                        let src: &[u8] = unsafe {
-                            std::slice::from_raw_parts(raw_ptr as *const u8, effective_len)
-                        };
-                        let room = max_samples.saturating_sub(collected.len());
-                        let mut count = 0usize;
-                        for pair in src.chunks(2) {
-                            if count >= room {
-                                break;
-                            }
-                            if pair.len() == 2 {
-                                collected.push(i16::from_le_bytes([pair[0], pair[1]]));
-                                count += 1;
-                            }
-                        }
-                        Ok(())
-                    })();
-                    // SAFETY: buffer was locked above; always unlock.
-                    let _ = unsafe { buffer.Unlock() };
-                    let _ = copy_result;
-                    if collected.len() >= max_samples {
-                        break;
+                    let effective_len = if cur_len != 0 {
+                        cur_len as usize
+                    } else {
+                        max_len as usize
+                    };
+                    if effective_len == 0 {
+                        return Ok(());
                     }
-                }
+                    if !effective_len.is_multiple_of(2) {
+                        return Err(VideoError("odd audio length".to_string()));
+                    }
+                    if effective_len > 16 * 1024 * 1024 {
+                        return Err(VideoError("audio buffer too large".to_string()));
+                    }
+                    // SAFETY: raw_ptr points to `effective_len` bytes while locked.
+                    let src: &[u8] =
+                        unsafe { std::slice::from_raw_parts(raw_ptr as *const u8, effective_len) };
+                    let room = max_samples.saturating_sub(collected.len());
+                    let mut count = 0usize;
+                    for pair in src.chunks(2) {
+                        if count >= room {
+                            break;
+                        }
+                        if pair.len() == 2 {
+                            collected.push(i16::from_le_bytes([pair[0], pair[1]]));
+                            count += 1;
+                        }
+                    }
+                    Ok(())
+                })();
+                // SAFETY: buffer was locked above; always unlock.
+                let _ = unsafe { buffer.Unlock() };
+                let _ = copy_result;
                 if collected.len() >= max_samples {
                     break;
                 }
-                if stream_flags & eof != 0 || stream_flags & err_flag != 0 {
-                    break;
-                }
             }
-            if collected.is_empty() {
-                return Ok(None);
+            if collected.len() >= max_samples {
+                break;
             }
-            Ok(Some(Pcm {
-                sample_rate: rate,
-                channels: channels_u16,
-                samples: collected,
-            }))
-        })();
-        // SAFETY: paired shutdown.
-        let _ = unsafe { MFShutdown() };
-        // SAFETY: paired with CoInitializeEx.
-        unsafe { CoUninitialize() };
-        result
+            if stream_flags & eof != 0 || stream_flags & err_flag != 0 {
+                break;
+            }
+        }
+        if collected.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Pcm {
+            sample_rate: rate,
+            channels: channels_u16,
+            samples: collected,
+        }))
     }
 }
 
