@@ -244,9 +244,9 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
         if let Some(painter) = editor.ui.format_painter.as_ref() {
             ui.separator();
             let hint = if painter.sticky {
-                "Format Painter on: click objects to paint, Esc to stop"
+                "Click objects to copy the format onto them (Esc to cancel)"
             } else {
-                "Format Painter: click an object to paint, Esc to cancel"
+                "Click an object to copy the format onto it (Esc to cancel)"
             };
             ui.label(coursecraft_render::small(hint).color(p.accent));
         }

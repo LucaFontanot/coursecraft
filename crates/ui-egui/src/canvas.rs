@@ -595,7 +595,7 @@ fn enter_edits_selection(editor: &mut Editor, ui: &Ui) {
     }
 }
 
-fn commit_inline_edit(editor: &mut Editor) {
+pub(crate) fn commit_inline_edit(editor: &mut Editor) {
     let Some(edit) = editor.ui.inline_edit.take() else {
         return;
     };
@@ -5091,6 +5091,7 @@ fn draw_handles_and_outline(
             );
             if editor.ui.canvas_drag.is_none()
                 && editor.ui.placement_tool.is_none()
+                && editor.ui.format_painter.is_none()
                 && current_pointer.is_some_and(|pos| {
                     Rect::from_center_size(handle, vec2(14.0, 14.0)).contains(pos)
                 })
@@ -5104,6 +5105,7 @@ fn draw_handles_and_outline(
 
         if editor.ui.canvas_drag.is_none()
             && editor.ui.placement_tool.is_none()
+            && editor.ui.format_painter.is_none()
             && let Some(pos) = current_pointer
         {
             for (h, c) in centers {
@@ -5646,6 +5648,17 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 }
                 if editor.ui.placement_drag.is_some() {
                     process_placement_drag(editor, &t, ui);
+                }
+            } else if editor.ui.format_painter.is_some() {
+                if !pointer_in_hud && current_pointer.is_some_and(|p| canvas_rect.contains(p)) {
+                    ui.ctx().set_cursor_icon(CursorIcon::Copy);
+                }
+                if !pointer_in_hud
+                    && (response.clicked() || response.drag_stopped())
+                    && let Some(pos) = current_pointer
+                {
+                    let click_items = input_animated.as_deref().unwrap_or(&items);
+                    handle_canvas_click(editor, pos, &t, click_items, modifiers);
                 }
             } else {
                 if !pointer_in_hud
