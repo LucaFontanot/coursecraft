@@ -1464,8 +1464,13 @@ fn a4_5_id_token_negative_security_matrix() {
     {
         let (state, nonce, cookie) = oidc_login(&server, &platform, "https://tool.example");
         let mut tok = platform.sign_id_token(&base_claims(&nonce)).expect("sign");
-        tok.pop();
-        tok.push(if tok.ends_with('A') { 'B' } else { 'A' });
+        let dot = tok.rfind('.').expect("jwt dot");
+        let flipped = if tok.as_bytes().get(dot + 1) == Some(&b'A') {
+            "B"
+        } else {
+            "A"
+        };
+        tok.replace_range(dot + 1..dot + 2, flipped);
         let (st, _, _) = do_launch(&server, &state, &cookie, &tok);
         assert_eq!(st, 400);
     }
