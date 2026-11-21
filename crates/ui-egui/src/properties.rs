@@ -2030,6 +2030,15 @@ fn show_format_tab(
 
     show_object_properties(editor, ui, actions_to_run);
 
+    if crate::question::selected_object_is_question_related(
+        &editor.session.course,
+        &editor.selection,
+    ) {
+        inspector_separator(ui);
+        inspector_section_header(ui, "Question");
+        crate::question::show_question_section(editor, ui, actions_to_run);
+    }
+
     inspector_separator(ui);
     inspector_section_header(ui, "States");
     crate::states::show_states_section(editor, ui, actions_to_run);
@@ -2987,6 +2996,17 @@ fn show_slide_tab(
                 ));
             }
         }
+        inspector_separator(ui);
+    }
+
+    let has_question = editor
+        .session
+        .course
+        .slide(&slide_id)
+        .is_some_and(|slide| slide.question.is_some());
+    if has_question {
+        inspector_section_header(ui, "Question");
+        crate::question::show_question_section(editor, ui, actions_to_run);
         inspector_separator(ui);
     }
 

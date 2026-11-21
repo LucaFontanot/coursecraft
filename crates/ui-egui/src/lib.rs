@@ -142,6 +142,8 @@ mod preview_variables_tests;
 #[cfg(test)]
 mod publish_tests;
 #[cfg(test)]
+mod question_panel_tests;
+#[cfg(test)]
 mod rename_tests;
 #[cfg(test)]
 mod shape_preview_tests;
