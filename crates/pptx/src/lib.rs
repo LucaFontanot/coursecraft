@@ -45,6 +45,8 @@ mod bughunt_m26_a13_pptx;
 #[cfg(test)]
 mod m26_fidelity_tests;
 #[cfg(test)]
+mod m27_table_tests;
+#[cfg(test)]
 mod tests;
 
 /// Maximum number of archive entries allowed when opening a presentation.
@@ -3001,7 +3003,20 @@ fn blend_hex_colors(a: &str, b: &str, t: f32) -> Color {
     ))
 }
 
-fn builtin_table_style(style_id: &str, theme: &ThemePalette) -> Option<TableStyleDef> {
+fn default_table_grid_outline(layout: SlideLayout) -> Outline {
+    Outline {
+        color: Color("#000000".to_string()),
+        width: ((12_700.0 * layout.scale) as f32).clamp(0.5, 50.0),
+        dash: DashStyle::Solid,
+        dash_pattern: None,
+    }
+}
+
+fn builtin_table_style(
+    style_id: &str,
+    theme: &ThemePalette,
+    layout: SlideLayout,
+) -> Option<TableStyleDef> {
     let id = style_id.trim().to_ascii_uppercase();
     // Standard Office built-in Medium Style 2 (Accent 1..6) and Light/No-Style grids.
     let accent_key = match id.as_str() {
@@ -3024,19 +3039,16 @@ fn builtin_table_style(style_id: &str, theme: &ThemePalette) -> Option<TableStyl
             Some("accent6")
         }
         "{5940675A-B579-460E-94D1-54222C63F5DA}" => {
-            let border = Some(Outline {
-                color: Color("#000000".to_string()),
-                width: 1.0,
-                dash: DashStyle::Solid,
-                dash_pattern: None,
-            });
             return Some(TableStyleDef {
                 whole: TablePartStyle {
-                    border,
+                    border: Some(default_table_grid_outline(layout)),
                     ..Default::default()
                 },
                 ..Default::default()
             });
+        }
+        "{2D5ABB26-0587-4C30-8999-92F81FD0307C}" => {
+            return Some(TableStyleDef::default());
         }
         _ => None,
     }?;
@@ -3178,7 +3190,7 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
             cx.table_styles
                 .get(&id)
                 .cloned()
-                .or_else(|| builtin_table_style(&id, cx.theme))
+                .or_else(|| builtin_table_style(&id, cx.theme, *cx.layout))
         });
 
     let links = TextLinkContext {
@@ -3186,8 +3198,7 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
         slide_parts: cx.slide_parts,
     };
     let mut rows: Vec<TableRow> = Vec::with_capacity(rows_nodes.len());
-    let mut outer_borders: Vec<Outline> = Vec::new();
-    let mut inner_borders: Vec<Outline> = Vec::new();
+    let mut border_acc = TableBorderAccumulator::default();
 
     for (row_index, row_node) in rows_nodes.iter().enumerate() {
         let mut cells: Vec<TableCell> = Vec::with_capacity(column_count);
@@ -3266,6 +3277,11 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
                 let cell_fill = props
                     .and_then(|p| table_cell_fill(p, cx.theme))
                     .or(part_fill);
+                let tc_valign = props.and_then(|p| p.attr("anchor")).map(|a| match a {
+                    "ctr" => VAlign::Middle,
+                    "b" => VAlign::Bottom,
+                    _ => VAlign::Top,
+                });
                 let cell = cell_node
                     .child("txBody")
                     .map(|body| {
@@ -3286,6 +3302,13 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
                                 }
                             }
                         }
+                        let has_body_anchor = body
+                            .child("bodyPr")
+                            .and_then(|bp| bp.attr("anchor"))
+                            .is_some();
+                        if !has_body_anchor && let Some(v) = tc_valign {
+                            info.style.valign = v;
+                        }
                         TableCell {
                             text: info.text,
                             style: info.style.clone(),
@@ -3301,28 +3324,20 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
                         fill: cell_fill,
                         row_span: u8::try_from(row_span.max(1)).unwrap_or(u8::MAX),
                         col_span: u8::try_from(col_span.max(1)).unwrap_or(u8::MAX),
+                        valign: tc_valign.unwrap_or(VAlign::Top),
                         ..TableCell::default()
                     });
-                if let Some(props) = props {
-                    for (side, outer) in [
-                        ("lnL", column == 0),
-                        ("lnR", column.saturating_add(col_span) >= column_count),
-                        ("lnT", row_index == 0),
-                        (
-                            "lnB",
-                            row_index.saturating_add(row_span) >= rows_nodes.len(),
-                        ),
-                    ] {
-                        if let Some(outline) = table_side_outline(props, side, *cx.layout, cx.theme)
-                        {
-                            if outer {
-                                outer_borders.push(outline);
-                            } else {
-                                inner_borders.push(outline);
-                            }
-                        }
-                    }
-                }
+                border_acc.record_cell(
+                    props,
+                    column,
+                    col_span,
+                    column_count,
+                    row_index,
+                    row_span,
+                    rows_nodes.len(),
+                    *cx.layout,
+                    cx.theme,
+                );
                 let span = col_span.max(1);
                 cells.push(cell);
                 for _ in 1..span {
@@ -3339,16 +3354,7 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
         });
     }
 
-    let style_border = table_style.as_ref().and_then(|s| {
-        s.whole
-            .border
-            .clone()
-            .or_else(|| s.first_row.border.clone())
-    });
-    let borders = TableBorders {
-        outer: dominant_outline(&outer_borders).or_else(|| style_border.clone()),
-        inner: dominant_outline(&inner_borders).or(style_border),
-    };
+    let borders = border_acc.finish(table_style.as_ref(), *cx.layout);
 
     cx.tracker.table_count = cx.tracker.table_count.saturating_add(1);
     let name = frame_node
@@ -3413,15 +3419,100 @@ fn table_cell_fill(props: &XmlNode, theme: &ThemePalette) -> Option<Color> {
     resolve_solid_fill(props, theme)
 }
 
+enum SideLine {
+    Solid(Outline),
+    ExplicitNone,
+    Inherited,
+}
+
+#[derive(Default)]
+struct TableBorderAccumulator {
+    outer_borders: Vec<Outline>,
+    inner_borders: Vec<Outline>,
+    outer_explicit_none: bool,
+    outer_inherited: bool,
+    inner_explicit_none: bool,
+    inner_inherited: bool,
+}
+
+impl TableBorderAccumulator {
+    #[allow(clippy::too_many_arguments)]
+    fn record_cell(
+        &mut self,
+        props: Option<&XmlNode>,
+        column: usize,
+        col_span: usize,
+        column_count: usize,
+        row_index: usize,
+        row_span: usize,
+        row_count: usize,
+        layout: SlideLayout,
+        theme: &ThemePalette,
+    ) {
+        for (side, outer) in [
+            ("lnL", column == 0),
+            ("lnR", column.saturating_add(col_span) >= column_count),
+            ("lnT", row_index == 0),
+            ("lnB", row_index.saturating_add(row_span) >= row_count),
+        ] {
+            let side_line = match props {
+                Some(p) => table_side_outline(p, side, layout, theme),
+                None => SideLine::Inherited,
+            };
+            match (side_line, outer) {
+                (SideLine::Solid(outline), true) => self.outer_borders.push(outline),
+                (SideLine::Solid(outline), false) => self.inner_borders.push(outline),
+                (SideLine::ExplicitNone, true) => self.outer_explicit_none = true,
+                (SideLine::ExplicitNone, false) => self.inner_explicit_none = true,
+                (SideLine::Inherited, true) => self.outer_inherited = true,
+                (SideLine::Inherited, false) => self.inner_inherited = true,
+            }
+        }
+    }
+
+    fn finish(self, table_style: Option<&TableStyleDef>, layout: SlideLayout) -> TableBorders {
+        let style_border = table_style.and_then(|s| {
+            s.whole
+                .border
+                .clone()
+                .or_else(|| s.first_row.border.clone())
+        });
+        let resolve = |explicit: &[Outline], all_none: bool| -> Option<Outline> {
+            if let Some(dom) = dominant_outline(explicit) {
+                return Some(dom);
+            }
+            if table_style.is_some() {
+                if all_none { None } else { style_border.clone() }
+            } else if all_none {
+                None
+            } else {
+                Some(default_table_grid_outline(layout))
+            }
+        };
+        TableBorders {
+            outer: resolve(
+                &self.outer_borders,
+                self.outer_explicit_none && !self.outer_inherited,
+            ),
+            inner: resolve(
+                &self.inner_borders,
+                self.inner_explicit_none && !self.inner_inherited,
+            ),
+        }
+    }
+}
+
 fn table_side_outline(
     props: &XmlNode,
     side: &str,
     layout: SlideLayout,
     theme: &ThemePalette,
-) -> Option<Outline> {
-    let line = props.child(side)?;
+) -> SideLine {
+    let Some(line) = props.child(side) else {
+        return SideLine::Inherited;
+    };
     if line.child("noFill").is_some() {
-        return None;
+        return SideLine::ExplicitNone;
     }
     let color = resolve_solid_fill(line, theme).unwrap_or_else(|| Color("#000000".to_string()));
     let width = line
@@ -3431,10 +3522,10 @@ fn table_side_outline(
         .map_or(1.0, |emu| (emu * layout.scale) as f32)
         .clamp(0.0, 50.0);
     if width <= 0.0 {
-        return None;
+        return SideLine::ExplicitNone;
     }
     let (dash, dash_pattern) = extract_dash_from_ln(line);
-    Some(Outline {
+    SideLine::Solid(Outline {
         color,
         width,
         dash,

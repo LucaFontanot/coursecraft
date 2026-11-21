@@ -304,3 +304,113 @@ fn pptx_fidelity_structural_checks() {
         "slides 10/18 should have multi-level bullets (level 0 and >0), found: {bullet_levels:?}"
     );
 }
+
+#[test]
+fn c2_9_slide_14_styleless_table_renders_black_gridlines() {
+    let dir = fidelity_dir();
+    let pptx_bytes = std::fs::read(dir.join("fidelity.pptx")).expect("read fidelity.pptx");
+    let imported = import_pptx(&pptx_bytes, "Fidelity").expect("import fidelity.pptx");
+
+    let media_map: HashMap<String, Arc<[u8]>> = imported
+        .media
+        .into_iter()
+        .map(|(name, bytes)| (name, Arc::<[u8]>::from(bytes)))
+        .collect();
+    let media = InMemoryMedia(media_map);
+
+    let slide14 = &imported.course.scenes[0].slides[13];
+    let tables: Vec<_> = slide14
+        .objects
+        .iter()
+        .filter_map(|o| match &o.kind {
+            ObjectKind::Table {
+                columns,
+                rows,
+                borders,
+                ..
+            } => Some((o.frame, columns, rows, borders)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        tables.len() >= 2,
+        "expected at least 2 tables on slide 14, got {}",
+        tables.len()
+    );
+
+    // Table 2 is the style-less table; verify it has 1pt #000000 outer & inner borders.
+    let (frame2, cols2, rows2, borders2) = tables[1];
+    let outer = borders2
+        .outer
+        .as_ref()
+        .expect("style-less Table 2 must have outer border");
+    let inner = borders2
+        .inner
+        .as_ref()
+        .expect("style-less Table 2 must have inner border");
+    assert_eq!(outer.color.0, "#000000");
+    assert_eq!(inner.color.0, "#000000");
+    assert!(
+        (outer.width - 1.333).abs() < 0.2,
+        "outer width={}",
+        outer.width
+    );
+    assert!(
+        (inner.width - 1.333).abs() < 0.2,
+        "inner width={}",
+        inner.width
+    );
+
+    let opts = RenderOptions {
+        width: 1280,
+        mode: RenderMode::Player,
+        layers: Vec::new(),
+        at_ms: None,
+    };
+    let rendered = render_slide_rgba(&imported.course, &slide14.id, &opts, &media)
+        .expect("render slide 14 at 1280px");
+    assert_eq!(rendered.width, 1280);
+
+    // Check that dark gridline pixels (r<30, g<30, b<30) appear along the first
+    // inner column boundary and first inner row boundary of Table 2.
+    assert!(cols2.len() >= 2 && rows2.len() >= 2);
+    let x_boundary = (frame2.x + frame2.w * cols2[0]).round() as i32;
+    let y_mid_row0 = (frame2.y + frame2.h * rows2[0].height * 0.5).round() as i32;
+    let mut found_vertical_grid = false;
+    for dx in -2..=2 {
+        let px = (x_boundary + dx).clamp(0, rendered.width as i32 - 1) as u32;
+        let py = y_mid_row0.clamp(0, rendered.height as i32 - 1) as u32;
+        let idx = ((py * rendered.width + px) * 4) as usize;
+        if rendered.pixels[idx] < 30
+            && rendered.pixels[idx + 1] < 30
+            && rendered.pixels[idx + 2] < 30
+        {
+            found_vertical_grid = true;
+            break;
+        }
+    }
+    assert!(
+        found_vertical_grid,
+        "expected dark gridline pixel near vertical cell boundary x={x_boundary}, y={y_mid_row0}"
+    );
+
+    let y_boundary = (frame2.y + frame2.h * rows2[0].height).round() as i32;
+    let x_mid_col0 = (frame2.x + frame2.w * cols2[0] * 0.5).round() as i32;
+    let mut found_horizontal_grid = false;
+    for dy in -2..=2 {
+        let px = x_mid_col0.clamp(0, rendered.width as i32 - 1) as u32;
+        let py = (y_boundary + dy).clamp(0, rendered.height as i32 - 1) as u32;
+        let idx = ((py * rendered.width + px) * 4) as usize;
+        if rendered.pixels[idx] < 30
+            && rendered.pixels[idx + 1] < 30
+            && rendered.pixels[idx + 2] < 30
+        {
+            found_horizontal_grid = true;
+            break;
+        }
+    }
+    assert!(
+        found_horizontal_grid,
+        "expected dark gridline pixel near horizontal cell boundary x={x_mid_col0}, y={y_boundary}"
+    );
+}
