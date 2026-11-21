@@ -114,6 +114,11 @@ pub struct TimelineTrack {
     pub bytes: Arc<[u8]>,
     /// The backend has a live (paused or playing) track for this object.
     pub started: bool,
+    /// The media reached its natural end during this playback/seek pass; do not
+    /// re-start it while the slide timeline continues past the media's end.
+    ended: bool,
+    /// Probed media file duration in ms, if known.
+    media_duration_ms: Option<u64>,
     /// Monotonic timestamp when we started waiting for a frame, if any.
     pending_since_mono: Option<u64>,
     /// Plain-language error message when preview decoding failed or timed out.
@@ -176,6 +181,15 @@ pub fn timing_includes(start_ms: u32, end_ms: u32, playhead_ms: u32) -> bool {
 fn clamp_playhead(ms: u64, duration_ms: u32) -> u32 {
     let duration = u64::from(duration_ms);
     ms.min(duration).min(u64::from(u32::MAX)) as u32
+}
+
+/// Probe and cache the natural media duration for `track`, if bytes are present.
+fn ensure_media_duration(track: &mut TimelineTrack) -> Option<u64> {
+    if track.media_duration_ms.is_none() && !track.bytes.is_empty() {
+        track.media_duration_ms =
+            coursecraft_playback::media_duration_ms(track.kind, &track.src, &track.bytes);
+    }
+    track.media_duration_ms
 }
 
 /// Default timeout (ms) before a hung video preview decode gives up and shows a placeholder.
@@ -308,6 +322,8 @@ impl TimelinePlayback {
                     end_ms,
                     bytes,
                     started: false,
+                    ended: false,
+                    media_duration_ms: None,
                     pending_since_mono: None,
                     failed: None,
                 }
@@ -359,32 +375,38 @@ impl TimelinePlayback {
         }
         // Keep the frame and error/pending state for tracks that survive the edit
         // with the same src; forget the rest.
-        let prev_state: std::collections::HashMap<
-            String,
-            (String, bool, Option<u64>, Option<String>),
-        > = self
+        struct PrevTrackState {
+            src: String,
+            started: bool,
+            media_duration_ms: Option<u64>,
+            pending_since_mono: Option<u64>,
+            failed: Option<String>,
+        }
+        let prev_state: std::collections::HashMap<String, PrevTrackState> = self
             .tracks
             .iter()
             .map(|track| {
                 (
                     track.object_id.clone(),
-                    (
-                        track.src.clone(),
-                        track.started,
-                        track.pending_since_mono,
-                        track.failed.clone(),
-                    ),
+                    PrevTrackState {
+                        src: track.src.clone(),
+                        started: track.started,
+                        media_duration_ms: track.media_duration_ms,
+                        pending_since_mono: track.pending_since_mono,
+                        failed: track.failed.clone(),
+                    },
                 )
             })
             .collect();
         self.tracks = next;
         for track in &mut self.tracks {
-            if let Some((prev_src, started, pending, failed)) = prev_state.get(&track.object_id)
-                && prev_src == &track.src
+            if let Some(prev) = prev_state.get(&track.object_id)
+                && prev.src == track.src
             {
-                track.started = *started;
-                track.pending_since_mono = *pending;
-                track.failed = failed.clone();
+                track.started = prev.started;
+                track.media_duration_ms = prev.media_duration_ms;
+                track.pending_since_mono = prev.pending_since_mono;
+                track.failed = prev.failed.clone();
             }
         }
         self.duration_ms = duration_ms;
@@ -413,6 +435,7 @@ impl TimelinePlayback {
                         Some(backend_err.unwrap_or_else(|| "Could not decode video".to_owned()));
                 }
                 track.started = false;
+                track.ended = true;
                 track.pending_since_mono = None;
             }
         }
@@ -422,7 +445,7 @@ impl TimelinePlayback {
     fn update_video_decode_status(&mut self, playhead_ms: u32) {
         let mut timed_out = Vec::new();
         for track in &mut self.tracks {
-            if track.kind != MediaKind::Video || track.failed.is_some() {
+            if track.kind != MediaKind::Video || track.ended || track.failed.is_some() {
                 continue;
             }
             if !timing_includes(track.start_ms, track.end_ms, playhead_ms) {
@@ -436,7 +459,10 @@ impl TimelinePlayback {
                 continue;
             }
             if let Some(frame) = self.backend.video_frame(&track.object_id) {
-                let expected = u64::from(playhead_ms.saturating_sub(track.start_ms));
+                let raw_expected = u64::from(playhead_ms.saturating_sub(track.start_ms));
+                let expected = track
+                    .media_duration_ms
+                    .map_or(raw_expected, |dur| raw_expected.min(dur));
                 if frame.pts_ms.abs_diff(expected) <= 100 {
                     track.pending_since_mono = None;
                     continue;
@@ -465,10 +491,17 @@ impl TimelinePlayback {
             return;
         }
         for index in 0..self.tracks.len() {
+            if let Some(track) = self.tracks.get_mut(index) {
+                ensure_media_duration(track);
+            }
             let Some(track) = self.tracks.get(index).cloned() else {
                 continue;
             };
-            if track.kind != MediaKind::Video || track.started || track.failed.is_some() {
+            if track.kind != MediaKind::Video
+                || track.started
+                || track.ended
+                || track.failed.is_some()
+            {
                 continue;
             }
             if !timing_includes(track.start_ms, track.end_ms, playhead_ms) {
@@ -505,6 +538,11 @@ impl TimelinePlayback {
         } else {
             playhead_ms
         };
+        if effective == 0 {
+            for track in &mut self.tracks {
+                track.ended = false;
+            }
+        }
         self.playing = true;
         self.anchor_playhead = effective;
         self.anchor_mono = now_mono;
@@ -587,6 +625,7 @@ impl TimelinePlayback {
                 .get(index)
                 .is_some_and(|track| timing_includes(track.start_ms, track.end_ms, playhead_ms));
             if in_window {
+                let media_dur = self.tracks.get_mut(index).and_then(ensure_media_duration);
                 let Some(track) = self.tracks.get(index).cloned() else {
                     continue;
                 };
@@ -599,8 +638,25 @@ impl TimelinePlayback {
                     track.started,
                 );
                 let offset = u64::from(playhead_ms.saturating_sub(start_ms));
+                let past_media_end = media_dur.is_some_and(|dur| offset >= dur);
+                if let Some(track) = self.tracks.get_mut(index) {
+                    track.ended = past_media_end;
+                }
                 if playing {
-                    if !started {
+                    if past_media_end {
+                        if started {
+                            self.backend.pause(&object_id);
+                            if let Some(track) = self.tracks.get_mut(index) {
+                                track.started = false;
+                            }
+                        } else if kind == MediaKind::Video && track.failed.is_none() {
+                            // Seek a newly-reached video to its last frame so it holds on screen.
+                            self.backend
+                                .play(&object_id, &src, kind, Arc::clone(&bytes));
+                            self.backend.pause(&object_id);
+                            self.backend.seek(&object_id, offset);
+                        }
+                    } else if !started {
                         self.backend
                             .play(&object_id, &src, kind, Arc::clone(&bytes));
                         self.backend.seek(&object_id, offset);
@@ -627,14 +683,21 @@ impl TimelinePlayback {
                         track.pending_since_mono.get_or_insert(self.last_mono);
                     }
                 }
-            } else if playing {
-                let Some(track) = self.tracks.get(index).cloned() else {
-                    continue;
-                };
-                if track.started {
-                    self.backend.pause(&track.object_id);
-                    if let Some(track) = self.tracks.get_mut(index) {
-                        track.started = false;
+            } else {
+                if let Some(track) = self.tracks.get_mut(index)
+                    && playhead_ms < track.start_ms
+                {
+                    track.ended = false;
+                }
+                if playing {
+                    let Some(track) = self.tracks.get(index).cloned() else {
+                        continue;
+                    };
+                    if track.started {
+                        self.backend.pause(&track.object_id);
+                        if let Some(track) = self.tracks.get_mut(index) {
+                            track.started = false;
+                        }
                     }
                 }
             }
@@ -661,6 +724,8 @@ impl TimelinePlayback {
                 .find(|track| track.object_id == object)
             {
                 track.started = false;
+                track.ended = true;
+                track.pending_since_mono = None;
             }
         }
         let mut master: Option<u32> = None;
@@ -705,24 +770,33 @@ impl TimelinePlayback {
         }
         .min(duration_ms);
         // Schedule tracks whose window the playhead just entered and
-        // pause tracks whose window it left.
+        // pause tracks whose window it left. Never re-start a track that
+        // already reached its natural end.
         for index in 0..self.tracks.len() {
-            let (in_window, started, start_ms) = self
+            let media_dur = self.tracks.get_mut(index).and_then(ensure_media_duration);
+            let (in_window, started, ended, start_ms) = self
                 .tracks
                 .get(index)
                 .map(|track| {
                     (
                         timing_includes(track.start_ms, track.end_ms, new_playhead),
                         track.started,
+                        track.ended,
                         track.start_ms,
                     )
                 })
-                .unwrap_or((false, false, 0));
-            if in_window && !started {
+                .unwrap_or((false, false, false, 0));
+            if in_window && !started && !ended {
+                let offset = u64::from(new_playhead.saturating_sub(start_ms));
+                if media_dur.is_some_and(|dur| offset >= dur) {
+                    if let Some(track) = self.tracks.get_mut(index) {
+                        track.ended = true;
+                    }
+                    continue;
+                }
                 let Some(track) = self.tracks.get(index).cloned() else {
                     continue;
                 };
-                let offset = u64::from(new_playhead.saturating_sub(start_ms));
                 self.backend.play(
                     &track.object_id,
                     &track.src,
@@ -804,6 +878,7 @@ impl TimelinePlayback {
     pub fn has_pending_frame(&self, playhead_ms: u32) -> bool {
         self.tracks.iter().any(|track| {
             if track.kind != MediaKind::Video
+                || track.ended
                 || track.failed.is_some()
                 || !timing_includes(track.start_ms, track.end_ms, playhead_ms)
             {
@@ -812,7 +887,10 @@ impl TimelinePlayback {
             match self.backend.video_frame(&track.object_id) {
                 None => true,
                 Some(frame) => {
-                    let expected = u64::from(playhead_ms.saturating_sub(track.start_ms));
+                    let raw_expected = u64::from(playhead_ms.saturating_sub(track.start_ms));
+                    let expected = track
+                        .media_duration_ms
+                        .map_or(raw_expected, |dur| raw_expected.min(dur));
                     // One frame of tolerance (the decoder returns the
                     // frame at or just after the seek).
                     frame.pts_ms.abs_diff(expected) > 100

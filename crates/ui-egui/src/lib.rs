@@ -206,6 +206,8 @@ mod text_format_tests;
 #[cfg(test)]
 mod timeline_cue_tests;
 #[cfg(test)]
+mod timeline_f23_tests;
+#[cfg(test)]
 mod timeline_scrub_tests;
 #[cfg(test)]
 mod translate_tests;

@@ -1184,6 +1184,7 @@ pub struct RodioBackend {
     warned_video: bool,
     tracks: std::collections::HashMap<String, RodioTrack>,
     videos: std::collections::HashMap<String, WorkerHandle>,
+    last_frames: std::collections::HashMap<String, Arc<VideoFrame>>,
     video_errors: std::collections::HashMap<String, String>,
     ended: Vec<String>,
     volume: f32,
@@ -1211,6 +1212,7 @@ impl RodioBackend {
             warned_video: false,
             tracks: std::collections::HashMap::new(),
             videos: std::collections::HashMap::new(),
+            last_frames: std::collections::HashMap::new(),
             video_errors: std::collections::HashMap::new(),
             ended: Vec::new(),
             volume: 1.0,
@@ -1229,6 +1231,7 @@ impl RodioBackend {
             warned_video: false,
             tracks: std::collections::HashMap::new(),
             videos: std::collections::HashMap::new(),
+            last_frames: std::collections::HashMap::new(),
             video_errors: std::collections::HashMap::new(),
             ended: Vec::new(),
             volume: 1.0,
@@ -1248,6 +1251,7 @@ impl RodioBackend {
         if self.videos.contains_key(object) {
             return self.resume_video(object);
         }
+        self.last_frames.remove(object);
         self.video_errors.remove(object);
         if bytes.is_empty() {
             log::warn!("video '{object}' ({src}) has no decodable bytes");
@@ -1522,6 +1526,7 @@ impl MediaBackend for RodioBackend {
             track.sink.stop();
         }
         self.videos.remove(object);
+        self.last_frames.remove(object);
         self.video_errors.remove(object);
     }
 
@@ -1530,6 +1535,7 @@ impl MediaBackend for RodioBackend {
             track.sink.stop();
         }
         self.videos.clear();
+        self.last_frames.clear();
         self.video_errors.clear();
         self.ended.clear();
     }
@@ -1624,28 +1630,29 @@ impl MediaBackend for RodioBackend {
         }
         // Video workers that reported ended (once), plus workers whose
         // file failed to open on the worker thread: clear and remove
-        // their worker so take_ended fires exactly once.
-        let video_ended: Vec<(String, Option<String>)> = self
+        // their worker so take_ended fires exactly once. Keep the last
+        // decoded frame on natural end so callers can hold it on screen.
+        let video_ended: Vec<(String, Option<String>, Option<Arc<VideoFrame>>)> = self
             .videos
             .iter()
             .filter_map(|(obj, worker)| {
                 let mut state = worker.shared.lock().ok()?;
                 if state.ended {
                     state.ended = false;
-                    Some((obj.clone(), None))
+                    Some((obj.clone(), None, state.frame.as_ref().map(Arc::clone)))
                 } else if state.failed {
                     state.failed = false;
                     let err = state
                         .error
                         .take()
                         .unwrap_or_else(|| "Could not decode video".to_owned());
-                    Some((obj.clone(), Some(err)))
+                    Some((obj.clone(), Some(err), None))
                 } else {
                     None
                 }
             })
             .collect();
-        for (obj, failed) in &video_ended {
+        for (obj, failed, last_frame) in &video_ended {
             if let Some(err) = failed {
                 if !self.warned_video {
                     log::warn!(
@@ -1655,10 +1662,13 @@ impl MediaBackend for RodioBackend {
                 } else {
                     log::warn!("video '{obj}' could not be decoded");
                 }
+                self.last_frames.remove(obj);
                 self.video_errors.insert(obj.clone(), err.clone());
+            } else if let Some(frame) = last_frame {
+                self.last_frames.insert(obj.clone(), Arc::clone(frame));
             }
         }
-        for (obj, _) in &video_ended {
+        for (obj, _, _) in &video_ended {
             self.videos.remove(obj);
             if let Some(track) = self.tracks.remove(obj) {
                 track.sink.stop();
@@ -1666,7 +1676,7 @@ impl MediaBackend for RodioBackend {
         }
         let mut res = std::mem::take(&mut self.ended);
         res.extend(finished);
-        for (obj, _) in video_ended {
+        for (obj, _, _) in video_ended {
             if !res.contains(&obj) {
                 res.push(obj);
             }
@@ -1704,9 +1714,13 @@ impl MediaBackend for RodioBackend {
     fn layout_video(&mut self, _object: &str, _rect: Option<[f32; 4]>) {}
 
     fn video_frame(&self, object: &str) -> Option<Arc<VideoFrame>> {
-        let worker = self.videos.get(object)?;
-        let state = worker.shared.lock().ok()?;
-        state.frame.as_ref().map(Arc::clone)
+        if let Some(worker) = self.videos.get(object)
+            && let Ok(state) = worker.shared.lock()
+            && let Some(frame) = &state.frame
+        {
+            return Some(Arc::clone(frame));
+        }
+        self.last_frames.get(object).map(Arc::clone)
     }
 
     fn is_video_decoding(&self, object: &str) -> bool {
@@ -2336,5 +2350,7 @@ pub fn tiny_wav_bytes() -> Vec<u8> {
 
 #[cfg(test)]
 mod bughunt_m26_a7_native_video;
+#[cfg(test)]
+mod f23_last_frame_tests;
 #[cfg(test)]
 mod tests;
