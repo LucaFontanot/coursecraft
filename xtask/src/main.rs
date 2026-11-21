@@ -541,7 +541,92 @@ fn package_example() -> Result<(), String> {
             &hello,
             None,
         )?;
+        let reference = mock_lrs.join(flavor).join("reference");
+        let reference_zip = root.join(format!("target/reference-course-{flavor}.zip"));
+        publish_course(
+            &dist,
+            "examples/reference-course/course.json",
+            flavor,
+            &reference,
+            Some(&reference_zip),
+        )?;
     }
+
+    let reference_mock = mock.join("reference");
+    let reference_package = reference_mock.join("package");
+    if reference_package.exists() {
+        std::fs::remove_dir_all(&reference_package)
+            .map_err(|e| format!("{}: {e}", reference_package.display()))?;
+    }
+    std::fs::create_dir_all(&reference_mock)
+        .map_err(|e| format!("{}: {e}", reference_mock.display()))?;
+    let reference_package_arg = reference_package.to_string_lossy().into_owned();
+    let reference_zip_arg = root
+        .join("target/reference-course.zip")
+        .to_string_lossy()
+        .into_owned();
+    let published_reference = cargo(&[
+        "run",
+        "-q",
+        "-p",
+        "coursecraft-cli",
+        "--",
+        "publish",
+        "examples/reference-course/course.json",
+        "--player",
+        &dist_arg,
+        "--out-dir",
+        &reference_package_arg,
+        "-o",
+        &reference_zip_arg,
+    ]);
+    if !published_reference {
+        return Err("coursecraft-cli publish failed for reference-course".into());
+    }
+    std::fs::copy(
+        root.join("xtask/mock-lms/index.html"),
+        reference_mock.join("index.html"),
+    )
+    .map_err(|e| format!("mock LMS reference page: {e}"))?;
+
+    let reference_2004_mock = mock.join("reference-2004");
+    let reference_2004_package = reference_2004_mock.join("package");
+    if reference_2004_package.exists() {
+        std::fs::remove_dir_all(&reference_2004_package)
+            .map_err(|e| format!("{}: {e}", reference_2004_package.display()))?;
+    }
+    std::fs::create_dir_all(&reference_2004_mock)
+        .map_err(|e| format!("{}: {e}", reference_2004_mock.display()))?;
+    let reference_2004_package_arg = reference_2004_package.to_string_lossy().into_owned();
+    let reference_2004_zip_arg = root
+        .join("target/reference-course-2004.zip")
+        .to_string_lossy()
+        .into_owned();
+    let published_reference_2004 = cargo(&[
+        "run",
+        "-q",
+        "-p",
+        "coursecraft-cli",
+        "--",
+        "publish",
+        "--standard",
+        "scorm2004",
+        "examples/reference-course/course.json",
+        "--player",
+        &dist_arg,
+        "--out-dir",
+        &reference_2004_package_arg,
+        "-o",
+        &reference_2004_zip_arg,
+    ]);
+    if !published_reference_2004 {
+        return Err("coursecraft-cli publish failed for SCORM 2004 reference-course".into());
+    }
+    std::fs::copy(
+        root.join("xtask/mock-lms/index.html"),
+        reference_2004_mock.join("index.html"),
+    )
+    .map_err(|e| format!("mock LMS SCORM 2004 reference page: {e}"))?;
 
     println!(
         "package-example: open target/mock-lms/index.html, /showcase/index.html or /scorm2004/index.html over http (launch config `mock-lms`); xAPI packages are under target/mock-lrs (launch config `mock-lrs`)"

@@ -3,15 +3,20 @@
 //! Step B-3: Shared runner harness + SCORM 1.2 (B1.1–B1.8) + SCORM 2004 (B2.1–B2.8).
 //! Step B-4: cmi5 & xAPI 1.0.3 (B3.1–B3.10).
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use coursecraft_course::{CompletionStatus, Course, Severity, Value};
 use coursecraft_lms::{
-    CmiApi, HANDSHAKE_TIMEOUT_MS, LmsBridge, LrsApi, LrsMethod, LrsRequest, LrsResponse, StartPlan,
-    Tick, XapiBridge,
+    CmiApi, HANDSHAKE_TIMEOUT_MS, LmsBridge, LrsApi, LrsMethod, LrsRequest, LrsResponse,
+    LtiReporter, StartPlan, Tick, XapiBridge,
 };
-use coursecraft_logic::{Effect, Input, Player};
+use coursecraft_logic::{Effect, HostInfo, Input, Player, decode_suspend, encode_suspend};
+use coursecraft_lti::ToolConfig;
+use coursecraft_lti_server::server::Server as LtiServer;
+use coursecraft_lti_server::strict_platform::StrictLtiPlatform;
 use coursecraft_publish::{
     PackageFile, PackageInput, PackageStandard, build_package_standard_with_folders,
 };
@@ -2701,4 +2706,614 @@ fn b3_10_cmi5_completion_only_with_mastery_score() {
         !verbs.contains(&"failed"),
         "must not emit failed: {verbs:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// B4. LTI 1.3 & Standalone Web Automated Runs + Cross-Standard Parity
+// ---------------------------------------------------------------------------
+
+const LTI_TEST_KEY: &[u8] = include_bytes!("../../coursecraft-lti/tests/fixtures/test_key.pk8");
+const LTI_CLIENT_ID: &str = "client-1";
+const LTI_DEPLOYMENT_ID: &str = "deployment-1";
+const LTI_SCORE_SCOPE: &str = "https://purl.imsglobal.org/spec/lti-ags/scope/score";
+
+fn lti_unix_now() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(d) => i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
+        Err(_) => 0,
+    }
+}
+
+fn lti_temp_course_dir(files: &[PackageFile]) -> PathBuf {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "coursecraft-cli-lti-ref-{}-{n}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    for file in files {
+        let target = dir.join(&file.path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).expect("create package parent dir");
+        }
+        std::fs::write(&target, &file.bytes).expect("write packaged file");
+    }
+    dir
+}
+
+fn lti_encode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(char::from(b));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+fn lti_http_agent() -> ureq::Agent {
+    let config = ureq::config::Config::builder()
+        .http_status_as_error(false)
+        .max_redirects(0)
+        .build();
+    ureq::Agent::new_with_config(config)
+}
+
+struct LtiHarness {
+    platform: StrictLtiPlatform,
+    server_addr: std::net::SocketAddr,
+    course_dir: PathBuf,
+    agent: ureq::Agent,
+}
+
+impl Drop for LtiHarness {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.course_dir);
+    }
+}
+
+impl LtiHarness {
+    fn start(course: &Course, course_json: &str) -> Self {
+        let files = package_and_validate(
+            course,
+            course_json,
+            PackageStandard::Lti,
+            PackageStandardKind::Lti,
+        );
+        let course_dir = lti_temp_course_dir(&files);
+        let platform = StrictLtiPlatform::start(LTI_CLIENT_ID).expect("start StrictLtiPlatform");
+        let config = ToolConfig {
+            issuer: platform.issuer(),
+            client_id: LTI_CLIENT_ID.into(),
+            deployment_id: LTI_DEPLOYMENT_ID.into(),
+            auth_login_url: platform.auth_login_url(),
+            auth_token_url: platform.auth_token_url(),
+            jwks_url: platform.jwks_url(),
+            tool_url: "https://tool.example".into(),
+            private_key_pkcs8: LTI_TEST_KEY.to_vec(),
+            key_id: "tool-key".into(),
+        };
+        let server =
+            LtiServer::bind(config, course_dir.clone(), "127.0.0.1:0").expect("bind LtiServer");
+        let server_addr = server.local_addr().expect("local_addr");
+        std::thread::spawn(move || {
+            let _ = server.run();
+        });
+        platform.set_tool_jwks_url(format!("http://{server_addr}/.well-known/jwks.json"));
+        Self {
+            platform,
+            server_addr,
+            course_dir,
+            agent: lti_http_agent(),
+        }
+    }
+
+    fn launch(&self, lineitem_id: &str) -> (String, String) {
+        let target_link_uri = "https://tool.example/course/index.html";
+        let login_url = format!(
+            "http://{}/lti/login?iss={}&login_hint=user-1&target_link_uri={}&client_id={}",
+            self.server_addr,
+            lti_encode_component(&self.platform.issuer()),
+            lti_encode_component(target_link_uri),
+            lti_encode_component(LTI_CLIENT_ID),
+        );
+        let login_resp = self.agent.get(&login_url).call().expect("OIDC login");
+        assert_eq!(login_resp.status(), 302, "login must redirect");
+        let location = login_resp
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .expect("location header")
+            .to_owned();
+        let state_cookie = login_resp
+            .headers()
+            .get("set-cookie")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(';').next())
+            .expect("state cookie")
+            .to_owned();
+
+        let oidc_resp = self.agent.get(&location).call().expect("OIDC auth");
+        assert_eq!(oidc_resp.status(), 200, "strict platform accepts OIDC");
+        let params = self
+            .platform
+            .last_oidc_params()
+            .expect("recorded oidc params");
+        let state = params.get("state").expect("state").clone();
+        let nonce = params.get("nonce").expect("nonce").clone();
+
+        let lineitem = self.platform.lineitem_url(lineitem_id);
+        let claims = self.platform.default_claims(
+            &nonce,
+            lti_unix_now(),
+            target_link_uri,
+            Some(&lineitem),
+            &[LTI_SCORE_SCOPE],
+        );
+        let id_token = self.platform.sign_id_token(&claims).expect("sign id_token");
+        let launch_body = format!(
+            "state={}&id_token={}",
+            lti_encode_component(&state),
+            lti_encode_component(&id_token)
+        );
+        let launch_url = format!("http://{}/lti/launch", self.server_addr);
+        let launch_resp = self
+            .agent
+            .post(&launch_url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .header("Cookie", &state_cookie)
+            .send(&launch_body)
+            .expect("POST /lti/launch");
+        assert_eq!(launch_resp.status(), 302, "launch must redirect");
+        let redirect_location = launch_resp
+            .headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .expect("redirect location")
+            .to_owned();
+        let session_cookie = launch_resp
+            .headers()
+            .get("set-cookie")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(';').next())
+            .expect("cc_lti cookie")
+            .to_owned();
+        (session_cookie, redirect_location)
+    }
+
+    fn post_score(&self, session_cookie: &str, json_body: &str) -> u16 {
+        let url = format!("http://{}/lti/score", self.server_addr);
+        let resp = self
+            .agent
+            .post(&url)
+            .header("Cookie", session_cookie)
+            .header("Content-Type", "application/json")
+            .header("Origin", "https://tool.example")
+            .send(json_body)
+            .expect("POST /lti/score");
+        resp.status().as_u16()
+    }
+}
+
+fn drive_lti_inputs(
+    harness: &LtiHarness,
+    session_cookie: &str,
+    player: &mut Player<'_>,
+    reporter: &mut LtiReporter,
+    inputs: &[Input],
+) -> (Vec<Effect>, Vec<String>) {
+    let mut effects = Vec::new();
+    let mut warnings = Vec::new();
+    for input in inputs {
+        let step_effects = player.handle(input);
+        for eff in &step_effects {
+            if let Effect::Warning { message } = eff {
+                warnings.push(message.clone());
+            }
+        }
+        reporter.record(&step_effects);
+        while let Some(report) = reporter.take_pending() {
+            let status = harness.post_score(session_cookie, &report.json_body());
+            if (200..300).contains(&status) {
+                reporter.mark_sent();
+            } else {
+                reporter.mark_failed();
+            }
+        }
+        effects.extend(step_effects);
+    }
+    (effects, warnings)
+}
+
+#[test]
+fn b4_1_lti13_full_pass_end_to_end() {
+    let (course, course_json) = load_course("course.json");
+    let harness = LtiHarness::start(&course, &course_json);
+    let (session_cookie, redirect) = harness.launch("ref-pass-1");
+    assert_eq!(redirect, "/course/index.html?name=Ada%20Lovelace");
+
+    let mut player = Player::with_draw_seed(&course, 42).expect("player");
+    player.set_host_info(HostInfo {
+        learner_name: Some("Ada Lovelace".into()),
+        date: Some("2026-11-21".into()),
+    });
+    let mut reporter = LtiReporter::new();
+    let inputs = load_inputs("pass.inputs.json");
+    let (_effects, warnings) = drive_lti_inputs(
+        &harness,
+        &session_cookie,
+        &mut player,
+        &mut reporter,
+        &inputs,
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!reporter.lost());
+    assert!(
+        harness.platform.violations().is_empty(),
+        "LTI violations: {:?}",
+        harness.platform.violations()
+    );
+    let scores = harness.platform.scores();
+    assert!(!scores.is_empty(), "expected AGS score post");
+    let last = scores.last().expect("last score");
+    assert_eq!(last.payload["scoreGiven"].as_f64(), Some(100.0));
+    assert_eq!(last.payload["scoreMaximum"].as_f64(), Some(100.0));
+    assert_eq!(last.payload["comment"].as_str(), Some("passed"));
+    assert_eq!(last.payload["activityProgress"].as_str(), Some("Completed"));
+    assert_eq!(
+        last.payload["gradingProgress"].as_str(),
+        Some("FullyGraded")
+    );
+}
+
+#[test]
+fn b4_2_lti13_fail_retry_pass_and_high_water_suppression() {
+    let (course, course_json) = load_course("course.json");
+    let harness = LtiHarness::start(&course, &course_json);
+    let (session_cookie, _) = harness.launch("ref-retry-1");
+
+    let mut player = Player::with_draw_seed(&course, 42).expect("player");
+    let mut reporter = LtiReporter::new();
+    let inputs = load_inputs("retry-review.inputs.json");
+    let (_effects, warnings) = drive_lti_inputs(
+        &harness,
+        &session_cookie,
+        &mut player,
+        &mut reporter,
+        &inputs,
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+
+    // Subsequent fail (10%) in the same session must be suppressed by LtiReporter high-water!
+    reporter.record(&[Effect::Score {
+        raw: 10,
+        max: 100,
+        percent: 10,
+        status: CompletionStatus::Failed,
+    }]);
+    assert!(
+        reporter.take_pending().is_none(),
+        "LtiReporter must suppress fail after pass"
+    );
+
+    assert!(
+        harness.platform.violations().is_empty(),
+        "LTI violations: {:?}",
+        harness.platform.violations()
+    );
+    let scores = harness.platform.scores();
+    assert!(
+        scores
+            .iter()
+            .any(|s| s.payload["comment"].as_str() == Some("failed")),
+        "expected initial failing score: {scores:?}"
+    );
+    let last = scores.last().expect("last score");
+    assert_eq!(last.payload["scoreGiven"].as_f64(), Some(100.0));
+    assert_eq!(last.payload["comment"].as_str(), Some("passed"));
+}
+
+#[test]
+fn b4_3_lti13_completion_only_omits_score_given() {
+    let (course, course_json) = load_course("completion-only.json");
+    let harness = LtiHarness::start(&course, &course_json);
+    let (session_cookie, _) = harness.launch("ref-comp-1");
+
+    let mut player = Player::with_draw_seed(&course, 42).expect("player");
+    let mut reporter = LtiReporter::new();
+    let inputs = load_inputs("completion-only.inputs.json");
+    let (_effects, warnings) = drive_lti_inputs(
+        &harness,
+        &session_cookie,
+        &mut player,
+        &mut reporter,
+        &inputs,
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(
+        harness.platform.violations().is_empty(),
+        "LTI violations: {:?}",
+        harness.platform.violations()
+    );
+    let scores = harness.platform.scores();
+    assert_eq!(scores.len(), 1, "expected 1 completion payload: {scores:?}");
+    let payload = &scores[0].payload;
+    assert!(
+        payload.get("scoreGiven").is_none(),
+        "completion-only must omit scoreGiven: {payload}"
+    );
+    assert!(
+        payload.get("scoreMaximum").is_none(),
+        "completion-only must omit scoreMaximum: {payload}"
+    );
+    assert_eq!(payload["activityProgress"].as_str(), Some("Completed"));
+    assert_eq!(payload["gradingProgress"].as_str(), Some("FullyGraded"));
+}
+
+#[test]
+fn b4_4_lti13_relaunch_starts_fresh_and_name_populates_learner_name() {
+    let (course, course_json) = load_course("course.json");
+    let harness = LtiHarness::start(&course, &course_json);
+
+    // Launch 1: complete slide 1 and advance
+    let (_cookie1, redirect1) = harness.launch("ref-relaunch-1");
+    assert_eq!(redirect1, "/course/index.html?name=Ada%20Lovelace");
+    let mut player1 = Player::with_draw_seed(&course, 42).expect("player1");
+    player1.set_host_info(HostInfo {
+        learner_name: Some("Ada Lovelace".into()),
+        date: Some("2026-11-21".into()),
+    });
+    for input in load_inputs("partial-1.inputs.json") {
+        player1.handle(&input);
+    }
+    assert_ne!(
+        player1.current_slide().map(|s| s.id.as_str()),
+        Some("s01-intro")
+    );
+
+    // Relaunch: LTI has 0 suspend data, so it starts fresh at s01-intro with Learner.Name populated.
+    let (_cookie2, redirect2) = harness.launch("ref-relaunch-1");
+    assert_eq!(redirect2, "/course/index.html?name=Ada%20Lovelace");
+    let mut player2 = Player::with_draw_seed(&course, 43).expect("player2");
+    player2.set_host_info(HostInfo {
+        learner_name: Some("Ada Lovelace".into()),
+        date: Some("2026-11-21".into()),
+    });
+    player2.handle(&Input::Start);
+    assert_eq!(
+        player2.current_slide().map(|s| s.id.as_str()),
+        Some("s01-intro")
+    );
+    assert_eq!(
+        player2.value("Learner.Name"),
+        Some(Value::Text("Ada Lovelace".into()))
+    );
+    assert!(harness.platform.violations().is_empty());
+}
+
+#[test]
+fn b4_5_lti13_transient_502_retry_and_double_failure_lost() {
+    let (course, course_json) = load_course("course.json");
+    let harness = LtiHarness::start(&course, &course_json);
+    let (session_cookie, _) = harness.launch("ref-retry502-1");
+
+    // Sub-case 1: single 502 retries and succeeds (204, lost == false).
+    harness.platform.inject_score_status(502);
+    let mut reporter = LtiReporter::new();
+    reporter.record(&[Effect::Score {
+        raw: 90,
+        max: 100,
+        percent: 90,
+        status: CompletionStatus::Passed,
+    }]);
+    let first = reporter.take_pending().expect("first report");
+    let status1 = harness.post_score(&session_cookie, &first.json_body());
+    assert_eq!(status1, 502);
+    reporter.mark_failed();
+    assert!(!reporter.lost());
+    let retry = reporter.take_pending().expect("retry report");
+    let status2 = harness.post_score(&session_cookie, &retry.json_body());
+    assert_eq!(status2, 204);
+    reporter.mark_sent();
+    assert!(!reporter.lost());
+
+    // Sub-case 2: double 502 triggers reporting_lost.
+    harness.platform.inject_score_status(502);
+    harness.platform.inject_score_status(502);
+    let mut reporter2 = LtiReporter::new();
+    reporter2.record(&[Effect::Score {
+        raw: 80,
+        max: 100,
+        percent: 80,
+        status: CompletionStatus::Passed,
+    }]);
+    let r1 = reporter2.take_pending().expect("r1");
+    let s1 = harness.post_score(&session_cookie, &r1.json_body());
+    assert_eq!(s1, 502);
+    reporter2.mark_failed();
+    assert!(!reporter2.lost());
+    let r2 = reporter2.take_pending().expect("r2");
+    let s2 = harness.post_score(&session_cookie, &r2.json_body());
+    assert_eq!(s2, 502);
+    reporter2.mark_failed();
+    assert!(reporter2.lost());
+    assert!(reporter2.take_pending().is_none());
+    assert!(harness.platform.violations().is_empty());
+}
+
+#[test]
+fn b4_6_web_package_pass_fail_and_resume() {
+    let (course, course_json) = load_course("course.json");
+    let _files = package_and_validate(
+        &course,
+        &course_json,
+        PackageStandard::Web,
+        PackageStandardKind::Web,
+    );
+
+    let key = format!("coursecraft:resume:{}", course.id);
+    assert_eq!(key, "coursecraft:resume:reference-course");
+    let mut storage: BTreeMap<String, String> = BTreeMap::new();
+
+    // Partial-1 + persist on pagehide
+    let mut p1 = Player::with_draw_seed(&course, 42).expect("p1");
+    for input in load_inputs("partial-1.inputs.json") {
+        p1.handle(&input);
+    }
+    let saved = encode_suspend(&course, p1.state());
+    assert!(saved.starts_with("cc1:"));
+    storage.insert(key.clone(), saved);
+
+    // Relaunch from storage -> resume -> finish pass
+    let raw = storage.get(&key).expect("stored cc1");
+    let decoded = decode_suspend(&course, raw).expect("decode cc1");
+    let mut p2 = Player::resume(&course, decoded).expect("resume p2");
+    assert_eq!(p2.state().draw_seed, 42);
+    let start_fx = p2.handle(&Input::Start);
+    assert!(
+        !start_fx.iter().any(|e| matches!(e, Effect::Warning { .. })),
+        "unexpected warning on resume start: {start_fx:?}"
+    );
+    for input in load_inputs("partial-2-resume.inputs.json") {
+        let fx = p2.handle(&input);
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::Warning { .. })),
+            "unexpected warning: {fx:?}"
+        );
+    }
+    assert_eq!(p2.current_slide().map(|s| s.id.as_str()), Some("s20-cert"));
+}
+
+#[test]
+fn b4_7_web_start_over_and_corrupt_resilience() {
+    let (course, _) = load_course("course.json");
+    // Corrupt cc1:bad fails decode cleanly without panicking, allowing fresh start.
+    assert!(decode_suspend(&course, "cc1:bad").is_err());
+    let mut fresh = Player::with_draw_seed(&course, 42).expect("fresh");
+    fresh.handle(&Input::Start);
+    assert_eq!(
+        fresh.current_slide().map(|s| s.id.as_str()),
+        Some("s01-intro")
+    );
+}
+
+#[test]
+fn b4_8_cross_standard_runtime_parity() {
+    let (course, course_json) = load_course("course.json");
+    let inputs = load_inputs("pass.inputs.json");
+
+    // 1. `coursecraft-cli simulate --seed 42 --strict`
+    let cli_out = std::process::Command::new(env!("CARGO_BIN_EXE_coursecraft-cli"))
+        .args([
+            "simulate",
+            "--seed",
+            "42",
+            "--strict",
+            &ref_dir().join("course.json").to_string_lossy(),
+            &ref_dir().join("pass.inputs.json").to_string_lossy(),
+        ])
+        .output()
+        .expect("run coursecraft-cli simulate");
+    assert!(
+        cli_out.status.success(),
+        "simulate --strict failed: {}",
+        String::from_utf8_lossy(&cli_out.stderr)
+    );
+    let sim_effects: Vec<Effect> = String::from_utf8_lossy(&cli_out.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("parse simulate effect"))
+        .collect();
+
+    // 2. SCORM 1.2
+    let mut api12 = Strict12Adapter::new(StrictScorm12::new());
+    let (mut p12, mut b12, _, _) = start_scorm_session(&course, Standard::Scorm12, &mut api12, 42);
+    let res12 = drive_scorm_inputs(&mut p12, &mut b12, &mut api12, &course, &inputs, 0);
+    assert_eq!(res12.effects, sim_effects, "SCORM 1.2 parity mismatch");
+
+    // 3. SCORM 2004 4th Ed.
+    let mut api2004 = Strict2004Adapter::new(StrictScorm2004::with_config(Scorm2004Config {
+        edition: Scorm2004Edition::Fourth,
+        ..Scorm2004Config::default()
+    }));
+    let (mut p2004, mut b2004, _, _) =
+        start_scorm_session(&course, Standard::Scorm2004, &mut api2004, 42);
+    let res2004 = drive_scorm_inputs(&mut p2004, &mut b2004, &mut api2004, &course, &inputs, 0);
+    assert_eq!(res2004.effects, sim_effects, "SCORM 2004 parity mismatch");
+
+    // 4. cmi5
+    let mut lrs_cmi5 = StrictLrs::new();
+    let cmi5_params = register_cmi5_launch(
+        &mut lrs_cmi5,
+        "p1",
+        "sess-p1",
+        "tok-p1",
+        "Normal",
+        None,
+        None,
+    );
+    let mut api_cmi5 = StrictLrsAdapter::new(lrs_cmi5);
+    let mut now_ms = 0;
+    let (mut p_cmi5, mut b_cmi5, _, _) = start_xapi_session(
+        &course,
+        cmi5_params,
+        Flavor::Cmi5,
+        &mut api_cmi5,
+        42,
+        &mut now_ms,
+    );
+    let res_cmi5 = drive_xapi_inputs(
+        &mut p_cmi5,
+        &mut b_cmi5,
+        &mut api_cmi5,
+        &course,
+        &inputs,
+        0,
+        &mut now_ms,
+    );
+    assert_eq!(res_cmi5.effects, sim_effects, "cmi5 parity mismatch");
+
+    // 5. xAPI
+    let mut lrs_xapi = StrictLrs::new();
+    let xapi_params = register_xapi_launch(&mut lrs_xapi, Some("reg-p1"), "xapi-p1", "Basic dG9r");
+    let mut api_xapi = StrictLrsAdapter::new(lrs_xapi);
+    let mut now_ms = 0;
+    let (mut p_xapi, mut b_xapi, _, _) = start_xapi_session(
+        &course,
+        xapi_params,
+        Flavor::Xapi,
+        &mut api_xapi,
+        42,
+        &mut now_ms,
+    );
+    let res_xapi = drive_xapi_inputs(
+        &mut p_xapi,
+        &mut b_xapi,
+        &mut api_xapi,
+        &course,
+        &inputs,
+        0,
+        &mut now_ms,
+    );
+    assert_eq!(res_xapi.effects, sim_effects, "xAPI parity mismatch");
+
+    // 6. LTI 1.3
+    let harness = LtiHarness::start(&course, &course_json);
+    let (cookie, _) = harness.launch("ref-parity-1");
+    let mut p_lti = Player::with_draw_seed(&course, 42).expect("p_lti");
+    let mut rep_lti = LtiReporter::new();
+    let (res_lti, _) = drive_lti_inputs(&harness, &cookie, &mut p_lti, &mut rep_lti, &inputs);
+    assert_eq!(res_lti, sim_effects, "LTI 1.3 parity mismatch");
+
+    // 7. Standalone Web
+    let mut p_web = Player::with_draw_seed(&course, 42).expect("p_web");
+    let mut res_web = Vec::new();
+    for input in &inputs {
+        res_web.extend(p_web.handle(input));
+    }
+    assert_eq!(res_web, sim_effects, "Web parity mismatch");
 }

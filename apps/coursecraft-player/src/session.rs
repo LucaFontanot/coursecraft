@@ -1445,4 +1445,214 @@ mod tests {
             "no further requests after lost"
         );
     }
+
+    #[derive(Clone, Default)]
+    struct SharedMemoryStorage {
+        inner: Rc<RefCell<crate::web_resume::MemoryStorage>>,
+    }
+
+    impl crate::web_resume::SuspendStorage for SharedMemoryStorage {
+        fn get(&self, key: &str) -> Option<String> {
+            self.inner.borrow().get(key)
+        }
+
+        fn set(&mut self, key: &str, value: &str) {
+            self.inner.borrow_mut().set(key, value);
+        }
+
+        fn remove(&mut self, key: &str) {
+            self.inner.borrow_mut().remove(key);
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct QuotaFailingStorage;
+
+    impl crate::web_resume::SuspendStorage for QuotaFailingStorage {
+        fn get(&self, _key: &str) -> Option<String> {
+            None
+        }
+
+        fn set(&mut self, _key: &str, _value: &str) {
+            // Simulate QuotaExceededError being caught and ignored by LocalStorage.
+        }
+
+        fn remove(&mut self, _key: &str) {}
+    }
+
+    fn load_reference_course() -> Course {
+        let json = include_str!("../../../examples/reference-course/course.json");
+        Course::from_json(json).expect("reference course")
+    }
+
+    fn load_reference_inputs(name: &str) -> Vec<Input> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/reference-course")
+            .join(name);
+        let raw = std::fs::read_to_string(&path).expect("read reference inputs");
+        serde_json::from_str(&raw).expect("parse reference inputs")
+    }
+
+    #[test]
+    fn b4_6_web_resume_reference_course_pass_fail_and_pagehide_resume() {
+        let course = load_reference_course();
+        let expected_key = crate::web_resume::storage_key(&course);
+        assert_eq!(expected_key, "coursecraft:resume:reference-course");
+
+        let mut no_js = |_: &Player<'_>, _: &str| Vec::new();
+        let mut no_media = |_: &Player<'_>, _: &[Effect]| Vec::new();
+
+        // 1. Full pass
+        {
+            let storage = SharedMemoryStorage::default();
+            let mut session =
+                PlayerSession::start_web(&course, Box::new(storage), HostInfo::default(), 42)
+                    .expect("start_web pass");
+            for (idx, input) in load_reference_inputs("pass.inputs.json").iter().enumerate() {
+                let t = (idx as u64 + 1) * 100;
+                session.handle_input(input, t, t, &mut no_js, &mut no_media);
+            }
+            assert!(session.warnings.is_empty(), "{:?}", session.warnings);
+            assert!(session.ended);
+        }
+
+        // 2. Full fail
+        {
+            let storage = SharedMemoryStorage::default();
+            let mut session =
+                PlayerSession::start_web(&course, Box::new(storage), HostInfo::default(), 42)
+                    .expect("start_web fail");
+            for (idx, input) in load_reference_inputs("fail.inputs.json").iter().enumerate() {
+                let t = (idx as u64 + 1) * 100;
+                session.handle_input(input, t, t, &mut no_js, &mut no_media);
+            }
+            assert!(session.warnings.is_empty(), "{:?}", session.warnings);
+            assert!(session.ended);
+        }
+
+        // 3. Partial + pagehide -> relaunch -> resumes exact slide/vars/states/answers/bank draw_seed -> pass
+        let shared = SharedMemoryStorage::default();
+        let (saved_slide, saved_seed) = {
+            let mut session = PlayerSession::start_web(
+                &course,
+                Box::new(shared.clone()),
+                HostInfo::default(),
+                42,
+            )
+            .expect("start_web partial-1");
+            let mut t = 0_u64;
+            for input in load_reference_inputs("partial-1.inputs.json") {
+                t += 100;
+                session.handle_input(&input, t, t, &mut no_js, &mut no_media);
+            }
+            assert!(session.warnings.is_empty(), "{:?}", session.warnings);
+            session.on_page_close(t);
+            let slide = session
+                .player
+                .current_slide()
+                .map(|s| s.id.clone())
+                .expect("slide");
+            let seed = session.player.state().draw_seed;
+            (slide, seed)
+        };
+
+        let raw_saved = shared
+            .inner
+            .borrow()
+            .raw("coursecraft:resume:reference-course")
+            .expect("saved cc1: payload")
+            .to_owned();
+        assert!(raw_saved.starts_with("cc1:"));
+
+        let mut resumed =
+            PlayerSession::start_web(&course, Box::new(shared), HostInfo::default(), 999)
+                .expect("resume web");
+        assert_eq!(resumed.player.state().draw_seed, saved_seed);
+        resumed.handle_input(&Input::Start, 4_900, 4_900, &mut no_js, &mut no_media);
+        let mut t = 5_000_u64;
+        for input in load_reference_inputs("partial-2-resume.inputs.json") {
+            t += 100;
+            resumed.handle_input(&input, t, t, &mut no_js, &mut no_media);
+        }
+        assert!(resumed.warnings.is_empty(), "{:?}", resumed.warnings);
+        assert_eq!(
+            resumed.player.current_slide().map(|s| s.id.as_str()),
+            Some("s20-cert")
+        );
+        assert_ne!(saved_slide, "s20-cert");
+    }
+
+    #[test]
+    fn b4_7_web_resume_start_over_corrupt_and_quota_resilience() {
+        let course = load_reference_course();
+        let key = crate::web_resume::storage_key(&course);
+        let mut no_js = |_: &Player<'_>, _: &str| Vec::new();
+        let mut no_media = |_: &Player<'_>, _: &[Effect]| Vec::new();
+
+        // 1. Start Over clears storage and restarts fresh at s01-intro.
+        let shared = SharedMemoryStorage::default();
+        {
+            let mut session = PlayerSession::start_web(
+                &course,
+                Box::new(shared.clone()),
+                HostInfo::default(),
+                42,
+            )
+            .expect("start_web");
+            for (idx, input) in load_reference_inputs("partial-1.inputs.json")
+                .iter()
+                .enumerate()
+            {
+                let t = (idx as u64 + 1) * 100;
+                session.handle_input(input, t, t, &mut no_js, &mut no_media);
+            }
+            session.on_page_close(2_000);
+            assert!(shared.inner.borrow().raw(&key).is_some());
+            if let ReportingHost::Web(ref mut resume) = session.host {
+                resume.clear();
+            }
+            assert!(shared.inner.borrow().raw(&key).is_none());
+        }
+        let mut after_clear =
+            PlayerSession::start_web(&course, Box::new(shared.clone()), HostInfo::default(), 42)
+                .expect("after clear");
+        after_clear.handle_input(&Input::Start, 10, 10, &mut no_js, &mut no_media);
+        assert_eq!(
+            after_clear.player.current_slide().map(|s| s.id.as_str()),
+            Some("s01-intro")
+        );
+
+        // 2. Corrupt cc1:bad falls back cleanly to s01-intro without panicking.
+        shared.inner.borrow_mut().set(&key, "cc1:bad");
+        let mut corrupt_session =
+            PlayerSession::start_web(&course, Box::new(shared), HostInfo::default(), 42)
+                .expect("corrupt fallback");
+        corrupt_session.handle_input(&Input::Start, 10, 10, &mut no_js, &mut no_media);
+        assert_eq!(
+            corrupt_session
+                .player
+                .current_slide()
+                .map(|s| s.id.as_str()),
+            Some("s01-intro")
+        );
+
+        // 3. Quota-failing storage never panics and plays fresh cleanly.
+        let mut quota_session = PlayerSession::start_web(
+            &course,
+            Box::new(QuotaFailingStorage),
+            HostInfo::default(),
+            42,
+        )
+        .expect("quota storage");
+        for (idx, input) in load_reference_inputs("pass.inputs.json").iter().enumerate() {
+            let t = (idx as u64 + 1) * 100;
+            quota_session.handle_input(input, t, t, &mut no_js, &mut no_media);
+        }
+        assert!(
+            quota_session.warnings.is_empty(),
+            "{:?}",
+            quota_session.warnings
+        );
+        assert!(quota_session.ended);
+    }
 }

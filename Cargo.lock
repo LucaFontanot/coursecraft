@@ -862,6 +862,8 @@ dependencies = [
  "coursecraft-format",
  "coursecraft-lms",
  "coursecraft-logic",
+ "coursecraft-lti",
+ "coursecraft-lti-server",
  "coursecraft-pptx",
  "coursecraft-publish",
  "coursecraft-render",
@@ -871,6 +873,7 @@ dependencies = [
  "coursecraft-xapi",
  "serde",
  "serde_json",
+ "ureq",
 ]
 
 [[package]]
