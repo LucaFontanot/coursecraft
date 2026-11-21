@@ -76,6 +76,24 @@ pub trait LrsApi {
     fn new_uuid(&mut self) -> String;
 }
 
+impl<T: LrsApi + ?Sized> LrsApi for Box<T> {
+    fn send(&mut self, request: LrsRequest) {
+        (**self).send(request);
+    }
+
+    fn poll(&mut self) -> Vec<LrsResponse> {
+        (**self).poll()
+    }
+
+    fn now_iso(&mut self) -> String {
+        (**self).now_iso()
+    }
+
+    fn new_uuid(&mut self) -> String {
+        (**self).new_uuid()
+    }
+}
+
 /// What one [`XapiBridge::tick`] produced.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tick {

@@ -424,119 +424,139 @@ impl Playing {
 
     /// Handle a runtime input, emitting and logging each resulting effect.
     pub fn handle_input(&mut self, input: &Input, ctx: Option<&egui::Context>) {
-        let effects = self.player.handle(input);
         if matches!(input, Input::SetSpeed { .. }) {
             self.media.set_rate(self.player.speed());
         }
-        for effect in &effects {
-            if let Ok(line) = serde_json::to_string(effect) {
+        let media = &mut self.media;
+        let media_source = &self.media_source;
+        let log = &mut self.log;
+        let log_effects = self.log_effects;
+        let ended = &mut self.ended;
+        #[cfg(target_arch = "wasm32")]
+        let lms = &self.lms;
+        #[cfg(target_arch = "wasm32")]
+        let xapi = &self.xapi;
+        #[cfg(target_arch = "wasm32")]
+        let lti = &self.lti;
+        #[cfg(target_arch = "wasm32")]
+        let web_resume = &self.web_resume;
+        #[cfg(target_arch = "wasm32")]
+        let start_ms = self.start_ms;
+        #[cfg(target_arch = "wasm32")]
+        let frame = &mut self.frame;
+        #[cfg(target_arch = "wasm32")]
+        let a11y = &self.a11y;
+
+        crate::session::sequence_input(
+            &mut self.player,
+            input,
+            &mut |player, effects| {
                 #[cfg(not(target_arch = "wasm32"))]
-                if self.log_effects {
-                    println!("{line}");
-                }
+                let _ = (player, effects);
                 #[cfg(target_arch = "wasm32")]
-                if self.log_effects {
-                    web_sys::console::log_1(&eframe::wasm_bindgen::JsValue::from_str(&line));
-                }
-                push_log_entry(&mut self.log, line);
-            }
-            match effect {
-                Effect::OpenUrl { url } => {
-                    if let Some(ctx) = ctx {
-                        ctx.open_url(egui::OpenUrl::new_tab(url));
-                    }
-                }
-                Effect::Exit => {
-                    self.ended = true;
-                }
-                Effect::RunJavaScript { code } => {
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        let inputs = crate::web_object::run_javascript(&self.player, code);
-                        for input in inputs {
-                            self.handle_input(&input, ctx);
-                        }
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        let _ = code;
-                        let line = "JavaScript runs in the published course".to_owned();
-                        if self.log_effects {
-                            println!("{line}");
-                        }
-                        push_log_entry(&mut self.log, line);
-                    }
-                }
-                Effect::AnswerRequired =>
                 {
-                    #[cfg(target_arch = "wasm32")]
-                    if let Some(a11y) = &self.a11y {
-                        a11y.announce(self.player.course().chrome_string("answerRequired"));
+                    if let Some(lms) = lms {
+                        crate::lms::after_input(
+                            lms,
+                            player.course(),
+                            player.state(),
+                            effects,
+                            start_ms,
+                        );
+                    }
+                    if let Some(xapi) = xapi {
+                        crate::lrs::after_input(xapi, player.course(), player.state(), effects);
+                    }
+                    if let Some(lti) = lti {
+                        crate::lti::after_input(lti, effects);
+                    }
+                    if let Some(web_resume) = web_resume {
+                        crate::web_resume::after_input(
+                            web_resume,
+                            player.course(),
+                            player.state(),
+                            effects,
+                        );
                     }
                 }
-                Effect::Print { exclude, .. } => {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let _ = exclude;
-                    #[cfg(target_arch = "wasm32")]
-                    crate::print::print_slide(
-                        &self.player,
-                        &self.media_source,
-                        &mut self.frame,
-                        exclude,
-                    );
-                    #[cfg(not(target_arch = "wasm32"))]
-                    {
-                        let line = "Printing works in the published course or the editor preview."
-                            .to_owned();
-                        if self.log_effects {
+            },
+            &mut |player, effects| {
+                let mut followups = Vec::new();
+                for effect in effects {
+                    if let Ok(line) = serde_json::to_string(effect) {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if log_effects {
                             println!("{line}");
                         }
-                        push_log_entry(&mut self.log, line);
+                        #[cfg(target_arch = "wasm32")]
+                        if log_effects {
+                            web_sys::console::log_1(&eframe::wasm_bindgen::JsValue::from_str(
+                                &line,
+                            ));
+                        }
+                        push_log_entry(log, line);
+                    }
+                    match effect {
+                        Effect::OpenUrl { url } => {
+                            if let Some(ctx) = ctx {
+                                ctx.open_url(egui::OpenUrl::new_tab(url));
+                            }
+                        }
+                        Effect::Exit => {
+                            *ended = true;
+                        }
+                        Effect::RunJavaScript { code } => {
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                followups.extend(crate::web_object::run_javascript(player, code));
+                            }
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                let _ = code;
+                                let line = "JavaScript runs in the published course".to_owned();
+                                if log_effects {
+                                    println!("{line}");
+                                }
+                                push_log_entry(log, line);
+                            }
+                        }
+                        Effect::AnswerRequired =>
+                        {
+                            #[cfg(target_arch = "wasm32")]
+                            if let Some(a11y) = a11y {
+                                a11y.announce(player.course().chrome_string("answerRequired"));
+                            }
+                        }
+                        Effect::Print { exclude, .. } => {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            let _ = exclude;
+                            #[cfg(target_arch = "wasm32")]
+                            crate::print::print_slide(player, media_source, frame, exclude);
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                let line =
+                                    "Printing works in the published course or the editor preview."
+                                        .to_owned();
+                                if log_effects {
+                                    println!("{line}");
+                                }
+                                push_log_entry(log, line);
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                _ => {}
-            }
-        }
-        let followups = self
-            .media
-            .apply(&self.player, &effects, Some(&self.media_source));
-        for next in followups {
-            self.handle_input(&next, ctx);
-        }
-        #[cfg(target_arch = "wasm32")]
-        if let Some(ref lms) = self.lms {
-            crate::lms::after_input(
-                lms,
-                self.player.course(),
-                self.player.state(),
-                &effects,
-                self.start_ms,
-            );
-        }
-        #[cfg(target_arch = "wasm32")]
-        if let Some(ref xapi) = self.xapi {
-            crate::lrs::after_input(xapi, self.player.course(), self.player.state(), &effects);
-        }
-        #[cfg(target_arch = "wasm32")]
-        if let Some(ref lti) = self.lti {
-            crate::lti::after_input(lti, &effects);
-        }
-        #[cfg(target_arch = "wasm32")]
-        if let Some(ref web_resume) = self.web_resume {
-            crate::web_resume::after_input(
-                web_resume,
-                self.player.course(),
-                self.player.state(),
-                &effects,
-            );
-        }
-        #[cfg(target_arch = "wasm32")]
-        if effects.iter().any(|effect| matches!(effect, Effect::Exit))
-            && let Some(url) = self.xapi.as_ref().and_then(crate::lrs::return_url)
-            && let Some(window) = web_sys::window()
-        {
-            let _ = window.location().set_href(&url);
-        }
+                followups.extend(media.apply(player, effects, Some(media_source)));
+                #[cfg(target_arch = "wasm32")]
+                if effects.iter().any(|effect| matches!(effect, Effect::Exit))
+                    && let Some(url) = xapi.as_ref().and_then(crate::lrs::return_url)
+                    && let Some(window) = web_sys::window()
+                {
+                    let _ = window.location().set_href(&url);
+                }
+                followups
+            },
+        );
     }
 
     /// Poll media events, resolve pending media fetches, and update video layouts.
@@ -754,26 +774,20 @@ impl PlayerApp {
             match result {
                 Ok(web) => {
                     let (standard, warning) =
-                        crate::load::parse_package_standard(web.package_json.as_deref());
+                        coursecraft_lms::reporting_from_marker(web.package_json.as_deref());
                     if let Some(warning) = warning {
                         crate::lms::log_warn(&warning);
                     }
                     match crate::load::parse_course(&web.course_json, "course.json") {
                         Ok(course) => match standard {
-                            crate::load::PlayerStandard::Scorm12 => {
-                                self.start_scorm(course, coursecraft_lms::Standard::Scorm12)
+                            coursecraft_lms::ReportingStandard::Scorm(standard) => {
+                                self.start_scorm(course, standard)
                             }
-                            crate::load::PlayerStandard::Scorm2004 => {
-                                self.start_scorm(course, coursecraft_lms::Standard::Scorm2004)
+                            coursecraft_lms::ReportingStandard::Xapi(flavor) => {
+                                self.start_xapi(course, flavor);
                             }
-                            crate::load::PlayerStandard::Cmi5 => {
-                                self.start_xapi(course, coursecraft_xapi::Flavor::Cmi5);
-                            }
-                            crate::load::PlayerStandard::Xapi => {
-                                self.start_xapi(course, coursecraft_xapi::Flavor::Xapi);
-                            }
-                            crate::load::PlayerStandard::Lti => self.start_lti(course),
-                            crate::load::PlayerStandard::Web => self.start_web(course),
+                            coursecraft_lms::ReportingStandard::Lti => self.start_lti(course),
+                            coursecraft_lms::ReportingStandard::Web => self.start_web(course),
                         },
                         Err(e) => {
                             self.state = State::Failed(e);

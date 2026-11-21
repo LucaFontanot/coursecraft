@@ -6,7 +6,7 @@
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
-#[cfg(test)]
+#[cfg(any(not(target_arch = "wasm32"), test))]
 use std::collections::BTreeMap;
 #[cfg(target_arch = "wasm32")]
 use std::rc::Rc;
@@ -26,6 +26,20 @@ pub trait SuspendStorage {
     fn remove(&mut self, key: &str);
 }
 
+impl<T: SuspendStorage + ?Sized> SuspendStorage for Box<T> {
+    fn get(&self, key: &str) -> Option<String> {
+        (**self).get(key)
+    }
+
+    fn set(&mut self, key: &str, value: &str) {
+        (**self).set(key, value);
+    }
+
+    fn remove(&mut self, key: &str) {
+        (**self).remove(key);
+    }
+}
+
 /// Storage key for a course's web resume state.
 #[must_use]
 pub fn storage_key(course: &Course) -> String {
@@ -33,13 +47,13 @@ pub fn storage_key(course: &Course) -> String {
 }
 
 /// In-memory [`SuspendStorage`] implementation for tests.
-#[cfg(test)]
+#[cfg(any(not(target_arch = "wasm32"), test))]
 #[derive(Debug, Default, Clone)]
 pub struct MemoryStorage {
     entries: BTreeMap<String, String>,
 }
 
-#[cfg(test)]
+#[cfg(any(not(target_arch = "wasm32"), test))]
 impl MemoryStorage {
     /// Read an entry directly for assertions.
     #[must_use]
@@ -48,7 +62,7 @@ impl MemoryStorage {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(not(target_arch = "wasm32"), test))]
 impl SuspendStorage for MemoryStorage {
     fn get(&self, key: &str) -> Option<String> {
         self.entries.get(key).cloned()

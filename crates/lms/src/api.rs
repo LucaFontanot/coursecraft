@@ -50,3 +50,29 @@ impl<T: CmiApi + ?Sized> CmiApi for &mut T {
         (**self).last_error()
     }
 }
+
+impl<T: CmiApi + ?Sized> CmiApi for Box<T> {
+    fn initialize(&mut self) -> bool {
+        (**self).initialize()
+    }
+
+    fn get_value(&mut self, key: &str) -> String {
+        (**self).get_value(key)
+    }
+
+    fn set_value(&mut self, key: &str, value: &str) -> bool {
+        (**self).set_value(key, value)
+    }
+
+    fn commit(&mut self) -> bool {
+        (**self).commit()
+    }
+
+    fn finish(&mut self) -> bool {
+        (**self).finish()
+    }
+
+    fn last_error(&mut self) -> String {
+        (**self).last_error()
+    }
+}

@@ -1028,6 +1028,7 @@ dependencies = [
  "coursecraft-logic",
  "coursecraft-playback",
  "coursecraft-render",
+ "coursecraft-strict-lms",
  "coursecraft-xapi",
  "eframe",
  "egui",

@@ -23,10 +23,10 @@ mod lti;
 pub mod media;
 #[cfg(target_arch = "wasm32")]
 mod print;
+pub mod session;
 #[cfg(target_arch = "wasm32")]
 mod web_object;
-#[cfg(any(target_arch = "wasm32", test))]
-mod web_resume;
+pub mod web_resume;
 
 #[cfg(test)]
 mod tests;
