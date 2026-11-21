@@ -35,6 +35,8 @@ pub use zip;
 
 mod docx;
 mod theme;
+#[cfg_attr(not(test), allow(dead_code))]
+mod timing;
 
 use theme::{ThemePalette, resolve_first_color_child, resolve_solid_fill};
 
@@ -1029,8 +1031,9 @@ struct SlideTracker {
     path_count: usize,
     image_count: usize,
     table_count: usize,
-    /// DrawingML shape id (`cNvPr/@id`) to imported object id.
-    pptx_ids: HashMap<String, String>,
+    /// DrawingML shape id (`cNvPr/@id`) to imported object ids (may be multiple for
+    /// multi-subpath custom geometry or flattened `grpSp` groups).
+    pptx_ids: HashMap<String, Vec<String>>,
     pending_connectors: Vec<PendingConnector>,
 }
 
@@ -1058,6 +1061,15 @@ impl SlideTracker {
                 note: note.into(),
             });
         }
+    }
+
+    fn report_animation(&mut self, note: impl Into<String>) {
+        self.seen_skips.insert(SkipKind::Animation);
+        self.items.push(ReportItem {
+            slide: self.slide_idx,
+            kind: SkipKind::Animation,
+            note: note.into(),
+        });
     }
 }
 
@@ -2535,6 +2547,7 @@ fn drawing_id(node: &XmlNode) -> Option<&str> {
         .and_then(|nv| nv.child("cNvPr"))
         .or_else(|| node.child("nvPicPr").and_then(|nv| nv.child("cNvPr")))
         .or_else(|| node.child("nvCxnSpPr").and_then(|nv| nv.child("cNvPr")))
+        .or_else(|| node.child("nvGrpSpPr").and_then(|nv| nv.child("cNvPr")))
         .or_else(|| {
             node.child("nvGraphicFramePr")
                 .and_then(|nv| nv.child("cNvPr"))
@@ -2552,8 +2565,12 @@ fn record_pptx_id(node: &XmlNode, before: usize, cx: &mut SlideContext<'_, '_>) 
         .skip(before)
         .map(|object| object.id.clone())
         .collect();
-    for object_id in ids {
-        cx.tracker.pptx_ids.insert(drawing_id.to_owned(), object_id);
+    if !ids.is_empty() {
+        cx.tracker
+            .pptx_ids
+            .entry(drawing_id.to_owned())
+            .or_default()
+            .extend(ids);
     }
 }
 
@@ -2663,7 +2680,10 @@ fn resolve_connector_glues(objects: &mut [Object], tracker: &mut SlideTracker) {
             continue;
         };
         if let Some(connection) = &pending.start
-            && let Some(target_id) = tracker.pptx_ids.get(&connection.target)
+            && let Some(target_id) = tracker
+                .pptx_ids
+                .get(&connection.target)
+                .and_then(|ids| ids.last())
             && let Some(target) = targets.get(target_id)
             && !target.connector
         {
@@ -2681,7 +2701,10 @@ fn resolve_connector_glues(objects: &mut [Object], tracker: &mut SlideTracker) {
             });
         }
         if let Some(connection) = &pending.end
-            && let Some(target_id) = tracker.pptx_ids.get(&connection.target)
+            && let Some(target_id) = tracker
+                .pptx_ids
+                .get(&connection.target)
+                .and_then(|ids| ids.last())
             && let Some(target) = targets.get(target_id)
             && !target.connector
         {
@@ -2830,9 +2853,15 @@ fn process_group_children(
                     grp_flip_v,
                 );
 
+                let before = cx.objects.len();
                 process_group_children(child, new_transform, depth.saturating_add(1), cx)?;
+                record_pptx_id(child, before, cx);
             }
-            "cxnSp" => process_connector(child, transform, cx),
+            "cxnSp" => {
+                let before = cx.objects.len();
+                process_connector(child, transform, cx);
+                record_pptx_id(child, before, cx);
+            }
             "graphicFrame" => {
                 if child.find_descendant("tbl").is_some() {
                     let before = cx.objects.len();
