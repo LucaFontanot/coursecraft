@@ -2,7 +2,9 @@
 
 use crate::Editor;
 use crate::properties::{color_swatch_picker, is_committed, mark_color_picked};
-use coursecraft_course::{Color, Course, ObjectKind, StateDef};
+use coursecraft_course::{
+    Action, Color, Condition, Course, Event, ObjectKind, Slide, StateDef, Trigger,
+};
 use coursecraft_render::parse_color;
 use egui::{Rect, Response, RichText, TextEdit, Ui};
 use serde_json::Value as Json;
@@ -10,6 +12,8 @@ use std::collections::HashMap;
 
 pub const SUGGESTED_STATE_NAMES: &[&str] =
     &["visited", "selected", "disabled", "hover", "down", "hidden"];
+
+const MAX_STATE_NAME_LEN: usize = 64;
 
 /// Edit buffers for a single custom state.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -35,6 +39,7 @@ pub struct StatesState {
 
     pub new_state_name: String,
     pub edit_buffers: HashMap<String, StateEditBuffer>,
+    pub delete_error: Option<(String, String)>,
 
     // Tracked rects for test interaction
     pub new_state_name_rect: Option<Rect>,
@@ -50,6 +55,7 @@ impl StatesState {
         }
         self.last_synced_revision.set(revision);
         self.last_synced_selection = selection.clone();
+        self.delete_error = None;
 
         let Some(slide) = course.slide(&selection.slide) else {
             self.edit_buffers.clear();
@@ -137,6 +143,75 @@ fn push_add_state(
     }
 }
 
+fn validate_new_state_name(trimmed: &str, existing: &[StateDef]) -> Result<(), String> {
+    if trimmed.is_empty() {
+        return Err("State name cannot be empty".to_owned());
+    }
+    if trimmed.eq_ignore_ascii_case("normal") {
+        return Err("'normal' is a built-in state name".to_owned());
+    }
+    if trimmed.chars().count() > MAX_STATE_NAME_LEN {
+        return Err(format!(
+            "State name cannot exceed {MAX_STATE_NAME_LEN} characters"
+        ));
+    }
+    if existing.iter().any(|s| s.name == trimmed) {
+        return Err(format!("State '{trimmed}' already exists"));
+    }
+    Ok(())
+}
+
+fn condition_references_state(cond: &Condition, obj_id: &str, state_name: &str) -> bool {
+    match cond {
+        Condition::ObjectState { object, state, .. } => object == obj_id && state == state_name,
+        Condition::All(list) | Condition::Any(list) => list
+            .iter()
+            .any(|c| condition_references_state(c, obj_id, state_name)),
+        Condition::Not(inner) => condition_references_state(inner, obj_id, state_name),
+        Condition::Compare { .. } => false,
+    }
+}
+
+fn trigger_references_state(trig: &Trigger, obj_id: &str, state_name: &str) -> bool {
+    let in_event = matches!(
+        &trig.when,
+        Event::StateChanges { object, to: Some(to) } if object == obj_id && to == state_name
+    );
+    let in_action = matches!(
+        &trig.action,
+        Action::ChangeState { object, state } if object == obj_id && state == state_name
+    );
+    let in_cond = trig
+        .condition
+        .as_ref()
+        .is_some_and(|c| condition_references_state(c, obj_id, state_name));
+    in_event || in_action || in_cond
+}
+
+fn state_delete_blocker(
+    slide: &Slide,
+    obj_id: &str,
+    state_name: &str,
+    initial_state: &str,
+) -> Option<String> {
+    if initial_state == state_name {
+        return Some(format!(
+            "Cannot delete '{state_name}': it is the object's initial state"
+        ));
+    }
+    let used_by_trigger = slide
+        .triggers
+        .iter()
+        .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+        .any(|t| trigger_references_state(t, obj_id, state_name));
+    if used_by_trigger {
+        return Some(format!(
+            "Cannot delete '{state_name}': referenced by a trigger"
+        ));
+    }
+    None
+}
+
 /// Render the States panel section in the right column.
 pub fn show_states_section(
     editor: &mut Editor,
@@ -167,6 +242,19 @@ pub fn show_states_section(
     let initial_state = obj.initial_state.clone();
     let obj_kind = obj.kind.clone();
     let states_copy = obj.states.clone();
+    if let Some(ref preview) = editor.ui.preview_state
+        && !obj.has_state(preview)
+    {
+        editor.ui.preview_state = None;
+    }
+
+    let delete_blockers: HashMap<String, String> = states_copy
+        .iter()
+        .filter_map(|s| {
+            state_delete_blocker(slide, &obj_id_str, &s.name, &initial_state)
+                .map(|reason| (s.name.clone(), reason))
+        })
+        .collect();
 
     // 1. Add State form
     ui.horizontal(|ui| {
@@ -178,19 +266,20 @@ pub fn show_states_section(
         );
         editor.ui.states.new_state_name_rect = Some(r_name.rect);
 
-        let trimmed = editor.ui.states.new_state_name.trim();
-        let is_valid = !trimmed.is_empty()
-            && trimmed != "normal"
-            && !states_copy.iter().any(|s| s.name == trimmed);
+        let trimmed = editor.ui.states.new_state_name.trim().to_owned();
+        let validation = validate_new_state_name(&trimmed, &states_copy);
+        let is_valid = validation.is_ok();
 
         let add_btn = ui.add_enabled(is_valid, egui::Button::new("+ Add"));
         editor.ui.states.add_button_rect = Some(add_btn.rect);
 
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter))
             && (r_name.has_focus() || r_name.lost_focus());
-        if (add_btn.clicked() || (enter && is_valid)) && is_valid {
-            push_add_state(actions, &slide_id, &obj_id_str, &obj_kind, trimmed);
+        if (add_btn.clicked() || enter) && is_valid {
+            push_add_state(actions, &slide_id, &obj_id_str, &obj_kind, &trimmed);
             editor.ui.states.new_state_name.clear();
+        } else if enter && let Err(err) = validation {
+            editor.ui.last_error = Some((err, editor.ui.current_time));
         }
     });
 
@@ -288,6 +377,14 @@ pub fn show_states_section(
 
         let state_name = state.name.clone();
 
+        let blocker = delete_blockers.get(&state_name).cloned();
+        let delete_err = editor
+            .ui
+            .states
+            .delete_error
+            .as_ref()
+            .and_then(|(s, msg)| (s == &state_name).then(|| msg.clone()));
+
         let row_resp = ui
             .group(|ui| {
                 ui.horizontal(|ui| {
@@ -332,6 +429,9 @@ pub fn show_states_section(
                         crate::quiet_button(ui, "Delete state", crate::QuietTone::Danger, true);
                     buf.delete_rect = Some(del_btn.rect);
                     if del_btn.clicked() {
+                        if let Some(reason) = blocker.clone() {
+                            editor.ui.states.delete_error = Some((state_name.clone(), reason));
+                        }
                         actions.push((
                             "object.delete_state",
                             serde_json::json!({
@@ -342,6 +442,13 @@ pub fn show_states_section(
                         ));
                     }
                 });
+                if let Some(msg) = delete_err {
+                    let p = coursecraft_render::palette(ui.ctx());
+                    ui.label(coursecraft_render::caption(msg).color(p.danger));
+                } else if let Some(reason) = blocker {
+                    let p = coursecraft_render::palette(ui.ctx());
+                    ui.label(coursecraft_render::caption(reason).color(p.text_secondary));
+                }
 
                 // Fill edit (for Button / Shape)
                 let state_fill_allowed = match &obj_kind {

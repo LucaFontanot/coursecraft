@@ -176,6 +176,8 @@ mod m25_input_tests;
 #[cfg(test)]
 mod m26_text_format_tests;
 #[cfg(test)]
+mod m27_triggers_states_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -3971,6 +3973,7 @@ impl Editor {
 
         // Auto-switch inspector tab on selection change
         if self.selection.object != self.ui.last_selected_object {
+            self.ui.preview_state = None;
             match (&self.selection.object, &self.ui.inspector_tab) {
                 (Some(_), InspectorTab::Slide | InspectorTab::Course) => {
                     self.ui.inspector_tab = InspectorTab::Format;
