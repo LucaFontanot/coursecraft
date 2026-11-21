@@ -1,0 +1,50 @@
+[
+  { "input": "click", "object": "s11-ok-btn" },
+
+  { "input": "match_selected", "left": "m1", "right": "m1" },
+  { "input": "match_selected", "left": "m2", "right": "m2" },
+  { "input": "match_selected", "left": "m3", "right": "m3" },
+  { "input": "click", "object": "s12-submit" },
+  { "input": "click", "object": "s12-next" },
+
+  { "input": "hotspot_clicked", "x": 150.0, "y": 150.0 },
+  { "input": "hotspot_clicked", "x": 310.0, "y": 150.0 },
+  { "input": "click", "object": "s13-submit" },
+  { "input": "click", "object": "s13-next" },
+
+  { "input": "drag_dropped", "item": "d1", "target": "t1", "x": 310.0, "y": 160.0 },
+  { "input": "drag_dropped", "item": "d2", "target": "t2", "x": 310.0, "y": 250.0 },
+  { "input": "click", "object": "s14-submit" },
+  { "input": "click", "object": "s14-next" },
+
+  { "input": "click", "object": "card1" },
+  { "input": "click", "object": "s15-submit" },
+  { "input": "click", "object": "s15-next" },
+
+  { "input": "select_choice", "choice": "3" },
+  { "input": "click", "object": "s16a-submit" },
+  { "input": "click", "object": "s16a-next" },
+
+  { "input": "text_entered", "text": "Great" },
+  { "input": "click", "object": "s16b-submit" },
+  { "input": "click", "object": "s16b-next" },
+
+  { "input": "text_entered", "text": "Detailed notes." },
+  { "input": "click", "object": "s16c-submit" },
+  { "input": "click", "object": "s16c-next" },
+
+  { "input": "select_choice", "choice": "a" },
+  { "input": "click", "object": "bk-submit" },
+  { "input": "click", "object": "bk-next" },
+
+  { "input": "select_choice", "choice": "a" },
+  { "input": "click", "object": "bk-submit" },
+  { "input": "click", "object": "bk-next" },
+
+  { "input": "select_choice", "choice": "a" },
+  { "input": "click", "object": "bk-submit" },
+  { "input": "click", "object": "bk-next" },
+
+  { "input": "click", "object": "btn-cert" },
+  { "input": "click", "object": "btn-exit-cert" }
+]

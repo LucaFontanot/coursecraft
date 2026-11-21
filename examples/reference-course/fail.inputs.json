@@ -1,0 +1,79 @@
+[
+  { "input": "start" },
+  { "input": "tick", "ms": 2100 },
+  { "input": "click", "object": "s01-btn-action" },
+  { "input": "set_variable", "variable": "v_tag", "value": "Alpha" },
+  { "input": "click", "object": "s01-btn-next" },
+  { "input": "click", "object": "btn-s02-next" },
+  { "input": "click", "object": "s03-btn-next" },
+  { "input": "click", "object": "s04-btn-next" },
+  { "input": "click", "object": "s05-btn-next" },
+  { "input": "click", "object": "btn-to-quiz" },
+
+  { "input": "select_choice", "choice": "c" },
+  { "input": "click", "object": "s07-submit" },
+  { "input": "click", "object": "s07-ta-btn" },
+  { "input": "select_choice", "choice": "c" },
+  { "input": "click", "object": "s07-submit" },
+  { "input": "click", "object": "s07-no-btn" },
+
+  { "input": "select_choice", "choice": "a" },
+  { "input": "select_choice", "choice": "c" },
+  { "input": "submit" },
+  { "input": "click", "object": "s08-next" },
+
+  { "input": "select_choice", "choice": "false" },
+  { "input": "click", "object": "s09-submit" },
+  { "input": "click", "object": "s09-next" },
+
+  { "input": "text_entered", "text": "Wrong" },
+  { "input": "click", "object": "s10-submit" },
+  { "input": "click", "object": "s10-next" },
+
+  { "input": "sequence_moved", "choice": "third", "to": 0 },
+  { "input": "click", "object": "s11-submit" },
+  { "input": "click", "object": "s11-no-btn" },
+
+  { "input": "match_selected", "left": "m1", "right": "m3" },
+  { "input": "match_selected", "left": "m2", "right": "m1" },
+  { "input": "match_selected", "left": "m3", "right": "m2" },
+  { "input": "click", "object": "s12-submit" },
+  { "input": "click", "object": "s12-next" },
+
+  { "input": "hotspot_clicked", "x": 450.0, "y": 150.0 },
+  { "input": "click", "object": "s13-submit" },
+  { "input": "click", "object": "s13-next" },
+
+  { "input": "drag_dropped", "item": "d1", "target": "t3", "x": 310.0, "y": 340.0 },
+  { "input": "click", "object": "s14-submit" },
+  { "input": "click", "object": "s14-next" },
+
+  { "input": "click", "object": "s15-submit" },
+  { "input": "click", "object": "s15-next" },
+
+  { "input": "select_choice", "choice": "1" },
+  { "input": "click", "object": "s16a-submit" },
+  { "input": "click", "object": "s16a-next" },
+
+  { "input": "text_entered", "text": "Ok" },
+  { "input": "click", "object": "s16b-submit" },
+  { "input": "click", "object": "s16b-next" },
+
+  { "input": "text_entered", "text": "Notes" },
+  { "input": "click", "object": "s16c-submit" },
+  { "input": "click", "object": "s16c-next" },
+
+  { "input": "select_choice", "choice": "b" },
+  { "input": "click", "object": "bk-submit" },
+  { "input": "click", "object": "bk-next" },
+
+  { "input": "select_choice", "choice": "b" },
+  { "input": "click", "object": "bk-submit" },
+  { "input": "click", "object": "bk-next" },
+
+  { "input": "select_choice", "choice": "b" },
+  { "input": "click", "object": "bk-submit" },
+  { "input": "click", "object": "bk-next" },
+
+  { "input": "click", "object": "btn-exit" }
+]
