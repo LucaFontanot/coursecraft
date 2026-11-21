@@ -352,7 +352,13 @@ fn halign(align: Align) -> egui::Align {
     }
 }
 
-fn justify_galley(galley: &mut Arc<egui::Galley>, target_width: f32) {
+/// Spread extra horizontal space on wrapped lines across inter-word spaces
+/// so each non-final line fills `target_width`.
+///
+/// Updates both `row.glyphs` (for hit testing, cursor placement, underlines and
+/// links) and `row.visuals.mesh` (which egui actually renders), plus the row
+/// and galley bounding boxes.
+pub fn justify_galley(galley: &mut Arc<egui::Galley>, target_width: f32) {
     if !target_width.is_finite() || target_width <= 0.0 {
         return;
     }
@@ -363,12 +369,23 @@ fn justify_galley(galley: &mut Arc<egui::Galley>, target_width: f32) {
         if is_last || placed_row.ends_with_newline {
             continue;
         }
-        let extra = target_width - placed_row.size.x;
+        let glyphs = &placed_row.glyphs;
+        let Some(first_non_ws) = glyphs.iter().position(|glyph| !glyph.chr.is_whitespace()) else {
+            continue;
+        };
+        let Some(last_non_ws) = glyphs.iter().rposition(|glyph| !glyph.chr.is_whitespace()) else {
+            continue;
+        };
+        let effective_end = last_non_ws + 1;
+        let content_right = glyphs[..effective_end]
+            .iter()
+            .map(|glyph| glyph.pos.x + glyph.advance_width)
+            .fold(0.0f32, f32::max);
+        let extra = target_width - content_right;
         if extra <= 0.5 || !extra.is_finite() {
             continue;
         }
-        let space_count = placed_row
-            .glyphs
+        let space_count = glyphs[first_non_ws..effective_end]
             .iter()
             .filter(|glyph| glyph.chr == ' ')
             .count();
@@ -377,15 +394,57 @@ fn justify_galley(galley: &mut Arc<egui::Galley>, target_width: f32) {
         }
         let per_space = extra / space_count as f32;
         let row = Arc::make_mut(&mut placed_row.row);
+        let glyph_vertex_end = row
+            .visuals
+            .glyph_vertex_range
+            .end
+            .min(row.visuals.mesh.vertices.len());
         let mut shift = 0.0f32;
-        for glyph in &mut row.glyphs {
+        for (idx, glyph) in row.glyphs.iter_mut().enumerate() {
             glyph.pos.x += shift;
-            if glyph.chr == ' ' {
+            if shift != 0.0 && !glyph.uv_rect.is_nothing() {
+                let v_start = glyph.first_vertex as usize;
+                let v_end = v_start.saturating_add(4);
+                if v_end <= glyph_vertex_end {
+                    for vertex in &mut row.visuals.mesh.vertices[v_start..v_end] {
+                        vertex.pos.x += shift;
+                    }
+                }
+            }
+            if idx >= first_non_ws && idx < effective_end && glyph.chr == ' ' {
                 shift += per_space;
             }
         }
+        // Stretch any row-wide strikethrough/underline hline vertices that
+        // epaint appended after the glyph vertices.
+        if glyph_vertex_end < row.visuals.mesh.vertices.len() && content_right > 0.0 {
+            let content_left = row.glyphs[first_non_ws..effective_end]
+                .iter()
+                .map(|glyph| glyph.pos.x)
+                .fold(f32::INFINITY, f32::min);
+            let old_span = content_right - content_left;
+            if old_span > 0.5 && old_span.is_finite() {
+                let scale_x = (target_width - content_left) / old_span;
+                for vertex in &mut row.visuals.mesh.vertices[glyph_vertex_end..] {
+                    vertex.pos.x = content_left + (vertex.pos.x - content_left) * scale_x;
+                }
+            }
+        }
+        row.visuals.mesh_bounds = row.visuals.mesh.calc_bounds();
         row.size.x = target_width;
     }
+
+    let mut rect = egui::Rect::ZERO;
+    let mut mesh_bounds = egui::Rect::NOTHING;
+    for placed_row in &g.rows {
+        rect |= placed_row.rect();
+        mesh_bounds |= placed_row
+            .visuals
+            .mesh_bounds
+            .translate(placed_row.pos.to_vec2());
+    }
+    g.rect = rect;
+    g.mesh_bounds = mesh_bounds;
 }
 
 fn is_vector_bullet_char(ch: char) -> bool {

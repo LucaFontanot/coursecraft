@@ -4942,6 +4942,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let base_buffer = edit.buffer.clone();
     let course_align = style.align;
     let is_multiline = !edit.is_button;
+    let wrap = style.wrap;
     let mut layouter = |egui_ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();
         let (runs_for_s, paras_for_s) = if s == base_buffer {
@@ -4971,7 +4972,11 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             wrap_width,
             is_multiline,
         );
-        egui_ui.fonts_mut(|fonts| fonts.layout_job(job))
+        let mut galley = egui_ui.fonts_mut(|fonts| fonts.layout_job(job));
+        if course_align == coursecraft_course::Align::Justify && is_multiline && wrap {
+            coursecraft_render::justify_galley(&mut galley, wrap_width.max(1.0));
+        }
+        galley
     };
     let edit_builder = if edit.is_button {
         egui::TextEdit::singleline(&mut buffer)

@@ -60,4 +60,26 @@ fn format_panel_sets_justify_wrap_direction_and_border_on_text_box() {
     assert_eq!(style.align, Align::Justify);
     assert_eq!(style.direction, TextDirection::Vertical270);
     assert!(!style.wrap);
+
+    // Undo and redo preserve Justify cleanly.
+    harness.editor.session.undo().expect("undo 1");
+    harness.idle_frame();
+    harness.editor.session.undo().expect("undo 2");
+    harness.idle_frame();
+    harness.editor.session.undo().expect("undo 3");
+    harness.idle_frame();
+    harness.editor.session.redo().expect("redo 1");
+    harness.idle_frame();
+    let obj = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .and_then(|s| s.object("title"))
+        .map(|(o, _)| o.clone())
+        .expect("title object");
+    let ObjectKind::Text { style, .. } = &obj.kind else {
+        panic!("expected text object");
+    };
+    assert_eq!(style.align, Align::Justify);
 }

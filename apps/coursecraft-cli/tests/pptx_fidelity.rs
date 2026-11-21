@@ -100,7 +100,7 @@ const MIN_SCORES: [f64; 18] = [
     0.8859, // Slide 06 (measured 0.9159)
     0.9401, // Slide 07 (measured 0.9701)
     0.9212, // Slide 08 (measured 0.9512)
-    0.9005, // Slide 09 (measured 0.9305)
+    0.9008, // Slide 09 (measured 0.9308)
     0.9353, // Slide 10 (measured 0.9653)
     0.9402, // Slide 11 (measured 0.9702)
     0.9310, // Slide 12 (measured 0.9610)
