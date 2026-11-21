@@ -242,15 +242,6 @@ fn a11_4_keyboard_shortcuts_arm_and_apply_to_multi_select() {
 
 #[test]
 fn a11_7_painting_across_base_and_slide_layer() {
-    let mut h = TestHarness::new(hello());
-    h.editor
-        .session
-        .execute(
-            "object.set",
-            &serde_json::json!({ "slide": "s-intro", "object": "btn-start", "fill": "#123456" }),
-        )
-        .ok();
-    // Set fill via object.set_fill or direct mutation before TestHarness
     let mut course = hello();
     for obj in &mut course.scenes[0].slides[0].objects {
         if obj.id == "btn-start"
