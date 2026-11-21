@@ -72,7 +72,7 @@ pub fn show_version_history_window(
     Dialog::new("Version History")
         .open(&mut open)
         .resizable(true)
-        .width(460.0)
+        .width(540.0)
         .show(ctx, |ui| {
             if editor.ui.versions.folder_project {
                 ui.label(
