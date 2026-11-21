@@ -41,6 +41,8 @@ use theme::{ThemePalette, resolve_first_color_child, resolve_solid_fill};
 pub use docx::{DocxError, MAX_DOCX_BYTES, MAX_DOCX_ENTRIES, MAX_DOCX_XML_DEPTH, docx_to_text};
 
 #[cfg(test)]
+mod bughunt_m26_a13_pptx;
+#[cfg(test)]
 mod m26_fidelity_tests;
 #[cfg(test)]
 mod tests;

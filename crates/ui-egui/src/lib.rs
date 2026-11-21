@@ -102,6 +102,28 @@ mod bughunt_m24b_trigger;
 #[cfg(test)]
 mod bughunt_m25_templates;
 #[cfg(test)]
+mod bughunt_m26_a10_question_panel;
+#[cfg(test)]
+mod bughunt_m26_a11_format_painter;
+#[cfg(test)]
+mod bughunt_m26_a12_preview_close;
+#[cfg(test)]
+mod bughunt_m26_a1_text_format;
+#[cfg(test)]
+mod bughunt_m26_a2_gradients;
+#[cfg(test)]
+mod bughunt_m26_a4_timeline;
+#[cfg(test)]
+mod bughunt_m26_a5_shape_preview;
+#[cfg(test)]
+mod bughunt_m26_a6_dialogs;
+#[cfg(test)]
+mod bughunt_m26_a7_video;
+#[cfg(test)]
+mod bughunt_m26_a9_base_slide_view;
+#[cfg(test)]
+mod bughunt_m26_crosscut;
+#[cfg(test)]
 mod bughunt_menus;
 #[cfg(test)]
 mod bughunt_stress;

@@ -1874,4 +1874,6 @@ fn push_str_capped(out: &mut String, s: &str, max_len: usize) -> bool {
 }
 
 #[cfg(test)]
+mod bughunt_m26_a3_exit_transitions;
+#[cfg(test)]
 mod tests;

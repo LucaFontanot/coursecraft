@@ -39,6 +39,8 @@ pub mod ticker;
 pub mod view;
 
 #[cfg(test)]
+mod bughunt_m26_render;
+#[cfg(test)]
 mod review_tests;
 #[cfg(test)]
 mod shape_tests;

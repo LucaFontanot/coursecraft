@@ -2335,4 +2335,6 @@ pub fn tiny_wav_bytes() -> Vec<u8> {
 }
 
 #[cfg(test)]
+mod bughunt_m26_a7_native_video;
+#[cfg(test)]
 mod tests;
