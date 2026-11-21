@@ -265,7 +265,8 @@ fn cc_2_pack_unpack_pack_and_cli_diff_lossless_roundtrip() {
 #[test]
 fn cc_3_published_web_zip_preserves_course_and_media() {
     let player_dist = repo_root().join("target/player-dist");
-    if !player_dist.exists() {
+    // Publishing needs a built web player; CI runs the gate without one.
+    if !player_dist.join("index.html").exists() {
         return;
     }
     let out_zip = repo_root().join("target/m26-cc3-web.zip");
@@ -279,7 +280,9 @@ fn cc_3_published_web_zip_preserves_course_and_media() {
                 "-o",
                 out_zip.to_str().unwrap(),
                 "--standard",
-                "web"
+                "web",
+                "--player",
+                player_dist.to_str().unwrap(),
             ])
             .status()
             .unwrap()

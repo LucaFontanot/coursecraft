@@ -223,7 +223,8 @@ fn a13_3_fidelity_pptx_validates_plays_and_publishes() {
     let _ = coursecraft_format::open_project(&bytes).expect("reopen .ccraft");
 
     let player_dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/player-dist");
-    if player_dist.exists() {
+    // Publishing needs a built web player; CI runs the gate without one.
+    if player_dist.join("index.html").exists() {
         let work_dir = std::env::temp_dir().join("m26-bughunt-fid-pub");
         let _ = std::fs::remove_dir_all(&work_dir);
         std::fs::create_dir_all(work_dir.join("media")).unwrap();
@@ -243,6 +244,8 @@ fn a13_3_fidelity_pptx_validates_plays_and_publishes() {
                     out_zip.to_str().unwrap(),
                     "--standard",
                     "web",
+                    "--player",
+                    player_dist.to_str().unwrap(),
                 ])
                 .status()
                 .unwrap()
