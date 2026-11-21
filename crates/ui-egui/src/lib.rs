@@ -109,6 +109,8 @@ mod canvas_speed_tests;
 #[cfg(test)]
 mod daily_fixes_tests;
 #[cfg(test)]
+mod dialog_reopen_tests;
+#[cfg(test)]
 mod document_tests;
 #[cfg(test)]
 mod eyedropper_tests;
