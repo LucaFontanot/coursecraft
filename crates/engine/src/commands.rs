@@ -2302,9 +2302,36 @@ fn scene_delete(s: &mut Session, p: &Json) -> Result<Json> {
         .iter()
         .position(|sc| sc.id == sid)
         .ok_or_else(|| EngineError::NotFound(format!("scene {sid:?} does not exist")))?;
+    let deleted_sids: Vec<String> = s.course.scenes[pos]
+        .slides
+        .iter()
+        .map(|sl| sl.id.clone())
+        .collect();
     s.course.scenes.remove(pos);
+    let removed = if was_valid {
+        let mut needles = vec![format!("scene {sid:?} does not exist")];
+        for deleted_sid in &deleted_sids {
+            needles.push(format!("slide {deleted_sid:?} does not exist"));
+        }
+        let remaining_sids: Vec<String> = s
+            .course
+            .slides()
+            .chain(s.course.banks.iter().flat_map(|b| b.slides.iter()))
+            .filter(|sl| {
+                !sl.triggers.is_empty() || sl.layers.iter().any(|l| !l.triggers.is_empty())
+            })
+            .map(|sl| sl.id.clone())
+            .collect();
+        let mut total = 0;
+        for other_sid in &remaining_sids {
+            total += remove_dangling_triggers(s, other_sid, &needles);
+        }
+        total
+    } else {
+        0
+    };
     keep_valid(s, was_valid)?;
-    Ok(Json::Null)
+    Ok(json!({ "removed_triggers": removed }))
 }
 
 fn slide_add(s: &mut Session, p: &Json) -> Result<Json> {

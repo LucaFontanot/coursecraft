@@ -600,6 +600,7 @@ fn show_slide_rename_editor(editor: &mut Editor, ui: &mut Ui, rect: Rect) {
 fn slides_using_master(course: &Course, master_id: &str) -> usize {
     course
         .slides()
+        .chain(course.templates.iter())
         .filter(|slide| slide.master.as_deref() == Some(master_id))
         .count()
 }
