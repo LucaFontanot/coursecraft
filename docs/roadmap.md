@@ -274,6 +274,16 @@ Review: `docs/bug-hunt/2026-11-20-code-review.md`. 20 steps by Gemini 4 Hydrogen
 - Section 6: validation limits and a safe clamp, desktop playback speed, editor settings persistence checked, Web resume, long AI documents in parts, shared template library, web editor open/save/publish.
 - Open decisions (spec rules, not changed): 3.16 timers keep the "only while its timeline runs" rule (a validation warning was added); 4.2 cmi5 pass after a fail in the same session; 4.9 SCORM 1.2 response identifiers.
 
+## M26 Tester feedback round 2 ✅
+
+Feedback: `docs/user-feedback/aurelie-v02-issues.md` (A1–A13 from Aurelie, A14–A15 from the owner). Steps by Gemini 4 Hydrogen (agy CLI); test plan by Gemini 4 Neon; checked by Opus.
+
+- A1–A15 fixed, each reproduced through the real user path first.
+- PowerPoint fidelity: a reference deck (`crates/pptx/tests/fidelity/`) compared slide by slide with PowerPoint's own pictures in a permanent test.
+- Test round from all angles (`docs/testing/m26-test-plan.md`, `docs/bug-hunt/2026-11-21-m26-tests.md`): 19 more bugs found and fixed.
+- Installed fonts in the editor, fonts from PowerPoint files, fonts embedded automatically at publish (respecting the licence flag).
+- Owner testing: formatting kept while editing, bigger font picker, justify, Fill/Outline switches, dash spacing, timeline past a video, exit effect names.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.

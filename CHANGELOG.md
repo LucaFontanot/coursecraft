@@ -2,6 +2,22 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.3.0
+
+A big round of fixes from real testing, much better PowerPoint import, real fonts, and a Windows installer. Thanks to Aurelie for testing so thoroughly and reporting the issues behind most of these fixes.
+
+- **Text formatting:** font size, letter spacing, line spacing and paragraph spacing accept typed and dragged values, for one or many objects, with inline editing open or closed. Text keeps its fonts, colours, sizes, underline, strikethrough and super/subscript while you edit it. Justify really justifies.
+- **Fonts:** fonts installed on your computer show in the editor and in a bigger, searchable font picker. Fonts packed in a PowerPoint file are imported. Publishing embeds the fonts a course uses (fonts whose licence forbids embedding are listed instead).
+- **Gradients:** any number of colours, reorderable, with hard edges where two colours meet, everywhere: canvas, preview, thumbnails and the published course.
+- **Animations and timeline:** exit animations play with a slide transition; exit effects are named as exits (Fly out, Fade out…); dragging the playhead shows the slide at that moment; the timeline plays to the end of the slide after a video ends (the video holds its last frame); the timeline scroll bar no longer covers the end of a bar.
+- **Shapes and lines:** the drag preview shows the real shape; "Fill" and "Outline" are ticked switches; dashes and dots have adjustable length and gap; pattern fills.
+- **PowerPoint import:** grouped shapes, pictures and cropped pictures, picture fills, theme colours, slide backgrounds, master and layout content, bullets and numbering, text margins, no-wrap text, exact line spacing, 4:3 and portrait slides, custom shapes, tables and video. A built-in comparison test checks every slide of a reference deck against PowerPoint's own pictures.
+- **Editing:** Insert ▸ Interaction and other dialogs open full size every time; Paint copies a format (Esc or a click on empty canvas cancels); the preview closes with a click outside or Esc, and editor shortcuts no longer change the course behind it; the question editor is also in the right panel; a layer can show the base slide normally, dimmed or hidden; deleting a slide keeps your place in the list; the Spacebar no longer starts the timeline while you type.
+- **Player:** at the end of a slide the Pause button shows Play and replays the slide, instead of a second Replay button.
+- **Video:** selecting a video no longer freezes or crashes the app on Windows; a video that cannot be decoded shows a placeholder.
+- **Windows:** a real installer (Start menu entry and uninstall), alongside the portable `.exe`.
+- **Also fixed:** Find and Replace with built-in variables, Version History for `course.json` projects, inserting library templates with links or similar media names, headless MCP save keeping media, "Start over" playback speed on the web, and the web editor saving unused media.
+
 ## 0.2.5
 
 Fixes from a full code review, faster everywhere, and new features: resume on the web, desktop playback speed, a shared template library, and open, save and publish in the web editor.
