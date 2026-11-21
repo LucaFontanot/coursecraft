@@ -1836,7 +1836,9 @@ fn image_state_src_overrides_base_src_keeping_alt() {
         Visual::Image {
             crop: None,
             src: "b.png".into(),
-            alt: "A photo".into()
+            alt: "A photo".into(),
+            outline: None,
+            shape: None,
         }
     );
     for state in ["normal", "undefined-state"] {
@@ -1845,7 +1847,9 @@ fn image_state_src_overrides_base_src_keeping_alt() {
             Visual::Image {
                 crop: None,
                 src: "a.png".into(),
-                alt: "A photo".into()
+                alt: "A photo".into(),
+                outline: None,
+                shape: None,
             }
         );
     }
@@ -1898,6 +1902,8 @@ fn compose_produces_visual_image() {
             crop: None,
             src: "picture.png".to_string(),
             alt: "A mountain view".to_string(),
+            outline: None,
+            shape: None,
         }
     );
 }
@@ -1978,6 +1984,8 @@ fn a_full_crop_composes_exactly_like_no_crop() {
             crop: None,
             src: "picture.png".into(),
             alt: "A view".into(),
+            outline: None,
+            shape: None,
         }
     );
 }
@@ -2029,6 +2037,8 @@ fn a_crop_passes_through_to_the_visual() {
             )),
             src: "picture.png".into(),
             alt: "A view".into(),
+            outline: None,
+            shape: None,
         }
     );
 }
@@ -2092,6 +2102,8 @@ fn painting_registers_texture_caches_failure_and_retain_drops() {
                 crop: None,
                 src: "photo.png".to_string(),
                 alt: "Good Image".to_string(),
+                outline: None,
+                shape: None,
             },
             dimmed: false,
             opacity: 1.0,
@@ -2114,6 +2126,8 @@ fn painting_registers_texture_caches_failure_and_retain_drops() {
                 crop: None,
                 src: "missing.png".to_string(),
                 alt: "Missing Image".to_string(),
+                outline: None,
+                shape: None,
             },
             dimmed: false,
             opacity: 1.0,
@@ -2853,6 +2867,10 @@ fn paint_without_install_fonts_falls_back_without_panic() {
                 valign: coursecraft_course::VAlign::Top,
                 paragraphs: Vec::new(),
                 autofit: coursecraft_course::Autofit::None,
+                outline: None,
+                wrap: true,
+                insets: None,
+                direction: coursecraft_course::TextDirection::Horizontal,
             },
             dimmed: false,
             opacity: 1.0,
@@ -3377,6 +3395,7 @@ fn keyboard_focus_reaches_text_links() {
         paragraphs: Vec::new(),
         autofit: Autofit::None,
         text_style: None,
+        outline: None,
     };
     let mut player = Player::new(&course).expect("player");
     player.handle(&Input::Start);
@@ -3481,7 +3500,9 @@ fn align_and_valign_positions_on_known_frame() {
         (coursecraft_course::Align::Right, 500.0),
     ] {
         let x = match align {
-            coursecraft_course::Align::Left => screen_rect.left(),
+            coursecraft_course::Align::Left | coursecraft_course::Align::Justify => {
+                screen_rect.left()
+            }
             coursecraft_course::Align::Center => screen_rect.center().x,
             coursecraft_course::Align::Right => screen_rect.right(),
         };
@@ -3515,6 +3536,7 @@ fn plain_text_renders_as_one_run() {
             paragraphs: Vec::new(),
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
+            outline: None,
         },
         frame: coursecraft_course::Rect {
             x: 0.0,
@@ -5542,6 +5564,77 @@ mod offscreen_tests {
     }
 
     #[test]
+    fn three_stop_linear_and_radial_gradients_render_all_stops_sorted_by_position() {
+        let stops = serde_json::json!([
+            { "color": "#FFFF00", "position": 1.0 },
+            { "color": "#0000FF", "position": 0.0 },
+            { "color": "#FF0000", "position": 0.5 }
+        ]);
+        let linear = gradient_slide(
+            serde_json::json!({ "type": "linear", "angle": 0, "stops": stops }),
+            0.0,
+        );
+        let img = render_slide_rgba(&linear, "slide1", &RenderOptions::default(), &DummyMedia)
+            .expect("render linear");
+        let left = pixel_at(&img, 205, 300);
+        let mid = pixel_at(&img, 300, 300);
+        let right = pixel_at(&img, 395, 300);
+        assert!(left[2] > 200 && left[0] < 60, "left blue: {left:?}");
+        assert!(
+            mid[0] > 200 && mid[1] < 60 && mid[2] < 60,
+            "mid red: {mid:?}"
+        );
+        assert!(
+            right[0] > 200 && right[1] > 200 && right[2] < 60,
+            "right yellow: {right:?}"
+        );
+
+        let radial = gradient_slide(
+            serde_json::json!({
+                "type": "radial",
+                "center": [0.5, 0.5],
+                "stops": [
+                    { "color": "#0000FF", "position": 0.0 },
+                    { "color": "#FF0000", "position": 0.5 },
+                    { "color": "#FFFF00", "position": 1.0 }
+                ]
+            }),
+            0.0,
+        );
+        let img_r = render_slide_rgba(&radial, "slide1", &RenderOptions::default(), &DummyMedia)
+            .expect("render radial");
+        let c = pixel_at(&img_r, 300, 300);
+        let m = pixel_at(&img_r, 350, 350);
+        let e = pixel_at(&img_r, 397, 397);
+        assert!(c[2] > 200 && c[0] < 60, "centre blue: {c:?}");
+        assert!(m[0] > 200 && m[1] < 60 && m[2] < 60, "mid red: {m:?}");
+        assert!(e[0] > 200 && e[1] > 200 && e[2] < 60, "edge yellow: {e:?}");
+    }
+
+    #[test]
+    fn duplicate_end_stop_still_samples_final_colour() {
+        let linear = gradient_slide(
+            serde_json::json!({
+                "type": "linear",
+                "angle": 0,
+                "stops": [
+                    { "color": "#0000FF", "position": 0.0 },
+                    { "color": "#FF0000", "position": 1.0 },
+                    { "color": "#FFFF00", "position": 1.0 }
+                ]
+            }),
+            0.0,
+        );
+        let img = render_slide_rgba(&linear, "slide1", &RenderOptions::default(), &DummyMedia)
+            .expect("render");
+        let right = pixel_at(&img, 399, 300);
+        assert!(
+            right[0] > 200 && right[1] > 200 && right[2] < 60,
+            "rightmost pixel uses last stop yellow: {right:?}"
+        );
+    }
+
+    #[test]
     fn half_opacity_red_over_white_is_pink() {
         let course = make_course(serde_json::json!({
             "id": "slide1",
@@ -6285,17 +6378,21 @@ fn a_diagonal_path_hits_its_line_not_its_bounding_box() {
                 ],
                 style: coursecraft_course::PathStyle::Straight,
                 closed: false,
+                subpaths: Vec::new(),
                 fill: None,
+                fill_style: None,
                 outline: coursecraft_course::Outline {
                     color: Color("#1F1F1F".into()),
                     width: 2.0,
                     dash: coursecraft_course::DashStyle::Solid,
+                    dash_pattern: None,
                 },
                 start_end: coursecraft_course::LineEnd::None,
                 end_end: coursecraft_course::LineEnd::None,
                 connector: None,
                 start_glue: None,
                 end_glue: None,
+                text: None,
             },
         },
         frame: ModelRect {
@@ -6356,17 +6453,21 @@ fn a_closed_filled_path_hits_inside_its_outline() {
                 ],
                 style: coursecraft_course::PathStyle::Straight,
                 closed: true,
+                subpaths: Vec::new(),
                 fill: Some(Color("#2F6FEB".into())),
+                fill_style: None,
                 outline: coursecraft_course::Outline {
                     color: Color("#1F1F1F".into()),
                     width: 2.0,
                     dash: coursecraft_course::DashStyle::Solid,
+                    dash_pattern: None,
                 },
                 start_end: coursecraft_course::LineEnd::None,
                 end_end: coursecraft_course::LineEnd::None,
                 connector: None,
                 start_glue: None,
                 end_glue: None,
+                text: None,
             },
         },
         frame: ModelRect {
@@ -8138,4 +8239,221 @@ fn text_effects_reach_the_layout() {
     let font = &sup.galley.job.sections[0].format.font_id;
     assert!((font.size - 20.0 * crate::text_layout::SCRIPT_SCALE).abs() < 0.01);
     assert_eq!(sup.galley.job.sections[0].format.valign, egui::Align::TOP);
+}
+
+#[test]
+fn exit_animations_render_with_and_without_slide_transition() {
+    use coursecraft_course::{
+        AnimEffect, Animation, Direction, Easing, Transition, TransitionEffect,
+    };
+
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    {
+        let s2 = course.slide_mut("s-quiz").expect("s-quiz");
+        s2.duration_ms = 5000;
+        s2.transition = Some(Transition {
+            effect: TransitionEffect::Push {
+                from: Direction::Right,
+            },
+            duration_ms: 500,
+        });
+        s2.objects = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "fly-obj",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+                "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 100.0 },
+                "timing": { "start_ms": 0, "end_ms": null }
+            }))
+            .expect("fly-obj"),
+            serde_json::from_value(serde_json::json!({
+                "id": "fade-obj",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#10B981" },
+                "frame": { "x": 400.0, "y": 100.0, "w": 200.0, "h": 100.0 },
+                "timing": { "start_ms": 0, "end_ms": null }
+            }))
+            .expect("fade-obj"),
+        ];
+        s2.objects[0].exit = Some(Animation {
+            effect: AnimEffect::FlyIn {
+                from: Direction::Left,
+            },
+            duration_ms: 1000,
+            easing: Easing::Linear,
+        });
+        s2.objects[1].exit = Some(Animation {
+            effect: AnimEffect::Fade,
+            duration_ms: 1000,
+            easing: Easing::Linear,
+        });
+        s2.triggers.clear();
+    }
+
+    let mut player = Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+
+    let ctx = egui::Context::default();
+    let mut view = SlideView::new();
+    let run_frame = |view: &mut SlideView, player: &Player<'_>, time: f64| {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            time: Some(time),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            let _ = view.show(ui, player, None);
+        });
+        out.textures_delta.clear();
+    };
+
+    // Frame 1 on s-intro, then navigate to s-quiz (starts Push transition).
+    run_frame(&mut view, &player, 0.0);
+    player.handle(&Input::Jump {
+        slide: "s-quiz".into(),
+    });
+    assert_eq!(player.current_slide().expect("s2").id, "s-quiz");
+    run_frame(&mut view, &player, 0.1);
+    assert!(view.transition_active());
+
+    // Advance past transition (0.6s) and to mid-exit (4500ms).
+    player.handle(&Input::Tick { ms: 4500 });
+    run_frame(&mut view, &player, 4.6);
+    assert!(!view.transition_active());
+
+    let fly_item = view
+        .last_items()
+        .iter()
+        .find(|it| it.hit == Hit::Object("fly-obj".into()))
+        .expect("fly-obj mid-exit");
+    assert!(
+        (fly_item.rect.min.x - (-50.0)).abs() < 1e-2,
+        "fly-obj should have moved halfway off-screen left (100 - 150 = -50), got {}",
+        fly_item.rect.min.x
+    );
+    let fade_item = view
+        .last_items()
+        .iter()
+        .find(|it| it.hit == Hit::Object("fade-obj".into()))
+        .expect("fade-obj mid-exit");
+    assert!(
+        (fade_item.opacity - 0.5).abs() < 1e-2,
+        "fade-obj should be at 0.5 opacity mid-exit, got {}",
+        fade_item.opacity
+    );
+
+    // Advance to end of timeline (5000ms): both gone.
+    player.handle(&Input::Tick { ms: 500 });
+    run_frame(&mut view, &player, 5.1);
+    assert!(
+        !view
+            .last_items()
+            .iter()
+            .any(|it| it.hit == Hit::Object("fly-obj".into())
+                || it.hit == Hit::Object("fade-obj".into()))
+    );
+}
+
+#[test]
+fn text_layout_custom_bullets_numbering_schemes_start_at_and_nested_continuation() {
+    use coursecraft_course::{Autofit, ListKind, NumberScheme, Paragraph, VAlign};
+
+    let ctx = text_layout_context();
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 500.0));
+    let runs = vec![crate::compose::ResolvedTextRun {
+        text: "one\ntwo\nthree\nsubA\nsubB\nfour\nrom1\nrom2\nalpha1\nstart5".into(),
+        size: 16.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        link: None,
+        font: None,
+        strikethrough: false,
+        baseline: coursecraft_course::Baseline::Normal,
+        letter_spacing: 0.0,
+    }];
+    let paragraphs = vec![
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 1,
+            number_scheme: Some(NumberScheme::AlphaLcParenR),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 1,
+            number_scheme: Some(NumberScheme::AlphaLcParenR),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::RomanLcPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::RomanLcPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::AlphaUcPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicParenR),
+            start_at: Some(5),
+            ..Paragraph::default()
+        },
+    ];
+    let laid = crate::text_layout::layout_text(
+        &ctx,
+        rect,
+        1.0,
+        &runs,
+        &paragraphs,
+        coursecraft_course::Align::Left,
+        VAlign::Top,
+        Autofit::None,
+    );
+    let markers: Vec<String> = laid
+        .paragraphs
+        .iter()
+        .filter_map(|p| p.marker.as_ref().map(|m| m.galley.text().to_owned()))
+        .collect();
+    assert_eq!(
+        markers,
+        vec!["1.", "2.", "3.", "a)", "b)", "4.", "i.", "ii.", "A.", "5)"]
+    );
 }

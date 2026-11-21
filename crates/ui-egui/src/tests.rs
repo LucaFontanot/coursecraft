@@ -2793,6 +2793,7 @@ fn describe_covers_all_action_and_event_variants() {
                     paragraphs: Vec::new(),
                     autofit: coursecraft_course::Autofit::None,
                     text_style: None,
+                    outline: None,
                 },
                 frame: Rect::default(),
                 timing: Default::default(),
@@ -5873,14 +5874,29 @@ fn typing_in_styled_text_preserves_runs() {
     harness.idle_frame();
 
     // Now edit text_body and blur/change
-    let frame_pos = harness.find_text("Font").expect("Font label to blur");
+    let mut text_edit_pos = None;
+    for _ in 0..20 {
+        let panel = harness.right_panel_rect();
+        if let Some(pos) = harness.find_text_in("Text Content", panel) {
+            text_edit_pos = Some(pos + vec2(110.0, 0.0));
+            break;
+        }
+        harness.scroll_over(panel.center(), -120.0);
+    }
+    let text_edit_pos = text_edit_pos.expect("Text Content label");
     harness.editor.ui.properties.text_body = "Thanks a lot for completing the course.".to_owned();
     // Simulate commit via blur
-    let text_edit_pos = harness
-        .find_text("Text Content")
-        .expect("Text Content label")
-        + vec2(110.0, 0.0);
     harness.click_at(text_edit_pos);
+    let mut frame_pos = None;
+    for _ in 0..20 {
+        let panel = harness.right_panel_rect();
+        if let Some(pos) = harness.find_text_in("Font", panel) {
+            frame_pos = Some(pos);
+            break;
+        }
+        harness.scroll_over(panel.center(), 120.0);
+    }
+    let frame_pos = frame_pos.expect("Font label to blur");
     harness.click_at(frame_pos);
     harness.idle_frame();
 
@@ -7949,6 +7965,8 @@ fn image_object(src: &str) -> Object {
             src: src.to_owned(),
             alt: "Picture".to_owned(),
             crop: None,
+            outline: None,
+            shape: None,
         },
         frame: CourseRect {
             x: 600.0,
@@ -7993,6 +8011,8 @@ fn accessibility_section_renders_and_a_click_selects_the_object() {
                 src: "photo.png".to_owned(),
                 alt: String::new(),
                 crop: None,
+                outline: None,
+                shape: None,
             },
             frame: CourseRect {
                 x: 600.0,
@@ -8404,6 +8424,8 @@ fn inspector_reset_clears_the_crop_and_restores_the_scale() {
             w: 0.5,
             h: 1.0,
         }),
+        outline: None,
+        shape: None,
     };
     let id = object.id.clone();
     course
@@ -14690,6 +14712,9 @@ fn timeline_space_does_nothing_in_a_text_field() {
         is_shape: false,
         cell: None,
         just_entered: false,
+        live_runs: Vec::new(),
+        live_paragraphs: Vec::new(),
+        last_revision: 0,
     });
     harness.idle_frame();
     harness.press(Key::Space, Modifiers::NONE);
@@ -17662,4 +17687,81 @@ fn sanitize_media_src_avoids_case_only_collisions() {
     let picked = crate::sanitize_media_src("logo.png", &existing);
     assert!(!picked.eq_ignore_ascii_case("Logo.png"));
     assert_eq!(picked, "logo-2.png");
+}
+
+#[test]
+fn exit_animations_play_in_preview_with_slide_transition() {
+    let mut harness = TestHarness::new(timeline_media_course());
+    harness.editor.selection.slide = "s1".into();
+    // Add a second object on s1 for the Disappear/Fade exit.
+    let added = harness.editor.run(
+        "object.add",
+        serde_json::json!({
+            "slide": "s1",
+            "id": "shape2",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#10B981" },
+            "frame": { "x": 400.0, "y": 120.0, "w": 160.0, "h": 80.0 }
+        }),
+    );
+    assert!(added.is_some());
+
+    let (cmd1, params1) = crate::properties::animation_command(
+        "exit",
+        "fly_in",
+        coursecraft_course::Direction::Left,
+        1000,
+        coursecraft_course::Easing::Linear,
+        "s1",
+        "txt",
+    );
+    assert!(harness.editor.run(cmd1, params1).is_some());
+
+    let (cmd2, params2) = crate::properties::animation_command(
+        "exit",
+        "fade",
+        coursecraft_course::Direction::Bottom,
+        1000,
+        coursecraft_course::Easing::Linear,
+        "s1",
+        "shape2",
+    );
+    assert!(harness.editor.run(cmd2, params2).is_some());
+
+    // Add slide transition on s1.
+    assert!(
+        harness
+            .editor
+            .run(
+                "slide.set_transition",
+                serde_json::json!({
+                    "slide": "s1",
+                    "transition": { "type": "fade", "duration_ms": 500 }
+                }),
+            )
+            .is_some()
+    );
+
+    let slide = harness.editor.session.course.slide("s1").expect("s1");
+    let duration_ms = slide.duration_ms;
+    assert!(slide.transition.is_some());
+    assert!(slide.object("txt").expect("txt").0.exit.is_some());
+    assert!(slide.object("shape2").expect("shape2").0.exit.is_some());
+
+    let mut preview = crate::preview::Preview::new(&harness.editor.session.course, Some("s1"));
+    let state = preview.state.take().expect("preview state");
+    let mut player =
+        coursecraft_logic::Player::resume(&preview.course, state).expect("resume player");
+
+    // Advance to mid-exit (duration_ms - 500ms).
+    let mid_ms = duration_ms.saturating_sub(500);
+    player.handle(&coursecraft_logic::Input::Tick { ms: mid_ms });
+    let txt_mid = player.sample_object("txt").expect("txt mid-exit");
+    assert!(txt_mid.offset.0 < 0.0, "fly_in exit should shift left");
+    let shape_mid = player.sample_object("shape2").expect("shape2 mid-exit");
+    assert!((shape_mid.opacity - 0.5).abs() < 1e-2);
+
+    // Advance to end of timeline.
+    player.handle(&coursecraft_logic::Input::Tick { ms: 500 });
+    assert!(player.sample_object("txt").is_none());
+    assert!(player.sample_object("shape2").is_none());
 }

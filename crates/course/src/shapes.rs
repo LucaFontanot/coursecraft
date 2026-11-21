@@ -1728,6 +1728,7 @@ pub fn adjust_spec(kind: ShapeKind) -> AdjustSpec {
         ShapeKind::Cube => spec(&[0.25], &[0.05], &[0.45]),
         ShapeKind::LeftBracket | ShapeKind::RightBracket => spec(&[0.3], &[0.02], &[0.9]),
         ShapeKind::LeftBrace | ShapeKind::RightBrace => spec(&[0.85], &[0.1], &[0.95]),
+        ShapeKind::Triangle => spec(&[0.5], &[0.0], &[1.0]),
         _ => NO_ADJUST,
     }
 }

@@ -296,11 +296,13 @@ fn check_course_fonts(cx: &mut Ctx<'_>) {
                 format!("font src {src:?} must be under fonts/"),
             );
         } else if !(src.to_ascii_lowercase().ends_with(".ttf")
-            || src.to_ascii_lowercase().ends_with(".otf"))
+            || src.to_ascii_lowercase().ends_with(".otf")
+            || src.to_ascii_lowercase().ends_with(".ttc")
+            || src.to_ascii_lowercase().ends_with(".otc"))
         {
             cx.err(
                 format!("{p}/src"),
-                format!("font src {src:?} must be a .ttf or .otf file"),
+                format!("font src {src:?} must be a .ttf or .otf file (or .ttc/.otc)"),
             );
         }
     }
@@ -1058,6 +1060,28 @@ fn check_paragraphs(cx: &mut Ctx<'_>, paragraphs: &[crate::Paragraph], p: &str) 
                 );
             }
         }
+        if let Some(color) = &paragraph.bullet_color
+            && !color.is_valid()
+        {
+            cx.err(
+                format!("{p}/paragraphs/{i}/bullet_color"),
+                "bullet_color must be a valid hex colour",
+            );
+        }
+        if let Some(size) = paragraph.bullet_size
+            && (!size.is_finite() || !(1.0..=400.0).contains(&size))
+        {
+            cx.err(
+                format!("{p}/paragraphs/{i}/bullet_size"),
+                "bullet_size must be finite and within 1..=400",
+            );
+        }
+        if paragraph.start_at == Some(0) {
+            cx.err(
+                format!("{p}/paragraphs/{i}/start_at"),
+                "start_at must be at least 1",
+            );
+        }
     }
 }
 
@@ -1089,6 +1113,26 @@ fn check_fill_style(cx: &mut Ctx<'_>, style: &crate::FillStyle, p: &str) {
                 cx.warn(
                     format!("{p}/fill_style/src"),
                     "picture fill has no image; the solid fill is drawn instead",
+                );
+            }
+        }
+        crate::FillStyle::Pattern { preset, fg, bg } => {
+            if preset.trim().is_empty() {
+                cx.warn(
+                    format!("{p}/fill_style/preset"),
+                    "pattern fill has no preset name; falling back to default pattern",
+                );
+            }
+            if !fg.is_valid() {
+                cx.err(
+                    format!("{p}/fill_style/fg"),
+                    format!("color {:?} is not #RRGGBB or #RRGGBBAA", fg.0),
+                );
+            }
+            if !bg.is_valid() {
+                cx.err(
+                    format!("{p}/fill_style/bg"),
+                    format!("color {:?} is not #RRGGBB or #RRGGBBAA", bg.0),
                 );
             }
         }
@@ -1148,6 +1192,11 @@ fn check_shape_outline_and_text(
                 "outline width must be finite and within 0..=50",
             );
         }
+        check_dash_pattern(
+            cx,
+            outline.dash_pattern.as_deref(),
+            &format!("{p}/kind/outline"),
+        );
     }
     if let Some(text) = text {
         if !crate::shape_allows_text(shape) {
@@ -1216,6 +1265,11 @@ fn check_path(cx: &mut Ctx<'_>, path: &crate::Path, p: &str) {
             "outline width must be finite and within 0..=50",
         );
     }
+    check_dash_pattern(
+        cx,
+        path.outline.dash_pattern.as_deref(),
+        &format!("{p}/kind/path/outline"),
+    );
     for (end, glue) in [
         ("start_glue", &path.start_glue),
         ("end_glue", &path.end_glue),
@@ -1358,6 +1412,33 @@ fn check_table(
                 "border width must be finite and within 0..=50",
             );
         }
+        check_dash_pattern(
+            cx,
+            outline.dash_pattern.as_deref(),
+            &format!("{p}/kind/borders/{name}"),
+        );
+    }
+}
+
+fn check_dash_pattern(cx: &mut Ctx<'_>, pattern: Option<&[f32]>, p: &str) {
+    let Some(pattern) = pattern else {
+        return;
+    };
+    if pattern.is_empty() || pattern.len() > 32 || pattern.len() % 2 != 0 {
+        cx.err(
+            format!("{p}/dash_pattern"),
+            "dash_pattern must have an even number of entries between 2 and 32",
+        );
+        return;
+    }
+    if pattern
+        .iter()
+        .any(|v| !v.is_finite() || *v <= 0.0 || *v > 100.0)
+    {
+        cx.err(
+            format!("{p}/dash_pattern"),
+            "dash_pattern entries must be finite and within (0, 100]",
+        );
     }
 }
 

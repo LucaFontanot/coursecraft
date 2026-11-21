@@ -125,7 +125,9 @@ fn preview_variables_panel_updates_on_click_and_stays_inside_window() {
     );
 
     // Click the "Add One" button on the slide and check the live value updates to 1.
-    let btn_pos = harness.find_text("Add One").expect("Add One button");
+    let btn_pos = harness
+        .find_text_in("Add One", preview_rect)
+        .expect("Add One button");
     assert!(
         btn_pos.x < clicks_pos.x,
         "slide button should be to the left of the side variables panel"

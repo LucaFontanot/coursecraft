@@ -131,6 +131,7 @@ pub fn insert_table(editor: &mut Editor) {
         color: coursecraft_course::Color("#1F1F1F".to_owned()),
         width: 1.0,
         dash: coursecraft_course::DashStyle::Solid,
+        dash_pattern: None,
     };
     let kind = coursecraft_course::ObjectKind::Table {
         columns,
@@ -503,10 +504,15 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         editor.arm_format_painter(true);
         if let Some(p) = editor.ui.format_painter.as_mut() {
             p.sticky = true;
+            p.just_double_clicked = true;
         }
     } else if painter_resp.clicked() {
-        if painter_armed {
-            editor.ui.format_painter = None;
+        if let Some(p) = editor.ui.format_painter.as_mut() {
+            if p.just_double_clicked {
+                p.just_double_clicked = false;
+            } else {
+                editor.ui.format_painter = None;
+            }
         } else {
             editor.arm_format_painter(false);
         }

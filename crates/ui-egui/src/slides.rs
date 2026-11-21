@@ -63,6 +63,13 @@ enum SlideMenuAction {
     Cut(String),
     Paste,
     Rename(String),
+    DeleteSelected,
+}
+
+enum SlideClick {
+    Single(String),
+    Toggle(String),
+    Range(String),
 }
 
 /// Returns the thumbnail rect for a given slide id, given the left panel rect.
@@ -824,6 +831,8 @@ fn show_slide_menu_items(
     slide_idx: usize,
     total_in_scene: usize,
     total_slides: usize,
+    multi_selected: bool,
+    selected_count: usize,
     can_paste: bool,
     has_question: bool,
     banks: &[(String, String)],
@@ -937,17 +946,25 @@ fn show_slide_menu_items(
     }
     ui.separator();
 
-    let can_delete = total_slides > 1;
+    let can_delete = if multi_selected {
+        total_slides > selected_count
+    } else {
+        total_slides > 1
+    };
     if ui
         .add_enabled(can_delete, egui::Button::new("Delete"))
         .clicked()
     {
-        *action_to_run = Some((
-            "slide.delete",
-            serde_json::json!({
-                "slide": slide_id,
-            }),
-        ));
+        if multi_selected {
+            *slide_action = Some(SlideMenuAction::DeleteSelected);
+        } else {
+            *action_to_run = Some((
+                "slide.delete",
+                serde_json::json!({
+                    "slide": slide_id,
+                }),
+            ));
+        }
         ui.close();
     }
 }
@@ -1113,7 +1130,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
     let mut selected_rect: Option<Rect> = None;
     let mut action_to_run: Option<(&'static str, Json)> = None;
     let mut slide_action: Option<SlideMenuAction> = None;
-    let mut slide_to_select: Option<String> = None;
+    let mut slide_to_select: Option<SlideClick> = None;
     let mut slide_to_rename: Option<String> = None;
     let mut scene_to_rename: Option<String> = None;
     let mut scene_to_delete: Option<String> = None;
@@ -1265,8 +1282,8 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
         for (slide_idx, slide) in scene.slides.iter().enumerate() {
             global_slide_idx += 1;
             let thumb_rect = Rect::from_min_size(pos2(thumb_x, current_y), vec2(thumb_w, thumb_h));
-            let is_selected = editor.selection.slide == slide.id;
-            if is_selected {
+            let is_selected = editor.selection.is_slide_selected(&slide.id);
+            if editor.selection.slide == slide.id {
                 selected_rect = Some(Rect::from_min_size(
                     thumb_rect.min,
                     vec2(thumb_w, thumb_h + TITLE_GAP + TITLE_HEIGHT),
@@ -1351,13 +1368,18 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 ui.interact(thumb_rect, ui.scope_id().with(&slide.id), Sense::click());
             let raw_pointer = ui.input(|i| i.pointer.interact_pos());
             let covered = raw_pointer.is_some_and(|pos| !crate::widgets::pointer_reaches(ui, pos));
+            let click_mods = ui.input(|i| i.modifiers);
+            let multi_mod = click_mods.shift || click_mods.command || click_mods.ctrl;
             if !covered
+                && !multi_mod
                 && editor.ui.slide_drag.is_none()
                 && ui.input(|i| i.pointer.primary_pressed())
                 && thumb_response.contains_pointer()
             {
                 editor.ui.last_active_area = crate::ActiveArea::Navigator;
-                slide_to_select = Some(slide.id.clone());
+                if !editor.selection.is_slide_selected(&slide.id) {
+                    slide_to_select = Some(SlideClick::Single(slide.id.clone()));
+                }
                 editor.ui.slide_drag = Some(SlideDrag {
                     slide_id: slide.id.clone(),
                     source_scene: scene.id.clone(),
@@ -1372,7 +1394,13 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             }
             if !covered && thumb_response.clicked() {
                 editor.ui.last_active_area = crate::ActiveArea::Navigator;
-                slide_to_select = Some(slide.id.clone());
+                slide_to_select = Some(if click_mods.shift {
+                    SlideClick::Range(slide.id.clone())
+                } else if click_mods.command || click_mods.ctrl {
+                    SlideClick::Toggle(slide.id.clone())
+                } else {
+                    SlideClick::Single(slide.id.clone())
+                });
             }
             if (!covered && thumb_response.secondary_clicked()) || thumb_response.has_focus() {
                 editor.ui.last_active_area = crate::ActiveArea::Navigator;
@@ -1382,6 +1410,9 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
 
             // Right-clicking thumbnail opens context menu
             let can_paste = editor.ui.clipboard.is_some();
+            let multi_selected = !editor.selection.also_slides.is_empty()
+                && editor.selection.is_slide_selected(&slide.id);
+            let selected_slide_count = editor.selection.slide_ids().len();
             thumb_response.context_menu(|ui| {
                 show_slide_menu_items(
                     ui,
@@ -1390,6 +1421,8 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     slide_idx,
                     total_in_scene,
                     total_course_slides,
+                    multi_selected,
+                    selected_slide_count,
                     can_paste,
                     slide.is_question,
                     &bank_menu,
@@ -1473,6 +1506,8 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                         slide_idx,
                         total_in_scene,
                         total_course_slides,
+                        multi_selected,
+                        selected_slide_count,
                         can_paste,
                         slide.is_question,
                         &bank_menu,
@@ -1502,11 +1537,17 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 );
                 if title_resp.clicked() {
                     editor.ui.last_active_area = crate::ActiveArea::Navigator;
-                    slide_to_select = Some(slide.id.clone());
+                    slide_to_select = Some(if click_mods.shift {
+                        SlideClick::Range(slide.id.clone())
+                    } else if click_mods.command || click_mods.ctrl {
+                        SlideClick::Toggle(slide.id.clone())
+                    } else {
+                        SlideClick::Single(slide.id.clone())
+                    });
                 }
                 if title_resp.double_clicked() {
                     editor.ui.last_active_area = crate::ActiveArea::Navigator;
-                    slide_to_select = Some(slide.id.clone());
+                    slide_to_select = Some(SlideClick::Single(slide.id.clone()));
                     slide_to_rename = Some(slide.id.clone());
                 }
                 if title_resp.secondary_clicked() {
@@ -1520,6 +1561,8 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                         slide_idx,
                         total_in_scene,
                         total_course_slides,
+                        multi_selected,
+                        selected_slide_count,
                         can_paste,
                         slide.is_question,
                         &bank_menu,
@@ -1711,7 +1754,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 );
                 if row_resp.clicked() {
                     editor.ui.last_active_area = crate::ActiveArea::Navigator;
-                    slide_to_select = Some(slide.id.clone());
+                    slide_to_select = Some(SlideClick::Single(slide.id.clone()));
                 }
                 row_resp.context_menu(|ui| {
                     if ui.button("Delete").clicked() {
@@ -1776,7 +1819,8 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
     if editor.ui.slides_scrolled_to.as_deref() != Some(editor.selection.slide.as_str())
         && let Some(r) = selected_rect
     {
-        if ui.clip_rect().contains_rect(r) {
+        let clip = ui.clip_rect();
+        if r.min.y >= clip.min.y - 1.0 && r.max.y <= clip.max.y + 1.0 {
             editor.ui.slides_scrolled_to = Some(editor.selection.slide.clone());
         } else {
             ui.scroll_to_rect(r.expand2(vec2(0.0, 12.0)), None);
@@ -1784,8 +1828,21 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
         }
     }
 
-    if let Some(sid) = slide_to_select {
-        editor.selection.slide = sid;
+    if let Some(click) = slide_to_select {
+        match click {
+            SlideClick::Single(sid) => {
+                editor.selection.slide = sid;
+                editor.selection.also_slides.clear();
+            }
+            SlideClick::Toggle(sid) => {
+                editor.selection.toggle_slide(&sid);
+            }
+            SlideClick::Range(sid) => {
+                editor
+                    .selection
+                    .select_slide_range(&editor.session.course, &sid);
+            }
+        }
         editor.selection.layer = None;
         editor.selection.clear_objects();
     }
@@ -1820,6 +1877,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             }
             SlideMenuAction::Paste => crate::clipboard::paste_private(editor),
             SlideMenuAction::Rename(id) => start_slide_rename(editor, &id),
+            SlideMenuAction::DeleteSelected => editor.delete_selected_slides(),
         }
     }
 

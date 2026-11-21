@@ -19,6 +19,8 @@ mod host;
 mod server;
 
 #[cfg(test)]
+mod bughunt_m25_host;
+#[cfg(test)]
 mod tests;
 
 pub use client::{ClientError, ControlClient};

@@ -328,3 +328,285 @@ fn clicking_away_from_an_open_menu_does_not_click_the_layer_underneath() {
         "with no menu open the row takes the click"
     );
 }
+
+struct NoMedia;
+impl coursecraft_render::MediaSource for NoMedia {
+    fn get(&self, _src: &str) -> coursecraft_render::MediaFetch {
+        coursecraft_render::MediaFetch::Missing
+    }
+}
+
+fn select_about_panel(harness: &mut TestHarness) {
+    harness.editor.selection.slide = "s-intro".into();
+    harness.editor.selection.layer = Some("about".into());
+    harness.editor.selection.object = Some("about-panel".into());
+    harness.editor.ui.inspector_tab = InspectorTab::Format;
+    harness.idle_frame();
+    harness.idle_frame();
+}
+
+fn scroll_to_text_in_panel(harness: &mut TestHarness, label: &str) -> egui::Pos2 {
+    for _ in 0..40 {
+        let panel = harness.right_panel_rect();
+        if let Some(pos) = harness.find_text_in(label, panel) {
+            return pos;
+        }
+        harness.scroll_over(panel.center(), -120.0);
+    }
+    panic!("'{label}' not found in right panel");
+}
+
+#[test]
+fn three_stop_linear_gradient_on_shape_renders_all_three_colours() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 960.0));
+    select_about_panel(&mut harness);
+
+    harness.pick_combo("Solid", "Linear gradient");
+    let add_btn = scroll_to_text_in_panel(&mut harness, "Add colour");
+    harness.click_at(add_btn);
+    harness.idle_frame();
+
+    for (label, current_hex, hex) in [
+        ("Colour 1", "#FFFFFFF0", "#0000FF"),
+        ("Colour 2", "#FFFFFF", "#FF0000"),
+        ("Colour 3", "#FFFFFF", "#FFFF00"),
+    ] {
+        let label_pos = scroll_to_text_in_panel(&mut harness, label);
+        let field_pos = harness
+            .find_texts(current_hex)
+            .into_iter()
+            .find(|p| (p.y - label_pos.y).abs() < 12.0 && p.x > label_pos.x)
+            .unwrap_or_else(|| panic!("hex field '{current_hex}' on row {label}"));
+        harness.set_field(field_pos, hex);
+    }
+
+    let kind = harness
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .and_then(|s| s.layer("about"))
+        .and_then(|l| l.objects.iter().find(|o| o.id == "about-panel"))
+        .map(|o| o.kind.clone())
+        .expect("about-panel");
+    let ObjectKind::Shape {
+        fill_style: Some(FillStyle::Linear { ref stops, .. }),
+        ..
+    } = kind
+    else {
+        panic!("expected linear gradient, got {kind:?}");
+    };
+    assert_eq!(stops.len(), 3, "course should have three stops");
+
+    // Render the layer/slide and check that blue, red, and yellow all appear in about-panel (x=240..1040, y=140..580).
+    let mut course = harness.editor.session.course.clone();
+    // Move about-panel to base slide for render_slide_rgba or render via compose_authoring_layers.
+    let obj = course
+        .slide("s-intro")
+        .unwrap()
+        .layer("about")
+        .unwrap()
+        .objects
+        .iter()
+        .find(|o| o.id == "about-panel")
+        .unwrap()
+        .clone();
+    course.scenes[0].slides[0].objects.push(obj);
+    let img = coursecraft_render::render_slide_rgba(
+        &course,
+        "s-intro",
+        &coursecraft_render::RenderOptions::default(),
+        &NoMedia,
+    )
+    .expect("render slide");
+
+    let mut has_blue = false;
+    let mut has_red = false;
+    let mut has_yellow = false;
+    for x in (250..1030).step_by(10) {
+        let idx = ((360 * img.width + x) * 4) as usize;
+        let p = &img.pixels[idx..idx + 4];
+        if p[2] > 200 && p[0] < 60 && p[1] < 60 {
+            has_blue = true;
+        }
+        if p[0] > 200 && p[1] < 60 && p[2] < 60 {
+            has_red = true;
+        }
+        if p[0] > 200 && p[1] > 200 && p[2] < 60 {
+            has_yellow = true;
+        }
+    }
+    assert!(
+        has_blue && has_red && has_yellow,
+        "expected blue={has_blue}, red={has_red}, yellow={has_yellow} in rendered gradient; stops={stops:?}"
+    );
+}
+
+#[test]
+fn three_stop_radial_gradient_on_button_renders_all_three_colours() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 960.0));
+    select_start_button(&mut harness);
+    harness.pick_combo("Solid", "Radial gradient");
+    let add_btn = scroll_to_text_in_panel(&mut harness, "Add colour");
+    harness.click_at(add_btn);
+    harness.idle_frame();
+
+    for (label, current_hex, hex) in [
+        ("Colour 1", "#2F6FEB", "#0000FF"),
+        ("Colour 2", "#FFFFFF", "#FF0000"),
+        ("Colour 3", "#FFFFFF", "#FFFF00"),
+    ] {
+        let label_pos = scroll_to_text_in_panel(&mut harness, label);
+        let field_pos = harness
+            .find_texts(current_hex)
+            .into_iter()
+            .find(|p| (p.y - label_pos.y).abs() < 12.0 && p.x > label_pos.x)
+            .unwrap_or_else(|| panic!("hex field '{current_hex}' on row {label}"));
+        harness.set_field(field_pos, hex);
+    }
+
+    let img = coursecraft_render::render_slide_rgba(
+        &harness.editor.session.course,
+        "s-intro",
+        &coursecraft_render::RenderOptions::default(),
+        &NoMedia,
+    )
+    .expect("render slide");
+
+    // btn-start is at x=80..280, y=520..580. Radial centre is (180, 550), corner is (83, 523).
+    let mut has_blue = false;
+    let mut has_red = false;
+    let mut has_yellow = false;
+    for x in (84..276).step_by(4) {
+        for y in [523, 550, 576] {
+            let idx = ((y * img.width + x) * 4) as usize;
+            let p = &img.pixels[idx..idx + 4];
+            if p[2] > 200 && p[0] < 60 && p[1] < 60 {
+                has_blue = true;
+            }
+            if p[0] > 200 && p[1] < 60 && p[2] < 60 {
+                has_red = true;
+            }
+            if p[0] > 200 && p[1] > 200 && p[2] < 60 {
+                has_yellow = true;
+            }
+        }
+    }
+    assert!(
+        has_blue && has_red && has_yellow,
+        "expected blue={has_blue}, red={has_red}, yellow={has_yellow} on button radial gradient"
+    );
+}
+
+#[test]
+fn gradient_stops_can_be_reordered_positions_edited_undone_and_saved() {
+    let mut harness = TestHarness::new_with_size(hello(), (1280.0, 960.0));
+    select_start_button(&mut harness);
+    harness.pick_combo("Solid", "Linear gradient");
+    let add_btn = scroll_to_text_in_panel(&mut harness, "Add colour");
+    harness.click_at(add_btn);
+    harness.idle_frame();
+
+    for (label, current_hex, hex) in [
+        ("Colour 1", "#2F6FEB", "#0000FF"),
+        ("Colour 2", "#FFFFFF", "#FF0000"),
+        ("Colour 3", "#FFFFFF", "#FFFF00"),
+    ] {
+        let label_pos = scroll_to_text_in_panel(&mut harness, label);
+        let field_pos = harness
+            .find_texts(current_hex)
+            .into_iter()
+            .find(|p| (p.y - label_pos.y).abs() < 12.0 && p.x > label_pos.x)
+            .unwrap_or_else(|| panic!("hex field '{current_hex}' on row {label}"));
+        harness.set_field(field_pos, hex);
+    }
+
+    // With 3 stops (including the × button), nothing in the Format panel is clipped or overlapping.
+    let report = harness.layout_report(2);
+    assert!(
+        report.findings.is_empty(),
+        "three-stop gradient row fits inside panel: {:?}",
+        report.findings
+    );
+
+    // Move Colour 2 (Red) up to Colour 1 -> order becomes Red, Blue, Yellow.
+    let c2_pos = scroll_to_text_in_panel(&mut harness, "Colour 2");
+    let up_btn = harness
+        .find_texts("↑")
+        .into_iter()
+        .find(|p| (p.y - c2_pos.y).abs() < 12.0)
+        .expect("move up button on Colour 2");
+    harness.click_at(up_btn);
+    harness.idle_frame();
+
+    let stops = match fill_style(&start_button_kind(&harness)) {
+        Some(FillStyle::Linear { stops, .. }) => stops,
+        other => panic!("expected linear fill, got {other:?}"),
+    };
+    assert_eq!(
+        stops.iter().map(|s| s.color.0.as_str()).collect::<Vec<_>>(),
+        vec!["#FF0000", "#0000FF", "#FFFF00"]
+    );
+
+    // Edit Colour 2's position from 50% to 25%.
+    let c2_pos = scroll_to_text_in_panel(&mut harness, "Colour 2");
+    let up_c2 = harness
+        .find_texts("↑")
+        .into_iter()
+        .find(|p| (p.y - c2_pos.y).abs() < 12.0)
+        .expect("move up button on Colour 2");
+    let pct_pos = egui::pos2(up_c2.x - 28.0, c2_pos.y);
+    harness.set_field(pct_pos, "25");
+    let stops = match fill_style(&start_button_kind(&harness)) {
+        Some(FillStyle::Linear { stops, .. }) => stops,
+        other => panic!("expected linear fill, got {other:?}"),
+    };
+    assert!(
+        (stops[1].position - 0.25).abs() < 0.01,
+        "position updated to 25%: {stops:?}"
+    );
+
+    // Undo restores 50%, then undo again restores Blue, Red, Yellow.
+    let _ = harness.editor.session.undo();
+    harness.idle_frame();
+    let stops = match fill_style(&start_button_kind(&harness)) {
+        Some(FillStyle::Linear { stops, .. }) => stops,
+        other => panic!("expected linear fill, got {other:?}"),
+    };
+    assert!((stops[1].position - 0.5).abs() < 0.01);
+
+    let _ = harness.editor.session.undo();
+    harness.idle_frame();
+    let stops = match fill_style(&start_button_kind(&harness)) {
+        Some(FillStyle::Linear { stops, .. }) => stops,
+        other => panic!("expected linear fill, got {other:?}"),
+    };
+    assert_eq!(
+        stops.iter().map(|s| s.color.0.as_str()).collect::<Vec<_>>(),
+        vec!["#0000FF", "#FF0000", "#FFFF00"]
+    );
+
+    // Redo + save & reopen preserves all 3 stops.
+    let _ = harness.editor.session.redo();
+    harness.idle_frame();
+    let saved = harness.editor.session.course.to_json().expect("save");
+    let reopened = Course::from_json(&saved).expect("reopen");
+    let reopened_stops = match reopened
+        .slide("s-intro")
+        .and_then(|s| s.object("btn-start"))
+        .map(|(o, _)| &o.kind)
+    {
+        Some(ObjectKind::Button {
+            fill_style: Some(FillStyle::Linear { stops, .. }),
+            ..
+        }) => stops.clone(),
+        other => panic!("expected linear fill after reopen, got {other:?}"),
+    };
+    assert_eq!(
+        reopened_stops
+            .iter()
+            .map(|s| s.color.0.as_str())
+            .collect::<Vec<_>>(),
+        vec!["#FF0000", "#0000FF", "#FFFF00"]
+    );
+}

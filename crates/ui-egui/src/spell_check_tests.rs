@@ -129,6 +129,9 @@ fn canvas_records_misspellings_only_while_checking_is_on() {
         is_shape: false,
         cell: None,
         just_entered: false,
+        live_runs: Vec::new(),
+        live_paragraphs: Vec::new(),
+        last_revision: 0,
     });
     harness.idle_frame();
     assert_eq!(
@@ -178,6 +181,9 @@ fn right_clicking_a_squiggle_opens_the_word_menu() {
         is_shape: false,
         cell: None,
         just_entered: false,
+        live_runs: Vec::new(),
+        live_paragraphs: Vec::new(),
+        last_revision: 0,
     });
     harness.idle_frame();
     let center = harness.editor.ui.spell_inline_rects[0].rects[0].center();
@@ -218,6 +224,9 @@ fn choosing_a_suggestion_replaces_the_word_and_keeps_editing() {
         is_shape: false,
         cell: None,
         just_entered: false,
+        live_runs: Vec::new(),
+        live_paragraphs: Vec::new(),
+        last_revision: 0,
     });
     harness.idle_frame();
     let suggestion = harness

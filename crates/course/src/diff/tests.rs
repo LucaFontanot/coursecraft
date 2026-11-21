@@ -268,6 +268,8 @@ fn media_source_change_is_media() {
             src: "a.png".into(),
             alt: String::new(),
             crop: None,
+            outline: None,
+            shape: None,
         },
         id: "pic".into(),
         ..template

@@ -954,6 +954,8 @@ fn course_with_image() -> Course {
                 src: "photo.png".to_string(),
                 alt: "A photo".to_string(),
                 crop: None,
+                outline: None,
+                shape: None,
             },
             frame: Rect {
                 x: 10.0,

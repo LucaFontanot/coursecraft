@@ -393,6 +393,23 @@ pub struct PublishSettings {
     pub standard: String,
 }
 
+/// How the base slide appears in the editor while a layer tab is active.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BaseSlideView {
+    /// Show base slide objects at full opacity.
+    Show,
+    /// Dim base slide objects (~35% opacity) so the active layer stands out.
+    #[default]
+    Dim,
+    /// Hide base slide objects completely while editing a layer.
+    Hide,
+}
+
+fn is_default_base_slide_view(v: &BaseSlideView) -> bool {
+    *v == BaseSlideView::Dim
+}
+
 /// Authoring view settings saved with the course. Ignored by the player and publish.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -405,6 +422,8 @@ pub struct EditorSettings {
     pub snap_to_grid: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub show_guides: bool,
+    #[serde(default, skip_serializing_if = "is_default_base_slide_view")]
+    pub base_slide_view: BaseSlideView,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guides: Vec<Guide>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,6 +437,7 @@ impl EditorSettings {
             && !self.show_grid
             && !self.snap_to_grid
             && !self.show_guides
+            && self.base_slide_view == BaseSlideView::Dim
             && self.guides.is_empty()
             && self.last_publish.is_none()
     }
@@ -1113,6 +1133,20 @@ pub enum FillStyle {
         src: String,
         #[serde(default)]
         mode: PictureFillMode,
+        /// Tile scale multipliers `[sx, sy]` when `mode == Tile`. Omitted when `[1.0, 1.0]`.
+        #[serde(
+            default = "default_tile_scale",
+            deserialize_with = "deserialize_tile_scale",
+            skip_serializing_if = "is_default_tile_scale"
+        )]
+        tile_scale: [f32; 2],
+    },
+    /// A repeating preset pattern fill with foreground and background colours.
+    Pattern {
+        #[serde(default)]
+        preset: String,
+        fg: Color,
+        bg: Color,
     },
 }
 
@@ -1122,7 +1156,7 @@ impl FillStyle {
     pub fn picture_src(&self) -> Option<&str> {
         match self {
             Self::Picture { src, .. } => Some(src.as_str()),
-            Self::Linear { .. } | Self::Radial { .. } => None,
+            Self::Linear { .. } | Self::Radial { .. } | Self::Pattern { .. } => None,
         }
     }
 }
@@ -1140,6 +1174,33 @@ pub enum PictureFillMode {
 
 fn default_gradient_center() -> [f32; 2] {
     [0.5, 0.5]
+}
+
+fn default_tile_scale() -> [f32; 2] {
+    [1.0, 1.0]
+}
+
+fn is_default_tile_scale(scale: &[f32; 2]) -> bool {
+    (scale[0] - 1.0).abs() <= f32::EPSILON && (scale[1] - 1.0).abs() <= f32::EPSILON
+}
+
+fn deserialize_tile_scale<'de, D>(deserializer: D) -> Result<[f32; 2], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let scale = <[f32; 2]>::deserialize(deserializer)?;
+    Ok([
+        if scale[0].is_finite() && scale[0] > 0.0 {
+            scale[0].clamp(0.01, 100.0)
+        } else {
+            1.0
+        },
+        if scale[1].is_finite() && scale[1] > 0.0 {
+            scale[1].clamp(0.01, 100.0)
+        } else {
+            1.0
+        },
+    ])
 }
 
 fn deserialize_angle<'de, D>(deserializer: D) -> Result<f32, D::Error>
@@ -2015,6 +2076,9 @@ pub enum ObjectKind {
         /// Omitted when unlinked.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text_style: Option<String>,
+        /// Optional border around the text box. Omitted when unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outline: Option<Outline>,
     },
     Shape {
         shape: ShapeKind,
@@ -2037,6 +2101,12 @@ pub enum ObjectKind {
         /// source (0..=1). Omitted means the whole picture. See [`CropRect`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         crop: Option<CropRect>,
+        /// Optional border around the picture. Omitted when unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outline: Option<Outline>,
+        /// Optional preset shape mask (e.g. `Ellipse`). Omitted when rectangular.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shape: Option<ShapeKind>,
     },
     Audio {
         src: String,
@@ -2070,6 +2140,9 @@ pub enum ObjectKind {
             skip_serializing_if = "Vec::is_empty"
         )]
         cues: Vec<Cue>,
+        /// Optional poster image shown before playback starts. Omitted when unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        poster: Option<String>,
     },
     /// A web page shown as an iframe in the published course.
     Web { source: WebSource },
@@ -2554,6 +2627,27 @@ fn is_default_list_kind(list: &ListKind) -> bool {
     *list == ListKind::None
 }
 
+/// Numbering style for a numbered-list paragraph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NumberScheme {
+    /// `1.`, `2.`, `3.`
+    #[default]
+    ArabicPeriod,
+    /// `1)`, `2)`, `3)`
+    ArabicParenR,
+    /// `a.`, `b.`, `c.`
+    AlphaLcPeriod,
+    /// `a)`, `b)`, `c)`
+    AlphaLcParenR,
+    /// `A.`, `B.`, `C.`
+    AlphaUcPeriod,
+    /// `i.`, `ii.`, `iii.`
+    RomanLcPeriod,
+    /// `I.`, `II.`, `III.`
+    RomanUcPeriod,
+}
+
 /// Paragraph formatting. Entry `i` of `text.paragraphs` styles the `i`-th
 /// `\n`-separated paragraph.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2573,6 +2667,21 @@ pub struct Paragraph {
     /// Space below the paragraph in slide pixels, `0..=200`. Omitted when 0.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub space_after: f32,
+    /// Custom bullet glyph (e.g. `"★"`, `"–"`). `None` uses the level's default bullet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullet: Option<String>,
+    /// Custom bullet or number marker colour. `None` uses the paragraph's first run colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullet_color: Option<Color>,
+    /// Custom bullet or number marker size in slide pixels. `None` uses the paragraph's first run size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullet_size: Option<f32>,
+    /// Numbering scheme for [`ListKind::Number`]. `None` uses the level's default (`1.`, `a.`, `i.`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_scheme: Option<NumberScheme>,
+    /// Starting number (`1..`) for [`ListKind::Number`]. `None` starts at `1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_at: Option<u32>,
 }
 
 impl Default for Paragraph {
@@ -2583,6 +2692,11 @@ impl Default for Paragraph {
             line_spacing: 1.0,
             space_before: 0.0,
             space_after: 0.0,
+            bullet: None,
+            bullet_color: None,
+            bullet_size: None,
+            number_scheme: None,
+            start_at: None,
         }
     }
 }
@@ -2625,6 +2739,29 @@ pub struct Outline {
     pub width: f32,
     #[serde(default)]
     pub dash: DashStyle,
+    /// Optional alternating `[dash, gap, ...]` lengths as multiples of `width`.
+    /// Omitted when using `dash`'s built-in spacing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash_pattern: Option<Vec<f32>>,
+}
+
+impl Outline {
+    /// Effective alternating `[dash, gap, ...]` pattern in multiples of `width`.
+    /// Returns an empty slice when `dash` is `Solid`.
+    #[must_use]
+    pub fn effective_dash_pattern(&self) -> &[f32] {
+        if self.dash == DashStyle::Solid {
+            return &[];
+        }
+        if let Some(pattern) = &self.dash_pattern
+            && pattern.len() >= 2
+            && pattern.len() % 2 == 0
+            && pattern.iter().all(|v| v.is_finite() && *v > 0.0)
+        {
+            return pattern;
+        }
+        self.dash.default_pattern()
+    }
 }
 
 /// How an outline is broken along its path.
@@ -2635,6 +2772,21 @@ pub enum DashStyle {
     Solid,
     Dash,
     Dot,
+    DashDot,
+    Custom,
+}
+
+impl DashStyle {
+    /// Built-in alternating `[dash, gap, ...]` lengths in multiples of line width.
+    #[must_use]
+    pub const fn default_pattern(self) -> &'static [f32] {
+        match self {
+            Self::Solid => &[],
+            Self::Dash | Self::Custom => &[3.0, 2.0],
+            Self::Dot => &[1.0, 1.0],
+            Self::DashDot => &[3.0, 1.5, 1.0, 1.5],
+        }
+    }
 }
 
 /// How many points a path needs and may carry.
@@ -2726,6 +2878,15 @@ fn is_default_line_end(end: &LineEnd) -> bool {
     *end == LineEnd::None
 }
 
+/// An extra contour inside a [`Path`] (e.g. a hole filled with the even-odd rule).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathSubpath {
+    pub points: Vec<PathPoint>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub closed: bool,
+}
+
 /// A drawn line, curve, freeform or connector.
 ///
 /// Points are fractions of the object's frame, so resizing the frame scales the
@@ -2739,9 +2900,15 @@ pub struct Path {
     pub style: PathStyle,
     #[serde(default, skip_serializing_if = "is_false")]
     pub closed: bool,
+    /// Additional subpaths (such as holes) in the same frame. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subpaths: Vec<PathSubpath>,
     /// Fill colour; only present on a closed path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<Color>,
+    /// Gradient or picture fill for a closed path. Omitted when solid or unfilled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_style: Option<FillStyle>,
     pub outline: Outline,
     #[serde(default, skip_serializing_if = "is_default_line_end")]
     pub start_end: LineEnd,
@@ -2755,6 +2922,9 @@ pub struct Path {
     /// Target of the end end, only used by a connector.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_glue: Option<Glue>,
+    /// Optional text inside a freeform path. Omitted when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<ShapeText>,
 }
 
 impl Path {
@@ -2764,6 +2934,10 @@ impl Path {
     pub fn is_valid(&self) -> bool {
         (PATH_MIN_POINTS..=PATH_MAX_POINTS).contains(&self.points.len())
             && self.points.iter().all(PathPoint::is_valid)
+            && self.subpaths.iter().all(|sub| {
+                (PATH_MIN_POINTS..=PATH_MAX_POINTS).contains(&sub.points.len())
+                    && sub.points.iter().all(PathPoint::is_valid)
+            })
             && self
                 .fill
                 .as_ref()
@@ -2875,6 +3049,7 @@ pub enum Align {
     Left,
     Center,
     Right,
+    Justify,
 }
 
 fn is_default_align(a: &Align) -> bool {
@@ -3369,6 +3544,45 @@ pub struct TextStyle {
     pub align: Align,
     #[serde(default, skip_serializing_if = "is_default_valign")]
     pub valign: VAlign,
+    /// Whether lines wrap at the box width (`true` by default, omitted when true).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub wrap: bool,
+    /// Padding inside the text box in slide pixels (`left`, `top`, `right`, `bottom`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insets: Option<TextInsets>,
+    /// Text flow direction (`horizontal` by default, omitted when horizontal).
+    #[serde(default, skip_serializing_if = "is_default_text_direction")]
+    pub direction: TextDirection,
+}
+
+/// Padding inside a text box in slide pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextInsets {
+    #[serde(default)]
+    pub left: f32,
+    #[serde(default)]
+    pub top: f32,
+    #[serde(default)]
+    pub right: f32,
+    #[serde(default)]
+    pub bottom: f32,
+}
+
+/// Text orientation inside a text box or shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextDirection {
+    #[default]
+    Horizontal,
+    /// Rotated 90 degrees clockwise.
+    Vertical,
+    /// Rotated 270 degrees clockwise (90 degrees counter-clockwise).
+    Vertical270,
+}
+
+fn is_default_text_direction(dir: &TextDirection) -> bool {
+    *dir == TextDirection::Horizontal
 }
 
 /// Where text sits relative to the line.
@@ -3459,6 +3673,9 @@ impl Default for TextStyle {
             letter_spacing: 0.0,
             align: Align::Left,
             valign: VAlign::Top,
+            wrap: true,
+            insets: None,
+            direction: TextDirection::Horizontal,
         }
     }
 }

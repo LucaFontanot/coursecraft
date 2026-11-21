@@ -15,6 +15,10 @@
     clippy::unreachable
 )]
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use coursecraft_render::IndexFontProvider;
+pub use coursecraft_render::SystemFontProvider;
+
 pub mod ai_settings;
 pub mod alt_text;
 pub mod audio_ai;
@@ -33,6 +37,10 @@ pub mod export_dialog;
 pub(crate) mod eyedropper;
 pub mod find;
 pub mod fonts;
+
+/// `(slide, object, selection_range, cursor_pos)` captured from an active inline text edit.
+pub type InlineEditSelection = (String, String, Option<(usize, usize)>, usize);
+pub mod font_picker;
 pub mod format_painter;
 pub mod history;
 pub mod input_insert;
@@ -81,6 +89,9 @@ mod alt_text_tests;
 #[cfg(test)]
 mod audio_ai_tests;
 #[cfg(test)]
+#[cfg(test)]
+mod base_slide_view_tests;
+#[cfg(test)]
 mod bughunt_insert;
 #[cfg(test)]
 mod bughunt_m24_canvas;
@@ -97,6 +108,32 @@ mod bughunt_m24b_misc;
 #[cfg(test)]
 mod bughunt_m24b_trigger;
 #[cfg(test)]
+mod bughunt_m25_templates;
+#[cfg(test)]
+mod bughunt_m26_a10_question_panel;
+#[cfg(test)]
+mod bughunt_m26_a11_format_painter;
+#[cfg(test)]
+mod bughunt_m26_a12_preview_close;
+#[cfg(test)]
+mod bughunt_m26_a1_text_format;
+#[cfg(test)]
+mod bughunt_m26_a2_gradients;
+#[cfg(test)]
+mod bughunt_m26_a4_timeline;
+#[cfg(test)]
+mod bughunt_m26_a5_shape_preview;
+#[cfg(test)]
+mod bughunt_m26_a6_dialogs;
+#[cfg(test)]
+mod bughunt_m26_a7_video;
+#[cfg(test)]
+mod bughunt_m26_a9_base_slide_view;
+#[cfg(test)]
+mod bughunt_m26_crosscut;
+#[cfg(test)]
+mod bughunt_m26_f19_fonts_inline_edit;
+#[cfg(test)]
 mod bughunt_menus;
 #[cfg(test)]
 mod bughunt_stress;
@@ -107,13 +144,23 @@ mod canvas_speed_tests;
 #[cfg(test)]
 mod daily_fixes_tests;
 #[cfg(test)]
+mod dialog_reopen_tests;
+#[cfg(test)]
 mod document_tests;
 #[cfg(test)]
 mod eyedropper_tests;
 #[cfg(test)]
+mod f22_fill_outline_dash_tests;
+#[cfg(test)]
+mod f24_exit_animation_labels_tests;
+#[cfg(test)]
 mod fill_style_tests;
 #[cfg(test)]
 mod find_tests;
+#[cfg(test)]
+mod font_harness_tests;
+#[cfg(test)]
+mod font_picker_tests;
 #[cfg(test)]
 mod guard_counters;
 #[cfg(test)]
@@ -127,15 +174,25 @@ mod layout_tests;
 #[cfg(test)]
 mod m25_input_tests;
 #[cfg(test)]
+mod m26_text_format_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
+#[cfg(test)]
+mod preview_close_tests;
 #[cfg(test)]
 mod preview_variables_tests;
 #[cfg(test)]
 mod publish_tests;
 #[cfg(test)]
+mod question_panel_tests;
+#[cfg(test)]
 mod rename_tests;
+#[cfg(test)]
+mod shape_preview_tests;
+#[cfg(test)]
+mod slide_delete_tests;
 #[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
@@ -147,7 +204,13 @@ pub(crate) mod test_harness;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod text_format_tests;
+#[cfg(test)]
 mod timeline_cue_tests;
+#[cfg(test)]
+mod timeline_f23_tests;
+#[cfg(test)]
+mod timeline_scrub_tests;
 #[cfg(test)]
 mod translate_tests;
 #[cfg(test)]
@@ -158,6 +221,8 @@ mod trigger_speed_tests;
 mod try_again_tests;
 #[cfg(test)]
 mod var_compare_tests;
+#[cfg(test)]
+mod video_selection_tests;
 #[cfg(test)]
 mod walkthrough_tests;
 
@@ -668,6 +733,10 @@ pub struct UiState {
     pub slides_scroll_y: f32,
     /// Slide id last scrolled into view in the slides panel.
     pub slides_scrolled_to: Option<String>,
+    /// Scene/slide order at the last seen revision, for keeping place on delete/undo.
+    pub(crate) last_known_slides: Vec<(String, Vec<String>)>,
+    /// True when the last mutating command was `edit.undo` or `edit.redo`.
+    pub(crate) pending_undo_redo: bool,
     /// Active slide-thumbnail drag in the navigator.
     pub slide_drag: Option<slides::SlideDrag>,
     pub last_seen_revision: u64,
@@ -764,6 +833,10 @@ pub struct UiState {
     /// The table cell selected in the inspector and by a canvas click.
     pub table_cell: Option<(usize, usize)>,
     pub inline_edit: Option<canvas::InlineEdit>,
+    /// Last observed `(slide, object, selection_range, cursor_pos)` from inline edit.
+    pub inline_edit_selection: Option<InlineEditSelection>,
+    /// True after a click in the right panel while inline edit is open, so the canvas editor doesn't steal focus back.
+    pub inline_edit_yielded_to_panel: bool,
     /// Image crop mode: the canvas edits a window, Apply writes it in one step.
     pub crop_edit: Option<CropSession>,
     /// Active pointer drag inside crop mode.
@@ -997,6 +1070,9 @@ pub struct Editor {
     pub media_cache: coursecraft_render::MediaCache,
     /// Cached audio waveform peak envelopes (`0.0..=1.0`, <= 2,000 peaks) keyed by media id (`src`).
     pub audio_waveforms: std::collections::HashMap<String, Option<Vec<f32>>>,
+    /// Cached video durations in ms keyed by media `src`, populated off the UI thread.
+    pub video_durations:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<u64>>>>,
     pub pending_replace_object: Option<String>,
     /// The shape or button (slide id, object id) whose picture fill the next
     /// picked image becomes, instead of placing or replacing an object.
@@ -1022,6 +1098,8 @@ pub struct Editor {
     pub spell_cache: spell_check::SpellCache,
     /// Bumped whenever the dictionary or ignored words change.
     pub spell_version: u64,
+    /// Optional provider of installed desktop fonts (unset on wasm).
+    pub system_font_provider: Option<std::sync::Arc<dyn coursecraft_render::SystemFontProvider>>,
 }
 
 /// Text tone of a [`quiet_button`].
@@ -1119,6 +1197,7 @@ impl Editor {
             .unwrap_or_default();
         let session = Session::new(course);
         let initial_revision = session.revision;
+        let initial_slides = selection::slide_layout(&session.course);
         let mut selection = Selection::new(first_slide);
         selection.repair(&session.course);
 
@@ -1128,6 +1207,8 @@ impl Editor {
             ui: UiState {
                 slides_scroll_y: 0.0,
                 slides_scrolled_to: None,
+                last_known_slides: initial_slides,
+                pending_undo_redo: false,
                 slide_drag: None,
                 last_seen_revision: u64::MAX,
                 last_error: None,
@@ -1188,6 +1269,8 @@ impl Editor {
                 canvas_drag: None,
                 table_cell: None,
                 inline_edit: None,
+                inline_edit_selection: None,
+                inline_edit_yielded_to_panel: false,
                 crop_edit: None,
                 crop_drag: None,
                 scene_rename: None,
@@ -1274,6 +1357,9 @@ impl Editor {
             media: Vec::new(),
             media_cache: coursecraft_render::MediaCache::new(),
             audio_waveforms: std::collections::HashMap::new(),
+            video_durations: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             pending_replace_object: None,
             pending_picture_fill: None,
             pending_requests: Vec::new(),
@@ -1289,10 +1375,19 @@ impl Editor {
             spell_tried: false,
             spell_cache: spell_check::SpellCache::default(),
             spell_version: 0,
+            system_font_provider: None,
         };
         editor.check_revision();
         editor.refresh_audit_now();
         editor
+    }
+
+    /// Register (or clear) the optional system font provider for slide rendering.
+    pub fn set_system_font_provider(
+        &mut self,
+        provider: Option<std::sync::Arc<dyn coursecraft_render::SystemFontProvider>>,
+    ) {
+        self.system_font_provider = provider;
     }
 
     /// Set the user's active theme preference.
@@ -1390,6 +1485,7 @@ impl Editor {
             .course
             .slide(&slide_id)
             .map_or(100, |slide| slide.duration_ms.max(100));
+        self.timeline_playback.update_clock(now_mono);
         self.timeline_playback.sync_slide(
             &self.session.course,
             &slide_id,
@@ -1445,6 +1541,8 @@ impl Editor {
         self.selection.repair(&self.session.course);
 
         self.ui.slides_scrolled_to = None;
+        self.ui.last_known_slides = selection::slide_layout(&self.session.course);
+        self.ui.pending_undo_redo = false;
         self.ui.slide_drag = None;
         self.ui.timeline.active_row_drag = None;
         self.ui.timeline.slide_cue_drag = None;
@@ -1786,15 +1884,22 @@ impl Editor {
         {
             slide.master = None;
         }
+        let prev_media_len = self.media.len();
         let mut renames = std::collections::HashMap::new();
         let mut media_added = false;
         for (src, bytes) in media {
-            if let Some((_, existing)) = self.media.iter().find(|(name, _)| name == &src) {
+            if let Some((existing_name, existing)) = self
+                .media
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&src))
+            {
                 if existing.as_ref() != bytes.as_slice() {
                     let new_src = sanitize_media_src(&src, &self.media);
                     self.media.push((new_src.clone(), bytes.into()));
                     renames.insert(src, new_src);
                     media_added = true;
+                } else if existing_name != &src {
+                    renames.insert(src, existing_name.clone());
                 }
             } else {
                 self.media.push((src, bytes.into()));
@@ -1804,10 +1909,8 @@ impl Editor {
         if !renames.is_empty() {
             rewrite_slide_media_srcs(&mut slide, &renames);
         }
-        if media_added {
-            self.mark_media_changed();
-        }
         let Ok(slide_json) = serde_json::to_value(&slide) else {
+            self.media.truncate(prev_media_len);
             return;
         };
         let mut params = serde_json::json!({ "slide": slide_json });
@@ -1817,7 +1920,13 @@ impl Editor {
         if let Some(scene) = scene {
             params["scene"] = serde_json::json!(scene);
         }
-        self.run("slide.paste", params);
+        if self.run("slide.paste", params).is_some() {
+            if media_added {
+                self.mark_media_changed();
+            }
+        } else {
+            self.media.truncate(prev_media_len);
+        }
     }
 
     /// Media files the course references but the editor's media store does not
@@ -2355,6 +2464,7 @@ impl Editor {
         let style = coursecraft_course::FillStyle::Picture {
             src: src.to_owned(),
             mode,
+            tile_scale: [1.0, 1.0],
         };
         let fill_style = serde_json::to_value(&style).unwrap_or(serde_json::Value::Null);
         self.run(
@@ -2398,7 +2508,20 @@ impl Editor {
 
     /// Import a video file into the editor's media library and arm placement or replace selected object.
     pub fn import_video(&mut self, file_name: &str, bytes: &[u8]) -> Option<String> {
-        self.import_media(MediaKind::Video, file_name, bytes)
+        let src = self.import_media(MediaKind::Video, file_name, bytes)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((_, stored_bytes)) = self.media.iter().find(|(name, _)| name == &src) {
+            let cache = std::sync::Arc::clone(&self.video_durations);
+            let key = src.clone();
+            let bytes = std::sync::Arc::clone(stored_bytes);
+            std::thread::spawn(move || {
+                let ms = coursecraft_playback::media_duration_ms(MediaKind::Video, &key, &bytes);
+                if let Ok(mut map) = cache.lock() {
+                    map.insert(key, ms);
+                }
+            });
+        }
+        Some(src)
     }
 
     /// Import an audio file and make it the course's background track.
@@ -2430,7 +2553,25 @@ impl Editor {
         src: &str,
     ) -> Option<((String, Json), u32)> {
         let (_, bytes) = self.media.iter().find(|(name, _)| name == src)?;
-        let ms = coursecraft_playback::media_duration_ms(kind, src, bytes)?;
+        let ms = if kind == MediaKind::Video {
+            let cached = self
+                .video_durations
+                .lock()
+                .ok()
+                .and_then(|map| map.get(src).copied());
+            match cached {
+                Some(v) => v?,
+                None => {
+                    let probed = coursecraft_playback::media_duration_ms(kind, src, bytes);
+                    if let Ok(mut map) = self.video_durations.lock() {
+                        map.insert(src.to_owned(), probed);
+                    }
+                    probed?
+                }
+            }
+        } else {
+            coursecraft_playback::media_duration_ms(kind, src, bytes)?
+        };
         let slide = self.session.course.slide(slide_id)?;
         let needed = ms
             .div_ceil(100)
@@ -2846,6 +2987,38 @@ impl Editor {
         }
     }
 
+    /// Delete every selected slide as one undo step, refusing to leave the course empty.
+    pub fn delete_selected_slides(&mut self) {
+        let valid_ids: Vec<String> = self
+            .selection
+            .slide_ids()
+            .into_iter()
+            .filter(|id| self.session.course.slide(id).is_some())
+            .collect();
+        if valid_ids.is_empty() {
+            return;
+        }
+        let total = self.session.course.slides().count();
+        if valid_ids.len() >= total {
+            self.set_status("A course needs at least one slide");
+            return;
+        }
+        let steps: Vec<(String, Json)> = valid_ids
+            .iter()
+            .map(|id| {
+                (
+                    "slide.delete".to_owned(),
+                    serde_json::json!({ "slide": id }),
+                )
+            })
+            .collect();
+        if steps.len() == 1 {
+            self.run("slide.delete", steps[0].1.clone());
+        } else {
+            self.run_batch(&steps);
+        }
+    }
+
     /// Duplicate every selected object as one undo step and select the copies.
     pub fn duplicate_selection(&mut self) {
         let ids = self.selected_object_ids();
@@ -3188,6 +3361,7 @@ impl Editor {
                 {
                     log_failed_for_test(id, &params, "NO CHANGE");
                 }
+                self.ui.pending_undo_redo = matches!(id, "edit.undo" | "edit.redo");
                 self.select_created(id, &v);
                 self.note_removed_triggers(&v);
                 Some(v)
@@ -3214,6 +3388,7 @@ impl Editor {
         }
         match self.session.execute_batch(steps) {
             Ok(results) => {
+                self.ui.pending_undo_redo = false;
                 for (step, res) in steps.iter().zip(&results) {
                     self.select_created(&step.0, res);
                 }
@@ -3281,6 +3456,7 @@ impl Editor {
             | "bank.add_question"
             | "draw.insert" => {
                 self.selection.slide = new_id.to_owned();
+                self.selection.also_slides.clear();
                 self.selection.layer = None;
                 self.selection.clear_objects();
             }
@@ -3299,7 +3475,14 @@ impl Editor {
     pub fn check_revision(&mut self) {
         if self.session.revision != self.ui.last_seen_revision {
             self.ui.last_seen_revision = self.session.revision;
-            self.selection.repair(&self.session.course);
+            let reselect_restored = std::mem::take(&mut self.ui.pending_undo_redo);
+            self.selection.repair_with_prev_ex(
+                &self.session.course,
+                &self.ui.last_known_slides,
+                reselect_restored,
+            );
+            self.ui.last_known_slides = selection::slide_layout(&self.session.course);
+            self.ui.pending_undo_redo = false;
             if self.ui.master_view {
                 if self.session.course.master(&self.selection.slide).is_none() {
                     let first = self
@@ -3482,6 +3665,7 @@ impl Editor {
         self.check_revision();
         self.maybe_run_deferred_audit(ui.ctx());
         properties::publish_theme_colors(ui.ctx(), &self.session.course.theme);
+        coursecraft_render::set_system_font_provider(ui.ctx(), self.system_font_provider.clone());
         coursecraft_render::install_course_fonts(
             ui.ctx(),
             &self.session.course,
@@ -3647,6 +3831,11 @@ impl Editor {
                             params["layer"] = serde_json::json!(lid);
                         }
                         self.run("slide.remove_cue", params);
+                    } else if self.ui.last_active_area == ActiveArea::Navigator
+                        && !self.ui.master_view
+                        && !self.ui.story_view
+                    {
+                        self.delete_selected_slides();
                     } else {
                         self.delete_selection();
                     }
@@ -3703,6 +3892,11 @@ impl Editor {
                         params["layer"] = serde_json::json!(lid);
                     }
                     self.run("slide.remove_cue", params);
+                } else if self.ui.last_active_area == ActiveArea::Navigator
+                    && !self.ui.master_view
+                    && !self.ui.story_view
+                {
+                    self.delete_selected_slides();
                 } else {
                     self.delete_selection();
                 }
@@ -4139,6 +4333,10 @@ impl coursecraft_render::MediaSource for TimelineMediaSource<'_> {
     fn video_frame(&self, object: &str) -> Option<std::sync::Arc<VideoFrame>> {
         self.playback.video_frame_for(object, self.playhead_ms)
     }
+
+    fn video_error(&self, object: &str) -> Option<&str> {
+        self.playback.video_error_for(object)
+    }
 }
 
 /// Collect all media `src` paths referenced by objects and states across the
@@ -4367,7 +4565,10 @@ pub fn sanitize_font_src(file_name: &str, existing: &[(String, std::sync::Arc<[u
         } else {
             format!("fonts/{stem}-{counter}.{ext}")
         };
-        if !existing.iter().any(|(src, _)| src == &name) {
+        if !existing
+            .iter()
+            .any(|(src, _)| src.eq_ignore_ascii_case(&name))
+        {
             return name;
         }
         counter = counter.saturating_add(1);

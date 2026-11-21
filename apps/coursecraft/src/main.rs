@@ -42,6 +42,8 @@ pub mod versions;
 #[cfg(test)]
 mod bughunt_m24_preview;
 #[cfg(test)]
+mod bughunt_m25_versions;
+#[cfg(test)]
 mod files_tests;
 #[cfg(test)]
 mod tests;
@@ -165,10 +167,16 @@ struct EditorApp {
     export_review_rx: Option<std::sync::mpsc::Receiver<Result<PathBuf, String>>>,
     /// A background scan of the computer's installed fonts, while one is running.
     #[cfg(not(target_arch = "wasm32"))]
-    system_fonts_rx: Option<std::sync::mpsc::Receiver<Vec<system_fonts::SystemFontFamily>>>,
-    /// The installed font families found by the last scan, kept for importing.
+    system_fonts_rx: Option<
+        std::sync::mpsc::Receiver<
+            std::sync::Arc<coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex>,
+        >,
+    >,
+    /// The cached installed font index found by the background scan.
     #[cfg(not(target_arch = "wasm32"))]
-    system_font_families: Vec<system_fonts::SystemFontFamily>,
+    system_font_index: Option<
+        std::sync::Arc<coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex>,
+    >,
     /// Last file written by a successful publish, for "Show in folder".
     #[cfg(not(target_arch = "wasm32"))]
     published_path: Option<PathBuf>,
@@ -396,6 +404,15 @@ impl EditorApp {
         let project = Project::new(editor.session.revision);
         let autosave_minutes = prefs.autosave_minutes_clamped();
 
+        let (fonts_tx, fonts_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let index = std::sync::Arc::new(
+                coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default(
+                ),
+            );
+            let _ = fonts_tx.send(index);
+        });
+
         Self {
             editor,
             ai: ai::AiClient::new(),
@@ -418,8 +435,8 @@ impl EditorApp {
             publish_rx: None,
             export_rx: None,
             export_review_rx: None,
-            system_fonts_rx: None,
-            system_font_families: Vec::new(),
+            system_fonts_rx: Some(fonts_rx),
+            system_font_index: None,
             published_path: None,
             preview_server: None,
             #[cfg(test)]
@@ -1342,15 +1359,18 @@ impl EditorApp {
     /// Scan the installed font folders in the background.
     #[cfg(not(target_arch = "wasm32"))]
     fn start_system_font_scan(&mut self, ctx: &egui::Context) {
-        if self.system_fonts_rx.is_some() {
+        if self.system_fonts_rx.is_some() || self.system_font_index.is_some() {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
         self.system_fonts_rx = Some(rx);
         let repaint_ctx = ctx.clone();
         std::thread::spawn(move || {
-            let families = system_fonts::scan(&system_fonts::font_folders());
-            let _ = tx.send(families);
+            let index = std::sync::Arc::new(
+                coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default(
+                ),
+            );
+            let _ = tx.send(index);
             // Wake the UI only when there is a result to show, instead of
             // repainting every frame while the scan runs.
             repaint_ctx.request_repaint();
@@ -1372,19 +1392,18 @@ impl EditorApp {
         let mut restricted = false;
 
         if !already_in_course
-            && let Some(found) = self
-                .system_font_families
-                .iter()
-                .find(|item| item.name.eq_ignore_ascii_case(family))
+            && let Some(index) = self.system_font_index.as_ref()
+            && let Some(found) = index.find_family(family)
         {
             restricted = found.embedding_restricted;
-            for (_style, path) in &found.faces {
-                let file_name = path
+            for face in &found.faces {
+                let file_name = face
+                    .path
                     .file_name()
                     .and_then(|name| name.to_str())
                     .unwrap_or("font.ttf")
                     .to_string();
-                let Ok(bytes) = std::fs::read(path) else {
+                let Some(bytes) = index.load_face_bytes(face) else {
                     continue;
                 };
                 if self.editor.import_font(&file_name, &bytes).is_some() {
@@ -1648,8 +1667,12 @@ impl EditorApp {
         self.publish_rx = Some(rx);
         self.editor.set_publish_busy();
         let repaint = ctx.clone();
+        let font_index = self.system_font_index.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(publish::run_publish_job(job));
+            let _ = tx.send(publish::run_publish_job_with_fonts(
+                job,
+                font_index.as_deref(),
+            ));
             repaint.request_repaint();
         });
     }
@@ -1669,7 +1692,13 @@ impl EditorApp {
                     .unwrap_or("course.zip")
                     .to_string();
                 self.published_path = Some(outcome.path);
-                self.editor.set_publish_success(name, outcome.bytes);
+                self.editor.set_publish_success_with_fonts(
+                    name,
+                    outcome.bytes,
+                    outcome.embedded_fonts,
+                    outcome.font_warnings,
+                    outcome.pending_save_fonts,
+                );
             }
             Ok(Err(message)) => {
                 self.editor.set_publish_failure(message);
@@ -1694,9 +1723,10 @@ impl EditorApp {
             return;
         };
         match rx.try_recv() {
-            Ok(families) => {
+            Ok(index) => {
                 self.editor.ui.system_fonts = Some(
-                    families
+                    index
+                        .families()
                         .iter()
                         .map(|family| coursecraft_ui_egui::SystemFontChoice {
                             name: family.name.clone(),
@@ -1704,7 +1734,12 @@ impl EditorApp {
                         })
                         .collect(),
                 );
-                self.system_font_families = families;
+                let provider: std::sync::Arc<dyn coursecraft_ui_egui::SystemFontProvider> =
+                    std::sync::Arc::new(coursecraft_ui_egui::IndexFontProvider(
+                        std::sync::Arc::clone(&index),
+                    ));
+                self.editor.set_system_font_provider(Some(provider));
+                self.system_font_index = Some(index);
                 ctx.request_repaint();
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -2300,7 +2335,13 @@ impl EditorApp {
 
     fn finish_import_pptx(&mut self, bytes: &[u8], title: &str) {
         match coursecraft_pptx::import_pptx(bytes, title) {
-            Ok(imported) => {
+            Ok(mut imported) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(index) = self.system_font_index.as_ref() {
+                    imported
+                        .report
+                        .filter_installed_fonts(|name| index.has_family(name));
+                }
                 self.editor.replace_course(imported.course);
                 let media_arc = into_arc_media(imported.media);
                 self.editor.set_media(media_arc);
@@ -3179,10 +3220,9 @@ impl eframe::App for EditorApp {
                         });
                     }
                     EditorRequest::Save | EditorRequest::SaveAs => {
-                        match coursecraft_format::save_project(
-                            &self.editor.session.course,
-                            &self.editor.media,
-                        ) {
+                        let media = self.editor.used_media();
+                        match coursecraft_format::save_project(&self.editor.session.course, &media)
+                        {
                             Ok(bytes) => {
                                 let stem = sanitize_filename_stem(
                                     &self.editor.session.course.title,

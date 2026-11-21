@@ -1,11 +1,66 @@
-//! Bundled font loading, custom course fonts, and fallback resolution.
+//! Bundled font loading, custom course fonts, installed system fonts, and fallback resolution.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use coursecraft_course::{Course, FontStyle};
 use egui::{FontData, FontDefinitions, FontFamily, FontId};
 
 use crate::media::{MediaFetch, MediaSource};
+
+/// Loaded bytes and collection face index for an installed system font face.
+#[derive(Clone, Debug)]
+pub struct SystemFontData {
+    pub bytes: Arc<[u8]>,
+    pub face_index: u32,
+}
+
+/// Optional provider of installed system fonts (desktop only; absent on wasm).
+pub trait SystemFontProvider: Send + Sync {
+    /// Load the font face bytes for `(family, style)` if installed, falling
+    /// back to `FontStyle::Regular` when the exact style is unavailable.
+    fn load_face(&self, family: &str, style: FontStyle) -> Option<(FontStyle, SystemFontData)>;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn to_media_style(style: FontStyle) -> coursecraft_media::FontFileStyle {
+    match style {
+        FontStyle::Regular => coursecraft_media::FontFileStyle::Regular,
+        FontStyle::Bold => coursecraft_media::FontFileStyle::Bold,
+        FontStyle::Italic => coursecraft_media::FontFileStyle::Italic,
+        FontStyle::BoldItalic => coursecraft_media::FontFileStyle::BoldItalic,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn from_media_style(style: coursecraft_media::FontFileStyle) -> FontStyle {
+    match style {
+        coursecraft_media::FontFileStyle::Regular => FontStyle::Regular,
+        coursecraft_media::FontFileStyle::Bold => FontStyle::Bold,
+        coursecraft_media::FontFileStyle::Italic => FontStyle::Italic,
+        coursecraft_media::FontFileStyle::BoldItalic => FontStyle::BoldItalic,
+    }
+}
+
+/// [`SystemFontProvider`] backed by [`coursecraft_media::system_fonts::SystemFontIndex`].
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone)]
+pub struct IndexFontProvider(pub Arc<coursecraft_media::system_fonts::SystemFontIndex>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SystemFontProvider for IndexFontProvider {
+    fn load_face(&self, family: &str, style: FontStyle) -> Option<(FontStyle, SystemFontData)> {
+        let (_, face) = self.0.resolve_face(family, to_media_style(style))?;
+        let bytes = self.0.load_face_bytes(face)?;
+        Some((
+            from_media_style(face.style),
+            SystemFontData {
+                bytes,
+                face_index: face.face_index,
+            },
+        ))
+    }
+}
 
 const INTER_REGULAR: &[u8] = include_bytes!("../fonts/Inter-Regular.ttf");
 const INTER_MEDIUM: &[u8] = include_bytes!("../fonts/Inter-Medium.ttf");
@@ -18,6 +73,18 @@ const PHOSPHOR_FILL: &[u8] = include_bytes!("../fonts/Phosphor-Fill.ttf");
 
 /// `ctx.data` key holding the fingerprint of the font set currently installed.
 const FINGERPRINT_ID: &str = "coursecraft-installed-fonts";
+/// `ctx.data` key holding the optional `Arc<dyn SystemFontProvider>`.
+const SYSTEM_PROVIDER_ID: &str = "coursecraft-system-font-provider";
+/// `ctx.data` key holding `(family_lower, FontStyle)` pairs already looked up
+/// via the system font provider, so missing or already-loaded faces are never
+/// re-queried every frame.
+const TRIED_SYSTEM_FACES_ID: &str = "coursecraft-tried-system-faces";
+/// `ctx.data` key holding `(cumulative_pass_nr, FontDefinitions)` queued via
+/// `ctx.set_fonts` during the current pass, because egui only applies
+/// `set_fonts` at the start of the next pass. Without tracking it here, a
+/// second incremental font install in the same frame would clone stale
+/// `ctx.fonts()` definitions and clobber the first font.
+const PENDING_DEFS_ID: &str = "coursecraft-pending-font-defs";
 
 /// Which file is backing a registered family. `Ready(len)` means the bytes
 /// are available; `Missing` and `Pending` both omit the face until it arrives.
@@ -136,13 +203,87 @@ fn store_fingerprint(ctx: &egui::Context, fingerprint: FontFingerprint) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::unique(FINGERPRINT_ID), fingerprint));
 }
 
+fn pending_defs_for_pass(ctx: &egui::Context) -> Option<FontDefinitions> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|data| {
+        data.get_temp::<(u64, FontDefinitions)>(egui::Id::unique(PENDING_DEFS_ID))
+            .and_then(|(saved_pass, defs)| (saved_pass == pass).then_some(defs))
+    })
+}
+
+fn set_fonts_and_track(ctx: &egui::Context, defs: FontDefinitions) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::unique(PENDING_DEFS_ID), (pass, defs.clone()));
+    });
+    ctx.set_fonts(defs);
+}
+
 fn install_base(ctx: &egui::Context) {
     let fingerprint = FontFingerprint::default();
     if installed_fingerprint(ctx).as_ref() == Some(&fingerprint) {
         return;
     }
-    ctx.set_fonts(base_definitions());
+    set_fonts_and_track(ctx, base_definitions());
+    clear_tried_system_faces(ctx);
     store_fingerprint(ctx, fingerprint);
+}
+
+/// Register (or clear) the optional system font provider on `ctx`.
+///
+/// Only desktop builds supply a provider; the web player leaves it unset.
+pub fn set_system_font_provider(
+    ctx: &egui::Context,
+    provider: Option<Arc<dyn SystemFontProvider>>,
+) {
+    let id = egui::Id::unique(SYSTEM_PROVIDER_ID);
+    let unchanged = ctx.data(|data| {
+        let existing = data.get_temp::<Option<Arc<dyn SystemFontProvider>>>(id);
+        match (
+            existing.as_ref().and_then(|o| o.as_ref()),
+            provider.as_ref(),
+        ) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => existing.is_some(),
+            _ => false,
+        }
+    });
+    if unchanged {
+        return;
+    }
+    ctx.data_mut(|data| data.insert_temp(id, provider));
+    clear_tried_system_faces(ctx);
+}
+
+fn system_font_provider(ctx: &egui::Context) -> Option<Arc<dyn SystemFontProvider>> {
+    ctx.data(|data| {
+        data.get_temp::<Option<Arc<dyn SystemFontProvider>>>(egui::Id::unique(SYSTEM_PROVIDER_ID))
+            .flatten()
+    })
+}
+
+fn clear_tried_system_faces(ctx: &egui::Context) {
+    ctx.data_mut(|data| {
+        data.remove::<HashSet<(String, &'static str)>>(egui::Id::unique(TRIED_SYSTEM_FACES_ID));
+    });
+}
+
+fn was_system_face_tried(ctx: &egui::Context, key: &(String, &'static str)) -> bool {
+    ctx.data(|data| {
+        data.get_temp::<HashSet<(String, &'static str)>>(egui::Id::unique(TRIED_SYSTEM_FACES_ID))
+            .is_some_and(|set| set.contains(key))
+    })
+}
+
+fn mark_system_face_tried(ctx: &egui::Context, key: (String, &'static str)) {
+    ctx.data_mut(|data| {
+        let id = egui::Id::unique(TRIED_SYSTEM_FACES_ID);
+        let mut set = data
+            .get_temp::<HashSet<(String, &'static str)>>(id)
+            .unwrap_or_default();
+        set.insert(key);
+        data.insert_temp(id, set);
+    });
 }
 
 /// Install the bundled Inter and Phosphor font families into an [`egui::Context`].
@@ -157,6 +298,17 @@ pub fn install_fonts(ctx: &egui::Context) {
 }
 
 /// A stable egui family name for one course face.
+#[must_use]
+pub fn system_face_family(family: &str, style: FontStyle) -> FontFamily {
+    FontFamily::Name(
+        format!(
+            "coursecraft-sysfont:{}:{}",
+            family.trim().to_ascii_lowercase(),
+            style.as_str()
+        )
+        .into(),
+    )
+}
 #[must_use]
 pub fn course_face_family(family: &str, style: FontStyle) -> FontFamily {
     FontFamily::Name(
@@ -217,14 +369,29 @@ pub fn install_course_fonts(ctx: &egui::Context, course: &Course, media: &dyn Me
         };
         // Treat a hostile or corrupt file as missing; never feed egui bytes
         // that do not parse as a font.
-        if coursecraft_media::font_info(&bytes).is_err() {
+        let Ok(faces) = coursecraft_media::font_collection_info(&bytes) else {
             continue;
-        }
+        };
+        let face_index = faces
+            .iter()
+            .find(|(_, info, aliases)| {
+                (info.family.eq_ignore_ascii_case(&face.family)
+                    || aliases.iter().any(|a| a.eq_ignore_ascii_case(&face.family)))
+                    && to_course_style(info.style) == face.style
+            })
+            .or_else(|| {
+                faces.iter().find(|(_, info, aliases)| {
+                    info.family.eq_ignore_ascii_case(&face.family)
+                        || aliases.iter().any(|a| a.eq_ignore_ascii_case(&face.family))
+                })
+            })
+            .map_or(0, |(idx, _, _)| *idx);
         let data_key = format!("course-font-{index}");
-        fonts.font_data.insert(
-            data_key.clone(),
-            Arc::new(FontData::from_owned(bytes.to_vec())),
-        );
+        let mut font_data = FontData::from_owned(bytes.to_vec());
+        font_data.index = face_index;
+        fonts
+            .font_data
+            .insert(data_key.clone(), Arc::new(font_data));
         let mut list = Vec::with_capacity(1 + inter_fallback.len());
         list.push(data_key);
         // Inter follows the course face so a missing glyph never turns into a
@@ -235,8 +402,18 @@ pub fn install_course_fonts(ctx: &egui::Context, course: &Course, media: &dyn Me
             .insert(course_face_family(&face.family, face.style), list);
     }
 
-    ctx.set_fonts(fonts);
+    set_fonts_and_track(ctx, fonts);
+    clear_tried_system_faces(ctx);
     store_fingerprint(ctx, fingerprint);
+}
+
+fn to_course_style(style: coursecraft_media::FontFileStyle) -> FontStyle {
+    match style {
+        coursecraft_media::FontFileStyle::Regular => FontStyle::Regular,
+        coursecraft_media::FontFileStyle::Bold => FontStyle::Bold,
+        coursecraft_media::FontFileStyle::Italic => FontStyle::Italic,
+        coursecraft_media::FontFileStyle::BoldItalic => FontStyle::BoldItalic,
+    }
 }
 
 fn inter_family(bold: bool, italic: bool) -> &'static str {
@@ -258,11 +435,48 @@ fn style_for(bold: bool, italic: bool) -> FontStyle {
 }
 
 fn family_exists(ctx: &egui::Context, family: &FontFamily) -> bool {
-    ctx.fonts(|f| f.definitions().families.contains_key(family))
+    pending_defs_for_pass(ctx).is_some_and(|defs| defs.families.contains_key(family))
+        || ctx.fonts(|f| f.definitions().families.contains_key(family))
 }
 
-/// Choose a slide text font, resolving `family` to its exact face, then its
-/// regular face, then Inter. An unknown or missing family falls back to Inter.
+fn install_system_face_incrementally(
+    ctx: &egui::Context,
+    family_name: &str,
+    style: FontStyle,
+    data: SystemFontData,
+) -> FontFamily {
+    let target = system_face_family(family_name, style);
+    if family_exists(ctx, &target) {
+        return target;
+    }
+    let mut defs =
+        pending_defs_for_pass(ctx).unwrap_or_else(|| ctx.fonts(|f| f.definitions().clone()));
+    let data_key = format!(
+        "sys-font:{}:{}",
+        family_name.trim().to_ascii_lowercase(),
+        style.as_str()
+    );
+    let mut font_data = FontData::from_owned(data.bytes.to_vec());
+    font_data.index = data.face_index;
+    defs.font_data.insert(data_key.clone(), Arc::new(font_data));
+    let inter_fallback = defs
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_else(|| vec!["inter_regular".to_owned()]);
+    let mut list = Vec::with_capacity(1 + inter_fallback.len());
+    list.push(data_key);
+    list.extend(inter_fallback);
+    defs.families.insert(target.clone(), list);
+    set_fonts_and_track(ctx, defs);
+    ctx.request_repaint();
+    target
+}
+
+/// Choose a slide text font, resolving `family` to:
+/// 1. course-embedded face (exact style, then regular)
+/// 2. installed system face (exact style, then regular)
+/// 3. Inter (exact style, then proportional).
 #[must_use]
 pub fn slide_font_named(
     ctx: &egui::Context,
@@ -277,13 +491,34 @@ pub fn slide_font_named(
         && !name.eq_ignore_ascii_case("Inter")
         && !name.eq_ignore_ascii_case("Open Sans")
     {
-        let exact = course_face_family(name, style_for(bold, italic));
+        let requested_style = style_for(bold, italic);
+        let exact = course_face_family(name, requested_style);
         if family_exists(ctx, &exact) {
             return FontId::new(size, exact);
         }
         let regular = course_face_family(name, FontStyle::Regular);
         if family_exists(ctx, &regular) {
             return FontId::new(size, regular);
+        }
+
+        // Installed system font (desktop only, when a provider is registered).
+        let sys_exact = system_face_family(name, requested_style);
+        if family_exists(ctx, &sys_exact) {
+            return FontId::new(size, sys_exact);
+        }
+        let key = (name.to_ascii_lowercase(), requested_style.as_str());
+        if !was_system_face_tried(ctx, &key) {
+            mark_system_face_tried(ctx, key);
+            if let Some(provider) = system_font_provider(ctx)
+                && let Some((actual_style, data)) = provider.load_face(name, requested_style)
+            {
+                let installed = install_system_face_incrementally(ctx, name, actual_style, data);
+                return FontId::new(size, installed);
+            }
+        }
+        let sys_regular = system_face_family(name, FontStyle::Regular);
+        if family_exists(ctx, &sys_regular) {
+            return FontId::new(size, sys_regular);
         }
     }
 

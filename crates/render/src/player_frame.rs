@@ -1736,12 +1736,7 @@ fn draw_strip(
         let dim = Color32::from_rgba_unmultiplied(text.r(), text.g(), text.b(), 0x55);
 
         if let Some(rect) = layout.play {
-            let (icon, tooltip) = if layout.at_end {
-                (
-                    Icon::ArrowCounterClockwise,
-                    player.course().chrome_string("replaySlide"),
-                )
-            } else if paused {
+            let (icon, tooltip) = if layout.at_end || paused {
                 (Icon::Play, player.course().chrome_string("playTooltip"))
             } else {
                 (Icon::Pause, player.course().chrome_string("pauseTooltip"))

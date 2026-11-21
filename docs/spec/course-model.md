@@ -62,10 +62,10 @@ Course
 
 | `kind.type` | fields |
 |---|---|
-| `text` | `text`, `style {font, size, color, bold, italic?, underline?, strikethrough?, baseline?, letter_spacing?, align?, valign?}`, `runs? [{text, bold?, italic?, underline?, strikethrough?, baseline?, letter_spacing?, size?, color?, font?, link?}]`, `paragraphs? [Paragraph]`, `autofit?` |
+| `text` | `text`, `style {font, size, color, bold, italic?, underline?, strikethrough?, baseline?, letter_spacing?, align?, valign?, wrap?, insets?, direction?}`, `runs? [{text, bold?, italic?, underline?, strikethrough?, baseline?, letter_spacing?, size?, color?, font?, link?}]`, `paragraphs? [Paragraph]`, `autofit?`, `outline? {color, width, dash?}` |
 | `shape` | `shape` (see [Shapes](#shapes)), `fill`, `fill_style?`, `outline? {color, width, dash?}`, `text? {text, style, runs?, paragraphs?, autofit?}`, `adjust? [number]` |
-| `image` | `src`, `alt`, `crop?` |
-| `audio` / `video` | `src`, `autoplay`, `captions?`, `volume?`, `trim?`, `cues[]?` (video only, see [Interactive video cues](#interactive-video-cues)) |
+| `image` | `src`, `alt`, `crop?`, `outline? {color, width, dash?}`, `shape?` |
+| `audio` / `video` | `src`, `autoplay`, `captions?`, `volume?`, `trim?`, `cues[]?` (video only, see [Interactive video cues](#interactive-video-cues)), `poster?` (video only) |
 | `lottie` | `src`, `loop?`, `autoplay?`, `speed?` |
 | `web` | `source` (see [Web objects](#web-objects)) |
 | `text_entry` | `variable`, `placeholder?`, `multiline?`, `max_chars?` (default 0 = no limit, at most 10000) |
@@ -294,11 +294,15 @@ An author can add TrueType or OpenType files with File ▸ Add font…, or throu
 
 - `style` is `regular`, `bold`, `italic` or `bold_italic`. A family may register any subset of faces.
 - At most 40 faces per course. A family name is trimmed, stripped of control characters, and 1–64 characters. `(family, style)` is unique, compared case-insensitively.
-- `src` is a safe relative media path under `fonts/` ending in `.ttf` or `.otf`. The file must parse as TrueType/OpenType and be at most 15 MiB. The editor validates the bytes before copying them and the `course.add_font` command enforces the model rules.
-- `TextStyle.font`, `TextRun.font` and `Theme.font` may name `Inter` or a registered family. A run's `font` overrides its style. Rendering resolves the exact `(family, bold, italic)` face, then the family's `regular` face, then Inter. An unknown or missing family renders in Inter.
-- Fonts are media: they are kept by `.ccraft` save/load, checked for missing files, and shipped by every publish standard. The player loads them from `media/`.
+- `src` is a safe relative media path under `fonts/` ending in `.ttf`, `.otf`, `.ttc` or `.otc`. The file must parse as TrueType/OpenType and be at most 15 MiB. The editor validates the bytes before copying them and the `course.add_font` command enforces the model rules.
+- `TextStyle.font`, `TextRun.font` and `Theme.font` may name `Inter`, a registered course family, or (on desktop) an installed system font. A run's `font` overrides its style. Rendering resolves a family in order:
+  1. course-embedded face (exact `(family, bold, italic)`, then `regular`),
+  2. installed system face on desktop (exact `(family, bold, italic)`, then `regular`; absent in the web player),
+  3. `Inter` (exact bold/italic, then regular).
+  An unknown or missing family renders in `Inter`.
+- Fonts are media: they are kept by `.ccraft` save/load, checked for missing files, and shipped by every publish standard. At publish on desktop, installed system font faces used by the course's text (whose OS/2 `fsType` permits embedding) are auto-embedded into the published package; restricted or missing fonts are warned (`Learners without <font> will see Inter.`) along with `Font licences are your responsibility.`. The player loads embedded fonts from `media/`.
 - `course.add_font` takes `{src, family, style}` and is undoable. `course.remove_font` takes `{family, style?}` or `{src}` and is undoable. Removing a font used by text is confirmed by the editor first; that text then falls back to Inter.
-- PowerPoint import keeps each run's `a:latin@typeface` in `TextRun.font` and reports fonts used by the deck or its theme (`a:majorFont`/`a:minorFont`) that are not Inter: "Add these fonts to keep the look: …". Adding them later makes the imported text render in them.
+- PowerPoint import extracts `p:embeddedFontLst` (including ECMA-376 `.fntdata` obfuscated parts) into `course.fonts`, keeps each run's `a:latin@typeface` in `TextRun.font`, and reports fonts used by the deck or its theme (`a:majorFont`/`a:minorFont`) that are neither embedded nor installed: `"Add these fonts to keep the look: … (shown as Inter)."`
 
 ### Shapes
 
@@ -318,11 +322,11 @@ Hit testing stays the object's frame (rotated and flipped when the object is), n
 
 `adjust` carries the kind's adjustment values, in the order its handles appear. Values are unitless and clamped per kind when a command stores them and again when they are drawn; non-finite values fall back to the kind's default and extra values are ignored. Callout tail points are fractions of the width and height and may sit outside the frame; angle values are radians. An empty list means the kind's defaults, and the field is omitted when empty, so a plain shape saves exactly as before. PowerPoint `a:avLst/a:gd` values import where the preset has a known mapping (most are 1/100000 of `min(w, h)`, star inner radii are 1/50000 of the outer radius, and angles are 60000ths of a degree); unknown presets keep the defaults. A rectangular, rounded or oval callout is a single contour with its wedge spliced into the nearest side, so an outline never draws through the bubble.
 
-### Shape outlines, no fill and text
+### Shape outlines, unfilled shapes and text
 
-A shape may set `outline` to `{color, width, dash}`. `color` is a normal `#RRGGBB`/`#RRGGBBAA` colour, `width` is in slide pixels and must be finite and within `0..=50`, and `dash` is `solid` (default), `dash` or `dot`. The outline is a band centred on the shape's edge, including a hole's edge; it is a mesh, not an `egui::Stroke`, so the wasm player and the offscreen rasteriser draw it the same way. Miter joins fall back to a bevel past a limit. Non-finite or zero widths draw nothing. `Lines` kinds keep their filled bands and take neither an outline nor text.
+A shape may set `outline` to `{color, width, dash, dash_pattern?}`. `color` is a normal `#RRGGBB`/`#RRGGBBAA` colour, `width` is in slide pixels and must be finite and within `0..=50`, `dash` is `solid` (default), `dash`, `dot`, `dash_dot` or `custom`, and optional `dash_pattern` is an even-length list (2 to 32 entries, each in `(0, 100]`) of alternating dash and gap lengths as multiples of `width` (omitted when using `dash`'s built-in spacing). The outline is a band centred on the shape's edge, including a hole's edge; it is a mesh, not an `egui::Stroke`, so the wasm player and the offscreen rasteriser draw it the same way. Miter joins fall back to a bevel past a limit. Non-finite or zero widths draw nothing. `Lines` kinds keep their filled bands and take neither an outline nor text. `text` and `image` objects may also carry an optional `outline` (and `image` may carry an optional `shape` mask).
 
-"No fill" is `fill: "#00000000"`; the shape then draws only its outline and text. `outline` and `text` are omitted when unset, so a plain shape saves exactly as it did before these fields existed.
+An unfilled shape is `fill: "#00000000"`; the shape then draws only its outline and text. `outline` and `text` are omitted when unset, so a plain shape saves exactly as it did before these fields existed.
 
 A shape may set `text` to `{text, style, runs?, paragraphs?, autofit?}` using the same style, run, paragraph and autofit rules as a text object. It moves, animates, translates and imports with the shape. `%name%` substitution, `StateDef.text` overrides, alignment, runs and the accessibility name all treat it as the shape's own text. A `Lines` shape cannot carry text. Text may overflow the shape, as it does in PowerPoint, and sits in a per-kind text rectangle: the frame inset by 6 px by default, with overrides for ellipses, diamonds, triangles, callouts, arrows, stars, flowchart shapes, cloud and heart. A PowerPoint autoshape's `txBody` imports into this field; a plain text box stays a `text` object.
 
@@ -530,7 +534,7 @@ Objects may define entrance and exit animations, and one or more motion paths:
 }
 ```
 
-- **Effects (`AnimEffect`):** `fade`, `fly_in { from }`, `zoom`, `wipe { from }`, `float { from }`.
+- **Effects (`AnimEffect`):** `fade`, `fly_in { from }`, `zoom`, `wipe { from }`, `float { from }`. The same stored effect ids are used for both `entrance` and `exit` (for example, `fly_in` is shown as "Fly in" for entrances and "Fly out" for exits).
 - **Direction (`Direction`):** `left`, `right`, `top`, `bottom` (default `bottom`). For exits, `from` indicates the direction the object leaves toward.
 - **Easing (`Easing`):** `linear`, `ease_in`, `ease_out` (default), `ease_in_out`.
 - **Duration (`duration_ms`):** default 500 ms for animations, 1000 ms for motion paths (allowed 1–60000 ms).

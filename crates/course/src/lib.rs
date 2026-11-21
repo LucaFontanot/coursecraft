@@ -48,24 +48,25 @@ pub use audit::{
 
 pub use model::{
     Action, Align, AnimEffect, Animation, Autofit, BACKGROUND_AUDIO_ID, BUILTIN_STATES,
-    BUILTIN_VARIABLES, BackgroundAudio, BankDraw, Baseline, CHROME_STRINGS, Choice, CmpOp, Color,
-    CompletionStatus, Condition, ConnectorStyle, Course, CropRect, Cue, DEFAULT_TIMER_DURATION_MS,
-    DashStyle, Direction, DragItem, DragSpec, Easing, EditorSettings, Event, FillStyle, FontFace,
-    FontStyle, GlossaryEntry, Glow, Glue, GradientStop, Guide, HotspotRegion, HotspotShape,
-    InputKind, LOTTIE_MAX_SPEED, LOTTIE_MIN_SPEED, Layer, LineEnd, Link, ListKind, MAX_CUES,
-    MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, MAX_GRADIENT_STOPS, MAX_INPUT_CHARS,
-    MAX_JAVASCRIPT_BYTES, MAX_LETTER_SPACING, MAX_OBJECT_FRAME_SIZE, MAX_PALETTE_COLORS,
-    MAX_RADIO_OPTIONS, MAX_SCROLL_CONTENT_HEIGHT, MAX_TEXT_STYLES, MAX_TIMELINE_DURATION_MS,
-    MAX_TIMER_DURATION_MS, MAX_TRIM_MS, MIN_LETTER_SPACING, MIN_RADIO_OPTIONS, MarkerIcon,
-    MatchPair, MeterStyle, MotionPath, NamedTextStyle, NavMode, NextRequirement, Object,
-    ObjectKind, Orientation, Outline, PATH_MAX_POINTS, PATH_MIN_POINTS, PaletteColor, Paragraph,
-    Path, PathPoint, PathStyle, PictureFillMode, PlayerSettings, PlayerTheme, Point,
-    PublishSettings, Question, QuestionBank, QuestionKind, QuizSettings, RadioOption, Rect,
-    Resource, ResourceTarget, RevisitMode, SCHEMA_VERSION, Scene, Scoring, ScrollBar, SeekMode,
-    Shadow, ShapeKind, ShapeText, Size, Slide, SlideCue, SlidePlayerOverrides, SlideTarget,
-    StateDef, TABLE_MAX_AXIS, TABLE_MAX_CELLS, TABLE_MIN_FRACTION, TableBorders, TableCell,
-    TableRow, TextRun, TextStyle, Theme, TimerFormat, Timing, Transition, TransitionEffect,
-    Trigger, Trim, VALID_TRIGGER_KEYS, VAlign, Value, ValueKind, ValueSource, VarOp, VariableDef,
+    BUILTIN_VARIABLES, BackgroundAudio, BankDraw, BaseSlideView, Baseline, CHROME_STRINGS, Choice,
+    CmpOp, Color, CompletionStatus, Condition, ConnectorStyle, Course, CropRect, Cue,
+    DEFAULT_TIMER_DURATION_MS, DashStyle, Direction, DragItem, DragSpec, Easing, EditorSettings,
+    Event, FillStyle, FontFace, FontStyle, GlossaryEntry, Glow, Glue, GradientStop, Guide,
+    HotspotRegion, HotspotShape, InputKind, LOTTIE_MAX_SPEED, LOTTIE_MIN_SPEED, Layer, LineEnd,
+    Link, ListKind, MAX_CUES, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, MAX_GRADIENT_STOPS,
+    MAX_INPUT_CHARS, MAX_JAVASCRIPT_BYTES, MAX_LETTER_SPACING, MAX_OBJECT_FRAME_SIZE,
+    MAX_PALETTE_COLORS, MAX_RADIO_OPTIONS, MAX_SCROLL_CONTENT_HEIGHT, MAX_TEXT_STYLES,
+    MAX_TIMELINE_DURATION_MS, MAX_TIMER_DURATION_MS, MAX_TRIM_MS, MIN_LETTER_SPACING,
+    MIN_RADIO_OPTIONS, MarkerIcon, MatchPair, MeterStyle, MotionPath, NamedTextStyle, NavMode,
+    NextRequirement, NumberScheme, Object, ObjectKind, Orientation, Outline, PATH_MAX_POINTS,
+    PATH_MIN_POINTS, PaletteColor, Paragraph, Path, PathPoint, PathStyle, PathSubpath,
+    PictureFillMode, PlayerSettings, PlayerTheme, Point, PublishSettings, Question, QuestionBank,
+    QuestionKind, QuizSettings, RadioOption, Rect, Resource, ResourceTarget, RevisitMode,
+    SCHEMA_VERSION, Scene, Scoring, ScrollBar, SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide,
+    SlideCue, SlidePlayerOverrides, SlideTarget, StateDef, TABLE_MAX_AXIS, TABLE_MAX_CELLS,
+    TABLE_MIN_FRACTION, TableBorders, TableCell, TableRow, TextDirection, TextInsets, TextRun,
+    TextStyle, Theme, TimerFormat, Timing, Transition, TransitionEffect, Trigger, Trim,
+    VALID_TRIGGER_KEYS, VAlign, Value, ValueKind, ValueSource, VarOp, VariableDef,
     WEB_DEFAULT_ENTRY, WEB_MAX_BYTES, WEB_MAX_FILES, WebSource, builtin_variable_kind,
     clamp_letter_spacing, clamp_lottie_speed, clamp_opacity, clamp_panel_offset, d500, d1000,
     default_accent_color, default_background_color, default_bar_color, default_bar_text_color,
@@ -222,14 +223,33 @@ fn walk_object_media_references(
     };
     match &object.kind {
         ObjectKind::Image { src, .. } | ObjectKind::Lottie { src, .. } => push(src),
-        ObjectKind::Audio { src, captions, .. } | ObjectKind::Video { src, captions, .. } => {
+        ObjectKind::Audio { src, captions, .. } => {
             push(src);
             if let Some(captions) = captions {
                 push(captions);
             }
         }
+        ObjectKind::Video {
+            src,
+            captions,
+            poster,
+            ..
+        } => {
+            push(src);
+            if let Some(captions) = captions {
+                push(captions);
+            }
+            if let Some(poster) = poster {
+                push(poster);
+            }
+        }
         ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
             if let Some(src) = fill_style.as_ref().and_then(FillStyle::picture_src) {
+                push(src);
+            }
+        }
+        ObjectKind::Path { path } => {
+            if let Some(src) = path.fill_style.as_ref().and_then(FillStyle::picture_src) {
                 push(src);
             }
         }
@@ -530,6 +550,8 @@ impl Object {
     }
 }
 
+#[cfg(test)]
+mod bughunt_m25_strings;
 #[cfg(test)]
 mod outline_tests;
 #[cfg(test)]

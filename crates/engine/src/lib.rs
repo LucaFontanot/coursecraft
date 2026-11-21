@@ -422,6 +422,8 @@ impl Session {
 }
 
 #[cfg(test)]
+mod bughunt_m25_engine;
+#[cfg(test)]
 mod bughunt_undo_tests;
 #[cfg(test)]
 mod connector_tests;

@@ -39,6 +39,10 @@ pub mod ticker;
 pub mod view;
 
 #[cfg(test)]
+mod bughunt_m26_render;
+#[cfg(test)]
+mod justify_tests;
+#[cfg(test)]
 mod review_tests;
 #[cfg(test)]
 mod shape_tests;
@@ -57,9 +61,10 @@ pub use compose::{
     DEFAULT_BUTTON_COLOR, DEFAULT_TEXT_COLOR, DrawItem, Hit, ResolvedCellText, ResolvedLinkRect,
     ResolvedOutline, ResolvedPath, ResolvedShapeText, ResolvedTable, ResolvedTableCell,
     ResolvedTableRow, ResolvedTextRun, ReviewMark, Visual, compose, compose_authoring,
-    compose_authoring_layers, compose_object, compose_object_with_theme, compose_object_with_value,
-    flip_point, item_bounds, item_corners, item_hit_test, item_link_at, item_local_point,
-    question_prompt_rect, rotate_point,
+    compose_authoring_layers, compose_authoring_layers_opts, compose_object,
+    compose_object_with_theme, compose_object_with_value, flip_point, item_bounds, item_corners,
+    item_hit_test, item_link_at, item_local_point, question_prompt_rect, resolve_text_runs,
+    rotate_point,
 };
 pub use design::{
     CONTROL_COMPACT, CONTROL_PRIMARY, CONTROL_TOOLBAR, ICON_SM, ICON_TOOLBAR, PANEL_MARGIN,
@@ -75,8 +80,11 @@ pub use focus::{
     ChromeButton, ExternalFocus, FocusManager, FocusTarget, KeyboardDragVisual, build_list,
     fill_in_id, input_text_id,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use font::IndexFontProvider;
 pub use font::{
-    course_face_family, install_course_fonts, install_fonts, slide_font, slide_font_named,
+    SystemFontData, SystemFontProvider, course_face_family, install_course_fonts, install_fonts,
+    set_system_font_provider, slide_font, slide_font_named, system_face_family,
 };
 pub use icons::{Icon, icon, icon_fill, icon_text};
 pub use layout::SlideTransform;
@@ -88,7 +96,8 @@ pub use media_driver::{
 };
 pub use offscreen::{
     DEFAULT_RENDER_WIDTH, MAX_RENDER_WIDTH, MIN_RENDER_WIDTH, RenderError, RenderMode,
-    RenderOptions, RgbaImage, encode_png, render_player_rgba, render_slide_rgba, render_ui,
+    RenderOptions, RgbaImage, decode_png, encode_png, render_player_rgba, render_slide_rgba,
+    render_ui,
 };
 pub use paint::{
     DEFAULT_BACKGROUND_COLOR, Highlight, dial_point, paint, paint_outline, paint_shape,
@@ -100,7 +109,10 @@ pub use path_geometry::{
     route_connector,
 };
 pub use player_frame::{FrameOutput, PlayerFrame, show_loading, show_loading_text};
-pub use shape_fill::{even_odd_area, fill_contours, stroke_contours, stroke_path};
+pub use shape_fill::{
+    even_odd_area, fill_contours, stroke_contours, stroke_contours_pattern, stroke_path,
+    stroke_path_pattern,
+};
 pub use shape_geometry::{
     Pt as ShapePoint, adjust_from_point, adjust_handle_name, adjust_handles, arc, regular_polygon,
     rounded_polygon, scale, shape_contours, shape_contours_adjusted, shape_text_rect, star,
@@ -109,7 +121,7 @@ pub use shape_geometry::{
 pub use snapshot::{PlayerSnapshotSelect, snapshot_player};
 pub use text_layout::{
     AUTOFIT_MIN_SCALE, INDENT_STEP, LaidLink, LaidMarker, LaidParagraph, LaidText, fill_item_links,
-    layout_text,
+    inline_edit_layout_job, justify_galley, justify_galley_snapped, layout_text,
 };
 pub use ticker::Ticker;
 pub use view::{

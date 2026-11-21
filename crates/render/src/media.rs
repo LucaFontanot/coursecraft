@@ -104,6 +104,10 @@ pub trait MediaSource {
     fn video_frame(&self, _object: &str) -> Option<Arc<coursecraft_playback::VideoFrame>> {
         None
     }
+    /// Plain-language error message if video preview decoding failed or timed out.
+    fn video_error(&self, _object: &str) -> Option<&str> {
+        None
+    }
 }
 
 /// Resolved presentation view of a requested media texture.

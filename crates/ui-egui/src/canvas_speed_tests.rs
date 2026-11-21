@@ -366,7 +366,7 @@ fn multi_select_button_fill_preserves_gradient_fill_style() {
     let fill_label = harness
         .find_text_in("Fill", panel)
         .expect("Fill label in multi-select panel");
-    let field_pos = Pos2::new(panel.center().x + 20.0, fill_label.y);
+    let field_pos = Pos2::new(panel.max.x - 40.0, fill_label.y);
     harness.set_field(field_pos, "#123456");
     harness.idle_frame();
 

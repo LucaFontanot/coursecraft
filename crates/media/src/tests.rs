@@ -632,3 +632,109 @@ fn animation_decoded_size_cap_is_enforced() {
         Err(MediaError::AnimationTooLarge { .. }) | Err(MediaError::TooLarge { .. })
     ));
 }
+
+#[test]
+fn fs_type_allows_restricted_when_permissive_bit_also_set() {
+    let preview_also =
+        font_info(&synthetic_font(Some(0x0006), None)).expect("restricted + preview&print");
+    assert!(!preview_also.embedding_restricted);
+
+    let editable_also =
+        font_info(&synthetic_font(Some(0x000A), None)).expect("restricted + editable");
+    assert!(!editable_also.embedding_restricted);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn system_font_index_handles_lookup_fallback_ttc_corrupt_and_missing_dirs() {
+    use crate::system_fonts::SystemFontIndex;
+
+    let dir = std::env::temp_dir().join("coursecraft-media-sysfont-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp font dir");
+
+    // Empty dir -> empty index.
+    assert!(
+        SystemFontIndex::from_folders(std::slice::from_ref(&dir))
+            .families()
+            .is_empty()
+    );
+    // Missing dir -> empty index.
+    assert!(
+        SystemFontIndex::from_folders(&[dir.join("does-not-exist")])
+            .families()
+            .is_empty()
+    );
+
+    // Copy a real repo font under a different filename, plus a corrupt file.
+    let dm_serif =
+        include_bytes!("../../../examples/healthy-habits/media/fonts/dm-serif-display-regular.ttf");
+    let font_path = dir.join("custom-display.ttf");
+    std::fs::write(&font_path, dm_serif).expect("write dm serif");
+    std::fs::write(dir.join("corrupt.ttf"), b"not a font").expect("write corrupt");
+
+    // Build a 2-face .ttc collection from two copies of synthetic_font,
+    // shifting each face's table offsets by its start offset in the collection.
+    let mut f1 = synthetic_font(Some(0x0000), None);
+    let mut f2 = synthetic_font(Some(0x0002), None);
+    let header_len = 12u32 + 2 * 4;
+    let off1 = header_len;
+    let off2 = off1 + f1.len() as u32;
+    let shift_offsets = |sfnt: &mut [u8], delta: u32| {
+        let num_tables = u16::from_be_bytes([sfnt[4], sfnt[5]]) as usize;
+        for i in 0..num_tables {
+            let entry = 12 + i * 16;
+            let orig = u32::from_be_bytes([
+                sfnt[entry + 8],
+                sfnt[entry + 9],
+                sfnt[entry + 10],
+                sfnt[entry + 11],
+            ]);
+            let shifted = (orig + delta).to_be_bytes();
+            sfnt[entry + 8..entry + 12].copy_from_slice(&shifted);
+        }
+    };
+    shift_offsets(&mut f1, off1);
+    shift_offsets(&mut f2, off2);
+    let mut ttc = Vec::new();
+    ttc.extend_from_slice(b"ttcf");
+    ttc.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+    ttc.extend_from_slice(&2u32.to_be_bytes());
+    ttc.extend_from_slice(&off1.to_be_bytes());
+    ttc.extend_from_slice(&off2.to_be_bytes());
+    ttc.extend_from_slice(&f1);
+    ttc.extend_from_slice(&f2);
+    std::fs::write(dir.join("pair.ttc"), &ttc).expect("write ttc");
+
+    let index = SystemFontIndex::from_folders(std::slice::from_ref(&dir));
+    assert!(index.has_family("dm serif display"));
+    assert!(index.has_family("  DM Serif Display  "));
+    assert!(index.has_family("test family"));
+    assert_eq!(
+        index.find_family("Test Family").map(|f| f.name.as_str()),
+        Some("Test Family")
+    );
+
+    // Style fallback: Bold requested when only Regular exists -> resolves to Regular.
+    let (fam, face) = index
+        .resolve_face("DM SERIF DISPLAY", FontFileStyle::Bold)
+        .expect("resolve with fallback to regular");
+    assert_eq!(fam.name, "DM Serif Display");
+    assert_eq!(face.style, FontFileStyle::Regular);
+
+    // Removing the file after indexing (before loading bytes) returns None without crashing.
+    let index_uncached = SystemFontIndex::from_folders(std::slice::from_ref(&dir));
+    let (_, uncached_face) = index_uncached
+        .resolve_face("DM Serif Display", FontFileStyle::Regular)
+        .expect("resolve before delete");
+    std::fs::remove_file(&font_path).expect("remove font file");
+    assert!(index_uncached.load_face_bytes(uncached_face).is_none());
+
+    // Now load from the first index? No, file was deleted; test load_face_bytes on existing ttc.
+    let (_, ttc_face) = index
+        .resolve_face("Test Family", FontFileStyle::Regular)
+        .expect("resolve ttc face");
+    assert!(index.load_face_bytes(ttc_face).is_some());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

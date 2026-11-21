@@ -538,6 +538,7 @@ fn caption_files_survive_a_ccraft_round_trip_for_audio_and_video() {
                 volume: 1.0,
                 trim: None,
                 cues: Vec::new(),
+                poster: None,
             },
             "clip.vtt",
         ),

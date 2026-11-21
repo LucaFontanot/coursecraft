@@ -593,6 +593,7 @@ fn big_slide_reroutes_quickly() {
         color: Color("#1F1F1F".into()),
         width: 2.0,
         dash: DashStyle::Solid,
+        dash_pattern: None,
     };
     for index in 0..2000usize {
         #[allow(clippy::cast_precision_loss)]
@@ -618,7 +619,9 @@ fn big_slide_reroutes_quickly() {
                         points: vec![PathPoint { x: 0.0, y: 0.0 }, PathPoint { x: 1.0, y: 1.0 }],
                         style: coursecraft_course::PathStyle::Straight,
                         closed: false,
+                        subpaths: Vec::new(),
                         fill: None,
+                        fill_style: None,
                         outline: outline.clone(),
                         start_end: LineEnd::None,
                         end_end: LineEnd::None,
@@ -628,6 +631,7 @@ fn big_slide_reroutes_quickly() {
                             site: 0,
                         }),
                         end_glue: None,
+                        text: None,
                     },
                 }
             },
@@ -670,7 +674,9 @@ fn big_slide_reroutes_quickly() {
                     points: vec![PathPoint { x: 0.0, y: 0.0 }, PathPoint { x: 1.0, y: 1.0 }],
                     style: coursecraft_course::PathStyle::Straight,
                     closed: false,
+                    subpaths: Vec::new(),
                     fill: None,
+                    fill_style: None,
                     outline: outline.clone(),
                     start_end: LineEnd::None,
                     end_end: LineEnd::None,
@@ -680,6 +686,7 @@ fn big_slide_reroutes_quickly() {
                         site: (index % 4) as u8,
                     }),
                     end_glue: None,
+                    text: None,
                 },
             },
             frame: Rect {

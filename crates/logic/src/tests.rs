@@ -77,6 +77,7 @@ fn link_clicks_run_open_url_and_slide_jumps_without_firing_object_clicks() {
             paragraphs: Vec::new(),
             autofit: Autofit::None,
             text_style: None,
+            outline: None,
         };
         slide.triggers.push(Trigger {
             action: Action::SetVariable {
@@ -3655,6 +3656,7 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                         paragraphs: Vec::new(),
                         autofit: coursecraft_course::Autofit::None,
                         text_style: None,
+                        outline: None,
                     },
                     frame: Rect {
                         x: 80.0,
@@ -10860,4 +10862,213 @@ fn keyboard_objects_uses_precomputed_pointer_trigger_set() {
         p.keyboard_objects(),
         vec!["clicked", "hovered", "layer_obj"]
     );
+}
+
+#[test]
+fn exit_animations_with_slide_transition_fly_out_and_disappear() {
+    use crate::ObjectSample;
+    use coursecraft_course::{
+        AnimEffect, Animation, Direction, Easing, Transition, TransitionEffect,
+    };
+
+    let make_course = |transition: Option<Transition>| {
+        let mut c = Course::from_json(HELLO).expect("hello");
+        let s = c.slide_mut("s-intro").expect("s-intro");
+        s.duration_ms = 5000;
+        s.transition = transition;
+        s.objects = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "obj-fly",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+                "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 100.0 },
+                "timing": { "start_ms": 0, "end_ms": null },
+                "exit": {
+                    "effect": { "type": "fly_in", "from": "left" },
+                    "duration_ms": 1000,
+                    "easing": "linear"
+                }
+            }))
+            .expect("obj-fly"),
+            serde_json::from_value(serde_json::json!({
+                "id": "obj-disappear",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#10B981" },
+                "frame": { "x": 400.0, "y": 100.0, "w": 200.0, "h": 100.0 },
+                "timing": { "start_ms": 0, "end_ms": null },
+                "exit": {
+                    "effect": { "type": "fade" },
+                    "duration_ms": 1000,
+                    "easing": "linear"
+                }
+            }))
+            .expect("obj-disappear"),
+            serde_json::from_value(serde_json::json!({
+                "id": "obj-hard-end",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#F59E0B" },
+                "frame": { "x": 700.0, "y": 100.0, "w": 200.0, "h": 100.0 },
+                "timing": { "start_ms": 0, "end_ms": 5000 }
+            }))
+            .expect("obj-hard-end"),
+        ];
+        s.triggers.clear();
+        c
+    };
+
+    for trans in [
+        None,
+        Some(Transition {
+            effect: TransitionEffect::Fade,
+            duration_ms: 500,
+        }),
+        Some(Transition {
+            effect: TransitionEffect::Push {
+                from: Direction::Right,
+            },
+            duration_ms: 500,
+        }),
+        Some(Transition {
+            effect: TransitionEffect::Cover {
+                from: Direction::Bottom,
+            },
+            duration_ms: 500,
+        }),
+    ] {
+        let c = make_course(trans.clone());
+        let mut p = Player::new(&c).expect("player");
+        p.handle(&Input::Start);
+
+        // Before exit window (t = 3500ms): both at rest.
+        p.handle(&Input::Tick { ms: 3500 });
+        assert_eq!(p.sample_object("obj-fly"), Some(ObjectSample::IDENTITY));
+        assert_eq!(
+            p.sample_object("obj-disappear"),
+            Some(ObjectSample::IDENTITY)
+        );
+        assert_eq!(
+            p.sample_object("obj-hard-end"),
+            Some(ObjectSample::IDENTITY)
+        );
+
+        // Mid-exit (t = 4500ms, exit is 4000..5000): Fly out moved left by 50% of (100+200)=150px,
+        // Disappear faded to 0.5 opacity.
+        p.handle(&Input::Tick { ms: 1000 });
+        let fly_mid = p.sample_object("obj-fly").expect("fly mid-exit");
+        assert!(
+            (fly_mid.offset.0 - (-150.0)).abs() < 1e-3,
+            "fly out should move at mid-exit with transition {trans:?}, got {:?}",
+            fly_mid.offset
+        );
+        let fade_mid = p.sample_object("obj-disappear").expect("fade mid-exit");
+        assert!(
+            (fade_mid.opacity - 0.5).abs() < 1e-3,
+            "disappear should fade at mid-exit with transition {trans:?}, got {}",
+            fade_mid.opacity
+        );
+        assert_eq!(
+            p.sample_object("obj-hard-end"),
+            Some(ObjectSample::IDENTITY)
+        );
+
+        // End of timeline (t = 5000ms): all exited / ended.
+        p.handle(&Input::Tick { ms: 500 });
+        assert!(p.sample_object("obj-fly").is_none());
+        assert!(p.sample_object("obj-disappear").is_none());
+        assert!(p.sample_object("obj-hard-end").is_none());
+        assert!(warned(&p.handle(&click("obj-fly"))));
+        assert!(warned(&p.handle(&click("obj-disappear"))));
+    }
+
+    // Silence unused import warning if needed by using Animation/AnimEffect directly.
+    let _ = Animation {
+        effect: AnimEffect::Zoom,
+        duration_ms: 500,
+        easing: Easing::Linear,
+    };
+}
+
+#[test]
+fn every_exit_effect_with_and_without_transition_and_entrance_exit() {
+    use crate::ObjectSample;
+    use coursecraft_course::{
+        AnimEffect, Animation, Direction, Easing, Transition, TransitionEffect,
+    };
+
+    let effects = [
+        AnimEffect::Fade,
+        AnimEffect::FlyIn {
+            from: Direction::Left,
+        },
+        AnimEffect::FlyIn {
+            from: Direction::Right,
+        },
+        AnimEffect::FlyIn {
+            from: Direction::Top,
+        },
+        AnimEffect::FlyIn {
+            from: Direction::Bottom,
+        },
+        AnimEffect::Zoom,
+        AnimEffect::Wipe {
+            from: Direction::Left,
+        },
+        AnimEffect::Float {
+            from: Direction::Bottom,
+        },
+    ];
+
+    for with_transition in [false, true] {
+        for effect in &effects {
+            let mut c = Course::from_json(HELLO).expect("hello");
+            let s = c.slide_mut("s-intro").expect("s-intro");
+            s.duration_ms = 4000;
+            s.transition = with_transition.then_some(Transition {
+                effect: TransitionEffect::Fade,
+                duration_ms: 500,
+            });
+            s.objects = vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": "obj",
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+                    "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 100.0 },
+                    "timing": { "start_ms": 0, "end_ms": null }
+                }))
+                .expect("obj"),
+            ];
+            s.objects[0].entrance = Some(Animation {
+                effect: AnimEffect::Fade,
+                duration_ms: 1000,
+                easing: Easing::Linear,
+            });
+            s.objects[0].exit = Some(Animation {
+                effect: effect.clone(),
+                duration_ms: 1000,
+                easing: Easing::Linear,
+            });
+            s.triggers.clear();
+
+            let mut p = Player::new(&c).expect("player");
+            p.handle(&Input::Start);
+
+            // Entrance mid (t = 500ms)
+            p.handle(&Input::Tick { ms: 500 });
+            let ent = p.sample_object("obj").expect("entering");
+            assert!((ent.opacity - 0.5).abs() < 1e-3);
+
+            // At rest (t = 2000ms)
+            p.handle(&Input::Tick { ms: 1500 });
+            assert_eq!(p.sample_object("obj"), Some(ObjectSample::IDENTITY));
+
+            // Exit mid (t = 3500ms)
+            p.handle(&Input::Tick { ms: 1500 });
+            let ex = p.sample_object("obj").expect("exiting");
+            assert_ne!(
+                ex,
+                ObjectSample::IDENTITY,
+                "exit {effect:?} (transition={with_transition}) must animate at mid-exit"
+            );
+
+            // End (t = 4000ms)
+            p.handle(&Input::Tick { ms: 500 });
+            assert!(p.sample_object("obj").is_none());
+        }
+    }
 }

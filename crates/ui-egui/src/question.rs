@@ -306,7 +306,7 @@ pub(crate) fn prompt_overlap_names(
 fn show_prompt_overlap_warning(ui: &mut Ui, names: &[String]) {
     let p = coursecraft_render::palette(ui.ctx());
     for name in names {
-        ui.horizontal(|ui| {
+        ui.horizontal_top(|ui| {
             ui.label(
                 coursecraft_render::icon(
                     coursecraft_render::Icon::Warning,
@@ -314,15 +314,72 @@ fn show_prompt_overlap_warning(ui: &mut Ui, names: &[String]) {
                 )
                 .color(p.warning),
             );
-            ui.label(
-                RichText::new(format!(
-                    "The question prompt overlaps \"{name}\". Move it or remove it."
-                ))
-                .color(p.warning)
-                .size(coursecraft_render::SIZE_BODY),
-            );
+            ui.vertical(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "The question prompt overlaps \"{name}\". Move it or remove it."
+                        ))
+                        .color(p.warning)
+                        .size(coursecraft_render::SIZE_BODY),
+                    )
+                    .wrap(),
+                );
+            });
         });
     }
+}
+
+/// Whether `obj_id` is part of the slide's question (hotspot image, drag/drop
+/// item or target, or a trigger control that submits the question).
+#[must_use]
+pub(crate) fn is_question_object(slide: &Slide, _obj_id: &str) -> bool {
+    slide.question.is_some()
+}
+
+/// Whether the currently selected object is related to the slide's question.
+#[must_use]
+pub(crate) fn selected_object_is_question_related(
+    course: &coursecraft_course::Course,
+    selection: &crate::Selection,
+) -> bool {
+    let Some(ref obj_id) = selection.object else {
+        return false;
+    };
+    let Some(slide) = course.slide(&selection.slide) else {
+        return false;
+    };
+    is_question_object(slide, obj_id)
+}
+
+fn sync_question_slide(editor: &mut crate::Editor) -> Option<std::sync::Arc<Slide>> {
+    let crate::Editor {
+        session,
+        selection,
+        ui: editor_ui,
+        ..
+    } = editor;
+    let slide = session.course.slide(&selection.slide)?;
+    if slide.draw.is_some() {
+        return None;
+    }
+    editor_ui.question.sync(slide, session.revision);
+    editor_ui.question.cached_slide.clone()
+}
+
+/// Render the Question section inside the right properties panel.
+pub fn show_question_section(
+    editor: &mut crate::Editor,
+    ui: &mut Ui,
+    actions: &mut Vec<(&'static str, Json)>,
+) {
+    let Some(slide_arc) = sync_question_slide(editor) else {
+        return;
+    };
+    if slide_arc.question.is_none() {
+        return;
+    }
+    show_question_editor_body(editor, ui, &slide_arc, actions, "right_question_panel");
 }
 
 /// Render the Question bottom panel.
@@ -332,13 +389,7 @@ pub fn show_question_tab(
     actions: &mut Vec<(&'static str, Json)>,
 ) {
     let slide_arc = {
-        let crate::Editor {
-            session,
-            selection,
-            ui: editor_ui,
-            ..
-        } = editor;
-        let Some(slide) = session.course.slide(&selection.slide) else {
+        let Some(slide) = editor.session.course.slide(&editor.selection.slide) else {
             ui.label("No slide selected");
             return;
         };
@@ -347,8 +398,7 @@ pub fn show_question_tab(
             ui.label("This slide draws questions from a bank. Edit the draw in the inspector.");
             return;
         }
-        editor_ui.question.sync(slide, session.revision);
-        let Some(slide_arc) = editor_ui.question.cached_slide.clone() else {
+        let Some(slide_arc) = sync_question_slide(editor) else {
             return;
         };
         slide_arc
@@ -373,6 +423,27 @@ pub fn show_question_tab(
         return;
     }
 
+    let scroll_out = ScrollArea::vertical()
+        .id_salt("question_panel_scroll")
+        .auto_shrink([false, false])
+        // Rows below the fold are reached by scrolling; show the bar so that is visible.
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+        .show(ui, |ui| {
+            show_question_editor_body(editor, ui, slide_clone, actions, "bottom_question_panel");
+        });
+    editor.ui.question.scroll_offset_y = scroll_out.state.clamped_offset().y;
+    editor.ui.question.scroll_inner_rect = scroll_out.inner_rect;
+    editor.ui.question.scroll_overflow_y =
+        (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(0.0);
+}
+
+fn show_question_editor_body(
+    editor: &mut crate::Editor,
+    ui: &mut Ui,
+    slide_clone: &Slide,
+    actions: &mut Vec<(&'static str, Json)>,
+    id_salt: &str,
+) {
     let mut committed = false;
     let mut kind_change: Option<QuestionKind> = None;
     let mut structural: Vec<(&'static str, Json)> = Vec::new();
@@ -391,13 +462,12 @@ pub fn show_question_tab(
             .iter()
             .all(|trigger| trigger.when == Event::Submit);
 
-    let scroll_out = ScrollArea::vertical()
-        .id_salt("question_panel_scroll")
-        .auto_shrink([false, false])
-        // Rows below the fold are reached by scrolling; show the bar so that is visible.
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
-        .show(ui, |ui| {
-            // Header bar: Kind, tip line, Remove button
+    ui.push_id(id_salt, |ui| {
+        ui.set_max_width(ui.available_width());
+        let wide = ui.available_width() >= TWO_COLUMN_MIN_WIDTH;
+
+        // Header bar: Kind, tip line, Remove button
+        if wide {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Kind").strong());
                 let prev_kind = editor.ui.question.kind;
@@ -449,68 +519,114 @@ pub fn show_question_tab(
                     }
                 });
             });
+        } else {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Kind").strong());
+                let prev_kind = editor.ui.question.kind;
+                egui::ComboBox::from_id_salt("question_kind_combo")
+                    .height(320.0)
+                    .selected_text(question_kind_name(editor.ui.question.kind))
+                    .show_ui(ui, |ui| {
+                        for kind in ALL_QUESTION_KINDS {
+                            ui.selectable_value(
+                                &mut editor.ui.question.kind,
+                                kind,
+                                question_kind_name(kind),
+                            );
+                        }
+                    });
+
+                if editor.ui.question.kind != prev_kind {
+                    kind_change = Some(editor.ui.question.kind);
+                    editor.ui.question.kind = prev_kind;
+                }
+            });
+
+            if needs_submit_button {
+                let p = coursecraft_render::palette(ui.ctx());
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "no control on this slide submits the question: add a Submit button",
+                    )
+                    .color(p.warning),
+                );
+                if crate::quiet_primary_button(ui, "Add Submit button").clicked() {
+                    actions.push((
+                        "question.add_submit_button",
+                        serde_json::json!({ "slide": slide_clone.id }),
+                    ));
+                }
+            }
 
             ui.add_space(4.0);
-            if !overlaps.is_empty() {
-                show_prompt_overlap_warning(ui, &overlaps);
-                ui.add_space(4.0);
+            if crate::destructive_action_button(ui, "Remove question").clicked() {
+                actions.push((
+                    "question.delete",
+                    serde_json::json!({
+                        "slide": slide_clone.id,
+                    }),
+                ));
             }
+        }
 
-            if ui.available_width() >= TWO_COLUMN_MIN_WIDTH {
-                // Two columns: prompt and choices on the left, settings stacked on the right,
-                // so the whole form fits a short panel without scrolling.
-                let left_w = ui.available_width() - SETTINGS_COLUMN_WIDTH - 64.0;
-                ui.horizontal_top(|ui| {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(left_w, 0.0),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            ui.set_width(left_w);
-                            show_prompt_and_choices(
-                                editor,
-                                ui,
-                                slide_clone,
-                                &mut committed,
-                                &mut structural,
-                            );
-                        },
-                    );
-                    ui.separator();
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(SETTINGS_COLUMN_WIDTH, 0.0),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            ui.set_width(SETTINGS_COLUMN_WIDTH);
-                            ui.label(RichText::new("Settings").strong());
-                            show_settings(
-                                editor,
-                                ui,
-                                slide_clone,
-                                &mut committed,
-                                &mut structural,
-                                true,
-                            );
-                        },
-                    );
-                });
-            } else {
-                show_prompt_and_choices(editor, ui, slide_clone, &mut committed, &mut structural);
-                ui.add_space(8.0);
-                ui.separator();
-                show_settings(
-                    editor,
-                    ui,
-                    slide_clone,
-                    &mut committed,
-                    &mut structural,
-                    false,
+        ui.add_space(4.0);
+        if !overlaps.is_empty() {
+            show_prompt_overlap_warning(ui, &overlaps);
+            ui.add_space(4.0);
+        }
+
+        if wide {
+            // Two columns: prompt and choices on the left, settings stacked on the right,
+            // so the whole form fits a short panel without scrolling.
+            let left_w = ui.available_width() - SETTINGS_COLUMN_WIDTH - 64.0;
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(left_w, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_width(left_w);
+                        show_prompt_and_choices(
+                            editor,
+                            ui,
+                            slide_clone,
+                            &mut committed,
+                            &mut structural,
+                        );
+                    },
                 );
-            }
-        });
-    editor.ui.question.scroll_offset_y = scroll_out.state.clamped_offset().y;
-    editor.ui.question.scroll_inner_rect = scroll_out.inner_rect;
-    editor.ui.question.scroll_overflow_y =
-        (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(0.0);
+                ui.separator();
+                ui.allocate_ui_with_layout(
+                    egui::vec2(SETTINGS_COLUMN_WIDTH, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_width(SETTINGS_COLUMN_WIDTH);
+                        ui.label(RichText::new("Settings").strong());
+                        show_settings(
+                            editor,
+                            ui,
+                            slide_clone,
+                            &mut committed,
+                            &mut structural,
+                            true,
+                        );
+                    },
+                );
+            });
+        } else {
+            show_prompt_and_choices(editor, ui, slide_clone, &mut committed, &mut structural);
+            ui.add_space(8.0);
+            ui.separator();
+            show_settings(
+                editor,
+                ui,
+                slide_clone,
+                &mut committed,
+                &mut structural,
+                true,
+            );
+        }
+    });
 
     // Text edits first, then structural edits, then a kind switch. The kind
     // switch reads the question `question.set` just wrote and replaces only
@@ -541,6 +657,36 @@ pub fn show_question_tab(
 fn singleline_done(ui: &Ui, response: &egui::Response) -> bool {
     let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     response.lost_focus() || enter
+}
+
+/// Single-line text edit that wraps visually in narrow panels instead of clipping.
+fn show_singleline_text_field(
+    ui: &mut Ui,
+    text: &mut String,
+    width: f32,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    narrow: bool,
+) -> bool {
+    if narrow {
+        let res = ui.add(
+            TextEdit::multiline(text)
+                .desired_rows(1)
+                .desired_width(width)
+                .id_salt(id_salt),
+        );
+        let had_newline = text.contains(['\n', '\r']);
+        if had_newline {
+            text.retain(|ch| ch != '\n' && ch != '\r');
+        }
+        had_newline || singleline_done(ui, &res)
+    } else {
+        let res = ui.add(
+            TextEdit::singleline(text)
+                .desired_width(width)
+                .id_salt(id_salt),
+        );
+        singleline_done(ui, &res)
+    }
 }
 
 /// Prompt plus the editor for the current kind.
@@ -695,18 +841,21 @@ fn show_choice_rows(
             }
 
             // Leave room for the three reorder/remove buttons so narrow windows never overflow.
-            let mut reserve = if list_edit { 130.0 } else { 8.0 };
+            let narrow = ui.available_width() < 520.0;
+            let mut reserve = if list_edit { 170.0 } else { 48.0 };
             let per_answer = editor.ui.question.scoring == Scoring::PerAnswer;
             if per_answer {
                 reserve += 64.0;
             }
-            let text_w = (ui.available_width() - reserve).clamp(100.0, 320.0);
-            let text_edit_res = {
+            let text_w = (ui.available_width() - reserve).clamp(40.0, 320.0);
+            let text_committed = {
                 let c = &mut editor.ui.question.choices[idx];
-                ui.add(
-                    TextEdit::singleline(&mut c.text)
-                        .desired_width(text_w)
-                        .id_salt(format!("choice_text_{cid}")),
+                show_singleline_text_field(
+                    ui,
+                    &mut c.text,
+                    text_w,
+                    format!("choice_text_{cid}"),
+                    narrow,
                 )
             };
             let current = editor.ui.question.choices.get(idx).map(|c| c.text.as_str());
@@ -715,7 +864,7 @@ fn show_choice_rows(
                 .as_ref()
                 .and_then(|q| q.choices.get(idx))
                 .map(|c| c.text.as_str());
-            if singleline_done(ui, &text_edit_res) && current != saved {
+            if text_committed && current != saved {
                 *committed = true;
             }
 
@@ -875,15 +1024,18 @@ fn show_sequence(
                 return;
             };
             ui.label(RichText::new(format!("{}.", idx + 1)).strong());
+            let narrow = ui.available_width() < 520.0;
             let text_w = (ui.available_width() - 130.0).clamp(100.0, 320.0);
-            let response = {
+            let text_committed = {
                 let Some(choice) = editor.ui.question.choices.get_mut(idx) else {
                     return;
                 };
-                ui.add(
-                    TextEdit::singleline(&mut choice.text)
-                        .desired_width(text_w)
-                        .id_salt(format!("seq_text_{cid}")),
+                show_singleline_text_field(
+                    ui,
+                    &mut choice.text,
+                    text_w,
+                    format!("seq_text_{cid}"),
+                    narrow,
                 )
             };
             let current = editor.ui.question.choices.get(idx).map(|c| c.text.as_str());
@@ -892,7 +1044,7 @@ fn show_sequence(
                 .as_ref()
                 .and_then(|q| q.choices.get(idx))
                 .map(|c| c.text.as_str());
-            if singleline_done(ui, &response) && current != saved {
+            if text_committed && current != saved {
                 *committed = true;
             }
             if icon_button_enabled(ui, Icon::ArrowUp, idx > 0, "Move up").clicked() {
@@ -941,11 +1093,76 @@ fn show_pairs(
 
     let mut remove: Option<String> = None;
     let mut reorder: Option<(String, usize)> = None;
+    let narrow = ui.available_width() < 520.0;
     for idx in 0..n {
+        let Some(pair_id) = editor.ui.question.pairs.get(idx).map(|p| p.id.clone()) else {
+            continue;
+        };
+        if narrow {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("{}.", idx + 1)).strong());
+                if icon_button_enabled(ui, Icon::ArrowUp, idx > 0, "Move up").clicked() {
+                    reorder = Some((pair_id.clone(), idx - 1));
+                }
+                if icon_button_enabled(ui, Icon::ArrowDown, idx + 1 < n, "Move down").clicked() {
+                    reorder = Some((pair_id.clone(), idx + 1));
+                }
+                if icon_button_danger(ui, Icon::Trash, n > 2, "Remove pair").clicked() {
+                    remove = Some(pair_id.clone());
+                }
+            });
+            let text_w = (ui.available_width() - 24.0).max(120.0);
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                let left_committed = {
+                    let Some(pair) = editor.ui.question.pairs.get_mut(idx) else {
+                        return;
+                    };
+                    show_singleline_text_field(
+                        ui,
+                        &mut pair.left,
+                        text_w,
+                        format!("pair_left_{pair_id}"),
+                        true,
+                    )
+                };
+                let current = editor.ui.question.pairs.get(idx).map(|p| p.left.as_str());
+                let saved = slide
+                    .question
+                    .as_ref()
+                    .and_then(|q| q.pairs.get(idx))
+                    .map(|p| p.left.as_str());
+                if left_committed && current != saved {
+                    *committed = true;
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                let right_committed = {
+                    let Some(pair) = editor.ui.question.pairs.get_mut(idx) else {
+                        return;
+                    };
+                    show_singleline_text_field(
+                        ui,
+                        &mut pair.right,
+                        text_w,
+                        format!("pair_right_{pair_id}"),
+                        true,
+                    )
+                };
+                let current = editor.ui.question.pairs.get(idx).map(|p| p.right.as_str());
+                let saved = slide
+                    .question
+                    .as_ref()
+                    .and_then(|q| q.pairs.get(idx))
+                    .map(|p| p.right.as_str());
+                if right_committed && current != saved {
+                    *committed = true;
+                }
+            });
+            continue;
+        }
         ui.horizontal(|ui| {
-            let Some(pair_id) = editor.ui.question.pairs.get(idx).map(|p| p.id.clone()) else {
-                return;
-            };
             ui.label(RichText::new(format!("{}.", idx + 1)).strong());
             let text_w = ((ui.available_width() - 150.0) * 0.5).clamp(60.0, 360.0);
             let left_res = {
@@ -1047,6 +1264,7 @@ fn show_hotspot(
         src.trim().is_empty() || !editor.media().iter().any(|(name, _)| name == src)
     });
 
+    let narrow = ui.available_width() < 520.0;
     // 1. Image picker row
     ui.horizontal(|ui| {
         ui.label(RichText::new("Hotspot image").strong());
@@ -1094,7 +1312,7 @@ fn show_hotspot(
                 }
             });
 
-        if hotspot_missing {
+        if hotspot_missing && !narrow {
             let p = coursecraft_render::palette(ui.ctx());
             ui.add_space(12.0);
             ui.label(
@@ -1118,6 +1336,31 @@ fn show_hotspot(
             }
         }
     });
+
+    if hotspot_missing && narrow {
+        let p = coursecraft_render::palette(ui.ctx());
+        ui.horizontal(|ui| {
+            ui.label(
+                coursecraft_render::icon(
+                    coursecraft_render::Icon::Warning,
+                    coursecraft_render::ICON_SM,
+                )
+                .color(p.warning),
+            );
+            ui.label(
+                RichText::new("Choose the image learners will click on.")
+                    .color(p.warning)
+                    .size(coursecraft_render::SIZE_BODY),
+            );
+        });
+        if let Some((image_id, _)) = hotspot_image.as_ref()
+            && crate::quiet_primary_button(ui, "Choose image…").clicked()
+        {
+            editor.pending_replace_object = Some(image_id.clone());
+            editor.pending_picture_fill = None;
+            editor.request(crate::EditorRequest::PickImage);
+        }
+    }
     // Markers get their own line: the warning above can fill the whole row.
     ui.horizontal(|ui| {
         ui.label(RichText::new("Markers").strong());
@@ -1210,6 +1453,7 @@ fn show_hotspot(
         });
         // The frame, the Correct box and Remove go on a second line, indented under the name:
         // one line is wider than a narrow panel.
+        let narrow_region = ui.available_width() < 520.0;
         ui.horizontal(|ui| {
             ui.add_space(22.0);
             ui.label("X");
@@ -1280,34 +1524,64 @@ fn show_hotspot(
                 ));
             }
 
-            // Correct checkbox
-            let mut correct = r.correct;
-            let can_toggle_correct =
-                !correct || regions.iter().filter(|reg| reg.correct).count() > 1;
-            if ui
-                .add_enabled(
-                    can_toggle_correct,
-                    egui::Checkbox::new(&mut correct, "Correct"),
-                )
-                .changed()
-            {
-                structural.push((
-                    "question.update_region",
-                    serde_json::json!({
-                        "slide": sid,
-                        "id": r.id,
-                        "correct": correct,
-                    }),
-                ));
-            }
+            if !narrow_region {
+                let mut correct = r.correct;
+                let can_toggle_correct =
+                    !correct || regions.iter().filter(|reg| reg.correct).count() > 1;
+                if ui
+                    .add_enabled(
+                        can_toggle_correct,
+                        egui::Checkbox::new(&mut correct, "Correct"),
+                    )
+                    .changed()
+                {
+                    structural.push((
+                        "question.update_region",
+                        serde_json::json!({
+                            "slide": sid,
+                            "id": r.id,
+                            "correct": correct,
+                        }),
+                    ));
+                }
 
-            // Delete button
-            let can_delete =
-                n > 1 && (!r.correct || regions.iter().filter(|reg| reg.correct).count() > 1);
-            if icon_button_danger(ui, Icon::Trash, can_delete, "Remove region").clicked() {
-                remove_region = Some(r.id.clone());
+                let can_delete =
+                    n > 1 && (!r.correct || regions.iter().filter(|reg| reg.correct).count() > 1);
+                if icon_button_danger(ui, Icon::Trash, can_delete, "Remove region").clicked() {
+                    remove_region = Some(r.id.clone());
+                }
             }
         });
+        if narrow_region {
+            ui.horizontal(|ui| {
+                ui.add_space(22.0);
+                let mut correct = r.correct;
+                let can_toggle_correct =
+                    !correct || regions.iter().filter(|reg| reg.correct).count() > 1;
+                if ui
+                    .add_enabled(
+                        can_toggle_correct,
+                        egui::Checkbox::new(&mut correct, "Correct"),
+                    )
+                    .changed()
+                {
+                    structural.push((
+                        "question.update_region",
+                        serde_json::json!({
+                            "slide": sid,
+                            "id": r.id,
+                            "correct": correct,
+                        }),
+                    ));
+                }
+
+                let can_delete =
+                    n > 1 && (!r.correct || regions.iter().filter(|reg| reg.correct).count() > 1);
+                if icon_button_danger(ui, Icon::Trash, can_delete, "Remove region").clicked() {
+                    remove_region = Some(r.id.clone());
+                }
+            });
+        }
     }
 
     if let Some(id) = remove_region {
@@ -1331,7 +1605,7 @@ fn show_drag_drop(
     let sid = slide.id.as_str();
 
     // The three option checkboxes
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let mut snap = editor.ui.question.snap_to_center;
         if ui.checkbox(&mut snap, "Snap to center").changed() {
             editor.ui.question.snap_to_center = snap;

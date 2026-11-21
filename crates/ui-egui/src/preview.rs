@@ -160,6 +160,8 @@ pub struct Preview {
     /// Whether the preview window currently owns keyboard interaction: it was the
     /// last thing clicked, or the pointer is over it.
     pub has_focus: bool,
+    /// Whether a text input inside the preview had focus at the end of the previous frame.
+    had_text_focus: bool,
     /// Outer rect of the preview window in the last frame (tracked for tests).
     pub window_rect: Option<Rect>,
     /// Cached play order for [`Player::resume_trusted`], updated on open/restart/retry.
@@ -501,7 +503,8 @@ impl Preview {
                 last_var_values: BTreeMap::new(),
                 var_changed_at: HashMap::new(),
                 ended: false,
-                has_focus: false,
+                has_focus: true,
+                had_text_focus: false,
                 window_rect: None,
                 play_plan: None,
             };
@@ -548,7 +551,8 @@ impl Preview {
                     last_var_values,
                     var_changed_at: HashMap::new(),
                     ended,
-                    has_focus: false,
+                    has_focus: true,
+                    had_text_focus: false,
                     window_rect: None,
                     play_plan: Some(plan),
                 }
@@ -570,7 +574,8 @@ impl Preview {
                 last_var_values: BTreeMap::new(),
                 var_changed_at: HashMap::new(),
                 ended: false,
-                has_focus: false,
+                has_focus: true,
+                had_text_focus: false,
                 window_rect: None,
                 play_plan: None,
             },
@@ -702,6 +707,7 @@ impl Preview {
         let current_state = self.state.clone();
         let mut frame_effects = Vec::new();
         let drawer_was_open = self.frame.drawer_open();
+        let text_edit_was_focused = self.had_text_focus || ctx.egui_wants_keyboard_input();
         let max_width = (ctx.content_rect().width() - 40.0).clamp(320.0, 960.0);
         let max_height = (ctx.content_rect().height() - 40.0).clamp(240.0, 640.0);
 
@@ -968,12 +974,18 @@ impl Preview {
         let (pressed, pos) = ctx.input(|i| (i.pointer.any_pressed(), i.pointer.interact_pos()));
         let inside = pos.is_some_and(|p| rect.contains(p));
         self.has_focus = next_preview_focus(self.has_focus, pressed, inside);
+        self.had_text_focus = ctx.egui_wants_keyboard_input();
         self.window_rect = Some(rect);
 
-        // Escape closes the preview unless the player used it first (the outline
-        // drawer takes the first Escape).
+        // Escape closes the preview unless the player or a focused text input
+        // used it first (e.g. the outline drawer or a course text-entry field).
+        // Clicking the dimmed backdrop outside the modal also closes it.
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        if close_requested || (escape && !drawer_was_open) {
+        let backdrop_clicked = modal.backdrop_response.clicked();
+        if close_requested
+            || backdrop_clicked
+            || (escape && !drawer_was_open && !text_edit_was_focused)
+        {
             *open = false;
         }
 

@@ -5,15 +5,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use coursecraft_course::Course;
+use coursecraft_course::{Course, FontFace, FontStyle};
 #[cfg(not(target_arch = "wasm32"))]
 use coursecraft_publish::zip_package_to;
 use coursecraft_publish::{
-    PackageFile, PackageInput, PackageStandard, PublishError, build_package_standard_with_folders,
-    zip_package,
+    PackageFile, PackageInput, PackageStandard, PublishError, PublishFontLookup,
+    PublishFontProvider, auto_embed_fonts, build_package_standard_with_folders, zip_package,
 };
 use coursecraft_scorm::Standard;
 use coursecraft_ui_egui::PublishStandard;
+#[cfg(not(target_arch = "wasm32"))]
+use coursecraft_ui_egui::coursecraft_media::{FontFileStyle, system_fonts::SystemFontIndex};
 use coursecraft_xapi::Flavor;
 
 /// Everything a background publish needs. It owns the course and media, so a
@@ -27,12 +29,15 @@ pub struct PublishJob {
     pub out: PathBuf,
 }
 
-/// The written file and its size in bytes.
+/// The written file, its size in bytes, and any auto-embedded font details.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublishOutcome {
     pub path: PathBuf,
     pub bytes: u64,
+    pub embedded_fonts: Vec<String>,
+    pub font_warnings: Vec<String>,
+    pub pending_save_fonts: Vec<(FontFace, Arc<[u8]>)>,
 }
 
 /// Map the UI's small standard enum onto the publishing crate's type.
@@ -110,12 +115,82 @@ pub fn run_publish_bytes(
     zip_package(&files).map_err(|e| format!("Couldn't create the zip file: {e}"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+struct DesktopFontProvider<'a>(&'a SystemFontIndex);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PublishFontProvider for DesktopFontProvider<'_> {
+    fn lookup_font(&self, family: &str, style: FontStyle) -> PublishFontLookup {
+        let media_style = match style {
+            FontStyle::Regular => FontFileStyle::Regular,
+            FontStyle::Bold => FontFileStyle::Bold,
+            FontStyle::Italic => FontFileStyle::Italic,
+            FontStyle::BoldItalic => FontFileStyle::BoldItalic,
+        };
+        let Some((_, face)) = self.0.resolve_face(family, media_style) else {
+            return PublishFontLookup::Missing;
+        };
+        if face.embedding_restricted {
+            return PublishFontLookup::Restricted;
+        }
+        let Some(bytes) = self.0.load_face_bytes(face) else {
+            return PublishFontLookup::Unreadable;
+        };
+        let actual_style = match face.style {
+            FontFileStyle::Regular => FontStyle::Regular,
+            FontFileStyle::Bold => FontStyle::Bold,
+            FontFileStyle::Italic => FontStyle::Italic,
+            FontFileStyle::BoldItalic => FontStyle::BoldItalic,
+        };
+        let extension = if bytes.starts_with(b"OTTO") {
+            "otf"
+        } else if bytes.starts_with(b"ttcf") {
+            "ttc"
+        } else {
+            "ttf"
+        };
+        PublishFontLookup::Found {
+            style: actual_style,
+            bytes: bytes.to_vec(),
+            extension,
+        }
+    }
+}
+
 /// Build the package and write it to the job's output path atomically.
 ///
 /// # Errors
 /// Returns a plain sentence an author can act on.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_publish_job(job: PublishJob) -> Result<PublishOutcome, String> {
+    run_publish_job_with_fonts(job, None)
+}
+
+/// Build the package with optional system font auto-embedding and write it atomically.
+///
+/// # Errors
+/// Returns a plain sentence an author can act on.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_publish_job_with_fonts(
+    mut job: PublishJob,
+    font_index: Option<&SystemFontIndex>,
+) -> Result<PublishOutcome, String> {
+    let provider = font_index.map(DesktopFontProvider);
+    let auto = auto_embed_fonts(
+        &job.course,
+        provider.as_ref().map(|p| p as &dyn PublishFontProvider),
+    );
+    let mut pending_save_fonts = Vec::with_capacity(auto.embedded_files.len());
+    if !auto.embedded_files.is_empty() {
+        job.course = auto.course;
+        for (face, bytes) in auto.embedded_files {
+            let arc: Arc<[u8]> = Arc::from(bytes);
+            if !job.media.iter().any(|(name, _)| name == &face.src) {
+                job.media.push((face.src.clone(), Arc::clone(&arc)));
+            }
+            pending_save_fonts.push((face, arc));
+        }
+    }
     let files = package_files(&job)?;
 
     if let Some(parent) = job.out.parent()
@@ -156,6 +231,9 @@ pub fn run_publish_job(job: PublishJob) -> Result<PublishOutcome, String> {
     Ok(PublishOutcome {
         path: job.out,
         bytes,
+        embedded_fonts: auto.embedded_families,
+        font_warnings: auto.warnings,
+        pending_save_fonts,
     })
 }
 

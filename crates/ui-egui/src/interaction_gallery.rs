@@ -354,7 +354,6 @@ pub fn show_interaction_gallery(
             rects.push((card.id, rect));
             if response.clicked() {
                 on_pick(card.id);
-                ui.close();
             }
         }
     });

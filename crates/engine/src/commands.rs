@@ -725,7 +725,7 @@ static REGISTRY: &[Command] = &[
         label: "Editor View Settings",
         menu: "",
         shortcut: None,
-        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "last_publish"?: {"standard": string}}"#,
+        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "base_slide_view"?: "show"|"dim"|"hide", "last_publish"?: {"standard": string}}"#,
         mutates: true,
         run: view_set,
     },
@@ -3120,6 +3120,7 @@ fn layout_text(
             paragraphs: Vec::new(),
             autofit: Autofit::None,
             text_style: None,
+            outline: None,
         },
         frame,
         timing: Timing::default(),
@@ -3262,6 +3263,8 @@ fn layout_objects(layout: &str, slide: &Slide, size: Size, theme: &Theme) -> Vec
                     src: "placeholder.png".to_owned(),
                     alt: "Choose an image".to_owned(),
                     crop: None,
+                    outline: None,
+                    shape: None,
                 },
                 frame: p.frame,
                 timing: Timing::default(),
@@ -4194,6 +4197,77 @@ struct SlideCopy {
     skipped: usize,
 }
 
+/// Remap self-referential `Link::Slide` links and, when `allow_missing_jump` is
+/// `false`, drop `Link::Slide` targets that do not exist in `course`.
+fn sanitize_copied_runs(
+    runs: &mut [TextRun],
+    course: &Course,
+    self_pair: (&str, &str),
+    allow_missing_jump: bool,
+) {
+    for run in runs {
+        if let Some(Link::Slide { slide }) = &mut run.link {
+            if slide == self_pair.0 {
+                *slide = self_pair.1.to_owned();
+            } else if !allow_missing_jump && course.play_slide(slide).is_none() {
+                run.link = None;
+            }
+        }
+    }
+}
+
+fn sanitize_copied_object_links(
+    obj: &mut Object,
+    course: &Course,
+    self_pair: (&str, &str),
+    allow_missing_jump: bool,
+) {
+    match &mut obj.kind {
+        ObjectKind::Text { runs, .. } | ObjectKind::Marker { runs, .. } => {
+            sanitize_copied_runs(runs, course, self_pair, allow_missing_jump);
+        }
+        ObjectKind::Shape {
+            text: Some(shape_text),
+            ..
+        } => {
+            sanitize_copied_runs(&mut shape_text.runs, course, self_pair, allow_missing_jump);
+        }
+        ObjectKind::Table { rows, .. } => {
+            for row in rows {
+                for cell in &mut row.cells {
+                    sanitize_copied_runs(&mut cell.runs, course, self_pair, allow_missing_jump);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sanitize_copied_slide_links_and_player(
+    slide: &mut Slide,
+    course: &Course,
+    self_pair: (&str, &str),
+    allow_missing_jump: bool,
+) {
+    for obj in &mut slide.objects {
+        sanitize_copied_object_links(obj, course, self_pair, allow_missing_jump);
+    }
+    for layer in &mut slide.layers {
+        for obj in &mut layer.objects {
+            sanitize_copied_object_links(obj, course, self_pair, allow_missing_jump);
+        }
+    }
+    if !allow_missing_jump
+        && let Some(overrides) = &mut slide.player
+        && let Some(coursecraft_course::NextRequirement::Variable { name }) =
+            &overrides.next_requires
+        && coursecraft_course::builtin_variable_kind(name).is_none()
+        && course.variable(name).is_none()
+    {
+        overrides.next_requires = None;
+    }
+}
+
 /// Give a slide, its layers and objects fresh ids, then rewrite every internal
 /// reference. `self_slide` is the slide id the triggers originally used.
 fn copy_slide(
@@ -4235,6 +4309,7 @@ fn copy_slide(
 
     let new_slide_id = fresh_id("slide", course.all_slide_ids());
     let self_pair = (self_slide, new_slide_id.as_str());
+    sanitize_copied_slide_links_and_player(&mut slide, course, self_pair, allow_missing_jump);
     let mut skipped = 0;
 
     let mut kept = Vec::with_capacity(slide.triggers.len());
@@ -5475,6 +5550,9 @@ fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(v) = opt::<bool>(C, p, "show_guides")? {
         s.course.editor.show_guides = v;
     }
+    if let Some(v) = opt::<coursecraft_course::BaseSlideView>(C, p, "base_slide_view")? {
+        s.course.editor.base_slide_view = v;
+    }
     if let Some(v) = opt::<coursecraft_course::PublishSettings>(C, p, "last_publish")? {
         s.course.editor.last_publish = Some(v);
     }
@@ -5573,6 +5651,14 @@ fn look_of(object: &Object) -> Look {
             look.fill = Some(fill.clone());
             look.fill_style = Some(fill_style.clone());
         }
+        ObjectKind::Path { path } => {
+            if path.closed {
+                look.fill = path.fill.clone();
+                look.fill_style = Some(path.fill_style.clone());
+            }
+            look.outline = Some(Some(path.outline.clone()));
+            look.text_style = path.text.as_ref().map(|t| t.style.clone());
+        }
         _ => {}
     }
     look
@@ -5634,6 +5720,23 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
             }
             if let Some(src) = &look.fill_style {
                 *fill_style = src.clone();
+            }
+        }
+        ObjectKind::Path { path } => {
+            if path.closed {
+                if let Some(src) = &look.fill {
+                    path.fill = Some(src.clone());
+                }
+                if let Some(src) = &look.fill_style {
+                    path.fill_style = src.clone();
+                }
+            }
+            if let Some(Some(src)) = &look.outline {
+                path.outline = src.clone();
+            }
+            if let (Some(src), Some(t)) = (&look.text_style, path.text.as_mut()) {
+                t.style = src.clone();
+                clear_run_look(&mut t.runs);
             }
         }
         _ => {}
@@ -7399,6 +7502,9 @@ fn text_set(s: &mut Session, p: &Json) -> Result<Json> {
     let new_text_raw: String = req(C, p, "text")?;
     let new_text = text(C, new_text_raw, "text")?;
 
+    let explicit_runs: Option<Vec<coursecraft_course::TextRun>> = opt(C, p, "runs")?;
+    let explicit_paragraphs: Option<Vec<coursecraft_course::Paragraph>> = opt(C, p, "paragraphs")?;
+
     let sl = slide_mut(s, &sid)?;
     let obj = find_object_mut(sl, &oid)?;
     let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
@@ -7410,11 +7516,19 @@ fn text_set(s: &mut Session, p: &Json) -> Result<Json> {
     } else {
         parts.runs.iter().map(|r| r.text.as_str()).collect()
     };
-    let new_runs = apply_text_edit(parts.runs, &old_plain, &new_text);
+    let new_runs = match explicit_runs {
+        Some(runs) if runs.iter().map(|r| r.text.as_str()).collect::<String>() == new_text => {
+            coursecraft_course::normalize_runs(&runs)
+        }
+        _ => apply_text_edit(parts.runs, &old_plain, &new_text),
+    };
     if new_runs.len() > 1000 {
         return Err(bad(C, "exceeded 1000 text runs"));
     }
-    let new_paragraphs = align_paragraphs(&old_plain, parts.paragraphs, &new_text);
+    let new_paragraphs = match explicit_paragraphs {
+        Some(paragraphs) => paragraphs,
+        None => align_paragraphs(&old_plain, parts.paragraphs, &new_text),
+    };
     *parts.runs = new_runs;
     *parts.paragraphs = new_paragraphs;
     *parts.text = new_text;
@@ -7497,12 +7611,16 @@ fn text_set_paragraph(s: &mut Session, p: &Json) -> Result<Json> {
     let oid: String = req(C, p, "object")?;
     let align_str: Option<String> = opt(C, p, "align")?;
     let valign_str: Option<String> = opt(C, p, "valign")?;
+    let wrap: Option<bool> = opt(C, p, "wrap")?;
+    let dir_str: Option<String> = opt(C, p, "direction")?;
+    let insets_val: Option<coursecraft_course::TextInsets> = opt(C, p, "insets")?;
 
     let align = match align_str.as_deref() {
         None => None,
         Some("left") => Some(Align::Left),
         Some("center") => Some(Align::Center),
         Some("right") => Some(Align::Right),
+        Some("justify") => Some(Align::Justify),
         Some(other) => return Err(bad(C, format!("unknown align {other:?}"))),
     };
     let valign = match valign_str.as_deref() {
@@ -7511,6 +7629,13 @@ fn text_set_paragraph(s: &mut Session, p: &Json) -> Result<Json> {
         Some("middle") => Some(VAlign::Middle),
         Some("bottom") => Some(VAlign::Bottom),
         Some(other) => return Err(bad(C, format!("unknown valign {other:?}"))),
+    };
+    let direction = match dir_str.as_deref() {
+        None => None,
+        Some("horizontal") => Some(coursecraft_course::TextDirection::Horizontal),
+        Some("vertical") => Some(coursecraft_course::TextDirection::Vertical),
+        Some("vertical270") => Some(coursecraft_course::TextDirection::Vertical270),
+        Some(other) => return Err(bad(C, format!("unknown direction {other:?}"))),
     };
 
     let sl = slide_mut(s, &sid)?;
@@ -7527,6 +7652,15 @@ fn text_set_paragraph(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             parts.style.valign = v;
         }
+    }
+    if let Some(w) = wrap {
+        parts.style.wrap = w;
+    }
+    if let Some(d) = direction {
+        parts.style.direction = d;
+    }
+    if let Some(ins) = insets_val {
+        parts.style.insets = Some(ins);
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
@@ -8455,6 +8589,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                         src: "placeholder.png".to_owned(),
                         alt: "Choose an image for the hotspot".to_owned(),
                         crop: None,
+                        outline: None,
+                        shape: None,
                     },
                     frame: Rect {
                         x: 240.0,
@@ -8585,6 +8721,7 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                         paragraphs: Vec::new(),
                         autofit: Autofit::None,
                         text_style: None,
+                        outline: None,
                     },
                     frame: Rect {
                         x: target_frame.x + 40.0,
@@ -8852,6 +8989,7 @@ fn add_feedback_layers(slide: &mut Slide, theme: &Theme, slide_size: Size) -> (S
                     paragraphs: Vec::new(),
                     autofit: Autofit::None,
                     text_style: None,
+                    outline: None,
                 },
                 frame,
                 timing: Timing::default(),
@@ -8929,6 +9067,7 @@ fn add_try_again_layer(slide: &mut Slide, theme: &Theme, slide_size: Size) -> St
                 paragraphs: Vec::new(),
                 autofit: Autofit::None,
                 text_style: None,
+                outline: None,
             },
             frame: text_frame,
             timing: Timing::default(),
@@ -9281,6 +9420,7 @@ fn certificate_text(
             paragraphs: Vec::new(),
             autofit: Autofit::None,
             text_style: None,
+            outline: None,
         },
         frame,
         timing: Timing::default(),
@@ -9347,6 +9487,7 @@ fn build_certificate_slide(id: &str, theme: &Theme, size: Size) -> Slide {
                 color: theme.accent.clone(),
                 width: 6.0,
                 dash: DashStyle::Solid,
+                dash_pattern: None,
             }),
             text: None,
             adjust: Vec::new(),
@@ -9522,6 +9663,7 @@ fn interaction_text(id: String, name: String, text: String, frame: Rect, theme: 
             paragraphs: Vec::new(),
             autofit: Autofit::None,
             text_style: None,
+            outline: None,
         },
         frame,
         timing: Timing::default(),
@@ -9752,6 +9894,7 @@ fn interaction_panel_objects(
             color: theme.accent.clone(),
             width: 2.0,
             dash: DashStyle::Solid,
+            dash_pattern: None,
         }),
         None,
         Vec::new(),
@@ -10127,6 +10270,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                         color: theme.accent.clone(),
                         width: 2.0,
                         dash: Default::default(),
+                        dash_pattern: None,
                     }),
                     Some(("Card title".to_owned(), 26.0, true)),
                     vec![StateDef {
@@ -10197,6 +10341,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     color: theme.accent.clone(),
                     width: 2.0,
                     dash: DashStyle::Solid,
+                    dash_pattern: None,
                 }),
                 Some(("Replace with your picture".to_owned(), 24.0, false)),
                 Vec::new(),
@@ -10696,6 +10841,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                         color: theme.accent.clone(),
                         width: 2.0,
                         dash: DashStyle::Solid,
+                        dash_pattern: None,
                     }),
                     Some(("Tap to reveal".to_owned(), 18.0, false)),
                     vec![StateDef {
@@ -10852,6 +10998,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                             color: theme.accent.clone(),
                             width: 2.0,
                             dash: DashStyle::Solid,
+                            dash_pattern: None,
                         }),
                         None,
                         Vec::new(),
@@ -10965,6 +11112,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                             color: theme.accent.clone(),
                             width: 2.0,
                             dash: DashStyle::Solid,
+                            dash_pattern: None,
                         }),
                         None,
                         Vec::new(),

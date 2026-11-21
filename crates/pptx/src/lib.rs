@@ -20,11 +20,11 @@ use std::io::Read as _;
 use std::sync::Arc;
 
 use coursecraft_course::{
-    Align, Autofit, Color, ConnectorStyle, Course, DashStyle, FillStyle, Glow, Glue, GradientStop,
-    LineEnd, Link, ListKind, Object, ObjectKind, Outline, Paragraph, Path, PathPoint, PathStyle,
-    PictureFillMode, Point, Rect, SCHEMA_VERSION, Scene, Shadow, ShapeKind, ShapeText, Size, Slide,
-    TableBorders, TableCell, TableRow, TextRun, TextStyle, Timing, VAlign, is_valid_link_url,
-    normalize_table_fractions, path_frame_and_points,
+    Align, Autofit, Baseline, Color, ConnectorStyle, Course, DashStyle, FillStyle, Glow, Glue,
+    GradientStop, LineEnd, Link, ListKind, MAX_OBJECT_FRAME_SIZE, NumberScheme, Object, ObjectKind,
+    Outline, Paragraph, Path, PathPoint, PathStyle, PictureFillMode, Point, Rect, SCHEMA_VERSION,
+    Scene, Shadow, ShapeKind, ShapeText, Slide, TableBorders, TableCell, TableRow, TextRun,
+    TextStyle, Timing, VAlign, is_valid_link_url, normalize_table_fractions, path_frame_and_points,
 };
 
 /// A point in the coordinate space of one geometry helper.
@@ -34,9 +34,16 @@ type Pt = (f32, f32);
 pub use zip;
 
 mod docx;
+mod theme;
+
+use theme::{ThemePalette, resolve_first_color_child, resolve_solid_fill};
 
 pub use docx::{DocxError, MAX_DOCX_BYTES, MAX_DOCX_ENTRIES, MAX_DOCX_XML_DEPTH, docx_to_text};
 
+#[cfg(test)]
+mod bughunt_m26_a13_pptx;
+#[cfg(test)]
+mod m26_fidelity_tests;
 #[cfg(test)]
 mod tests;
 
@@ -315,10 +322,16 @@ impl ImportReport {
             String::new()
         } else {
             format!(
-                "\nAdd these fonts to keep the look: {}.",
+                "\nAdd these fonts to keep the look: {} (shown as Inter).",
                 self.missing_fonts.join(", ")
             )
         }
+    }
+
+    /// Remove any font family from `missing_fonts` that is installed on the
+    /// user's computer (used by desktop/CLI shells after `import_pptx`).
+    pub fn filter_installed_fonts(&mut self, is_installed: impl Fn(&str) -> bool) {
+        self.missing_fonts.retain(|font| !is_installed(font));
     }
 }
 
@@ -713,6 +726,7 @@ fn parse_relationships(
 /// Safe relative scale and letterboxing transform.
 #[derive(Debug, Clone, Copy)]
 struct SlideLayout {
+    slide_size: coursecraft_course::Size,
     scale: f64,
     offset_x: f64,
     offset_y: f64,
@@ -734,19 +748,23 @@ impl SlideLayout {
             5_143_500.0
         };
 
-        let scale = (1280.0 / valid_cx).min(720.0 / valid_cy);
-        let scaled_w = valid_cx * scale;
-        let scaled_h = valid_cy * scale;
-        let offset_x = (1280.0 - scaled_w) / 2.0;
-        let offset_y = (720.0 - scaled_h) / 2.0;
-
-        let aspect_ratio_mismatch = (valid_cx * 720.0 - valid_cy * 1280.0).abs() > 100.0;
+        let (w, h) = if valid_cx >= valid_cy {
+            let w = 1280_u32;
+            let h = ((1280.0 * valid_cy / valid_cx).round() as u32).clamp(1, 8192);
+            (w, h)
+        } else {
+            let h = 1280_u32;
+            let w = ((1280.0 * valid_cx / valid_cy).round() as u32).clamp(1, 8192);
+            (w, h)
+        };
+        let scale = f64::from(w) / valid_cx;
 
         Self {
+            slide_size: coursecraft_course::Size { w, h },
             scale,
-            offset_x,
-            offset_y,
-            aspect_ratio_mismatch,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            aspect_ratio_mismatch: false,
             cx: valid_cx,
             cy: valid_cy,
         }
@@ -872,6 +890,50 @@ impl GroupTransform {
             w * scale_x,
             h * scale_y,
         )
+    }
+
+    /// Resolve the child's `(rotation_for_paint, flip_h, flip_v)` in slide space,
+    /// accounting for parent group reflection + rotation and converting OOXML's
+    /// `R(theta) * F` order to `paint.rs`'s `F * R(alpha)` order.
+    fn resolve_rotation_and_flips(
+        &self,
+        own_rotation: f64,
+        own_flip_h: bool,
+        own_flip_v: bool,
+    ) -> (f64, bool, bool) {
+        let radians = own_rotation.to_radians();
+        let (sin, cos) = radians.sin_cos();
+        let fx = if own_flip_h { -1.0 } else { 1.0 };
+        let fy = if own_flip_v { -1.0 } else { 1.0 };
+        let m00 = cos * fx;
+        let m01 = -sin * fy;
+        let m10 = sin * fx;
+        let m11 = cos * fy;
+        let a = self.a * m00 + self.c * m10;
+        let b = self.b * m00 + self.d * m10;
+        let c = self.a * m01 + self.c * m11;
+        let d = self.b * m01 + self.d * m11;
+        let det = a * d - b * c;
+        if det >= 0.0 {
+            let flip_h = self.flip_h ^ own_flip_h;
+            let flip_v = self.flip_v ^ own_flip_v;
+            let theta = b.atan2(a).to_degrees();
+            if flip_h && flip_v {
+                // Both flipped is a 180-degree rotation; keep both flags off and use theta.
+                (theta, false, false)
+            } else {
+                (theta, false, false)
+            }
+        } else {
+            let prefer_v = (self.flip_v ^ own_flip_v) && !(self.flip_h ^ own_flip_h);
+            if prefer_v {
+                let theta = b.atan2(a).to_degrees();
+                (-theta, false, true)
+            } else {
+                let theta = (-b).atan2(-a).to_degrees();
+                (-theta, true, false)
+            }
+        }
     }
 }
 
@@ -1014,6 +1076,13 @@ struct TextLinkContext<'a> {
     slide_parts: &'a HashMap<String, String>,
 }
 
+/// Inherited `bodyPr` and `lstStyle`/`txStyles` nodes for text extraction.
+#[derive(Default)]
+struct TextInheritance {
+    body_pr: Vec<XmlNode>,
+    lst_styles: Vec<XmlNode>,
+}
+
 /// Extracted shape geometry, fill and outline information.
 struct ExtractedShape {
     kind: Option<ShapeKind>,
@@ -1038,6 +1107,23 @@ pub fn import_pptx(bytes: &[u8], title: &str) -> Result<Imported, PptxError> {
 ///
 /// # Errors
 /// Returns [`PptxError`] if the archive violates limits or is malformed.
+fn slide_layout_from_presentation(pres_tree: &XmlNode) -> SlideLayout {
+    let (mut emu_cx, mut emu_cy) = (9_144_000.0, 5_143_500.0);
+    if let Some(sld_sz) = pres_tree.find_descendant("sldSz") {
+        if let Some(cx_str) = sld_sz.attr("cx")
+            && let Some(val) = parse_emu(cx_str)
+        {
+            emu_cx = val;
+        }
+        if let Some(cy_str) = sld_sz.attr("cy")
+            && let Some(val) = parse_emu(cy_str)
+        {
+            emu_cy = val;
+        }
+    }
+    SlideLayout::from_emu(emu_cx, emu_cy)
+}
+
 pub fn import_pptx_with_limits(
     bytes: &[u8],
     title: &str,
@@ -1106,21 +1192,7 @@ pub fn import_pptx_with_limits(
 
     let pres_tree = parse_xml_tree(pres_xml_str, "ppt/presentation.xml", limits.max_xml_depth)?;
 
-    // Geometry slide size from <p:sldSz cx="..." cy="..."/>
-    let (mut emu_cx, mut emu_cy) = (9_144_000.0, 5_143_500.0);
-    if let Some(sld_sz) = pres_tree.find_descendant("sldSz") {
-        if let Some(cx_str) = sld_sz.attr("cx")
-            && let Some(val) = parse_emu(cx_str)
-        {
-            emu_cx = val;
-        }
-        if let Some(cy_str) = sld_sz.attr("cy")
-            && let Some(val) = parse_emu(cy_str)
-        {
-            emu_cy = val;
-        }
-    }
-    let layout = SlideLayout::from_emu(emu_cx, emu_cy);
+    let layout = slide_layout_from_presentation(&pres_tree);
 
     // Read slide order from <p:sldIdLst>
     struct SlideRef {
@@ -1277,8 +1349,97 @@ pub fn import_pptx_with_limits(
             .min()
             .map(str::to_string);
 
+        let theme_palette = resolver.resolve_palette(&entries, layout_path.as_deref(), &slide_tree);
+
+        let (slide_background, bg_object) = extract_slide_background(
+            &mut resolver,
+            &entries,
+            &slide_tree,
+            &slide_rels,
+            layout_path.as_deref(),
+            &layout,
+            &theme_palette,
+            &mut imported_media,
+            &mut existing_media_names,
+            &mut tracker,
+            &limits,
+            &slide_parts,
+        );
+
         let mut slide_title: Option<String> = None;
         let mut objects: Vec<Object> = Vec::new();
+        if let Some(bg) = bg_object {
+            objects.push(bg);
+        }
+
+        let table_styles = parse_table_styles(&entries, &theme_palette);
+
+        let slide_hide_master = slide_tree
+            .attr("showMasterSp")
+            .is_some_and(|s| s == "0" || s == "false");
+        let layout_tree_opt = layout_path
+            .as_deref()
+            .and_then(|lp| resolver.tree(&entries, lp).cloned());
+        let layout_hide_master = layout_tree_opt.as_ref().is_some_and(|lt| {
+            lt.attr("showMasterSp")
+                .is_some_and(|s| s == "0" || s == "false")
+        });
+        if !slide_hide_master && !layout_hide_master {
+            let master_path = layout_path
+                .as_deref()
+                .and_then(|lp| resolver.master_of(&entries, lp))
+                .or_else(|| {
+                    entries
+                        .contains_key("ppt/slideMasters/slideMaster1.xml")
+                        .then(|| "ppt/slideMasters/slideMaster1.xml".to_string())
+                });
+            if let Some(mp) = master_path
+                && let Some(master_tree) = resolver.tree(&entries, &mp).cloned()
+                && let Some(sp_tree) = master_tree.find_descendant("spTree")
+            {
+                let master_rels = resolver.rels_of(&entries, &mp);
+                let mut mcx = SlideContext {
+                    layout: &layout,
+                    slide_rels: &master_rels,
+                    entries: &entries,
+                    objects: &mut objects,
+                    slide_title: &mut None,
+                    imported_media: &mut imported_media,
+                    existing_media_names: &mut existing_media_names,
+                    tracker: &mut tracker,
+                    limits: &limits,
+                    resolver: &mut resolver,
+                    layout_path: layout_path.clone(),
+                    slide_parts: &slide_parts,
+                    theme: &theme_palette,
+                    table_styles: &table_styles,
+                };
+                process_non_placeholder_children(sp_tree, GroupTransform::default(), 0, &mut mcx)?;
+            }
+        }
+        if let Some(lp) = layout_path.as_deref()
+            && let Some(layout_tree) = layout_tree_opt.as_ref()
+            && let Some(sp_tree) = layout_tree.find_descendant("spTree")
+        {
+            let layout_rels = resolver.rels_of(&entries, lp);
+            let mut lcx = SlideContext {
+                layout: &layout,
+                slide_rels: &layout_rels,
+                entries: &entries,
+                objects: &mut objects,
+                slide_title: &mut None,
+                imported_media: &mut imported_media,
+                existing_media_names: &mut existing_media_names,
+                tracker: &mut tracker,
+                limits: &limits,
+                resolver: &mut resolver,
+                layout_path: layout_path.clone(),
+                slide_parts: &slide_parts,
+                theme: &theme_palette,
+                table_styles: &table_styles,
+            };
+            process_non_placeholder_children(sp_tree, GroupTransform::default(), 0, &mut lcx)?;
+        }
 
         if let Some(sp_tree) = slide_tree.find_descendant("spTree") {
             let initial_xfrm = GroupTransform::default();
@@ -1295,6 +1456,8 @@ pub fn import_pptx_with_limits(
                 resolver: &mut resolver,
                 layout_path,
                 slide_parts: &slide_parts,
+                theme: &theme_palette,
+                table_styles: &table_styles,
             };
             process_group_children(sp_tree, initial_xfrm, 0, &mut cx)?;
         }
@@ -1308,7 +1471,7 @@ pub fn import_pptx_with_limits(
             id: format!("slide{slide_idx}"),
             title: final_title,
             duration_ms: 5000,
-            background: None,
+            background: slide_background,
             objects,
             layers: Vec::new(),
             triggers: Vec::new(),
@@ -1334,6 +1497,14 @@ pub fn import_pptx_with_limits(
 
     report.slides = imported_slides.len();
 
+    let embedded_fonts = import_embedded_fonts(
+        &pres_tree,
+        &pres_rels,
+        &entries,
+        &mut imported_media,
+        &mut report,
+    );
+
     let (mut deck_fonts, major_font, minor_font) =
         collect_theme_fonts(&entries, limits.max_xml_depth);
     if let Some(err) = entries.take_error() {
@@ -1350,7 +1521,11 @@ pub fn import_pptx_with_limits(
     let mut missing_fonts: Vec<String> = deck_fonts
         .into_iter()
         .filter(|font| {
-            !font.eq_ignore_ascii_case("Inter") && !font.eq_ignore_ascii_case("Open Sans")
+            !font.eq_ignore_ascii_case("Inter")
+                && !font.eq_ignore_ascii_case("Open Sans")
+                && !embedded_fonts
+                    .iter()
+                    .any(|face| face.family.eq_ignore_ascii_case(font))
         })
         .collect();
     missing_fonts.sort_by_key(|font| font.to_ascii_lowercase());
@@ -1367,7 +1542,7 @@ pub fn import_pptx_with_limits(
         schema_version: SCHEMA_VERSION,
         id: "imported-course".to_string(),
         title: clean_title,
-        slide_size: Size { w: 1280, h: 720 },
+        slide_size: layout.slide_size,
         variables: Vec::new(),
         scenes: vec![Scene {
             id: "imported".to_string(),
@@ -1383,7 +1558,7 @@ pub fn import_pptx_with_limits(
         theme: coursecraft_course::Theme::default(),
         language: None,
         strings: std::collections::BTreeMap::new(),
-        fonts: Vec::new(),
+        fonts: embedded_fonts,
         background_audio: None,
         glossary: Vec::new(),
         editor: Default::default(),
@@ -1407,6 +1582,175 @@ pub fn import_pptx_with_limits(
         media: imported_media,
         report,
     })
+}
+
+/// Parse `<p:embeddedFontLst>` from `ppt/presentation.xml`, de-obfuscating
+/// `.fntdata` / `.odttf` parts using their ECMA-376 GUID key.
+fn import_embedded_fonts(
+    pres_tree: &XmlNode,
+    pres_rels: &HashMap<String, Relationship>,
+    entries: &Entries<'_>,
+    imported_media: &mut Vec<(String, Vec<u8>)>,
+    report: &mut ImportReport,
+) -> Vec<coursecraft_course::FontFace> {
+    use coursecraft_course::{FontFace, FontStyle};
+
+    let Some(list) = pres_tree.find_descendant("embeddedFontLst") else {
+        return Vec::new();
+    };
+    let mut faces = Vec::new();
+    let mut used_paths: HashSet<String> = imported_media
+        .iter()
+        .map(|(p, _)| p.to_ascii_lowercase())
+        .collect();
+
+    for entry in list.children_named("embeddedFont") {
+        let Some(family) = entry
+            .child("font")
+            .and_then(|n| n.attr("typeface"))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+
+        let style_nodes = [
+            ("regular", FontStyle::Regular),
+            ("bold", FontStyle::Bold),
+            ("italic", FontStyle::Italic),
+            ("boldItalic", FontStyle::BoldItalic),
+        ];
+        for (tag, style) in style_nodes {
+            let Some(node) = entry.child(tag) else {
+                continue;
+            };
+            let Some(rid) = node.attr("r:id").or_else(|| node.attr("id")) else {
+                continue;
+            };
+            let Some(target) = pres_rels.get(rid).and_then(|r| r.target.as_deref()) else {
+                continue;
+            };
+            let Ok(Some(raw_bytes)) = entries.get_checked(target) else {
+                report.items.push(ReportItem {
+                    slide: 1,
+                    kind: SkipKind::Media,
+                    note: format!(
+                        "Embedded font \"{family}\" ({}) could not be read",
+                        style.as_str()
+                    ),
+                });
+                continue;
+            };
+            let font_key = node.attr("fontKey");
+            let Some(bytes) = decode_embedded_font_bytes(&raw_bytes, font_key, target) else {
+                report.items.push(ReportItem {
+                    slide: 1,
+                    kind: SkipKind::Media,
+                    note: format!(
+                        "Embedded font \"{family}\" ({}) could not be read",
+                        style.as_str()
+                    ),
+                });
+                continue;
+            };
+            if faces
+                .iter()
+                .any(|f: &FontFace| f.family.eq_ignore_ascii_case(&family) && f.style == style)
+            {
+                continue;
+            }
+            let ext = if bytes.starts_with(b"OTTO") {
+                "otf"
+            } else {
+                "ttf"
+            };
+            let slug = sanitize_font_slug(&family);
+            let mut candidate = format!("fonts/{slug}-{}.{ext}", style.as_str());
+            let mut n = 2usize;
+            while used_paths.contains(&candidate.to_ascii_lowercase()) {
+                candidate = format!("fonts/{slug}-{}-{n}.{ext}", style.as_str());
+                n += 1;
+            }
+            used_paths.insert(candidate.to_ascii_lowercase());
+            imported_media.push((candidate.clone(), bytes));
+            faces.push(FontFace {
+                family: family.clone(),
+                style,
+                src: candidate,
+            });
+        }
+    }
+    faces
+}
+
+fn sanitize_font_slug(family: &str) -> String {
+    let mut slug = String::new();
+    for ch in family.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if (ch == ' ' || ch == '-' || ch == '_') && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let trimmed = slug.trim_matches('-').to_owned();
+    if trimmed.is_empty() {
+        "font".to_owned()
+    } else {
+        trimmed
+    }
+}
+
+fn parse_guid_bytes(text: &str) -> Option<[u8; 16]> {
+    let hex: Vec<u8> = text.bytes().filter(|b| b.is_ascii_hexdigit()).collect();
+    if hex.len() < 32 {
+        return None;
+    }
+    // Search for a 32-hex-digit GUID run (in case filename has extra chars).
+    let start = hex.len().saturating_sub(32);
+    let slice = &hex[start..start + 32];
+    let mut out = [0u8; 16];
+    for i in 0..16 {
+        let pair = std::str::from_utf8(&slice[i * 2..i * 2 + 2]).ok()?;
+        out[i] = u8::from_str_radix(pair, 16).ok()?;
+    }
+    Some(out)
+}
+
+fn xor_font_header(raw: &[u8], key: &[u8; 16], reversed: bool) -> Vec<u8> {
+    let mut out = raw.to_vec();
+    let limit = out.len().min(32);
+    for (i, byte) in out.iter_mut().take(limit).enumerate() {
+        let k = if reversed {
+            key[15 - (i % 16)]
+        } else {
+            key[i % 16]
+        };
+        *byte ^= k;
+    }
+    out
+}
+
+fn decode_embedded_font_bytes(
+    raw: &[u8],
+    font_key: Option<&str>,
+    target_path: &str,
+) -> Option<Vec<u8>> {
+    if coursecraft_media::font_info(raw).is_ok() {
+        return Some(raw.to_vec());
+    }
+    let key = font_key
+        .and_then(parse_guid_bytes)
+        .or_else(|| parse_guid_bytes(target_path))?;
+    let reversed = xor_font_header(raw, &key, true);
+    if coursecraft_media::font_info(&reversed).is_ok() {
+        return Some(reversed);
+    }
+    let forward = xor_font_header(raw, &key, false);
+    if coursecraft_media::font_info(&forward).is_ok() {
+        return Some(forward);
+    }
+    None
 }
 
 /// Fonts named by the presentation's theme parts (`a:majorFont` and
@@ -1451,14 +1795,11 @@ fn collect_theme_fonts(
 /// Replace PowerPoint theme font tokens (`+mj-lt`, `+mn-lt`, and their East
 /// Asian / complex-script variants) with the theme's actual Latin typeface.
 fn resolve_theme_font_tokens(slides: &mut [Slide], major: Option<&str>, minor: Option<&str>) {
-    let resolve = |font: &mut Option<String>| {
-        let Some(token) = font.as_deref() else {
-            return;
-        };
-        if !token.starts_with('+') {
-            return;
+    let resolve_str = |font: &str| -> Option<String> {
+        if !font.starts_with('+') {
+            return None;
         }
-        let lower = token.to_ascii_lowercase();
+        let lower = font.to_ascii_lowercase();
         let chosen = if lower.starts_with("+mj") {
             major
         } else if lower.starts_with("+mn") {
@@ -1466,21 +1807,47 @@ fn resolve_theme_font_tokens(slides: &mut [Slide], major: Option<&str>, minor: O
         } else {
             None
         };
-        *font = chosen.map(str::to_owned);
+        chosen.map(str::to_owned)
     };
-    let resolve_kind = |kind: &mut ObjectKind| {
-        let runs = match kind {
-            ObjectKind::Text { runs, .. } => Some(runs),
-            ObjectKind::Shape {
-                text: Some(text), ..
-            } => Some(&mut text.runs),
-            _ => None,
-        };
-        if let Some(runs) = runs {
+    let resolve = |font: &mut Option<String>| {
+        if let Some(token) = font.as_deref()
+            && token.starts_with('+')
+        {
+            *font = resolve_str(token);
+        }
+    };
+    let resolve_kind = |kind: &mut ObjectKind| match kind {
+        ObjectKind::Text { style, runs, .. } => {
+            if let Some(replacement) = resolve_str(&style.font) {
+                style.font = replacement;
+            }
             for run in runs {
                 resolve(&mut run.font);
             }
         }
+        ObjectKind::Shape {
+            text: Some(text), ..
+        } => {
+            if let Some(replacement) = resolve_str(&text.style.font) {
+                text.style.font = replacement;
+            }
+            for run in &mut text.runs {
+                resolve(&mut run.font);
+            }
+        }
+        ObjectKind::Table { rows, .. } => {
+            for row in rows {
+                for cell in &mut row.cells {
+                    if let Some(replacement) = resolve_str(&cell.style.font) {
+                        cell.style.font = replacement;
+                    }
+                    for run in &mut cell.runs {
+                        resolve(&mut run.font);
+                    }
+                }
+            }
+        }
+        _ => {}
     };
     for slide in slides {
         for object in &mut slide.objects {
@@ -1496,28 +1863,46 @@ fn resolve_theme_font_tokens(slides: &mut [Slide], major: Option<&str>, minor: O
 
 /// Fonts named by text runs on one imported slide.
 fn collect_slide_fonts(slide: &Slide, fonts: &mut HashSet<String>) {
-    let mut add_kind = |kind: &ObjectKind| {
-        let (runs, style_font) = match kind {
-            ObjectKind::Text { runs, style, .. } => (runs.as_slice(), Some(&style.font)),
-            ObjectKind::Shape {
-                text: Some(text), ..
-            } => (text.runs.as_slice(), Some(&text.style.font)),
-            _ => (&[][..], None),
-        };
-        if let Some(font) = style_font
+    let mut push_name = |font: &str| {
+        if !font.trim().is_empty()
             && !font.eq_ignore_ascii_case("Inter")
             && !font.eq_ignore_ascii_case("Open Sans")
         {
-            fonts.insert(font.clone());
+            fonts.insert(font.trim().to_owned());
         }
-        for run in runs {
-            if let Some(font) = &run.font
-                && !font.eq_ignore_ascii_case("Inter")
-                && !font.eq_ignore_ascii_case("Open Sans")
-            {
-                fonts.insert(font.clone());
+    };
+    let mut add_kind = |kind: &ObjectKind| match kind {
+        ObjectKind::Text { runs, style, .. } => {
+            push_name(&style.font);
+            for run in runs {
+                if let Some(font) = &run.font {
+                    push_name(font);
+                }
             }
         }
+        ObjectKind::Shape {
+            text: Some(text), ..
+        } => {
+            push_name(&text.style.font);
+            for run in &text.runs {
+                if let Some(font) = &run.font {
+                    push_name(font);
+                }
+            }
+        }
+        ObjectKind::Table { rows, .. } => {
+            for row in rows {
+                for cell in &row.cells {
+                    push_name(&cell.style.font);
+                    for run in &cell.runs {
+                        if let Some(font) = &run.font {
+                            push_name(font);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     };
     for object in &slide.objects {
         add_kind(&object.kind);
@@ -1638,6 +2023,7 @@ struct PlaceholderResolver {
     max_depth: usize,
     trees: HashMap<String, Option<XmlNode>>,
     masters: HashMap<String, Option<String>>,
+    themes: HashMap<String, Option<String>>,
 }
 
 impl PlaceholderResolver {
@@ -1646,6 +2032,7 @@ impl PlaceholderResolver {
             max_depth,
             trees: HashMap::new(),
             masters: HashMap::new(),
+            themes: HashMap::new(),
         }
     }
 
@@ -1661,6 +2048,21 @@ impl PlaceholderResolver {
         self.trees.get(path).and_then(Option::as_ref)
     }
 
+    /// Parse relationships for `owner_path` if present.
+    fn rels_of(&self, entries: &Entries<'_>, owner_path: &str) -> HashMap<String, Relationship> {
+        let Some((folder, file)) = owner_path.rsplit_once('/') else {
+            return HashMap::new();
+        };
+        let rels_path = format!("{folder}/_rels/{file}.rels");
+        let Some(bytes) = entries.get(&rels_path) else {
+            return HashMap::new();
+        };
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            return HashMap::new();
+        };
+        parse_relationships(text, &rels_path, folder, self.max_depth).unwrap_or_default()
+    }
+
     /// The first part under `prefix` that `owner_path` relates to.
     fn related_part(
         &self,
@@ -1668,11 +2070,7 @@ impl PlaceholderResolver {
         owner_path: &str,
         prefix: &str,
     ) -> Option<String> {
-        let (folder, file) = owner_path.rsplit_once('/')?;
-        let rels_path = format!("{folder}/_rels/{file}.rels");
-        let bytes = entries.get(&rels_path)?;
-        let text = std::str::from_utf8(&bytes).ok()?;
-        let rels = parse_relationships(text, &rels_path, folder, self.max_depth).ok()?;
+        let rels = self.rels_of(entries, owner_path);
         rels.values()
             .filter_map(|r| r.target.as_deref())
             .filter(|t| t.starts_with(prefix) && entries.contains_key(t))
@@ -1687,6 +2085,64 @@ impl PlaceholderResolver {
         let found = self.related_part(entries, layout_path, "ppt/slideMasters/");
         self.masters.insert(layout_path.to_string(), found.clone());
         found
+    }
+
+    fn theme_of(&mut self, entries: &Entries<'_>, master_path: &str) -> Option<String> {
+        if let Some(cached) = self.themes.get(master_path) {
+            return cached.clone();
+        }
+        let found = self
+            .related_part(entries, master_path, "ppt/theme/")
+            .or_else(|| {
+                entries
+                    .contains_key("ppt/theme/theme1.xml")
+                    .then(|| "ppt/theme/theme1.xml".to_string())
+            });
+        self.themes.insert(master_path.to_string(), found.clone());
+        found
+    }
+
+    /// Resolve the theme colour palette for a slide via its layout -> master -> theme.
+    fn resolve_palette(
+        &mut self,
+        entries: &Entries<'_>,
+        layout_path: Option<&str>,
+        slide_tree: &XmlNode,
+    ) -> ThemePalette {
+        let master_path = layout_path
+            .and_then(|lp| self.master_of(entries, lp))
+            .or_else(|| {
+                entries
+                    .contains_key("ppt/slideMasters/slideMaster1.xml")
+                    .then(|| "ppt/slideMasters/slideMaster1.xml".to_string())
+            });
+        let theme_path = master_path
+            .as_deref()
+            .and_then(|mp| self.theme_of(entries, mp))
+            .or_else(|| {
+                entries
+                    .contains_key("ppt/theme/theme1.xml")
+                    .then(|| "ppt/theme/theme1.xml".to_string())
+            });
+
+        let mut palette = theme_path
+            .as_deref()
+            .and_then(|tp| self.tree(entries, tp))
+            .map(ThemePalette::from_theme_tree)
+            .unwrap_or_default();
+
+        if let Some(mp) = master_path.as_deref()
+            && let Some(master_tree) = self.tree(entries, mp)
+        {
+            palette.apply_clr_map(master_tree);
+        }
+        if let Some(lp) = layout_path
+            && let Some(layout_tree) = self.tree(entries, lp)
+        {
+            palette.apply_clr_map(layout_tree);
+        }
+        palette.apply_clr_map(slide_tree);
+        palette
     }
 
     /// Resolve the frame for a placeholder (`type`, `idx`) via layout then master.
@@ -1707,6 +2163,107 @@ impl PlaceholderResolver {
         let tree = self.tree(entries, &master_path)?;
         find_placeholder_frame(tree, ph_type, ph_idx, false)
     }
+
+    /// Collect inherited `bodyPr` and `lstStyle` / `txStyles` nodes for a shape.
+    fn resolve_text_inheritance(
+        &mut self,
+        entries: &Entries<'_>,
+        layout_path: Option<&str>,
+        ph_type: Option<&str>,
+        ph_idx: Option<&str>,
+        is_placeholder: bool,
+    ) -> TextInheritance {
+        let mut body_pr = Vec::new();
+        let mut lst_styles = Vec::new();
+
+        let Some(lp) = layout_path else {
+            return TextInheritance {
+                body_pr,
+                lst_styles,
+            };
+        };
+
+        if is_placeholder
+            && let Some(layout_tree) = self.tree(entries, lp)
+            && let Some(sp) = find_placeholder_sp(layout_tree, ph_type, ph_idx, true)
+            && let Some(tx_body) = sp.child("txBody")
+        {
+            if let Some(bp) = tx_body.child("bodyPr") {
+                body_pr.push(bp.clone());
+            }
+            if let Some(ls) = tx_body.child("lstStyle") {
+                lst_styles.push(ls.clone());
+            }
+        }
+
+        let Some(mp) = self.master_of(entries, lp) else {
+            return TextInheritance {
+                body_pr,
+                lst_styles,
+            };
+        };
+        let Some(master_tree) = self.tree(entries, &mp) else {
+            return TextInheritance {
+                body_pr,
+                lst_styles,
+            };
+        };
+
+        if is_placeholder
+            && let Some(sp) = find_placeholder_sp(master_tree, ph_type, ph_idx, false)
+            && let Some(tx_body) = sp.child("txBody")
+        {
+            if let Some(bp) = tx_body.child("bodyPr") {
+                body_pr.push(bp.clone());
+            }
+            if let Some(ls) = tx_body.child("lstStyle") {
+                lst_styles.push(ls.clone());
+            }
+        }
+
+        if let Some(tx_styles) = master_tree.find_descendant("txStyles") {
+            let style_name = if !is_placeholder {
+                "otherStyle"
+            } else {
+                match normalize_ph_type(ph_type, true) {
+                    "title" => "titleStyle",
+                    "body" => "bodyStyle",
+                    _ => "otherStyle",
+                }
+            };
+            if let Some(style_node) = tx_styles.child(style_name) {
+                lst_styles.push(style_node.clone());
+            }
+        }
+
+        TextInheritance {
+            body_pr,
+            lst_styles,
+        }
+    }
+
+    /// Find the effective `p:bg` node and the relationships of the part that owns it.
+    fn resolve_background(
+        &mut self,
+        entries: &Entries<'_>,
+        slide_tree: &XmlNode,
+        slide_rels: &HashMap<String, Relationship>,
+        layout_path: Option<&str>,
+    ) -> Option<(XmlNode, HashMap<String, Relationship>)> {
+        if let Some(bg) = slide_tree.child("cSld").and_then(|c| c.child("bg")) {
+            return Some((bg.clone(), slide_rels.clone()));
+        }
+        let lp = layout_path?;
+        if let Some(layout_tree) = self.tree(entries, lp)
+            && let Some(bg) = layout_tree.child("cSld").and_then(|c| c.child("bg"))
+        {
+            return Some((bg.clone(), self.rels_of(entries, lp)));
+        }
+        let mp = self.master_of(entries, lp)?;
+        let master_tree = self.tree(entries, &mp)?;
+        let bg = master_tree.child("cSld").and_then(|c| c.child("bg"))?;
+        Some((bg.clone(), self.rels_of(entries, &mp)))
+    }
 }
 
 /// Normalise a placeholder type for matching (`ctrTitle` is a `title`, none is `body`).
@@ -1717,6 +2274,37 @@ fn normalize_ph_type(t: Option<&str>, lenient: bool) -> &str {
         Some(other) => other,
         None => "body",
     }
+}
+
+/// Find the matching placeholder `<p:sp>` in a layout/master tree.
+fn find_placeholder_sp<'a>(
+    tree: &'a XmlNode,
+    ph_type: Option<&str>,
+    ph_idx: Option<&str>,
+    use_idx: bool,
+) -> Option<&'a XmlNode> {
+    let sp_tree = tree.find_descendant("spTree")?;
+    let want_type = normalize_ph_type(ph_type, !use_idx);
+    let find_matching = |by_idx: bool| {
+        sp_tree.children_named("sp").find(move |sp| {
+            let Some(ph) = sp
+                .child("nvSpPr")
+                .and_then(|nv| nv.child("nvPr"))
+                .and_then(|np| np.child("ph"))
+            else {
+                return false;
+            };
+            if by_idx {
+                ph_idx.is_some() && ph.attr("idx") == ph_idx
+            } else {
+                normalize_ph_type(ph.attr("type"), !use_idx) == want_type
+            }
+        })
+    };
+    if use_idx && let Some(sp) = find_matching(true) {
+        return Some(sp);
+    }
+    find_matching(false)
 }
 
 /// Find the `a:xfrm` frame of the matching placeholder shape in a layout/master tree.
@@ -1775,6 +2363,169 @@ struct SlideContext<'a, 'z> {
     resolver: &'a mut PlaceholderResolver,
     layout_path: Option<String>,
     slide_parts: &'a HashMap<String, String>,
+    theme: &'a ThemePalette,
+    table_styles: &'a HashMap<String, TableStyleDef>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_slide_background(
+    resolver: &mut PlaceholderResolver,
+    entries: &Entries<'_>,
+    slide_tree: &XmlNode,
+    slide_rels: &HashMap<String, Relationship>,
+    layout_path: Option<&str>,
+    layout: &SlideLayout,
+    theme_palette: &ThemePalette,
+    imported_media: &mut Vec<(String, Vec<u8>)>,
+    existing_media_names: &mut HashSet<String>,
+    tracker: &mut SlideTracker,
+    limits: &Limits,
+    slide_parts: &HashMap<String, String>,
+) -> (Option<Color>, Option<Object>) {
+    let Some((bg_node, bg_rels)) =
+        resolver.resolve_background(entries, slide_tree, slide_rels, layout_path)
+    else {
+        return (None, None);
+    };
+    if let Some(bg_pr) = bg_node.child("bgPr") {
+        if bg_pr.child("noFill").is_some() {
+            return (None, None);
+        }
+        if let Some(color) = resolve_solid_fill(bg_pr, theme_palette) {
+            return (Some(color), None);
+        }
+        if let Some(grad) = bg_pr.child("gradFill")
+            && let Some(fill_style) = extract_gradient_fill(grad, theme_palette)
+        {
+            let fallback = match &fill_style {
+                FillStyle::Linear { stops, .. } | FillStyle::Radial { stops, .. } => stops
+                    .first()
+                    .map(|s| s.color.clone())
+                    .unwrap_or_else(|| Color("#FFFFFF".to_string())),
+                FillStyle::Picture { .. } | FillStyle::Pattern { .. } => {
+                    Color("#FFFFFF".to_string())
+                }
+            };
+            return (None, Some(make_background_shape(fallback, fill_style)));
+        }
+        if let Some(blip_fill) = bg_pr.child("blipFill") {
+            let mut dummy_title = None;
+            let mut dummy_objects = Vec::new();
+            let mut bg_cx = SlideContext {
+                layout,
+                slide_rels: &bg_rels,
+                entries,
+                objects: &mut dummy_objects,
+                slide_title: &mut dummy_title,
+                imported_media,
+                existing_media_names,
+                tracker,
+                limits,
+                resolver,
+                layout_path: layout_path.map(str::to_string),
+                slide_parts,
+                theme: theme_palette,
+                table_styles: &HashMap::new(),
+            };
+            if let Some((src, mode, tile_scale)) = extract_picture_fill(blip_fill, &mut bg_cx) {
+                return (
+                    None,
+                    Some(make_background_shape(
+                        Color("#FFFFFF".to_string()),
+                        FillStyle::Picture {
+                            src,
+                            mode,
+                            tile_scale,
+                        },
+                    )),
+                );
+            }
+        }
+    } else if let Some(bg_ref) = bg_node.child("bgRef")
+        && let Some(color) = resolve_first_color_child(bg_ref, theme_palette)
+    {
+        return (Some(color), None);
+    }
+    (None, None)
+}
+
+fn make_background_shape(fill: Color, fill_style: FillStyle) -> Object {
+    Object {
+        id: "slide-bg".to_string(),
+        name: "Slide Background".to_string(),
+        kind: ObjectKind::Shape {
+            shape: ShapeKind::Rectangle,
+            fill,
+            fill_style: Some(fill_style),
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        },
+        frame: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1280.0,
+            h: 720.0,
+        },
+        timing: Timing::default(),
+        states: Vec::new(),
+        initial_state: "normal".to_string(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        focus_order: None,
+        decorative: true,
+        description: None,
+        group: None,
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+        locked: true,
+        editor_hidden: false,
+    }
+}
+
+fn clamp_object_frame(frame: Rect, tracker: &mut SlideTracker) -> Rect {
+    let max_dim = MAX_OBJECT_FRAME_SIZE;
+    let x = if frame.x.is_finite() {
+        frame.x.clamp(-max_dim, max_dim)
+    } else {
+        0.0
+    };
+    let y = if frame.y.is_finite() {
+        frame.y.clamp(-max_dim, max_dim)
+    } else {
+        0.0
+    };
+    let mut w = if frame.w.is_finite() && frame.w > 0.0 {
+        frame.w
+    } else {
+        1.0
+    };
+    let mut h = if frame.h.is_finite() && frame.h > 0.0 {
+        frame.h
+    } else {
+        1.0
+    };
+    let clamped_pos = x != frame.x || y != frame.y;
+    let oversized = w > max_dim || h > max_dim;
+    if oversized {
+        let scale = (max_dim / w.max(h)).min(1.0);
+        w = (w * scale).clamp(1.0, max_dim);
+        h = (h * scale).clamp(1.0, max_dim);
+    }
+    if clamped_pos || oversized {
+        tracker.report_skip(
+            SkipKind::InvalidGeometry,
+            "Shape frame exceeded 100,000 px limit and was clamped",
+        );
+    }
+    Rect { x, y, w, h }
 }
 
 fn drawing_id(node: &XmlNode) -> Option<&str> {
@@ -1949,6 +2700,43 @@ fn resolve_connector_glues(objects: &mut [Object], tracker: &mut SlideTracker) {
 }
 
 /// Recursively process children of a group or shape tree up to depth 8.
+fn is_placeholder_node(node: &XmlNode) -> bool {
+    [
+        "nvSpPr",
+        "nvPicPr",
+        "nvGrpSpPr",
+        "nvCxnSpPr",
+        "nvGraphicFramePr",
+    ]
+    .iter()
+    .any(|nv| {
+        node.child(nv)
+            .and_then(|n| n.child("nvPr"))
+            .and_then(|p| p.child("ph"))
+            .is_some()
+    })
+}
+
+fn process_non_placeholder_children(
+    parent: &XmlNode,
+    transform: GroupTransform,
+    depth: usize,
+    cx: &mut SlideContext<'_, '_>,
+) -> Result<(), PptxError> {
+    let filtered = XmlNode {
+        name: parent.name.clone(),
+        attributes: parent.attributes.clone(),
+        text: parent.text.clone(),
+        children: parent
+            .children
+            .iter()
+            .filter(|c| !is_placeholder_node(c))
+            .cloned()
+            .collect(),
+    };
+    process_group_children(&filtered, transform, depth, cx)
+}
+
 fn process_group_children(
     parent: &XmlNode,
     transform: GroupTransform,
@@ -2077,6 +2865,232 @@ fn process_group_children(
     Ok(())
 }
 
+#[derive(Debug, Clone, Default)]
+struct TablePartStyle {
+    fill: Option<Color>,
+    text_color: Option<Color>,
+    bold: Option<bool>,
+    border: Option<Outline>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TableStyleDef {
+    whole: TablePartStyle,
+    first_row: TablePartStyle,
+    last_row: TablePartStyle,
+    first_col: TablePartStyle,
+    last_col: TablePartStyle,
+    band1_h: TablePartStyle,
+    band2_h: TablePartStyle,
+    band1_v: TablePartStyle,
+    band2_v: TablePartStyle,
+}
+
+fn parse_table_part_style(node: &XmlNode, theme: &ThemePalette) -> TablePartStyle {
+    let tc_style = node.child("tcStyle");
+    let fill = tc_style
+        .and_then(|s| s.child("fill"))
+        .and_then(|f| resolve_solid_fill(f, theme));
+    let border = tc_style.and_then(|s| s.child("tcBdr")).and_then(|bdr| {
+        ["insideH", "insideV", "top", "bottom", "left", "right"]
+            .iter()
+            .find_map(|side| {
+                let ln = bdr.child(side)?.child("ln")?;
+                if ln.child("noFill").is_some() {
+                    return None;
+                }
+                let color = resolve_solid_fill(ln, theme)?;
+                let width = ln
+                    .attr("w")
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .map_or(1.0, |emu| (emu / 12700.0) as f32)
+                    .clamp(0.5, 10.0);
+                Some(Outline {
+                    color,
+                    width,
+                    dash: DashStyle::Solid,
+                    dash_pattern: None,
+                })
+            })
+    });
+    let tx_style = node.child("tcTxStyle");
+    let text_color = tx_style.and_then(|t| resolve_first_color_child(t, theme));
+    let bold = tx_style
+        .and_then(|t| t.attr("b"))
+        .map(|b| b == "on" || b == "1");
+    TablePartStyle {
+        fill,
+        text_color,
+        bold,
+        border,
+    }
+}
+
+fn parse_table_styles(
+    entries: &Entries<'_>,
+    theme: &ThemePalette,
+) -> HashMap<String, TableStyleDef> {
+    let mut map = HashMap::new();
+    let Some(bytes) = entries.get("ppt/tableStyles.xml") else {
+        return map;
+    };
+    let Ok(xml_str) = std::str::from_utf8(&bytes) else {
+        return map;
+    };
+    let Ok(root) = parse_xml_tree(xml_str, "ppt/tableStyles.xml", 32) else {
+        return map;
+    };
+    for style_node in root.children_named("tblStyle") {
+        let Some(id) = style_node.attr("styleId") else {
+            continue;
+        };
+        let mut def = TableStyleDef::default();
+        if let Some(part) = style_node.child("wholeTbl") {
+            def.whole = parse_table_part_style(part, theme);
+        }
+        if let Some(part) = style_node.child("firstRow") {
+            def.first_row = parse_table_part_style(part, theme);
+        }
+        if let Some(part) = style_node.child("lastRow") {
+            def.last_row = parse_table_part_style(part, theme);
+        }
+        if let Some(part) = style_node.child("firstCol") {
+            def.first_col = parse_table_part_style(part, theme);
+        }
+        if let Some(part) = style_node.child("lastCol") {
+            def.last_col = parse_table_part_style(part, theme);
+        }
+        if let Some(part) = style_node.child("band1H") {
+            def.band1_h = parse_table_part_style(part, theme);
+        }
+        if let Some(part) = style_node.child("band2H") {
+            def.band2_h = parse_table_part_style(part, theme);
+        }
+        if let Some(part) = style_node.child("band1V") {
+            def.band1_v = parse_table_part_style(part, theme);
+        }
+        if let Some(part) = style_node.child("band2V") {
+            def.band2_v = parse_table_part_style(part, theme);
+        }
+        map.insert(id.to_ascii_uppercase(), def);
+    }
+    map
+}
+
+fn blend_hex_colors(a: &str, b: &str, t: f32) -> Color {
+    let parse = |s: &str| -> (f32, f32, f32) {
+        let h = s.trim_start_matches('#');
+        if h.len() >= 6 {
+            let r = u8::from_str_radix(&h[0..2], 16).unwrap_or(0) as f32;
+            let g = u8::from_str_radix(&h[2..4], 16).unwrap_or(0) as f32;
+            let bl = u8::from_str_radix(&h[4..6], 16).unwrap_or(0) as f32;
+            (r, g, bl)
+        } else {
+            (217.0, 217.0, 217.0)
+        }
+    };
+    let (ar, ag, ab) = parse(a);
+    let (br, bg, bb) = parse(b);
+    let t = t.clamp(0.0, 1.0);
+    let mix = |x: f32, y: f32| (x + (y - x) * t).round().clamp(0.0, 255.0) as u8;
+    Color(format!(
+        "#{:02X}{:02X}{:02X}",
+        mix(ar, br),
+        mix(ag, bg),
+        mix(ab, bb)
+    ))
+}
+
+fn builtin_table_style(style_id: &str, theme: &ThemePalette) -> Option<TableStyleDef> {
+    let id = style_id.trim().to_ascii_uppercase();
+    // Standard Office built-in Medium Style 2 (Accent 1..6) and Light/No-Style grids.
+    let accent_key = match id.as_str() {
+        "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}" | "{9DCAF9ED-07DC-4A11-8D7F-57B35C25682E}" => {
+            Some("accent1")
+        }
+        "{21E4AEA4-8DFA-4A89-87EB-49C32662AFE0}" | "{D113A9D2-9D6B-4929-AA2D-F23B5EE8CBE7}" => {
+            Some("accent2")
+        }
+        "{F5AB1C69-6EDB-4FF4-983F-18BD219EF322}" | "{18603FDC-E32A-4AB5-989C-0864C322B819}" => {
+            Some("accent3")
+        }
+        "{00A15C55-8517-42AA-B614-E9B94910E393}" | "{306799F8-075E-4A3A-A7F6-7FBC6576F1A4}" => {
+            Some("accent4")
+        }
+        "{7DF18680-E054-41AD-8BC1-D1AEF772440D}" | "{E269D01E-BC32-4049-B463-5C60D7B0CCD2}" => {
+            Some("accent5")
+        }
+        "{93296810-A885-4BE3-A3E7-6D5BEEA58F35}" | "{B508A5F1-E17E-4042-9D08-0E8B325DF00B}" => {
+            Some("accent6")
+        }
+        "{5940675A-B579-460E-94D1-54222C63F5DA}" => {
+            let border = Some(Outline {
+                color: Color("#000000".to_string()),
+                width: 1.0,
+                dash: DashStyle::Solid,
+                dash_pattern: None,
+            });
+            return Some(TableStyleDef {
+                whole: TablePartStyle {
+                    border,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        }
+        _ => None,
+    }?;
+    let accent = theme
+        .slots
+        .get(accent_key)
+        .map(|&(r, g, b)| Color(format!("#{r:02X}{g:02X}{b:02X}")))
+        .unwrap_or_else(|| Color("#4472C4".to_string()));
+    let band1 = blend_hex_colors("#FFFFFF", &accent.0, 0.22);
+    let band2 = blend_hex_colors("#FFFFFF", &accent.0, 0.10);
+    let border = Some(Outline {
+        color: Color("#FFFFFF".to_string()),
+        width: 1.0,
+        dash: DashStyle::Solid,
+        dash_pattern: None,
+    });
+    Some(TableStyleDef {
+        whole: TablePartStyle {
+            fill: Some(band2.clone()),
+            border: border.clone(),
+            ..Default::default()
+        },
+        first_row: TablePartStyle {
+            fill: Some(accent),
+            text_color: Some(Color("#FFFFFF".to_string())),
+            bold: Some(true),
+            border: border.clone(),
+        },
+        last_row: TablePartStyle {
+            bold: Some(true),
+            border: border.clone(),
+            ..Default::default()
+        },
+        first_col: TablePartStyle {
+            bold: Some(true),
+            ..Default::default()
+        },
+        last_col: TablePartStyle {
+            bold: Some(true),
+            ..Default::default()
+        },
+        band1_h: TablePartStyle {
+            fill: Some(band1),
+            border,
+            ..Default::default()
+        },
+        band2_h: TablePartStyle {
+            fill: Some(band2),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+}
+
 /// Import one `p:graphicFrame` whose graphic data holds an `a:tbl`.
 fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_, '_>) {
     let Some(tbl) = frame_node.find_descendant("tbl") else {
@@ -2150,6 +3164,23 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
     let mut heights: Vec<f32> = row_heights.iter().map(|value| *value as f32).collect();
     normalize_table_fractions(&mut heights);
 
+    let tbl_pr = tbl.child("tblPr");
+    let first_row = tbl_pr.is_some_and(|p| attr_flag(p, "firstRow"));
+    let last_row = tbl_pr.is_some_and(|p| attr_flag(p, "lastRow"));
+    let first_col = tbl_pr.is_some_and(|p| attr_flag(p, "firstCol"));
+    let last_col = tbl_pr.is_some_and(|p| attr_flag(p, "lastCol"));
+    let band_row = tbl_pr.is_some_and(|p| attr_flag(p, "bandRow"));
+    let band_col = tbl_pr.is_some_and(|p| attr_flag(p, "bandCol"));
+    let table_style = tbl_pr
+        .and_then(|p| p.child("tableStyleId"))
+        .map(|n| n.text.trim().to_ascii_uppercase())
+        .and_then(|id| {
+            cx.table_styles
+                .get(&id)
+                .cloned()
+                .or_else(|| builtin_table_style(&id, cx.theme))
+        });
+
     let links = TextLinkContext {
         slide_rels: cx.slide_rels,
         slide_parts: cx.slide_parts,
@@ -2161,33 +3192,117 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
     for (row_index, row_node) in rows_nodes.iter().enumerate() {
         let mut cells: Vec<TableCell> = Vec::with_capacity(column_count);
         let mut column = 0usize;
+        let mut remaining_h_merge = 0usize;
         for cell_node in row_node.children_named("tc") {
             if column >= column_count {
                 break;
+            }
+            let h_merge = attr_flag(cell_node, "hMerge");
+            let v_merge = attr_flag(cell_node, "vMerge");
+            if h_merge && remaining_h_merge > 0 {
+                remaining_h_merge -= 1;
+                continue;
             }
             let col_span =
                 attr_span(cell_node, "gridSpan").min(column_count.saturating_sub(column));
             let row_span = attr_span(cell_node, "rowSpan")
                 .min(rows_nodes.len().saturating_sub(row_index).max(1));
-            let merged = attr_flag(cell_node, "hMerge") || attr_flag(cell_node, "vMerge");
+            let merged = h_merge || v_merge;
             let props = cell_node.child("tcPr");
             if merged {
                 cells.push(TableCell::default());
+                column = column.saturating_add(1);
             } else {
-                let text = cell_node
+                let mut part_fill: Option<Color> = None;
+                let mut part_text_color: Option<Color> = None;
+                let mut part_bold = false;
+                if let Some(style) = &table_style {
+                    let mut apply_part = |part: &TablePartStyle| {
+                        if let Some(f) = &part.fill {
+                            part_fill = Some(f.clone());
+                        }
+                        if let Some(tc) = &part.text_color {
+                            part_text_color = Some(tc.clone());
+                        }
+                        if let Some(b) = part.bold {
+                            part_bold = b;
+                        }
+                    };
+                    apply_part(&style.whole);
+                    if band_row {
+                        let data_idx = row_index.saturating_sub(usize::from(first_row));
+                        if !(first_row && row_index == 0) {
+                            if data_idx % 2 == 0 {
+                                apply_part(&style.band1_h);
+                            } else {
+                                apply_part(&style.band2_h);
+                            }
+                        }
+                    }
+                    if band_col {
+                        let data_col = column.saturating_sub(usize::from(first_col));
+                        if !(first_col && column == 0) {
+                            if data_col % 2 == 0 {
+                                apply_part(&style.band1_v);
+                            } else {
+                                apply_part(&style.band2_v);
+                            }
+                        }
+                    }
+                    if first_col && column == 0 {
+                        apply_part(&style.first_col);
+                    }
+                    if last_col && column.saturating_add(col_span) >= column_count {
+                        apply_part(&style.last_col);
+                    }
+                    if last_row && row_index + 1 == rows_nodes.len() {
+                        apply_part(&style.last_row);
+                    }
+                    if first_row && row_index == 0 {
+                        apply_part(&style.first_row);
+                    }
+                }
+
+                let cell_fill = props
+                    .and_then(|p| table_cell_fill(p, cx.theme))
+                    .or(part_fill);
+                let cell = cell_node
                     .child("txBody")
-                    .map(|body| extract_text_runs(body, *cx.layout, Some(links)))
-                    .map(|info| TableCell {
-                        text: info.text,
-                        style: info.style.clone(),
-                        runs: info.runs,
-                        paragraphs: info.paragraphs,
-                        fill: props.and_then(table_cell_fill),
+                    .map(|body| {
+                        let mut info =
+                            extract_text_runs(body, *cx.layout, Some(links), cx.theme, None);
+                        if let Some(tc) = &part_text_color {
+                            for run in &mut info.runs {
+                                if run.color.is_none() {
+                                    run.color = Some(tc.clone());
+                                }
+                            }
+                            info.style.color = tc.clone();
+                        }
+                        if part_bold {
+                            for run in &mut info.runs {
+                                if run.bold.is_none() {
+                                    run.bold = Some(true);
+                                }
+                            }
+                        }
+                        TableCell {
+                            text: info.text,
+                            style: info.style.clone(),
+                            runs: info.runs,
+                            paragraphs: info.paragraphs,
+                            fill: cell_fill.clone(),
+                            row_span: u8::try_from(row_span.max(1)).unwrap_or(u8::MAX),
+                            col_span: u8::try_from(col_span.max(1)).unwrap_or(u8::MAX),
+                            valign: info.style.valign,
+                        }
+                    })
+                    .unwrap_or_else(|| TableCell {
+                        fill: cell_fill,
                         row_span: u8::try_from(row_span.max(1)).unwrap_or(u8::MAX),
                         col_span: u8::try_from(col_span.max(1)).unwrap_or(u8::MAX),
-                        valign: info.style.valign,
-                    })
-                    .unwrap_or_default();
+                        ..TableCell::default()
+                    });
                 if let Some(props) = props {
                     for (side, outer) in [
                         ("lnL", column == 0),
@@ -2198,7 +3313,8 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
                             row_index.saturating_add(row_span) >= rows_nodes.len(),
                         ),
                     ] {
-                        if let Some(outline) = table_side_outline(props, side, *cx.layout) {
+                        if let Some(outline) = table_side_outline(props, side, *cx.layout, cx.theme)
+                        {
                             if outer {
                                 outer_borders.push(outline);
                             } else {
@@ -2208,12 +3324,13 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
                     }
                 }
                 let span = col_span.max(1);
-                cells.push(text);
+                cells.push(cell);
                 for _ in 1..span {
                     cells.push(TableCell::default());
                 }
+                remaining_h_merge = span.saturating_sub(1);
+                column = column.saturating_add(span);
             }
-            column = column.saturating_add(if merged { 1 } else { col_span.max(1) });
         }
         cells.resize(column_count, TableCell::default());
         rows.push(TableRow {
@@ -2222,13 +3339,15 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
         });
     }
 
-    let first_row = tbl
-        .child("tblPr")
-        .and_then(|props| props.attr("firstRow"))
-        .is_some_and(|value| value == "1" || value == "true");
+    let style_border = table_style.as_ref().and_then(|s| {
+        s.whole
+            .border
+            .clone()
+            .or_else(|| s.first_row.border.clone())
+    });
     let borders = TableBorders {
-        outer: dominant_outline(&outer_borders),
-        inner: dominant_outline(&inner_borders),
+        outer: dominant_outline(&outer_borders).or_else(|| style_border.clone()),
+        inner: dominant_outline(&inner_borders).or(style_border),
     };
 
     cx.tracker.table_count = cx.tracker.table_count.saturating_add(1);
@@ -2244,6 +3363,7 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
     } else {
         name
     };
+    let frame = clamp_object_frame(frame, cx.tracker);
     cx.objects.push(Object {
         id,
         name,
@@ -2289,23 +3409,21 @@ fn attr_flag(node: &XmlNode, name: &str) -> bool {
         .is_some_and(|value| value == "1" || value == "true")
 }
 
-fn table_cell_fill(props: &XmlNode) -> Option<Color> {
-    props
-        .child("solidFill")
-        .and_then(|fill| fill.child("srgbClr"))
-        .and_then(srgb_color)
+fn table_cell_fill(props: &XmlNode, theme: &ThemePalette) -> Option<Color> {
+    resolve_solid_fill(props, theme)
 }
 
-fn table_side_outline(props: &XmlNode, side: &str, layout: SlideLayout) -> Option<Outline> {
+fn table_side_outline(
+    props: &XmlNode,
+    side: &str,
+    layout: SlideLayout,
+    theme: &ThemePalette,
+) -> Option<Outline> {
     let line = props.child(side)?;
     if line.child("noFill").is_some() {
         return None;
     }
-    let color = line
-        .child("solidFill")
-        .and_then(|fill| fill.child("srgbClr"))
-        .and_then(srgb_color)
-        .unwrap_or_else(|| Color("#000000".to_string()));
+    let color = resolve_solid_fill(line, theme).unwrap_or_else(|| Color("#000000".to_string()));
     let width = line
         .attr("w")
         .and_then(|value| value.trim().parse::<f64>().ok())
@@ -2315,12 +3433,62 @@ fn table_side_outline(props: &XmlNode, side: &str, layout: SlideLayout) -> Optio
     if width <= 0.0 {
         return None;
     }
-    let dash = match line.child("prstDash").and_then(|dash| dash.attr("val")) {
-        Some("dash" | "lgDash" | "sysDash") => DashStyle::Dash,
-        Some("dot" | "sysDot") => DashStyle::Dot,
-        _ => DashStyle::Solid,
+    let (dash, dash_pattern) = extract_dash_from_ln(line);
+    Some(Outline {
+        color,
+        width,
+        dash,
+        dash_pattern,
+    })
+}
+
+fn parse_ooxml_dash_pct(raw: &str) -> Option<f32> {
+    let trimmed = raw.trim();
+    let mult = if let Some(pct) = trimmed.strip_suffix('%') {
+        pct.trim().parse::<f32>().ok()? / 100.0
+    } else {
+        trimmed.parse::<f32>().ok()? / 100_000.0
     };
-    Some(Outline { color, width, dash })
+    (mult.is_finite() && mult > 0.0).then(|| mult.clamp(0.1, 100.0))
+}
+
+fn extract_dash_from_ln(ln: &XmlNode) -> (DashStyle, Option<Vec<f32>>) {
+    if let Some(cust) = ln.child("custDash") {
+        let mut pattern = Vec::new();
+        for ds in cust.children_named("ds") {
+            let d = ds.attr("d").and_then(parse_ooxml_dash_pct);
+            let sp = ds.attr("sp").and_then(parse_ooxml_dash_pct);
+            if let (Some(d), Some(sp)) = (d, sp) {
+                pattern.push(d);
+                pattern.push(sp);
+                if pattern.len() >= 32 {
+                    break;
+                }
+            }
+        }
+        if !pattern.is_empty() {
+            return (DashStyle::Custom, Some(pattern));
+        }
+    }
+    map_dash_style(ln.child("prstDash").and_then(|dash| dash.attr("val")))
+}
+
+fn map_dash_style(val: Option<&str>) -> (DashStyle, Option<Vec<f32>>) {
+    match val {
+        Some("dash") => (DashStyle::Dash, None),
+        Some("sysDash") => (DashStyle::Dash, Some(vec![3.0, 1.0])),
+        Some("lgDash") => (DashStyle::Dash, Some(vec![8.0, 3.0])),
+        Some("dot") => (DashStyle::Dot, None),
+        Some("sysDot") => (DashStyle::Dot, Some(vec![1.0, 1.0])),
+        Some("dashDot") => (DashStyle::DashDot, None),
+        Some("sysDashDot") => (DashStyle::DashDot, Some(vec![3.0, 1.0, 1.0, 1.0])),
+        Some("lgDashDot") => (DashStyle::DashDot, Some(vec![8.0, 3.0, 1.0, 3.0])),
+        Some("dashDotDot" | "sysDashDotDot") => {
+            (DashStyle::DashDot, Some(vec![3.0, 1.0, 1.0, 1.0, 1.0, 1.0]))
+        }
+        Some("lgDashDotDot") => (DashStyle::DashDot, Some(vec![8.0, 3.0, 1.0, 3.0, 1.0, 3.0])),
+        _ => (DashStyle::Solid, None),
+    }
 }
 
 fn dominant_outline(candidates: &[Outline]) -> Option<Outline> {
@@ -2352,7 +3520,8 @@ fn extract_notes_body(tree: &XmlNode, layout: SlideLayout) -> Option<String> {
             && ph.attr("type").is_some_and(|t| t == "body")
             && let Some(tx_body) = sp.child("txBody")
         {
-            let text_info = extract_text_runs(tx_body, layout, None);
+            let default_theme = ThemePalette::default();
+            let text_info = extract_text_runs(tx_body, layout, None, &default_theme, None);
             let trimmed = text_info.text.trim();
             if !trimmed.is_empty() {
                 return Some(trimmed.to_string());
@@ -2421,8 +3590,8 @@ fn line_end_from(ln: Option<&XmlNode>, name: &str) -> LineEnd {
     }
 }
 
-fn path_outline(sp_pr: &XmlNode, layout: SlideLayout) -> Outline {
-    if let Some(outline) = extract_outline(sp_pr, layout) {
+fn path_outline(sp_pr: &XmlNode, layout: SlideLayout, theme: &ThemePalette) -> Outline {
+    if let Some(outline) = extract_outline(sp_pr, layout, theme) {
         return outline;
     }
     let ln_has_no_fill = sp_pr
@@ -2435,47 +3604,25 @@ fn path_outline(sp_pr: &XmlNode, layout: SlideLayout) -> Outline {
             color: Color("#00000000".to_owned()),
             width: 0.0,
             dash: DashStyle::Solid,
+            dash_pattern: None,
         }
     } else {
         Outline {
             color: Color("#000000".to_owned()),
             width: 1.0,
             dash: DashStyle::Solid,
+            dash_pattern: None,
         }
     }
 }
 
-/// Read `a:srgbClr` with its optional `a:alpha` (thousandths of a percent).
-fn srgb_color(srgb: &XmlNode) -> Option<Color> {
-    let value = srgb.attr("val")?;
-    let alpha = srgb
-        .child("alpha")
-        .and_then(|alpha| alpha.attr("val"))
-        .and_then(|val| val.trim().parse::<f64>().ok())
-        .filter(|val| val.is_finite())
-        .map(|val| (val / 100_000.0).clamp(0.0, 1.0));
-    let hex = match alpha {
-        Some(alpha) if alpha < 1.0 => {
-            format!("#{value}{:02X}", (alpha * 255.0).round() as u8)
-        }
-        _ => format!("#{value}"),
-    };
-    let color = Color(hex);
-    color.is_valid().then_some(color)
+fn solid_fill(sp_pr: &XmlNode, theme: &ThemePalette) -> Option<Color> {
+    resolve_solid_fill(sp_pr, theme)
 }
 
-fn solid_fill(sp_pr: &XmlNode) -> Option<Color> {
-    if sp_pr.child("noFill").is_some() {
-        return None;
-    }
-    srgb_color(sp_pr.child("solidFill")?.child("srgbClr")?)
-}
-
-/// Read a colour node's `srgbClr`, falling back to the old default fill grey.
-fn node_color(node: &XmlNode) -> Color {
-    node.child("srgbClr")
-        .and_then(srgb_color)
-        .unwrap_or_else(|| Color("#D9D9D9".to_owned()))
+/// Read a colour node (`srgbClr`, `schemeClr`, etc.), falling back to `#D9D9D9`.
+fn node_color(node: &XmlNode, theme: &ThemePalette) -> Color {
+    resolve_first_color_child(node, theme).unwrap_or_else(|| Color("#D9D9D9".to_owned()))
 }
 
 fn attr_f64(node: &XmlNode, name: &str) -> Option<f64> {
@@ -2485,7 +3632,7 @@ fn attr_f64(node: &XmlNode, name: &str) -> Option<f64> {
 }
 
 /// `a:gradFill` into a linear or radial [`FillStyle`].
-fn extract_gradient_fill(grad: &XmlNode) -> Option<FillStyle> {
+fn extract_gradient_fill(grad: &XmlNode, theme: &ThemePalette) -> Option<FillStyle> {
     let mut stops: Vec<GradientStop> = Vec::new();
     if let Some(list) = grad.child("gsLst") {
         for stop in list.children_named("gs") {
@@ -2493,7 +3640,7 @@ fn extract_gradient_fill(grad: &XmlNode) -> Option<FillStyle> {
                 .map(|value| (value / 100_000.0).clamp(0.0, 1.0) as f32)
                 .unwrap_or(0.0);
             stops.push(GradientStop {
-                color: node_color(stop),
+                color: node_color(stop, theme),
                 position,
             });
         }
@@ -2532,7 +3679,7 @@ fn extract_gradient_fill(grad: &XmlNode) -> Option<FillStyle> {
 fn extract_picture_fill(
     blip_fill: &XmlNode,
     cx: &mut SlideContext<'_, '_>,
-) -> Option<(String, PictureFillMode)> {
+) -> Option<(String, PictureFillMode, [f32; 2])> {
     let blip = blip_fill.child("blip")?;
     let (target_path, pic_bytes) = preferred_picture(blip, cx)?;
     let file_name = std::path::Path::new(&target_path)
@@ -2542,16 +3689,26 @@ fn extract_picture_fill(
     let safe_src = sanitize_media_name(file_name, cx.existing_media_names);
     cx.existing_media_names.insert(safe_src.clone());
     cx.imported_media.push((safe_src.clone(), pic_bytes));
-    let mode = if blip_fill.child("tile").is_some() {
-        PictureFillMode::Tile
+    let (mode, tile_scale) = if let Some(tile) = blip_fill.child("tile") {
+        let sx = attr_f64(tile, "sx")
+            .map(|v| (v / 100_000.0).clamp(0.01, 100.0) as f32)
+            .unwrap_or(1.0);
+        let sy = attr_f64(tile, "sy")
+            .map(|v| (v / 100_000.0).clamp(0.01, 100.0) as f32)
+            .unwrap_or(1.0);
+        (PictureFillMode::Tile, [sx, sy])
     } else {
-        PictureFillMode::Stretch
+        (PictureFillMode::Stretch, [1.0, 1.0])
     };
-    Some((safe_src, mode))
+    Some((safe_src, mode, tile_scale))
 }
 
 /// `a:effectLst`'s outer shadow and glow, converted to slide pixels.
-fn extract_effects(sp_pr: &XmlNode, layout: SlideLayout) -> (Option<Shadow>, Option<Glow>) {
+fn extract_effects(
+    sp_pr: &XmlNode,
+    layout: SlideLayout,
+    theme: &ThemePalette,
+) -> (Option<Shadow>, Option<Glow>) {
     let Some(effects) = sp_pr.child("effectLst") else {
         return (None, None);
     };
@@ -2563,14 +3720,14 @@ fn extract_effects(sp_pr: &XmlNode, layout: SlideLayout) -> (Option<Shadow>, Opt
         let blur =
             (attr_f64(shadow, "blurRad").unwrap_or(0.0) * layout.scale).clamp(0.0, 100.0) as f32;
         Shadow {
-            color: node_color(shadow),
+            color: node_color(shadow, theme),
             offset_x,
             offset_y,
             blur,
         }
     });
     let glow = effects.child("glow").map(|glow| Glow {
-        color: node_color(glow),
+        color: node_color(glow, theme),
         size: (attr_f64(glow, "rad").unwrap_or(0.0) * layout.scale).clamp(0.0, 100.0) as f32,
     });
     (shadow, glow)
@@ -2595,6 +3752,7 @@ fn push_path_object(
     } else {
         name.to_owned()
     };
+    let frame = clamp_object_frame(frame, cx.tracker);
     cx.objects.push(Object {
         id: id.clone(),
         name,
@@ -2674,8 +3832,10 @@ fn process_connector(cxn: &XmlNode, transform: GroupTransform, cx: &mut SlideCon
     let frame = cx.layout.to_slide_px(root_x, root_y, root_w, root_h);
     let sp_pr = cxn.child("spPr");
     let xfrm = sp_pr.and_then(|p| p.child("xfrm"));
-    let (flip_h, flip_v) = xfrm_flips(xfrm);
-    let rotation = transform.rotation + xfrm_rotation(xfrm);
+    let (own_flip_h, own_flip_v) = xfrm_flips(xfrm);
+    let own_rotation = xfrm_rotation(xfrm);
+    let (rotation, obj_flip_h, obj_flip_v) =
+        transform.resolve_rotation_and_flips(own_rotation, false, false);
     let preset = sp_pr
         .and_then(|p| p.child("prstGeom"))
         .and_then(|g| g.attr("prst"));
@@ -2689,13 +3849,14 @@ fn process_connector(cxn: &XmlNode, transform: GroupTransform, cx: &mut SlideCon
             color: Color("#000000".to_owned()),
             width: 1.0,
             dash: DashStyle::Solid,
+            dash_pattern: None,
         },
-        |sp_pr| path_outline(sp_pr, *cx.layout),
+        |sp_pr| path_outline(sp_pr, *cx.layout, cx.theme),
     );
     let ln = sp_pr.and_then(|p| p.child("ln"));
     let start_end = line_end_from(ln, "headEnd");
     let end_end = line_end_from(ln, "tailEnd");
-    let points = connector_points(frame, flip_h, flip_v);
+    let points = connector_points(frame, own_flip_h, own_flip_v);
     let Some((path_frame, fractions)) = path_frame_and_points(&points) else {
         cx.tracker.report_skip(
             SkipKind::InvalidGeometry,
@@ -2707,13 +3868,16 @@ fn process_connector(cxn: &XmlNode, transform: GroupTransform, cx: &mut SlideCon
         points: fractions,
         style: PathStyle::Straight,
         closed: false,
+        subpaths: Vec::new(),
         fill: None,
+        fill_style: None,
         outline,
         start_end,
         end_end,
         connector: Some(connector),
         start_glue: None,
         end_glue: None,
+        text: None,
     };
     let connector = push_path_object(
         cx,
@@ -2721,7 +3885,7 @@ fn process_connector(cxn: &XmlNode, transform: GroupTransform, cx: &mut SlideCon
         "Connector",
         path_frame,
         path,
-        (rotation, transform.flip_h, transform.flip_v),
+        (rotation, obj_flip_h, obj_flip_v),
     );
     if start_connection.is_some() || end_connection.is_some() {
         cx.tracker.pending_connectors.push(PendingConnector {
@@ -2747,7 +3911,7 @@ fn path_point(node: &XmlNode) -> Option<Pt> {
 }
 
 fn sample_cubic(p0: Pt, p1: Pt, p2: Pt, p3: Pt, out: &mut Vec<Pt>) {
-    let steps = 16usize;
+    let steps = 32usize;
     for i in 1..=steps {
         #[allow(clippy::cast_precision_loss)]
         let t = i as f32 / steps as f32;
@@ -2761,7 +3925,7 @@ fn sample_cubic(p0: Pt, p1: Pt, p2: Pt, p3: Pt, out: &mut Vec<Pt>) {
 }
 
 fn sample_quad(p0: Pt, p1: Pt, p2: Pt, out: &mut Vec<Pt>) {
-    let steps = 12usize;
+    let steps = 24usize;
     for i in 1..=steps {
         #[allow(clippy::cast_precision_loss)]
         let t = i as f32 / steps as f32;
@@ -2781,7 +3945,7 @@ fn sample_arc(current: Pt, rx: f32, ry: f32, start_angle: f32, swing: f32, out: 
         current.0 - rx * start_angle.cos(),
         current.1 - ry * start_angle.sin(),
     );
-    let steps = ((swing.abs() / (std::f32::consts::PI / 12.0)).ceil() as usize).clamp(2, 256);
+    let steps = ((swing.abs() / (std::f32::consts::PI / 36.0)).ceil() as usize).clamp(2, 256);
     for i in 1..=steps {
         #[allow(clippy::cast_precision_loss)]
         let t = i as f32 / steps as f32;
@@ -2790,134 +3954,210 @@ fn sample_arc(current: Pt, rx: f32, ry: f32, start_angle: f32, swing: f32, out: 
     }
 }
 
-/// Flatten the first `a:path` in `a:custGeom` into slide coordinates.
-fn custom_geometry_path(
+/// Flatten all `<a:path>` elements and their subpaths in `a:custGeom` into slide paths.
+fn custom_geometry_paths(
     sp_pr: &XmlNode,
     frame: Rect,
-    tracker: &mut SlideTracker,
-    layout: SlideLayout,
-) -> Option<Path> {
-    let path_lst = sp_pr.child("custGeom")?.child("pathLst")?;
-    let mut paths = path_lst.children_named("path");
-    let first = paths.next()?;
-    if paths.next().is_some() {
-        tracker.report_skip(
-            SkipKind::CustomGeometry,
-            "Custom geometry has several subpaths; only the first was imported",
-        );
-    }
-    let local_w = parse_coord(first, "w").filter(|value| *value > 0.0);
-    let local_h = parse_coord(first, "h").filter(|value| *value > 0.0);
-    let mut local: Vec<Pt> = Vec::new();
-    let mut current: Option<Pt> = None;
-    let mut closed = false;
-    let mut extra_subpath = false;
-    for command in &first.children {
-        if local.len() >= coursecraft_course::PATH_MAX_POINTS {
-            break;
-        }
-        match command.name.as_str() {
-            "moveTo" | "lnTo" => {
-                if let Some(point) = path_point(command) {
-                    if command.name == "moveTo" && !local.is_empty() {
-                        // Several contours inside one path: keep the first only.
-                        extra_subpath = true;
-                        break;
-                    }
-                    local.push(point);
-                    current = Some(point);
-                }
-            }
-            "cubicBezTo" => {
-                let Some(from) = current else {
-                    continue;
-                };
-                let controls: Vec<Pt> = command
-                    .children_named("pt")
-                    .filter_map(|pt| Some((parse_coord(pt, "x")?, parse_coord(pt, "y")?)))
-                    .collect();
-                if let (Some(&c1), Some(&c2), Some(&end)) =
-                    (controls.first(), controls.get(1), controls.get(2))
-                {
-                    sample_cubic(from, c1, c2, end, &mut local);
-                    current = Some(end);
-                }
-            }
-            "quadBezTo" => {
-                let Some(from) = current else {
-                    continue;
-                };
-                let controls: Vec<Pt> = command
-                    .children_named("pt")
-                    .filter_map(|pt| Some((parse_coord(pt, "x")?, parse_coord(pt, "y")?)))
-                    .collect();
-                if let (Some(&c1), Some(&end)) = (controls.first(), controls.get(1)) {
-                    sample_quad(from, c1, end, &mut local);
-                    current = Some(end);
-                }
-            }
-            "arcTo" => {
-                let Some(from) = current else {
-                    continue;
-                };
-                let rx = parse_coord(command, "wR").unwrap_or(0.0);
-                let ry = parse_coord(command, "hR").unwrap_or(0.0);
-                let start = parse_coord(command, "stAng").unwrap_or(0.0) / 60_000.0
-                    * std::f32::consts::PI
-                    / 180.0;
-                let swing = parse_coord(command, "swAng").unwrap_or(0.0) / 60_000.0
-                    * std::f32::consts::PI
-                    / 180.0;
-                sample_arc(from, rx, ry, start, swing, &mut local);
-                current = local.last().copied();
-            }
-            "close" => closed = true,
-            _ => {}
-        }
-    }
-    if extra_subpath {
-        tracker.report_skip(
-            SkipKind::CustomGeometry,
-            "Custom geometry has several subpaths; only the first was imported",
-        );
-    }
-    if local.len() < 2 {
-        return None;
-    }
-    let scale_x = local_w.map_or(1.0, |w| if frame.w > 0.0 { frame.w / w } else { 1.0 });
-    let scale_y = local_h.map_or(1.0, |h| if frame.h > 0.0 { frame.h / h } else { 1.0 });
+    text_info: &ExtractedText,
+    cx: &mut SlideContext<'_, '_>,
+) -> Vec<Path> {
+    let Some(path_lst) = sp_pr.child("custGeom").and_then(|c| c.child("pathLst")) else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
     let frame_w = if frame.w > 0.0 { frame.w } else { 1.0 };
     let frame_h = if frame.h > 0.0 { frame.h } else { 1.0 };
-    let mut fractions: Vec<PathPoint> = Vec::new();
-    for &(x, y) in &local {
-        if !x.is_finite() || !y.is_finite() {
+
+    let fill_style = sp_pr
+        .child("gradFill")
+        .and_then(|grad| extract_gradient_fill(grad, cx.theme))
+        .or_else(|| {
+            sp_pr.child("blipFill").and_then(|blip_fill| {
+                extract_picture_fill(blip_fill, cx).map(|(src, mode, tile_scale)| {
+                    FillStyle::Picture {
+                        src,
+                        mode,
+                        tile_scale,
+                    }
+                })
+            })
+        });
+    let solid = if sp_pr.child("noFill").is_some() {
+        None
+    } else {
+        solid_fill(sp_pr, cx.theme)
+    };
+    let outline = path_outline(sp_pr, *cx.layout, cx.theme);
+    let ln = sp_pr.child("ln");
+    let start_end = line_end_from(ln, "headEnd");
+    let end_end = line_end_from(ln, "tailEnd");
+
+    for path_node in path_lst.children_named("path") {
+        let local_w = parse_coord(path_node, "w").filter(|value| *value > 0.0);
+        let local_h = parse_coord(path_node, "h").filter(|value| *value > 0.0);
+        let scale_x = local_w.map_or(1.0, |w| if frame.w > 0.0 { frame.w / w } else { 1.0 });
+        let scale_y = local_h.map_or(1.0, |h| if frame.h > 0.0 { frame.h / h } else { 1.0 });
+        let no_fill = path_node.attr("fill") == Some("none");
+        let no_stroke =
+            path_node.attr("stroke") == Some("0") || path_node.attr("stroke") == Some("false");
+
+        let mut contours: Vec<(Vec<Pt>, bool)> = Vec::new();
+        let mut local: Vec<Pt> = Vec::new();
+        let mut current: Option<Pt> = None;
+        let mut closed = false;
+
+        for command in &path_node.children {
+            match command.name.as_str() {
+                "moveTo" => {
+                    if let Some(point) = path_point(command) {
+                        if local.len() >= 2 {
+                            contours.push((std::mem::take(&mut local), closed));
+                            closed = false;
+                        } else {
+                            local.clear();
+                        }
+                        local.push(point);
+                        current = Some(point);
+                    }
+                }
+                "lnTo" => {
+                    if let Some(point) = path_point(command)
+                        && local.len() < coursecraft_course::PATH_MAX_POINTS
+                    {
+                        local.push(point);
+                        current = Some(point);
+                    }
+                }
+                "cubicBezTo" => {
+                    let Some(from) = current else {
+                        continue;
+                    };
+                    let controls: Vec<Pt> = command
+                        .children_named("pt")
+                        .filter_map(|pt| Some((parse_coord(pt, "x")?, parse_coord(pt, "y")?)))
+                        .collect();
+                    if let (Some(&c1), Some(&c2), Some(&end)) =
+                        (controls.first(), controls.get(1), controls.get(2))
+                    {
+                        sample_cubic(from, c1, c2, end, &mut local);
+                        current = Some(end);
+                    }
+                }
+                "quadBezTo" => {
+                    let Some(from) = current else {
+                        continue;
+                    };
+                    let controls: Vec<Pt> = command
+                        .children_named("pt")
+                        .filter_map(|pt| Some((parse_coord(pt, "x")?, parse_coord(pt, "y")?)))
+                        .collect();
+                    if let (Some(&c1), Some(&end)) = (controls.first(), controls.get(1)) {
+                        sample_quad(from, c1, end, &mut local);
+                        current = Some(end);
+                    }
+                }
+                "arcTo" => {
+                    let Some(from) = current else {
+                        continue;
+                    };
+                    let rx = parse_coord(command, "wR").unwrap_or(0.0);
+                    let ry = parse_coord(command, "hR").unwrap_or(0.0);
+                    let start = parse_coord(command, "stAng").unwrap_or(0.0) / 60_000.0
+                        * std::f32::consts::PI
+                        / 180.0;
+                    let swing = parse_coord(command, "swAng").unwrap_or(0.0) / 60_000.0
+                        * std::f32::consts::PI
+                        / 180.0;
+                    sample_arc(from, rx, ry, start, swing, &mut local);
+                    current = local.last().copied();
+                }
+                "close" => closed = true,
+                _ => {}
+            }
+        }
+        if local.len() >= 2 {
+            contours.push((local, closed));
+        }
+
+        let to_fractions = |pts: &[Pt]| -> Vec<PathPoint> {
+            pts.iter()
+                .filter(|(x, y)| x.is_finite() && y.is_finite())
+                .take(coursecraft_course::PATH_MAX_POINTS)
+                .map(|&(x, y)| {
+                    let slide_x = frame.x + x * scale_x;
+                    let slide_y = frame.y + y * scale_y;
+                    PathPoint {
+                        x: ((slide_x - frame.x) / frame_w).clamp(0.0, 1.0),
+                        y: ((slide_y - frame.y) / frame_h).clamp(0.0, 1.0),
+                    }
+                })
+                .collect()
+        };
+
+        let mut converted: Vec<(Vec<PathPoint>, bool)> = contours
+            .into_iter()
+            .filter_map(|(pts, cl)| {
+                let fracs = to_fractions(&pts);
+                (fracs.len() >= 2).then_some((fracs, cl))
+            })
+            .collect();
+        if converted.is_empty() {
             continue;
         }
-        let slide_x = frame.x + x * scale_x;
-        let slide_y = frame.y + y * scale_y;
-        fractions.push(PathPoint {
-            x: ((slide_x - frame.x) / frame_w).clamp(0.0, 1.0),
-            y: ((slide_y - frame.y) / frame_h).clamp(0.0, 1.0),
+        let (first_pts, first_closed) = converted.remove(0);
+        let subpaths = converted
+            .into_iter()
+            .map(|(points, cl)| coursecraft_course::PathSubpath { points, closed: cl })
+            .collect();
+        let path_closed = first_closed && !no_fill;
+        let path_outline = if no_stroke {
+            Outline {
+                color: outline.color.clone(),
+                width: 0.0,
+                dash: outline.dash,
+                dash_pattern: outline.dash_pattern.clone(),
+            }
+        } else {
+            outline.clone()
+        };
+        let attach_text = result.is_empty() && text_info.has_text;
+        result.push(Path {
+            points: first_pts,
+            style: PathStyle::Straight,
+            closed: path_closed,
+            subpaths,
+            fill: if path_closed {
+                solid
+                    .clone()
+                    .or_else(|| fill_style.as_ref().map(|_| Color("#D9D9D9".to_string())))
+            } else {
+                None
+            },
+            fill_style: if path_closed {
+                fill_style.clone()
+            } else {
+                None
+            },
+            outline: path_outline,
+            start_end,
+            end_end,
+            connector: None,
+            start_glue: None,
+            end_glue: None,
+            text: if attach_text {
+                Some(ShapeText {
+                    text: text_info.text.clone(),
+                    style: text_info.style.clone(),
+                    runs: text_info.runs.clone(),
+                    paragraphs: text_info.paragraphs.clone(),
+                    autofit: text_info.autofit,
+                })
+            } else {
+                None
+            },
         });
     }
-    if fractions.len() < 2 {
-        return None;
-    }
-    fractions.truncate(coursecraft_course::PATH_MAX_POINTS);
-    let outline = path_outline(sp_pr, layout);
-    let ln = sp_pr.child("ln");
-    Some(Path {
-        points: fractions,
-        style: PathStyle::Straight,
-        closed,
-        fill: if closed { solid_fill(sp_pr) } else { None },
-        outline,
-        start_end: line_end_from(ln, "headEnd"),
-        end_end: line_end_from(ln, "tailEnd"),
-        connector: None,
-        start_glue: None,
-        end_glue: None,
-    })
+    result
 }
 
 /// Process a single `<p:sp>` shape or text box.
@@ -2953,9 +4193,16 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
     }
     let own_rotation = xfrm_rotation(own_xfrm);
     let (own_flip_h, own_flip_v) = xfrm_flips(own_xfrm);
-    let object_rotation = transform.rotation + own_rotation;
-    let object_flip_h = transform.flip_h ^ own_flip_h;
-    let object_flip_v = transform.flip_v ^ own_flip_v;
+    let (object_rotation, object_flip_h, object_flip_v) =
+        transform.resolve_rotation_and_flips(own_rotation, own_flip_h, own_flip_v);
+
+    let inheritance = cx.resolver.resolve_text_inheritance(
+        cx.entries,
+        cx.layout_path.as_deref(),
+        ph.and_then(|p| p.attr("type")),
+        ph.and_then(|p| p.attr("idx")),
+        is_any_ph,
+    );
 
     let mut text_info = sp
         .child("txBody")
@@ -2967,6 +4214,8 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                     slide_rels: cx.slide_rels,
                     slide_parts: cx.slide_parts,
                 }),
+                cx.theme,
+                Some(&inheritance),
             )
         })
         .unwrap_or(ExtractedText {
@@ -3102,30 +4351,41 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                 points: fractions,
                 style: PathStyle::Straight,
                 closed: false,
+                subpaths: Vec::new(),
                 fill: None,
-                outline: path_outline(sp_pr, *cx.layout),
+                fill_style: None,
+                outline: path_outline(sp_pr, *cx.layout, cx.theme),
                 start_end: line_end_from(ln, "headEnd"),
                 end_end: line_end_from(ln, "tailEnd"),
                 connector: None,
                 start_glue: None,
                 end_glue: None,
+                text: None,
             };
+            let (line_rot, line_fh, line_fv) =
+                transform.resolve_rotation_and_flips(own_rotation, false, false);
             push_path_object(
                 cx,
                 &name,
                 "Line",
                 path_frame,
                 path,
-                (object_rotation, transform.flip_h, transform.flip_v),
+                (line_rot, line_fh, line_fv),
             );
         }
         return;
     }
 
-    // `a:custGeom/a:pathLst` becomes a drawn path with the first subpath.
+    // `a:custGeom/a:pathLst` becomes drawn path(s) with all subpaths, curves, fills and text.
     if sp_pr.child("custGeom").is_some() {
-        match custom_geometry_path(sp_pr, frame, cx.tracker, *cx.layout) {
-            Some(path) => {
+        let paths = custom_geometry_paths(sp_pr, frame, &text_info, cx);
+        if paths.is_empty() {
+            cx.tracker.report_skip(
+                SkipKind::CustomGeometry,
+                "Custom geometry shape had no usable path",
+            );
+        } else {
+            for path in paths {
                 push_path_object(
                     cx,
                     &name,
@@ -3135,10 +4395,6 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                     (object_rotation, object_flip_h, object_flip_v),
                 );
             }
-            None => cx.tracker.report_skip(
-                SkipKind::CustomGeometry,
-                "Custom geometry shape had no usable path",
-            ),
         }
         return;
     }
@@ -3150,8 +4406,63 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
         return;
     }
 
+    let is_tx_box = sp
+        .child("nvSpPr")
+        .and_then(|nv| nv.child("cNvSpPr"))
+        .and_then(|c| c.attr("txBox"))
+        == Some("1");
+
     // Determine what objects to emit
     match (shape_info.kind, shape_info.fill) {
+        (Some(ShapeKind::Rectangle), Some(ref fill))
+            if is_tx_box
+                && fill.0 == "#00000000"
+                && shape_info.fill_style.is_none()
+                && text_info.has_text =>
+        {
+            cx.tracker.text_count = cx.tracker.text_count.saturating_add(1);
+            let text_id = format!("text{}", cx.tracker.text_count);
+            let text_name = if name.is_empty() {
+                format!("Text {}", cx.tracker.text_count)
+            } else {
+                name
+            };
+            let frame = clamp_object_frame(frame, cx.tracker);
+            cx.objects.push(Object {
+                id: text_id,
+                name: text_name,
+                kind: ObjectKind::Text {
+                    text: text_info.text,
+                    style: text_info.style,
+                    runs: text_info.runs,
+                    paragraphs: text_info.paragraphs,
+                    autofit: text_info.autofit,
+                    text_style: None,
+                    outline: shape_info.outline,
+                },
+                frame,
+                timing: Timing::default(),
+                states: Vec::new(),
+                initial_state: "normal".to_string(),
+                entrance: None,
+                exit: None,
+                motion_paths: Vec::new(),
+                focus_order: None,
+                decorative: false,
+                description: None,
+                group: None,
+                panel: None,
+                rotation: normalized_pptx_rotation(object_rotation),
+                flip_h: object_flip_h,
+                flip_v: object_flip_v,
+                opacity: 1.0,
+                shadow: shape_info.shadow,
+                glow: shape_info.glow,
+                drag: None,
+                locked: false,
+                editor_hidden: false,
+            });
+        }
         (Some(sk), Some(fill)) => {
             // Styled shape. Its text lives inside it so it moves and imports
             // with the shape.
@@ -3174,6 +4485,7 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                 None
             };
 
+            let frame = clamp_object_frame(frame, cx.tracker);
             cx.objects.push(Object {
                 id: shape_id,
                 name: shape_name,
@@ -3224,6 +4536,7 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                     name
                 };
 
+                let frame = clamp_object_frame(frame, cx.tracker);
                 cx.objects.push(Object {
                     id: text_id,
                     name: text_name,
@@ -3234,6 +4547,7 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                         paragraphs: text_info.paragraphs,
                         autofit: text_info.autofit,
                         text_style: None,
+                        outline: shape_info.outline,
                     },
                     frame,
                     timing: Timing::default(),
@@ -3278,6 +4592,7 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                     None
                 };
 
+                let frame = clamp_object_frame(frame, cx.tracker);
                 cx.objects.push(Object {
                     id: shape_id,
                     name: shape_name,
@@ -3328,6 +4643,7 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                     name
                 };
 
+                let frame = clamp_object_frame(frame, cx.tracker);
                 cx.objects.push(Object {
                     id: text_id,
                     name: text_name,
@@ -3338,6 +4654,7 @@ fn process_shape(sp: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<
                         paragraphs: text_info.paragraphs,
                         autofit: text_info.autofit,
                         text_style: None,
+                        outline: shape_info.outline,
                     },
                     frame,
                     timing: Timing::default(),
@@ -3398,8 +4715,8 @@ fn extract_shape_info(sp_pr: &XmlNode, cx: &mut SlideContext<'_, '_>) -> Extract
     if sp_pr.child("noFill").is_some() {
         fill = Some(Color("#00000000".to_string()));
     } else if let Some(solid) = sp_pr.child("solidFill") {
-        if let Some(srgb) = solid.child("srgbClr") {
-            fill = Some(srgb_color(srgb).unwrap_or_else(|| Color("#D9D9D9".to_string())));
+        if let Some(resolved) = resolve_first_color_child(solid, cx.theme) {
+            fill = Some(resolved);
         } else if solid.child("schemeClr").is_some() {
             cx.tracker.report_skip(
                 SkipKind::SchemeColor,
@@ -3410,7 +4727,7 @@ fn extract_shape_info(sp_pr: &XmlNode, cx: &mut SlideContext<'_, '_>) -> Extract
             fill = Some(Color("#D9D9D9".to_string()));
         }
     } else if let Some(grad) = sp_pr.child("gradFill") {
-        fill_style = extract_gradient_fill(grad);
+        fill_style = extract_gradient_fill(grad, cx.theme);
         if fill_style.is_some() {
             fill = Some(Color("#D9D9D9".to_string()));
         } else {
@@ -3422,7 +4739,11 @@ fn extract_shape_info(sp_pr: &XmlNode, cx: &mut SlideContext<'_, '_>) -> Extract
         }
     } else if let Some(blip_fill) = sp_pr.child("blipFill") {
         fill_style =
-            extract_picture_fill(blip_fill, cx).map(|(src, mode)| FillStyle::Picture { src, mode });
+            extract_picture_fill(blip_fill, cx).map(|(src, mode, tile_scale)| FillStyle::Picture {
+                src,
+                mode,
+                tile_scale,
+            });
         fill = Some(Color("#D9D9D9".to_string()));
         if fill_style.is_none() {
             cx.tracker.report_skip(
@@ -3430,16 +4751,29 @@ fn extract_shape_info(sp_pr: &XmlNode, cx: &mut SlideContext<'_, '_>) -> Extract
                 "Picture fill could not be read; replaced with the default fill",
             );
         }
-    } else if sp_pr.child("pattFill").is_some() {
-        cx.tracker.report_skip(
-            SkipKind::UnsupportedFill,
-            "Pattern fill replaced with default fill",
-        );
-        fill = Some(Color("#D9D9D9".to_string()));
+    } else if let Some(patt) = sp_pr.child("pattFill") {
+        let fg = patt
+            .child("fgClr")
+            .and_then(|n| resolve_first_color_child(n, cx.theme))
+            .unwrap_or_else(|| Color("#000000".to_string()));
+        let bg = patt
+            .child("bgClr")
+            .and_then(|n| resolve_first_color_child(n, cx.theme))
+            .unwrap_or_else(|| Color("#FFFFFF".to_string()));
+        let preset = patt.attr("prst").unwrap_or("pct50").to_string();
+        let weight = match preset.as_str() {
+            "pct50" | "smCheck" | "lgCheck" => 0.50,
+            "pct25" | "ltUpDiag" | "ltDnDiag" | "dashVert" | "dashHorz" => 0.25,
+            "wdUpDiag" | "wdDnDiag" | "cross" | "diagCross" | "trellis" => 0.40,
+            "dotGrid" | "pct20" | "pct10" => 0.20,
+            _ => 0.35,
+        };
+        fill = Some(blend_hex_colors(&bg.0, &fg.0, weight));
+        fill_style = Some(FillStyle::Pattern { preset, fg, bg });
     }
 
-    let outline = extract_outline(sp_pr, *cx.layout);
-    let (shadow, glow) = extract_effects(sp_pr, *cx.layout);
+    let outline = extract_outline(sp_pr, *cx.layout, cx.theme);
+    let (shadow, glow) = extract_effects(sp_pr, *cx.layout, cx.theme);
 
     ExtractedShape {
         kind,
@@ -3500,6 +4834,7 @@ fn map_adjust(kind: ShapeKind, preset: &str, av: Option<&XmlNode>) -> Vec<f32> {
     let value = |name: &str, fallback: f64| guide_or(av, name, fallback);
     let raw: Vec<f32> = match preset {
         "roundRect" | "snip1Rect" | "round1Rect" => vec![fraction(value("adj", 16667.0))],
+        "triangle" => vec![fraction(value("adj", 50000.0))],
         "snip2SameRect" | "snip2DiagRect" | "snipRoundRect" | "round2SameRect"
         | "round2DiagRect" => vec![
             fraction(value("adj1", 16667.0)),
@@ -3584,7 +4919,7 @@ fn map_adjust(kind: ShapeKind, preset: &str, av: Option<&XmlNode>) -> Vec<f32> {
 
 /// Read `<a:ln>` into an [`Outline`]. A missing line, `<a:noFill/>` inside it, or
 /// an empty `<a:ln>` that sets neither a colour nor a width means no outline. Widths are EMU, converted to slide pixels (96 dpi).
-fn extract_outline(sp_pr: &XmlNode, layout: SlideLayout) -> Option<Outline> {
+fn extract_outline(sp_pr: &XmlNode, layout: SlideLayout, theme: &ThemePalette) -> Option<Outline> {
     let ln = sp_pr.child("ln")?;
     if ln.child("noFill").is_some() {
         return None;
@@ -3592,11 +4927,7 @@ fn extract_outline(sp_pr: &XmlNode, layout: SlideLayout) -> Option<Outline> {
     if ln.child("solidFill").is_none() && ln.attr("w").is_none() {
         return None;
     }
-    let color = ln
-        .child("solidFill")
-        .and_then(|solid| solid.child("srgbClr"))
-        .and_then(srgb_color)
-        .unwrap_or_else(|| Color("#000000".to_string()));
+    let color = resolve_solid_fill(ln, theme).unwrap_or_else(|| Color("#000000".to_string()));
     // PowerPoint stores line width in EMU; `layout.scale` converts EMU to the
     // 1280x720 slide pixels every other frame measurement uses.
     let width = ln
@@ -3605,47 +4936,250 @@ fn extract_outline(sp_pr: &XmlNode, layout: SlideLayout) -> Option<Outline> {
         .filter(|w| w.is_finite() && *w >= 0.0)
         .map_or(1.0, |emu| (emu * layout.scale) as f32)
         .clamp(0.0, 50.0);
-    let dash = match ln.child("prstDash").and_then(|dash| dash.attr("val")) {
-        Some("dash" | "lgDash" | "sysDash") => DashStyle::Dash,
-        Some("dot" | "sysDot") => DashStyle::Dot,
-        _ => DashStyle::Solid,
-    };
-    Some(Outline { color, width, dash })
+    let (dash, dash_pattern) = extract_dash_from_ln(ln);
+    Some(Outline {
+        color,
+        width,
+        dash,
+        dash_pattern,
+    })
+}
+
+#[derive(Default)]
+struct RunDefaults {
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    strikethrough: Option<bool>,
+    baseline: Option<Baseline>,
+    size: Option<f32>,
+    color: Option<Color>,
+    font: Option<String>,
+}
+
+fn parse_run_props(
+    r_pr: &XmlNode,
+    layout: SlideLayout,
+    theme: &ThemePalette,
+    out: &mut RunDefaults,
+) {
+    if out.font.is_none()
+        && let Some(typeface) = r_pr
+            .child("latin")
+            .and_then(|latin| latin.attr("typeface"))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+    {
+        out.font = Some(typeface.to_string());
+    }
+    if out.bold.is_none()
+        && let Some(b) = r_pr.attr("b")
+    {
+        out.bold = Some(b == "1" || b == "true");
+    }
+    if out.italic.is_none()
+        && let Some(i) = r_pr.attr("i")
+    {
+        out.italic = Some(i == "1" || i == "true");
+    }
+    if out.underline.is_none()
+        && let Some(u) = r_pr.attr("u")
+    {
+        out.underline = Some(u != "none");
+    }
+    if out.strikethrough.is_none()
+        && let Some(strike) = r_pr.attr("strike")
+    {
+        out.strikethrough = Some(strike != "noStrike");
+    }
+    if out.baseline.is_none()
+        && let Some(base_str) = r_pr.attr("baseline")
+        && let Ok(val) = base_str.trim().parse::<f64>()
+        && val.is_finite()
+    {
+        out.baseline = Some(if val > 0.0 {
+            Baseline::Superscript
+        } else if val < 0.0 {
+            Baseline::Subscript
+        } else {
+            Baseline::Normal
+        });
+    }
+    if out.size.is_none()
+        && let Some(sz_str) = r_pr.attr("sz")
+        && let Ok(sz_val) = sz_str.trim().parse::<f64>()
+    {
+        let pt = sz_val / 100.0;
+        let px = (pt * (4.0 / 3.0) * layout.font_scale()).clamp(1.0, 400.0);
+        if pt > 0.0 && px.is_finite() {
+            out.size = Some(px as f32);
+        }
+    }
+    if out.color.is_none()
+        && let Some(col) = resolve_solid_fill(r_pr, theme)
+    {
+        out.color = Some(col);
+    }
+}
+
+fn lvl_p_pr_name(level: u8) -> &'static str {
+    match level {
+        0 => "lvl1pPr",
+        1 => "lvl2pPr",
+        2 => "lvl3pPr",
+        3 => "lvl4pPr",
+        4 => "lvl5pPr",
+        5 => "lvl6pPr",
+        6 => "lvl7pPr",
+        7 => "lvl8pPr",
+        _ => "lvl9pPr",
+    }
 }
 
 /// Extract text runs and styling from `<p:txBody>`.
+fn extract_body_props(
+    tx_body: &XmlNode,
+    layout: SlideLayout,
+    inheritance: Option<&TextInheritance>,
+) -> (
+    VAlign,
+    Autofit,
+    bool,
+    Option<coursecraft_course::TextInsets>,
+    coursecraft_course::TextDirection,
+) {
+    let mut valign = VAlign::Top;
+    let mut autofit = Autofit::None;
+    let mut wrap = true;
+    let mut insets: Option<coursecraft_course::TextInsets> = None;
+    let mut direction = coursecraft_course::TextDirection::Horizontal;
+    let mut found_anchor = false;
+    let mut found_autofit = false;
+    let mut found_wrap = false;
+    let mut found_insets = false;
+    let mut found_dir = false;
+    for body_pr in tx_body
+        .child("bodyPr")
+        .into_iter()
+        .chain(inheritance.into_iter().flat_map(|inh| inh.body_pr.iter()))
+    {
+        if !found_anchor && let Some(anchor) = body_pr.attr("anchor") {
+            valign = match anchor {
+                "ctr" => VAlign::Middle,
+                "b" => VAlign::Bottom,
+                _ => VAlign::Top,
+            };
+            found_anchor = true;
+        }
+        if !found_autofit && body_pr.child("normAutofit").is_some() {
+            autofit = Autofit::Shrink;
+            found_autofit = true;
+        }
+        if !found_wrap && let Some(w) = body_pr.attr("wrap") {
+            wrap = w != "none";
+            found_wrap = true;
+        }
+        if !found_insets
+            && (body_pr.attr("lIns").is_some()
+                || body_pr.attr("tIns").is_some()
+                || body_pr.attr("rIns").is_some()
+                || body_pr.attr("bIns").is_some())
+        {
+            let emu_to_px = |attr_name: &str, default_emu: f64| -> f32 {
+                let emu = body_pr
+                    .attr(attr_name)
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .unwrap_or(default_emu);
+                (emu * layout.scale) as f32
+            };
+            insets = Some(coursecraft_course::TextInsets {
+                left: emu_to_px("lIns", 91440.0),
+                top: emu_to_px("tIns", 45720.0),
+                right: emu_to_px("rIns", 91440.0),
+                bottom: emu_to_px("bIns", 45720.0),
+            });
+            found_insets = true;
+        }
+        if !found_dir && let Some(vert) = body_pr.attr("vert") {
+            direction = match vert {
+                "vert" | "eaVert" => coursecraft_course::TextDirection::Vertical,
+                "vert270" => coursecraft_course::TextDirection::Vertical270,
+                _ => coursecraft_course::TextDirection::Horizontal,
+            };
+            found_dir = true;
+        }
+    }
+    if !found_insets && tx_body.child("bodyPr").is_some() {
+        insets = Some(coursecraft_course::TextInsets {
+            left: (91_440.0 * layout.scale) as f32,
+            top: (45_720.0 * layout.scale) as f32,
+            right: (91_440.0 * layout.scale) as f32,
+            bottom: (45_720.0 * layout.scale) as f32,
+        });
+    }
+    (valign, autofit, wrap, insets, direction)
+}
+
 fn extract_text_runs(
     tx_body: &XmlNode,
     layout: SlideLayout,
     links: Option<TextLinkContext<'_>>,
+    theme: &ThemePalette,
+    inheritance: Option<&TextInheritance>,
 ) -> ExtractedText {
-    let mut valign = VAlign::Top;
-    let mut autofit = Autofit::None;
-    if let Some(body_pr) = tx_body.child("bodyPr") {
-        match body_pr.attr("anchor") {
-            Some("ctr") => valign = VAlign::Middle,
-            Some("b") => valign = VAlign::Bottom,
-            _ => valign = VAlign::Top,
-        }
-        if body_pr.child("normAutofit").is_some() {
-            autofit = Autofit::Shrink;
-        }
-    }
+    let (valign, autofit, wrap, insets, direction) =
+        extract_body_props(tx_body, layout, inheritance);
 
     let mut align = Align::Left;
     let mut first_paragraph = true;
     let mut runs: Vec<TextRun> = Vec::new();
     let mut paragraphs: Vec<Paragraph> = Vec::new();
+    let default_18pt_px = (18.0 * (4.0 / 3.0) * layout.font_scale()).clamp(1.0, 400.0) as f32;
 
     for p in tx_body.children_named("p") {
         let p_pr = p.child("pPr");
-        if first_paragraph {
-            if let Some(p_pr) = p_pr {
-                match p_pr.attr("algn") {
-                    Some("ctr") => align = Align::Center,
-                    Some("r") => align = Align::Right,
-                    _ => align = Align::Left,
+        let raw_level = p_pr
+            .and_then(|pr| pr.attr("lvl"))
+            .and_then(|v| v.trim().parse::<u8>().ok())
+            .unwrap_or(0)
+            .min(8);
+        let lvl_tag = lvl_p_pr_name(raw_level);
+
+        // Build priority chain of pPr nodes for this paragraph.
+        let mut p_pr_chain: Vec<&XmlNode> = Vec::new();
+        if let Some(pr) = p_pr {
+            p_pr_chain.push(pr);
+        }
+        if let Some(ls) = tx_body.child("lstStyle") {
+            if let Some(lvl_pr) = ls.child(lvl_tag) {
+                p_pr_chain.push(lvl_pr);
+            } else if raw_level == 0
+                && let Some(def_pr) = ls.child("defPPr")
+            {
+                p_pr_chain.push(def_pr);
+            }
+        }
+        if let Some(inh) = inheritance {
+            for ls in &inh.lst_styles {
+                if let Some(lvl_pr) = ls.child(lvl_tag) {
+                    p_pr_chain.push(lvl_pr);
+                } else if raw_level == 0
+                    && let Some(def_pr) = ls.child("defPPr")
+                {
+                    p_pr_chain.push(def_pr);
                 }
+            }
+        }
+
+        if first_paragraph {
+            if let Some(algn) = p_pr_chain.iter().find_map(|pr| pr.attr("algn")) {
+                align = match algn {
+                    "ctr" => Align::Center,
+                    "r" => Align::Right,
+                    "just" | "justLow" | "dist" => Align::Justify,
+                    _ => Align::Left,
+                };
             }
             first_paragraph = false;
         } else {
@@ -3669,55 +5203,30 @@ fn extract_text_runs(
             }
         }
 
-        paragraphs.push(paragraph_from(p_pr, layout));
+        let mut para_defaults = RunDefaults::default();
+        for pr in &p_pr_chain {
+            if let Some(def_r_pr) = pr.child("defRPr") {
+                parse_run_props(def_r_pr, layout, theme, &mut para_defaults);
+            }
+        }
+
+        let para_base_px = para_defaults.size.unwrap_or(default_18pt_px);
+        paragraphs.push(paragraph_from(
+            &p_pr_chain,
+            raw_level.min(4),
+            layout,
+            theme,
+            para_base_px,
+        ));
 
         for child in &p.children {
             match child.name.as_str() {
                 "r" => {
-                    let mut bold = None;
-                    let mut italic = None;
-                    let mut underline = None;
-                    let mut size = None;
-                    let mut color = None;
+                    let mut run_props = RunDefaults::default();
                     let mut link = None;
-                    let mut font = None;
 
                     if let Some(r_pr) = child.child("rPr") {
-                        if let Some(typeface) = r_pr
-                            .child("latin")
-                            .and_then(|latin| latin.attr("typeface"))
-                            .map(str::trim)
-                            .filter(|name| !name.is_empty())
-                        {
-                            font = Some(typeface.to_string());
-                        }
-                        if let Some(b) = r_pr.attr("b") {
-                            bold = Some(b == "1" || b == "true");
-                        }
-                        if let Some(i) = r_pr.attr("i") {
-                            italic = Some(i == "1" || i == "true");
-                        }
-                        if let Some(u) = r_pr.attr("u") {
-                            underline = Some(u != "none");
-                        }
-                        if let Some(sz_str) = r_pr.attr("sz")
-                            && let Ok(sz_val) = sz_str.trim().parse::<f64>()
-                        {
-                            let pt = sz_val / 100.0;
-                            let px = (pt * (4.0 / 3.0) * layout.font_scale()).clamp(1.0, 400.0);
-                            if pt > 0.0 && px.is_finite() {
-                                size = Some(px as f32);
-                            }
-                        }
-                        if let Some(solid) = r_pr.child("solidFill")
-                            && let Some(srgb) = solid.child("srgbClr")
-                            && let Some(val) = srgb.attr("val")
-                        {
-                            let col = Color(format!("#{val}"));
-                            if col.is_valid() {
-                                color = Some(col);
-                            }
-                        }
+                        parse_run_props(r_pr, layout, theme, &mut run_props);
                         link = links.and_then(|links| resolve_run_link(r_pr, links));
                     }
 
@@ -3725,15 +5234,15 @@ fn extract_text_runs(
                     if !t_text.is_empty() {
                         runs.push(TextRun {
                             text: t_text.to_string(),
-                            bold,
-                            italic,
-                            underline,
-                            size,
-                            color,
+                            bold: run_props.bold.or(para_defaults.bold),
+                            italic: run_props.italic.or(para_defaults.italic),
+                            underline: run_props.underline.or(para_defaults.underline),
+                            size: run_props.size.or(para_defaults.size),
+                            color: run_props.color.or_else(|| para_defaults.color.clone()),
                             link,
-                            font,
-                            strikethrough: None,
-                            baseline: None,
+                            font: run_props.font.or_else(|| para_defaults.font.clone()),
+                            strikethrough: run_props.strikethrough.or(para_defaults.strikethrough),
+                            baseline: run_props.baseline.or(para_defaults.baseline),
                             letter_spacing: None,
                         });
                     }
@@ -3765,8 +5274,8 @@ fn extract_text_runs(
     let concat_text: String = runs.iter().map(|r| r.text.as_str()).collect();
     let has_text = !concat_text.trim().is_empty();
 
-    // Paragraph default: the first explicit run size, else the course default.
-    let default_size = runs.iter().find_map(|r| r.size).unwrap_or(16.0);
+    // Paragraph default: the first explicit/inherited run size, else 18pt default.
+    let default_size = runs.iter().find_map(|r| r.size).unwrap_or(default_18pt_px);
     let style = TextStyle {
         font: "Inter".to_string(),
         size: default_size,
@@ -3776,8 +5285,11 @@ fn extract_text_runs(
         underline: false,
         align,
         valign,
+        wrap,
+        insets,
+        direction,
         strikethrough: false,
-        baseline: coursecraft_course::Baseline::Normal,
+        baseline: Baseline::Normal,
         letter_spacing: 0.0,
     };
 
@@ -3791,39 +5303,116 @@ fn extract_text_runs(
     }
 }
 
-/// Read one paragraph's list, level and spacing.
-fn paragraph_from(p_pr: Option<&XmlNode>, layout: SlideLayout) -> Paragraph {
-    let Some(p_pr) = p_pr else {
+fn map_number_scheme(val: Option<&str>) -> Option<NumberScheme> {
+    match val? {
+        "arabicPeriod" => Some(NumberScheme::ArabicPeriod),
+        "arabicParenR" => Some(NumberScheme::ArabicParenR),
+        "alphaLcPeriod" => Some(NumberScheme::AlphaLcPeriod),
+        "alphaLcParenR" => Some(NumberScheme::AlphaLcParenR),
+        "alphaUcPeriod" => Some(NumberScheme::AlphaUcPeriod),
+        "romanLcPeriod" => Some(NumberScheme::RomanLcPeriod),
+        "romanUcPeriod" => Some(NumberScheme::RomanUcPeriod),
+        _ => None,
+    }
+}
+
+/// Read one paragraph's list, level, bullet/numbering and spacing from its `pPr` chain.
+fn paragraph_from(
+    p_pr_chain: &[&XmlNode],
+    level: u8,
+    layout: SlideLayout,
+    theme: &ThemePalette,
+    para_base_px: f32,
+) -> Paragraph {
+    if p_pr_chain.is_empty() {
         return Paragraph::default();
-    };
-    let level = p_pr
-        .attr("lvl")
-        .and_then(|value| value.trim().parse::<u8>().ok())
-        .map(|value| value.min(4))
-        .unwrap_or(0);
-    let list = if p_pr.child("buNone").is_some() {
-        ListKind::None
-    } else if p_pr.child("buChar").is_some() {
-        ListKind::Bullet
-    } else if p_pr.child("buAutoNum").is_some() {
-        ListKind::Number
-    } else {
-        ListKind::None
-    };
-    let line_spacing = p_pr
-        .child("lnSpc")
-        .and_then(|spc| spc.child("spcPct"))
-        .and_then(|pct| pct.attr("val"))
-        .and_then(|value| value.trim().parse::<f64>().ok())
-        .map(|value| (value / 100_000.0) as f32)
+    }
+    let mut list = ListKind::None;
+    let mut bullet = None;
+    let mut number_scheme = None;
+    let mut start_at = None;
+    for pr in p_pr_chain {
+        if pr.child("buNone").is_some() {
+            list = ListKind::None;
+            break;
+        } else if let Some(bu_char) = pr.child("buChar") {
+            list = ListKind::Bullet;
+            bullet = bu_char.attr("char").map(str::to_owned);
+            break;
+        } else if let Some(bu_num) = pr.child("buAutoNum") {
+            list = ListKind::Number;
+            number_scheme = map_number_scheme(bu_num.attr("type"));
+            start_at = bu_num
+                .attr("startAt")
+                .and_then(|v| v.trim().parse::<u32>().ok())
+                .filter(|&v| v >= 1);
+            break;
+        }
+    }
+
+    let bullet_color = p_pr_chain
+        .iter()
+        .find_map(|pr| pr.child("buClr"))
+        .and_then(|clr| resolve_first_color_child(clr, theme));
+
+    let bullet_size = p_pr_chain.iter().find_map(|pr| {
+        if let Some(pct) = pr
+            .child("buSzPct")
+            .and_then(|n| n.attr("val"))
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+        {
+            let px = (f64::from(para_base_px) * (pct / 100_000.0)).clamp(1.0, 400.0);
+            Some(px as f32)
+        } else if let Some(pts) = pr
+            .child("buSzPts")
+            .and_then(|n| n.attr("val"))
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+        {
+            let px = (pts / 100.0 * (4.0 / 3.0) * layout.font_scale()).clamp(1.0, 400.0);
+            Some(px as f32)
+        } else {
+            None
+        }
+    });
+
+    let line_spacing = p_pr_chain
+        .iter()
+        .find_map(|pr| {
+            let spc = pr.child("lnSpc")?;
+            if let Some(val) = spc
+                .child("spcPct")
+                .and_then(|pct| pct.attr("val"))
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|v| v.is_finite())
+            {
+                return Some((val / 100_000.0) as f32);
+            }
+            if let Some(pts) = spc
+                .child("spcPts")
+                .and_then(|p| p.attr("val"))
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v > 0.0)
+            {
+                let exact_px = (pts / 100.0) * (4.0 / 3.0) * layout.font_scale();
+                let base_px = f64::from(para_base_px.max(1.0));
+                return Some((exact_px / base_px) as f32);
+            }
+            None
+        })
         .filter(|value| value.is_finite())
         .map(|value| value.clamp(0.8, 3.0))
         .unwrap_or(1.0);
     let space = |name: &str| -> f32 {
-        p_pr.child(name)
-            .and_then(|spc| spc.child("spcPts"))
-            .and_then(|pts| pts.attr("val"))
-            .and_then(|value| value.trim().parse::<f64>().ok())
+        p_pr_chain
+            .iter()
+            .find_map(|pr| {
+                pr.child(name)
+                    .and_then(|spc| spc.child("spcPts"))
+                    .and_then(|pts| pts.attr("val"))
+                    .and_then(|value| value.trim().parse::<f64>().ok())
+            })
             .filter(|value| value.is_finite() && *value >= 0.0)
             .map(|value| (value / 100.0 * (4.0 / 3.0) * layout.font_scale()) as f32)
             .map(|value| value.clamp(0.0, 200.0))
@@ -3835,6 +5424,11 @@ fn paragraph_from(p_pr: Option<&XmlNode>, layout: SlideLayout) -> Paragraph {
         line_spacing,
         space_before: space("spcBef"),
         space_after: space("spcAft"),
+        bullet,
+        bullet_color,
+        bullet_size,
+        number_scheme,
+        start_at,
     }
 }
 
@@ -3993,12 +5587,14 @@ fn preferred_picture(blip: &XmlNode, cx: &SlideContext<'_, '_>) -> Option<(Strin
     picture_bytes_are_valid(path, &bytes).then(|| (path.to_owned(), bytes.to_vec()))
 }
 
-/// Process a `<p:pic>` picture element.
+/// Process a `<p:pic>` picture element (or video/audio media picture).
 fn process_picture(pic: &XmlNode, transform: GroupTransform, cx: &mut SlideContext<'_, '_>) {
-    // Check for media (video or audio) inside pic
-    if pic.find_descendant("videoFile").is_some() || pic.find_descendant("audioFile").is_some() {
+    let has_audio = pic.find_descendant("audioFile").is_some();
+    let has_video =
+        pic.find_descendant("videoFile").is_some() || pic.find_descendant("media").is_some();
+    if has_audio && !has_video {
         cx.tracker
-            .report_skip(SkipKind::Media, "Audio/video picture skipped");
+            .report_skip(SkipKind::Media, "Audio picture skipped");
         return;
     }
 
@@ -4020,9 +5616,9 @@ fn process_picture(pic: &XmlNode, transform: GroupTransform, cx: &mut SlideConte
     };
 
     let (own_flip_h, own_flip_v) = xfrm_flips(Some(xfrm));
-    let rotation = transform.rotation + xfrm_rotation(Some(xfrm));
-    let flip_h = transform.flip_h ^ own_flip_h;
-    let flip_v = transform.flip_v ^ own_flip_v;
+    let own_rotation = xfrm_rotation(Some(xfrm));
+    let (rotation, flip_h, flip_v) =
+        transform.resolve_rotation_and_flips(own_rotation, own_flip_h, own_flip_v);
 
     let (Some(off_node), Some(ext_node)) = (xfrm.child("off"), xfrm.child("ext")) else {
         cx.tracker
@@ -4046,49 +5642,135 @@ fn process_picture(pic: &XmlNode, transform: GroupTransform, cx: &mut SlideConte
     let (root_x, root_y, root_w, root_h) = transform.apply(emu_x, emu_y, emu_w, emu_h);
     let frame = cx.layout.to_slide_px(root_x, root_y, root_w, root_h);
 
-    let Some(blip_fill) = pic.child("blipFill") else {
-        return;
-    };
-    let Some(blip) = blip_fill.child("blip") else {
-        return;
-    };
-    let Some(embed_id) = blip.attr("r:embed").or_else(|| blip.attr("embed")) else {
-        return;
-    };
-
-    if !cx.slide_rels.contains_key(embed_id) {
-        cx.tracker
-            .report_skip(SkipKind::ExternalTarget, "Missing picture relationship");
-        return;
-    }
-
-    if cx
-        .slide_rels
-        .get(embed_id)
-        .is_some_and(|rel| rel.is_external)
+    let mut poster_src: Option<String> = None;
+    let mut crop: Option<coursecraft_course::CropRect> = None;
+    if let Some(blip_fill) = pic.child("blipFill")
+        && let Some(blip) = blip_fill.child("blip")
+        && let Some(embed_id) = blip.attr("r:embed").or_else(|| blip.attr("embed"))
     {
-        cx.tracker
-            .report_skip(SkipKind::ExternalTarget, "External picture target skipped");
+        if !cx.slide_rels.contains_key(embed_id)
+            || cx
+                .slide_rels
+                .get(embed_id)
+                .is_some_and(|rel| rel.is_external)
+        {
+            if !has_video {
+                cx.tracker.report_skip(
+                    SkipKind::ExternalTarget,
+                    "Missing or external picture target",
+                );
+                return;
+            }
+        } else if let Some((target_path, pic_bytes)) = preferred_picture(blip, cx) {
+            let file_name = std::path::Path::new(&target_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image.png");
+            let safe_src = sanitize_media_name(file_name, cx.existing_media_names);
+            cx.existing_media_names.insert(safe_src.clone());
+            cx.imported_media.push((safe_src.clone(), pic_bytes));
+            poster_src = Some(safe_src);
+            crop = src_rect_crop(blip_fill);
+        } else if !has_video {
+            cx.tracker.report_skip(
+                SkipKind::UndecodablePicture,
+                "Picture file not found or undecodable",
+            );
+            return;
+        }
+    } else if !has_video {
         return;
     }
 
-    let Some((target_path, pic_bytes)) = preferred_picture(blip, cx) else {
+    let outline = extract_outline(sp_pr, *cx.layout, cx.theme);
+    let shape = sp_pr
+        .child("prstGeom")
+        .and_then(|prst| prst.attr("prst"))
+        .and_then(coursecraft_course::shape_kind_for_ooxml)
+        .filter(|sk| *sk != ShapeKind::Rectangle);
+    let frame = clamp_object_frame(frame, cx.tracker);
+
+    if has_video {
+        let vid_rid = pic
+            .find_descendant("media")
+            .and_then(|m| m.attr("r:embed").or_else(|| m.attr("embed")))
+            .or_else(|| {
+                pic.find_descendant("videoFile").and_then(|v| {
+                    v.attr("r:link")
+                        .or_else(|| v.attr("link"))
+                        .or_else(|| v.attr("r:embed"))
+                        .or_else(|| v.attr("embed"))
+                })
+            });
+        let video_part = vid_rid
+            .and_then(|rid| cx.slide_rels.get(rid))
+            .filter(|rel| !rel.is_external)
+            .and_then(|rel| rel.target.as_deref())
+            .and_then(|target| {
+                cx.entries
+                    .get(target)
+                    .map(|bytes| (target.to_string(), bytes.to_vec()))
+            });
+        if let Some((vid_path, vid_bytes)) = video_part {
+            let file_name = std::path::Path::new(&vid_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("video.mp4");
+            let safe_vid = sanitize_media_name(file_name, cx.existing_media_names);
+            cx.existing_media_names.insert(safe_vid.clone());
+            cx.imported_media.push((safe_vid.clone(), vid_bytes));
+            cx.tracker.image_count = cx.tracker.image_count.saturating_add(1);
+            let obj_id = format!("video{}", cx.tracker.image_count);
+            let obj_name = if name.is_empty() {
+                format!("Video {}", cx.tracker.image_count)
+            } else {
+                name
+            };
+            cx.objects.push(Object {
+                id: obj_id,
+                name: obj_name,
+                kind: ObjectKind::Video {
+                    src: safe_vid,
+                    autoplay: false,
+                    captions: None,
+                    volume: 1.0,
+                    trim: None,
+                    cues: Vec::new(),
+                    poster: poster_src,
+                },
+                frame,
+                timing: Timing::default(),
+                states: Vec::new(),
+                initial_state: "normal".to_string(),
+                entrance: None,
+                exit: None,
+                motion_paths: Vec::new(),
+                focus_order: None,
+                decorative: false,
+                description: None,
+                group: None,
+                panel: None,
+                rotation: normalized_pptx_rotation(rotation),
+                flip_h,
+                flip_v,
+                opacity: 1.0,
+                shadow: None,
+                glow: None,
+                drag: None,
+                locked: false,
+                editor_hidden: false,
+            });
+            return;
+        }
         cx.tracker.report_skip(
-            SkipKind::UndecodablePicture,
-            "Picture file not found or undecodable",
+            SkipKind::Media,
+            "Video media part missing; kept poster picture",
         );
+    }
+
+    let Some(safe_src) = poster_src else {
         return;
     };
-
-    let crop = src_rect_crop(blip_fill);
-
-    let file_name = std::path::Path::new(&target_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("image.png");
-    let safe_src = sanitize_media_name(file_name, cx.existing_media_names);
-    cx.existing_media_names.insert(safe_src.clone());
-    cx.imported_media.push((safe_src.clone(), pic_bytes));
 
     cx.tracker.image_count = cx.tracker.image_count.saturating_add(1);
     let obj_id = format!("image{}", cx.tracker.image_count);
@@ -4105,6 +5787,8 @@ fn process_picture(pic: &XmlNode, transform: GroupTransform, cx: &mut SlideConte
             src: safe_src,
             alt,
             crop,
+            outline,
+            shape,
         },
         frame,
         timing: Timing::default(),

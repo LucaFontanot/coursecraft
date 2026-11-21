@@ -5,10 +5,7 @@ use coursecraft_course::{
     ConnectorStyle, Course, Glue, HotspotShape, LineEnd, Object, ObjectKind, Path, PathStyle,
     Point, QuestionKind, ShapeKind, shape_info, shape_label,
 };
-use coursecraft_render::{
-    DrawItem, Highlight, Hit, SlideTransform, Visual, compose_authoring_layers, compose_object,
-    paint,
-};
+use coursecraft_render::{DrawItem, Highlight, Hit, SlideTransform, Visual, compose_object, paint};
 use egui::{
     Align2, Area, Color32, CornerRadius, CursorIcon, FontId, Id, Painter, Pos2, Rect, RichText,
     ScrollArea, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
@@ -232,6 +229,12 @@ pub struct InlineEdit {
     pub cell: Option<(usize, usize)>,
     /// Select all and focus on the first frame after entering.
     pub just_entered: bool,
+    /// Live text runs tracked across edits while the inline editor is open.
+    pub live_runs: Vec<coursecraft_course::TextRun>,
+    /// Live paragraph styles tracked across edits while the inline editor is open.
+    pub live_paragraphs: Vec<coursecraft_course::Paragraph>,
+    /// Course revision at which `live_runs` and `live_paragraphs` were synced.
+    pub last_revision: u64,
 }
 
 /// Enter in-place editing for a text object, button or shape on the current slide.
@@ -243,16 +246,44 @@ fn start_inline_edit(editor: &mut Editor, object_id: &str) {
     let Some((object, _)) = slide.object(object_id) else {
         return;
     };
-    let (buffer, is_button, is_shape) = match &object.kind {
-        coursecraft_course::ObjectKind::Text { text, .. } => (text.clone(), false, false),
-        coursecraft_course::ObjectKind::Button { label, .. } => (label.clone(), true, false),
+    let (buffer, is_button, is_shape, live_runs, live_paragraphs) = match &object.kind {
+        coursecraft_course::ObjectKind::Text {
+            text,
+            runs,
+            paragraphs,
+            ..
+        } => {
+            let plain = if runs.is_empty() {
+                text.clone()
+            } else {
+                runs.iter().map(|r| r.text.as_str()).collect()
+            };
+            (plain, false, false, runs.clone(), paragraphs.clone())
+        }
+        coursecraft_course::ObjectKind::Button { label, .. } => {
+            (label.clone(), true, false, Vec::new(), Vec::new())
+        }
         coursecraft_course::ObjectKind::Shape { shape, text, .. }
             if coursecraft_course::shape_allows_text(*shape) =>
         {
+            let plain = text
+                .as_ref()
+                .map(|t| {
+                    if t.runs.is_empty() {
+                        t.text.clone()
+                    } else {
+                        t.runs.iter().map(|r| r.text.as_str()).collect()
+                    }
+                })
+                .unwrap_or_default();
             (
-                text.as_ref().map(|t| t.text.clone()).unwrap_or_default(),
+                plain,
                 false,
                 true,
+                text.as_ref().map(|t| t.runs.clone()).unwrap_or_default(),
+                text.as_ref()
+                    .map(|t| t.paragraphs.clone())
+                    .unwrap_or_default(),
             )
         }
         _ => return,
@@ -267,7 +298,11 @@ fn start_inline_edit(editor: &mut Editor, object_id: &str) {
         is_shape,
         cell: None,
         just_entered: true,
+        live_runs,
+        live_paragraphs,
+        last_revision: editor.session.revision,
     });
+    editor.ui.inline_edit_yielded_to_panel = false;
 }
 
 /// The slide-space rect of one table cell, including its spans.
@@ -387,16 +422,25 @@ fn start_table_cell_edit(editor: &mut Editor, object_id: &str, row: usize, colum
     };
     editor.selection.set_many([object_id.to_owned()]);
     editor.ui.table_cell = Some((row, column));
+    let plain = if cell.runs.is_empty() {
+        cell.text.clone()
+    } else {
+        cell.runs.iter().map(|r| r.text.as_str()).collect()
+    };
     editor.ui.inline_edit = Some(InlineEdit {
         slide: slide_id,
         object: object_id.to_owned(),
-        original: cell.text.clone(),
-        buffer: cell.text.clone(),
+        original: plain.clone(),
+        buffer: plain,
         is_button: false,
         is_shape: false,
         cell: Some((row, column)),
         just_entered: true,
+        live_runs: cell.runs.clone(),
+        live_paragraphs: cell.paragraphs.clone(),
+        last_revision: editor.session.revision,
     });
+    editor.ui.inline_edit_yielded_to_panel = false;
 }
 
 /// Enter point editing for a path object.
@@ -595,7 +639,7 @@ fn enter_edits_selection(editor: &mut Editor, ui: &Ui) {
     }
 }
 
-fn commit_inline_edit(editor: &mut Editor) {
+pub(crate) fn commit_inline_edit(editor: &mut Editor) {
     let Some(edit) = editor.ui.inline_edit.take() else {
         return;
     };
@@ -610,14 +654,18 @@ fn commit_inline_edit(editor: &mut Editor) {
     };
     match &object.kind {
         coursecraft_course::ObjectKind::Text { .. } => {
-            editor.run(
-                "text.set",
-                serde_json::json!({
-                    "slide": edit.slide,
-                    "object": edit.object,
-                    "text": edit.buffer,
-                }),
-            );
+            let mut params = serde_json::json!({
+                "slide": edit.slide,
+                "object": edit.object,
+                "text": edit.buffer,
+            });
+            let live_plain: String = edit.live_runs.iter().map(|r| r.text.as_str()).collect();
+            if !edit.live_runs.is_empty() && live_plain == edit.buffer {
+                params["runs"] = serde_json::to_value(&edit.live_runs).unwrap_or_default();
+                params["paragraphs"] =
+                    serde_json::to_value(&edit.live_paragraphs).unwrap_or_default();
+            }
+            editor.run("text.set", params);
         }
         coursecraft_course::ObjectKind::Button {
             fill, fill_style, ..
@@ -648,18 +696,33 @@ fn commit_inline_edit(editor: &mut Editor) {
         } if coursecraft_course::shape_allows_text(*shape) => {
             let shape_text = match text {
                 Some(text) => {
-                    let old_plain: String = if text.runs.is_empty() {
-                        text.text.clone()
-                    } else {
-                        text.runs.iter().map(|run| run.text.as_str()).collect()
-                    };
-                    let runs =
-                        coursecraft_course::apply_text_edit(&text.runs, &old_plain, &edit.buffer);
-                    let paragraphs = coursecraft_course::align_paragraphs(
-                        &old_plain,
-                        &text.paragraphs,
-                        &edit.buffer,
-                    );
+                    let live_plain: String =
+                        edit.live_runs.iter().map(|r| r.text.as_str()).collect();
+                    let (runs, paragraphs) =
+                        if !edit.live_runs.is_empty() && live_plain == edit.buffer {
+                            (
+                                coursecraft_course::normalize_runs(&edit.live_runs),
+                                edit.live_paragraphs.clone(),
+                            )
+                        } else {
+                            let old_plain: String = if text.runs.is_empty() {
+                                text.text.clone()
+                            } else {
+                                text.runs.iter().map(|run| run.text.as_str()).collect()
+                            };
+                            (
+                                coursecraft_course::apply_text_edit(
+                                    &text.runs,
+                                    &old_plain,
+                                    &edit.buffer,
+                                ),
+                                coursecraft_course::align_paragraphs(
+                                    &old_plain,
+                                    &text.paragraphs,
+                                    &edit.buffer,
+                                ),
+                            )
+                        };
                     coursecraft_course::ShapeText {
                         text: edit.buffer.clone(),
                         style: text.style.clone(),
@@ -702,14 +765,27 @@ fn commit_inline_edit(editor: &mut Editor) {
             let Some(cell) = rows.get(row).and_then(|line| line.cells.get(column)) else {
                 return;
             };
-            let old_plain = if cell.runs.is_empty() {
-                cell.text.clone()
+            let live_plain: String = edit.live_runs.iter().map(|r| r.text.as_str()).collect();
+            let (runs, paragraphs) = if !edit.live_runs.is_empty() && live_plain == edit.buffer {
+                (
+                    coursecraft_course::normalize_runs(&edit.live_runs),
+                    edit.live_paragraphs.clone(),
+                )
             } else {
-                cell.runs.iter().map(|run| run.text.as_str()).collect()
+                let old_plain = if cell.runs.is_empty() {
+                    cell.text.clone()
+                } else {
+                    cell.runs.iter().map(|run| run.text.as_str()).collect()
+                };
+                (
+                    coursecraft_course::apply_text_edit(&cell.runs, &old_plain, &edit.buffer),
+                    coursecraft_course::align_paragraphs(
+                        &old_plain,
+                        &cell.paragraphs,
+                        &edit.buffer,
+                    ),
+                )
             };
-            let runs = coursecraft_course::apply_text_edit(&cell.runs, &old_plain, &edit.buffer);
-            let paragraphs =
-                coursecraft_course::align_paragraphs(&old_plain, &cell.paragraphs, &edit.buffer);
             editor.run(
                 "table.set_cell",
                 serde_json::json!({
@@ -1418,22 +1494,30 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
                 .sum::<f32>()
         })
         + 56.0
-        + 28.0;
+        + 28.0
+        + if editor.selection.layer.is_some() {
+            190.0
+        } else {
+            0.0
+        };
     let pills_x = t
         .slide_rect()
         .min
         .x
         .min(canvas_right - estimated_w)
         .max(canvas_left);
+    let has_layer_selected = editor.selection.layer.is_some();
+    let wraps = has_layer_selected || estimated_w > (canvas_right - pills_x);
+    let pills_h = if wraps { 64.0 } else { 24.0 };
     let pills_rect = Rect::from_min_size(
         pos2(pills_x, t.slide_rect().min.y - 24.0 - 8.0),
-        vec2((canvas_right - pills_x).max(t.slide_rect().width()), 24.0),
+        vec2((canvas_right - pills_x).max(1.0), pills_h),
     );
 
     let mut pills_ui = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(pills_rect)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            .layout(egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true)),
     );
     pills_ui.spacing_mut().item_spacing.x = 4.0;
 
@@ -1494,6 +1578,38 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             "layer.add",
             serde_json::json!({ "slide": editor.selection.slide }),
         );
+    }
+
+    if !is_base {
+        pills_ui.add_space(8.0);
+        pills_ui.label(coursecraft_render::small("Base slide:").color(p.text_secondary));
+        let current = editor.session.course.editor.base_slide_view;
+        for (mode, label, api_val) in [
+            (coursecraft_course::BaseSlideView::Show, "Show", "show"),
+            (coursecraft_course::BaseSlideView::Dim, "Dim", "dim"),
+            (coursecraft_course::BaseSlideView::Hide, "Hide", "hide"),
+        ] {
+            let active = current == mode;
+            let text = coursecraft_render::small(label).color(if active {
+                p.accent_text
+            } else {
+                p.text_secondary
+            });
+            let btn = egui::Button::new(text)
+                .fill(if active {
+                    p.accent_subtle
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .corner_radius(12)
+                .min_size(vec2(0.0, 24.0));
+            if pills_ui.add(btn).clicked() && !active {
+                editor.run(
+                    "view.set",
+                    serde_json::json!({ "base_slide_view": api_val }),
+                );
+            }
+        }
     }
 }
 
@@ -2213,11 +2329,14 @@ fn commit_draw(
         points: fractions,
         style,
         closed,
+        subpaths: Vec::new(),
         fill: closed.then(|| theme.accent.clone()),
+        fill_style: None,
         outline: coursecraft_course::Outline {
             color: theme.text.clone(),
             width: 2.0,
             dash: coursecraft_course::DashStyle::Solid,
+            dash_pattern: None,
         },
         start_end: LineEnd::None,
         end_end: if tool == DrawTool::Arrow {
@@ -2228,6 +2347,7 @@ fn commit_draw(
         connector,
         start_glue: start_glue.clone(),
         end_glue: end_glue.clone(),
+        text: None,
     };
     let name = next_draw_name(editor, tool.base_name());
     if wants_glue {
@@ -3954,6 +4074,13 @@ fn handle_canvas_click(
             if let Some(id) = picked {
                 let targets = editor.selection.group_members(&editor.session.course, &id);
                 editor.apply_format_painter(&targets);
+            } else if editor
+                .ui
+                .format_painter
+                .as_ref()
+                .is_some_and(|fp| !fp.sticky)
+            {
+                editor.ui.format_painter = None;
             }
             return;
         }
@@ -3983,6 +4110,15 @@ fn handle_canvas_click(
                 editor.ui.group_focus = None;
             }
             None => {}
+        }
+    } else if editor.ui.format_painter.is_some() {
+        if editor
+            .ui
+            .format_painter
+            .as_ref()
+            .is_some_and(|fp| !fp.sticky)
+        {
+            editor.ui.format_painter = None;
         }
     } else if !additive {
         editor.selection.clear_objects();
@@ -4293,7 +4429,7 @@ fn draw_crop_overlay(editor: &Editor, painter: &Painter, t: &SlideTransform, ui:
 
 fn align_for(align: coursecraft_course::Align) -> egui::Align {
     match align {
-        coursecraft_course::Align::Left => egui::Align::LEFT,
+        coursecraft_course::Align::Left | coursecraft_course::Align::Justify => egui::Align::LEFT,
         coursecraft_course::Align::Center => egui::Align::Center,
         coursecraft_course::Align::Right => egui::Align::RIGHT,
     }
@@ -4467,6 +4603,214 @@ fn apply_inline_edit_style_shortcut(
     }
 }
 
+fn update_inline_edit_panel_yield(
+    editor: &mut Editor,
+    ui: &Ui,
+    rect: Rect,
+    panel_right: f32,
+) -> bool {
+    let (clicked_in_panel, clicked_in_edit) = ui.input(|i| {
+        let pressed = i.pointer.primary_pressed();
+        let pos = i.pointer.interact_pos();
+        (
+            pressed && pos.is_some_and(|p| p.x >= panel_right),
+            pressed && pos.is_some_and(|p| rect.contains(p)),
+        )
+    });
+    if clicked_in_panel {
+        editor.ui.inline_edit_yielded_to_panel = true;
+    } else if clicked_in_edit {
+        editor.ui.inline_edit_yielded_to_panel = false;
+    }
+    editor.ui.inline_edit_yielded_to_panel
+}
+
+struct InlineEditTextProps {
+    style: coursecraft_course::TextStyle,
+    align: egui::Align,
+    valign: egui::Align,
+    autofit: coursecraft_course::Autofit,
+    insets: Option<coursecraft_course::TextInsets>,
+}
+
+fn inline_edit_text_props(
+    object: &coursecraft_course::Object,
+    cell: Option<(usize, usize)>,
+) -> Option<InlineEditTextProps> {
+    match (&object.kind, cell) {
+        (coursecraft_course::ObjectKind::Text { style, autofit, .. }, None) => {
+            Some(InlineEditTextProps {
+                style: style.clone(),
+                align: align_for(style.align),
+                valign: valign_for(style.valign),
+                autofit: *autofit,
+                insets: style.insets,
+            })
+        }
+        (coursecraft_course::ObjectKind::Button { .. }, None) => Some(InlineEditTextProps {
+            style: coursecraft_course::TextStyle {
+                size: 20.0,
+                color: coursecraft_course::Color("#ffffff".into()),
+                align: coursecraft_course::Align::Center,
+                valign: coursecraft_course::VAlign::Middle,
+                ..Default::default()
+            },
+            align: egui::Align::Center,
+            valign: egui::Align::Center,
+            autofit: coursecraft_course::Autofit::None,
+            insets: None,
+        }),
+        (
+            coursecraft_course::ObjectKind::Shape {
+                shape, fill, text, ..
+            },
+            None,
+        ) if coursecraft_course::shape_allows_text(*shape) => {
+            let st = text
+                .as_ref()
+                .map(|t| t.style.clone())
+                .unwrap_or_else(|| default_shape_text_style(fill));
+            let af = text
+                .as_ref()
+                .map_or(coursecraft_course::Autofit::None, |t| t.autofit);
+            Some(InlineEditTextProps {
+                align: align_for(st.align),
+                valign: valign_for(st.valign),
+                autofit: af,
+                insets: st.insets,
+                style: st,
+            })
+        }
+        (coursecraft_course::ObjectKind::Table { rows, .. }, Some((row, column))) => {
+            let cell = rows.get(row).and_then(|line| line.cells.get(column))?;
+            Some(InlineEditTextProps {
+                style: cell.style.clone(),
+                align: align_for(cell.style.align),
+                valign: valign_for(cell.valign),
+                autofit: coursecraft_course::Autofit::None,
+                insets: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn sync_inline_edit_runs(
+    object: &coursecraft_course::Object,
+    edit: &InlineEdit,
+    revision: u64,
+) -> (
+    Vec<coursecraft_course::TextRun>,
+    Vec<coursecraft_course::Paragraph>,
+    bool,
+) {
+    if edit.last_revision == revision {
+        return (edit.live_runs.clone(), edit.live_paragraphs.clone(), false);
+    }
+    let (obj_plain, obj_runs, obj_paras) = match (&object.kind, edit.cell) {
+        (
+            coursecraft_course::ObjectKind::Text {
+                text,
+                runs,
+                paragraphs,
+                ..
+            },
+            None,
+        ) => {
+            let p = if runs.is_empty() {
+                text.clone()
+            } else {
+                runs.iter().map(|r| r.text.as_str()).collect()
+            };
+            (p, runs.clone(), paragraphs.clone())
+        }
+        (coursecraft_course::ObjectKind::Shape { text: Some(t), .. }, None) => {
+            let p = if t.runs.is_empty() {
+                t.text.clone()
+            } else {
+                t.runs.iter().map(|r| r.text.as_str()).collect()
+            };
+            (p, t.runs.clone(), t.paragraphs.clone())
+        }
+        (coursecraft_course::ObjectKind::Table { rows, .. }, Some((r, c))) => {
+            if let Some(cell) = rows.get(r).and_then(|row| row.cells.get(c)) {
+                let p = if cell.runs.is_empty() {
+                    cell.text.clone()
+                } else {
+                    cell.runs.iter().map(|run| run.text.as_str()).collect()
+                };
+                (p, cell.runs.clone(), cell.paragraphs.clone())
+            } else {
+                (String::new(), Vec::new(), Vec::new())
+            }
+        }
+        _ => (edit.buffer.clone(), Vec::new(), Vec::new()),
+    };
+    let (runs, paras) = if edit.buffer == obj_plain {
+        (obj_runs, obj_paras)
+    } else {
+        (
+            coursecraft_course::apply_text_edit(&obj_runs, &obj_plain, &edit.buffer),
+            coursecraft_course::align_paragraphs(&obj_plain, &obj_paras, &edit.buffer),
+        )
+    };
+    (runs, paras, true)
+}
+
+fn inset_text_rect(rect: Rect, insets: Option<coursecraft_course::TextInsets>, scale: f32) -> Rect {
+    let Some(ins) = insets else {
+        return rect;
+    };
+    let l = (ins.left.max(0.0) * scale).min(rect.width() * 0.45);
+    let r = (ins.right.max(0.0) * scale).min(rect.width() * 0.45);
+    let top = (ins.top.max(0.0) * scale).min(rect.height() * 0.45);
+    let b = (ins.bottom.max(0.0) * scale).min(rect.height() * 0.45);
+    let inner = Rect::from_min_max(
+        pos2(rect.min.x + l, rect.min.y + top),
+        pos2(rect.max.x - r, rect.max.y - b),
+    );
+    if inner.is_positive() { inner } else { rect }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inline_edit_shrink(
+    ctx: &egui::Context,
+    autofit: coursecraft_course::Autofit,
+    text_rect: Rect,
+    scale: f32,
+    buffer: &str,
+    style: &coursecraft_course::TextStyle,
+    runs: &[coursecraft_course::TextRun],
+    paragraphs: &[coursecraft_course::Paragraph],
+    text_color: Color32,
+    link_color: Color32,
+    theme_font: &str,
+) -> f32 {
+    if autofit != coursecraft_course::Autofit::Shrink {
+        return 1.0;
+    }
+    let resolved = coursecraft_render::resolve_text_runs(
+        buffer,
+        style,
+        runs,
+        None,
+        text_color,
+        link_color,
+        Some(theme_font),
+    );
+    coursecraft_render::layout_text(
+        ctx,
+        text_rect,
+        scale,
+        &resolved,
+        paragraphs,
+        style.align,
+        style.valign,
+        autofit,
+    )
+    .shrink
+}
+
 fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let Some(edit) = editor.ui.inline_edit.clone() else {
         return;
@@ -4517,62 +4861,26 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     }
 
     let scale = t.scale();
-    let (font_size, text_color, align, valign) = match &object.kind {
-        coursecraft_course::ObjectKind::Text { style, .. } => (
-            style.size * scale,
-            coursecraft_render::parse_color(&style.color)
-                .unwrap_or_else(|| coursecraft_render::palette(ui.ctx()).text),
-            align_for(style.align),
-            valign_for(style.valign),
-        ),
-        coursecraft_course::ObjectKind::Button { .. } => (
-            20.0 * scale,
-            Color32::WHITE,
-            egui::Align::Center,
-            egui::Align::Center,
-        ),
-        coursecraft_course::ObjectKind::Shape {
-            shape, fill, text, ..
-        } => {
-            if !coursecraft_course::shape_allows_text(*shape) {
-                cancel_inline_edit(editor);
-                return;
-            }
-            let style = text
-                .as_ref()
-                .map(|text| text.style.clone())
-                .unwrap_or_else(|| default_shape_text_style(fill));
-            (
-                style.size * scale,
-                coursecraft_render::parse_color(&style.color)
-                    .unwrap_or_else(|| coursecraft_render::palette(ui.ctx()).text),
-                align_for(style.align),
-                valign_for(style.valign),
-            )
-        }
-        coursecraft_course::ObjectKind::Table { rows, .. } => {
-            let Some((row, column)) = edit.cell else {
-                cancel_inline_edit(editor);
-                return;
-            };
-            let Some(cell) = rows.get(row).and_then(|line| line.cells.get(column)) else {
-                cancel_inline_edit(editor);
-                return;
-            };
-            (
-                cell.style.size * scale,
-                coursecraft_render::parse_color(&cell.style.color)
-                    .unwrap_or_else(|| coursecraft_render::palette(ui.ctx()).text),
-                align_for(cell.style.align),
-                valign_for(cell.valign),
-            )
-        }
-        _ => {
-            cancel_inline_edit(editor);
-            return;
-        }
+    let Some(InlineEditTextProps {
+        style,
+        align,
+        valign,
+        autofit,
+        insets,
+    }) = inline_edit_text_props(object, edit.cell)
+    else {
+        cancel_inline_edit(editor);
+        return;
     };
-    let font_size = font_size.clamp(4.0, 400.0);
+    let text_color = coursecraft_render::parse_color(&style.color)
+        .unwrap_or_else(|| coursecraft_render::palette(ui.ctx()).text);
+    let link_color = coursecraft_render::parse_color(&editor.session.course.theme.accent)
+        .unwrap_or_else(|| coursecraft_render::palette(ui.ctx()).accent);
+    let theme_font = editor.session.course.theme.font.clone();
+    let font_size = (style.size * scale).clamp(4.0, 400.0);
+
+    let (synced_runs, synced_paragraphs, synced_changed) =
+        sync_inline_edit_runs(object, &edit, editor.session.revision);
     if edit.cell.is_some() {
         let forward =
             ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
@@ -4595,15 +4903,94 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let edit_id = Id::unique(("canvas_inline_edit", &edit.slide, &edit.object));
     let accent = coursecraft_render::palette(ui.ctx()).accent;
 
+    if synced_changed && let Some(state) = editor.ui.inline_edit.as_mut() {
+        state.live_runs = synced_runs.clone();
+        state.live_paragraphs = synced_paragraphs.clone();
+        state.last_revision = editor.session.revision;
+    }
     let mut buffer = edit.buffer.clone();
+    let text_rect = inset_text_rect(rect, insets, scale);
+    let frame = inline_edit_frame(accent);
+    if insets.is_some() {
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::ZERO,
+            frame.stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
     let mut child = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(rect)
+            .max_rect(text_rect)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );
     child.spacing_mut().item_spacing = egui::Vec2::ZERO;
     let visuals = inline_edit_visuals(child.visuals().clone(), text_color, accent);
     *child.visuals_mut() = visuals;
+    let shrink = inline_edit_shrink(
+        ui.ctx(),
+        autofit,
+        text_rect,
+        scale,
+        &buffer,
+        &style,
+        &synced_runs,
+        &synced_paragraphs,
+        text_color,
+        link_color,
+        &theme_font,
+    );
+    let base_buffer = edit.buffer.clone();
+    let course_align = style.align;
+    let is_multiline = !edit.is_button;
+    let wrap = style.wrap;
+    let mut layouter = |egui_ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+        let s = buf.as_str();
+        let (runs_for_s, paras_for_s) = if s == base_buffer {
+            (synced_runs.clone(), synced_paragraphs.clone())
+        } else {
+            (
+                coursecraft_course::apply_text_edit(&synced_runs, &base_buffer, s),
+                coursecraft_course::align_paragraphs(&base_buffer, &synced_paragraphs, s),
+            )
+        };
+        let resolved = coursecraft_render::resolve_text_runs(
+            s,
+            &style,
+            &runs_for_s,
+            None,
+            text_color,
+            link_color,
+            Some(&theme_font),
+        );
+        let job = coursecraft_render::inline_edit_layout_job(
+            egui_ui.ctx(),
+            scale,
+            shrink,
+            &resolved,
+            &paras_for_s,
+            course_align,
+            wrap_width,
+            is_multiline,
+        );
+        let mut galley = egui_ui.fonts_mut(|fonts| fonts.layout_job(job));
+        if course_align == coursecraft_course::Align::Justify && is_multiline && wrap {
+            let ppp = egui_ui.ctx().pixels_per_point();
+            let origin_x = text_rect.left()
+                + if insets.is_some() {
+                    0.0
+                } else {
+                    f32::from(frame.inner_margin.left)
+                };
+            coursecraft_render::justify_galley_snapped(
+                &mut galley,
+                wrap_width.max(1.0),
+                ppp,
+                origin_x,
+            );
+        }
+        galley
+    };
     let edit_builder = if edit.is_button {
         egui::TextEdit::singleline(&mut buffer)
     } else {
@@ -4614,8 +5001,13 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         .font(FontId::proportional(font_size))
         .text_color(text_color)
         .align(egui::Align2::new(align, valign))
-        .desired_width(rect.width())
-        .frame(inline_edit_frame(accent))
+        .desired_width(text_rect.width())
+        .frame(if insets.is_some() {
+            egui::Frame::NONE
+        } else {
+            frame
+        })
+        .layouter(&mut layouter)
         .show(&mut child);
 
     // As-you-type spelling: underline each misspelling from the galley and
@@ -4685,20 +5077,24 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let toggle_bold = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::B));
     let toggle_italic = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::I));
     let toggle_underline = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::U));
+    let panel_right = ui.max_rect().max.x;
     let clicked_outside = ui.input(|i| {
         i.pointer.primary_pressed()
             && !menu_open_at_start
             && i.pointer
                 .interact_pos()
-                .is_some_and(|pos| !rect.contains(pos))
+                .is_some_and(|pos| !rect.contains(pos) && pos.x < panel_right)
     });
+    let yielded_to_panel = update_inline_edit_panel_yield(editor, ui, rect, panel_right);
 
     // Keep keyboard focus on the in-place editor while it is open. The canvas
     // interaction and the click that placed the object can otherwise take it.
     let pointer_active = ui.input(|i| {
         i.pointer.primary_down() || i.pointer.primary_pressed() || i.pointer.primary_released()
     });
-    if edit.just_entered || (!output.response.has_focus() && !clicked_outside && !escaped) {
+    if edit.just_entered
+        || (!output.response.has_focus() && !clicked_outside && !escaped && !yielded_to_panel)
+    {
         output.response.request_focus();
     }
     let cursor_range = output.state.cursor.char_range();
@@ -4722,8 +5118,26 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         }
     }
 
-    if let Some(state) = editor.ui.inline_edit.as_mut() {
+    if let Some(state) = editor.ui.inline_edit.as_mut()
+        && buffer != state.buffer
+    {
+        state.live_runs =
+            coursecraft_course::apply_text_edit(&state.live_runs, &state.buffer, &buffer);
+        state.live_paragraphs =
+            coursecraft_course::align_paragraphs(&state.buffer, &state.live_paragraphs, &buffer);
         state.buffer = buffer.clone();
+    }
+    if output.response.has_focus()
+        && let Some(cr) = cursor_range
+    {
+        let (sel_range, cpos) = if !cr.is_empty() {
+            let sorted = cr.as_sorted_char_range();
+            (Some((sorted.start.0, sorted.end.0)), sorted.start.0)
+        } else {
+            (None, cr.primary.index.0)
+        };
+        editor.ui.inline_edit_selection =
+            Some((edit.slide.clone(), edit.object.clone(), sel_range, cpos));
     }
     if (toggle_bold || toggle_italic || toggle_underline) && !escaped {
         apply_inline_edit_style_shortcut(
@@ -4781,13 +5195,24 @@ fn draw_placement_preview(editor: &Editor, painter: &Painter, t: &SlideTransform
     let p = coursecraft_render::palette(ui.ctx());
     let screen_rect = t.to_screen_rect(drag.frame);
     let fill = Color32::from_rgba_unmultiplied(p.accent.r(), p.accent.g(), p.accent.b(), 24);
-    painter.rect_filled(screen_rect, CornerRadius::ZERO, fill);
-    painter.rect_stroke(
-        screen_rect,
-        CornerRadius::ZERO,
-        Stroke::new(1.5, p.accent),
-        StrokeKind::Inside,
-    );
+    if let Some(PlacementTool::Shape(kind)) = editor.ui.placement_tool {
+        coursecraft_render::paint_shape(painter, screen_rect, kind, &[], fill);
+        let outline = coursecraft_render::ResolvedOutline {
+            color: p.accent,
+            width: 1.5,
+            dash: coursecraft_course::DashStyle::Solid,
+            dash_pattern: None,
+        };
+        coursecraft_render::paint_outline(painter, screen_rect, kind, &[], &outline, 1.0);
+    } else {
+        painter.rect_filled(screen_rect, CornerRadius::ZERO, fill);
+        painter.rect_stroke(
+            screen_rect,
+            CornerRadius::ZERO,
+            Stroke::new(1.5, p.accent),
+            StrokeKind::Inside,
+        );
+    }
 
     let label = format!(
         "{:.0} × {:.0}",
@@ -5028,6 +5453,7 @@ fn draw_handles_and_outline(
             );
             if editor.ui.canvas_drag.is_none()
                 && editor.ui.placement_tool.is_none()
+                && editor.ui.format_painter.is_none()
                 && current_pointer.is_some_and(|pos| {
                     Rect::from_center_size(handle, vec2(14.0, 14.0)).contains(pos)
                 })
@@ -5041,6 +5467,7 @@ fn draw_handles_and_outline(
 
         if editor.ui.canvas_drag.is_none()
             && editor.ui.placement_tool.is_none()
+            && editor.ui.format_painter.is_none()
             && let Some(pos) = current_pointer
         {
             for (h, c) in centers {
@@ -5392,12 +5819,19 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             .ui
             .layers
             .extra_layer_ids(slide, editor.selection.layer.as_deref());
-        let mut items = compose_authoring_layers(
+        let hide_base_view = editor.selection.layer.is_some()
+            && editor.session.course.editor.base_slide_view
+                == coursecraft_course::BaseSlideView::Hide;
+        let dim_base = editor.selection.layer.is_some()
+            && editor.session.course.editor.base_slide_view
+                == coursecraft_course::BaseSlideView::Dim;
+        let mut items = coursecraft_render::compose_authoring_layers_opts(
             &editor.session.course,
             slide,
             editor.selection.layer.as_deref(),
             &extra_layers,
-            editor.ui.layers.dim_other_layers,
+            dim_base,
+            !hide_base_view,
         );
         items.retain(|item| {
             !matches!(&item.hit, Hit::Object(id)
@@ -5516,6 +5950,25 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             }
         }
 
+        let playhead_ms = editor.ui.timeline.playhead_ms;
+        let time_view = editor.timeline_playback.is_playing() || playhead_ms > 0;
+        let input_animated = if time_view {
+            editor
+                .session
+                .course
+                .slide(&editor.selection.slide)
+                .map(|slide| {
+                    timeline_animated_items(
+                        &items,
+                        slide,
+                        editor.session.course.slide_size,
+                        playhead_ms,
+                    )
+                })
+        } else {
+            None
+        };
+
         let gesture_active = editor.ui.canvas_drag.is_some()
             || editor.ui.placement_drag.is_some()
             || editor.ui.draw.is_some();
@@ -5555,6 +6008,17 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 if editor.ui.placement_drag.is_some() {
                     process_placement_drag(editor, &t, ui);
                 }
+            } else if editor.ui.format_painter.is_some() {
+                if !pointer_in_hud && current_pointer.is_some_and(|p| canvas_rect.contains(p)) {
+                    ui.ctx().set_cursor_icon(CursorIcon::Copy);
+                }
+                if !pointer_in_hud
+                    && (response.clicked() || response.drag_stopped())
+                    && let Some(pos) = current_pointer
+                {
+                    let click_items = input_animated.as_deref().unwrap_or(&items);
+                    handle_canvas_click(editor, pos, &t, click_items, modifiers);
+                }
             } else {
                 if !pointer_in_hud
                     && editor.ui.canvas_drag.is_none()
@@ -5562,7 +6026,13 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                     && primary_pressed
                     && let Some(start_pos) = current_pointer
                 {
-                    start_drag_if_pressed(editor, start_pos, &t, &items, modifiers);
+                    start_drag_if_pressed(
+                        editor,
+                        start_pos,
+                        &t,
+                        input_animated.as_deref().unwrap_or(&items),
+                        modifiers,
+                    );
                 }
 
                 if editor.ui.canvas_drag.is_some() {
@@ -5572,10 +6042,11 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                     && response.clicked()
                     && let Some(pos) = current_pointer
                 {
+                    let click_items = input_animated.as_deref().unwrap_or(&items);
                     if response.double_clicked() {
-                        handle_canvas_double_click(editor, pos, &t, &items, modifiers);
+                        handle_canvas_double_click(editor, pos, &t, click_items, modifiers);
                     } else {
-                        handle_canvas_click(editor, pos, &t, &items, modifiers);
+                        handle_canvas_click(editor, pos, &t, click_items, modifiers);
                     }
                 }
             }
@@ -5592,7 +6063,12 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             && response.secondary_clicked()
             && let Some(pos) = current_pointer
         {
-            handle_canvas_secondary_click(editor, pos, &t, &items);
+            handle_canvas_secondary_click(
+                editor,
+                pos,
+                &t,
+                input_animated.as_deref().unwrap_or(&items),
+            );
         }
         response.context_menu(|ui| show_canvas_context_menu(editor, ui, special_mode));
 
@@ -5630,10 +6106,10 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 .as_shape(t.slide_rect(), CornerRadius::ZERO),
         );
 
-        // While the timeline plays, show entrances and exits as the
-        // learner will see them. Paused or scrubbed, every object stays at
-        // rest so it can be selected and edited.
-        let animated = if editor.timeline_playback.is_playing() {
+        // While playing or scrubbed past 0, show objects at `playhead_ms`
+        // (hidden outside their start/end, with entrance/exit progress). At
+        // playhead 0 when paused, every object stays at rest for editing.
+        let animated = if time_view {
             editor
                 .session
                 .course
@@ -5649,10 +6125,11 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         } else {
             None
         };
+        let view_items = animated.as_deref().unwrap_or(&items);
         paint(
             &painter,
             &t,
-            animated.as_deref().unwrap_or(&items),
+            view_items,
             Highlight::default(),
             Some((&mut editor.media_cache, &source)),
             theme,
@@ -5674,13 +6151,17 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         if editor.ui.crop_edit.is_some() {
             draw_crop_overlay(editor, &painter, &t, ui);
         } else {
-            draw_handles_and_outline(editor, &painter, &t, &items, current_pointer, ui);
+            draw_handles_and_outline(editor, &painter, &t, view_items, current_pointer, ui);
             draw_connector_sites(editor, &painter, &t, ui);
-            draw_snap_guides(editor, &painter, &t, &items, ui);
+            draw_snap_guides(editor, &painter, &t, view_items, ui);
         }
         crate::rulers::show(editor, ui, &painter, &t, canvas_rect);
         if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {
-            if let Some(ref q) = slide.question
+            let base_hidden = editor.selection.layer.is_some()
+                && editor.session.course.editor.base_slide_view
+                    == coursecraft_course::BaseSlideView::Hide;
+            if !base_hidden
+                && let Some(ref q) = slide.question
                 && q.kind == QuestionKind::Hotspot
             {
                 draw_hotspot_regions(editor, &painter, &t, q, ui, current_pointer);

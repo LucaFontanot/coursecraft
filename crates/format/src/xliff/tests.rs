@@ -237,6 +237,7 @@ fn paragraphs_and_links_survive_xliff_round_trip() {
         line_spacing: 1.5,
         space_before: 4.0,
         space_after: 6.0,
+        ..Default::default()
     }];
     let expected_paragraphs = paragraphs.clone();
     if let Some(run) = runs.first_mut() {
@@ -688,6 +689,7 @@ fn fill_xliff_keeps_master_text_rich_runs_and_references() {
             paragraphs: Vec::new(),
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
+            outline: None,
         };
     }
     course.masters.push(master);
@@ -805,6 +807,7 @@ fn masters_round_trip_through_xliff_and_templates_are_not_exported() {
             paragraphs: Vec::new(),
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
+            outline: None,
         };
     }
     course.masters.push(master);
@@ -823,6 +826,7 @@ fn masters_round_trip_through_xliff_and_templates_are_not_exported() {
             paragraphs: Vec::new(),
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
+            outline: None,
         };
     }
     course.templates.push(template);

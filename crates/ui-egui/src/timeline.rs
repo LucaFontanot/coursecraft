@@ -2349,9 +2349,13 @@ fn show_timeline_content(
         return;
     }
 
+    let scroll_gutter = timeline_scrollbar_gutter(ui);
     let track_rect = Rect::from_min_max(
         pos2(total_area.min.x + TRACK_HEADER_WIDTH, total_area.min.y),
-        total_area.max,
+        pos2(
+            (total_area.max.x - scroll_gutter).max(total_area.min.x + TRACK_HEADER_WIDTH + 1.0),
+            total_area.max.y,
+        ),
     );
     let visible_track = track_rect;
     zoom_and_scroll_track(editor, ui, total_area, visible_track);
@@ -2488,31 +2492,52 @@ fn show_timeline_content(
     if row_area.height() > 0.0 {
         // The ruler is only painted, so step past it or the top row hides beneath it.
         ui.allocate_space(vec2(row_area.width(), row_area.min.y - total_area.min.y));
-        egui::ScrollArea::vertical()
-            .id_salt("timeline_object_rows_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let origin = ui.available_rect_before_wrap();
-                let row_painter =
-                    ui.painter_at(row_area.expand2(vec2(coursecraft_render::PANEL_MARGIN, 0.0)));
-                render_object_rows(
-                    editor,
-                    ui,
-                    &row_painter,
-                    &objects,
-                    origin.min.y,
-                    row_area,
-                    track_rect,
-                    visible_track,
-                    duration_ms,
-                    track_width,
-                    actions,
-                );
-                let content_height =
-                    (objects.len() as f32 * OBJECT_ROW_HEIGHT).max(row_area.height());
-                ui.allocate_space(vec2(row_area.width(), content_height));
-            });
+        ui.scope(|ui| {
+            configure_timeline_scroll_style(&mut ui.spacing_mut().scroll);
+            egui::ScrollArea::vertical()
+                .id_salt("timeline_object_rows_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let origin = ui.available_rect_before_wrap();
+                    let row_painter = ui
+                        .painter_at(row_area.expand2(vec2(coursecraft_render::PANEL_MARGIN, 0.0)));
+                    render_object_rows(
+                        editor,
+                        ui,
+                        &row_painter,
+                        &objects,
+                        origin.min.y,
+                        row_area,
+                        track_rect,
+                        visible_track,
+                        duration_ms,
+                        track_width,
+                        actions,
+                    );
+                    let content_height =
+                        (objects.len() as f32 * OBJECT_ROW_HEIGHT).max(row_area.height());
+                    ui.allocate_space(vec2(ui.available_width(), content_height));
+                });
+        });
     }
+}
+
+/// Constant width of the timeline vertical scrollbar, in screen points.
+const TIMELINE_SCROLLBAR_WIDTH: f32 = 8.0;
+
+/// Use a solid, constant-width scrollbar that reserves space and never grows on hover.
+fn configure_timeline_scroll_style(scroll: &mut egui::style::ScrollStyle) {
+    scroll.floating = false;
+    scroll.bar_width = TIMELINE_SCROLLBAR_WIDTH;
+    scroll.floating_width = TIMELINE_SCROLLBAR_WIDTH;
+    scroll.floating_allocated_width = TIMELINE_SCROLLBAR_WIDTH;
+}
+
+/// Horizontal space reserved on the right of the timeline track so the vertical
+/// scrollbar and the 3 px overhang of an object's end handle never overlap.
+fn timeline_scrollbar_gutter(ui: &Ui) -> f32 {
+    let scroll = &ui.spacing().scroll;
+    TIMELINE_SCROLLBAR_WIDTH + scroll.bar_inner_margin + scroll.bar_outer_margin + 3.0
 }
 
 #[cfg(test)]

@@ -67,6 +67,21 @@ impl TestHarness {
         requests
     }
 
+    /// Run a frame and return every clipped shape painted during it.
+    pub fn frame_shapes(&mut self, events: Vec<Event>) -> Vec<ClippedShape> {
+        let raw_input = RawInput {
+            screen_rect: Some(self.screen_rect),
+            events,
+            ..Default::default()
+        };
+        let output = self.ctx.run_ui(raw_input, |ui| {
+            let _ = self.editor.show(ui);
+        });
+        let shapes = output.shapes.clone();
+        output.drop_without_applying_deltas();
+        shapes
+    }
+
     /// Run a frame with an explicit egui input `time` (seconds).
     pub fn frame_at_time(&mut self, time: f64) -> Vec<EditorRequest> {
         let raw_input = RawInput {
@@ -178,11 +193,10 @@ impl TestHarness {
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
-        let found = output
-            .shapes
-            .iter()
-            .rev()
-            .find_map(|cs| walk(&cs.shape, label));
+        let found = output.shapes.iter().rev().find_map(|cs| {
+            let pos = walk(&cs.shape, label)?;
+            cs.clip_rect.contains(pos).then_some(pos)
+        });
         output.drop_without_applying_deltas();
         found
     }

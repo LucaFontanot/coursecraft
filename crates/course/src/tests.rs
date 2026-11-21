@@ -1414,6 +1414,8 @@ fn course_with_image_crop(crop: Option<crate::CropRect>) -> Course {
         src: "media/pic.png".into(),
         alt: "A picture".into(),
         crop,
+        outline: None,
+        shape: None,
     })
 }
 
@@ -1559,6 +1561,7 @@ fn valid_caption_paths_are_accepted_for_audio_and_video() {
             volume: 1.0,
             trim: None,
             cues: Vec::new(),
+            poster: None,
         },
     ] {
         let course = course_with_media(kind);
@@ -1751,6 +1754,7 @@ fn unsafe_or_non_vtt_caption_paths_name_the_object_for_audio_and_video() {
             volume: 1.0,
             trim: None,
             cues: Vec::new(),
+            poster: None,
         },
     ] {
         let course = course_with_media(kind);
@@ -1771,6 +1775,7 @@ fn caption_field_is_omitted_when_unset_and_round_trips_when_set() {
         volume: 1.0,
         trim: None,
         cues: Vec::new(),
+        poster: None,
     });
     let json = course.to_json().unwrap();
     assert!(!json.contains("captions"));
@@ -1827,6 +1832,7 @@ fn media_volume_and_trim_round_trip() {
         volume: 1.0,
         trim: None,
         cues: Vec::new(),
+        poster: None,
     });
     if let crate::ObjectKind::Video { volume, trim, .. } =
         &mut course.scenes[0].slides[0].objects.last_mut().unwrap().kind
@@ -2350,6 +2356,7 @@ fn shape_with_outline_and_text() -> crate::ObjectKind {
             color: crate::Color("#2F6FEB".to_owned()),
             width: 3.0,
             dash: crate::DashStyle::Dash,
+            dash_pattern: None,
         }),
         text: Some(crate::ShapeText {
             text: "Hello".to_owned(),
@@ -2528,17 +2535,21 @@ fn default_path() -> crate::Path {
         ],
         style: crate::PathStyle::Straight,
         closed: false,
+        subpaths: Vec::new(),
         fill: None,
+        fill_style: None,
         outline: crate::Outline {
             color: crate::Color("#1F1F1F".into()),
             width: 2.0,
             dash: crate::DashStyle::Solid,
+            dash_pattern: None,
         },
         start_end: crate::LineEnd::None,
         end_end: crate::LineEnd::None,
         connector: None,
         start_glue: None,
         end_glue: None,
+        text: None,
     }
 }
 
@@ -2878,6 +2889,7 @@ fn paragraph_and_link_serde_defaults_and_omission() {
         paragraphs: Vec::new(),
         autofit: crate::Autofit::None,
         text_style: None,
+        outline: None,
     };
     let json = serde_json::to_value(&kind).expect("kind json");
     assert!(json.get("paragraphs").is_none());
@@ -2893,6 +2905,7 @@ fn paragraph_and_link_serde_defaults_and_omission() {
         }],
         autofit: crate::Autofit::Shrink,
         text_style: None,
+        outline: None,
     };
     let json = serde_json::to_value(&with_paragraphs).expect("kind json");
     assert_eq!(json["paragraphs"][0]["list"], "number");
@@ -3050,6 +3063,7 @@ fn links_are_validated_by_scheme_and_slide() {
         paragraphs: Vec::new(),
         autofit: crate::Autofit::None,
         text_style: None,
+        outline: None,
     };
     course.scenes[0].slides[0].objects[0].kind = make_text(crate::Link::Url {
         url: "javascript:alert(1)".into(),
@@ -3548,6 +3562,7 @@ fn panel_membership_and_nesting_are_validated() {
             paragraphs: Vec::new(),
             autofit: Default::default(),
             text_style: None,
+            outline: None,
         };
         child.panel = Some("panel".into());
         slide.objects.push(child);
@@ -4039,6 +4054,7 @@ fn video_cue_validation_rejects_duplicates_empty_names_bad_times_and_too_many() 
                 pause: false,
             },
         ],
+        poster: None,
     });
     let e = errors(&course);
     assert!(e.iter().any(|m| m.contains("duplicate cue id")), "{e:?}");
@@ -4077,6 +4093,7 @@ fn cue_reached_requires_a_video_with_that_cue() {
             name: "One".into(),
             pause: false,
         }],
+        poster: None,
     });
     course.scenes[0].slides[0].triggers.push(Trigger {
         action: crate::Action::PauseMedia {

@@ -18,7 +18,9 @@ use crate::icons::Icon;
 use crate::layout::SlideTransform;
 use crate::media::{LottieView, MediaCache, MediaSource, MediaView};
 use crate::path_geometry::{PathMeshSpec, path_mesh};
-use crate::shape_fill::{fill_contours, fill_contours_shaded, fill_contours_uv, stroke_contours};
+use crate::shape_fill::{
+    fill_contours, fill_contours_shaded, fill_contours_uv, stroke_contours_pattern,
+};
 use crate::shape_geometry::{shape_contours_adjusted, shape_text_rect};
 
 const DIM_FACTOR: f32 = 0.35;
@@ -158,13 +160,24 @@ fn screen_contours(
 
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
-    let [ar, ag, ab, aa] = a.to_srgba_unmultiplied();
-    let [br, bg, bb, ba] = b.to_srgba_unmultiplied();
     let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
-    Color32::from_rgba_unmultiplied(mix(ar, br), mix(ag, bg), mix(ab, bb), mix(aa, ba))
+    Color32::from_rgba_premultiplied(
+        mix(a.r(), b.r()),
+        mix(a.g(), b.g()),
+        mix(a.b(), b.b()),
+        mix(a.a(), b.a()),
+    )
 }
 
 fn sample_gradient(stops: &[crate::compose::ResolvedGradientStop], t: f32) -> Color32 {
+    sample_gradient_side(stops, t, t)
+}
+
+fn sample_gradient_side(
+    stops: &[crate::compose::ResolvedGradientStop],
+    t: f32,
+    tri_mid_t: f32,
+) -> Color32 {
     let Some(first) = stops.first() else {
         return Color32::TRANSPARENT;
     };
@@ -173,17 +186,31 @@ fn sample_gradient(stops: &[crate::compose::ResolvedGradientStop], t: f32) -> Co
     } else {
         0.0
     };
-    if t <= first.position {
+    if t < first.position
+        || (t <= first.position && (first.position <= 1e-6 || tri_mid_t <= first.position))
+    {
         return first.color;
     }
+    if let Some(last) = stops.last()
+        && (t > last.position
+            || (t >= last.position && (last.position >= 1.0 - 1e-6 || tri_mid_t >= last.position)))
+    {
+        return last.color;
+    }
+    let prefer_right = tri_mid_t > t + 1e-6;
     for pair in stops.windows(2) {
         let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
             continue;
         };
-        if t <= b.position {
+        let in_span = if prefer_right {
+            t < b.position
+        } else {
+            t <= b.position
+        };
+        if in_span {
             let span = b.position - a.position;
             if span.abs() <= 1e-6 {
-                return b.color;
+                return if prefer_right { b.color } else { a.color };
             }
             return lerp_color(a.color, b.color, (t - a.position) / span);
         }
@@ -204,6 +231,85 @@ fn paint_gradient_fill(
     let Some(contours) = screen_contours(rect, kind, adjust) else {
         return;
     };
+    paint_gradient_contours(painter, rect, &contours, style, dimmed, opacity);
+}
+
+fn pattern_pixel(preset: &str, x: usize, y: usize, n: usize) -> bool {
+    match preset {
+        "ltUpDiag" => (x + y).is_multiple_of(4),
+        "wdUpDiag" => (x + y) % 8 < 3,
+        "ltDnDiag" => (x + n - (y % n)).is_multiple_of(4),
+        "wdDnDiag" => (x + n - (y % n)) % 8 < 3,
+        "smCheck" => ((x / 4) + (y / 4)).is_multiple_of(2),
+        "lgCheck" => ((x / 8) + (y / 8)).is_multiple_of(2),
+        "dotGrid" => (x % 6) < 2 && (y % 6) < 2,
+        "horz" | "ltHorz" => y.is_multiple_of(4),
+        "wdHorz" => y % 8 < 3,
+        "vert" | "ltVert" => x.is_multiple_of(4),
+        "wdVert" => x % 8 < 3,
+        "cross" => x.is_multiple_of(8) || y.is_multiple_of(8),
+        "diagCross" => (x + y).is_multiple_of(8) || (x + n - (y % n)).is_multiple_of(8),
+        "pct50" => (x + y).is_multiple_of(2),
+        "pct10" => x.is_multiple_of(4) && y.is_multiple_of(4),
+        "pct20" | "pct25" => x.is_multiple_of(2) && y.is_multiple_of(2),
+        "pct75" | "pct80" => !(x.is_multiple_of(2) && y.is_multiple_of(2)),
+        "pct90" => !(x.is_multiple_of(4) && y.is_multiple_of(4)),
+        "dashVert" => x.is_multiple_of(4) && y % 8 < 4,
+        "dashHorz" => y.is_multiple_of(4) && x % 8 < 4,
+        "trellis" => (x + y) % 8 < 2 || (x + n - (y % n)) % 8 < 2,
+        _ => (x + y).is_multiple_of(4),
+    }
+}
+
+fn pattern_tile_texture(
+    ctx: &egui::Context,
+    preset: &str,
+    fg: Color32,
+    bg: Color32,
+) -> (egui::TextureHandle, f32) {
+    let n = if preset == "dotGrid" {
+        12usize
+    } else {
+        16usize
+    };
+    let key = egui::Id::unique(("cc_patt_tile", preset, fg.to_array(), bg.to_array()));
+    if let Some(handle) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+        return (handle, n as f32);
+    }
+    let mut pixels = Vec::with_capacity(n * n);
+    for y in 0..n {
+        for x in 0..n {
+            pixels.push(if pattern_pixel(preset, x, y, n) {
+                fg
+            } else {
+                bg
+            });
+        }
+    }
+    let image = egui::ColorImage {
+        size: [n, n],
+        source_size: egui::vec2(n as f32, n as f32),
+        pixels,
+    };
+    let opts = egui::TextureOptions {
+        magnification: egui::TextureFilter::Nearest,
+        minification: egui::TextureFilter::Nearest,
+        wrap_mode: egui::TextureWrapMode::Repeat,
+        ..Default::default()
+    };
+    let handle = ctx.load_texture(format!("patt_{preset}"), image, opts);
+    ctx.data_mut(|d| d.insert_temp(key, handle.clone()));
+    (handle, n as f32)
+}
+
+fn paint_gradient_contours(
+    painter: &Painter,
+    rect: Rect,
+    contours: &[Vec<crate::shape_geometry::Pt>],
+    style: &ResolvedFill,
+    dimmed: bool,
+    opacity: f32,
+) {
     let centre = rect.center();
     let mesh = match style {
         ResolvedFill::Linear { angle, stops } => {
@@ -214,18 +320,33 @@ fn paint_gradient_fill(
             };
             let (sin, cos) = radians.sin_cos();
             let extent = (rect.width() * cos).abs() + (rect.height() * sin).abs();
-            fill_contours_shaded(
-                &contours,
+            let mut split_ts = Vec::new();
+            for pair in stops.windows(2) {
+                if (pair[1].position - pair[0].position).abs() <= 1e-5
+                    && split_ts
+                        .last()
+                        .is_none_or(|&prev: &f32| (prev - pair[0].position).abs() > 1e-5)
+                {
+                    split_ts.push(pair[0].position);
+                }
+            }
+            let t_at = |point: crate::shape_geometry::Pt| {
+                let distance = (point.0 - centre.x) * cos + (point.1 - centre.y) * sin;
+                if extent > 1e-6 {
+                    0.5 + distance / extent
+                } else {
+                    0.5
+                }
+            };
+            crate::shape_fill::fill_contours_linear_shaded(
+                contours,
                 painter.pixels_per_point(),
                 GRADIENT_MAX_EDGE,
-                |point| {
-                    let distance = (point.0 - centre.x) * cos + (point.1 - centre.y) * sin;
-                    let t = if extent > 1e-6 {
-                        0.5 + distance / extent
-                    } else {
-                        0.5
-                    };
-                    apply_dim(sample_gradient(stops, t), dimmed, opacity)
+                &split_ts,
+                t_at,
+                |point, tri_mid_t| {
+                    let t = t_at(point);
+                    apply_dim(sample_gradient_side(stops, t, tri_mid_t), dimmed, opacity)
                 },
             )
         }
@@ -248,7 +369,7 @@ fn paint_gradient_fill(
             })
             .fold(0.0_f32, f32::max);
             fill_contours_shaded(
-                &contours,
+                contours,
                 painter.pixels_per_point(),
                 GRADIENT_MAX_EDGE,
                 |point| {
@@ -264,6 +385,26 @@ fn paint_gradient_fill(
             )
         }
         ResolvedFill::Picture { .. } => return,
+        ResolvedFill::Pattern { preset, fg, bg } => {
+            let fg = apply_dim(*fg, dimmed, opacity);
+            let bg = apply_dim(*bg, dimmed, opacity);
+            let (handle, tile_px) = pattern_tile_texture(painter.ctx(), preset, fg, bg);
+            let mut mesh = crate::shape_fill::fill_contours_uv(
+                contours,
+                painter.pixels_per_point(),
+                |point| {
+                    (
+                        (point.0 - rect.min.x) / tile_px,
+                        (point.1 - rect.min.y) / tile_px,
+                    )
+                },
+            );
+            mesh.texture_id = handle.id();
+            if !mesh.is_empty() {
+                painter.add(egui::Shape::mesh(mesh));
+            }
+            return;
+        }
     };
     if !mesh.is_empty() {
         painter.add(egui::Shape::mesh(mesh));
@@ -280,6 +421,7 @@ fn paint_picture_fill(
     adjust: &[f32],
     src: &str,
     tile: bool,
+    tile_scale: [f32; 2],
     scale: f32,
     dimmed: bool,
     opacity: f32,
@@ -288,6 +430,24 @@ fn paint_picture_fill(
     let Some(contours) = screen_contours(rect, kind, adjust) else {
         return false;
     };
+    paint_picture_contours(
+        painter, rect, &contours, src, tile, tile_scale, scale, dimmed, opacity, media,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_picture_contours(
+    painter: &Painter,
+    rect: Rect,
+    contours: &[Vec<crate::shape_geometry::Pt>],
+    src: &str,
+    tile: bool,
+    tile_scale: [f32; 2],
+    scale: f32,
+    dimmed: bool,
+    opacity: f32,
+    media: &mut Option<(&mut MediaCache, &dyn MediaSource)>,
+) -> bool {
     let Some((cache, source)) = media.as_mut() else {
         return false;
     };
@@ -303,8 +463,21 @@ fn paint_picture_fill(
     if !(tex_w.is_finite() && tex_h.is_finite() && tex_w > 0.0 && tex_h > 0.0) {
         return false;
     }
-    let tile_size = ((tex_w * scale).max(1e-3), (tex_h * scale).max(1e-3));
-    let mut mesh = fill_contours_uv(&contours, painter.pixels_per_point(), |point| {
+    let sx = if tile_scale[0].is_finite() && tile_scale[0] > 0.0 {
+        tile_scale[0]
+    } else {
+        1.0
+    };
+    let sy = if tile_scale[1].is_finite() && tile_scale[1] > 0.0 {
+        tile_scale[1]
+    } else {
+        1.0
+    };
+    let tile_size = (
+        (tex_w * scale * sx).max(1e-3),
+        (tex_h * scale * sy).max(1e-3),
+    );
+    let mut mesh = fill_contours_uv(contours, painter.pixels_per_point(), |point| {
         let local_x = point.0 - rect.min.x;
         let local_y = point.1 - rect.min.y;
         if tile {
@@ -455,11 +628,12 @@ pub fn paint_outline(
                 .collect()
         })
         .collect();
-    let mesh = stroke_contours(
+    let mesh = stroke_contours_pattern(
         &translated,
         outline.color,
         outline.width * scale,
         outline.dash,
+        outline.dash_pattern.as_deref(),
         painter.pixels_per_point(),
     );
     if !mesh.is_empty() {
@@ -653,6 +827,96 @@ fn draw_draw_card(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn paint_text_with_options(
+    slide_painter: &Painter,
+    screen_rect: Rect,
+    scale: f32,
+    runs: &[ResolvedTextRun],
+    paragraphs: &[coursecraft_course::Paragraph],
+    align: &Align,
+    valign: &VAlign,
+    autofit: coursecraft_course::Autofit,
+    wrap: bool,
+    insets: Option<coursecraft_course::TextInsets>,
+    direction: coursecraft_course::TextDirection,
+    dimmed: bool,
+    opacity: f32,
+    theme_text_color: Color32,
+) {
+    let text_rect = if let Some(ins) = insets {
+        let l = (ins.left.max(0.0) * scale).min(screen_rect.width() * 0.45);
+        let r = (ins.right.max(0.0) * scale).min(screen_rect.width() * 0.45);
+        let t = (ins.top.max(0.0) * scale).min(screen_rect.height() * 0.45);
+        let b = (ins.bottom.max(0.0) * scale).min(screen_rect.height() * 0.45);
+        Rect::from_min_max(
+            pos2(screen_rect.min.x + l, screen_rect.min.y + t),
+            pos2(screen_rect.max.x - r, screen_rect.max.y - b),
+        )
+    } else {
+        screen_rect
+    };
+    if !text_rect.is_positive() {
+        return;
+    }
+    let (layout_rect, rot_deg) = match direction {
+        coursecraft_course::TextDirection::Horizontal => (text_rect, 0.0f32),
+        coursecraft_course::TextDirection::Vertical => (
+            Rect::from_center_size(
+                text_rect.center(),
+                vec2(text_rect.height(), text_rect.width()),
+            ),
+            90.0,
+        ),
+        coursecraft_course::TextDirection::Vertical270 => (
+            Rect::from_center_size(
+                text_rect.center(),
+                vec2(text_rect.height(), text_rect.width()),
+            ),
+            270.0,
+        ),
+    };
+    let dir_marker = (rot_deg != 0.0).then(|| slide_painter.add(egui::Shape::Noop));
+    let dimmed_runs: Vec<ResolvedTextRun> = runs
+        .iter()
+        .map(|run| ResolvedTextRun {
+            color: apply_dim(run.color, dimmed, opacity),
+            ..run.clone()
+        })
+        .collect();
+    let laid = crate::text_layout::layout_text_with_wrap(
+        slide_painter.ctx(),
+        layout_rect,
+        scale,
+        &dimmed_runs,
+        paragraphs,
+        *align,
+        *valign,
+        autofit,
+        wrap,
+    );
+    let fallback_color = apply_dim(theme_text_color, dimmed, opacity);
+    for paragraph in &laid.paragraphs {
+        slide_painter.galley(paragraph.pos, paragraph.galley.clone(), fallback_color);
+        for (points, stroke) in crate::text_layout::underline_segments(paragraph, paragraph.pos) {
+            slide_painter.line_segment(points, stroke);
+        }
+        if let Some(marker) = &paragraph.marker {
+            crate::text_layout::paint_marker(slide_painter, marker, fallback_color);
+        }
+    }
+    if let Some(marker) = dir_marker {
+        transform_painted_shapes(
+            slide_painter,
+            marker,
+            text_rect.center(),
+            rot_deg,
+            false,
+            false,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn paint_text(
     slide_painter: &Painter,
     screen_rect: Rect,
@@ -666,33 +930,22 @@ fn paint_text(
     opacity: f32,
     theme_text_color: Color32,
 ) {
-    let dimmed_runs: Vec<ResolvedTextRun> = runs
-        .iter()
-        .map(|run| ResolvedTextRun {
-            color: apply_dim(run.color, dimmed, opacity),
-            ..run.clone()
-        })
-        .collect();
-    let laid = crate::text_layout::layout_text(
-        slide_painter.ctx(),
+    paint_text_with_options(
+        slide_painter,
         screen_rect,
         scale,
-        &dimmed_runs,
+        runs,
         paragraphs,
-        *align,
-        *valign,
+        align,
+        valign,
         autofit,
+        true,
+        None,
+        coursecraft_course::TextDirection::Horizontal,
+        dimmed,
+        opacity,
+        theme_text_color,
     );
-    let fallback_color = apply_dim(theme_text_color, dimmed, opacity);
-    for paragraph in &laid.paragraphs {
-        slide_painter.galley(paragraph.pos, paragraph.galley.clone(), fallback_color);
-        for (points, stroke) in crate::text_layout::underline_segments(paragraph, paragraph.pos) {
-            slide_painter.line_segment(points, stroke);
-        }
-        if let Some(marker) = &paragraph.marker {
-            slide_painter.galley(marker.pos, marker.galley.clone(), fallback_color);
-        }
-    }
 }
 
 /// Which anchor cell owns each slot of a resolved table grid.
@@ -838,7 +1091,7 @@ fn paint_table(
                     cell_painter.line_segment(points, stroke);
                 }
                 if let Some(marker) = &paragraph.marker {
-                    cell_painter.galley(marker.pos, marker.galley.clone(), fallback);
+                    crate::text_layout::paint_marker(&cell_painter, marker, fallback);
                 }
             }
             if show_overflow
@@ -1033,6 +1286,7 @@ pub fn paint_background(
 }
 
 /// Paint one drawn path into `screen_rect`.
+#[allow(clippy::too_many_arguments)]
 fn paint_path(
     painter: &Painter,
     screen_rect: Rect,
@@ -1040,6 +1294,7 @@ fn paint_path(
     path: &ResolvedPath,
     dimmed: bool,
     opacity: f32,
+    media: &mut Option<(&mut MediaCache, &dyn MediaSource)>,
 ) {
     if !screen_rect.is_positive()
         || !scale.is_finite()
@@ -1055,46 +1310,154 @@ fn paint_path(
     {
         return;
     }
-    let points: Vec<crate::shape_geometry::Pt> = path
-        .points
-        .iter()
-        .map(|point| {
-            (
-                screen_rect.min.x + point.x * screen_rect.width(),
-                screen_rect.min.y + point.y * screen_rect.height(),
-            )
-        })
-        .collect();
+    let to_screen = |pts: &[coursecraft_course::PathPoint]| -> Vec<crate::shape_geometry::Pt> {
+        pts.iter()
+            .map(|point| {
+                (
+                    screen_rect.min.x + point.x * screen_rect.width(),
+                    screen_rect.min.y + point.y * screen_rect.height(),
+                )
+            })
+            .collect()
+    };
+    let points = to_screen(&path.points);
     let fill = path.fill.map(|color| apply_dim(color, dimmed, opacity));
-    let (outline_color, outline_width, dash) = match &path.outline {
+    let (outline_color, outline_width, dash, dash_pattern) = match &path.outline {
         Some(outline) => (
             apply_dim(outline.color, dimmed, opacity),
             outline.width * scale,
             outline.dash,
+            outline.dash_pattern.clone(),
         ),
         None => (
             Color32::TRANSPARENT,
             0.0,
             coursecraft_course::DashStyle::Solid,
+            None,
         ),
     };
-    let mesh = path_mesh(
-        &points,
-        path.style,
-        path.closed,
-        path.connector,
-        path.start_end,
-        path.end_end,
-        &PathMeshSpec {
-            color: outline_color,
-            width: outline_width,
-            dash,
-            fill,
-            pixels_per_point: painter.pixels_per_point(),
-        },
-    );
-    if !mesh.is_empty() {
-        painter.add(egui::Shape::mesh(mesh));
+    if path.subpaths.is_empty() && path.fill_style.is_none() {
+        let mesh = path_mesh(
+            &points,
+            path.style,
+            path.closed,
+            path.connector,
+            path.start_end,
+            path.end_end,
+            &PathMeshSpec {
+                color: outline_color,
+                width: outline_width,
+                dash,
+                dash_pattern,
+                fill,
+                pixels_per_point: painter.pixels_per_point(),
+            },
+        );
+        if !mesh.is_empty() {
+            painter.add(egui::Shape::mesh(mesh));
+        }
+        return;
+    }
+
+    // Multi-subpath or styled fill path: fill all closed contours together with
+    // even-odd winding so holes cut cleanly, then stroke each contour.
+    let mut fill_contours_list: Vec<Vec<crate::shape_geometry::Pt>> = Vec::new();
+    if path.closed && points.len() >= 3 {
+        fill_contours_list.push(points.clone());
+    }
+    for sub in &path.subpaths {
+        let sub_pts = to_screen(&sub.points);
+        if sub.closed && sub_pts.len() >= 3 {
+            fill_contours_list.push(sub_pts);
+        }
+    }
+    if !fill_contours_list.is_empty() {
+        let mut drawn_style = false;
+        match &path.fill_style {
+            Some(ResolvedFill::Picture {
+                src,
+                tile,
+                tile_scale,
+            }) => {
+                drawn_style = paint_picture_contours(
+                    painter,
+                    screen_rect,
+                    &fill_contours_list,
+                    src,
+                    *tile,
+                    *tile_scale,
+                    scale,
+                    dimmed,
+                    opacity,
+                    media,
+                );
+            }
+            Some(style) => {
+                paint_gradient_contours(
+                    painter,
+                    screen_rect,
+                    &fill_contours_list,
+                    style,
+                    dimmed,
+                    opacity,
+                );
+                drawn_style = true;
+            }
+            None => {}
+        }
+        if !drawn_style
+            && let Some(fill_color) = fill
+            && fill_color.a() > 0
+        {
+            let filled = fill_contours(&fill_contours_list, fill_color, painter.pixels_per_point());
+            if !filled.is_empty() {
+                painter.add(egui::Shape::mesh(filled));
+            }
+        }
+    }
+
+    if outline_width > 0.0 && outline_color.a() > 0 {
+        let mesh = path_mesh(
+            &points,
+            path.style,
+            path.closed,
+            path.connector,
+            path.start_end,
+            path.end_end,
+            &PathMeshSpec {
+                color: outline_color,
+                width: outline_width,
+                dash,
+                dash_pattern: dash_pattern.clone(),
+                fill: None,
+                pixels_per_point: painter.pixels_per_point(),
+            },
+        );
+        if !mesh.is_empty() {
+            painter.add(egui::Shape::mesh(mesh));
+        }
+        for sub in &path.subpaths {
+            let sub_pts = to_screen(&sub.points);
+            let sub_mesh = path_mesh(
+                &sub_pts,
+                path.style,
+                sub.closed,
+                None,
+                coursecraft_course::LineEnd::None,
+                coursecraft_course::LineEnd::None,
+                &PathMeshSpec {
+                    color: outline_color,
+                    width: outline_width,
+                    dash,
+                    dash_pattern: dash_pattern.clone(),
+                    fill: None,
+                    pixels_per_point: painter.pixels_per_point(),
+                },
+            );
+            if !sub_mesh.is_empty() {
+                painter.add(egui::Shape::mesh(sub_mesh));
+            }
+        }
     }
 }
 
@@ -1134,6 +1497,7 @@ fn paint_path_silhouette(
             color,
             width,
             dash: coursecraft_course::DashStyle::Solid,
+            dash_pattern: None,
             fill,
             pixels_per_point: painter.pixels_per_point(),
         },
@@ -1334,7 +1698,7 @@ pub fn paint_items(
             item_painter = item_painter.with_clip_rect(current.intersect(screen_clip));
         }
 
-        let marker = transformed.then(|| item_painter.add(egui::Shape::Noop));
+        let mut marker = transformed.then(|| item_painter.add(egui::Shape::Noop));
 
         match &item.visual {
             Visual::Text {
@@ -1343,7 +1707,27 @@ pub fn paint_items(
                 valign,
                 paragraphs,
                 autofit,
+                outline,
+                wrap,
+                insets,
+                direction,
             } => {
+                if let Some(outline) = outline {
+                    let resolved = ResolvedOutline {
+                        color: apply_dim(outline.color, item.dimmed, op),
+                        width: outline.width,
+                        dash: outline.dash,
+                        dash_pattern: outline.dash_pattern.clone(),
+                    };
+                    paint_outline(
+                        &item_painter,
+                        screen_rect,
+                        ShapeKind::Rectangle,
+                        &[],
+                        &resolved,
+                        scale,
+                    );
+                }
                 if let Some(shadow) = &item.shadow {
                     paint_text_effect(
                         &item_painter,
@@ -1380,19 +1764,63 @@ pub fn paint_items(
                         op,
                     );
                 }
-                paint_text(
-                    &item_painter,
-                    screen_rect,
-                    scale,
-                    runs,
-                    paragraphs,
-                    align,
-                    valign,
-                    *autofit,
-                    item.dimmed,
-                    op,
-                    theme_text_color,
-                );
+                if item.flip_h
+                    && let Some(shape_marker) = marker.take()
+                {
+                    transform_painted_shapes(
+                        &item_painter,
+                        shape_marker,
+                        screen_rect.center(),
+                        rotation,
+                        item.flip_h,
+                        item.flip_v,
+                    );
+                    let text_marker = (rotation != 0.0 || item.flip_v)
+                        .then(|| item_painter.add(egui::Shape::Noop));
+                    paint_text_with_options(
+                        &item_painter,
+                        screen_rect,
+                        scale,
+                        runs,
+                        paragraphs,
+                        align,
+                        valign,
+                        *autofit,
+                        *wrap,
+                        *insets,
+                        *direction,
+                        item.dimmed,
+                        op,
+                        theme_text_color,
+                    );
+                    if let Some(tm) = text_marker {
+                        transform_painted_shapes(
+                            &item_painter,
+                            tm,
+                            screen_rect.center(),
+                            rotation,
+                            false,
+                            item.flip_v,
+                        );
+                    }
+                } else {
+                    paint_text_with_options(
+                        &item_painter,
+                        screen_rect,
+                        scale,
+                        runs,
+                        paragraphs,
+                        align,
+                        valign,
+                        *autofit,
+                        *wrap,
+                        *insets,
+                        *direction,
+                        item.dimmed,
+                        op,
+                        theme_text_color,
+                    );
+                }
             }
             Visual::Button {
                 label,
@@ -1448,7 +1876,11 @@ pub fn paint_items(
                 let mut drawn = false;
                 if !solid_override {
                     match fill_style {
-                        Some(ResolvedFill::Picture { src, tile }) => {
+                        Some(ResolvedFill::Picture {
+                            src,
+                            tile,
+                            tile_scale,
+                        }) => {
                             drawn = paint_picture_fill(
                                 &item_painter,
                                 screen_rect,
@@ -1456,6 +1888,7 @@ pub fn paint_items(
                                 &button_adjust,
                                 src,
                                 *tile,
+                                *tile_scale,
                                 scale,
                                 item.dimmed,
                                 op,
@@ -1553,7 +1986,11 @@ pub fn paint_items(
                 let mut drawn = false;
                 if !solid_override {
                     match fill_style {
-                        Some(ResolvedFill::Picture { src, tile }) => {
+                        Some(ResolvedFill::Picture {
+                            src,
+                            tile,
+                            tile_scale,
+                        }) => {
                             drawn = paint_picture_fill(
                                 &item_painter,
                                 screen_rect,
@@ -1561,6 +1998,7 @@ pub fn paint_items(
                                 adjust,
                                 src,
                                 *tile,
+                                *tile_scale,
                                 scale,
                                 item.dimmed,
                                 op,
@@ -1590,12 +2028,27 @@ pub fn paint_items(
                         color: apply_dim(outline.color, item.dimmed, op),
                         width: outline.width,
                         dash: outline.dash,
+                        dash_pattern: outline.dash_pattern.clone(),
                     };
                     paint_outline(&item_painter, screen_rect, *shape, adjust, &resolved, scale);
                 }
                 if let Some(text) = text
                     && !text.runs.is_empty()
                 {
+                    if item.flip_h
+                        && let Some(shape_marker) = marker.take()
+                    {
+                        transform_painted_shapes(
+                            &item_painter,
+                            shape_marker,
+                            screen_rect.center(),
+                            rotation,
+                            item.flip_h,
+                            item.flip_v,
+                        );
+                    }
+                    let text_marker = (item.flip_h && (rotation != 0.0 || item.flip_v))
+                        .then(|| item_painter.add(egui::Shape::Noop));
                     let (tx, ty, tw, th) = shape_text_rect(
                         *shape,
                         screen_rect.width() / scale,
@@ -1611,7 +2064,7 @@ pub fn paint_items(
                     );
                     if text_rect.width() > 0.0 && text_rect.height() > 0.0 {
                         // Text may overflow its shape, as it does in PowerPoint.
-                        paint_text(
+                        paint_text_with_options(
                             &item_painter,
                             text_rect,
                             scale,
@@ -1620,9 +2073,22 @@ pub fn paint_items(
                             &text.align,
                             &text.valign,
                             text.autofit,
+                            text.wrap,
+                            text.insets,
+                            text.direction,
                             item.dimmed,
                             op,
                             theme_text_color,
+                        );
+                    }
+                    if let Some(tm) = text_marker {
+                        transform_painted_shapes(
+                            &item_painter,
+                            tm,
+                            screen_rect.center(),
+                            rotation,
+                            false,
+                            item.flip_v,
                         );
                     }
                 }
@@ -1657,7 +2123,59 @@ pub fn paint_items(
                         paint_path_silhouette(&item_painter, rect, scale, path, color, expansion);
                     }
                 }
-                paint_path(&item_painter, screen_rect, scale, path, item.dimmed, op);
+                paint_path(
+                    &item_painter,
+                    screen_rect,
+                    scale,
+                    path,
+                    item.dimmed,
+                    op,
+                    &mut media,
+                );
+                if let Some(text) = &path.text
+                    && !text.runs.is_empty()
+                {
+                    if item.flip_h
+                        && let Some(shape_marker) = marker.take()
+                    {
+                        transform_painted_shapes(
+                            &item_painter,
+                            shape_marker,
+                            screen_rect.center(),
+                            rotation,
+                            item.flip_h,
+                            item.flip_v,
+                        );
+                    }
+                    let text_marker = (item.flip_h && (rotation != 0.0 || item.flip_v))
+                        .then(|| item_painter.add(egui::Shape::Noop));
+                    paint_text_with_options(
+                        &item_painter,
+                        screen_rect.shrink((4.0 * scale).min(screen_rect.width() * 0.25)),
+                        scale,
+                        &text.runs,
+                        &text.paragraphs,
+                        &text.align,
+                        &text.valign,
+                        text.autofit,
+                        text.wrap,
+                        text.insets,
+                        text.direction,
+                        item.dimmed,
+                        op,
+                        theme_text_color,
+                    );
+                    if let Some(tm) = text_marker {
+                        transform_painted_shapes(
+                            &item_painter,
+                            tm,
+                            screen_rect.center(),
+                            rotation,
+                            false,
+                            item.flip_v,
+                        );
+                    }
+                }
             }
             Visual::Table(table) => {
                 if let Some(shadow) = &item.shadow {
@@ -1699,12 +2217,19 @@ pub fn paint_items(
                     item.show_table_overflow,
                 );
             }
-            Visual::Image { src, alt, crop } => {
+            Visual::Image {
+                src,
+                alt,
+                crop,
+                outline,
+                shape,
+            } => {
+                let shape_kind = shape.unwrap_or(ShapeKind::Rectangle);
                 if let Some(shadow) = &item.shadow {
                     paint_shape_effect(
                         &item_painter,
                         screen_rect,
-                        ShapeKind::Rectangle,
+                        shape_kind,
                         &[],
                         shadow.color,
                         (shadow.offset_x * scale, shadow.offset_y * scale),
@@ -1718,7 +2243,7 @@ pub fn paint_items(
                     paint_shape_effect(
                         &item_painter,
                         screen_rect,
-                        ShapeKind::Rectangle,
+                        shape_kind,
                         &[],
                         glow.color,
                         (0.0, 0.0),
@@ -1730,14 +2255,24 @@ pub fn paint_items(
                 }
                 let mut drawn_texture = false;
                 let mut failure_msg = None;
-                if let Some((ref mut cache, source)) = media {
+                if let Some(mask_shape) = shape {
+                    drawn_texture = paint_picture_fill(
+                        &item_painter,
+                        screen_rect,
+                        *mask_shape,
+                        &[],
+                        src,
+                        false,
+                        [1.0, 1.0],
+                        scale,
+                        item.dimmed,
+                        op,
+                        &mut media,
+                    );
+                } else if let Some((ref mut cache, source)) = media {
                     let target_px = image_target_px(screen_rect, painter.pixels_per_point());
                     match cache.texture_for(painter.ctx(), src, source, target_px) {
                         MediaView::Ready { texture, size } => {
-                            // `None` (no crop, or an untrusted crop the composer
-                            // dropped) keeps the old aspect-fit drawing. A crop's
-                            // kept window fills the frame, so its pixels keep the
-                            // scale the crop editor works in, per axis.
                             let tex_size = (size[0] as f32, size[1] as f32);
                             if let Some(dest_rect) = image_dest_rect(screen_rect, tex_size, *crop) {
                                 let window = crop.unwrap_or(FULL_UV);
@@ -1775,11 +2310,27 @@ pub fn paint_items(
                         op,
                     );
                 }
+                if let Some(outline) = outline {
+                    let resolved = ResolvedOutline {
+                        color: apply_dim(outline.color, item.dimmed, op),
+                        width: outline.width,
+                        dash: outline.dash,
+                        dash_pattern: outline.dash_pattern.clone(),
+                    };
+                    paint_outline(
+                        &item_painter,
+                        screen_rect,
+                        shape_kind,
+                        &[],
+                        &resolved,
+                        scale,
+                    );
+                }
             }
             Visual::ImagePlaceholder { label } => {
                 draw_image_placeholder(&item_painter, screen_rect, scale, label, item.dimmed, op);
             }
-            Visual::Video { src: _, poster: _ } => {
+            Visual::Video { src: _, poster } => {
                 // Desktop playback: draw the newest decoded frame as a texture
                 // when one exists, with the poster as the fallback.
                 let mut drawn_frame = false;
@@ -1798,6 +2349,19 @@ pub fn paint_items(
                             let tint = apply_dim(Color32::WHITE, item.dimmed, op);
                             item_painter.image(texture.id(), dest_rect, FULL_UV, tint);
                             drawn_frame = true;
+                        }
+                    }
+                    if !drawn_frame && let Some(poster_src) = poster {
+                        let target_px = image_target_px(screen_rect, painter.pixels_per_point());
+                        if let MediaView::Ready { texture, size } =
+                            cache.texture_for(painter.ctx(), poster_src, *source, target_px)
+                        {
+                            let tex_size = (size[0] as f32, size[1] as f32);
+                            if let Some(dest_rect) = image_dest_rect(screen_rect, tex_size, None) {
+                                let tint = apply_dim(Color32::WHITE, item.dimmed, op);
+                                item_painter.image(texture.id(), dest_rect, FULL_UV, tint);
+                                drawn_frame = true;
+                            }
                         }
                     }
                 }
@@ -1843,16 +2407,22 @@ pub fn paint_items(
                     Stroke::NONE,
                 ));
 
-                // Poster text
+                // Poster text (or plain error message if preview decode failed)
+                let error_text = media.as_ref().and_then(|(_, source)| {
+                    if let Hit::Object(id) = &item.hit {
+                        source.video_error(id)
+                    } else {
+                        None
+                    }
+                });
+                let label = error_text
+                    .unwrap_or("Video plays in the published course")
+                    .to_string();
                 let font_size = (14.0 * scale).max(1.0);
                 let font_id = crate::font::slide_font(item_painter.ctx(), false, false, font_size);
                 let text_color = apply_dim(Color32::from_rgb(0xAA, 0xAA, 0xAA), item.dimmed, op);
-                let galley = item_painter.layout(
-                    "Video plays in the published course".to_string(),
-                    font_id,
-                    text_color,
-                    screen_rect.width().max(0.0),
-                );
+                let galley =
+                    item_painter.layout(label, font_id, text_color, screen_rect.width().max(0.0));
                 let text_pos = pos2(
                     center.x - galley.size().x * 0.5,
                     center.y + play_radius + 4.0 * scale - 12.0 * scale,

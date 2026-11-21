@@ -73,6 +73,7 @@ fn text(id: &str, content: &str, size: f32, color: &str) -> Object {
             paragraphs: Vec::new(),
             autofit: crate::Autofit::None,
             text_style: None,
+            outline: None,
         },
         (0.0, 0.0, 400.0, 100.0),
     )
@@ -97,6 +98,8 @@ fn image(id: &str, alt: &str) -> Object {
             src: "image.png".to_owned(),
             alt: alt.to_owned(),
             crop: None,
+            outline: None,
+            shape: None,
         },
         (600.0, 0.0, 200.0, 200.0),
     )
@@ -152,6 +155,7 @@ fn video(id: &str, autoplay: bool, captions: Option<&str>) -> Object {
             volume: 1.0,
             trim: None,
             cues: Vec::new(),
+            poster: None,
         },
         (0.0, 0.0, 400.0, 300.0),
     )
@@ -454,6 +458,8 @@ fn a_fully_covered_text_over_an_image_is_unknown_not_a_guess() {
             src: "photo.png".to_owned(),
             alt: "A photo".to_owned(),
             crop: None,
+            outline: None,
+            shape: None,
         },
         (0.0, 0.0, 400.0, 100.0),
     ));
@@ -528,6 +534,7 @@ fn runs_are_checked_separately_with_their_own_colours() {
         paragraphs: Vec::new(),
         autofit: crate::Autofit::None,
         text_style: None,
+        outline: None,
     };
     slide(&mut course).objects.push(object);
     let findings = findings(&course);
@@ -886,6 +893,8 @@ fn crowded_course() -> Course {
             src: "photo.png".to_owned(),
             alt: "A photo".to_owned(),
             crop: None,
+            outline: None,
+            shape: None,
         },
         (0.0, 150.0, 400.0, 100.0),
     ));

@@ -48,6 +48,16 @@ pub fn show_shape_gallery_selected(
     selected: Option<ShapeKind>,
     on_pick: &mut dyn FnMut(GalleryPick),
 ) -> ShapeGalleryOutput {
+    show_shape_gallery_inner(ui, query, selected, true, on_pick)
+}
+
+fn show_shape_gallery_inner(
+    ui: &mut Ui,
+    query: &mut String,
+    selected: Option<ShapeKind>,
+    close_on_pick: bool,
+    on_pick: &mut dyn FnMut(GalleryPick),
+) -> ShapeGalleryOutput {
     let mut output = ShapeGalleryOutput::default();
     ui.set_min_width((GALLERY_WIDTH - 24.0).max(220.0));
     ui.set_max_width(GALLERY_WIDTH);
@@ -96,7 +106,9 @@ pub fn show_shape_gallery_selected(
                         let response = response.on_hover_text(tool.label());
                         if response.clicked() {
                             on_pick(GalleryPick::Draw(tool));
-                            ui.close();
+                            if close_on_pick {
+                                ui.close();
+                            }
                         }
                     }
                 });
@@ -155,7 +167,9 @@ pub fn show_shape_gallery_selected(
                         let response = response.on_hover_text(info.label);
                         if response.clicked() {
                             on_pick(GalleryPick::Shape(info.kind));
-                            ui.close();
+                            if close_on_pick {
+                                ui.close();
+                            }
                         }
                     }
                 });
@@ -166,7 +180,7 @@ pub fn show_shape_gallery_selected(
             }
         });
 
-    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+    if close_on_pick && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
         ui.close();
     }
     output
@@ -296,9 +310,13 @@ pub fn show_shape_gallery_window(editor: &mut crate::Editor, ctx: &egui::Context
         .open(&mut open)
         .width(GALLERY_WIDTH)
         .show(ctx, |ui| {
-            let output = show_shape_gallery(ui, &mut editor.ui.shape_gallery_query, &mut |pick| {
-                picked = Some(pick)
-            });
+            let output = show_shape_gallery_inner(
+                ui,
+                &mut editor.ui.shape_gallery_query,
+                None,
+                false,
+                &mut |pick| picked = Some(pick),
+            );
             editor.ui.shape_gallery_rects = output.icons;
             editor.ui.shape_gallery_draw_rects = output.draw_icons;
             editor.ui.shape_gallery_search_rect = output.search_rect;
@@ -310,7 +328,9 @@ pub fn show_shape_gallery_window(editor: &mut crate::Editor, ctx: &egui::Context
             GalleryPick::Draw(tool) => crate::toolbar::insert_draw(editor, tool),
         }
         editor.ui.show_shape_gallery_window = false;
+        editor.ui.shape_gallery_query.clear();
     } else if !open || escape {
         editor.ui.show_shape_gallery_window = false;
+        editor.ui.shape_gallery_query.clear();
     }
 }

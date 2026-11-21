@@ -15,6 +15,8 @@ pub struct FormatPainter {
     pub source: String,
     /// Stays armed after an application.
     pub sticky: bool,
+    /// Suppresses the release `clicked()` of the double-click that armed sticky mode.
+    pub(crate) just_double_clicked: bool,
 }
 
 /// Cmd/Ctrl+Alt+C arms the painter from the selection.
@@ -38,6 +40,7 @@ impl Editor {
         if !self.can_arm_format_painter() {
             return;
         }
+        crate::canvas::commit_inline_edit(self);
         let Some(source) = self.selection.object.clone() else {
             return;
         };
@@ -45,6 +48,7 @@ impl Editor {
             source_slide: self.selection.slide.clone(),
             source,
             sticky,
+            just_double_clicked: false,
         });
     }
 
@@ -202,5 +206,237 @@ mod tests {
         assert_eq!(fill_of(&h, "c"), "#112233");
         h.editor.session.undo().expect("undo");
         assert_eq!(fill_of(&h, "b"), "#FF0000");
+    }
+
+    #[test]
+    fn user_click_shape_paint_then_click_with_jitter_copies_format() {
+        let (mut h, t) = setup();
+        // 1. Select shape "a" by clicking it on the canvas.
+        h.click_at(t.to_screen_pos(pos2(200.0, 160.0)));
+        assert_eq!(h.editor.selection.object.as_deref(), Some("a"));
+
+        // 2. Click the "Paint" button in the toolbar.
+        let paint = h.find_text("Paint").expect("Paint button in toolbar");
+        h.click_at(paint);
+        assert!(h.editor.ui.format_painter.is_some());
+        assert!(
+            h.find_text("Click an object to copy the format onto it (Esc to cancel)")
+                .is_some(),
+            "status hint should be visible while paint mode is on"
+        );
+
+        // 3. Click shape "b" on the canvas with a realistic 4px pointer jitter
+        //    between press and release.
+        let target = t.to_screen_pos(pos2(700.0, 360.0));
+        h.frame(vec![egui::Event::PointerMoved(target)]);
+        h.frame(vec![egui::Event::PointerButton {
+            pos: target,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let jittered = pos2(target.x + 4.0, target.y + 2.0);
+        h.frame(vec![egui::Event::PointerMoved(jittered)]);
+        h.frame(vec![egui::Event::PointerButton {
+            pos: jittered,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        h.idle_frame();
+
+        assert_eq!(
+            fill_of(&h, "b"),
+            "#112233",
+            "target should receive source fill"
+        );
+        assert!(h.editor.ui.format_painter.is_none());
+    }
+
+    #[test]
+    fn paint_mode_shows_copy_cursor_on_canvas_and_double_click_is_sticky() {
+        let (mut h, t) = setup();
+        h.click_at(t.to_screen_pos(pos2(200.0, 160.0)));
+        let paint = h.find_text("Paint").expect("Paint button in toolbar");
+        // Double-click Paint to keep it armed for multiple objects.
+        let click = |h: &mut TestHarness, time: f64| {
+            for (t, ev) in [
+                (time, egui::Event::PointerMoved(paint)),
+                (
+                    time + 0.01,
+                    egui::Event::PointerButton {
+                        pos: paint,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ),
+                (
+                    time + 0.02,
+                    egui::Event::PointerButton {
+                        pos: paint,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ),
+            ] {
+                let output = h.ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(h.screen_rect),
+                        time: Some(t),
+                        events: vec![ev],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let _ = h.editor.show(ui);
+                    },
+                );
+                output.drop_without_applying_deltas();
+            }
+        };
+        click(&mut h, 1.0);
+        assert!(h.editor.ui.format_painter.is_some(), "first click arms");
+        click(&mut h, 1.1);
+        assert!(
+            h.editor
+                .ui
+                .format_painter
+                .as_ref()
+                .is_some_and(|p| p.sticky),
+            "double-clicking Paint should arm sticky mode, got: {:?}",
+            h.editor.ui.format_painter
+        );
+
+        // Hovering the canvas in paint mode shows the Copy cursor.
+        let canvas_pt = t.to_screen_pos(pos2(700.0, 360.0));
+        let output = h.ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(h.screen_rect),
+                events: vec![egui::Event::PointerMoved(canvas_pt)],
+                ..Default::default()
+            },
+            |ui| {
+                let _ = h.editor.show(ui);
+            },
+        );
+        assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::Copy);
+        output.drop_without_applying_deltas();
+
+        // Click two targets in sticky mode, then cancel with Esc.
+        h.click_at(t.to_screen_pos(pos2(700.0, 360.0)));
+        h.click_at(t.to_screen_pos(pos2(1000.0, 560.0)));
+        assert_eq!(fill_of(&h, "b"), "#112233");
+        assert_eq!(fill_of(&h, "c"), "#112233");
+        assert!(h.editor.ui.format_painter.is_some());
+        h.press(Key::Escape, Modifiers::NONE);
+        assert!(h.editor.ui.format_painter.is_none());
+    }
+
+    #[test]
+    fn text_box_to_text_box_and_shape_outline_copy_and_undo() {
+        let json = serde_json::json!({
+            "schema_version": 1, "id": "fp2", "title": "FP2",
+            "slide_size": { "w": 1280, "h": 720 },
+            "scenes": [{ "id": "scene1", "title": "S", "slides": [{
+                "id": "slide1", "title": "One",
+                "objects": [
+                    { "id": "t1", "kind": { "type": "text", "text": "Source",
+                        "style": { "size": 32, "bold": true, "color": "#AA2244" } },
+                      "frame": { "x": 100, "y": 100, "w": 240, "h": 100 } },
+                    { "id": "t2", "kind": { "type": "text", "text": "Target",
+                        "style": { "size": 14, "bold": false, "color": "#000000" } },
+                      "frame": { "x": 500, "y": 100, "w": 240, "h": 100 } },
+                    { "id": "s1", "kind": { "type": "shape", "shape": "rectangle",
+                        "fill": "#123456",
+                        "outline": { "color": "#FEDCBA", "width": 4.0 } },
+                      "frame": { "x": 100, "y": 350, "w": 200, "h": 120 } },
+                    { "id": "s2", "kind": { "type": "shape", "shape": "ellipse",
+                        "fill": "#FFFFFF" },
+                      "frame": { "x": 500, "y": 350, "w": 200, "h": 120 } }
+                ]
+            }]}]
+        });
+        let course = Course::from_json(&json.to_string()).expect("course");
+        let mut h = TestHarness::new(course);
+        h.editor.selection.slide = "slide1".into();
+        h.editor.ui.snap_to_guides = false;
+        h.idle_frame();
+        let t = SlideTransform::fit(
+            canvas_fit_rect(canvas_rect(h.central_panel_rect())),
+            h.editor.session.course.slide_size,
+        )
+        .expect("transform");
+
+        // Text box to text box
+        h.click_at(t.to_screen_pos(pos2(220.0, 150.0)));
+        let paint = h.find_text("Paint").expect("Paint button");
+        h.click_at(paint);
+        h.click_at(t.to_screen_pos(pos2(620.0, 150.0)));
+        let t2 = &h
+            .editor
+            .session
+            .course
+            .slide("slide1")
+            .expect("slide")
+            .object("t2")
+            .expect("t2")
+            .0
+            .kind;
+        match t2 {
+            ObjectKind::Text { text, style, .. } => {
+                assert_eq!(text, "Target");
+                assert!((style.size - 32.0).abs() < 0.01);
+                assert!(style.bold);
+                assert_eq!(style.color.0, "#AA2244");
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // Undo restores t2
+        h.editor.session.undo().expect("undo");
+        let t2_after = &h
+            .editor
+            .session
+            .course
+            .slide("slide1")
+            .expect("slide")
+            .object("t2")
+            .expect("t2")
+            .0
+            .kind;
+        match t2_after {
+            ObjectKind::Text { style, .. } => {
+                assert!((style.size - 14.0).abs() < 0.01);
+                assert!(!style.bold);
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // Shape fill + outline to another shape
+        h.click_at(t.to_screen_pos(pos2(200.0, 410.0)));
+        let paint = h.find_text("Paint").expect("Paint button");
+        h.click_at(paint);
+        h.click_at(t.to_screen_pos(pos2(600.0, 410.0)));
+        let s2 = &h
+            .editor
+            .session
+            .course
+            .slide("slide1")
+            .expect("slide")
+            .object("s2")
+            .expect("s2")
+            .0
+            .kind;
+        match s2 {
+            ObjectKind::Shape { fill, outline, .. } => {
+                assert_eq!(fill.0, "#123456");
+                assert_eq!(
+                    outline.as_ref().map(|o| (o.color.0.as_str(), o.width)),
+                    Some(("#FEDCBA", 4.0))
+                );
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

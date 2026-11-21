@@ -446,6 +446,8 @@ fn control_save_on_open_folder_without_extension_keeps_folder_record() {
         src: "logo.png".to_owned(),
         alt: "Logo".to_owned(),
         crop: None,
+        outline: None,
+        shape: None,
     };
     initial.scenes[0].slides[0].objects.push(img);
     let mut record = FolderRecord::new();

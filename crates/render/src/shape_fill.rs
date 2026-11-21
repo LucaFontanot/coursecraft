@@ -551,11 +551,138 @@ pub fn fill_contours_shaded(
         let coverage = vertex.color.a();
         let mut color = color_at((vertex.pos.x, vertex.pos.y));
         if coverage < 255 {
-            let alpha = (u16::from(color.a()) * u16::from(coverage) / 255) as u8;
-            let [r, g, b, _] = color.to_srgba_unmultiplied();
-            color = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+            color = color.gamma_multiply(f32::from(coverage) / 255.0);
         }
         vertex.color = color;
+    }
+    mesh
+}
+
+fn lerp_vertex(a: &egui::epaint::Vertex, b: &egui::epaint::Vertex, u: f32) -> egui::epaint::Vertex {
+    let u = u.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * u).round() as u8;
+    egui::epaint::Vertex {
+        pos: pos2(
+            a.pos.x + (b.pos.x - a.pos.x) * u,
+            a.pos.y + (b.pos.y - a.pos.y) * u,
+        ),
+        uv: pos2(
+            a.uv.x + (b.uv.x - a.uv.x) * u,
+            a.uv.y + (b.uv.y - a.uv.y) * u,
+        ),
+        color: Color32::from_rgba_premultiplied(
+            mix(a.color.r(), b.color.r()),
+            mix(a.color.g(), b.color.g()),
+            mix(a.color.b(), b.color.b()),
+            mix(a.color.a(), b.color.a()),
+        ),
+    }
+}
+
+fn split_mesh_at_cuts(mesh: &mut Mesh, split_ts: &[f32], t_at: &impl Fn(Pt) -> f32) {
+    const CUT_EPS: f32 = 1e-5;
+    for &cut in split_ts {
+        if !cut.is_finite() || mesh.indices.len() < 3 {
+            continue;
+        }
+        let mut out = Mesh {
+            texture_id: mesh.texture_id,
+            ..Mesh::default()
+        };
+        for triangle in mesh.indices.as_chunks::<3>().0 {
+            let (Some(a), Some(b), Some(c)) = (
+                mesh.vertices.get(triangle[0] as usize).copied(),
+                mesh.vertices.get(triangle[1] as usize).copied(),
+                mesh.vertices.get(triangle[2] as usize).copied(),
+            ) else {
+                continue;
+            };
+            let ta = t_at((a.pos.x, a.pos.y));
+            let tb = t_at((b.pos.x, b.pos.y));
+            let tc = t_at((c.pos.x, c.pos.y));
+            let has_below = ta < cut - CUT_EPS || tb < cut - CUT_EPS || tc < cut - CUT_EPS;
+            let has_above = ta > cut + CUT_EPS || tb > cut + CUT_EPS || tc > cut + CUT_EPS;
+            if !has_below || !has_above || out.vertices.len() + 9 > MAX_SHADED_FILL_VERTICES {
+                let base = out.vertices.len() as u32;
+                out.vertices.extend([a, b, c]);
+                out.add_triangle(base, base.saturating_add(1), base.saturating_add(2));
+                continue;
+            }
+            let verts = [(a, ta), (b, tb), (c, tc)];
+            // Case 1: one vertex is on the cut, the other two are on opposite sides.
+            if let Some(on_idx) = (0..3).find(|&i| (verts[i].1 - cut).abs() <= CUT_EPS) {
+                let (v0, _) = verts[on_idx];
+                let (v1, t1) = verts[(on_idx + 1) % 3];
+                let (v2, t2) = verts[(on_idx + 2) % 3];
+                let u = ((cut - t1) / (t2 - t1)).clamp(0.0, 1.0);
+                let p = lerp_vertex(&v1, &v2, u);
+                let base = out.vertices.len() as u32;
+                out.vertices.extend([v0, v1, p, v0, p, v2]);
+                out.add_triangle(base, base + 1, base + 2);
+                out.add_triangle(base + 3, base + 4, base + 5);
+                continue;
+            }
+            // Case 2: one vertex is alone on its side, two are on the other side.
+            let below_count = usize::from(ta < cut) + usize::from(tb < cut) + usize::from(tc < cut);
+            let want_below = below_count == 1;
+            let lone_idx = (0..3)
+                .find(|&i| (verts[i].1 < cut) == want_below)
+                .unwrap_or(0);
+            let (v0, t0) = verts[lone_idx];
+            let (v1, t1) = verts[(lone_idx + 1) % 3];
+            let (v2, t2) = verts[(lone_idx + 2) % 3];
+            let p1 = lerp_vertex(&v0, &v1, (cut - t0) / (t1 - t0));
+            let p2 = lerp_vertex(&v0, &v2, (cut - t0) / (t2 - t0));
+            let base = out.vertices.len() as u32;
+            out.vertices.extend([v0, p1, p2, p1, v1, v2, p1, v2, p2]);
+            out.add_triangle(base, base + 1, base + 2);
+            out.add_triangle(base + 3, base + 4, base + 5);
+            out.add_triangle(base + 6, base + 7, base + 8);
+        }
+        *mesh = out;
+    }
+}
+
+/// Triangulate `contours`, split triangles at hard-step iso-lines `split_ts`,
+/// and colour every triangle's vertices from `color_at(point, tri_mid_t)`.
+#[must_use]
+pub fn fill_contours_linear_shaded(
+    contours: &[Vec<Pt>],
+    pixels_per_point: f32,
+    max_edge: f32,
+    split_ts: &[f32],
+    t_at: impl Fn(Pt) -> f32,
+    color_at: impl Fn(Pt, f32) -> Color32,
+) -> Mesh {
+    let mut mesh = fill_contours(contours, Color32::WHITE, pixels_per_point);
+    subdivide_mesh(&mut mesh, max_edge);
+    if !split_ts.is_empty() {
+        split_mesh_at_cuts(&mut mesh, split_ts, &t_at);
+    }
+    for tri in mesh.indices.as_chunks::<3>().0 {
+        let (Some(i0), Some(i1), Some(i2)) = (
+            Some(tri[0] as usize),
+            Some(tri[1] as usize),
+            Some(tri[2] as usize),
+        ) else {
+            continue;
+        };
+        if i2 >= mesh.vertices.len() || i1 >= mesh.vertices.len() || i0 >= mesh.vertices.len() {
+            continue;
+        }
+        let t0 = t_at((mesh.vertices[i0].pos.x, mesh.vertices[i0].pos.y));
+        let t1 = t_at((mesh.vertices[i1].pos.x, mesh.vertices[i1].pos.y));
+        let t2 = t_at((mesh.vertices[i2].pos.x, mesh.vertices[i2].pos.y));
+        let tri_mid_t = (t0 + t1 + t2) / 3.0;
+        for idx in [i0, i1, i2] {
+            let v = &mut mesh.vertices[idx];
+            let coverage = v.color.a();
+            let mut color = color_at((v.pos.x, v.pos.y), tri_mid_t);
+            if coverage < 255 {
+                color = color.gamma_multiply(f32::from(coverage) / 255.0);
+            }
+            v.color = color;
+        }
     }
     mesh
 }
@@ -606,7 +733,8 @@ fn subdivide_mesh(mesh: &mut Mesh, max_edge: f32) {
         texture_id,
         ..Mesh::default()
     };
-    let mut stack: Vec<[egui::epaint::Vertex; 3]> = Vec::new();
+    let mut queue: std::collections::VecDeque<[egui::epaint::Vertex; 3]> =
+        std::collections::VecDeque::new();
     for triangle in mesh.indices.as_chunks::<3>().0 {
         let (Some(a), Some(b), Some(c)) = (
             mesh.vertices.get(triangle[0] as usize).copied(),
@@ -615,27 +743,28 @@ fn subdivide_mesh(mesh: &mut Mesh, max_edge: f32) {
         ) else {
             continue;
         };
-        stack.push([a, b, c]);
+        queue.push_back([a, b, c]);
     }
-    while let Some([a, b, c]) = stack.pop() {
+    while let Some([a, b, c]) = queue.pop_front() {
         let ab = (a.pos.x - b.pos.x).powi(2) + (a.pos.y - b.pos.y).powi(2);
         let bc = (b.pos.x - c.pos.x).powi(2) + (b.pos.y - c.pos.y).powi(2);
         let ca = (c.pos.x - a.pos.x).powi(2) + (c.pos.y - a.pos.y).powi(2);
         let longest = ab.max(bc).max(ca);
-        if longest > max_edge_sq && out.vertices.len().saturating_add(3) <= MAX_SHADED_FILL_VERTICES
+        if longest > max_edge_sq
+            && out.vertices.len() + queue.len() * 3 + 3 <= MAX_SHADED_FILL_VERTICES
         {
             if longest == ab {
                 let m = midpoint(&a, &b);
-                stack.push([a, m, c]);
-                stack.push([m, b, c]);
+                queue.push_back([a, m, c]);
+                queue.push_back([m, b, c]);
             } else if longest == bc {
                 let m = midpoint(&b, &c);
-                stack.push([a, b, m]);
-                stack.push([a, m, c]);
+                queue.push_back([a, b, m]);
+                queue.push_back([a, m, c]);
             } else {
                 let m = midpoint(&c, &a);
-                stack.push([a, b, m]);
-                stack.push([m, b, c]);
+                queue.push_back([a, b, m]);
+                queue.push_back([m, b, c]);
             }
         } else {
             let base = out.vertices.len() as u32;
@@ -653,20 +782,33 @@ const MITER_LIMIT: f32 = 4.0;
 /// Segments in one round dot.
 const DOT_SEGMENTS: usize = 12;
 
-/// Build a mesh for a band of `width` centred on each contour's edge.
+/// Build a mesh for a band of `width` centred on each closed contour.
 ///
 /// Every contour, including a hole, gets its own closed band. Joins are mitred
-/// up to [`MITER_LIMIT`] and bevelled past it. `Dash` splits each path by arc
-/// length into dashes three widths long with two-width gaps; `Dot` places round
-/// dots two widths apart. The band is a single ring polygon fed through
-/// [`fill_contours`], so it gets the same one-pixel feather and never overlaps
-/// itself at a join. Non-finite or non-positive widths draw nothing.
+/// up to [`MITER_LIMIT`] and bevelled past it. `dash` breaks the band into
+/// dashes, round dots or dash-dot groups. The band is a single ring polygon fed
+/// through [`fill_contours`], so it gets the same one-pixel feather and never
+/// overlaps itself at a join. Non-finite or non-positive widths draw nothing.
 #[must_use]
 pub fn stroke_contours(
     contours: &[Vec<Pt>],
     color: Color32,
     width: f32,
     dash: coursecraft_course::DashStyle,
+    pixels_per_point: f32,
+) -> Mesh {
+    stroke_contours_pattern(contours, color, width, dash, None, pixels_per_point)
+}
+
+/// Like [`stroke_contours`], with an optional custom alternating
+/// `[dash, gap, ...]` pattern in multiples of `width`.
+#[must_use]
+pub fn stroke_contours_pattern(
+    contours: &[Vec<Pt>],
+    color: Color32,
+    width: f32,
+    dash: coursecraft_course::DashStyle,
+    dash_pattern: Option<&[f32]>,
     pixels_per_point: f32,
 ) -> Mesh {
     let mut mesh = Mesh::default();
@@ -687,25 +829,18 @@ pub fn stroke_contours(
         0.0
     };
     for contour in &cleaned {
-        match dash {
-            coursecraft_course::DashStyle::Solid => {
-                add_band(&mut mesh, contour, true, half, feather, color);
-            }
-            coursecraft_course::DashStyle::Dash => {
-                for piece in dash_pieces(contour, true, width * 3.0, width * 2.0) {
-                    add_band(&mut mesh, &piece, false, half, feather, color);
-                }
-            }
-            coursecraft_course::DashStyle::Dot => {
-                for (cx, cy) in sample_path(contour, true, width * 2.0) {
-                    let dot = circle_contour(cx, cy, half, DOT_SEGMENTS);
-                    if dot.len() >= 3 {
-                        let filled = fill_contours(&[dot], color, pixels_per_point);
-                        append_mesh(&mut mesh, &filled);
-                    }
-                }
-            }
-        }
+        add_patterned_stroke(
+            &mut mesh,
+            contour,
+            true,
+            width,
+            half,
+            feather,
+            color,
+            pixels_per_point,
+            dash,
+            dash_pattern,
+        );
     }
     mesh
 }
@@ -722,6 +857,21 @@ pub fn stroke_path(
     color: Color32,
     width: f32,
     dash: coursecraft_course::DashStyle,
+    pixels_per_point: f32,
+) -> Mesh {
+    stroke_path_pattern(points, closed, color, width, dash, None, pixels_per_point)
+}
+
+/// Like [`stroke_path`], with an optional custom alternating `[dash, gap, ...]`
+/// pattern in multiples of `width`.
+#[must_use]
+pub fn stroke_path_pattern(
+    points: &[Pt],
+    closed: bool,
+    color: Color32,
+    width: f32,
+    dash: coursecraft_course::DashStyle,
+    dash_pattern: Option<&[f32]>,
     pixels_per_point: f32,
 ) -> Mesh {
     let mut mesh = Mesh::default();
@@ -741,33 +891,135 @@ pub fn stroke_path(
     } else {
         0.0
     };
-    match dash {
-        coursecraft_course::DashStyle::Solid => {
-            add_band(
-                &mut mesh,
-                &cleaned,
-                closed && cleaned.len() > 2,
-                half,
-                feather,
-                color,
-            );
+    add_patterned_stroke(
+        &mut mesh,
+        &cleaned,
+        closed && cleaned.len() > 2,
+        width,
+        half,
+        feather,
+        color,
+        pixels_per_point,
+        dash,
+        dash_pattern,
+    );
+    mesh
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_patterned_stroke(
+    mesh: &mut Mesh,
+    points: &[Pt],
+    closed: bool,
+    width: f32,
+    half: f32,
+    feather: f32,
+    color: Color32,
+    pixels_per_point: f32,
+    dash: coursecraft_course::DashStyle,
+    dash_pattern: Option<&[f32]>,
+) {
+    if dash == coursecraft_course::DashStyle::Solid {
+        add_band(mesh, points, closed, half, feather, color);
+        return;
+    }
+    let pattern: &[f32] = match dash_pattern {
+        Some(p)
+            if p.len() >= 2 && p.len() % 2 == 0 && p.iter().all(|v| v.is_finite() && *v > 0.0) =>
+        {
+            p
         }
-        coursecraft_course::DashStyle::Dash => {
-            for piece in dash_pieces(&cleaned, closed, width * 3.0, width * 2.0) {
-                add_band(&mut mesh, &piece, false, half, feather, color);
-            }
+        _ => dash.default_pattern(),
+    };
+    if pattern.len() < 2 {
+        add_band(mesh, points, closed, half, feather, color);
+        return;
+    }
+    let segs = segments(points, closed);
+    if segs.is_empty() {
+        return;
+    }
+    let pair_count = pattern.len() / 2;
+    let mut pair_idx = 0usize;
+    let mut in_dash = true;
+    let mut phase = 0.0f32;
+    let mut current: Vec<Pt> = Vec::new();
+    let mut dot_mid_recorded = false;
+
+    for (a, b, len) in segs {
+        if !len.is_finite() || len <= EPS {
+            continue;
         }
-        coursecraft_course::DashStyle::Dot => {
-            for (cx, cy) in sample_path(&cleaned, closed, width * 2.0) {
-                let dot = circle_contour(cx, cy, half, DOT_SEGMENTS);
-                if dot.len() >= 3 {
-                    let filled = fill_contours(&[dot], color, pixels_per_point);
-                    append_mesh(&mut mesh, &filled);
+        let mut t = 0.0f32;
+        let mut guard = 0usize;
+        while t < len - EPS && guard < 4096 {
+            guard = guard.saturating_add(1);
+            let d_mult = pattern[pair_idx * 2];
+            let g_mult = pattern[pair_idx * 2 + 1];
+            let is_dot = d_mult <= 1.05;
+            let phase_len = (if in_dash { d_mult } else { g_mult }) * width;
+            if !phase_len.is_finite() || phase_len <= EPS {
+                if !in_dash {
+                    pair_idx = (pair_idx + 1) % pair_count;
                 }
+                in_dash = !in_dash;
+                phase = 0.0;
+                dot_mid_recorded = false;
+                continue;
+            }
+            let remaining = (phase_len - phase).max(0.0);
+            let step = remaining.min(len - t);
+            if in_dash {
+                if is_dot {
+                    let half_dash = phase_len * 0.5;
+                    if !dot_mid_recorded && phase + step >= half_dash - EPS {
+                        let dt = (half_dash - phase).clamp(0.0, step);
+                        let center = lerp(a, b, ((t + dt) / len).clamp(0.0, 1.0));
+                        let dot_half = half * d_mult.clamp(0.4, 1.0);
+                        let dot = circle_contour(center.0, center.1, dot_half, DOT_SEGMENTS);
+                        if dot.len() >= 3 {
+                            let filled = fill_contours(&[dot], color, pixels_per_point);
+                            append_mesh(mesh, &filled);
+                        }
+                        dot_mid_recorded = true;
+                    }
+                } else {
+                    let p0 = lerp(a, b, t / len);
+                    let p1 = lerp(a, b, (t + step) / len);
+                    if current
+                        .last()
+                        .is_none_or(|last: &Pt| distance(*last, p0) > EPS)
+                    {
+                        current.push(p0);
+                    }
+                    if current
+                        .last()
+                        .is_none_or(|last: &Pt| distance(*last, p1) > EPS)
+                    {
+                        current.push(p1);
+                    }
+                }
+            }
+            t += step;
+            phase += step;
+            if phase >= phase_len - EPS {
+                if in_dash {
+                    if !is_dot && current.len() >= 2 {
+                        add_band(mesh, &current, false, half, feather, color);
+                    }
+                    current.clear();
+                    dot_mid_recorded = false;
+                } else {
+                    pair_idx = (pair_idx + 1) % pair_count;
+                }
+                in_dash = !in_dash;
+                phase = 0.0;
             }
         }
     }
-    mesh
+    if in_dash && current.len() >= 2 {
+        add_band(mesh, &current, false, half, feather, color);
+    }
 }
 
 /// Drop non-finite points and points that sit on their predecessor. A closed
@@ -844,108 +1096,6 @@ fn segments(points: &[Pt], closed: bool) -> Vec<(Pt, Pt, f32)> {
         }
     }
     out
-}
-
-fn path_length(segs: &[(Pt, Pt, f32)]) -> f32 {
-    segs.iter().map(|(_, _, len)| *len).sum()
-}
-
-/// Points at `step` intervals along the path, starting at its first point.
-fn sample_path(points: &[Pt], closed: bool, step: f32) -> Vec<Pt> {
-    let segs = segments(points, closed);
-    let total = path_length(&segs);
-    if !total.is_finite() || total <= EPS || !step.is_finite() || step <= EPS {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let mut wanted = 0.0f32;
-    let mut guard = 0usize;
-    while wanted < total - EPS && guard < 4096 {
-        guard = guard.saturating_add(1);
-        // Find the segment containing `wanted`.
-        let mut start = 0.0f32;
-        let mut found = None;
-        for &(a, b, len) in &segs {
-            if wanted <= start + len + EPS {
-                let t = ((wanted - start) / len).clamp(0.0, 1.0);
-                found = Some(lerp(a, b, t));
-                break;
-            }
-            start += len;
-        }
-        let Some(point) = found else {
-            break;
-        };
-        if point.0.is_finite() && point.1.is_finite() {
-            out.push(point);
-        }
-        wanted += step;
-    }
-    if closed
-        && let (Some(first), Some(last)) = (out.first(), out.last())
-        && distance(*first, *last) <= EPS * 4.0
-    {
-        out.pop();
-    }
-    out
-}
-
-/// Split a path into dashes, each a polyline of points along the path.
-fn dash_pieces(points: &[Pt], closed: bool, dash: f32, gap: f32) -> Vec<Vec<Pt>> {
-    let segs = segments(points, closed);
-    if segs.is_empty() || !dash.is_finite() || !gap.is_finite() || dash <= 0.0 || gap <= 0.0 {
-        return Vec::new();
-    }
-    let mut pieces = Vec::new();
-    let mut current: Vec<Pt> = Vec::new();
-    let mut in_dash = true;
-    let mut phase = 0.0f32;
-    for (a, b, len) in segs {
-        if !len.is_finite() || len <= EPS {
-            continue;
-        }
-        let mut t = 0.0f32;
-        let mut guard = 0usize;
-        while t < len - EPS && guard < 4096 {
-            guard = guard.saturating_add(1);
-            let phase_len = if in_dash { dash } else { gap };
-            let remaining = (phase_len - phase).max(0.0);
-            let step = remaining.min(len - t);
-            if in_dash {
-                let p0 = lerp(a, b, t / len);
-                let p1 = lerp(a, b, (t + step) / len);
-                if current
-                    .last()
-                    .is_none_or(|last: &Pt| distance(*last, p0) > EPS)
-                {
-                    current.push(p0);
-                }
-                if current
-                    .last()
-                    .is_none_or(|last: &Pt| distance(*last, p1) > EPS)
-                {
-                    current.push(p1);
-                }
-            }
-            t += step;
-            phase += step;
-            if phase >= phase_len - EPS {
-                if in_dash {
-                    if current.len() >= 2 {
-                        pieces.push(std::mem::take(&mut current));
-                    } else {
-                        current.clear();
-                    }
-                }
-                in_dash = !in_dash;
-                phase = 0.0;
-            }
-        }
-    }
-    if in_dash && current.len() >= 2 {
-        pieces.push(current);
-    }
-    pieces
 }
 
 /// One cross-section of a band: its two edges, either side of the path.

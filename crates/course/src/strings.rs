@@ -803,7 +803,11 @@ pub fn variable_reference_spans(text: &str) -> Vec<Range<usize>> {
             break;
         };
         if let Some(name) = text.get(i.saturating_add(1)..close)
-            && crate::validate::valid_name(name)
+            && !name.is_empty()
+            && name.len() <= 128
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
         {
             spans.push(i..close.saturating_add(1));
             i = close.saturating_add(1);
