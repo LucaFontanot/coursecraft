@@ -21,7 +21,7 @@ pub fn at_slide_end(player: &Player<'_>) -> bool {
 
 /// Inputs for the main play/pause button.
 ///
-/// At the end it acts as Replay, as the icon switches to the replay glyph.
+/// At the end it replays the current slide from the start.
 #[must_use]
 pub fn play_pause_inputs(player: &Player<'_>) -> Vec<Input> {
     if at_slide_end(player) {

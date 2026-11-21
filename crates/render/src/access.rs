@@ -1470,9 +1470,7 @@ fn target_node(
                     None,
                 ),
                 ChromeButton::PlayPause => {
-                    let label = if crate::chrome::at_slide_end(player) {
-                        course.chrome_string("replaySlide")
-                    } else if player.player_paused() {
+                    let label = if crate::chrome::at_slide_end(player) || player.player_paused() {
                         course.chrome_string("play")
                     } else {
                         course.chrome_string("pause")

@@ -13,6 +13,7 @@ struct Harness {
     view: SlideView,
     size: Vec2,
     time: f64,
+    last_shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 impl Harness {
@@ -23,6 +24,7 @@ impl Harness {
             view: SlideView::new(),
             size: vec2(width, height),
             time: 0.0,
+            last_shapes: Vec::new(),
         }
     }
 
@@ -40,6 +42,7 @@ impl Harness {
         let full = self.ctx.run_ui(raw, |ui| {
             output = frame.show(ui, player, view, None);
         });
+        self.last_shapes = full.shapes.clone();
         full.drop_without_applying_deltas();
         output
     }
@@ -824,6 +827,109 @@ fn mute_and_volume_reach_the_media_driver() {
         driver.set_volume(volume);
     }
     assert!(driver.volume() > 0.3 && driver.volume() < 0.5);
+}
+
+fn text_in_rect(shapes: &[egui::epaint::ClippedShape], rect: Rect) -> Option<String> {
+    fn walk(shape: &egui::epaint::Shape, rect: Rect) -> Option<String> {
+        match shape {
+            egui::epaint::Shape::Text(t) => {
+                let center = t.galley.rect.translate(t.pos.to_vec2()).center();
+                if rect.contains(center) {
+                    Some(t.galley.job.text.clone())
+                } else {
+                    None
+                }
+            }
+            egui::epaint::Shape::Vec(items) => items.iter().find_map(|s| walk(s, rect)),
+            _ => None,
+        }
+    }
+    shapes.iter().find_map(|cs| walk(&cs.shape, rect))
+}
+
+#[test]
+fn play_pause_shows_play_icon_at_end_and_replays_same_slide() {
+    let (_course, mut player) = hello();
+    let initial_slide = player.state().slide;
+    let duration = player.seek_info().duration_ms;
+    let mut harness = Harness::new(1280.0, 720.0);
+
+    // Playing mid-slide: shows Pause icon.
+    harness.run(&player, Vec::new());
+    let play_rect = control(&harness.frame, ChromeButton::PlayPause);
+    assert_eq!(
+        text_in_rect(&harness.last_shapes, play_rect).as_deref(),
+        Some(crate::Icon::Pause.codepoint().to_string().as_str())
+    );
+
+    // Paused mid-slide: shows Play icon, clicking resumes.
+    player.handle(&Input::PlayerPause);
+    harness.run(&player, Vec::new());
+    let play_rect = control(&harness.frame, ChromeButton::PlayPause);
+    assert_eq!(
+        text_in_rect(&harness.last_shapes, play_rect).as_deref(),
+        Some(crate::Icon::Play.codepoint().to_string().as_str())
+    );
+    let output = harness.run(&player, click(play_rect.center()));
+    assert_eq!(output.inputs, vec![Input::PlayerResume]);
+    apply_inputs(&mut player, &output.inputs);
+
+    // Drive timeline to the end of the slide.
+    player.handle(&Input::Tick { ms: duration });
+    assert!(player.state().base.ended);
+    harness.run(&player, Vec::new());
+
+    let play_rect = control(&harness.frame, ChromeButton::PlayPause);
+    let replay_rect = control(&harness.frame, ChromeButton::Replay);
+    assert_eq!(
+        text_in_rect(&harness.last_shapes, replay_rect).as_deref(),
+        Some(
+            crate::Icon::ArrowCounterClockwise
+                .codepoint()
+                .to_string()
+                .as_str()
+        )
+    );
+    assert_eq!(
+        text_in_rect(&harness.last_shapes, play_rect).as_deref(),
+        Some(crate::Icon::Play.codepoint().to_string().as_str()),
+        "Play/Pause button at end of slide must show Play icon, not Replay"
+    );
+
+    // Clicking Play at the end replays the current slide from 0 and never advances.
+    let output = harness.run(&player, click(play_rect.center()));
+    assert_eq!(output.inputs, vec![Input::PlayerSeek { ms: 0 }]);
+    apply_inputs(&mut player, &output.inputs);
+    assert_eq!(player.state().slide, initial_slide);
+    assert_eq!(player.seek_info().elapsed_ms, 0);
+    assert!(!player.state().base.ended);
+
+    harness.run(&player, Vec::new());
+    let play_rect = control(&harness.frame, ChromeButton::PlayPause);
+    assert_eq!(
+        text_in_rect(&harness.last_shapes, play_rect).as_deref(),
+        Some(crate::Icon::Pause.codepoint().to_string().as_str())
+    );
+
+    // Paused at the end of the slide: still shows Play and replays + resumes.
+    player.handle(&Input::Tick { ms: duration });
+    player.handle(&Input::PlayerPause);
+    harness.run(&player, Vec::new());
+    let play_rect = control(&harness.frame, ChromeButton::PlayPause);
+    assert_eq!(
+        text_in_rect(&harness.last_shapes, play_rect).as_deref(),
+        Some(crate::Icon::Play.codepoint().to_string().as_str())
+    );
+    let output = harness.run(&player, click(play_rect.center()));
+    assert_eq!(
+        output.inputs,
+        vec![Input::PlayerResume, Input::PlayerSeek { ms: 0 }]
+    );
+    apply_inputs(&mut player, &output.inputs);
+    assert_eq!(player.state().slide, initial_slide);
+    assert_eq!(player.seek_info().elapsed_ms, 0);
+    assert!(!player.player_paused());
+    assert!(!player.state().base.ended);
 }
 
 #[test]

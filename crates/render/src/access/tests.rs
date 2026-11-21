@@ -216,6 +216,23 @@ fn transport_controls_have_roles_labels_and_values() {
 }
 
 #[test]
+fn play_pause_access_label_is_play_at_end_of_slide() {
+    let course = Course::from_json(SHOWCASE_JSON).expect("valid showcase");
+    let mut player = player(&course);
+    let duration = player.seek_info().duration_ms;
+    player.handle(&Input::Tick { ms: duration });
+    let tree = tree_for(&player, true, true);
+    let play = tree
+        .nodes
+        .iter()
+        .find(|node| {
+            node.target == Some(FocusTarget::Chrome(crate::focus::ChromeButton::PlayPause))
+        })
+        .expect("play/pause node");
+    assert_eq!(play.label, "Play");
+}
+
+#[test]
 fn decorative_hidden_and_variable_text_are_handled() {
     let mut decorative = text_object("deco", "Not read");
     decorative["decorative"] = json!(true);
