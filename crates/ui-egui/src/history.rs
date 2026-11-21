@@ -103,6 +103,7 @@ pub fn show_history_window(editor: &mut Editor, ctx: &Context) {
         };
         match res {
             Ok(()) => {
+                editor.ui.pending_undo_redo = true;
                 editor.check_revision();
             }
             Err(e) => {

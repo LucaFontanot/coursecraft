@@ -180,6 +180,8 @@ mod m27_timeline_media_tests;
 #[cfg(test)]
 mod m27_triggers_states_tests;
 #[cfg(test)]
+mod m27_undo_clipboard_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;

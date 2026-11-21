@@ -145,6 +145,16 @@ fn event_object_ref(event: &Event) -> Option<&str> {
     }
 }
 
+fn event_refs_only_copied(event: &Event, copied: &BTreeSet<String>) -> bool {
+    match event {
+        Event::DroppedOn { object, target } => copied.contains(object) && copied.contains(target),
+        Event::ObjectsIntersect { a, b } | Event::ObjectsStopIntersecting { a, b } => {
+            copied.contains(a) && copied.contains(b)
+        }
+        other => event_object_ref(other).is_some_and(|id| copied.contains(id)),
+    }
+}
+
 fn action_refs_only_copied(action: &Action, copied: &BTreeSet<String>) -> bool {
     match action {
         Action::ChangeState { object, .. }
@@ -188,7 +198,7 @@ fn condition_refs_only_copied(condition: &Condition, copied: &BTreeSet<String>) 
 }
 
 fn trigger_refs_only_copied(trigger: &Trigger, copied: &BTreeSet<String>) -> bool {
-    event_object_ref(&trigger.when).is_some_and(|id| copied.contains(id))
+    event_refs_only_copied(&trigger.when, copied)
         && action_refs_only_copied(&trigger.action, copied)
         && trigger
             .condition
@@ -492,8 +502,9 @@ fn paste_objects(editor: &mut Editor, clipboard: &Clipboard, centre: Option<egui
         editor.set_status("Select a slide to paste into");
         return;
     }
+    let same_slide = clipboard.source_slide.as_deref() == Some(target.as_str());
     let next_paste = editor.ui.clipboard_paste_count.saturating_add(1);
-    let mut offset = if clipboard.source_slide.as_deref() == Some(target.as_str()) {
+    let mut offset = if same_slide {
         20.0 * next_paste as f32
     } else {
         0.0
@@ -531,7 +542,9 @@ fn paste_objects(editor: &mut Editor, clipboard: &Clipboard, centre: Option<egui
     let Some(result) = editor.run("object.paste", params) else {
         return;
     };
-    editor.ui.clipboard_paste_count = next_paste;
+    if same_slide && centre.is_none() {
+        editor.ui.clipboard_paste_count = next_paste;
+    }
     let ids: Vec<String> = result
         .get("ids")
         .and_then(serde_json::Value::as_array)
