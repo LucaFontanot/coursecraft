@@ -1108,6 +1108,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "coursecraft-strict-lms-wasm"
+version = "0.3.0"
+dependencies = [
+ "coursecraft-strict-lms",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "coursecraft-ui-egui"
 version = "0.3.0"
 dependencies = [

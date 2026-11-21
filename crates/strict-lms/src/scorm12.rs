@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
@@ -60,14 +60,14 @@ enum LifecycleState {
     Finished,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Scorm12Score {
     raw: String,
     min: String,
     max: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Scorm12Interaction {
     id: String,
     kind: String,
@@ -80,11 +80,26 @@ struct Scorm12Interaction {
     correct_responses: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Scorm12Objective {
     id: String,
     score: Scorm12Score,
     status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedScorm12 {
+    entry: String,
+    lesson_status: String,
+    lesson_location: String,
+    suspend_data: String,
+    exit: String,
+    total_time_cs: u64,
+    score: Scorm12Score,
+    comments: String,
+    student_preference: BTreeMap<String, String>,
+    interactions: Vec<Scorm12Interaction>,
+    objectives: Vec<Scorm12Objective>,
 }
 
 /// Strict SCORM 1.2 RTE conformance engine.
@@ -220,6 +235,46 @@ impl StrictScorm12 {
         self.last_error = "0";
         self.exit.clear();
         self.session_time_cs = None;
+    }
+
+    /// Export persisted learner attempt state as JSON (for `localStorage` in `mock-lms`).
+    #[must_use]
+    pub fn export_persisted_json(&self) -> String {
+        let persisted = PersistedScorm12 {
+            entry: self.entry.clone(),
+            lesson_status: self.lesson_status.clone(),
+            lesson_location: self.lesson_location.clone(),
+            suspend_data: self.suspend_data.clone(),
+            exit: self.exit.clone(),
+            total_time_cs: self.total_time_cs,
+            score: self.score.clone(),
+            comments: self.comments.clone(),
+            student_preference: self.student_preference.clone(),
+            interactions: self.interactions.clone(),
+            objectives: self.objectives.clone(),
+        };
+        serde_json::to_string(&persisted).unwrap_or_else(|_| "{}".to_owned())
+    }
+
+    /// Restore persisted learner attempt state from JSON (resets lifecycle to `NotInitialized`).
+    pub fn import_persisted_json(&mut self, json: &str) -> Result<(), String> {
+        let p: PersistedScorm12 =
+            serde_json::from_str(json).map_err(|e| format!("invalid persisted state: {e}"))?;
+        self.entry = p.entry;
+        self.lesson_status = p.lesson_status;
+        self.lesson_location = p.lesson_location;
+        self.suspend_data = p.suspend_data;
+        self.exit = p.exit;
+        self.total_time_cs = p.total_time_cs;
+        self.score = p.score;
+        self.comments = p.comments;
+        self.student_preference = p.student_preference;
+        self.interactions = p.interactions;
+        self.objectives = p.objectives;
+        self.state = LifecycleState::NotInitialized;
+        self.last_error = "0";
+        self.session_time_cs = None;
+        Ok(())
     }
 
     /// Flag a violation if the SCO is still `Running` without calling `LMSFinish("")`.

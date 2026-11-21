@@ -56,6 +56,7 @@ const EXEMPT: &[&str] = &[
     "coursecraft-lti-server",
     "coursecraft-mcp",
     "coursecraft-player",
+    "coursecraft-strict-lms-wasm",
     "xtask",
 ];
 
@@ -346,6 +347,45 @@ fn build_player() -> Result<(), String> {
     Ok(())
 }
 
+/// Build `xtask/strict-lms-wasm` into `target/mock-lms/strict-lms-wasm/` using `wasm-bindgen`.
+fn build_strict_lms_wasm(root: &Path, mock: &Path) -> Result<(), String> {
+    if !cargo(&[
+        "build",
+        "--release",
+        "-p",
+        "coursecraft-strict-lms-wasm",
+        "--target",
+        "wasm32-unknown-unknown",
+    ]) {
+        return Err("cargo build failed for coursecraft-strict-lms-wasm".into());
+    }
+    let wasm_in =
+        root.join("target/wasm32-unknown-unknown/release/coursecraft_strict_lms_wasm.wasm");
+    let out_dir = mock.join("strict-lms-wasm");
+    if out_dir.exists() {
+        std::fs::remove_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    }
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    let out_arg = out_dir.to_string_lossy().into_owned();
+    let wasm_arg = wasm_in.to_string_lossy().into_owned();
+    println!("$ wasm-bindgen --target web --no-typescript --out-dir {out_arg} {wasm_arg}");
+    let bound = Command::new("wasm-bindgen")
+        .args([
+            "--target",
+            "web",
+            "--no-typescript",
+            "--out-dir",
+            &out_arg,
+            &wasm_arg,
+        ])
+        .status()
+        .map_err(|e| format!("wasm-bindgen: {e}"))?;
+    if !bound.success() {
+        return Err("wasm-bindgen failed for coursecraft-strict-lms-wasm".into());
+    }
+    Ok(())
+}
+
 /// Build the release web player, publish hello-course and showcase into the mock LMS.
 fn package_example() -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -367,6 +407,7 @@ fn package_example() -> Result<(), String> {
         std::fs::remove_dir_all(&package).map_err(|e| format!("{}: {e}", package.display()))?;
     }
     std::fs::create_dir_all(&mock).map_err(|e| format!("{}: {e}", mock.display()))?;
+    build_strict_lms_wasm(root, &mock)?;
     let dist = player_dir.join("dist");
     let package_arg = package.to_string_lossy().into_owned();
     let dist_arg = dist.to_string_lossy().into_owned();

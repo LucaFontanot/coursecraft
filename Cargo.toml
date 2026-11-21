@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "apps/*", "xtask"]
+members = ["crates/*", "apps/*", "xtask", "xtask/strict-lms-wasm"]
 default-members = ["crates/*", "apps/coursecraft-cli", "apps/coursecraft-mcp"]
 
 [workspace.package]

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
@@ -68,7 +68,7 @@ enum LifecycleState {
     Terminated,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Scorm2004Score {
     raw: Option<String>,
     min: Option<String>,
@@ -76,7 +76,7 @@ struct Scorm2004Score {
     scaled: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Scorm2004Interaction {
     id: String,
     kind: Option<String>,
@@ -88,6 +88,21 @@ struct Scorm2004Interaction {
     latency: Option<String>,
     objectives: Vec<String>,
     correct_responses: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedScorm2004 {
+    entry: String,
+    completion_status: String,
+    success_status: String,
+    location: Option<String>,
+    suspend_data: Option<String>,
+    progress_measure: Option<String>,
+    exit: String,
+    total_time_cs: u64,
+    nav_request: String,
+    score: Scorm2004Score,
+    interactions: Vec<Scorm2004Interaction>,
 }
 
 /// Strict SCORM 2004 3rd/4th Edition RTE conformance engine.
@@ -221,6 +236,46 @@ impl StrictScorm2004 {
         self.exit.clear();
         self.session_time = None;
         self.nav_request = "_none_".to_owned();
+    }
+
+    /// Export persisted learner attempt state as JSON (for `localStorage` in `mock-lms`).
+    #[must_use]
+    pub fn export_persisted_json(&self) -> String {
+        let persisted = PersistedScorm2004 {
+            entry: self.entry.clone(),
+            completion_status: self.completion_status.clone(),
+            success_status: self.success_status.clone(),
+            location: self.location.clone(),
+            suspend_data: self.suspend_data.clone(),
+            progress_measure: self.progress_measure.clone(),
+            exit: self.exit.clone(),
+            total_time_cs: self.total_time_cs,
+            nav_request: self.nav_request.clone(),
+            score: self.score.clone(),
+            interactions: self.interactions.clone(),
+        };
+        serde_json::to_string(&persisted).unwrap_or_else(|_| "{}".to_owned())
+    }
+
+    /// Restore persisted learner attempt state from JSON (resets lifecycle to `NotInitialized`).
+    pub fn import_persisted_json(&mut self, json: &str) -> Result<(), String> {
+        let p: PersistedScorm2004 =
+            serde_json::from_str(json).map_err(|e| format!("invalid persisted state: {e}"))?;
+        self.entry = p.entry;
+        self.completion_status = p.completion_status;
+        self.success_status = p.success_status;
+        self.location = p.location;
+        self.suspend_data = p.suspend_data;
+        self.progress_measure = p.progress_measure;
+        self.exit = p.exit;
+        self.total_time_cs = p.total_time_cs;
+        self.nav_request = p.nav_request;
+        self.score = p.score;
+        self.interactions = p.interactions;
+        self.state = LifecycleState::NotInitialized;
+        self.last_error = "0";
+        self.session_time = None;
+        Ok(())
     }
 
     /// Flag a violation if the SCO is still `Running` without calling `Terminate("")`.
