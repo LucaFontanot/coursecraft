@@ -795,7 +795,7 @@ impl<'c> Player<'c> {
     fn jump(&mut self, target: &SlideTarget, q: &mut Queue, out: &mut Vec<Effect>) {
         if self.st.lightbox.is_some() {
             // A jump from inside the box closes it and moves the base slide.
-            self.close_lightbox(true, out);
+            self.close_lightbox(false, out);
         }
         let cur = self.st.slide;
         if matches!(target, SlideTarget::LastVisited) {
@@ -2251,6 +2251,9 @@ impl<'c> Player<'c> {
                 base_object_positions: self.st.object_positions.clone(),
                 base_intersecting_pairs: self.st.intersecting_pairs.clone(),
                 base_timers: self.st.timers.clone(),
+                base_cue_progress: self.st.cue_progress.clone(),
+                base_cue_held: self.st.cue_held.clone(),
+                base_cue_layers: self.st.cue_layers.clone(),
             };
             self.st.lightbox = Some(lb);
         } else {
@@ -2387,6 +2390,9 @@ impl<'c> Player<'c> {
         self.st.object_positions = lb.base_object_positions;
         self.st.intersecting_pairs = lb.base_intersecting_pairs;
         self.st.timers = lb.base_timers;
+        self.st.cue_progress = lb.base_cue_progress;
+        self.st.cue_held = lb.base_cue_held;
+        self.st.cue_layers = lb.base_cue_layers;
         self.check_intersections(&mut Queue::new());
         if resume_media {
             for (object, state) in &self.st.media_playback {

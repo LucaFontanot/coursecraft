@@ -562,6 +562,12 @@ pub struct Lightbox {
     pub base_intersecting_pairs: BTreeSet<(String, String)>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub base_timers: BTreeMap<String, TimerState>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub base_cue_progress: BTreeMap<String, CueProgress>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub base_cue_held: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub base_cue_layers: BTreeMap<String, Vec<String>>,
 }
 
 /// Runtime cue progress for one video object: which cues have fired and the
