@@ -782,20 +782,33 @@ const MITER_LIMIT: f32 = 4.0;
 /// Segments in one round dot.
 const DOT_SEGMENTS: usize = 12;
 
-/// Build a mesh for a band of `width` centred on each contour's edge.
+/// Build a mesh for a band of `width` centred on each closed contour.
 ///
 /// Every contour, including a hole, gets its own closed band. Joins are mitred
-/// up to [`MITER_LIMIT`] and bevelled past it. `Dash` splits each path by arc
-/// length into dashes three widths long with two-width gaps; `Dot` places round
-/// dots two widths apart. The band is a single ring polygon fed through
-/// [`fill_contours`], so it gets the same one-pixel feather and never overlaps
-/// itself at a join. Non-finite or non-positive widths draw nothing.
+/// up to [`MITER_LIMIT`] and bevelled past it. `dash` breaks the band into
+/// dashes, round dots or dash-dot groups. The band is a single ring polygon fed
+/// through [`fill_contours`], so it gets the same one-pixel feather and never
+/// overlaps itself at a join. Non-finite or non-positive widths draw nothing.
 #[must_use]
 pub fn stroke_contours(
     contours: &[Vec<Pt>],
     color: Color32,
     width: f32,
     dash: coursecraft_course::DashStyle,
+    pixels_per_point: f32,
+) -> Mesh {
+    stroke_contours_pattern(contours, color, width, dash, None, pixels_per_point)
+}
+
+/// Like [`stroke_contours`], with an optional custom alternating
+/// `[dash, gap, ...]` pattern in multiples of `width`.
+#[must_use]
+pub fn stroke_contours_pattern(
+    contours: &[Vec<Pt>],
+    color: Color32,
+    width: f32,
+    dash: coursecraft_course::DashStyle,
+    dash_pattern: Option<&[f32]>,
     pixels_per_point: f32,
 ) -> Mesh {
     let mut mesh = Mesh::default();
@@ -816,98 +829,20 @@ pub fn stroke_contours(
         0.0
     };
     for contour in &cleaned {
-        match dash {
-            coursecraft_course::DashStyle::Solid => {
-                add_band(&mut mesh, contour, true, half, feather, color);
-            }
-            coursecraft_course::DashStyle::Dash => {
-                for piece in dash_pieces(contour, true, width * 3.0, width * 2.0) {
-                    add_band(&mut mesh, &piece, false, half, feather, color);
-                }
-            }
-            coursecraft_course::DashStyle::Dot => {
-                for (cx, cy) in sample_path(contour, true, width * 2.0) {
-                    let dot = circle_contour(cx, cy, half, DOT_SEGMENTS);
-                    if dot.len() >= 3 {
-                        let filled = fill_contours(&[dot], color, pixels_per_point);
-                        append_mesh(&mut mesh, &filled);
-                    }
-                }
-            }
-            coursecraft_course::DashStyle::DashDot => {
-                add_dash_dot(
-                    &mut mesh,
-                    contour,
-                    true,
-                    width,
-                    half,
-                    feather,
-                    color,
-                    pixels_per_point,
-                );
-            }
-        }
+        add_patterned_stroke(
+            &mut mesh,
+            contour,
+            true,
+            width,
+            half,
+            feather,
+            color,
+            pixels_per_point,
+            dash,
+            dash_pattern,
+        );
     }
     mesh
-}
-
-#[allow(clippy::too_many_arguments)]
-fn add_dash_dot(
-    mesh: &mut Mesh,
-    points: &[Pt],
-    closed: bool,
-    width: f32,
-    half: f32,
-    feather: f32,
-    color: Color32,
-    pixels_per_point: f32,
-) {
-    let dash_len = width * 3.0;
-    let gap = width * 2.0;
-    let period = dash_len + gap + gap;
-    for piece in dash_pieces(points, closed, dash_len, gap * 2.0) {
-        add_band(mesh, &piece, false, half, feather, color);
-    }
-    let samples = sample_path(points, closed, period);
-    // Offset dots to sit midway in the gap between dashes: dash_len + gap.
-    let _ = samples;
-    let total = dash_pieces_dots(points, closed, dash_len + gap, period);
-    for (cx, cy) in total {
-        let dot = circle_contour(cx, cy, half, DOT_SEGMENTS);
-        if dot.len() >= 3 {
-            let filled = fill_contours(&[dot], color, pixels_per_point);
-            append_mesh(mesh, &filled);
-        }
-    }
-}
-
-fn dash_pieces_dots(points: &[Pt], closed: bool, offset: f32, period: f32) -> Vec<Pt> {
-    if points.len() < 2 || !period.is_finite() || period <= 0.0 {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let count = if closed {
-        points.len()
-    } else {
-        points.len() - 1
-    };
-    let mut next_at = offset.max(0.0);
-    let mut covered = 0.0f32;
-    for i in 0..count {
-        let a = points[i];
-        let b = points[(i + 1) % points.len()];
-        let seg_len = distance(a, b);
-        if seg_len <= 1e-4 {
-            continue;
-        }
-        while next_at <= covered + seg_len {
-            let t = ((next_at - covered) / seg_len).clamp(0.0, 1.0);
-            out.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
-            next_at += period;
-        }
-        covered += seg_len;
-    }
-    out
 }
 
 /// Build a mesh for a band of `width` centred on an open or closed polyline.
@@ -922,6 +857,21 @@ pub fn stroke_path(
     color: Color32,
     width: f32,
     dash: coursecraft_course::DashStyle,
+    pixels_per_point: f32,
+) -> Mesh {
+    stroke_path_pattern(points, closed, color, width, dash, None, pixels_per_point)
+}
+
+/// Like [`stroke_path`], with an optional custom alternating `[dash, gap, ...]`
+/// pattern in multiples of `width`.
+#[must_use]
+pub fn stroke_path_pattern(
+    points: &[Pt],
+    closed: bool,
+    color: Color32,
+    width: f32,
+    dash: coursecraft_course::DashStyle,
+    dash_pattern: Option<&[f32]>,
     pixels_per_point: f32,
 ) -> Mesh {
     let mut mesh = Mesh::default();
@@ -941,45 +891,135 @@ pub fn stroke_path(
     } else {
         0.0
     };
-    match dash {
-        coursecraft_course::DashStyle::Solid => {
-            add_band(
-                &mut mesh,
-                &cleaned,
-                closed && cleaned.len() > 2,
-                half,
-                feather,
-                color,
-            );
+    add_patterned_stroke(
+        &mut mesh,
+        &cleaned,
+        closed && cleaned.len() > 2,
+        width,
+        half,
+        feather,
+        color,
+        pixels_per_point,
+        dash,
+        dash_pattern,
+    );
+    mesh
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_patterned_stroke(
+    mesh: &mut Mesh,
+    points: &[Pt],
+    closed: bool,
+    width: f32,
+    half: f32,
+    feather: f32,
+    color: Color32,
+    pixels_per_point: f32,
+    dash: coursecraft_course::DashStyle,
+    dash_pattern: Option<&[f32]>,
+) {
+    if dash == coursecraft_course::DashStyle::Solid {
+        add_band(mesh, points, closed, half, feather, color);
+        return;
+    }
+    let pattern: &[f32] = match dash_pattern {
+        Some(p)
+            if p.len() >= 2 && p.len() % 2 == 0 && p.iter().all(|v| v.is_finite() && *v > 0.0) =>
+        {
+            p
         }
-        coursecraft_course::DashStyle::Dash => {
-            for piece in dash_pieces(&cleaned, closed, width * 3.0, width * 2.0) {
-                add_band(&mut mesh, &piece, false, half, feather, color);
+        _ => dash.default_pattern(),
+    };
+    if pattern.len() < 2 {
+        add_band(mesh, points, closed, half, feather, color);
+        return;
+    }
+    let segs = segments(points, closed);
+    if segs.is_empty() {
+        return;
+    }
+    let pair_count = pattern.len() / 2;
+    let mut pair_idx = 0usize;
+    let mut in_dash = true;
+    let mut phase = 0.0f32;
+    let mut current: Vec<Pt> = Vec::new();
+    let mut dot_mid_recorded = false;
+
+    for (a, b, len) in segs {
+        if !len.is_finite() || len <= EPS {
+            continue;
+        }
+        let mut t = 0.0f32;
+        let mut guard = 0usize;
+        while t < len - EPS && guard < 4096 {
+            guard = guard.saturating_add(1);
+            let d_mult = pattern[pair_idx * 2];
+            let g_mult = pattern[pair_idx * 2 + 1];
+            let is_dot = d_mult <= 1.05;
+            let phase_len = (if in_dash { d_mult } else { g_mult }) * width;
+            if !phase_len.is_finite() || phase_len <= EPS {
+                if !in_dash {
+                    pair_idx = (pair_idx + 1) % pair_count;
+                }
+                in_dash = !in_dash;
+                phase = 0.0;
+                dot_mid_recorded = false;
+                continue;
             }
-        }
-        coursecraft_course::DashStyle::Dot => {
-            for (cx, cy) in sample_path(&cleaned, closed, width * 2.0) {
-                let dot = circle_contour(cx, cy, half, DOT_SEGMENTS);
-                if dot.len() >= 3 {
-                    let filled = fill_contours(&[dot], color, pixels_per_point);
-                    append_mesh(&mut mesh, &filled);
+            let remaining = (phase_len - phase).max(0.0);
+            let step = remaining.min(len - t);
+            if in_dash {
+                if is_dot {
+                    let half_dash = phase_len * 0.5;
+                    if !dot_mid_recorded && phase + step >= half_dash - EPS {
+                        let dt = (half_dash - phase).clamp(0.0, step);
+                        let center = lerp(a, b, ((t + dt) / len).clamp(0.0, 1.0));
+                        let dot_half = half * d_mult.clamp(0.4, 1.0);
+                        let dot = circle_contour(center.0, center.1, dot_half, DOT_SEGMENTS);
+                        if dot.len() >= 3 {
+                            let filled = fill_contours(&[dot], color, pixels_per_point);
+                            append_mesh(mesh, &filled);
+                        }
+                        dot_mid_recorded = true;
+                    }
+                } else {
+                    let p0 = lerp(a, b, t / len);
+                    let p1 = lerp(a, b, (t + step) / len);
+                    if current
+                        .last()
+                        .is_none_or(|last: &Pt| distance(*last, p0) > EPS)
+                    {
+                        current.push(p0);
+                    }
+                    if current
+                        .last()
+                        .is_none_or(|last: &Pt| distance(*last, p1) > EPS)
+                    {
+                        current.push(p1);
+                    }
                 }
             }
-        }
-        coursecraft_course::DashStyle::DashDot => {
-            add_dash_dot(
-                &mut mesh,
-                &cleaned,
-                closed && cleaned.len() > 2,
-                width,
-                half,
-                feather,
-                color,
-                pixels_per_point,
-            );
+            t += step;
+            phase += step;
+            if phase >= phase_len - EPS {
+                if in_dash {
+                    if !is_dot && current.len() >= 2 {
+                        add_band(mesh, &current, false, half, feather, color);
+                    }
+                    current.clear();
+                    dot_mid_recorded = false;
+                } else {
+                    pair_idx = (pair_idx + 1) % pair_count;
+                }
+                in_dash = !in_dash;
+                phase = 0.0;
+            }
         }
     }
-    mesh
+    if in_dash && current.len() >= 2 {
+        add_band(mesh, &current, false, half, feather, color);
+    }
 }
 
 /// Drop non-finite points and points that sit on their predecessor. A closed
@@ -1056,108 +1096,6 @@ fn segments(points: &[Pt], closed: bool) -> Vec<(Pt, Pt, f32)> {
         }
     }
     out
-}
-
-fn path_length(segs: &[(Pt, Pt, f32)]) -> f32 {
-    segs.iter().map(|(_, _, len)| *len).sum()
-}
-
-/// Points at `step` intervals along the path, starting at its first point.
-fn sample_path(points: &[Pt], closed: bool, step: f32) -> Vec<Pt> {
-    let segs = segments(points, closed);
-    let total = path_length(&segs);
-    if !total.is_finite() || total <= EPS || !step.is_finite() || step <= EPS {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let mut wanted = 0.0f32;
-    let mut guard = 0usize;
-    while wanted < total - EPS && guard < 4096 {
-        guard = guard.saturating_add(1);
-        // Find the segment containing `wanted`.
-        let mut start = 0.0f32;
-        let mut found = None;
-        for &(a, b, len) in &segs {
-            if wanted <= start + len + EPS {
-                let t = ((wanted - start) / len).clamp(0.0, 1.0);
-                found = Some(lerp(a, b, t));
-                break;
-            }
-            start += len;
-        }
-        let Some(point) = found else {
-            break;
-        };
-        if point.0.is_finite() && point.1.is_finite() {
-            out.push(point);
-        }
-        wanted += step;
-    }
-    if closed
-        && let (Some(first), Some(last)) = (out.first(), out.last())
-        && distance(*first, *last) <= EPS * 4.0
-    {
-        out.pop();
-    }
-    out
-}
-
-/// Split a path into dashes, each a polyline of points along the path.
-fn dash_pieces(points: &[Pt], closed: bool, dash: f32, gap: f32) -> Vec<Vec<Pt>> {
-    let segs = segments(points, closed);
-    if segs.is_empty() || !dash.is_finite() || !gap.is_finite() || dash <= 0.0 || gap <= 0.0 {
-        return Vec::new();
-    }
-    let mut pieces = Vec::new();
-    let mut current: Vec<Pt> = Vec::new();
-    let mut in_dash = true;
-    let mut phase = 0.0f32;
-    for (a, b, len) in segs {
-        if !len.is_finite() || len <= EPS {
-            continue;
-        }
-        let mut t = 0.0f32;
-        let mut guard = 0usize;
-        while t < len - EPS && guard < 4096 {
-            guard = guard.saturating_add(1);
-            let phase_len = if in_dash { dash } else { gap };
-            let remaining = (phase_len - phase).max(0.0);
-            let step = remaining.min(len - t);
-            if in_dash {
-                let p0 = lerp(a, b, t / len);
-                let p1 = lerp(a, b, (t + step) / len);
-                if current
-                    .last()
-                    .is_none_or(|last: &Pt| distance(*last, p0) > EPS)
-                {
-                    current.push(p0);
-                }
-                if current
-                    .last()
-                    .is_none_or(|last: &Pt| distance(*last, p1) > EPS)
-                {
-                    current.push(p1);
-                }
-            }
-            t += step;
-            phase += step;
-            if phase >= phase_len - EPS {
-                if in_dash {
-                    if current.len() >= 2 {
-                        pieces.push(std::mem::take(&mut current));
-                    } else {
-                        current.clear();
-                    }
-                }
-                in_dash = !in_dash;
-                phase = 0.0;
-            }
-        }
-    }
-    if in_dash && current.len() >= 2 {
-        pieces.push(current);
-    }
-    pieces
 }
 
 /// One cross-section of a band: its two edges, either side of the path.

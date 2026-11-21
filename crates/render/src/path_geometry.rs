@@ -10,7 +10,7 @@ pub use coursecraft_course::{
 use coursecraft_course::{ConnectorStyle, DashStyle, LineEnd, PathStyle};
 use egui::{Color32, Mesh, pos2};
 
-use crate::shape_fill::{fill_contours, stroke_path};
+use crate::shape_fill::{fill_contours, stroke_path_pattern};
 
 pub use crate::shape_geometry::Pt;
 
@@ -508,21 +508,23 @@ fn add_line_end(mesh: &mut Mesh, tip: Pt, forward: Pt, end: LineEnd, width: f32,
         LineEnd::None => {}
         LineEnd::Arrow => push_triangle(mesh, [tip, plus, minus], color),
         LineEnd::OpenArrow => {
-            let stroke = stroke_path(
+            let stroke = stroke_path_pattern(
                 &[tip, plus],
                 false,
                 color,
                 width.max(1.0),
                 DashStyle::Solid,
+                None,
                 0.0,
             );
             append_mesh(mesh, &stroke);
-            let stroke = stroke_path(
+            let stroke = stroke_path_pattern(
                 &[tip, minus],
                 false,
                 color,
                 width.max(1.0),
                 DashStyle::Solid,
+                None,
                 0.0,
             );
             append_mesh(mesh, &stroke);
@@ -542,11 +544,12 @@ fn two_thirds(value: f32) -> f32 {
 }
 
 /// Colours and widths for a path mesh.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PathMeshSpec {
     pub color: Color32,
     pub width: f32,
     pub dash: DashStyle,
+    pub dash_pattern: Option<Vec<f32>>,
     pub fill: Option<Color32>,
     pub pixels_per_point: f32,
 }
@@ -620,12 +623,13 @@ pub fn path_mesh(
         .and_then(|(a, b)| direction(b, a));
 
     let trimmed = trim_end(&trim_start(&flat, start_trim), end_trim);
-    let stroke = stroke_path(
+    let stroke = stroke_path_pattern(
         &trimmed,
         closed,
         spec.color,
         spec.width,
         spec.dash,
+        spec.dash_pattern.as_deref(),
         spec.pixels_per_point,
     );
     append_mesh(&mut mesh, &stroke);
@@ -824,6 +828,7 @@ mod tests {
                         color: Color32::from_rgb(20, 30, 40),
                         width: 3.0,
                         dash: DashStyle::Solid,
+                        dash_pattern: None,
                         fill: None,
                         pixels_per_point: 1.0,
                     },
@@ -862,6 +867,7 @@ mod tests {
                     color: Color32::WHITE,
                     width: 2.0,
                     dash: DashStyle::Solid,
+                    dash_pattern: None,
                     fill: Some(Color32::from_rgb(10, 20, 30)),
                     pixels_per_point: 1.0,
                 },

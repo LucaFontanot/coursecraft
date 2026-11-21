@@ -18,7 +18,9 @@ use crate::icons::Icon;
 use crate::layout::SlideTransform;
 use crate::media::{LottieView, MediaCache, MediaSource, MediaView};
 use crate::path_geometry::{PathMeshSpec, path_mesh};
-use crate::shape_fill::{fill_contours, fill_contours_shaded, fill_contours_uv, stroke_contours};
+use crate::shape_fill::{
+    fill_contours, fill_contours_shaded, fill_contours_uv, stroke_contours_pattern,
+};
 use crate::shape_geometry::{shape_contours_adjusted, shape_text_rect};
 
 const DIM_FACTOR: f32 = 0.35;
@@ -626,11 +628,12 @@ pub fn paint_outline(
                 .collect()
         })
         .collect();
-    let mesh = stroke_contours(
+    let mesh = stroke_contours_pattern(
         &translated,
         outline.color,
         outline.width * scale,
         outline.dash,
+        outline.dash_pattern.as_deref(),
         painter.pixels_per_point(),
     );
     if !mesh.is_empty() {
@@ -1319,16 +1322,18 @@ fn paint_path(
     };
     let points = to_screen(&path.points);
     let fill = path.fill.map(|color| apply_dim(color, dimmed, opacity));
-    let (outline_color, outline_width, dash) = match &path.outline {
+    let (outline_color, outline_width, dash, dash_pattern) = match &path.outline {
         Some(outline) => (
             apply_dim(outline.color, dimmed, opacity),
             outline.width * scale,
             outline.dash,
+            outline.dash_pattern.clone(),
         ),
         None => (
             Color32::TRANSPARENT,
             0.0,
             coursecraft_course::DashStyle::Solid,
+            None,
         ),
     };
     if path.subpaths.is_empty() && path.fill_style.is_none() {
@@ -1343,6 +1348,7 @@ fn paint_path(
                 color: outline_color,
                 width: outline_width,
                 dash,
+                dash_pattern,
                 fill,
                 pixels_per_point: painter.pixels_per_point(),
             },
@@ -1422,6 +1428,7 @@ fn paint_path(
                 color: outline_color,
                 width: outline_width,
                 dash,
+                dash_pattern: dash_pattern.clone(),
                 fill: None,
                 pixels_per_point: painter.pixels_per_point(),
             },
@@ -1442,6 +1449,7 @@ fn paint_path(
                     color: outline_color,
                     width: outline_width,
                     dash,
+                    dash_pattern: dash_pattern.clone(),
                     fill: None,
                     pixels_per_point: painter.pixels_per_point(),
                 },
@@ -1489,6 +1497,7 @@ fn paint_path_silhouette(
             color,
             width,
             dash: coursecraft_course::DashStyle::Solid,
+            dash_pattern: None,
             fill,
             pixels_per_point: painter.pixels_per_point(),
         },
@@ -1708,6 +1717,7 @@ pub fn paint_items(
                         color: apply_dim(outline.color, item.dimmed, op),
                         width: outline.width,
                         dash: outline.dash,
+                        dash_pattern: outline.dash_pattern.clone(),
                     };
                     paint_outline(
                         &item_painter,
@@ -2018,6 +2028,7 @@ pub fn paint_items(
                         color: apply_dim(outline.color, item.dimmed, op),
                         width: outline.width,
                         dash: outline.dash,
+                        dash_pattern: outline.dash_pattern.clone(),
                     };
                     paint_outline(&item_painter, screen_rect, *shape, adjust, &resolved, scale);
                 }
@@ -2304,6 +2315,7 @@ pub fn paint_items(
                         color: apply_dim(outline.color, item.dimmed, op),
                         width: outline.width,
                         dash: outline.dash,
+                        dash_pattern: outline.dash_pattern.clone(),
                     };
                     paint_outline(
                         &item_painter,

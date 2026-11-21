@@ -358,6 +358,7 @@ fn outline_text_slide() -> Slide {
                 color: Color("#2F6FEB".to_owned()),
                 width,
                 dash,
+                dash_pattern: None,
             }),
             label,
             ModelRect {
@@ -575,6 +576,7 @@ fn draw_slide(text_color: Color) -> Slide {
         color: text_color.clone(),
         width: 2.0,
         dash: coursecraft_course::DashStyle::Solid,
+        dash_pattern: None,
     };
     let mut objects = Vec::new();
     let specs: Vec<(&str, coursecraft_course::Path)> = vec![
@@ -892,6 +894,7 @@ fn draw_slide(text_color: Color) -> Slide {
                     color: text_color.clone(),
                     width: 2.0,
                     dash: coursecraft_course::DashStyle::Solid,
+                    dash_pattern: None,
                 },
                 start_end: coursecraft_course::LineEnd::None,
                 end_end: coursecraft_course::LineEnd::None,
@@ -1059,6 +1062,7 @@ fn no_fill_is_a_transparent_colour() {
                 color: Color("#2F6FEB".to_owned()),
                 width: 3.0,
                 dash: coursecraft_course::DashStyle::Dash,
+                dash_pattern: None,
             }),
             text: Some(coursecraft_course::ShapeText {
                 text: "No fill".to_owned(),
@@ -1584,4 +1588,76 @@ fn solid_outline_covers_every_edge_of_every_kind() {
             }
         }
     }
+}
+
+#[test]
+fn custom_dash_pattern_measures_gaps_on_straight_line() {
+    use coursecraft_course::DashStyle;
+    fn inside(p: (f32, f32), a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> bool {
+        let area = |u: (f32, f32), v: (f32, f32), w: (f32, f32)| {
+            (v.0 - u.0) * (w.1 - u.1) - (v.1 - u.1) * (w.0 - u.0)
+        };
+        let (a, b, c) = ((a.x, a.y), (b.x, b.y), (c.x, c.y));
+        let (d1, d2, d3) = (area(p, a, b), area(p, b, c), area(p, c, a));
+        let eps = 0.01;
+        !((d1 < -eps || d2 < -eps || d3 < -eps) && (d1 > eps || d2 > eps || d3 > eps))
+    }
+    let color = egui::Color32::from_rgb(20, 30, 40);
+    // width = 4.0, pattern = [5.0, 3.0] => 20px dash, 12px gap, 32px period.
+    let mesh = crate::shape_fill::stroke_path_pattern(
+        &[(0.0, 50.0), (200.0, 50.0)],
+        false,
+        color,
+        4.0,
+        DashStyle::Custom,
+        Some(&[5.0, 3.0]),
+        1.0,
+    );
+    let opaque: Vec<[egui::Pos2; 3]> = mesh
+        .triangles()
+        .filter_map(|[a, b, c]| {
+            let v = |i: u32| mesh.vertices.get(i as usize);
+            let (a, b, c) = (v(a)?, v(b)?, v(c)?);
+            (a.color.a() > 0 || b.color.a() > 0 || c.color.a() > 0).then_some([a.pos, b.pos, c.pos])
+        })
+        .collect();
+    let hit = |x: f32| opaque.iter().any(|t| inside((x, 50.0), t[0], t[1], t[2]));
+    assert!(hit(10.0), "inside first dash (0..20)");
+    assert!(!hit(26.0), "inside first gap (20..32)");
+    assert!(hit(42.0), "inside second dash (32..52)");
+    assert!(!hit(58.0), "inside second gap (52..64)");
+}
+
+#[test]
+fn custom_dash_pattern_renders_on_rounded_corners_and_curves() {
+    use coursecraft_course::{DashStyle, LineEnd, PathStyle, ShapeKind};
+    let color = egui::Color32::from_rgb(20, 30, 40);
+    let contours = crate::shape_contours(ShapeKind::RoundedRectangle, 160.0, 100.0);
+    let rounded_mesh = crate::shape_fill::stroke_contours_pattern(
+        &contours,
+        color,
+        3.0,
+        DashStyle::Custom,
+        Some(&[4.0, 2.0, 1.0, 2.0]),
+        1.0,
+    );
+    assert!(!rounded_mesh.is_empty());
+
+    let curved_mesh = crate::path_mesh(
+        &[(0.0, 0.0), (60.0, 80.0), (140.0, 20.0), (200.0, 90.0)],
+        PathStyle::Curved,
+        false,
+        None,
+        LineEnd::None,
+        LineEnd::None,
+        &crate::PathMeshSpec {
+            color,
+            width: 3.0,
+            dash: DashStyle::Custom,
+            dash_pattern: Some(vec![3.0, 2.0]),
+            fill: None,
+            pixels_per_point: 1.0,
+        },
+    );
+    assert!(!curved_mesh.is_empty());
 }

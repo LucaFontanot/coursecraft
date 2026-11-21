@@ -150,6 +150,8 @@ mod document_tests;
 #[cfg(test)]
 mod eyedropper_tests;
 #[cfg(test)]
+mod f22_fill_outline_dash_tests;
+#[cfg(test)]
 mod fill_style_tests;
 #[cfg(test)]
 mod find_tests;

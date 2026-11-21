@@ -593,6 +593,7 @@ fn big_slide_reroutes_quickly() {
         color: Color("#1F1F1F".into()),
         width: 2.0,
         dash: DashStyle::Solid,
+        dash_pattern: None,
     };
     for index in 0..2000usize {
         #[allow(clippy::cast_precision_loss)]

@@ -109,7 +109,10 @@ pub use path_geometry::{
     route_connector,
 };
 pub use player_frame::{FrameOutput, PlayerFrame, show_loading, show_loading_text};
-pub use shape_fill::{even_odd_area, fill_contours, stroke_contours, stroke_path};
+pub use shape_fill::{
+    even_odd_area, fill_contours, stroke_contours, stroke_contours_pattern, stroke_path,
+    stroke_path_pattern,
+};
 pub use shape_geometry::{
     Pt as ShapePoint, adjust_from_point, adjust_handle_name, adjust_handles, arc, regular_polygon,
     rounded_polygon, scale, shape_contours, shape_contours_adjusted, shape_text_rect, star,

@@ -131,6 +131,7 @@ pub fn insert_table(editor: &mut Editor) {
         color: coursecraft_course::Color("#1F1F1F".to_owned()),
         width: 1.0,
         dash: coursecraft_course::DashStyle::Solid,
+        dash_pattern: None,
     };
     let kind = coursecraft_course::ObjectKind::Table {
         columns,

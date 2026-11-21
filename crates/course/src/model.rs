@@ -2739,6 +2739,29 @@ pub struct Outline {
     pub width: f32,
     #[serde(default)]
     pub dash: DashStyle,
+    /// Optional alternating `[dash, gap, ...]` lengths as multiples of `width`.
+    /// Omitted when using `dash`'s built-in spacing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash_pattern: Option<Vec<f32>>,
+}
+
+impl Outline {
+    /// Effective alternating `[dash, gap, ...]` pattern in multiples of `width`.
+    /// Returns an empty slice when `dash` is `Solid`.
+    #[must_use]
+    pub fn effective_dash_pattern(&self) -> &[f32] {
+        if self.dash == DashStyle::Solid {
+            return &[];
+        }
+        if let Some(pattern) = &self.dash_pattern
+            && pattern.len() >= 2
+            && pattern.len() % 2 == 0
+            && pattern.iter().all(|v| v.is_finite() && *v > 0.0)
+        {
+            return pattern;
+        }
+        self.dash.default_pattern()
+    }
 }
 
 /// How an outline is broken along its path.
@@ -2750,6 +2773,20 @@ pub enum DashStyle {
     Dash,
     Dot,
     DashDot,
+    Custom,
+}
+
+impl DashStyle {
+    /// Built-in alternating `[dash, gap, ...]` lengths in multiples of line width.
+    #[must_use]
+    pub const fn default_pattern(self) -> &'static [f32] {
+        match self {
+            Self::Solid => &[],
+            Self::Dash | Self::Custom => &[3.0, 2.0],
+            Self::Dot => &[1.0, 1.0],
+            Self::DashDot => &[3.0, 1.5, 1.0, 1.5],
+        }
+    }
 }
 
 /// How many points a path needs and may carry.

@@ -143,6 +143,9 @@ pub struct PropertiesState {
     pub shape_outline_color: String,
     pub shape_outline_width: f32,
     pub shape_outline_dash: coursecraft_course::DashStyle,
+    pub shape_outline_dash_pattern: Option<Vec<f32>>,
+    pub shape_outline_dash_length: f32,
+    pub shape_outline_gap: f32,
     /// Search text in the shape gallery popup.
     pub shape_gallery_query: String,
     /// Icon rects painted by the last open gallery (test hook).
@@ -154,6 +157,9 @@ pub struct PropertiesState {
     pub path_outline_color: String,
     pub path_outline_width: f32,
     pub path_outline_dash: coursecraft_course::DashStyle,
+    pub path_outline_dash_pattern: Option<Vec<f32>>,
+    pub path_outline_dash_length: f32,
+    pub path_outline_gap: f32,
     pub path_start_end: coursecraft_course::LineEnd,
     pub path_end_end: coursecraft_course::LineEnd,
     pub path_style: coursecraft_course::PathStyle,
@@ -276,8 +282,10 @@ pub struct PropertiesState {
     pub multi_font: String,
     pub multi_font_mixed: bool,
     pub multi_fill_allowed: bool,
+    pub multi_fill_enabled: Option<bool>,
     pub multi_fill: String,
     pub multi_fill_mixed: bool,
+    pub multi_outline_enabled: Option<bool>,
     pub multi_decorative: Option<bool>,
 
     // Course buffers
@@ -385,12 +393,18 @@ impl Default for PropertiesState {
             shape_outline_color: "#1F1F1F".into(),
             shape_outline_width: 1.5,
             shape_outline_dash: coursecraft_course::DashStyle::Solid,
+            shape_outline_dash_pattern: None,
+            shape_outline_dash_length: 3.0,
+            shape_outline_gap: 2.0,
             shape_gallery_query: String::new(),
             shape_gallery_rects: Vec::new(),
             shape_gallery_search_rect: None,
             path_outline_color: "#1F1F1F".into(),
             path_outline_width: 2.0,
             path_outline_dash: coursecraft_course::DashStyle::Solid,
+            path_outline_dash_pattern: None,
+            path_outline_dash_length: 3.0,
+            path_outline_gap: 2.0,
             path_start_end: coursecraft_course::LineEnd::None,
             path_end_end: coursecraft_course::LineEnd::None,
             path_style: coursecraft_course::PathStyle::Straight,
@@ -484,8 +498,10 @@ impl Default for PropertiesState {
             multi_font: String::new(),
             multi_font_mixed: false,
             multi_fill_allowed: false,
+            multi_fill_enabled: None,
             multi_fill: String::new(),
             multi_fill_mixed: false,
+            multi_outline_enabled: None,
             multi_decorative: None,
             course_title: String::new(),
             slide_title: String::new(),
@@ -670,11 +686,20 @@ impl PropertiesState {
                     if let Some(outline) = outline {
                         self.shape_outline_color = outline.color.0.clone();
                         self.shape_outline_width = outline.width;
-                        self.shape_outline_dash = outline.dash;
+                        sync_dash_fields(
+                            outline,
+                            &mut self.shape_outline_dash,
+                            &mut self.shape_outline_dash_pattern,
+                            &mut self.shape_outline_dash_length,
+                            &mut self.shape_outline_gap,
+                        );
                     } else {
                         self.shape_outline_color = "#1F1F1F".into();
                         self.shape_outline_width = 1.5;
                         self.shape_outline_dash = coursecraft_course::DashStyle::Solid;
+                        self.shape_outline_dash_pattern = None;
+                        self.shape_outline_dash_length = 3.0;
+                        self.shape_outline_gap = 2.0;
                     }
                     if let Some(text) = text {
                         self.text_body = text.text.clone();
@@ -700,7 +725,13 @@ impl PropertiesState {
                 ObjectKind::Path { path } => {
                     self.path_outline_color = path.outline.color.0.clone();
                     self.path_outline_width = path.outline.width;
-                    self.path_outline_dash = path.outline.dash;
+                    sync_dash_fields(
+                        &path.outline,
+                        &mut self.path_outline_dash,
+                        &mut self.path_outline_dash_pattern,
+                        &mut self.path_outline_dash_length,
+                        &mut self.path_outline_gap,
+                    );
                     self.path_start_end = path.start_end;
                     self.path_end_end = path.end_end;
                     self.path_style = path.style;
@@ -1051,8 +1082,10 @@ impl PropertiesState {
             .iter()
             .all(|object| matches!(object.kind, ObjectKind::Button { .. }));
         self.multi_fill_allowed = all_shapes || all_buttons;
+        self.multi_fill_enabled = None;
         self.multi_fill = String::new();
         self.multi_fill_mixed = false;
+        self.multi_outline_enabled = None;
         if self.multi_fill_allowed {
             let fills: Vec<&Color> = objects
                 .iter()
@@ -1061,25 +1094,44 @@ impl PropertiesState {
                     _ => None,
                 })
                 .collect();
+            self.multi_fill_enabled = all_same_bool(fills.iter().map(|fill| fill.0 != "#00000000"));
             if let Some(first) = fills.first() {
                 let same = fills.iter().all(|fill| *fill == *first);
                 self.multi_fill = if same { first.0.clone() } else { String::new() };
                 self.multi_fill_mixed = !same;
             }
         }
-        if all_shapes
-            && let Some(ObjectKind::Shape { outline, .. }) =
-                objects.first().map(|object| &object.kind)
-        {
-            self.shape_outline_enabled = outline.is_some();
-            if let Some(outline) = outline {
+        if all_shapes {
+            self.multi_outline_enabled = all_same_bool(objects.iter().map(|object| {
+                matches!(
+                    &object.kind,
+                    ObjectKind::Shape {
+                        outline: Some(_),
+                        ..
+                    }
+                )
+            }));
+            self.shape_outline_enabled = self.multi_outline_enabled != Some(false);
+            if let Some(outline) = objects.iter().find_map(|object| match &object.kind {
+                ObjectKind::Shape { outline, .. } => outline.as_ref(),
+                _ => None,
+            }) {
                 self.shape_outline_color = outline.color.0.clone();
                 self.shape_outline_width = outline.width;
-                self.shape_outline_dash = outline.dash;
+                sync_dash_fields(
+                    outline,
+                    &mut self.shape_outline_dash,
+                    &mut self.shape_outline_dash_pattern,
+                    &mut self.shape_outline_dash_length,
+                    &mut self.shape_outline_gap,
+                );
             } else {
                 self.shape_outline_color = "#1F1F1F".to_owned();
                 self.shape_outline_width = 1.5;
                 self.shape_outline_dash = coursecraft_course::DashStyle::Solid;
+                self.shape_outline_dash_pattern = None;
+                self.shape_outline_dash_length = 3.0;
+                self.shape_outline_gap = 2.0;
             }
         }
 
@@ -2495,57 +2547,72 @@ fn show_multi_properties(
 
     if props.multi_fill_allowed {
         inspector_separator(ui);
-        let (fill_response, valid_fill) =
-            show_color_field(ui, "Fill", &mut props.multi_fill, "prop_multi_fill");
-        if is_committed(&fill_response, ui) && valid_fill && !props.multi_fill.trim().is_empty() {
-            let fill = props.multi_fill.trim().to_owned();
-            for object in &objects {
-                let (kind, needs) = match &object.kind {
-                    ObjectKind::Shape { fill: current, .. }
-                    | ObjectKind::Button { fill: current, .. } => {
-                        let mut kind = serde_json::to_value(&object.kind).unwrap_or(Json::Null);
-                        kind["fill"] = serde_json::json!(fill);
-                        (kind, current.0 != fill)
-                    }
-                    _ => continue,
-                };
-                if needs {
-                    actions_to_run.push((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": object.id,
-                            "kind": kind,
-                        }),
-                    ));
-                }
-            }
-        }
-        let all_shapes = objects
-            .iter()
-            .all(|object| matches!(object.kind, ObjectKind::Shape { .. }));
-        if all_shapes {
-            inspector_row(ui, "No fill", |ui| {
-                let all_no_fill = objects.iter().all(|object| {
-                    matches!(&object.kind, ObjectKind::Shape { fill, .. } if fill.0 == "#00000000")
-                });
-                let mut checked = all_no_fill;
-                if ui.checkbox(&mut checked, "").changed() {
-                    let next_fill = if checked {
-                        "#00000000".to_owned()
-                    } else {
-                        props.multi_fill.trim().to_owned()
-                    };
-                    let next_fill = if next_fill.is_empty() || next_fill == "#00000000" {
+        inspector_row(ui, "Fill", |ui| {
+            let mut checked = props.multi_fill_enabled == Some(true);
+            let r = ui.add(
+                egui::Checkbox::new(&mut checked, "")
+                    .indeterminate(props.multi_fill_enabled.is_none()),
+            );
+            if r.changed() {
+                let next_fill = if checked {
+                    let candidate = props.multi_fill.trim();
+                    if candidate.is_empty() || candidate == "#00000000" {
                         "#D0D7DE".to_owned()
                     } else {
-                        next_fill
+                        candidate.to_owned()
+                    }
+                } else {
+                    "#00000000".to_owned()
+                };
+                props.multi_fill_enabled = Some(checked);
+                for object in &objects {
+                    let (mut kind, needs) = match &object.kind {
+                        ObjectKind::Shape { fill, .. } | ObjectKind::Button { fill, .. } => (
+                            serde_json::to_value(&object.kind).unwrap_or(Json::Null),
+                            if checked {
+                                fill.0 == "#00000000"
+                            } else {
+                                fill.0 != "#00000000"
+                            },
+                        ),
+                        _ => continue,
                     };
+                    if needs {
+                        kind["fill"] = serde_json::json!(next_fill);
+                        if !checked {
+                            kind["fill_style"] = Json::Null;
+                        }
+                        actions_to_run.push((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": object.id,
+                                "kind": kind,
+                            }),
+                        ));
+                    }
+                }
+            }
+            if props.multi_fill_enabled != Some(false) {
+                let (fill_response, valid_fill) =
+                    show_color_field(ui, "", &mut props.multi_fill, "prop_multi_fill");
+                if is_committed(&fill_response, ui)
+                    && valid_fill
+                    && !props.multi_fill.trim().is_empty()
+                {
+                    let fill = props.multi_fill.trim().to_owned();
                     for object in &objects {
-                        let needs = matches!(&object.kind, ObjectKind::Shape { fill, .. } if fill.0 != next_fill);
+                        let (kind, needs) = match &object.kind {
+                            ObjectKind::Shape { fill: current, .. }
+                            | ObjectKind::Button { fill: current, .. } => {
+                                let mut kind =
+                                    serde_json::to_value(&object.kind).unwrap_or(Json::Null);
+                                kind["fill"] = serde_json::json!(fill);
+                                (kind, current.0 != fill)
+                            }
+                            _ => continue,
+                        };
                         if needs {
-                            let mut kind = serde_json::to_value(&object.kind).unwrap_or(Json::Null);
-                            kind["fill"] = serde_json::json!(next_fill);
                             actions_to_run.push((
                                 "object.update",
                                 serde_json::json!({
@@ -2557,18 +2624,27 @@ fn show_multi_properties(
                         }
                     }
                 }
-            });
-
+            }
+        });
+        let all_shapes = objects
+            .iter()
+            .all(|object| matches!(object.kind, ObjectKind::Shape { .. }));
+        if all_shapes {
             inspector_separator(ui);
             let mut outline_changed = false;
-            inspector_row(ui, "No outline", |ui| {
-                let mut no_outline = !props.shape_outline_enabled;
-                if ui.checkbox(&mut no_outline, "").changed() {
-                    props.shape_outline_enabled = !no_outline;
+            inspector_row(ui, "Outline", |ui| {
+                let mut checked = props.multi_outline_enabled == Some(true);
+                let r = ui.add(
+                    egui::Checkbox::new(&mut checked, "")
+                        .indeterminate(props.multi_outline_enabled.is_none()),
+                );
+                if r.changed() {
+                    props.shape_outline_enabled = checked;
+                    props.multi_outline_enabled = Some(checked);
                     outline_changed = true;
                 }
             });
-            if props.shape_outline_enabled {
+            if props.multi_outline_enabled != Some(false) {
                 inspector_row(ui, "Colour", |ui| {
                     let (cr, valid_color) = show_color_field(
                         ui,
@@ -2598,51 +2674,31 @@ fn show_multi_properties(
                         outline_changed = true;
                     }
                 });
-                inspector_row(ui, "Dash", |ui| {
-                    let label = match props.shape_outline_dash {
-                        coursecraft_course::DashStyle::Solid => "Solid",
-                        coursecraft_course::DashStyle::Dash => "Dash",
-                        coursecraft_course::DashStyle::Dot => "Dot",
-                        coursecraft_course::DashStyle::DashDot => "Dash-dot",
-                    };
-                    let rem_w = ui.available_width().max(30.0);
-                    egui::ComboBox::from_id_salt("prop_multi_shape_outline_dash")
-                        .width(rem_w)
-                        .selected_text(label)
-                        .show_ui(ui, |ui| {
-                            for (dash, dash_label) in [
-                                (coursecraft_course::DashStyle::Solid, "Solid"),
-                                (coursecraft_course::DashStyle::Dash, "Dash"),
-                                (coursecraft_course::DashStyle::Dot, "Dot"),
-                                (coursecraft_course::DashStyle::DashDot, "Dash-dot"),
-                            ] {
-                                if ui
-                                    .selectable_value(
-                                        &mut props.shape_outline_dash,
-                                        dash,
-                                        dash_label,
-                                    )
-                                    .clicked()
-                                {
-                                    outline_changed = true;
-                                }
-                            }
-                        });
-                });
+                if show_dash_controls(
+                    ui,
+                    "prop_multi_shape_outline",
+                    &mut props.shape_outline_dash,
+                    &mut props.shape_outline_dash_pattern,
+                    &mut props.shape_outline_dash_length,
+                    &mut props.shape_outline_gap,
+                ) {
+                    outline_changed = true;
+                }
             }
             if outline_changed {
-                let outline_json = if props.shape_outline_enabled {
-                    serde_json::json!({
-                        "color": props.shape_outline_color.trim(),
-                        "width": props.shape_outline_width,
-                        "dash": props.shape_outline_dash,
-                    })
+                let out_json = if props.shape_outline_enabled {
+                    outline_json(
+                        &props.shape_outline_color,
+                        props.shape_outline_width,
+                        props.shape_outline_dash,
+                        &props.shape_outline_dash_pattern,
+                    )
                 } else {
                     Json::Null
                 };
                 for object in &objects {
                     let mut kind = serde_json::to_value(&object.kind).unwrap_or(Json::Null);
-                    kind["outline"] = outline_json.clone();
+                    kind["outline"] = out_json.clone();
                     actions_to_run.push((
                         "object.update",
                         serde_json::json!({
@@ -6078,7 +6134,7 @@ fn show_object_properties(
             ) {
                 action_to_run = Some(action);
             }
-            inspector_row(ui, "Border", |ui| {
+            inspector_row(ui, "Outline", |ui| {
                 let mut has_border = outline.is_some();
                 let mut changed = ui.checkbox(&mut has_border, "").changed();
                 let mut cur = outline
@@ -6087,6 +6143,7 @@ fn show_object_properties(
                         color: coursecraft_course::Color("#1F1F1F".to_owned()),
                         width: 1.0,
                         dash: coursecraft_course::DashStyle::Solid,
+                        dash_pattern: None,
                     });
                 if has_border {
                     let r = ui.add(
@@ -6153,11 +6210,20 @@ fn show_object_properties(
                 }
             });
 
+            let has_fill = fill.0 != "#00000000";
             inspector_row(ui, "Fill", |ui| {
-                let (cr, valid_color) =
-                    show_color_field(ui, "", &mut props.button_fill, "prop_btn_fill");
-                props.color_rect = Some(cr.rect);
-                if is_committed(&cr, ui) && valid_color && props.button_fill.trim() != fill.0 {
+                let mut checked = has_fill;
+                if ui.checkbox(&mut checked, "").changed() {
+                    let next = if !checked {
+                        "#00000000".to_owned()
+                    } else if props.button_fill.trim().is_empty()
+                        || props.button_fill.trim() == "#00000000"
+                    {
+                        "#2F6FEB".to_owned()
+                    } else {
+                        props.button_fill.trim().to_owned()
+                    };
+                    props.button_fill = next.clone();
                     action_to_run = Some((
                         "object.update",
                         serde_json::json!({
@@ -6166,23 +6232,45 @@ fn show_object_properties(
                             "kind": {
                                 "type": "button",
                                 "label": props.button_label,
-                                "fill": props.button_fill.trim(),
-                                "fill_style": fill_style_json.clone(),
+                                "fill": next,
+                                "fill_style": if checked { fill_style_json.clone() } else { Json::Null },
                             },
                         }),
                     ));
                 }
+                if has_fill {
+                    let (cr, valid_color) =
+                        show_color_field(ui, "", &mut props.button_fill, "prop_btn_fill");
+                    props.color_rect = Some(cr.rect);
+                    if is_committed(&cr, ui) && valid_color && props.button_fill.trim() != fill.0 {
+                        action_to_run = Some((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "kind": {
+                                    "type": "button",
+                                    "label": props.button_label,
+                                    "fill": props.button_fill.trim(),
+                                    "fill_style": fill_style_json.clone(),
+                                },
+                            }),
+                        ));
+                    }
+                }
             });
 
-            show_fill_style_editor(
-                ui,
-                props,
-                &fill.0,
-                &slide.id,
-                &obj.id,
-                &lists.media_names,
-                actions_to_run,
-            );
+            if has_fill {
+                show_fill_style_editor(
+                    ui,
+                    props,
+                    &fill.0,
+                    &slide.id,
+                    &obj.id,
+                    &lists.media_names,
+                    actions_to_run,
+                );
+            }
         }
         ObjectKind::Shape {
             shape,
@@ -6240,37 +6328,11 @@ fn show_object_properties(
                     });
             });
 
-            let no_fill = fill.0 == "#00000000";
+            let has_fill = fill.0 != "#00000000";
             inspector_row(ui, "Fill", |ui| {
-                let (cr, valid_color) =
-                    show_color_field(ui, "", &mut props.shape_fill, "prop_shape_fill");
-                props.color_rect = Some(cr.rect);
-                if is_committed(&cr, ui) && valid_color && props.shape_fill.trim() != fill.0 {
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": kind_with(*shape, props.shape_fill.trim()),
-                        }),
-                    ));
-                }
-            });
-
-            show_fill_style_editor(
-                ui,
-                props,
-                &fill.0,
-                &slide.id,
-                &obj.id,
-                &lists.media_names,
-                actions_to_run,
-            );
-
-            inspector_row(ui, "No fill", |ui| {
-                let mut checked = no_fill;
+                let mut checked = has_fill;
                 if ui.checkbox(&mut checked, "").changed() {
-                    let next = if checked {
+                    let next = if !checked {
                         "#00000000".to_owned()
                     } else if props.shape_fill.trim().is_empty()
                         || props.shape_fill.trim() == "#00000000"
@@ -6281,7 +6343,7 @@ fn show_object_properties(
                     };
                     props.shape_fill = next.clone();
                     let mut kind = kind_with(*shape, &next);
-                    if checked {
+                    if !checked {
                         kind["fill_style"] = Json::Null;
                     }
                     action_to_run = Some((
@@ -6293,7 +6355,34 @@ fn show_object_properties(
                         }),
                     ));
                 }
+                if has_fill {
+                    let (cr, valid_color) =
+                        show_color_field(ui, "", &mut props.shape_fill, "prop_shape_fill");
+                    props.color_rect = Some(cr.rect);
+                    if is_committed(&cr, ui) && valid_color && props.shape_fill.trim() != fill.0 {
+                        action_to_run = Some((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "kind": kind_with(*shape, props.shape_fill.trim()),
+                            }),
+                        ));
+                    }
+                }
             });
+
+            if has_fill {
+                show_fill_style_editor(
+                    ui,
+                    props,
+                    &fill.0,
+                    &slide.id,
+                    &obj.id,
+                    &lists.media_names,
+                    actions_to_run,
+                );
+            }
 
             if !adjust.is_empty() {
                 inspector_row(ui, "Adjust", |ui| {
@@ -6313,22 +6402,22 @@ fn show_object_properties(
             }
 
             inspector_separator(ui);
-            inspector_row(ui, "No outline", |ui| {
-                let mut no_outline = !props.shape_outline_enabled;
-                if ui.checkbox(&mut no_outline, "").changed() {
-                    let enabled = !no_outline;
-                    props.shape_outline_enabled = enabled;
-                    let outline_json = if enabled {
-                        serde_json::json!({
-                            "color": props.shape_outline_color.trim(),
-                            "width": props.shape_outline_width,
-                            "dash": props.shape_outline_dash,
-                        })
+            inspector_row(ui, "Outline", |ui| {
+                let mut has_outline = props.shape_outline_enabled;
+                if ui.checkbox(&mut has_outline, "").changed() {
+                    props.shape_outline_enabled = has_outline;
+                    let out_json = if has_outline {
+                        outline_json(
+                            &props.shape_outline_color,
+                            props.shape_outline_width,
+                            props.shape_outline_dash,
+                            &props.shape_outline_dash_pattern,
+                        )
                     } else {
                         Json::Null
                     };
                     let mut kind = kind_with(*shape, &fill.0);
-                    kind["outline"] = outline_json;
+                    kind["outline"] = out_json;
                     action_to_run = Some((
                         "object.update",
                         serde_json::json!({
@@ -6351,11 +6440,12 @@ fn show_object_properties(
                     props.color_rect = Some(cr.rect);
                     if is_committed(&cr, ui) && valid_color {
                         let mut kind = kind_with(*shape, &fill.0);
-                        kind["outline"] = serde_json::json!({
-                            "color": props.shape_outline_color.trim(),
-                            "width": props.shape_outline_width,
-                            "dash": props.shape_outline_dash,
-                        });
+                        kind["outline"] = outline_json(
+                            &props.shape_outline_color,
+                            props.shape_outline_width,
+                            props.shape_outline_dash,
+                            &props.shape_outline_dash_pattern,
+                        );
                         action_to_run = Some((
                             "object.update",
                             serde_json::json!({
@@ -6383,11 +6473,12 @@ fn show_object_properties(
                         && (0.0..=50.0).contains(&props.shape_outline_width)
                     {
                         let mut kind = kind_with(*shape, &fill.0);
-                        kind["outline"] = serde_json::json!({
-                            "color": props.shape_outline_color.trim(),
-                            "width": props.shape_outline_width,
-                            "dash": props.shape_outline_dash,
-                        });
+                        kind["outline"] = outline_json(
+                            &props.shape_outline_color,
+                            props.shape_outline_width,
+                            props.shape_outline_dash,
+                            &props.shape_outline_dash_pattern,
+                        );
                         action_to_run = Some((
                             "object.update",
                             serde_json::json!({
@@ -6399,50 +6490,30 @@ fn show_object_properties(
                     }
                 });
 
-                inspector_row(ui, "Dash", |ui| {
-                    let label = match props.shape_outline_dash {
-                        coursecraft_course::DashStyle::Solid => "Solid",
-                        coursecraft_course::DashStyle::Dash => "Dash",
-                        coursecraft_course::DashStyle::Dot => "Dot",
-                        coursecraft_course::DashStyle::DashDot => "Dash-dot",
-                    };
-                    let rem_w = ui.available_width().max(30.0);
-                    let mut changed = false;
-                    egui::ComboBox::from_id_salt("prop_shape_outline_dash")
-                        .width(rem_w)
-                        .selected_text(label)
-                        .show_ui(ui, |ui| {
-                            for (dash, label) in [
-                                (coursecraft_course::DashStyle::Solid, "Solid"),
-                                (coursecraft_course::DashStyle::Dash, "Dash"),
-                                (coursecraft_course::DashStyle::Dot, "Dot"),
-                                (coursecraft_course::DashStyle::DashDot, "Dash-dot"),
-                            ] {
-                                if ui
-                                    .selectable_value(&mut props.shape_outline_dash, dash, label)
-                                    .clicked()
-                                {
-                                    changed = true;
-                                }
-                            }
-                        });
-                    if changed {
-                        let mut kind = kind_with(*shape, &fill.0);
-                        kind["outline"] = serde_json::json!({
-                            "color": props.shape_outline_color.trim(),
-                            "width": props.shape_outline_width,
-                            "dash": props.shape_outline_dash,
-                        });
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "kind": kind,
-                            }),
-                        ));
-                    }
-                });
+                if show_dash_controls(
+                    ui,
+                    "prop_shape_outline",
+                    &mut props.shape_outline_dash,
+                    &mut props.shape_outline_dash_pattern,
+                    &mut props.shape_outline_dash_length,
+                    &mut props.shape_outline_gap,
+                ) {
+                    let mut kind = kind_with(*shape, &fill.0);
+                    kind["outline"] = outline_json(
+                        &props.shape_outline_color,
+                        props.shape_outline_width,
+                        props.shape_outline_dash,
+                        &props.shape_outline_dash_pattern,
+                    );
+                    action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
             }
 
             if coursecraft_course::shape_allows_text(*shape) {
@@ -6498,11 +6569,12 @@ fn show_object_properties(
                 props.color_rect = Some(cr.rect);
                 if is_committed(&cr, ui) && valid_color {
                     let mut kind = base_kind.clone();
-                    kind["outline"] = serde_json::json!({
-                        "color": props.path_outline_color.trim(),
-                        "width": props.path_outline_width,
-                        "dash": props.path_outline_dash,
-                    });
+                    kind["outline"] = outline_json(
+                        &props.path_outline_color,
+                        props.path_outline_width,
+                        props.path_outline_dash,
+                        &props.path_outline_dash_pattern,
+                    );
                     action_to_run = Some((
                         "object.update",
                         serde_json::json!({
@@ -6530,11 +6602,12 @@ fn show_object_properties(
                     && (0.0..=50.0).contains(&props.path_outline_width)
                 {
                     let mut kind = base_kind.clone();
-                    kind["outline"] = serde_json::json!({
-                        "color": props.path_outline_color.trim(),
-                        "width": props.path_outline_width,
-                        "dash": props.path_outline_dash,
-                    });
+                    kind["outline"] = outline_json(
+                        &props.path_outline_color,
+                        props.path_outline_width,
+                        props.path_outline_dash,
+                        &props.path_outline_dash_pattern,
+                    );
                     action_to_run = Some((
                         "object.update",
                         serde_json::json!({
@@ -6546,50 +6619,30 @@ fn show_object_properties(
                 }
             });
 
-            inspector_row(ui, "Dash", |ui| {
-                let label = match props.path_outline_dash {
-                    coursecraft_course::DashStyle::Solid => "Solid",
-                    coursecraft_course::DashStyle::Dash => "Dash",
-                    coursecraft_course::DashStyle::Dot => "Dot",
-                    coursecraft_course::DashStyle::DashDot => "Dash-dot",
-                };
-                let rem_w = ui.available_width().max(30.0);
-                let mut changed = false;
-                egui::ComboBox::from_id_salt("prop_path_outline_dash")
-                    .width(rem_w)
-                    .selected_text(label)
-                    .show_ui(ui, |ui| {
-                        for (dash, label) in [
-                            (coursecraft_course::DashStyle::Solid, "Solid"),
-                            (coursecraft_course::DashStyle::Dash, "Dash"),
-                            (coursecraft_course::DashStyle::Dot, "Dot"),
-                            (coursecraft_course::DashStyle::DashDot, "Dash-dot"),
-                        ] {
-                            if ui
-                                .selectable_value(&mut props.path_outline_dash, dash, label)
-                                .clicked()
-                            {
-                                changed = true;
-                            }
-                        }
-                    });
-                if changed {
-                    let mut kind = base_kind.clone();
-                    kind["outline"] = serde_json::json!({
-                        "color": props.path_outline_color.trim(),
-                        "width": props.path_outline_width,
-                        "dash": props.path_outline_dash,
-                    });
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": kind,
-                        }),
-                    ));
-                }
-            });
+            if show_dash_controls(
+                ui,
+                "prop_path_outline",
+                &mut props.path_outline_dash,
+                &mut props.path_outline_dash_pattern,
+                &mut props.path_outline_dash_length,
+                &mut props.path_outline_gap,
+            ) {
+                let mut kind = base_kind.clone();
+                kind["outline"] = outline_json(
+                    &props.path_outline_color,
+                    props.path_outline_width,
+                    props.path_outline_dash,
+                    &props.path_outline_dash_pattern,
+                );
+                action_to_run = Some((
+                    "object.update",
+                    serde_json::json!({
+                        "slide": slide.id,
+                        "object": obj.id,
+                        "kind": kind,
+                    }),
+                ));
+            }
 
             inspector_separator(ui);
             inspector_row(ui, "Begin", |ui| {
@@ -7942,6 +7995,130 @@ struct ImagePropTarget<'a> {
     cropping: bool,
     /// The picture file is loaded, so crop mode can show it.
     can_crop: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_dash_fields(
+    outline: &coursecraft_course::Outline,
+    dash: &mut coursecraft_course::DashStyle,
+    pattern: &mut Option<Vec<f32>>,
+    dash_len: &mut f32,
+    gap: &mut f32,
+) {
+    *dash = outline.dash;
+    *pattern = outline.dash_pattern.clone();
+    let effective = outline.effective_dash_pattern();
+    *dash_len = effective.first().copied().unwrap_or(3.0);
+    *gap = effective.get(1).copied().unwrap_or(2.0);
+}
+
+fn outline_json(
+    color: &str,
+    width: f32,
+    dash: coursecraft_course::DashStyle,
+    dash_pattern: &Option<Vec<f32>>,
+) -> Json {
+    match dash_pattern {
+        Some(pattern) => serde_json::json!({
+            "color": color.trim(),
+            "width": width,
+            "dash": dash,
+            "dash_pattern": pattern,
+        }),
+        None => serde_json::json!({
+            "color": color.trim(),
+            "width": width,
+            "dash": dash,
+        }),
+    }
+}
+
+fn show_dash_controls(
+    ui: &mut Ui,
+    id_prefix: &str,
+    dash: &mut coursecraft_course::DashStyle,
+    dash_pattern: &mut Option<Vec<f32>>,
+    dash_len: &mut f32,
+    gap: &mut f32,
+) -> bool {
+    let mut changed = false;
+    inspector_row(ui, "Dash", |ui| {
+        let label = match *dash {
+            coursecraft_course::DashStyle::Solid => "Solid",
+            coursecraft_course::DashStyle::Dash => "Dash",
+            coursecraft_course::DashStyle::Dot => "Dot",
+            coursecraft_course::DashStyle::DashDot => "Dash-dot",
+            coursecraft_course::DashStyle::Custom => "Custom",
+        };
+        let rem_w = ui.available_width().max(30.0);
+        egui::ComboBox::from_id_salt(format!("{id_prefix}_dash"))
+            .width(rem_w)
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                for (choice, choice_label) in [
+                    (coursecraft_course::DashStyle::Solid, "Solid"),
+                    (coursecraft_course::DashStyle::Dash, "Dash"),
+                    (coursecraft_course::DashStyle::Dot, "Dot"),
+                    (coursecraft_course::DashStyle::DashDot, "Dash-dot"),
+                    (coursecraft_course::DashStyle::Custom, "Custom"),
+                ] {
+                    if ui.selectable_value(dash, choice, choice_label).clicked() {
+                        if choice == coursecraft_course::DashStyle::Custom {
+                            if dash_pattern.is_none() {
+                                *dash_pattern = Some(vec![*dash_len, *gap]);
+                            }
+                        } else {
+                            *dash_pattern = None;
+                            let def = choice.default_pattern();
+                            if def.len() >= 2 {
+                                *dash_len = def[0];
+                                *gap = def[1];
+                            }
+                        }
+                        changed = true;
+                    }
+                }
+            });
+    });
+
+    if *dash != coursecraft_course::DashStyle::Solid {
+        let mut spacing_committed = false;
+        for (label, value) in [("Dash length", &mut *dash_len), ("Gap", &mut *gap)] {
+            inspector_row(ui, label, |ui| {
+                let rem_w = ui.available_width().max(30.0);
+                let r = add_drag_left(
+                    ui,
+                    [rem_w, coursecraft_render::CONTROL_COMPACT],
+                    DragValue::new(value)
+                        .speed(0.1)
+                        .range(0.2..=50.0)
+                        .suffix("×"),
+                );
+                let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (r.drag_stopped() || r.lost_focus() || enter)
+                    && value.is_finite()
+                    && (0.2..=50.0).contains(value)
+                {
+                    spacing_committed = true;
+                }
+            });
+        }
+        if spacing_committed {
+            let d = dash_len.clamp(0.2, 50.0);
+            let g = gap.clamp(0.2, 50.0);
+            *dash_pattern = if *dash == coursecraft_course::DashStyle::DashDot {
+                let dot = dash_pattern
+                    .as_ref()
+                    .and_then(|p| p.get(2).copied())
+                    .unwrap_or(1.0);
+                Some(vec![d, g, dot, g])
+            } else {
+                Some(vec![d, g])
+            };
+            changed = true;
+        }
+    }
+    changed
 }
 
 #[allow(clippy::too_many_arguments)]

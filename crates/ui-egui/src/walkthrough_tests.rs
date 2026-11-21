@@ -356,7 +356,7 @@ fn build_intro_slide(harness: &mut TestHarness) {
     let fill_pos = harness
         .find_text_in("Fill", harness.right_panel_rect())
         .expect("Fill label")
-        + vec2(140.0, 0.0);
+        + vec2(170.0, 0.0);
     harness.set_field(fill_pos, "#5A5A5A");
     set_object_frame(harness, 300.0, 520.0, 260.0, 60.0);
 
@@ -395,7 +395,7 @@ fn build_intro_slide(harness: &mut TestHarness) {
     let fill_pos = harness
         .find_text_in("Fill", harness.right_panel_rect())
         .expect("Fill label")
-        + vec2(140.0, 0.0);
+        + vec2(170.0, 0.0);
     harness.set_field(fill_pos, "#FFFFFFF0");
     set_object_frame(harness, 240.0, 140.0, 800.0, 440.0);
 

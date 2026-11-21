@@ -716,3 +716,49 @@ fn geometry_dash_dot_picture_outline_ellipse_and_text_gaps_import() {
         panic!("expected text box");
     }
 }
+
+#[test]
+fn imports_custom_and_preset_dash_patterns() {
+    let slide_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="2" name="CustDash"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:custDash><a:ds d="400000" sp="200000"/><a:ds d="100000" sp="200000"/></a:custDash></a:ln></p:spPr>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="3" name="SysDash"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:prstDash val="sysDash"/></a:ln></p:spPr>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="4" name="LgDashDotDot"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:prstDash val="lgDashDotDot"/></a:ln></p:spPr>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"#;
+    let bytes = build_pptx(&[slide_xml], &[]);
+    let imported = import_pptx(&bytes, "Dashes").unwrap();
+    let objs = &imported.course.scenes[0].slides[0].objects;
+    let outline_of = |idx: usize| match &objs[idx].kind {
+        ObjectKind::Shape { outline, .. } => outline.as_ref().expect("outline").clone(),
+        _ => panic!("expected shape at {idx}"),
+    };
+    let cust = outline_of(0);
+    assert_eq!(cust.dash, coursecraft_course::DashStyle::Custom);
+    assert_eq!(
+        cust.dash_pattern.as_deref(),
+        Some(&[4.0, 2.0, 1.0, 2.0][..])
+    );
+
+    let sys_dash = outline_of(1);
+    assert_eq!(sys_dash.dash, coursecraft_course::DashStyle::Dash);
+    assert_eq!(sys_dash.dash_pattern.as_deref(), Some(&[3.0, 1.0][..]));
+
+    let lg_ddd = outline_of(2);
+    assert_eq!(lg_ddd.dash, coursecraft_course::DashStyle::DashDot);
+    assert_eq!(
+        lg_ddd.dash_pattern.as_deref(),
+        Some(&[8.0, 3.0, 1.0, 3.0, 1.0, 3.0][..])
+    );
+}

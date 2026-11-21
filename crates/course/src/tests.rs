@@ -2356,6 +2356,7 @@ fn shape_with_outline_and_text() -> crate::ObjectKind {
             color: crate::Color("#2F6FEB".to_owned()),
             width: 3.0,
             dash: crate::DashStyle::Dash,
+            dash_pattern: None,
         }),
         text: Some(crate::ShapeText {
             text: "Hello".to_owned(),
@@ -2541,6 +2542,7 @@ fn default_path() -> crate::Path {
             color: crate::Color("#1F1F1F".into()),
             width: 2.0,
             dash: crate::DashStyle::Solid,
+            dash_pattern: None,
         },
         start_end: crate::LineEnd::None,
         end_end: crate::LineEnd::None,

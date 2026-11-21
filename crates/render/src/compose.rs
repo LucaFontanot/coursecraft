@@ -83,6 +83,7 @@ pub struct ResolvedOutline {
     pub color: egui::Color32,
     pub width: f32,
     pub dash: DashStyle,
+    pub dash_pattern: Option<Vec<f32>>,
 }
 
 /// Resolved drawn path. Points stay as fractions of the item's frame.
@@ -646,6 +647,7 @@ fn resolve_outline(outline: &coursecraft_course::Outline) -> Option<ResolvedOutl
         color,
         width: outline.width,
         dash: outline.dash,
+        dash_pattern: outline.dash_pattern.clone(),
     })
 }
 

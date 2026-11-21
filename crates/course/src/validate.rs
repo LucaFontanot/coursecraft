@@ -1192,6 +1192,11 @@ fn check_shape_outline_and_text(
                 "outline width must be finite and within 0..=50",
             );
         }
+        check_dash_pattern(
+            cx,
+            outline.dash_pattern.as_deref(),
+            &format!("{p}/kind/outline"),
+        );
     }
     if let Some(text) = text {
         if !crate::shape_allows_text(shape) {
@@ -1260,6 +1265,11 @@ fn check_path(cx: &mut Ctx<'_>, path: &crate::Path, p: &str) {
             "outline width must be finite and within 0..=50",
         );
     }
+    check_dash_pattern(
+        cx,
+        path.outline.dash_pattern.as_deref(),
+        &format!("{p}/kind/path/outline"),
+    );
     for (end, glue) in [
         ("start_glue", &path.start_glue),
         ("end_glue", &path.end_glue),
@@ -1402,6 +1412,33 @@ fn check_table(
                 "border width must be finite and within 0..=50",
             );
         }
+        check_dash_pattern(
+            cx,
+            outline.dash_pattern.as_deref(),
+            &format!("{p}/kind/borders/{name}"),
+        );
+    }
+}
+
+fn check_dash_pattern(cx: &mut Ctx<'_>, pattern: Option<&[f32]>, p: &str) {
+    let Some(pattern) = pattern else {
+        return;
+    };
+    if pattern.is_empty() || pattern.len() > 32 || pattern.len() % 2 != 0 {
+        cx.err(
+            format!("{p}/dash_pattern"),
+            "dash_pattern must have an even number of entries between 2 and 32",
+        );
+        return;
+    }
+    if pattern
+        .iter()
+        .any(|v| !v.is_finite() || *v <= 0.0 || *v > 100.0)
+    {
+        cx.err(
+            format!("{p}/dash_pattern"),
+            "dash_pattern entries must be finite and within (0, 100]",
+        );
     }
 }
 

@@ -2909,6 +2909,7 @@ fn parse_table_part_style(node: &XmlNode, theme: &ThemePalette) -> TablePartStyl
                     color,
                     width,
                     dash: DashStyle::Solid,
+                    dash_pattern: None,
                 })
             })
     });
@@ -3027,6 +3028,7 @@ fn builtin_table_style(style_id: &str, theme: &ThemePalette) -> Option<TableStyl
                 color: Color("#000000".to_string()),
                 width: 1.0,
                 dash: DashStyle::Solid,
+                dash_pattern: None,
             });
             return Some(TableStyleDef {
                 whole: TablePartStyle {
@@ -3049,6 +3051,7 @@ fn builtin_table_style(style_id: &str, theme: &ThemePalette) -> Option<TableStyl
         color: Color("#FFFFFF".to_string()),
         width: 1.0,
         dash: DashStyle::Solid,
+        dash_pattern: None,
     });
     Some(TableStyleDef {
         whole: TablePartStyle {
@@ -3430,19 +3433,61 @@ fn table_side_outline(
     if width <= 0.0 {
         return None;
     }
-    let dash = map_dash_style(line.child("prstDash").and_then(|dash| dash.attr("val")));
-    Some(Outline { color, width, dash })
+    let (dash, dash_pattern) = extract_dash_from_ln(line);
+    Some(Outline {
+        color,
+        width,
+        dash,
+        dash_pattern,
+    })
 }
 
-fn map_dash_style(val: Option<&str>) -> DashStyle {
+fn parse_ooxml_dash_pct(raw: &str) -> Option<f32> {
+    let trimmed = raw.trim();
+    let mult = if let Some(pct) = trimmed.strip_suffix('%') {
+        pct.trim().parse::<f32>().ok()? / 100.0
+    } else {
+        trimmed.parse::<f32>().ok()? / 100_000.0
+    };
+    (mult.is_finite() && mult > 0.0).then(|| mult.clamp(0.1, 100.0))
+}
+
+fn extract_dash_from_ln(ln: &XmlNode) -> (DashStyle, Option<Vec<f32>>) {
+    if let Some(cust) = ln.child("custDash") {
+        let mut pattern = Vec::new();
+        for ds in cust.children_named("ds") {
+            let d = ds.attr("d").and_then(parse_ooxml_dash_pct);
+            let sp = ds.attr("sp").and_then(parse_ooxml_dash_pct);
+            if let (Some(d), Some(sp)) = (d, sp) {
+                pattern.push(d);
+                pattern.push(sp);
+                if pattern.len() >= 32 {
+                    break;
+                }
+            }
+        }
+        if !pattern.is_empty() {
+            return (DashStyle::Custom, Some(pattern));
+        }
+    }
+    map_dash_style(ln.child("prstDash").and_then(|dash| dash.attr("val")))
+}
+
+fn map_dash_style(val: Option<&str>) -> (DashStyle, Option<Vec<f32>>) {
     match val {
-        Some("dash" | "lgDash" | "sysDash") => DashStyle::Dash,
-        Some("dot" | "sysDot") => DashStyle::Dot,
-        Some(
-            "dashDot" | "lgDashDot" | "sysDashDot" | "dashDotDot" | "lgDashDotDot"
-            | "sysDashDotDot",
-        ) => DashStyle::DashDot,
-        _ => DashStyle::Solid,
+        Some("dash") => (DashStyle::Dash, None),
+        Some("sysDash") => (DashStyle::Dash, Some(vec![3.0, 1.0])),
+        Some("lgDash") => (DashStyle::Dash, Some(vec![8.0, 3.0])),
+        Some("dot") => (DashStyle::Dot, None),
+        Some("sysDot") => (DashStyle::Dot, Some(vec![1.0, 1.0])),
+        Some("dashDot") => (DashStyle::DashDot, None),
+        Some("sysDashDot") => (DashStyle::DashDot, Some(vec![3.0, 1.0, 1.0, 1.0])),
+        Some("lgDashDot") => (DashStyle::DashDot, Some(vec![8.0, 3.0, 1.0, 3.0])),
+        Some("dashDotDot" | "sysDashDotDot") => {
+            (DashStyle::DashDot, Some(vec![3.0, 1.0, 1.0, 1.0, 1.0, 1.0]))
+        }
+        Some("lgDashDotDot") => (DashStyle::DashDot, Some(vec![8.0, 3.0, 1.0, 3.0, 1.0, 3.0])),
+        _ => (DashStyle::Solid, None),
     }
 }
 
@@ -3559,12 +3604,14 @@ fn path_outline(sp_pr: &XmlNode, layout: SlideLayout, theme: &ThemePalette) -> O
             color: Color("#00000000".to_owned()),
             width: 0.0,
             dash: DashStyle::Solid,
+            dash_pattern: None,
         }
     } else {
         Outline {
             color: Color("#000000".to_owned()),
             width: 1.0,
             dash: DashStyle::Solid,
+            dash_pattern: None,
         }
     }
 }
@@ -3802,6 +3849,7 @@ fn process_connector(cxn: &XmlNode, transform: GroupTransform, cx: &mut SlideCon
             color: Color("#000000".to_owned()),
             width: 1.0,
             dash: DashStyle::Solid,
+            dash_pattern: None,
         },
         |sp_pr| path_outline(sp_pr, *cx.layout, cx.theme),
     );
@@ -4067,6 +4115,7 @@ fn custom_geometry_paths(
                 color: outline.color.clone(),
                 width: 0.0,
                 dash: outline.dash,
+                dash_pattern: outline.dash_pattern.clone(),
             }
         } else {
             outline.clone()
@@ -4887,8 +4936,13 @@ fn extract_outline(sp_pr: &XmlNode, layout: SlideLayout, theme: &ThemePalette) -
         .filter(|w| w.is_finite() && *w >= 0.0)
         .map_or(1.0, |emu| (emu * layout.scale) as f32)
         .clamp(0.0, 50.0);
-    let dash = map_dash_style(ln.child("prstDash").and_then(|dash| dash.attr("val")));
-    Some(Outline { color, width, dash })
+    let (dash, dash_pattern) = extract_dash_from_ln(ln);
+    Some(Outline {
+        color,
+        width,
+        dash,
+        dash_pattern,
+    })
 }
 
 #[derive(Default)]
