@@ -216,7 +216,10 @@ fn pass_script_reports_passed_score_and_location() {
         if effects.iter().any(|e| {
             matches!(
                 e,
-                Effect::SlideEntered { .. } | Effect::Score { .. } | Effect::Completion { .. }
+                Effect::SlideEntered { .. }
+                    | Effect::Score { .. }
+                    | Effect::Completion { .. }
+                    | Effect::QuestionAnswered { .. }
             )
         }) {
             expected_commits += 1;
@@ -261,7 +264,7 @@ fn pass_script_reports_passed_score_and_location() {
 
     let commit_count = api.calls.iter().filter(|c| **c == Call::Commit).count();
     assert_eq!(commit_count, expected_commits);
-    assert_eq!(commit_count, 4);
+    assert_eq!(commit_count, 5);
 }
 
 #[test]
@@ -538,8 +541,8 @@ fn finish_sets_exit_and_session_time_once() {
 fn session_time_formats_and_saturates() {
     assert_eq!(format_session_time(0), "0000:00:00.00");
     assert_eq!(format_session_time(3_723_450), "0001:02:03.45");
-    assert_eq!(format_session_time(u64::MAX), "9999:99:99.99");
-    assert_eq!(format_session_time(10_000 * 3600 * 1000), "9999:99:99.99");
+    assert_eq!(format_session_time(u64::MAX), "9999:59:59.99");
+    assert_eq!(format_session_time(10_000 * 3600 * 1000), "9999:59:59.99");
 }
 
 #[test]

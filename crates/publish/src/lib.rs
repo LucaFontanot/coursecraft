@@ -100,7 +100,7 @@ fn collect_object_media<'a>(obj: &'a Object, out: &mut Vec<MediaRef<'a>>) {
                 src,
             });
         }
-        ObjectKind::Audio { src, captions, .. } | ObjectKind::Video { src, captions, .. } => {
+        ObjectKind::Audio { src, captions, .. } => {
             out.push(MediaRef {
                 object_id: &obj.id,
                 src,
@@ -112,8 +112,46 @@ fn collect_object_media<'a>(obj: &'a Object, out: &mut Vec<MediaRef<'a>>) {
                 });
             }
         }
+        ObjectKind::Video {
+            src,
+            captions,
+            poster,
+            ..
+        } => {
+            out.push(MediaRef {
+                object_id: &obj.id,
+                src,
+            });
+            if let Some(captions) = captions {
+                out.push(MediaRef {
+                    object_id: &obj.id,
+                    src: captions,
+                });
+            }
+            if let Some(poster) = poster
+                && !poster.is_empty()
+            {
+                out.push(MediaRef {
+                    object_id: &obj.id,
+                    src: poster,
+                });
+            }
+        }
         ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
             if let Some(src) = fill_style
+                .as_ref()
+                .and_then(coursecraft_course::FillStyle::picture_src)
+                && !src.is_empty()
+            {
+                out.push(MediaRef {
+                    object_id: &obj.id,
+                    src,
+                });
+            }
+        }
+        ObjectKind::Path { path } => {
+            if let Some(src) = path
+                .fill_style
                 .as_ref()
                 .and_then(coursecraft_course::FillStyle::picture_src)
                 && !src.is_empty()
@@ -513,7 +551,6 @@ pub fn build_package_standard_with_folders(
     // packages carry no imsmanifest.
     if let PackageStandard::Scorm(scorm_standard) = standard {
         let mut manifest_files: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
-        manifest_files.push("imsmanifest.xml".to_string());
         manifest_files.sort();
         manifest_files.dedup();
 

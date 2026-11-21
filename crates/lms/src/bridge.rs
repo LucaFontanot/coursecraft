@@ -16,6 +16,9 @@ pub const SUSPEND_LIMIT: usize = 4096;
 /// Maximum number of characters allowed for SCORM 2004 `cmi.suspend_data`.
 pub const SUSPEND_LIMIT_2004: usize = 64_000;
 
+/// Maximum number of characters allowed for SCORM 1.2 `cmi.core.lesson_location`.
+pub const LOCATION_LIMIT_12: usize = 255;
+
 /// Maximum number of characters allowed for SCORM 2004 `cmi.location`.
 pub const LOCATION_LIMIT_2004: usize = 1000;
 
@@ -31,6 +34,8 @@ struct ScoreKeys {
 #[derive(Debug, Clone, Copy)]
 struct InteractionMapping {
     count_key: &'static str,
+    id_limit: usize,
+    other_type: &'static str,
     description: bool,
     description_limit: usize,
     learner_key: &'static str,
@@ -75,7 +80,7 @@ impl CmiMapping {
                 standard,
                 status_keys: &["cmi.core.lesson_status"],
                 location_key: "cmi.core.lesson_location",
-                location_limit: None,
+                location_limit: Some(LOCATION_LIMIT_12),
                 suspend_key: "cmi.suspend_data",
                 suspend_limit: SUSPEND_LIMIT,
                 learner_name_key: "cmi.core.student_name",
@@ -91,6 +96,8 @@ impl CmiMapping {
                 },
                 interaction: InteractionMapping {
                     count_key: "cmi.interactions._count",
+                    id_limit: 255,
+                    other_type: "performance",
                     description: false,
                     description_limit: 0,
                     learner_key: "student_response",
@@ -127,6 +134,8 @@ impl CmiMapping {
                 },
                 interaction: InteractionMapping {
                     count_key: "cmi.interactions._count",
+                    id_limit: 4000,
+                    other_type: "other",
                     description: true,
                     description_limit: 250,
                     learner_key: "learner_response",
@@ -155,10 +164,12 @@ impl CmiMapping {
 
     fn is_first_launch(&self, statuses: &[String]) -> bool {
         match self.standard {
-            Standard::Scorm12 => statuses.first().is_some_and(|s| s == "not attempted"),
+            Standard::Scorm12 => statuses
+                .first()
+                .is_some_and(|s| matches!(s.as_str(), "not attempted" | "")),
             Standard::Scorm2004 => statuses
                 .first()
-                .is_some_and(|s| matches!(s.as_str(), "unknown" | "not attempted")),
+                .is_some_and(|s| matches!(s.as_str(), "unknown" | "not attempted" | "")),
         }
     }
 
@@ -260,20 +271,18 @@ impl CmiMapping {
         index: u64,
         record: &InteractionRecord,
         warnings: &mut Vec<String>,
-    ) {
+    ) -> bool {
         let base = format!("cmi.interactions.{index}");
-        set_cmi(
-            api,
-            &format!("{base}.id"),
-            &sanitize_identifier(&record.id),
-            warnings,
-        );
-        set_cmi(
-            api,
-            &format!("{base}.type"),
-            record.kind.as_cmi_type(),
-            warnings,
-        );
+        let id = truncate_chars(&sanitize_identifier(&record.id), self.interaction.id_limit);
+        if !api.set_value(&format!("{base}.id"), &id) {
+            warnings.push(format!("set_value {base}.id failed: {}", api.last_error()));
+            return false;
+        }
+        let kind_str = match record.kind {
+            InteractionKind::Other => self.interaction.other_type,
+            other => other.as_cmi_type(),
+        };
+        set_cmi(api, &format!("{base}.type"), kind_str, warnings);
         if self.interaction.description {
             let description = sanitize_text(&record.description, self.interaction.escape_text);
             let description = truncate_chars(&description, self.interaction.description_limit);
@@ -317,6 +326,7 @@ impl CmiMapping {
             self.interaction.result_wrong
         };
         set_cmi(api, &format!("{base}.result"), result, warnings);
+        true
     }
 
     fn interaction_value(
@@ -417,7 +427,7 @@ pub struct LmsBridge {
     finished: bool,
     completed: bool,
     passed: bool,
-    best_passed_score: Option<u8>,
+    best_passed_score: Option<f64>,
     /// Next `cmi.interactions.n` index, or `None` when reporting is unavailable.
     interaction_index: Option<u64>,
 }
@@ -517,9 +527,9 @@ impl LmsBridge {
             self.best_passed_score = api
                 .get_value(self.mapping.score.raw)
                 .trim()
-                .parse::<u8>()
+                .parse::<f64>()
                 .ok()
-                .filter(|&percent| percent <= 100);
+                .filter(|&percent| percent.is_finite() && (0.0..=100.0).contains(&percent));
         }
 
         let suspend_data = api.get_value(self.mapping.suspend_key);
@@ -610,6 +620,7 @@ impl LmsBridge {
                 Effect::QuestionAnswered { slide, .. } => {
                     self.write_interaction(api, course, state, slide, &mut warnings);
                     durable_changed = true;
+                    needs_commit = true;
                 }
                 Effect::Exit => {
                     should_finish = true;
@@ -699,9 +710,10 @@ impl LmsBridge {
         last_status: &mut Option<CompletionStatus>,
         warnings: &mut Vec<String>,
     ) {
+        let percent_f = f64::from(percent);
         if self.passed
             && (status != CompletionStatus::Passed
-                || self.best_passed_score.is_some_and(|best| percent < best))
+                || self.best_passed_score.is_some_and(|best| percent_f < best))
         {
             return;
         }
@@ -712,7 +724,7 @@ impl LmsBridge {
             self.passed = true;
             self.best_passed_score = Some(
                 self.best_passed_score
-                    .map_or(percent, |best| best.max(percent)),
+                    .map_or(percent_f, |best| best.max(percent_f)),
             );
         }
         if matches!(
@@ -765,9 +777,12 @@ impl LmsBridge {
         let Some(record) = interaction_record(course, slide, state) else {
             return;
         };
-        self.mapping
-            .write_interaction(api, index, &record, warnings);
-        self.interaction_index = Some(index.saturating_add(1));
+        if self
+            .mapping
+            .write_interaction(api, index, &record, warnings)
+        {
+            self.interaction_index = Some(index.saturating_add(1));
+        }
     }
 
     fn write_suspend_data(

@@ -31,7 +31,14 @@ fn a5_1_scorm12_manifest_catches_self_listing_and_bad_ncname() {
     // Exposes BUG-A7: leading digit in identifier is invalid XML NCName.
     let mut digit_spec = spec;
     digit_spec.identifier = "123-course".to_owned();
-    let digit_xml = manifest_scorm12(&digit_spec).expect("digit xml");
+    assert!(matches!(
+        manifest_scorm12(&digit_spec),
+        Err(coursecraft_scorm::ScormError::BadIdentifier(_))
+    ));
+    let digit_xml = xml.replace(
+        "identifier=\"coursecraft.hello\"",
+        "identifier=\"123-course\"",
+    );
     let v_id = validate_scorm12_manifest(&digit_xml, Some(&pkg_files));
     assert!(v_id.iter().any(|x| x.rule == "MANIFEST-NCNAME"));
 }

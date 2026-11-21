@@ -323,7 +323,9 @@ impl XapiBridge {
                 }
                 Effect::SlideEntered { .. }
                 | Effect::StateChanged { .. }
-                | Effect::VariableChanged { .. } => {
+                | Effect::VariableChanged { .. }
+                | Effect::LightboxOpened { .. }
+                | Effect::LightboxClosed { .. } => {
                     durable_changed = true;
                 }
                 Effect::Exit => {
@@ -480,6 +482,7 @@ impl XapiBridge {
         if response.status == 200
             && let Ok(value) = serde_json::from_str::<Value>(&response.body)
             && let Some(text) = value.get("auth-token").and_then(Value::as_str)
+            && !text.trim().is_empty()
         {
             token = Some(text.to_owned());
         }
@@ -966,6 +969,13 @@ impl XapiBridge {
             "passed": self.progress.passed,
         })
         .to_string();
+        if body.len() > MAX_KEEPALIVE_BODY {
+            self.warnings.push(format!(
+                "keepalive progress body length {} exceeds limit {MAX_KEEPALIVE_BODY}",
+                body.len()
+            ));
+            return;
+        }
         let id = self.new_request();
         api.send(LrsRequest {
             id,
