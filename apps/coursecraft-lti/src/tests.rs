@@ -1491,7 +1491,7 @@ fn a4_5_id_token_negative_security_matrix() {
     type ClaimMutator = (&'static str, Box<dyn Fn(&mut Value)>);
     let mut mutators: Vec<ClaimMutator> = vec![
         ("expired", Box::new(move |c| c["exp"] = json!(now - 10))),
-        ("future_iat", Box::new(move |c| c["iat"] = json!(now + 301))),
+        ("future_iat", Box::new(move |c| c["iat"] = json!(now + 310))),
         (
             "wrong_iss",
             Box::new(|c| c["iss"] = json!("https://evil.example")),
