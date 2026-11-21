@@ -176,6 +176,8 @@ mod m25_input_tests;
 #[cfg(test)]
 mod m26_text_format_tests;
 #[cfg(test)]
+mod m27_layers_questions_tests;
+#[cfg(test)]
 mod m27_timeline_media_tests;
 #[cfg(test)]
 mod m27_triggers_states_tests;
