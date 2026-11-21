@@ -1050,6 +1050,7 @@ name = "coursecraft-pptx"
 version = "0.3.0"
 dependencies = [
  "coursecraft-course",
+ "coursecraft-logic",
  "coursecraft-media",
  "quick-xml",
  "serde_json",

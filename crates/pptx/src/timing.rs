@@ -229,7 +229,13 @@ fn collect_effects_from_par<'a>(
             .and_then(|s| s.trim().parse::<u32>().ok())
             .unwrap_or(0);
         let step_kind = own_step.unwrap_or(StepKind::WithPrevious);
-        let duration_ms = parse_effect_duration_ms(ctn);
+        let duration_ms = if preset_id == 1
+            && matches!(preset_class, PresetClass::Entrance | PresetClass::Exit)
+        {
+            0
+        } else {
+            parse_effect_duration_ms(ctn)
+        };
         let easing = parse_effect_easing(ctn);
         let (spid, paragraph_level) = find_effect_target(ctn);
 
@@ -378,7 +384,7 @@ fn schedule_main_sequence(
                     );
                     let obj = &mut objects[obj_idx];
                     let safe_end = if end_ms <= obj.timing.start_ms {
-                        obj.timing.start_ms.saturating_add(eff.duration_ms)
+                        obj.timing.start_ms.saturating_add(eff.duration_ms.max(1))
                     } else {
                         end_ms
                     };

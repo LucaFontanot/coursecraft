@@ -46,6 +46,8 @@ mod bughunt_m26_a13_pptx;
 #[cfg(test)]
 mod m26_fidelity_tests;
 #[cfg(test)]
+mod m27_anim_tests;
+#[cfg(test)]
 mod m27_table_tests;
 #[cfg(test)]
 mod tests;
