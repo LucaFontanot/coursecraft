@@ -514,15 +514,16 @@ fn insert_on_slide(editor: &mut Editor, src: &str) {
     {
         editor.selection.set_many([id.to_owned()]);
     }
-    editor.set_status(format!(
-        "Inserted “{src}”. File operations are not undoable."
-    ));
+    if result.is_some() {
+        editor.set_status(format!("Inserted “{src}”."));
+    }
 }
 
 fn go_to_place(editor: &mut Editor, reference: &MediaReference) {
     let Some(slide) = reference.slide.as_deref() else {
         return;
     };
+    editor.ui.story_view = false;
     if editor.session.course.master(slide).is_some() {
         editor.enter_master_view();
     } else {
@@ -532,7 +533,7 @@ fn go_to_place(editor: &mut Editor, reference: &MediaReference) {
         &editor.session.course,
         &mut editor.selection,
         Some(slide),
-        None,
+        reference.object.as_deref(),
     );
 }
 
