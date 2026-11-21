@@ -534,7 +534,7 @@ Objects may define entrance and exit animations, and one or more motion paths:
 }
 ```
 
-- **Effects (`AnimEffect`):** `fade`, `fly_in { from }`, `zoom`, `wipe { from }`, `float { from }`.
+- **Effects (`AnimEffect`):** `fade`, `fly_in { from }`, `zoom`, `wipe { from }`, `float { from }`. The same stored effect ids are used for both `entrance` and `exit` (for example, `fly_in` is shown as "Fly in" for entrances and "Fly out" for exits).
 - **Direction (`Direction`):** `left`, `right`, `top`, `bottom` (default `bottom`). For exits, `from` indicates the direction the object leaves toward.
 - **Easing (`Easing`):** `linear`, `ease_in`, `ease_out` (default), `ease_in_out`.
 - **Duration (`duration_ms`):** default 500 ms for animations, 1000 ms for motion paths (allowed 1–60000 ms).

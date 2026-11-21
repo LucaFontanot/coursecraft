@@ -1590,6 +1590,51 @@ pub(crate) fn show_paired_numeric_row(
     })
 }
 
+/// Human-readable label for an animation effect id (`"none"`, `"fade"`,
+/// `"fly_in"`, `"zoom"`, `"wipe"`, `"float"`), phrased as an entrance or exit
+/// depending on `which` (`"entrance"` or `"exit"`).
+fn anim_effect_label(which: &str, effect: &str) -> &'static str {
+    let is_exit = which == "exit";
+    match effect {
+        "fade" => {
+            if is_exit {
+                "Fade out"
+            } else {
+                "Fade in"
+            }
+        }
+        "fly_in" => {
+            if is_exit {
+                "Fly out"
+            } else {
+                "Fly in"
+            }
+        }
+        "zoom" => {
+            if is_exit {
+                "Zoom out"
+            } else {
+                "Zoom in"
+            }
+        }
+        "wipe" => {
+            if is_exit {
+                "Wipe out"
+            } else {
+                "Wipe in"
+            }
+        }
+        "float" => {
+            if is_exit {
+                "Float out"
+            } else {
+                "Float in"
+            }
+        }
+        _ => "None",
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn show_anim_row(
     ui: &mut Ui,
@@ -1606,14 +1651,7 @@ fn show_anim_row(
     inspector_section_header(ui, title);
     let mut changed = false;
 
-    let effect_label = match effect_str.as_str() {
-        "fade" => "Fade",
-        "fly_in" => "Fly in",
-        "zoom" => "Zoom",
-        "wipe" => "Wipe",
-        "float" => "Float",
-        _ => "None",
-    };
+    let effect_label = anim_effect_label(which, effect_str.as_str());
 
     inspector_row(ui, "Effect", |ui| {
         let rem_w = ui.available_width().max(30.0);
@@ -1621,41 +1659,13 @@ fn show_anim_row(
             .width(rem_w)
             .selected_text(effect_label)
             .show_ui(ui, |ui| {
-                if ui
-                    .selectable_value(effect_str, "none".to_string(), "None")
-                    .clicked()
-                {
-                    changed = true;
-                }
-                if ui
-                    .selectable_value(effect_str, "fade".to_string(), "Fade")
-                    .clicked()
-                {
-                    changed = true;
-                }
-                if ui
-                    .selectable_value(effect_str, "fly_in".to_string(), "Fly in")
-                    .clicked()
-                {
-                    changed = true;
-                }
-                if ui
-                    .selectable_value(effect_str, "zoom".to_string(), "Zoom")
-                    .clicked()
-                {
-                    changed = true;
-                }
-                if ui
-                    .selectable_value(effect_str, "wipe".to_string(), "Wipe")
-                    .clicked()
-                {
-                    changed = true;
-                }
-                if ui
-                    .selectable_value(effect_str, "float".to_string(), "Float")
-                    .clicked()
-                {
-                    changed = true;
+                for id in ["none", "fade", "fly_in", "zoom", "wipe", "float"] {
+                    if ui
+                        .selectable_value(effect_str, id.to_owned(), anim_effect_label(which, id))
+                        .clicked()
+                    {
+                        changed = true;
+                    }
                 }
             });
     });
