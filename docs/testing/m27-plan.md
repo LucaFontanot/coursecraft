@@ -10,6 +10,14 @@
 > 4. **Zero network, zero installs:** Every automated test in Parts A–D runs purely locally (in-memory or `127.0.0.1:0` loopback), with no Docker, PHP, Moodle, or internet access.
 > 5. **Artifact hygiene:** All test-generated zips, PNGs, and `.ccraft` files go under `target/` or `std::env::temp_dir()`, never into tracked directories.
 
+
+> **Reviewer notes (Claude, 2026-11-21) — these override anything below:**
+> 1. **MUST vs SHOULD.** Every strict-LMS rule carries the spec section it comes from. Only a MUST/SHALL (or an explicit error code in the spec) is a *violation*; a SHOULD or a rule from LMS folklore is a *warning*. Never change product behaviour to satisfy a warning-level rule.
+> 2. **Watchlist bugs are suspicions, not facts.** Reproduce each one with a failing test first. If it does not reproduce, write that in `docs/bug-hunt/2026-11-21-m27.md` and move on; do not "fix" working code.
+> 3. **Line numbers drift.** Find code by function name; the line numbers in this plan are hints.
+> 4. **`wasm-bindgen` is already installed and used by `cargo xtask build-player`**, so Step A-4 needs no new installs. Do not install anything else.
+> 5. A step that runs out of room finishes its cases in priority order (watchlist bugs first, then the remaining cases) and lists anything left undone at the end of the bug-hunt file, rather than leaving half-written tests.
+
 ---
 
 ## Executive Summary & Coverage Index
@@ -173,7 +181,7 @@ Every strict engine exposes `pub fn violations(&self) -> &[Violation]`, `pub fn 
   - Every LRS request requires `X-Experience-API-Version` matching `^1\.0\.[0-3]$` (`400` + violation); response echoes `X-Experience-API-Version: 1.0.3`.
   - Requests with JSON body require `Content-Type` starting with `application/json` (`400` + violation).
   - `Authorization` must match an issued cmi5 `Basic <token>` or configured xAPI auth (`401`).
-  - cmi5 `/fetch/{id}`: `POST` only, **no `Authorization` header allowed** (cmi5 §8.2 violation if auth sent!), single-use (second call returns `200 {"error-code":"1","error-text":"Already in use"}` + violation).
+  - cmi5 `/fetch/{id}`: `POST` only, no `Authorization` header needed (record a *warning*, not a violation, if one is sent: cmi5 does not forbid it), single-use (second call returns `200 {"error-code":"1","error-text":"Already in use"}` + violation).
 - **xAPI 1.0.3 Statement Validation:**
   - `id`: valid UUID v4/RFC 4122 (`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`). Duplicate `id` with byte-identical semantic content -> `200` (idempotent); duplicate `id` with **different** content -> `409 Conflict` + violation!
   - `timestamp`: valid RFC 3339 / ISO 8601 timestamp with timezone offset or `Z`.
@@ -202,7 +210,7 @@ Every strict engine exposes `pub fn violations(&self) -> &[Violation]`, `pub fn 
   - **Session & Registration Cardinality (cmi5 §9.3.1):**
     - At most ONE of `passed` OR `failed` per session (forbids BOTH `failed` after `passed` AND `passed` after `failed` in one session!).
     - At most ONE `completed` and ONE `passed` per registration across relaunches; never `failed` after a prior `passed` on the same registration.
-    - `launchMode` `"Browse"` or `"Review"`: ONLY `initialized` and `terminated` allowed; any `answered`/`completed`/`passed`/`failed` or `PUT activities/state` is a violation!
+    - `launchMode` `"Browse"` or `"Review"`: `completed`, `passed` and `failed` are violations. (Reviewer note: `answered` statements and State API writes are NOT forbidden by cmi5 in these modes; do not flag them.)
 - **State API (`activities/state`):**
   - Matches `agent` by **canonical IFI equality** (not raw JSON string equality — fixes **BUG-A13**).
   - `LMS.LaunchData`: strictly read-only (`PUT`/`POST`/`DELETE` -> `403` + violation).
@@ -233,7 +241,7 @@ Every strict engine exposes `pub fn violations(&self) -> &[Violation]`, `pub fn 
 | **A1.6** | `lesson_location` 255-char boundary (**BUG-A3**) | Write 255-char ASCII, 255-char multi-byte UTF-8, and 256-char slide IDs through `LmsBridge::after_input` -> `StrictScorm12`. | 255-char succeeds (`0` violations); 256-char is skipped by `LmsBridge` with warning (after fixing BUG-A3), never reaching `LMSSetValue` with a `405` violation. Direct strict call with 256 chars returns `405`. |
 | **A1.7** | `suspend_data` 4096-char boundary | Write 4096-char `cc1:` payload vs 4097-char payload through `LmsBridge` and directly to `StrictScorm12`. | 4096 succeeds (`0` violations); 4097 skipped by `LmsBridge` with warning (`0` LMS violations); direct call with 4097 returns `405`. |
 | **A1.8** | `score.raw/min/max` `CMIDecimal` & decimal resume (**BUG-A5**) | Set valid `0`, `85`, `85.5`, `100` vs invalid `-1`, `100.1`, `1e2`, `NaN`, `"abc"`. Resume `LmsBridge` when LMS returns `cmi.core.lesson_status = "passed"` and `cmi.core.score.raw = "85.0"`, then emit `Effect::Score { percent: 60, Passed }`. | Invalid decimals rejected `405`; after fixing BUG-A5, `"85.0"` parses as `best_passed_score = Some(85)` so `60` does NOT overwrite `85.0`. |
-| **A1.9** | All 12 `QuestionKind`s -> `cmi.interactions.n.*` (**BUG-A1**) | Grade every one of the 12 question kinds through `LmsBridge(Scorm12)` -> `StrictScorm12` (including `Freeform`, `Likert`, `ShortAnswer`, `Essay`, `Hotspot`, `DragDrop`, `Sequence`, `Matching`). | Zero `405` violations once **BUG-A1** maps `Freeform` in SCORM 1.2 to a legal 1.2 type (e.g. `fill-in` or `performance` per spec decision in `docs/spec/triggers.md`); `cmi.interactions._count` increments to 12; `.result` uses `wrong` (never `incorrect`) and `neutral` for surveys; `.description` is NOT written in 1.2. |
+| **A1.9** | All 12 `QuestionKind`s -> `cmi.interactions.n.*` (**BUG-A1**) | Grade every one of the 12 question kinds through `LmsBridge(Scorm12)` -> `StrictScorm12` (including `Freeform`, `Likert`, `ShortAnswer`, `Essay`, `Hotspot`, `DragDrop`, `Sequence`, `Matching`). | Zero `405` violations once **BUG-A1** maps `Freeform` in SCORM 1.2 to the legal 1.2 type `performance` (decided by the reviewer; record it in `docs/spec/triggers.md`); `cmi.interactions._count` increments to 12; `.result` uses `wrong` (never `incorrect`) and `neutral` for surveys; `.description` is NOT written in 1.2. |
 | **A1.10** | Interaction index gap, failed `.id` write, & 255-char `.id` limit (**BUG-A4**) | Direct strict test writes `cmi.interactions.2.id` when `_count == 0`; bridge test simulates LMS refusing `.id` write (`405`) and tests a 260-char slide ID. | Gap returns `201`/`405` violation; bridge truncates/guards `.id` to 255 chars and does not increment `interaction_index` or write orphan child fields when `.id` fails. |
 | **A1.11** | `total_time` accumulation & `exit` -> `entry` relaunch semantics | Session 1 sets `session_time = 0000:01:30.50`, `exit = suspend`, `suspend_data = "cc1:..."`, `LMSFinish("")` -> `relaunch()`. Session 2 sees `entry == "resume"`, `total_time == "0000:01:30.50"`, finishes with `exit = ""` -> `relaunch()`. | Session 2 resumes; Session 3 sees `entry == "ab-initio"` and cleared `suspend_data` (when `clear_on_normal_exit = true`). |
 | **A1.12** | Empty initial status `""` & `LMSInitialize` failure (**BUG-A6**) | LMS returns `cmi.core.lesson_status = ""` on launch; second sub-case fails `LMSInitialize` with `101`. | Empty status writes `"incomplete"` (after fixing BUG-A6); failed init sets `active = false`, emits warning, and sends zero subsequent `LMSSetValue`/`LMSFinish` calls (`0` post-failure violations). |
@@ -489,7 +497,7 @@ Parse `<p:timing>` under `slide_tree` (bounded by existing `limits.max_xml_depth
 | **Wipe** | `22` | `AnimEffect::Wipe { from }` | Direction from `presetSubtype` (default `Bottom`). |
 | **Zoom** | `23` | `AnimEffect::Zoom` | Exact match. |
 | **Basic Zoom / Grow & Turn / Swivel / Bounce / Center Revolve** | `53`, `37`, `24` | `AnimEffect::Zoom` (fallback for `53`) / or **Skip** with note for exotic physics (`Bounce`/`Swivel`) | Map `53` (Grow & Turn) -> `Zoom` with note; report `Bounce`/`Swivel`/`Random Bars`/`Wheel` (`3`, `4`, `5`, `6`, `7`, `8`, `9`, `11`, `12`, `14`, `16`, `17`, `18`, `19`, `20`, `21`, `25`, `27`+) -> fallback to `AnimEffect::Fade` (preserving timing!) + report `SkipKind::Animation` note naming the exact unsupported preset ID & object so the object's timing is NOT broken while the author knows the visual effect approximated to Fade! |
-| **Float In / Float Out** | `42` (Float Up/Down), `26` (Rise Up / Sink Down), `47` (Descend), `39` (Ascend) | `AnimEffect::Float { from }` | `42`/`26` -> `Bottom` (entr) / `Top` or subtype; `47` -> `Top`; `39` -> `Bottom`. |
+| **Float In / Float Out** | `42` (Float In/Out, up), `47` (Descend / Float down) | `AnimEffect::Float { from }` | `42` -> `Bottom` (rises from below); `47` -> `Top`. Reviewer note: `26` is Bounce, not Rise Up; it falls back to `Fade` with a note like the other unsupported presets. |
 | **Peek In / Peek Out** | `12` | `AnimEffect::Wipe { from }` | Closest clean-room match (`Wipe` clips at frame edge) + diagnostic note. |
 | **Split** | `16` | `AnimEffect::Wipe { from }` (or `Fade`) + diagnostic note | Report `"Entrance preset Split (id=16) approximated as Fade on <name>"`. |
 
@@ -544,7 +552,7 @@ Because `python-pptx` has no API for `<p:timing>`, add a self-contained reproduc
   - For Slide 20, do **NOT** rely on `at_ms: None` (which ticks to `slide.duration_ms` where exit-animated `spid=5` has already vanished!). Instead:
     1. Assert structural import: `spid=3` has `Fade` @ `0ms`, `spid=4` has `FlyIn(Left)` @ `800ms`, `spid=5` has `Wipe(Bottom)` + `FlyIn(Right)` exit, `spid=6` has `Zoom` + `MotionPath` + `MoveOnPath` trigger, `spid=7` has `Float` + `report` contains `SkipKind::Animation` mentioning Spin/Emphasis.
     2. Drive `Player` on Slide 20 and call `render_slide_rgba` at multiple timestamps (`t = 300ms` mid-fade, `t = 1050ms` mid-fly-in, `t = 1500ms` all entered & `spid=5` visible, `t = 2250ms` `spid=5` mid-exit, `t = 2600ms` `spid=5` gone, `t = motion_end` `spid=6` resting at `(+0.25*1280, +0.20*720)`) and assert pixel deltas at each object's expected location!
-    3. Export `Slide20.png` from PowerPoint (static/authoring frame) when regenerated, and compare `RenderMode::Authoring` (which ignores timing and draws all objects at rest) against `Slide20.png`.
+    3. Do NOT try to run PowerPoint (agents cannot). Leave `Slide20.png` out; the reviewer exports it locally afterwards and adds the `RenderMode::Authoring` comparison.
 
 ---
 
