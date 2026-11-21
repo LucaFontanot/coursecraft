@@ -102,6 +102,9 @@ pub struct PropertiesState {
     /// Where the word menu was opened, kept while the popup is open.
     pub spell_menu_pos: Option<egui::Pos2>,
     pub text_size: f32,
+    pub text_size_seen: f32,
+    pub text_letter_spacing: f32,
+    pub text_letter_spacing_seen: f32,
     pub text_color: String,
     pub text_bold: bool,
     pub text_italic: bool,
@@ -115,6 +118,7 @@ pub struct PropertiesState {
     pub link_use_slide: bool,
     /// Last custom line-spacing value entered.
     pub line_spacing_custom: f32,
+    pub line_spacing_seen: f32,
     /// The font picker's "Add font…" entry was clicked.
     pub add_font_requested: bool,
     /// Search text for the "On this computer" font list.
@@ -346,6 +350,9 @@ impl Default for PropertiesState {
             spell_ignore: Vec::new(),
             spell_menu_pos: None,
             text_size: 20.0,
+            text_size_seen: f32::NAN,
+            text_letter_spacing: 0.0,
+            text_letter_spacing_seen: f32::NAN,
             text_color: "#1F1F1F".into(),
             text_bold: false,
             text_italic: false,
@@ -357,6 +364,7 @@ impl Default for PropertiesState {
             link_slide: String::new(),
             link_use_slide: false,
             line_spacing_custom: 1.0,
+            line_spacing_seen: f32::NAN,
             add_font_requested: false,
             system_font_search: String::new(),
             system_fonts_list_requested: false,
@@ -536,6 +544,9 @@ impl PropertiesState {
 
         self.cue_edits.clear();
         self.cue_row_rects.clear();
+        self.text_size_seen = f32::NAN;
+        self.text_letter_spacing_seen = f32::NAN;
+        self.line_spacing_seen = f32::NAN;
 
         if let Some(ref obj_id) = selection.object
             && let Some((obj, _)) = slide.object(obj_id)
@@ -2362,7 +2373,9 @@ fn show_multi_properties(
                 for object in &objects {
                     let needs = matches!(
                         &object.kind,
-                        ObjectKind::Text { style, .. } if (style.size - size).abs() >= 0.001
+                        ObjectKind::Text { style, runs, .. }
+                            if (style.size - size).abs() >= 0.001
+                                || runs.iter().any(|run| run.size.is_some_and(|s| (s - size).abs() >= 0.001))
                     );
                     if needs {
                         actions_to_run.push((
@@ -3402,18 +3415,23 @@ fn show_text_controls(
 
     // The size sits on its own row: seven controls do not fit one row of the panel.
     inspector_row(ui, "Font size", |ui| {
-        let mut size_val = eff_size;
+        if props.text_size_seen.is_nan() || (eff_size - props.text_size_seen).abs() > 0.001 {
+            props.text_size = eff_size;
+            props.text_size_seen = eff_size;
+        }
         let rem_w = ui.available_width();
         let r_size = add_drag_left(
             ui,
             [rem_w, coursecraft_render::CONTROL_COMPACT],
-            DragValue::new(&mut size_val).speed(1.0).range(1.0..=200.0),
+            DragValue::new(&mut props.text_size)
+                .speed(1.0)
+                .range(1.0..=200.0),
         );
         let enter_size = r_size.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if (r_size.drag_stopped() || r_size.lost_focus() || enter_size)
-            && size_val.is_finite()
-            && size_val > 0.0
-            && (size_val - eff_size).abs() > 0.01
+            && props.text_size.is_finite()
+            && props.text_size > 0.0
+            && (props.text_size - eff_size).abs() > 0.01
         {
             action_to_run = Some((
                 "text.style_range",
@@ -3422,16 +3440,21 @@ fn show_text_controls(
                     "object": obj_id,
                     "start": char_range.0,
                     "end": char_range.1,
-                    "size": size_val,
+                    "size": props.text_size,
                 }),
             ));
         }
     });
 
     inspector_row(ui, "Spacing", |ui| {
-        let mut spacing = eff_spacing;
+        if props.text_letter_spacing_seen.is_nan()
+            || (eff_spacing - props.text_letter_spacing_seen).abs() > 0.0001
+        {
+            props.text_letter_spacing = eff_spacing;
+            props.text_letter_spacing_seen = eff_spacing;
+        }
         let r = ui.add(
-            DragValue::new(&mut spacing)
+            DragValue::new(&mut props.text_letter_spacing)
                 .speed(0.1)
                 .range(
                     coursecraft_course::MIN_LETTER_SPACING..=coursecraft_course::MAX_LETTER_SPACING,
@@ -3440,8 +3463,8 @@ fn show_text_controls(
         );
         let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if (r.drag_stopped() || r.lost_focus() || enter)
-            && spacing.is_finite()
-            && (spacing - eff_spacing).abs() > 0.001
+            && props.text_letter_spacing.is_finite()
+            && (props.text_letter_spacing - eff_spacing).abs() > 0.001
         {
             action_to_run = Some((
                 "text.style_range",
@@ -3450,7 +3473,7 @@ fn show_text_controls(
                     "object": obj_id,
                     "start": char_range.0,
                     "end": char_range.1,
-                    "letter_spacing": spacing,
+                    "letter_spacing": props.text_letter_spacing,
                 }),
             ));
         }
@@ -3699,6 +3722,10 @@ fn show_paragraph_controls(
 
     inspector_row(ui, "Spacing", |ui| {
         let current = current_paragraph.line_spacing;
+        if props.line_spacing_seen.is_nan() || (current - props.line_spacing_seen).abs() > 0.001 {
+            props.line_spacing_custom = current;
+            props.line_spacing_seen = current;
+        }
         let id = egui::Id::unique(("line_spacing", id_prefix, obj_id));
         let mut chosen = None;
         egui::ComboBox::from_id_salt(id)
@@ -3713,16 +3740,18 @@ fn show_paragraph_controls(
                     }
                 }
                 ui.separator();
-                let mut custom = props.line_spacing_custom;
                 let response = ui.add(
-                    DragValue::new(&mut custom)
+                    DragValue::new(&mut props.line_spacing_custom)
                         .speed(0.05)
                         .range(0.8..=3.0)
                         .prefix("custom "),
                 );
-                props.line_spacing_custom = custom;
-                if response.drag_stopped() || response.lost_focus() {
-                    chosen = Some(custom);
+                let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (response.drag_stopped() || response.lost_focus() || enter)
+                    && props.line_spacing_custom.is_finite()
+                    && (props.line_spacing_custom - current).abs() > 0.001
+                {
+                    chosen = Some(props.line_spacing_custom);
                 }
             });
         if let Some(value) = chosen {

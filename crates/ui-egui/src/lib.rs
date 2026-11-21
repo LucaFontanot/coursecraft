@@ -149,6 +149,8 @@ pub(crate) mod test_harness;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod text_format_tests;
+#[cfg(test)]
 mod timeline_cue_tests;
 #[cfg(test)]
 mod translate_tests;
