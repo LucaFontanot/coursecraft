@@ -2,6 +2,23 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.3.5
+
+**New: PowerPoint animations come across.** Importing a `.pptx` now brings its entrance and exit animations (Appear, Fly, Fade, Wipe, Zoom, Float), motion paths, effects that start on a click of a shape, and repeats, with their timing and order. Other entrance and exit effects become the closest match and are noted in the import report. Emphasis effects (Spin, Pulse and the like) are not imported yet.
+
+Everything else in this release is bug fixes: 48 of them, found by a new strict test LMS that checks every message a course sends, a reference course that uses every feature, and tests across every part of the editor.
+
+- **LMS reporting:** a SCORM 1.2 course with a certificate slide no longer turns "passed" into "completed"; decimal scores, empty first-launch status, long slide and question ids, and very long session times are reported correctly; the package no longer lists its own manifest; video posters and picture-filled paths are included in the package; xAPI and cmi5 save progress when a lightbox opens or closes and reject broken endpoints and empty tokens.
+- **LTI:** scores post to line items with a trailing slash, a launch without score permission is refused cleanly, and a score still waiting when the learner closes the page is sent.
+- **Player:** a lightbox over a slide with a video no longer resets the video's cue points, and jumping away from a lightbox no longer flashes the base audio.
+- **PowerPoint import:** tables without a style get PowerPoint's thin black grid (tables with an unknown style no longer get one); "Disappear" no longer happens half a second late; grouped and connector shapes keep their animations.
+- **Triggers and states:** Move Up and Move Down follow the filtered list; deleting a state that is in use explains why it can't be deleted; state names are checked; empty key-press and JavaScript triggers are refused.
+- **Timeline and media:** cue markers can be dragged again; media on question-bank slides counts as used; "Go to" from the media library finds the object; renaming a font family is one Undo step; only `.vtt` caption files are accepted.
+- **Editing:** reordering several selected layers keeps their order; pasting triggers between two objects keeps both ends; clicking a History step past a deleted slide selects it; deleting a layer or scene removes triggers that pointed to it; focusing a hidden layer shows it; deleting a master counts the templates using it.
+- **Story View, Find and Check Course:** clicking a slide clears an old multi-slide selection (Story View could delete extra slides); arrow keys no longer move behind an open dialog; Find results and Check Course issues leave Story View and Master View and reach question-bank slides; a replacement that is too long is refused before it runs.
+- **Files:** a failed Save As keeps the current file; autosave restarts for every newly opened course; deleted versions disappear from Version History at once, and its Delete button is no longer cut off.
+- **Checked:** Undo and Redo were tested on all 166 editing commands.
+
 ## 0.3.0
 
 A big round of fixes from real testing, much better PowerPoint import, real fonts, and a Windows installer. Thanks to Aurelie for testing so thoroughly and reporting the issues behind most of these fixes.
