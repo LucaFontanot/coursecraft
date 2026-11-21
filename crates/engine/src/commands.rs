@@ -7502,6 +7502,9 @@ fn text_set(s: &mut Session, p: &Json) -> Result<Json> {
     let new_text_raw: String = req(C, p, "text")?;
     let new_text = text(C, new_text_raw, "text")?;
 
+    let explicit_runs: Option<Vec<coursecraft_course::TextRun>> = opt(C, p, "runs")?;
+    let explicit_paragraphs: Option<Vec<coursecraft_course::Paragraph>> = opt(C, p, "paragraphs")?;
+
     let sl = slide_mut(s, &sid)?;
     let obj = find_object_mut(sl, &oid)?;
     let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
@@ -7513,11 +7516,19 @@ fn text_set(s: &mut Session, p: &Json) -> Result<Json> {
     } else {
         parts.runs.iter().map(|r| r.text.as_str()).collect()
     };
-    let new_runs = apply_text_edit(parts.runs, &old_plain, &new_text);
+    let new_runs = match explicit_runs {
+        Some(runs) if runs.iter().map(|r| r.text.as_str()).collect::<String>() == new_text => {
+            coursecraft_course::normalize_runs(&runs)
+        }
+        _ => apply_text_edit(parts.runs, &old_plain, &new_text),
+    };
     if new_runs.len() > 1000 {
         return Err(bad(C, "exceeded 1000 text runs"));
     }
-    let new_paragraphs = align_paragraphs(&old_plain, parts.paragraphs, &new_text);
+    let new_paragraphs = match explicit_paragraphs {
+        Some(paragraphs) => paragraphs,
+        None => align_paragraphs(&old_plain, parts.paragraphs, &new_text),
+    };
     *parts.runs = new_runs;
     *parts.paragraphs = new_paragraphs;
     *parts.text = new_text;

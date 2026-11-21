@@ -131,6 +131,8 @@ mod bughunt_m26_a9_base_slide_view;
 #[cfg(test)]
 mod bughunt_m26_crosscut;
 #[cfg(test)]
+mod bughunt_m26_f19_fonts_inline_edit;
+#[cfg(test)]
 mod bughunt_menus;
 #[cfg(test)]
 mod bughunt_stress;

@@ -546,7 +546,7 @@ pub fn is_visible_at(timing: &Timing, clock_ms: u32) -> bool {
 }
 
 /// Resolve a text object's runs with state overrides and fallback colours.
-fn resolve_text_runs(
+pub fn resolve_text_runs(
     text: &str,
     style: &TextStyle,
     runs: &[coursecraft_course::TextRun],

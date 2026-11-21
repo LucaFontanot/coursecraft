@@ -79,6 +79,12 @@ const SYSTEM_PROVIDER_ID: &str = "coursecraft-system-font-provider";
 /// via the system font provider, so missing or already-loaded faces are never
 /// re-queried every frame.
 const TRIED_SYSTEM_FACES_ID: &str = "coursecraft-tried-system-faces";
+/// `ctx.data` key holding `(cumulative_pass_nr, FontDefinitions)` queued via
+/// `ctx.set_fonts` during the current pass, because egui only applies
+/// `set_fonts` at the start of the next pass. Without tracking it here, a
+/// second incremental font install in the same frame would clone stale
+/// `ctx.fonts()` definitions and clobber the first font.
+const PENDING_DEFS_ID: &str = "coursecraft-pending-font-defs";
 
 /// Which file is backing a registered family. `Ready(len)` means the bytes
 /// are available; `Missing` and `Pending` both omit the face until it arrives.
@@ -197,12 +203,28 @@ fn store_fingerprint(ctx: &egui::Context, fingerprint: FontFingerprint) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::unique(FINGERPRINT_ID), fingerprint));
 }
 
+fn pending_defs_for_pass(ctx: &egui::Context) -> Option<FontDefinitions> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|data| {
+        data.get_temp::<(u64, FontDefinitions)>(egui::Id::unique(PENDING_DEFS_ID))
+            .and_then(|(saved_pass, defs)| (saved_pass == pass).then_some(defs))
+    })
+}
+
+fn set_fonts_and_track(ctx: &egui::Context, defs: FontDefinitions) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::unique(PENDING_DEFS_ID), (pass, defs.clone()));
+    });
+    ctx.set_fonts(defs);
+}
+
 fn install_base(ctx: &egui::Context) {
     let fingerprint = FontFingerprint::default();
     if installed_fingerprint(ctx).as_ref() == Some(&fingerprint) {
         return;
     }
-    ctx.set_fonts(base_definitions());
+    set_fonts_and_track(ctx, base_definitions());
     clear_tried_system_faces(ctx);
     store_fingerprint(ctx, fingerprint);
 }
@@ -380,7 +402,7 @@ pub fn install_course_fonts(ctx: &egui::Context, course: &Course, media: &dyn Me
             .insert(course_face_family(&face.family, face.style), list);
     }
 
-    ctx.set_fonts(fonts);
+    set_fonts_and_track(ctx, fonts);
     clear_tried_system_faces(ctx);
     store_fingerprint(ctx, fingerprint);
 }
@@ -413,7 +435,8 @@ fn style_for(bold: bool, italic: bool) -> FontStyle {
 }
 
 fn family_exists(ctx: &egui::Context, family: &FontFamily) -> bool {
-    ctx.fonts(|f| f.definitions().families.contains_key(family))
+    pending_defs_for_pass(ctx).is_some_and(|defs| defs.families.contains_key(family))
+        || ctx.fonts(|f| f.definitions().families.contains_key(family))
 }
 
 fn install_system_face_incrementally(
@@ -426,7 +449,8 @@ fn install_system_face_incrementally(
     if family_exists(ctx, &target) {
         return target;
     }
-    let mut defs = ctx.fonts(|f| f.definitions().clone());
+    let mut defs =
+        pending_defs_for_pass(ctx).unwrap_or_else(|| ctx.fonts(|f| f.definitions().clone()));
     let data_key = format!(
         "sys-font:{}:{}",
         family_name.trim().to_ascii_lowercase(),
@@ -444,7 +468,8 @@ fn install_system_face_incrementally(
     list.push(data_key);
     list.extend(inter_fallback);
     defs.families.insert(target.clone(), list);
-    ctx.set_fonts(defs);
+    set_fonts_and_track(ctx, defs);
+    ctx.request_repaint();
     target
 }
 

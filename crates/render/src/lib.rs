@@ -61,7 +61,8 @@ pub use compose::{
     ResolvedTableRow, ResolvedTextRun, ReviewMark, Visual, compose, compose_authoring,
     compose_authoring_layers, compose_authoring_layers_opts, compose_object,
     compose_object_with_theme, compose_object_with_value, flip_point, item_bounds, item_corners,
-    item_hit_test, item_link_at, item_local_point, question_prompt_rect, rotate_point,
+    item_hit_test, item_link_at, item_local_point, question_prompt_rect, resolve_text_runs,
+    rotate_point,
 };
 pub use design::{
     CONTROL_COMPACT, CONTROL_PRIMARY, CONTROL_TOOLBAR, ICON_SM, ICON_TOOLBAR, PANEL_MARGIN,
@@ -115,7 +116,7 @@ pub use shape_geometry::{
 pub use snapshot::{PlayerSnapshotSelect, snapshot_player};
 pub use text_layout::{
     AUTOFIT_MIN_SCALE, INDENT_STEP, LaidLink, LaidMarker, LaidParagraph, LaidText, fill_item_links,
-    layout_text,
+    inline_edit_layout_job, layout_text,
 };
 pub use ticker::Ticker;
 pub use view::{

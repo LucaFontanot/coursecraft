@@ -971,3 +971,125 @@ fn to_fractions(frame: Rect, links: Vec<LaidLink>) -> Vec<ResolvedLinkRect> {
         })
         .collect()
 }
+
+/// Build an [`egui::text::LayoutJob`] for inline text editing that preserves
+/// per-run fonts, sizes, colours, bold/italic, underline, strikethrough,
+/// superscript/subscript, letter spacing, and paragraph alignment/line spacing
+/// while keeping `job.text` character-for-character identical to the buffer.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn inline_edit_layout_job(
+    ctx: &Context,
+    scale: f32,
+    shrink: f32,
+    runs: &[ResolvedTextRun],
+    paragraphs: &[Paragraph],
+    align: Align,
+    wrap_width: f32,
+    multiline: bool,
+) -> LayoutJob {
+    let shrink = if shrink.is_finite() {
+        shrink.clamp(AUTOFIT_MIN_SCALE, 1.0)
+    } else {
+        1.0
+    };
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let mut job = LayoutJob {
+        halign: halign(align),
+        wrap: TextWrapping {
+            max_width: if multiline {
+                wrap_width.max(1.0)
+            } else {
+                f32::INFINITY
+            },
+            ..Default::default()
+        },
+        break_on_newline: multiline,
+        ..Default::default()
+    };
+    let mut paragraph_index = 0usize;
+    for run in runs {
+        let size = (run.size.clamp(1.0, 400.0) * scale * shrink).max(1.0);
+        let (size, valign) = match run.baseline {
+            coursecraft_course::Baseline::Normal => (size, egui::Align::BOTTOM),
+            coursecraft_course::Baseline::Superscript => {
+                ((size * SCRIPT_SCALE).max(1.0), egui::Align::TOP)
+            }
+            coursecraft_course::Baseline::Subscript => {
+                ((size * SCRIPT_SCALE).max(1.0), egui::Align::BOTTOM)
+            }
+        };
+        let letter_spacing =
+            coursecraft_course::clamp_letter_spacing(run.letter_spacing) * scale * shrink;
+        let strike = if run.strikethrough {
+            Stroke::new((scale * shrink).max(1.0), run.color)
+        } else {
+            Stroke::NONE
+        };
+        let underline = if run.underline || run.link.is_some() {
+            Stroke::new((scale * shrink).max(1.0), run.color)
+        } else {
+            Stroke::NONE
+        };
+        let font_id =
+            crate::font::slide_font_named(ctx, run.font.as_deref(), run.bold, run.italic, size);
+        let row_height = ctx.fonts_mut(|fonts| fonts.row_height(&font_id));
+
+        if run.text.is_empty() {
+            let style = paragraphs.get(paragraph_index).cloned().unwrap_or_default();
+            let spacing = if style.line_spacing.is_finite() {
+                style.line_spacing.clamp(0.8, 3.0)
+            } else {
+                1.0
+            };
+            let line_height = (row_height * spacing).max(size * 0.5);
+            job.append(
+                "",
+                0.0,
+                TextFormat {
+                    font_id,
+                    color: run.color,
+                    line_height: Some(line_height),
+                    strikethrough: strike,
+                    underline,
+                    extra_letter_spacing: letter_spacing,
+                    valign,
+                    ..Default::default()
+                },
+            );
+            continue;
+        }
+
+        for piece in run.text.split_inclusive('\n') {
+            let style = paragraphs.get(paragraph_index).cloned().unwrap_or_default();
+            let spacing = if style.line_spacing.is_finite() {
+                style.line_spacing.clamp(0.8, 3.0)
+            } else {
+                1.0
+            };
+            let line_height = (row_height * spacing).max(size * 0.5);
+            job.append(
+                piece,
+                0.0,
+                TextFormat {
+                    font_id: font_id.clone(),
+                    color: run.color,
+                    line_height: Some(line_height),
+                    strikethrough: strike,
+                    underline,
+                    extra_letter_spacing: letter_spacing,
+                    valign,
+                    ..Default::default()
+                },
+            );
+            if piece.ends_with('\n') {
+                paragraph_index = paragraph_index.saturating_add(1);
+            }
+        }
+    }
+    job
+}
