@@ -6,8 +6,27 @@ use serde_json::{Map, Value, json};
 
 use super::*;
 
+const CMI5_CATEGORY: &str = "https://w3id.org/xapi/cmi5/context/categories/cmi5";
+const MOVEON_CATEGORY: &str = "https://w3id.org/xapi/cmi5/context/categories/moveon";
+const SESSION_ID_EXTENSION: &str = "https://w3id.org/xapi/cmi5/context/extensions/sessionid";
+const MASTERY_EXTENSION: &str = "https://w3id.org/xapi/cmi5/context/extensions/masteryscore";
+const VERB_BASE: &str = "http://adlnet.gov/expapi/verbs/";
+const LAUNCH_DATA: &str = "LMS.LaunchData";
+const TS: &str = "2026-11-21T12:00:00Z";
+
 fn empty_store() -> LrsStore {
     LrsStore::new(8091, PathBuf::from("target/mock-lrs"))
+}
+
+fn uuid_for(tag: &str) -> String {
+    let mut hex = String::with_capacity(12);
+    for b in tag.bytes().take(6) {
+        hex.push_str(&format!("{b:02x}"));
+    }
+    while hex.len() < 12 {
+        hex.push('0');
+    }
+    format!("00000000-0000-4000-8000-{hex}")
 }
 
 fn request(method: &str, path: &str, query: &str) -> Request {
@@ -55,7 +74,7 @@ fn xapi_request(method: &str, path: &str, query: &str, body: Vec<u8>) -> Request
 fn first_registration(store: &LrsStore) -> String {
     store
         .registrations
-        .keys()
+        .values()
         .next()
         .cloned()
         .expect("a registration")
@@ -74,8 +93,13 @@ fn cmi5_statement(verb: &str, registration: &str, session: &str, id: &str) -> Va
     if verb == "completed" {
         result.insert("completion".into(), json!(true));
     }
-    if matches!(verb, "passed" | "failed") {
+    if verb == "passed" {
+        result.insert("success".into(), json!(true));
         result.insert("score".into(), json!({ "scaled": 0.9 }));
+    }
+    if verb == "failed" {
+        result.insert("success".into(), json!(false));
+        result.insert("score".into(), json!({ "scaled": 0.4 }));
     }
     let mut categories = Vec::new();
     if matches!(
@@ -89,11 +113,23 @@ fn cmi5_statement(verb: &str, registration: &str, session: &str, id: &str) -> Va
     }
     let mut extensions = Map::new();
     extensions.insert(SESSION_ID_EXTENSION.into(), json!(session));
+    let mut object = json!({ "id": "urn:coursecraft:mock:activity:hello" });
+    if verb == "answered" {
+        object = json!({
+            "id": "urn:coursecraft:mock:activity:hello/questions/q1",
+            "definition": {
+                "type": "http://adlnet.gov/expapi/activities/cmi.interaction",
+                "interactionType": "choice",
+                "correctResponsesPattern": ["a"]
+            }
+        });
+    }
     json!({
-        "id": id,
+        "id": uuid_for(id),
+        "timestamp": TS,
         "actor": actor_json(),
-        "verb": { "id": format!("{VERB_BASE}{verb}") },
-        "object": { "id": "urn:coursecraft:mock:activity:hello" },
+        "verb": { "id": format!("{VERB_BASE}{verb}"), "display": { "en-US": verb } },
+        "object": object,
         "result": Value::Object(result),
         "context": {
             "registration": registration,
@@ -128,6 +164,14 @@ fn cmi5_registration(store: &mut LrsStore, mastery: Option<&str>) -> String {
     first_registration(store)
 }
 
+fn has_violation(store: &LrsStore, needle: &str) -> bool {
+    store
+        .strict
+        .violations()
+        .iter()
+        .any(|v| v.message.contains(needle) || v.rule.contains(needle))
+}
+
 #[test]
 fn launch_returns_cmi5_url_and_writes_launch_data() {
     let mut store = empty_store();
@@ -143,13 +187,17 @@ fn launch_returns_cmi5_url_and_writes_launch_data() {
     assert!(url.contains("fetch="));
     assert!(url.contains("activityId="));
 
-    let document = store
-        .state
-        .iter()
-        .find(|(key, _)| key.state_id == LAUNCH_DATA)
-        .map(|(_, body)| body)
+    let reg = first_registration(&store);
+    let doc_bytes = store
+        .strict
+        .get_state(
+            LAUNCH_DATA,
+            "urn:coursecraft:mock:activity:hello",
+            &actor_json(),
+            Some(&reg),
+        )
         .expect("LMS.LaunchData");
-    let document: Value = serde_json::from_slice(document).expect("launch data json");
+    let document: Value = serde_json::from_slice(doc_bytes).expect("launch data json");
     assert_eq!(
         document.get("launchMode").and_then(Value::as_str),
         Some("Normal")
@@ -167,10 +215,7 @@ fn launch_returns_cmi5_url_and_writes_launch_data() {
     let template = document.get("contextTemplate").expect("template");
     assert!(
         template
-            .pointer(&format!(
-                "/extensions/{}",
-                escape_pointer(SESSION_ID_EXTENSION)
-            ))
+            .pointer("/extensions/https:~1~1w3id.org~1xapi~1cmi5~1context~1extensions~1sessionid")
             .is_some()
     );
     assert!(
@@ -197,11 +242,17 @@ fn launch_returns_xapi_url() {
 #[test]
 fn fetch_token_once_then_reuse_error() {
     let mut store = empty_store();
-    handle(
+    let resp = handle(
         &mut store,
         &launch_request("cmi5", "hello", "Normal", None, false),
     );
-    let id = store.fetches.keys().next().cloned().expect("fetch id");
+    let url = serde_json::from_slice::<Value>(&resp.body)
+        .expect("json")
+        .get("url")
+        .and_then(Value::as_str)
+        .expect("url")
+        .to_string();
+    let id = url.rsplit("%2F").next().expect("fetch id");
     let path = format!("/fetch/{id}");
 
     let first = handle(&mut store, &request("POST", &path, ""));
@@ -217,16 +268,19 @@ fn fetch_token_once_then_reuse_error() {
     assert_eq!(second.status, 200);
     let body: Value = serde_json::from_slice(&second.body).expect("fetch json");
     assert_eq!(body.get("error-code").and_then(Value::as_str), Some("1"));
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("reused"))
-    );
+    assert!(has_violation(&store, "reused"));
 
     let get = handle(&mut store, &request("GET", &path, ""));
     assert_eq!(get.status, 405);
 
+    let stmt_body = serde_json::to_vec(&json!({
+        "id": uuid_for("after"),
+        "timestamp": TS,
+        "actor": actor_json(),
+        "verb": { "id": format!("{VERB_BASE}initialized"), "display": { "en-US": "initialized" } },
+        "object": { "id": "urn:coursecraft:mock:activity:hello" },
+    }))
+    .expect("json");
     let statement = Request {
         method: "POST".to_string(),
         path: "/xapi/statements".to_string(),
@@ -237,8 +291,9 @@ fn fetch_token_once_then_reuse_error() {
                 "Authorization".to_string(),
                 format!("Basic mock-token-{id}"),
             ),
+            ("Content-Type".to_string(), "application/json".to_string()),
         ],
-        body: br#"{"id":"after-fetch"}"#.to_vec(),
+        body: stmt_body,
     };
     assert_eq!(handle(&mut store, &statement).status, 200);
 }
@@ -246,16 +301,27 @@ fn fetch_token_once_then_reuse_error() {
 #[test]
 fn xapi_auth_is_required() {
     let mut store = empty_store();
+    let stmt_body = serde_json::to_vec(&json!({
+        "id": uuid_for("auth1"),
+        "timestamp": TS,
+        "actor": actor_json(),
+        "verb": { "id": format!("{VERB_BASE}initialized"), "display": { "en-US": "initialized" } },
+        "object": { "id": "urn:act" },
+    }))
+    .expect("json");
     let no_auth = Request {
         method: "POST".to_string(),
         path: "/xapi/statements".to_string(),
         query: String::new(),
-        headers: vec![("X-Experience-API-Version".to_string(), "1.0.3".to_string())],
-        body: br#"{"id":"a"}"#.to_vec(),
+        headers: vec![
+            ("X-Experience-API-Version".to_string(), "1.0.3".to_string()),
+            ("Content-Type".to_string(), "application/json".to_string()),
+        ],
+        body: stmt_body.clone(),
     };
     assert_eq!(handle(&mut store, &no_auth).status, 401);
 
-    let with_auth = xapi_request("POST", "/xapi/statements", "", br#"{"id":"a"}"#.to_vec());
+    let with_auth = xapi_request("POST", "/xapi/statements", "", stmt_body);
     assert_eq!(handle(&mut store, &with_auth).status, 200);
 }
 
@@ -267,13 +333,13 @@ fn xapi_version_is_required() {
         path: "/xapi/statements".to_string(),
         query: String::new(),
         headers: vec![("Authorization".to_string(), "Basic mock-xapi".to_string())],
-        body: br#"{"id":"a"}"#.to_vec(),
+        body: br#"[]"#.to_vec(),
     };
     assert_eq!(handle(&mut store, &no_version).status, 400);
 }
 
 #[test]
-fn state_round_trip_with_encoded_agent() {
+fn state_round_trip_with_encoded_agent_and_reordered_keys() {
     let mut store = empty_store();
     let agent = actor_json().to_string();
     let query = format!(
@@ -289,9 +355,25 @@ fn state_round_trip_with_encoded_agent() {
         &xapi_request("PUT", "/xapi/activities/state", &query, body.clone()),
     );
     assert_eq!(put.status, 204);
+
+    // BUG-A13: reordered keys in agent JSON still match by canonical IFI.
+    let reordered_agent =
+        r#"{"account":{"name":"learner-1","homePage":"http://127.0.0.1"},"objectType":"Agent"}"#;
+    let reordered_query = format!(
+        "stateId={}&activityId={}&agent={}&registration={}",
+        encode("coursecraft.progress"),
+        encode("urn:coursecraft:mock:activity:hello"),
+        encode(reordered_agent),
+        encode("urn:coursecraft:mock:registration:cmi5-hello"),
+    );
     let get = handle(
         &mut store,
-        &xapi_request("GET", "/xapi/activities/state", &query, Vec::new()),
+        &xapi_request(
+            "GET",
+            "/xapi/activities/state",
+            &reordered_query,
+            Vec::new(),
+        ),
     );
     assert_eq!(get.status, 200);
     assert_eq!(get.body, body);
@@ -314,21 +396,29 @@ fn state_round_trip_with_encoded_agent() {
 }
 
 #[test]
-fn duplicate_statement_ids_are_ignored() {
+fn duplicate_statement_ids_idempotent_or_409_conflict() {
     let mut store = empty_store();
     let statement = json!({
-        "id": "dup",
+        "id": uuid_for("dup"),
+        "timestamp": TS,
         "actor": actor_json(),
-        "verb": { "id": format!("{VERB_BASE}initialized") },
+        "verb": { "id": format!("{VERB_BASE}initialized"), "display": { "en-US": "initialized" } },
         "object": { "id": "urn:act" },
     });
     let first = post_statements(&mut store, std::slice::from_ref(&statement));
     assert_eq!(first.status, 200);
     let second = post_statements(&mut store, std::slice::from_ref(&statement));
     assert_eq!(second.status, 200);
-    assert_eq!(store.statements.len(), 1);
+    assert_eq!(store.strict.statements().len(), 1);
     let ids: Value = serde_json::from_slice(&second.body).expect("ids json");
     assert_eq!(ids.as_array().map(Vec::len), Some(1));
+
+    // BUG-A13: same id with mutated content returns 409 Conflict.
+    let mut mutated = statement;
+    mutated["timestamp"] = json!("2026-11-21T12:05:00Z");
+    let conflict = post_statements(&mut store, &[mutated]);
+    assert_eq!(conflict.status, 409);
+    assert!(has_violation(&store, "XAPI-409-DUPLICATE-ID"));
 }
 
 #[test]
@@ -345,12 +435,7 @@ fn lms_launch_data_is_protected() {
         &xapi_request("PUT", "/xapi/activities/state", &query, b"{}".to_vec()),
     );
     assert_eq!(response.status, 403);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("LMS.LaunchData"))
-    );
+    assert!(has_violation(&store, "LMS.LaunchData"));
 }
 
 #[test]
@@ -379,9 +464,10 @@ fn fail_injection_fails_the_next_statement_posts() {
     );
     assert_eq!(response.status, 200);
     let statement = json!({
-        "id": "fail-1",
+        "id": uuid_for("fail1"),
+        "timestamp": TS,
         "actor": actor_json(),
-        "verb": { "id": format!("{VERB_BASE}initialized") },
+        "verb": { "id": format!("{VERB_BASE}initialized"), "display": { "en-US": "initialized" } },
         "object": { "id": "urn:act" },
     });
     let failed = post_statements(&mut store, std::slice::from_ref(&statement));
@@ -402,7 +488,11 @@ fn good_cmi5_sequence_has_no_problems() {
     ];
     let response = post_statements(&mut store, &statements);
     assert_eq!(response.status, 200);
-    assert!(store.problems.is_empty(), "{:?}", store.problems);
+    assert!(
+        store.strict.violations().is_empty(),
+        "{:?}",
+        store.strict.violations()
+    );
 }
 
 #[test]
@@ -417,7 +507,11 @@ fn repeated_answered_statements_are_allowed() {
     ];
     let response = post_statements(&mut store, &statements);
     assert_eq!(response.status, 200);
-    assert!(store.problems.is_empty(), "{:?}", store.problems);
+    assert!(
+        store.strict.violations().is_empty(),
+        "{:?}",
+        store.strict.violations()
+    );
 }
 
 #[test]
@@ -431,12 +525,7 @@ fn initialized_must_be_first() {
         "s1",
     )];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("before initialized"))
-    );
+    assert!(has_violation(&store, "before initialized"));
 }
 
 #[test]
@@ -449,12 +538,7 @@ fn nothing_may_follow_terminated() {
         cmi5_statement("completed", &registration, "session-1", "s3"),
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("after terminated"))
-    );
+    assert!(has_violation(&store, "after terminated"));
 }
 
 #[test]
@@ -469,12 +553,7 @@ fn cmi5_requires_sessionid_and_registration() {
         extensions.remove(SESSION_ID_EXTENSION);
     }
     post_statements(&mut store, &[no_session]);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("missing sessionid"))
-    );
+    assert!(has_violation(&store, "missing sessionid"));
 
     let mut no_registration = cmi5_statement("initialized", &registration, "session-2", "s2");
     if let Some(context) = no_registration
@@ -484,12 +563,7 @@ fn cmi5_requires_sessionid_and_registration() {
         context.remove("registration");
     }
     post_statements(&mut store, &[no_registration]);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("missing registration"))
-    );
+    assert!(has_violation(&store, "missing context.registration"));
 }
 
 #[test]
@@ -499,12 +573,7 @@ fn cmi5_category_rules() {
     let mut missing = cmi5_statement("initialized", &registration, "session-1", "s1");
     category_ids_of(&mut missing).clear();
     post_statements(&mut store, &[missing]);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("missing cmi5 category"))
-    );
+    assert!(has_violation(&store, "missing cmi5 category"));
 
     let mut answered = cmi5_statement("answered", &registration, "session-2", "s2");
     category_ids_of(&mut answered).push(json!({ "id": CMI5_CATEGORY }));
@@ -513,12 +582,7 @@ fn cmi5_category_rules() {
         answered,
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("unexpected cmi5 category"))
-    );
+    assert!(has_violation(&store, "unexpected cmi5 category"));
 }
 
 #[test]
@@ -533,22 +597,12 @@ fn moveon_category_rules() {
         missing,
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("missing moveon category"))
-    );
+    assert!(has_violation(&store, "missing moveon category"));
 
     let mut unexpected = cmi5_statement("initialized", &registration, "session-2", "s2");
     category_ids_of(&mut unexpected).push(json!({ "id": MOVEON_CATEGORY }));
     post_statements(&mut store, &[unexpected]);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("unexpected moveon category"))
-    );
+    assert!(has_violation(&store, "unexpected moveon category"));
 }
 
 #[test]
@@ -567,12 +621,7 @@ fn duration_rules() {
         completed,
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("missing duration"))
-    );
+    assert!(has_violation(&store, "CMI5-RESULT-COMPLETED"));
 
     let mut terminated = cmi5_statement("terminated", &registration, "session-2", "s2");
     if let Some(result) = terminated
@@ -586,14 +635,7 @@ fn duration_rules() {
         terminated,
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .filter(|problem| problem.contains("missing duration"))
-            .count()
-            >= 2
-    );
+    assert!(has_violation(&store, "CMI5-RESULT-TERMINATED"));
 }
 
 #[test]
@@ -612,12 +654,7 @@ fn completed_must_not_carry_a_score() {
         completed,
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("must not carry a score"))
-    );
+    assert!(has_violation(&store, "CMI5-RESULT-COMPLETED"));
 }
 
 #[test]
@@ -635,22 +672,12 @@ fn completed_and_passed_only_once_per_registration() {
         cmi5_statement("terminated", &registration, "session-2", "s8"),
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("second completed"))
-    );
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("second passed"))
-    );
+    assert!(has_violation(&store, "second completed"));
+    assert!(has_violation(&store, "second passed"));
 }
 
 #[test]
-fn failed_after_passed_is_a_problem() {
+fn passed_after_failed_and_failed_after_passed_are_violations() {
     let mut store = empty_store();
     let registration = cmi5_registration(&mut store, None);
     let statements = vec![
@@ -662,11 +689,61 @@ fn failed_after_passed_is_a_problem() {
         cmi5_statement("terminated", &registration, "session-2", "s6"),
     ];
     post_statements(&mut store, &statements);
+    assert!(has_violation(&store, "failed after passed"));
+
+    // BUG-A13: passed after failed in same cmi5 session.
+    let mut store2 = empty_store();
+    let reg2 = cmi5_registration(&mut store2, None);
+    let s2 = vec![
+        cmi5_statement("initialized", &reg2, "session-1", "p1"),
+        cmi5_statement("failed", &reg2, "session-1", "p2"),
+        cmi5_statement("passed", &reg2, "session-1", "p3"),
+    ];
+    post_statements(&mut store2, &s2);
+    assert!(has_violation(&store2, "CMI5-9.3.1-PASS-AFTER-FAIL"));
+}
+
+#[test]
+fn plain_xapi_relaunch_does_not_collide_on_same_registration() {
+    let mut store = empty_store();
+    handle(
+        &mut store,
+        &launch_request("xapi", "hello", "Normal", None, false),
+    );
+    let reg = first_registration(&store);
+    let xapi_stmt = |verb: &str, id: &str| {
+        json!({
+            "id": uuid_for(id),
+            "timestamp": TS,
+            "actor": actor_json(),
+            "verb": { "id": format!("{VERB_BASE}{verb}"), "display": { "en-US": verb } },
+            "object": { "id": "urn:coursecraft:mock:activity:hello" },
+            "context": { "registration": reg },
+        })
+    };
+    post_statements(
+        &mut store,
+        &[
+            xapi_stmt("initialized", "x1"),
+            xapi_stmt("terminated", "x2"),
+        ],
+    );
+    // Relaunch plain xAPI on same registration.
+    handle(
+        &mut store,
+        &launch_request("xapi", "hello", "Normal", None, false),
+    );
+    post_statements(
+        &mut store,
+        &[
+            xapi_stmt("initialized", "x3"),
+            xapi_stmt("terminated", "x4"),
+        ],
+    );
     assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("failed after passed"))
+        store.strict.violations().is_empty(),
+        "unexpected violations: {:?}",
+        store.strict.violations()
     );
 }
 
@@ -679,12 +756,7 @@ fn a_verb_may_not_repeat_in_a_session() {
         cmi5_statement("initialized", &registration, "session-1", "s2"),
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("repeated verb"))
-    );
+    assert!(has_violation(&store, "repeated verb"));
 }
 
 #[test]
@@ -700,12 +772,7 @@ fn browse_may_only_send_initialized_and_terminated() {
         cmi5_statement("completed", &registration, "session-1", "s2"),
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("may only send initialized and terminated"))
-    );
+    assert!(has_violation(&store, "CMI5-MODE-DISALLOWED"));
 }
 
 #[test]
@@ -718,12 +785,7 @@ fn mastery_score_and_scaled_must_agree() {
         cmi5_statement("passed", &registration, "session-1", "s3"),
     ];
     post_statements(&mut store, &statements);
-    assert!(
-        store
-            .problems
-            .iter()
-            .any(|problem| problem.contains("missing masteryscore"))
-    );
+    assert!(has_violation(&store, "missing masteryscore"));
 
     let mut second = empty_store();
     let registration = cmi5_registration(&mut second, Some("0.8"));
@@ -744,12 +806,7 @@ fn mastery_score_and_scaled_must_agree() {
         passed,
     ];
     post_statements(&mut second, &statements);
-    assert!(
-        second
-            .problems
-            .iter()
-            .any(|problem| problem.contains("scaled score disagrees"))
-    );
+    assert!(has_violation(&second, "disagrees with masteryScore"));
 }
 
 #[test]

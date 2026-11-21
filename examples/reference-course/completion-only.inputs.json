@@ -1,0 +1,6 @@
+[
+  { "input": "start" },
+  { "input": "click", "object": "btn-next" },
+  { "input": "click", "object": "btn-complete" },
+  { "input": "click", "object": "btn-exit" }
+]

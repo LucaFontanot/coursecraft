@@ -13,5 +13,8 @@ coursecraft-scorm.workspace = true
 coursecraft-xapi.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+coursecraft-strict-lms.workspace = true
+
 [lints]
 workspace = true

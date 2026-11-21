@@ -2302,9 +2302,36 @@ fn scene_delete(s: &mut Session, p: &Json) -> Result<Json> {
         .iter()
         .position(|sc| sc.id == sid)
         .ok_or_else(|| EngineError::NotFound(format!("scene {sid:?} does not exist")))?;
+    let deleted_sids: Vec<String> = s.course.scenes[pos]
+        .slides
+        .iter()
+        .map(|sl| sl.id.clone())
+        .collect();
     s.course.scenes.remove(pos);
+    let removed = if was_valid {
+        let mut needles = vec![format!("scene {sid:?} does not exist")];
+        for deleted_sid in &deleted_sids {
+            needles.push(format!("slide {deleted_sid:?} does not exist"));
+        }
+        let remaining_sids: Vec<String> = s
+            .course
+            .slides()
+            .chain(s.course.banks.iter().flat_map(|b| b.slides.iter()))
+            .filter(|sl| {
+                !sl.triggers.is_empty() || sl.layers.iter().any(|l| !l.triggers.is_empty())
+            })
+            .map(|sl| sl.id.clone())
+            .collect();
+        let mut total = 0;
+        for other_sid in &remaining_sids {
+            total += remove_dangling_triggers(s, other_sid, &needles);
+        }
+        total
+    } else {
+        0
+    };
     keep_valid(s, was_valid)?;
-    Ok(Json::Null)
+    Ok(json!({ "removed_triggers": removed }))
 }
 
 fn slide_add(s: &mut Session, p: &Json) -> Result<Json> {
@@ -3761,6 +3788,12 @@ fn layer_delete(s: &mut Session, p: &Json) -> Result<Json> {
     let sid: String = req(C, p, "slide")?;
     let lid: String = req(C, p, "layer")?;
     let slide = slide_mut(s, &sid)?;
+    let deleted_oids: Vec<String> = slide
+        .layers
+        .iter()
+        .find(|l| l.id == lid)
+        .map(|l| l.objects.iter().map(|o| o.id.clone()).collect())
+        .unwrap_or_default();
     let before = slide.layers.len();
     slide.layers.retain(|l| l.id != lid);
     if slide.layers.len() == before {
@@ -3768,9 +3801,14 @@ fn layer_delete(s: &mut Session, p: &Json) -> Result<Json> {
             "layer {lid:?} is not on slide {sid:?}"
         )));
     }
-    // Triggers that show, hide or start from the layer go with it.
+    // Triggers that show, hide or start from the layer (or reference objects on it) go with it.
     let removed = if was_valid {
-        remove_dangling_triggers(s, &sid, &[format!("layer {lid:?} is not on slide")])
+        let mut needles = vec![format!("layer {lid:?} is not on slide")];
+        for oid in &deleted_oids {
+            needles.push(format!("object {oid:?} is not on slide"));
+            needles.push(format!("target {oid:?} is not on slide"));
+        }
+        remove_dangling_triggers(s, &sid, &needles)
     } else {
         0
     };

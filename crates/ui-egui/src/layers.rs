@@ -105,6 +105,9 @@ impl LayersState {
         let slide_changed = self.last_synced_selection.slide != selection.slide;
         self.last_synced_revision.set(revision);
         self.last_synced_selection = selection.clone();
+        if let Some(lid) = selection.layer.as_deref() {
+            self.hidden_layers.remove(lid);
+        }
 
         if slide_changed && self.eye_slide != selection.slide {
             self.hidden_layers.clear();
@@ -577,6 +580,7 @@ fn show_layer_row(
             start_layer_rename(editor, slide_id, layer_id);
         } else if response.clicked() {
             editor.selection.layer = Some(layer_id.to_owned());
+            editor.ui.layers.hidden_layers.remove(layer_id);
             editor.selection.repair(&editor.session.course);
         }
         if response.secondary_clicked() || response.container_secondary_clicked() {

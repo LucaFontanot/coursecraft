@@ -432,6 +432,8 @@ mod csv_tests;
 #[cfg(test)]
 mod find_tests;
 #[cfg(test)]
+mod m27_all_commands_undo_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod styles_tests;

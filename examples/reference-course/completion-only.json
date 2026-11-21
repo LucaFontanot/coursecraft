@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "id": "reference-course-completion",
+  "title": "CourseCraft Reference Course (Completion Only)",
+  "language": "en-US",
+  "slide_size": { "w": 1280, "h": 720 },
+  "start_slide": "s01-welcome",
+  "scenes": [
+    {
+      "id": "sc-main",
+      "title": "Main",
+      "slides": [
+        {
+          "id": "s01-welcome",
+          "title": "Welcome",
+          "duration_ms": 2000,
+          "objects": [
+            {
+              "id": "title",
+              "kind": { "type": "text", "text": "Completion-Only Reference Course" },
+              "frame": { "x": 80, "y": 120, "w": 1120, "h": 80 }
+            },
+            {
+              "id": "btn-next",
+              "kind": { "type": "button", "label": "Continue" },
+              "frame": { "x": 1000, "y": 600, "w": 200, "h": 56 }
+            }
+          ],
+          "triggers": [
+            {
+              "when": { "event": "click", "object": "btn-next" },
+              "action": { "action": "jump_to_slide", "target": "next" }
+            }
+          ]
+        },
+        {
+          "id": "s02-finish",
+          "title": "Finish",
+          "duration_ms": 2000,
+          "objects": [
+            {
+              "id": "finish-txt",
+              "kind": { "type": "text", "text": "All done." },
+              "frame": { "x": 80, "y": 120, "w": 1120, "h": 80 }
+            },
+            {
+              "id": "btn-complete",
+              "kind": { "type": "button", "label": "Complete Course" },
+              "frame": { "x": 80, "y": 300, "w": 220, "h": 56 }
+            },
+            {
+              "id": "btn-exit",
+              "kind": { "type": "button", "label": "Exit" },
+              "frame": { "x": 320, "y": 300, "w": 180, "h": 56 }
+            }
+          ],
+          "triggers": [
+            {
+              "when": { "event": "click", "object": "btn-complete" },
+              "action": { "action": "complete_course", "status": "completed" }
+            },
+            {
+              "when": { "event": "click", "object": "btn-exit" },
+              "action": { "action": "exit_course" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -288,7 +288,7 @@ fn hello_course_packaged_with_fake_player() {
     assert!(xml.contains("<file href=\"app.js\"/>"));
     assert!(xml.contains("<file href=\"app_bg.wasm\"/>"));
     assert!(xml.contains("<file href=\"course.json\"/>"));
-    assert!(xml.contains("<file href=\"imsmanifest.xml\"/>"));
+    assert!(!xml.contains("<file href=\"imsmanifest.xml\"/>"));
     assert!(xml.contains("<file href=\"index.html\"/>"));
 }
 
@@ -2035,4 +2035,100 @@ fn auto_embed_fonts_embeds_allowed_skips_restricted_and_warns_for_unembedded() {
         res.warnings
             .contains(&"Font licences are your responsibility.".to_string())
     );
+}
+
+#[test]
+fn published_packages_pass_strict_manifest_validation_and_include_poster_and_path_fill() {
+    use coursecraft_strict_lms::{PackageStandardKind, validate_package};
+
+    let mut course = minimal_course("Strict Publish Test");
+    let video_obj: Object = serde_json::from_value(serde_json::json!({
+        "id": "v1",
+        "name": "Video",
+        "kind": {
+            "type": "video",
+            "src": "media/clip.mp4",
+            "poster": "media/poster.png"
+        },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 60.0 }
+    }))
+    .expect("video obj");
+    let path_obj: Object = serde_json::from_value(serde_json::json!({
+        "id": "p1",
+        "name": "Path",
+        "kind": {
+            "type": "path",
+            "points": [
+                { "x": 0.0, "y": 0.0 },
+                { "x": 50.0, "y": 0.0 },
+                { "x": 50.0, "y": 50.0 }
+            ],
+            "closed": true,
+            "outline": { "color": "#000000", "width": 1.0 },
+            "fill_style": { "type": "picture", "src": "media/tile.png" }
+        },
+        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+    }))
+    .expect("path obj");
+    course.scenes[0].slides[0].objects.push(video_obj);
+    course.scenes[0].slides[0].objects.push(path_obj);
+
+    let media = |src: &str| -> Option<Vec<u8>> {
+        match src {
+            "media/clip.mp4" => Some(b"MP4".to_vec()),
+            "media/poster.png" => Some(b"PNG-POSTER".to_vec()),
+            "media/tile.png" => Some(b"PNG-TILE".to_vec()),
+            _ => None,
+        }
+    };
+    let course_json = serde_json::to_string(&course).expect("serialize course");
+    let player_files = fake_player();
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &media,
+    };
+
+    let standards = [
+        (
+            PackageStandard::Scorm(Standard::Scorm12),
+            PackageStandardKind::Scorm12,
+        ),
+        (
+            PackageStandard::Scorm(Standard::Scorm2004),
+            PackageStandardKind::Scorm2004,
+        ),
+        (
+            PackageStandard::Xapi(Flavor::Cmi5),
+            PackageStandardKind::Cmi5,
+        ),
+        (
+            PackageStandard::Xapi(Flavor::Xapi),
+            PackageStandardKind::Xapi,
+        ),
+        (PackageStandard::Lti, PackageStandardKind::Lti),
+        (PackageStandard::Web, PackageStandardKind::Web),
+    ];
+
+    for (std, kind) in standards {
+        let files = build_package_standard(&input, std).expect("package builds");
+        assert!(
+            files.iter().any(|f| f.path.ends_with("poster.png")),
+            "{std:?} missing poster.png"
+        );
+        assert!(
+            files.iter().any(|f| f.path.ends_with("tile.png")),
+            "{std:?} missing tile.png"
+        );
+        let refs: Vec<(&str, &[u8])> = files
+            .iter()
+            .map(|f| (f.path.as_str(), f.bytes.as_slice()))
+            .collect();
+        let violations = validate_package(kind, &refs);
+        assert!(
+            violations.is_empty(),
+            "{std:?} manifest violations: {violations:?}"
+        );
+    }
 }

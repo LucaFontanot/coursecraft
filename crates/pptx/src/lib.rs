@@ -35,6 +35,7 @@ pub use zip;
 
 mod docx;
 mod theme;
+mod timing;
 
 use theme::{ThemePalette, resolve_first_color_child, resolve_solid_fill};
 
@@ -44,6 +45,10 @@ pub use docx::{DocxError, MAX_DOCX_BYTES, MAX_DOCX_ENTRIES, MAX_DOCX_XML_DEPTH, 
 mod bughunt_m26_a13_pptx;
 #[cfg(test)]
 mod m26_fidelity_tests;
+#[cfg(test)]
+mod m27_anim_tests;
+#[cfg(test)]
+mod m27_table_tests;
 #[cfg(test)]
 mod tests;
 
@@ -1027,8 +1032,9 @@ struct SlideTracker {
     path_count: usize,
     image_count: usize,
     table_count: usize,
-    /// DrawingML shape id (`cNvPr/@id`) to imported object id.
-    pptx_ids: HashMap<String, String>,
+    /// DrawingML shape id (`cNvPr/@id`) to imported object ids (may be multiple for
+    /// multi-subpath custom geometry or flattened `grpSp` groups).
+    pptx_ids: HashMap<String, Vec<String>>,
     pending_connectors: Vec<PendingConnector>,
 }
 
@@ -1056,6 +1062,15 @@ impl SlideTracker {
                 note: note.into(),
             });
         }
+    }
+
+    fn report_animation(&mut self, note: impl Into<String>) {
+        self.seen_skips.insert(SkipKind::Animation);
+        self.items.push(ReportItem {
+            slide: self.slide_idx,
+            kind: SkipKind::Animation,
+            note: note.into(),
+        });
     }
 }
 
@@ -1322,11 +1337,6 @@ pub fn import_pptx_with_limits(
             tracker.report_skip(SkipKind::Transition, "Slide transition skipped");
         }
 
-        // Check for animations / timing
-        if slide_tree.find_descendant("timing").is_some() {
-            tracker.report_skip(SkipKind::Animation, "Animations/timing skipped");
-        }
-
         // Extract slide notes if present
         let mut slide_notes = String::new();
         for rel in slide_rels.values() {
@@ -1463,6 +1473,23 @@ pub fn import_pptx_with_limits(
         }
         resolve_connector_glues(&mut objects, &mut tracker);
 
+        let mut triggers: Vec<coursecraft_course::Trigger> = Vec::new();
+        let max_anim_end_ms = slide_tree
+            .find_descendant("timing")
+            .map(|timing_node| {
+                timing::apply_slide_timing(
+                    timing_node,
+                    &layout,
+                    &mut objects,
+                    &mut triggers,
+                    &mut tracker,
+                )
+            })
+            .unwrap_or(0);
+        let slide_duration_ms = 5000u32
+            .max(max_anim_end_ms.saturating_add(500))
+            .min(coursecraft_course::MAX_TIMELINE_DURATION_MS);
+
         let final_title = slide_title
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(|| format!("Slide {slide_idx}"));
@@ -1470,11 +1497,11 @@ pub fn import_pptx_with_limits(
         let slide = Slide {
             id: format!("slide{slide_idx}"),
             title: final_title,
-            duration_ms: 5000,
+            duration_ms: slide_duration_ms,
             background: slide_background,
             objects,
             layers: Vec::new(),
-            triggers: Vec::new(),
+            triggers,
             cue_points: Vec::new(),
             question: None,
             draw: None,
@@ -2364,7 +2391,7 @@ struct SlideContext<'a, 'z> {
     layout_path: Option<String>,
     slide_parts: &'a HashMap<String, String>,
     theme: &'a ThemePalette,
-    table_styles: &'a HashMap<String, TableStyleDef>,
+    table_styles: &'a TableStyleSet,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2425,7 +2452,7 @@ fn extract_slide_background(
                 layout_path: layout_path.map(str::to_string),
                 slide_parts,
                 theme: theme_palette,
-                table_styles: &HashMap::new(),
+                table_styles: &TableStyleSet::default(),
             };
             if let Some((src, mode, tile_scale)) = extract_picture_fill(blip_fill, &mut bg_cx) {
                 return (
@@ -2533,6 +2560,7 @@ fn drawing_id(node: &XmlNode) -> Option<&str> {
         .and_then(|nv| nv.child("cNvPr"))
         .or_else(|| node.child("nvPicPr").and_then(|nv| nv.child("cNvPr")))
         .or_else(|| node.child("nvCxnSpPr").and_then(|nv| nv.child("cNvPr")))
+        .or_else(|| node.child("nvGrpSpPr").and_then(|nv| nv.child("cNvPr")))
         .or_else(|| {
             node.child("nvGraphicFramePr")
                 .and_then(|nv| nv.child("cNvPr"))
@@ -2550,8 +2578,12 @@ fn record_pptx_id(node: &XmlNode, before: usize, cx: &mut SlideContext<'_, '_>) 
         .skip(before)
         .map(|object| object.id.clone())
         .collect();
-    for object_id in ids {
-        cx.tracker.pptx_ids.insert(drawing_id.to_owned(), object_id);
+    if !ids.is_empty() {
+        cx.tracker
+            .pptx_ids
+            .entry(drawing_id.to_owned())
+            .or_default()
+            .extend(ids);
     }
 }
 
@@ -2661,7 +2693,10 @@ fn resolve_connector_glues(objects: &mut [Object], tracker: &mut SlideTracker) {
             continue;
         };
         if let Some(connection) = &pending.start
-            && let Some(target_id) = tracker.pptx_ids.get(&connection.target)
+            && let Some(target_id) = tracker
+                .pptx_ids
+                .get(&connection.target)
+                .and_then(|ids| ids.last())
             && let Some(target) = targets.get(target_id)
             && !target.connector
         {
@@ -2679,7 +2714,10 @@ fn resolve_connector_glues(objects: &mut [Object], tracker: &mut SlideTracker) {
             });
         }
         if let Some(connection) = &pending.end
-            && let Some(target_id) = tracker.pptx_ids.get(&connection.target)
+            && let Some(target_id) = tracker
+                .pptx_ids
+                .get(&connection.target)
+                .and_then(|ids| ids.last())
             && let Some(target) = targets.get(target_id)
             && !target.connector
         {
@@ -2828,9 +2866,15 @@ fn process_group_children(
                     grp_flip_v,
                 );
 
+                let before = cx.objects.len();
                 process_group_children(child, new_transform, depth.saturating_add(1), cx)?;
+                record_pptx_id(child, before, cx);
             }
-            "cxnSp" => process_connector(child, transform, cx),
+            "cxnSp" => {
+                let before = cx.objects.len();
+                process_connector(child, transform, cx);
+                record_pptx_id(child, before, cx);
+            }
             "graphicFrame" => {
                 if child.find_descendant("tbl").is_some() {
                     let before = cx.objects.len();
@@ -2926,19 +2970,21 @@ fn parse_table_part_style(node: &XmlNode, theme: &ThemePalette) -> TablePartStyl
     }
 }
 
-fn parse_table_styles(
-    entries: &Entries<'_>,
-    theme: &ThemePalette,
-) -> HashMap<String, TableStyleDef> {
-    let mut map = HashMap::new();
+#[derive(Default)]
+struct TableStyleSet {
+    styles: HashMap<String, TableStyleDef>,
+}
+
+fn parse_table_styles(entries: &Entries<'_>, theme: &ThemePalette) -> TableStyleSet {
+    let mut set = TableStyleSet::default();
     let Some(bytes) = entries.get("ppt/tableStyles.xml") else {
-        return map;
+        return set;
     };
     let Ok(xml_str) = std::str::from_utf8(&bytes) else {
-        return map;
+        return set;
     };
     let Ok(root) = parse_xml_tree(xml_str, "ppt/tableStyles.xml", 32) else {
-        return map;
+        return set;
     };
     for style_node in root.children_named("tblStyle") {
         let Some(id) = style_node.attr("styleId") else {
@@ -2972,9 +3018,9 @@ fn parse_table_styles(
         if let Some(part) = style_node.child("band2V") {
             def.band2_v = parse_table_part_style(part, theme);
         }
-        map.insert(id.to_ascii_uppercase(), def);
+        set.styles.insert(id.to_ascii_uppercase(), def);
     }
-    map
+    set
 }
 
 fn blend_hex_colors(a: &str, b: &str, t: f32) -> Color {
@@ -3001,7 +3047,20 @@ fn blend_hex_colors(a: &str, b: &str, t: f32) -> Color {
     ))
 }
 
-fn builtin_table_style(style_id: &str, theme: &ThemePalette) -> Option<TableStyleDef> {
+fn default_table_grid_outline(layout: SlideLayout) -> Outline {
+    Outline {
+        color: Color("#000000".to_string()),
+        width: ((12_700.0 * layout.scale) as f32).clamp(0.5, 50.0),
+        dash: DashStyle::Solid,
+        dash_pattern: None,
+    }
+}
+
+fn builtin_table_style(
+    style_id: &str,
+    theme: &ThemePalette,
+    layout: SlideLayout,
+) -> Option<TableStyleDef> {
     let id = style_id.trim().to_ascii_uppercase();
     // Standard Office built-in Medium Style 2 (Accent 1..6) and Light/No-Style grids.
     let accent_key = match id.as_str() {
@@ -3024,19 +3083,16 @@ fn builtin_table_style(style_id: &str, theme: &ThemePalette) -> Option<TableStyl
             Some("accent6")
         }
         "{5940675A-B579-460E-94D1-54222C63F5DA}" => {
-            let border = Some(Outline {
-                color: Color("#000000".to_string()),
-                width: 1.0,
-                dash: DashStyle::Solid,
-                dash_pattern: None,
-            });
             return Some(TableStyleDef {
                 whole: TablePartStyle {
-                    border,
+                    border: Some(default_table_grid_outline(layout)),
                     ..Default::default()
                 },
                 ..Default::default()
             });
+        }
+        "{2D5ABB26-0587-4C30-8999-92F81FD0307C}" => {
+            return Some(TableStyleDef::default());
         }
         _ => None,
     }?;
@@ -3171,23 +3227,38 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
     let last_col = tbl_pr.is_some_and(|p| attr_flag(p, "lastCol"));
     let band_row = tbl_pr.is_some_and(|p| attr_flag(p, "bandRow"));
     let band_col = tbl_pr.is_some_and(|p| attr_flag(p, "bandCol"));
-    let table_style = tbl_pr
+    let explicit_style_id = tbl_pr
         .and_then(|p| p.child("tableStyleId"))
-        .map(|n| n.text.trim().to_ascii_uppercase())
-        .and_then(|id| {
-            cx.table_styles
-                .get(&id)
-                .cloned()
-                .or_else(|| builtin_table_style(&id, cx.theme))
-        });
+        .map(|n| n.text.trim())
+        .filter(|s| !s.is_empty());
+    let lookup_style = |id: &str| -> Option<TableStyleDef> {
+        let upper = id.to_ascii_uppercase();
+        cx.table_styles
+            .styles
+            .get(&upper)
+            .cloned()
+            .or_else(|| builtin_table_style(&upper, cx.theme, *cx.layout))
+    };
+    let (table_style, apply_default_grid) = match explicit_style_id {
+        Some(raw_id) => match lookup_style(raw_id) {
+            Some(style) => (Some(style), false),
+            None => {
+                cx.tracker.report_skip(
+                    SkipKind::Table,
+                    format!("Table style {raw_id} not recognized; borders may differ"),
+                );
+                (None, false)
+            }
+        },
+        None => (None, true),
+    };
 
     let links = TextLinkContext {
         slide_rels: cx.slide_rels,
         slide_parts: cx.slide_parts,
     };
     let mut rows: Vec<TableRow> = Vec::with_capacity(rows_nodes.len());
-    let mut outer_borders: Vec<Outline> = Vec::new();
-    let mut inner_borders: Vec<Outline> = Vec::new();
+    let mut border_acc = TableBorderAccumulator::default();
 
     for (row_index, row_node) in rows_nodes.iter().enumerate() {
         let mut cells: Vec<TableCell> = Vec::with_capacity(column_count);
@@ -3266,6 +3337,11 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
                 let cell_fill = props
                     .and_then(|p| table_cell_fill(p, cx.theme))
                     .or(part_fill);
+                let tc_valign = props.and_then(|p| p.attr("anchor")).map(|a| match a {
+                    "ctr" => VAlign::Middle,
+                    "b" => VAlign::Bottom,
+                    _ => VAlign::Top,
+                });
                 let cell = cell_node
                     .child("txBody")
                     .map(|body| {
@@ -3286,6 +3362,13 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
                                 }
                             }
                         }
+                        let has_body_anchor = body
+                            .child("bodyPr")
+                            .and_then(|bp| bp.attr("anchor"))
+                            .is_some();
+                        if !has_body_anchor && let Some(v) = tc_valign {
+                            info.style.valign = v;
+                        }
                         TableCell {
                             text: info.text,
                             style: info.style.clone(),
@@ -3301,28 +3384,20 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
                         fill: cell_fill,
                         row_span: u8::try_from(row_span.max(1)).unwrap_or(u8::MAX),
                         col_span: u8::try_from(col_span.max(1)).unwrap_or(u8::MAX),
+                        valign: tc_valign.unwrap_or(VAlign::Top),
                         ..TableCell::default()
                     });
-                if let Some(props) = props {
-                    for (side, outer) in [
-                        ("lnL", column == 0),
-                        ("lnR", column.saturating_add(col_span) >= column_count),
-                        ("lnT", row_index == 0),
-                        (
-                            "lnB",
-                            row_index.saturating_add(row_span) >= rows_nodes.len(),
-                        ),
-                    ] {
-                        if let Some(outline) = table_side_outline(props, side, *cx.layout, cx.theme)
-                        {
-                            if outer {
-                                outer_borders.push(outline);
-                            } else {
-                                inner_borders.push(outline);
-                            }
-                        }
-                    }
-                }
+                border_acc.record_cell(
+                    props,
+                    column,
+                    col_span,
+                    column_count,
+                    row_index,
+                    row_span,
+                    rows_nodes.len(),
+                    *cx.layout,
+                    cx.theme,
+                );
                 let span = col_span.max(1);
                 cells.push(cell);
                 for _ in 1..span {
@@ -3339,16 +3414,7 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
         });
     }
 
-    let style_border = table_style.as_ref().and_then(|s| {
-        s.whole
-            .border
-            .clone()
-            .or_else(|| s.first_row.border.clone())
-    });
-    let borders = TableBorders {
-        outer: dominant_outline(&outer_borders).or_else(|| style_border.clone()),
-        inner: dominant_outline(&inner_borders).or(style_border),
-    };
+    let borders = border_acc.finish(table_style.as_ref(), apply_default_grid, *cx.layout);
 
     cx.tracker.table_count = cx.tracker.table_count.saturating_add(1);
     let name = frame_node
@@ -3413,15 +3479,109 @@ fn table_cell_fill(props: &XmlNode, theme: &ThemePalette) -> Option<Color> {
     resolve_solid_fill(props, theme)
 }
 
+enum SideLine {
+    Solid(Outline),
+    ExplicitNone,
+    Inherited,
+}
+
+#[derive(Default)]
+struct TableBorderAccumulator {
+    outer_borders: Vec<Outline>,
+    inner_borders: Vec<Outline>,
+    outer_explicit_none: bool,
+    outer_inherited: bool,
+    inner_explicit_none: bool,
+    inner_inherited: bool,
+}
+
+impl TableBorderAccumulator {
+    #[allow(clippy::too_many_arguments)]
+    fn record_cell(
+        &mut self,
+        props: Option<&XmlNode>,
+        column: usize,
+        col_span: usize,
+        column_count: usize,
+        row_index: usize,
+        row_span: usize,
+        row_count: usize,
+        layout: SlideLayout,
+        theme: &ThemePalette,
+    ) {
+        for (side, outer) in [
+            ("lnL", column == 0),
+            ("lnR", column.saturating_add(col_span) >= column_count),
+            ("lnT", row_index == 0),
+            ("lnB", row_index.saturating_add(row_span) >= row_count),
+        ] {
+            let side_line = match props {
+                Some(p) => table_side_outline(p, side, layout, theme),
+                None => SideLine::Inherited,
+            };
+            match (side_line, outer) {
+                (SideLine::Solid(outline), true) => self.outer_borders.push(outline),
+                (SideLine::Solid(outline), false) => self.inner_borders.push(outline),
+                (SideLine::ExplicitNone, true) => self.outer_explicit_none = true,
+                (SideLine::ExplicitNone, false) => self.inner_explicit_none = true,
+                (SideLine::Inherited, true) => self.outer_inherited = true,
+                (SideLine::Inherited, false) => self.inner_inherited = true,
+            }
+        }
+    }
+
+    fn finish(
+        self,
+        table_style: Option<&TableStyleDef>,
+        apply_default_grid: bool,
+        layout: SlideLayout,
+    ) -> TableBorders {
+        let style_border = table_style.and_then(|s| {
+            s.whole
+                .border
+                .clone()
+                .or_else(|| s.first_row.border.clone())
+        });
+        let resolve = |explicit: &[Outline], all_none: bool| -> Option<Outline> {
+            if let Some(dom) = dominant_outline(explicit) {
+                return Some(dom);
+            }
+            if table_style.is_some() {
+                if all_none { None } else { style_border.clone() }
+            } else if apply_default_grid {
+                if all_none {
+                    None
+                } else {
+                    Some(default_table_grid_outline(layout))
+                }
+            } else {
+                None
+            }
+        };
+        TableBorders {
+            outer: resolve(
+                &self.outer_borders,
+                self.outer_explicit_none && !self.outer_inherited,
+            ),
+            inner: resolve(
+                &self.inner_borders,
+                self.inner_explicit_none && !self.inner_inherited,
+            ),
+        }
+    }
+}
+
 fn table_side_outline(
     props: &XmlNode,
     side: &str,
     layout: SlideLayout,
     theme: &ThemePalette,
-) -> Option<Outline> {
-    let line = props.child(side)?;
+) -> SideLine {
+    let Some(line) = props.child(side) else {
+        return SideLine::Inherited;
+    };
     if line.child("noFill").is_some() {
-        return None;
+        return SideLine::ExplicitNone;
     }
     let color = resolve_solid_fill(line, theme).unwrap_or_else(|| Color("#000000".to_string()));
     let width = line
@@ -3431,10 +3591,10 @@ fn table_side_outline(
         .map_or(1.0, |emu| (emu * layout.scale) as f32)
         .clamp(0.0, 50.0);
     if width <= 0.0 {
-        return None;
+        return SideLine::ExplicitNone;
     }
     let (dash, dash_pattern) = extract_dash_from_ln(line);
-    Some(Outline {
+    SideLine::Solid(Outline {
         color,
         width,
         dash,

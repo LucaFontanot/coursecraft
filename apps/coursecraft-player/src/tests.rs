@@ -3,12 +3,11 @@
 use std::path::PathBuf;
 
 use coursecraft_course::Course;
+use coursecraft_lms::{ReportingStandard, Standard, reporting_from_marker};
 use coursecraft_logic::{Effect, Input};
 
 use crate::app::{Playing, capped_push_log, compute_session_ms, format_issues, push_log_entry};
-use crate::load::{
-    PlayerStandard, learner_name_from_query, parse_args, parse_course, parse_package_standard,
-};
+use crate::load::{learner_name_from_query, parse_args, parse_course};
 
 #[test]
 fn arg_parsing_default() {
@@ -161,29 +160,29 @@ fn parse_course_hello_course_ok() {
 
 #[test]
 fn lti_marker_selects_the_lti_player() {
-    let (standard, warning) = parse_package_standard(Some(r#"{"standard":"lti"}"#));
-    assert_eq!(standard, PlayerStandard::Lti);
+    let (standard, warning) = reporting_from_marker(Some(r#"{"standard":"lti"}"#));
+    assert_eq!(standard, ReportingStandard::Lti);
     assert!(warning.is_none());
 }
 
 #[test]
 fn web_marker_selects_the_web_player() {
-    let (standard, warning) = parse_package_standard(Some(r#"{"standard":"web"}"#));
-    assert_eq!(standard, PlayerStandard::Web);
+    let (standard, warning) = reporting_from_marker(Some(r#"{"standard":"web"}"#));
+    assert_eq!(standard, ReportingStandard::Web);
     assert!(warning.is_none());
 }
 
 #[test]
 fn missing_marker_defaults_to_scorm12_without_a_warning() {
-    let (standard, warning) = parse_package_standard(None);
-    assert_eq!(standard, PlayerStandard::Scorm12);
+    let (standard, warning) = reporting_from_marker(None);
+    assert_eq!(standard, ReportingStandard::Scorm(Standard::Scorm12));
     assert!(warning.is_none());
 }
 
 #[test]
 fn unknown_marker_falls_back_to_scorm12_with_a_warning() {
-    let (standard, warning) = parse_package_standard(Some(r#"{"standard":"scorm1.2"}"#));
-    assert_eq!(standard, PlayerStandard::Scorm12);
+    let (standard, warning) = reporting_from_marker(Some(r#"{"standard":"scorm1.2"}"#));
+    assert_eq!(standard, ReportingStandard::Scorm(Standard::Scorm12));
     assert!(warning.is_some_and(|text| text.contains("unknown")));
 }
 

@@ -42,37 +42,40 @@ pub fn navigate_to_issue_path(
                 return false;
             };
 
-            selection.slide = slide.id.clone();
-            selection.layer = None;
-            selection.clear_objects();
-
-            // Check if points into layers
-            if segments.get(4) == Some(&"layers") {
-                if let Some(lyi_str) = segments.get(5)
-                    && let Ok(lyi) = lyi_str.parse::<usize>()
-                    && let Some(layer) = slide.layers.get(lyi)
-                {
-                    selection.layer = Some(layer.id.clone());
-                    // Check if points into objects on this layer
-                    if segments.get(6) == Some(&"objects")
-                        && let Some(oi_str) = segments.get(7)
-                        && let Ok(oi) = oi_str.parse::<usize>()
-                        && let Some(obj) = layer.objects.get(oi)
-                    {
-                        selection.object = Some(obj.id.clone());
-                    }
-                }
-            } else if segments.get(4) == Some(&"objects") {
-                // Base layer object
-                if let Some(oi_str) = segments.get(5)
-                    && let Ok(oi) = oi_str.parse::<usize>()
-                    && let Some(obj) = slide.objects.get(oi)
-                {
-                    selection.object = Some(obj.id.clone());
-                }
-            }
+            select_slide_subpath(slide, selection, &segments[4..]);
             return true;
         } else if let Some(first_slide) = scene.slides.first() {
+            selection.slide = first_slide.id.clone();
+            selection.layer = None;
+            selection.clear_objects();
+            return true;
+        }
+    }
+
+    // Pattern 2: banks/{bi}/slides/{si}/...
+    if segments.first() == Some(&"banks") {
+        let Some(bi_str) = segments.get(1) else {
+            return false;
+        };
+        let Ok(bi) = bi_str.parse::<usize>() else {
+            return false;
+        };
+        let Some(bank) = course.banks.get(bi) else {
+            return false;
+        };
+        if segments.get(2) == Some(&"slides") {
+            let Some(si_str) = segments.get(3) else {
+                return false;
+            };
+            let Ok(si) = si_str.parse::<usize>() else {
+                return false;
+            };
+            let Some(slide) = bank.slides.get(si) else {
+                return false;
+            };
+            select_slide_subpath(slide, selection, &segments[4..]);
+            return true;
+        } else if let Some(first_slide) = bank.slides.first() {
             selection.slide = first_slide.id.clone();
             selection.layer = None;
             selection.clear_objects();
@@ -116,6 +119,56 @@ pub fn navigate_to_issue_path(
     }
 
     false
+}
+
+fn select_slide_subpath(
+    slide: &coursecraft_course::Slide,
+    selection: &mut crate::Selection,
+    rest: &[&str],
+) {
+    selection.slide = slide.id.clone();
+    selection.layer = None;
+    selection.clear_objects();
+
+    if rest.first() == Some(&"layers") {
+        if let Some(lyi_str) = rest.get(1)
+            && let Ok(lyi) = lyi_str.parse::<usize>()
+            && let Some(layer) = slide.layers.get(lyi)
+        {
+            selection.layer = Some(layer.id.clone());
+            if rest.get(2) == Some(&"objects")
+                && let Some(oi_str) = rest.get(3)
+                && let Ok(oi) = oi_str.parse::<usize>()
+                && let Some(obj) = layer.objects.get(oi)
+            {
+                selection.object = Some(obj.id.clone());
+            }
+        }
+    } else if rest.first() == Some(&"objects")
+        && let Some(oi_str) = rest.get(1)
+        && let Ok(oi) = oi_str.parse::<usize>()
+        && let Some(obj) = slide.objects.get(oi)
+    {
+        selection.object = Some(obj.id.clone());
+    }
+}
+
+fn finish_slide_navigation(editor: &mut Editor, previous: String) {
+    editor.ui.story_view = false;
+    if editor
+        .session
+        .course
+        .master(&editor.selection.slide)
+        .is_some()
+    {
+        if !editor.ui.master_view {
+            editor.ui.master_view_return_slide = Some(previous);
+            editor.ui.master_view = true;
+        }
+    } else {
+        editor.ui.master_view = false;
+        editor.ui.master_view_return_slide = None;
+    }
 }
 
 /// Select the slide and object named by an accessibility finding.
@@ -366,32 +419,26 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
 
         if let Some(path) = path_to_navigate {
             let previous = editor.selection.slide.clone();
-            if navigate_to_issue_path(&editor.session.course, &mut editor.selection, &path)
-                && editor
-                    .session
-                    .course
-                    .master(&editor.selection.slide)
-                    .is_some()
-            {
-                editor.ui.master_view_return_slide = Some(previous);
-                editor.ui.master_view = true;
+            if navigate_to_issue_path(&editor.session.course, &mut editor.selection, &path) {
+                finish_slide_navigation(editor, previous);
             }
         }
         if let Some((slide, object)) = audit_to_navigate {
-            let previous = editor.selection.slide.clone();
-            if navigate_to_audit_finding(
-                &editor.session.course,
-                &mut editor.selection,
-                slide.as_deref(),
-                object.as_deref(),
-            ) && editor
-                .session
-                .course
-                .master(&editor.selection.slide)
-                .is_some()
-            {
-                editor.ui.master_view_return_slide = Some(previous);
-                editor.ui.master_view = true;
+            if slide.is_none() {
+                editor.ui.story_view = false;
+                editor.ui.master_view = false;
+                editor.ui.master_view_return_slide = None;
+                editor.ui.inspector_tab = crate::properties::InspectorTab::Course;
+            } else {
+                let previous = editor.selection.slide.clone();
+                if navigate_to_audit_finding(
+                    &editor.session.course,
+                    &mut editor.selection,
+                    slide.as_deref(),
+                    object.as_deref(),
+                ) {
+                    finish_slide_navigation(editor, previous);
+                }
             }
         }
         if suggest_alt {

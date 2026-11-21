@@ -1996,7 +1996,20 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
             .collect();
         editor.run_batch(&steps);
     } else if let Some((cmd, params)) = actions_to_run.pop() {
-        editor.run(cmd, params);
+        let deleted_state = (cmd == "object.delete_state")
+            .then(|| {
+                params
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
+            .flatten();
+        if editor.run(cmd, params).is_some()
+            && let Some(name) = deleted_state
+            && editor.ui.preview_state.as_deref() == Some(name.as_str())
+        {
+            editor.ui.preview_state = None;
+        }
     }
 }
 

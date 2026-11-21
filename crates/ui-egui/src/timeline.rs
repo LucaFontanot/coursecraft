@@ -2412,13 +2412,12 @@ fn show_timeline_content(
         track_width,
         pointer_pos,
     };
-    let on_slide_cue = render_slide_cue_markers(editor, ui, &painter, &cue_ctx, actions);
-
     let playhead_response = ui.interact(
         ruler_rect,
         ui.scope_id().with("timeline_playhead"),
         Sense::click_and_drag(),
     );
+    let on_slide_cue = render_slide_cue_markers(editor, ui, &painter, &cue_ctx, actions);
     if !on_slide_cue
         && editor.ui.timeline.slide_cue_drag.is_none()
         && (playhead_response.clicked() || playhead_response.dragged())

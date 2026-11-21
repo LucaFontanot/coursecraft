@@ -368,9 +368,7 @@ fn show_map_thumbnail(
         && resp.contains_pointer()
     {
         editor.ui.last_active_area = crate::ActiveArea::Navigator;
-        editor.selection.slide = slide_id.to_owned();
-        editor.selection.layer = None;
-        editor.selection.clear_objects();
+        select_single_slide(editor, slide_id);
         let start = ui
             .input(|i| i.pointer.interact_pos())
             .unwrap_or(thumb_rect.center());
@@ -388,14 +386,10 @@ fn show_map_thumbnail(
     }
     if !covered && resp.clicked() {
         editor.ui.last_active_area = crate::ActiveArea::Navigator;
-        editor.selection.slide = slide_id.to_owned();
-        editor.selection.layer = None;
-        editor.selection.clear_objects();
+        select_single_slide(editor, slide_id);
     }
     if !covered && resp.double_clicked() {
-        editor.selection.slide = slide_id.to_owned();
-        editor.selection.layer = None;
-        editor.selection.clear_objects();
+        select_single_slide(editor, slide_id);
         editor.ui.story_view = false;
     }
 
@@ -772,6 +766,53 @@ fn handle_map_drag(
     }
 }
 
+fn select_single_slide(editor: &mut Editor, slide_id: &str) {
+    editor.selection.slide = slide_id.to_owned();
+    editor.selection.also_slides.clear();
+    editor.selection.layer = None;
+    editor.selection.clear_objects();
+}
+
+fn has_open_modal_or_preview(editor: &Editor) -> bool {
+    let ui = &editor.ui;
+    editor.preview.is_some()
+        || ui.find.open
+        || ui.spell_check.open
+        || ui.publish.open
+        || ui.ai.open
+        || ui.alt.open
+        || ui.captions.open
+        || ui.speech.open
+        || ui.record_narration.open
+        || ui.translate.open
+        || ui.document.open
+        || ui.prefs.open
+        || ui.versions.open
+        || ui.report.open
+        || ui.slide_size_dialog.open
+        || ui.show_course_settings_window
+        || ui.show_theme_window
+        || ui.show_shortcuts_dialog
+        || ui.show_welcome
+        || ui.show_media_library
+        || ui.show_fonts_window
+        || ui.show_history
+        || ui.show_validation_window
+        || ui.show_error_history_window
+        || ui.show_export_translation
+        || ui.show_outline_dialog
+        || ui.show_export_video
+        || ui.show_export_review
+        || ui.show_shape_gallery_window
+        || ui.show_interaction_gallery
+        || ui.show_web_window
+        || ui.trigger_form.is_some()
+        || ui.pending_delete_scene.is_some()
+        || ui.pending_delete_master.is_some()
+        || ui.confirm_delete_library_template.is_some()
+        || ui.pending_remove_font.is_some()
+}
+
 /// Course map keyboard: arrows move the selection in play order, Enter
 /// opens the slide in the editor. Called from the central panel while
 /// the Course map is shown and no text field owns the keyboard.
@@ -780,7 +821,7 @@ pub fn handle_map_keys(editor: &mut Editor, ui: &mut Ui) {
         editor.ui.story_view = false;
         return;
     }
-    if editor.ui.course_map.rename.is_some() {
+    if editor.ui.course_map.rename.is_some() || has_open_modal_or_preview(editor) {
         return;
     }
     // A focused text field (for example in the inspector) owns arrows and
@@ -827,9 +868,7 @@ pub fn handle_map_keys(editor: &mut Editor, ui: &mut Ui) {
         current.saturating_sub(1)
     };
     if let Some(id) = ids.get(target) {
-        editor.selection.slide = id.clone();
-        editor.selection.layer = None;
-        editor.selection.clear_objects();
+        select_single_slide(editor, id);
         editor.ui.last_active_area = crate::ActiveArea::Navigator;
     }
 }

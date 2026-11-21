@@ -31,5 +31,12 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+coursecraft-lms.workspace = true
+coursecraft-lti.workspace = true
+coursecraft-lti-server = { path = "../../apps/coursecraft-lti" }
+coursecraft-strict-lms.workspace = true
+ureq.workspace = true
+
 [lints]
 workspace = true

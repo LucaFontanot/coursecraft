@@ -1293,6 +1293,9 @@ impl TriggerFormState {
                 }
             }
             ActionTag::RunJavaScript => {
+                if self.javascript_code.trim().is_empty() {
+                    return Err("JavaScript cannot be empty".to_owned());
+                }
                 if self.javascript_code.len() > coursecraft_course::MAX_JAVASCRIPT_BYTES {
                     return Err(format!(
                         "JavaScript must be at most {} bytes",
@@ -1375,10 +1378,15 @@ impl TriggerFormState {
             EventKindTag::MarkerClosed => Event::MarkerClosed {
                 object: self.event_object.clone(),
             },
-            EventKindTag::KeyPress => Event::KeyPressed {
-                key: self.event_key.clone(),
-                object: self.event_key_object.clone(),
-            },
+            EventKindTag::KeyPress => {
+                if self.event_key.trim().is_empty() {
+                    return Err("Key cannot be empty".to_owned());
+                }
+                Event::KeyPressed {
+                    key: self.event_key.clone(),
+                    object: self.event_key_object.clone(),
+                }
+            }
             EventKindTag::DroppedOn => Event::DroppedOn {
                 object: self.event_object.clone(),
                 target: self.event_drop_target.clone(),
@@ -1741,7 +1749,35 @@ pub fn show_triggers_tab(
                                 .strong(),
                         );
                     }
-                    for (idx, trig, desc) in rows {
+                    let sel_id = if editor_ui.triggers.group_by_object {
+                        None
+                    } else {
+                        selection.object.as_deref()
+                    };
+                    let row_neighbors: Vec<(Option<usize>, Option<usize>)> = (0..rows.len())
+                        .map(|pos| {
+                            let cur_sel =
+                                sel_id.map(|id| event_object_id(&rows[pos].1.when) == Some(id));
+                            let prev = pos.checked_sub(1).and_then(|p_idx| {
+                                let same_bucket = cur_sel.is_none_or(|s| {
+                                    (event_object_id(&rows[p_idx].1.when) == sel_id) == s
+                                });
+                                same_bucket.then_some(rows[p_idx].0)
+                            });
+                            let next =
+                                (pos + 1 < rows.len())
+                                    .then_some(pos + 1)
+                                    .and_then(|n_idx| {
+                                        let same_bucket = cur_sel.is_none_or(|s| {
+                                            (event_object_id(&rows[n_idx].1.when) == sel_id) == s
+                                        });
+                                        same_bucket.then_some(rows[n_idx].0)
+                                    });
+                            (prev, next)
+                        })
+                        .collect();
+                    for (pos, (idx, trig, desc)) in rows.into_iter().enumerate() {
+                        let (prev_idx, next_idx) = row_neighbors[pos];
                         let row_rect = egui::Rect::from_min_size(
                             ui.cursor().min,
                             egui::vec2(ui.available_width(), TRIGGER_ROW_HEIGHT),
@@ -1914,7 +1950,7 @@ pub fn show_triggers_tab(
                                         }
 
                                         // Move Down
-                                        let can_down = !form_open && idx + 1 < triggers.len();
+                                        let can_down = !form_open && next_idx.is_some();
                                         if crate::widgets::icon_button_enabled(
                                             ui,
                                             coursecraft_render::Icon::ArrowDown,
@@ -1922,26 +1958,27 @@ pub fn show_triggers_tab(
                                             "Move trigger down",
                                         )
                                         .clicked()
+                                            && let Some(to) = next_idx
                                         {
                                             let params = match &selected_layer {
                                                 Some(lid) => serde_json::json!({
                                                     "slide": slide.id,
                                                     "layer": lid,
                                                     "from": idx,
-                                                    "to": idx + 1,
+                                                    "to": to,
                                                 }),
                                                 None => serde_json::json!({
                                                     "slide": slide.id,
                                                     "from": idx,
-                                                    "to": idx + 1,
+                                                    "to": to,
                                                 }),
                                             };
                                             actions.push(("trigger.move", params));
-                                            new_active_row = Some(idx + 1);
+                                            new_active_row = Some(to);
                                         }
 
                                         // Move Up
-                                        let can_up = !form_open && idx > 0;
+                                        let can_up = !form_open && prev_idx.is_some();
                                         if crate::widgets::icon_button_enabled(
                                             ui,
                                             coursecraft_render::Icon::ArrowUp,
@@ -1949,22 +1986,23 @@ pub fn show_triggers_tab(
                                             "Move trigger up",
                                         )
                                         .clicked()
+                                            && let Some(to) = prev_idx
                                         {
                                             let params = match &selected_layer {
                                                 Some(lid) => serde_json::json!({
                                                     "slide": slide.id,
                                                     "layer": lid,
                                                     "from": idx,
-                                                    "to": idx - 1,
+                                                    "to": to,
                                                 }),
                                                 None => serde_json::json!({
                                                     "slide": slide.id,
                                                     "from": idx,
-                                                    "to": idx - 1,
+                                                    "to": to,
                                                 }),
                                             };
                                             actions.push(("trigger.move", params));
-                                            new_active_row = Some(idx - 1);
+                                            new_active_row = Some(to);
                                         }
 
                                         // Edit

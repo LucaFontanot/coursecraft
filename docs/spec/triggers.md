@@ -734,7 +734,7 @@ The renderer and LMS bridge consume these: `slide_entered`, `layer_shown`, `laye
 
 `Effect::Print { slide, exclude }` asks the host to render the named slide without the excluded objects and offer it for printing; the LMS bridge ignores it because it changes no durable state. The bare desktop player logs that printing works in the published course or the editor preview.
 
-The LMS bridge maps `score` to `cmi.core.score.raw` (set to `percent`), `cmi.core.score.min` (`0`), `cmi.core.score.max` (`100`), and `cmi.core.lesson_status` (`status`). It maps `completion` to `cmi.core.lesson_status` and `slide_entered` to `cmi.core.lesson_location`. Once a pass has been reported in an attempt, neither the SCORM bridge nor the LTI reporter overwrites it with a later fail or a lower score. Durable progress is stored in `cmi.suspend_data` using the compact `cc1:` encoding; writes exceeding the SCORM 1.2 limit of 4096 characters are skipped with a warning. Commits are batched at most once per input. On `start` the bridge calls `LMSInitialize`, turns `not attempted` into `incomplete`, and resumes from `cmi.suspend_data` when it decodes (otherwise it starts fresh with a warning). Finishing (on `exit`, or when the page closes) sets `cmi.core.exit` to `suspend` until a passed/failed/completed status has been written and to an empty string after, sets `cmi.core.session_time` (`HHHH:MM:SS.SS`), commits and calls `LMSFinish`, once.
+The LMS bridge maps `score` to `cmi.core.score.raw` (set to `percent`), `cmi.core.score.min` (`0`), `cmi.core.score.max` (`100`), and `cmi.core.lesson_status` (`status`). It maps `completion` to `cmi.core.lesson_status` and `slide_entered` to `cmi.core.lesson_location`. Once a pass has been reported in an attempt, neither the SCORM bridge nor the LTI reporter overwrites it with a later fail or a lower score (and in SCORM 1.2, where `cmi.core.lesson_status` is a single field, a later `completion` of `completed` does not overwrite `passed`). Durable progress is stored in `cmi.suspend_data` using the compact `cc1:` encoding; writes exceeding the SCORM 1.2 limit of 4096 characters are skipped with a warning. Commits are batched at most once per input. On `start` the bridge calls `LMSInitialize`, turns `not attempted` into `incomplete`, and resumes from `cmi.suspend_data` when it decodes (otherwise it starts fresh with a warning). Finishing (on `exit`, or when the page closes) sets `cmi.core.exit` to `suspend` until a passed/failed/completed status has been written and to an empty string after, sets `cmi.core.session_time` (`HHHH:MM:SS.SS`), commits and calls `LMSFinish`, once.
 
 ## SCORM 2004
 
@@ -745,7 +745,7 @@ A package states its standard in `coursecraft-package.json` at its root, for exa
 | API object | `API` | `API_1484_11` |
 | Calls | `LMSInitialize` `LMSGetValue` `LMSSetValue` `LMSCommit` `LMSFinish` `LMSGetLastError` `LMSGetErrorString` | `Initialize` `GetValue` `SetValue` `Commit` `Terminate` `GetLastError` `GetErrorString` |
 | Status read at start | `cmi.core.lesson_status` | `cmi.completion_status`, `cmi.success_status` |
-| First launch | `not attempted` → write `incomplete` | completion of `unknown` or `not attempted` → write `incomplete` |
+| First launch | `not attempted` or empty → write `incomplete` | completion of `unknown`, `not attempted`, or empty → write `incomplete` |
 | Already finished | status is `passed`, `failed` or `completed` | completion is `completed`, or success is `passed` or `failed` |
 | Score | `cmi.core.score.min`, `.max`, `.raw` | `cmi.score.min`, `.max`, `.raw`, plus `cmi.score.scaled` = percent / 100 (`0.85`, `1`, `0`) |
 | Passed | `lesson_status` = `passed` | `success_status` = `passed`, `completion_status` = `completed` |
@@ -761,7 +761,7 @@ A package states its standard in `coursecraft-package.json` at its root, for exa
 - **Unchanged effect rules.** Effects are processed in the same order as SCORM 1.2, with the same "suspend once, commit at most once" rule. Score is written before status. A write the LMS refuses becomes a warning, not a crash.
 - **Scaled score.** `cmi.score.scaled` is a plain decimal from the same `percent`: `85` becomes `0.85`, `100` becomes `1`, `0` becomes `0`. It is never written in exponent form.
 - **Hostile durations.** The ISO formatter uses wide arithmetic; `u64::MAX` milliseconds produces a valid `PT…H…M…S` string instead of overflowing. A zero duration is `PT0S`.
-- **Location limit.** A slide id longer than 1000 characters is not written to `cmi.location`; the bridge logs a length warning and keeps playing. SCORM 1.2 keeps its historical unchecked behaviour for `cmi.core.lesson_location`.
+- **Location limit.** A slide id longer than 255 characters (SCORM 1.2) or 1000 characters (SCORM 2004) is not written to `cmi.core.lesson_location` / `cmi.location`; the bridge logs a length warning and keeps playing.
 - **Suspend limit.** Data between 4096 and 64000 characters is written under SCORM 2004 and still refused with a warning under SCORM 1.2.
 - **No sequencing, no mastery score.** CourseCraft packages are single-SCO without `imsss:sequencing`. The manifest carries no `adlcp:masteryscore`, because CourseCraft decides pass or fail and reports `success_status` itself; an LMS-side passing score could override it.
 
@@ -782,7 +782,7 @@ Every graded question answer is also reported as one `cmi.interactions.n` record
 | Likert | `likert` | no correct answer |
 | Short answer | `fill-in` | no correct answer |
 | Essay | `fill-in` | no correct answer |
-| Freeform | `other` | one entry `correct` |
+| Freeform | `other` (SCORM 2004 / xAPI), `performance` (SCORM 1.2) | one entry `correct` |
 
 The record's id is the sanitized slide id plus `_a` and the attempt number (`s-q-mc_a1`, then `s-q-mc_a2`). The description is the question prompt. Weighting is the question's `points`.
 
@@ -797,7 +797,7 @@ The record's id is the sanitized slide id plus `_a` and the attempt number (`s-q
 | Learner | `.student_response` | `.learner_response` |
 | Result | `.result` = `correct` or `wrong` | `.result` = `correct` or `incorrect` |
 
-Interaction types are `true-false`, `choice`, `fill-in`, `matching`, `sequencing`, `likert` and `other` in both standards. A survey question (Likert, short answer or essay) has no correct answer and no correct responses are written for it; its result is `neutral` in both standards. Free-text answers are reported up to 250 characters. In xAPI, an `answered` statement for a survey omits `success` from its result; graded questions keep it.
+Interaction types are `true-false`, `choice`, `fill-in`, `matching`, `sequencing`, `likert` and `other` (SCORM 2004 / xAPI) or `performance` (SCORM 1.2). A survey question (Likert, short answer or essay) has no correct answer and no correct responses are written for it; its result is `neutral` in both standards. Free-text answers are reported up to 250 characters. In xAPI, an `answered` statement for a survey omits `success` from its result; graded questions keep it.
 
 | Response | SCORM 1.2 | SCORM 2004 |
 |---|---|---|

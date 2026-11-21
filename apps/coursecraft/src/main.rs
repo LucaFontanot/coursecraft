@@ -45,6 +45,8 @@ mod bughunt_m24_preview;
 mod bughunt_m25_versions;
 #[cfg(test)]
 mod files_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod m27_files_ui_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -195,6 +197,18 @@ struct EditorApp {
     /// A file returned by the media-library replace picker in tests.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     test_picked_media_file: Option<PathBuf>,
+    /// A file returned by Save As in tests instead of opening a native dialog.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    test_save_as_path: Option<PathBuf>,
+    /// A folder returned by Save As Folder in tests instead of opening a native dialog.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    test_save_as_folder_path: Option<PathBuf>,
+    /// A file returned by Open in tests instead of opening a native dialog.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    test_open_path: Option<PathBuf>,
+    /// A folder returned by Open Folder in tests instead of opening a native dialog.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    test_open_folder_path: Option<PathBuf>,
     /// The egui context control requests repaint, so an idle editor still answers them.
     #[cfg(not(target_arch = "wasm32"))]
     repaint_ctx: std::sync::Arc<std::sync::Mutex<Option<egui::Context>>>,
@@ -447,6 +461,14 @@ impl EditorApp {
             test_picked_media_files: None,
             #[cfg(test)]
             test_picked_media_file: None,
+            #[cfg(test)]
+            test_save_as_path: None,
+            #[cfg(test)]
+            test_save_as_folder_path: None,
+            #[cfg(test)]
+            test_open_path: None,
+            #[cfg(test)]
+            test_open_folder_path: None,
             repaint_ctx,
         }
     }
@@ -746,11 +768,47 @@ impl EditorApp {
                 self.project = Project::new(self.editor.session.revision);
                 // Unsaved until the person saves it under a name.
                 self.project.saved_revision = u64::MAX;
-                self.autosaver = Autosaver::new();
-                self.autosaver.interval_minutes = Some(self.prefs.autosave_minutes_clamped());
+                self.reset_autosaver();
             }
             Err(err) => self.error_modal = Some(err),
         }
+    }
+
+    fn reset_autosaver(&mut self) {
+        self.autosaver = Autosaver::new();
+        self.autosaver.interval_minutes = Some(self.prefs.autosave_minutes_clamped());
+    }
+
+    fn pick_save_file_path(&mut self, title: &str) -> Option<PathBuf> {
+        #[cfg(test)]
+        if let Some(path) = self.test_save_as_path.take() {
+            return Some(path);
+        }
+        files::pick_save_file(title)
+    }
+
+    fn pick_save_folder_path(&mut self, title: &str) -> Option<PathBuf> {
+        #[cfg(test)]
+        if let Some(path) = self.test_save_as_folder_path.take() {
+            return Some(path);
+        }
+        files::pick_save_folder(title)
+    }
+
+    fn pick_open_file_path(&mut self) -> Option<PathBuf> {
+        #[cfg(test)]
+        if let Some(path) = self.test_open_path.take() {
+            return Some(path);
+        }
+        files::pick_open_file()
+    }
+
+    fn pick_open_folder_path(&mut self) -> Option<PathBuf> {
+        #[cfg(test)]
+        if let Some(path) = self.test_open_folder_path.take() {
+            return Some(path);
+        }
+        files::pick_project_folder()
     }
 
     /// Open version `id` as a copy, after the unsaved-changes prompt if needed.
@@ -791,8 +849,8 @@ impl EditorApp {
     /// It must be new, empty, or an earlier project folder the dialog already
     /// confirmed replacing, so nothing else is ever written over.
     fn perform_save_as_folder(&mut self) -> bool {
-        let title = &self.editor.session.course.title;
-        let Some(path) = files::pick_save_folder(title) else {
+        let title = self.editor.session.course.title.clone();
+        let Some(path) = self.pick_save_folder_path(&title) else {
             return false;
         };
         let occupied = std::fs::read_dir(&path).is_ok_and(|mut e| e.next().is_some());
@@ -806,23 +864,43 @@ impl EditorApp {
             ));
             return false;
         }
+        let prev_path = self.project.path.clone();
+        let prev_disk_stamp = self.project.disk_stamp;
+        let prev_folder = self.project.folder.clone();
         self.project.path = Some(path);
         self.project.disk_stamp = None;
         self.project.folder = Some(coursecraft_format::FolderRecord::new());
-        self.perform_save()
+        if self.perform_save() {
+            true
+        } else {
+            self.project.path = prev_path;
+            self.project.disk_stamp = prev_disk_stamp;
+            self.project.folder = prev_folder;
+            false
+        }
     }
 
     fn perform_save_as(&mut self) -> bool {
-        let title = &self.editor.session.course.title;
-        let Some(path) = files::pick_save_file(title) else {
+        let title = self.editor.session.course.title.clone();
+        let Some(path) = self.pick_save_file_path(&title) else {
             return false;
         };
+        let prev_path = self.project.path.clone();
+        let prev_disk_stamp = self.project.disk_stamp;
+        let prev_folder = self.project.folder.clone();
         self.project.folder = None;
         self.project.path = Some(path);
         // A new path has no earlier stamp; the file dialog already confirmed
         // replacing a file that is there.
         self.project.disk_stamp = None;
-        self.perform_save()
+        if self.perform_save() {
+            true
+        } else {
+            self.project.path = prev_path;
+            self.project.disk_stamp = prev_disk_stamp;
+            self.project.folder = prev_folder;
+            false
+        }
     }
 
     fn finish_open(&mut self, path_to_read: &Path, final_path: Option<PathBuf>, is_restored: bool) {
@@ -859,7 +937,7 @@ impl EditorApp {
                     }
                     self.editor.set_recent(self.prefs.recent.clone());
                 }
-                self.autosaver = Autosaver::new();
+                self.reset_autosaver();
             }
             Err(err) => {
                 // A damaged project: offer its newest readable version if any.
@@ -903,11 +981,10 @@ impl EditorApp {
                 let course = self.prefs.blank_course();
                 self.editor.replace_course(course);
                 self.project = Project::new(self.editor.session.revision);
-                self.autosaver = Autosaver::new();
-                self.autosaver.interval_minutes = Some(self.prefs.autosave_minutes_clamped());
+                self.reset_autosaver();
             }
             PendingAction::Open => {
-                if let Some(path) = files::pick_open_file() {
+                if let Some(path) = self.pick_open_file_path() {
                     self.initiate_open(path);
                 }
             }
@@ -915,7 +992,7 @@ impl EditorApp {
                 self.initiate_open(path);
             }
             PendingAction::OpenFolder => {
-                if let Some(path) = files::pick_project_folder() {
+                if let Some(path) = self.pick_open_folder_path() {
                     self.initiate_open(path);
                 }
             }
@@ -925,12 +1002,12 @@ impl EditorApp {
             PendingAction::OpenExample(id) => {
                 self.editor.open_example(id);
                 self.project = Project::new(self.editor.session.revision);
-                self.autosaver = Autosaver::new();
+                self.reset_autosaver();
             }
             PendingAction::OpenTemplate(id) => {
                 self.editor.open_template(id);
                 self.project = Project::new(self.editor.session.revision);
-                self.autosaver = Autosaver::new();
+                self.reset_autosaver();
             }
             PendingAction::Quit | PendingAction::CloseRequested => {
                 self.allow_close = true;
@@ -2350,7 +2427,7 @@ impl EditorApp {
                     self.project = Project::new(self.editor.session.revision);
                     // Mark dirty so closing prompts to save
                     self.project.saved_revision = u64::MAX;
-                    self.autosaver = Autosaver::new();
+                    self.reset_autosaver();
                 }
                 let summary = imported.report.summary_window_text();
                 self.editor.set_import_report(summary);
@@ -2692,6 +2769,12 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.show_app(ui);
+    }
+}
+
+impl EditorApp {
+    fn show_app(&mut self, ui: &mut egui::Ui) {
         self.poll_ai(ui.ctx());
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_agents(ui.ctx());

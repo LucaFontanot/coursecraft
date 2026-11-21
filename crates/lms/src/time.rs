@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 /// Format millisecond duration into SCORM 1.2 `HHHH:MM:SS.SS` format.
 ///
 /// Hours are formatted with at least 4 digits (zero-padded).
-/// For inputs of 9999 hours or more, the value saturates at `"9999:99:99.99"`.
+/// For inputs of 10000 hours or more, the value saturates at `"9999:59:59.99"`.
 #[must_use]
 pub fn format_session_time(ms: u64) -> String {
     let hundredths = (ms / 10) % 100;
@@ -15,8 +15,8 @@ pub fn format_session_time(ms: u64) -> String {
     let minutes = total_minutes % 60;
     let hours = total_minutes / 60;
 
-    if hours >= 9999 {
-        return "9999:99:99.99".to_string();
+    if hours > 9999 {
+        return "9999:59:59.99".to_string();
     }
 
     let mut out = String::with_capacity(14);

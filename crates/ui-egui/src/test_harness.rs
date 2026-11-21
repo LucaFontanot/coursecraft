@@ -20,6 +20,7 @@ pub struct TestHarness {
     pub ctx: Context,
     pub editor: Editor,
     pub screen_rect: Rect,
+    pub time: f64,
 }
 
 #[allow(dead_code)]
@@ -50,15 +51,32 @@ impl TestHarness {
             ctx,
             editor,
             screen_rect,
+            time: 0.0,
         }
     }
 
-    pub fn frame(&mut self, events: Vec<Event>) -> Vec<EditorRequest> {
-        let raw_input = RawInput {
+    fn next_raw_input(&mut self, events: Vec<Event>) -> RawInput {
+        let ctx_time = self.ctx.input(|i| i.time);
+        if ctx_time > self.time {
+            self.time = ctx_time + 1.0 / 60.0;
+        }
+        let time = self.time;
+        self.time += 1.0 / 60.0;
+        RawInput {
             screen_rect: Some(self.screen_rect),
+            time: Some(time),
             events,
             ..Default::default()
-        };
+        }
+    }
+
+    /// Advance the virtual clock monotonically by `secs` seconds.
+    pub fn advance_time(&mut self, secs: f64) {
+        self.time += secs.max(0.0);
+    }
+
+    pub fn frame(&mut self, events: Vec<Event>) -> Vec<EditorRequest> {
+        let raw_input = self.next_raw_input(events);
         let mut requests = Vec::new();
         let output = self.ctx.run_ui(raw_input, |ui| {
             requests = self.editor.show(ui);
@@ -69,11 +87,7 @@ impl TestHarness {
 
     /// Run a frame and return every clipped shape painted during it.
     pub fn frame_shapes(&mut self, events: Vec<Event>) -> Vec<ClippedShape> {
-        let raw_input = RawInput {
-            screen_rect: Some(self.screen_rect),
-            events,
-            ..Default::default()
-        };
+        let raw_input = self.next_raw_input(events);
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
@@ -84,6 +98,7 @@ impl TestHarness {
 
     /// Run a frame with an explicit egui input `time` (seconds).
     pub fn frame_at_time(&mut self, time: f64) -> Vec<EditorRequest> {
+        self.time = self.time.max(time);
         let raw_input = RawInput {
             screen_rect: Some(self.screen_rect),
             time: Some(time),
@@ -113,10 +128,7 @@ impl TestHarness {
                 _ => {}
             }
         }
-        let raw_input = RawInput {
-            screen_rect: Some(self.screen_rect),
-            ..Default::default()
-        };
+        let raw_input = self.next_raw_input(Vec::new());
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
@@ -138,10 +150,7 @@ impl TestHarness {
                 _ => None,
             }
         }
-        let raw_input = RawInput {
-            screen_rect: Some(self.screen_rect),
-            ..Default::default()
-        };
+        let raw_input = self.next_raw_input(Vec::new());
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
@@ -161,10 +170,7 @@ impl TestHarness {
                 _ => None,
             }
         }
-        let raw_input = RawInput {
-            screen_rect: Some(self.screen_rect),
-            ..Default::default()
-        };
+        let raw_input = self.next_raw_input(Vec::new());
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
@@ -186,10 +192,7 @@ impl TestHarness {
                 _ => None,
             }
         }
-        let raw_input = RawInput {
-            screen_rect: Some(self.screen_rect),
-            ..Default::default()
-        };
+        let raw_input = self.next_raw_input(Vec::new());
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
@@ -217,10 +220,7 @@ impl TestHarness {
                 _ => None,
             }
         }
-        let raw_input = RawInput {
-            screen_rect: Some(self.screen_rect),
-            ..Default::default()
-        };
+        let raw_input = self.next_raw_input(Vec::new());
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
@@ -243,10 +243,7 @@ impl TestHarness {
                 _ => None,
             }
         }
-        let raw_input = RawInput {
-            screen_rect: Some(self.screen_rect),
-            ..Default::default()
-        };
+        let raw_input = self.next_raw_input(Vec::new());
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
@@ -278,19 +275,32 @@ impl TestHarness {
     }
 
     pub fn click_at(&mut self, pos: Pos2) {
-        self.frame(vec![Event::PointerMoved(pos)]);
-        self.frame(vec![Event::PointerButton {
+        let _ = self.click_at_requests(pos);
+    }
+
+    /// Click at `pos` and return all [`EditorRequest`]s emitted across the pointer frames.
+    pub fn click_at_requests(&mut self, pos: Pos2) -> Vec<EditorRequest> {
+        let mut requests = self.frame(vec![Event::PointerMoved(pos)]);
+        requests.extend(self.frame(vec![Event::PointerButton {
             pos,
             button: PointerButton::Primary,
             pressed: true,
             modifiers: Default::default(),
-        }]);
-        self.frame(vec![Event::PointerButton {
+        }]));
+        requests.extend(self.frame(vec![Event::PointerButton {
             pos,
             button: PointerButton::Primary,
             pressed: false,
             modifiers: Default::default(),
-        }]);
+        }]));
+        requests
+    }
+
+    /// Double-click at `pos` with a 50ms gap so egui registers `double_clicked()`.
+    pub fn double_click_at(&mut self, pos: Pos2) {
+        self.click_at(pos);
+        self.advance_time(0.05);
+        self.click_at(pos);
     }
 
     pub fn click_at_with(&mut self, pos: Pos2, modifiers: Modifiers) {
@@ -385,6 +395,21 @@ impl TestHarness {
 
     pub fn type_text(&mut self, text: &str) {
         self.frame(vec![Event::Text(text.to_owned())]);
+    }
+
+    /// Dispatch OS-style `Event::Copy`.
+    pub fn copy(&mut self) {
+        self.frame(vec![Event::Copy]);
+    }
+
+    /// Dispatch OS-style `Event::Cut`.
+    pub fn cut(&mut self) {
+        self.frame(vec![Event::Cut]);
+    }
+
+    /// Dispatch OS-style `Event::Paste` with `text`.
+    pub fn paste_text(&mut self, text: &str) {
+        self.frame(vec![Event::Paste(text.to_owned())]);
     }
 
     /// Click a text field / DragValue at `pos`, select all, type `text`, and press Enter.
@@ -514,10 +539,7 @@ impl TestHarness {
         for _ in 0..warmup {
             self.idle_frame();
         }
-        let raw_input = RawInput {
-            screen_rect: Some(self.screen_rect),
-            ..Default::default()
-        };
+        let raw_input = self.next_raw_input(Vec::new());
         let screen = self.screen_rect;
         let mut layers: Vec<(LayerId, Vec<ClippedShape>)> = Vec::new();
         let mut regions = Vec::new();
@@ -870,5 +892,105 @@ pub(crate) fn check_layout(
             .iter()
             .map(|(layer, rect)| (layer_name(*layer), *rect))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hello_course() -> Course {
+        let json = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/hello-course/course.json"
+        ))
+        .expect("hello course");
+        Course::from_json(&json).expect("valid course")
+    }
+
+    #[test]
+    fn virtual_clock_is_monotonic() {
+        let mut h = TestHarness::new(hello_course());
+        assert_eq!(h.time, 0.0);
+        h.idle_frame();
+        assert!((h.time - 1.0 / 60.0).abs() < 1e-9);
+        let t1 = h.time;
+        h.advance_time(0.5);
+        assert!((h.time - (t1 + 0.5)).abs() < 1e-9);
+        h.advance_time(-2.0);
+        assert!((h.time - (t1 + 0.5)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn clipboard_helpers_copy_cut_and_paste_text() {
+        let mut h = TestHarness::new(hello_course());
+        h.idle_frame();
+        let initial_len = h.editor.session.course.scenes[0].slides[0].objects.len();
+
+        h.paste_text("Hello harness");
+        h.idle_frame();
+        assert_eq!(
+            h.editor.session.course.scenes[0].slides[0].objects.len(),
+            initial_len + 1
+        );
+
+        let obj_id = h.editor.session.course.scenes[0].slides[0]
+            .objects
+            .last()
+            .expect("pasted text object")
+            .id
+            .clone();
+        h.editor.selection.object = Some(obj_id);
+        h.copy();
+        assert!(h.editor.ui.clipboard_text.is_some());
+
+        h.cut();
+        h.idle_frame();
+        assert_eq!(
+            h.editor.session.course.scenes[0].slides[0].objects.len(),
+            initial_len
+        );
+
+        let copied = h.editor.ui.clipboard_text.clone().unwrap_or_default();
+        h.paste_text(&copied);
+        h.idle_frame();
+        assert_eq!(
+            h.editor.session.course.scenes[0].slides[0].objects.len(),
+            initial_len + 1
+        );
+    }
+
+    #[test]
+    fn click_at_requests_captures_emitted_requests() {
+        let mut h = TestHarness::new(hello_course());
+        h.idle_frame();
+        let file_pos = h.find_text("File").expect("File menu");
+        h.click_at(file_pos);
+        h.idle_frame();
+        let save_as_pos = h.find_text_last("Save As…").expect("Save As menu item");
+        let reqs = h.click_at_requests(save_as_pos);
+        assert!(reqs.iter().any(|r| matches!(r, EditorRequest::SaveAs)));
+    }
+
+    #[test]
+    fn double_click_at_registers_egui_double_click() {
+        let mut h = TestHarness::new(hello_course());
+        h.editor.selection.slide = "s-intro".into();
+        h.editor.ui.bottom_tab = BottomTab::Triggers;
+        h.idle_frame();
+        h.idle_frame();
+        let slide = h
+            .editor
+            .session
+            .course
+            .slide("s-intro")
+            .expect("s-intro")
+            .clone();
+        let first_desc = crate::triggers::describe(&slide.triggers[0], &slide);
+        let row_pos = h.find_text(&first_desc).expect("first trigger row");
+        assert!(h.editor.ui.trigger_form.is_none());
+        h.double_click_at(row_pos);
+        h.idle_frame();
+        assert!(h.editor.ui.trigger_form.is_some());
     }
 }

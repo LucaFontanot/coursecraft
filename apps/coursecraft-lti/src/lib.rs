@@ -16,6 +16,7 @@
 
 pub mod http;
 pub mod server;
+pub mod strict_platform;
 
 #[cfg(test)]
 mod tests;

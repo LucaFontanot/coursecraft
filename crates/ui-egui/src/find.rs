@@ -180,6 +180,7 @@ fn window_body(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) -> Actio
     refresh(editor);
 
     let query_len = editor.ui.find.query.len();
+    let replacement_too_long = editor.ui.find.replacement.len() > MAX_TEXT_BYTES;
     let searchable = !editor.ui.find.query.is_empty() && query_len <= MAX_TEXT_BYTES;
     let (hits, truncated) = match &editor.ui.find.results {
         Some(results) => (results.hits.as_slice(), results.truncated),
@@ -240,7 +241,7 @@ fn window_body(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) -> Actio
         });
 
     ui.separator();
-    let can_replace = searchable && !hits.is_empty();
+    let can_replace = searchable && !replacement_too_long && !hits.is_empty();
     ui.horizontal(|ui| {
         let replace_one = ui
             .add_enabled(can_replace && selected < hits.len(), Button::new("Replace"))
@@ -255,6 +256,13 @@ fn window_body(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) -> Actio
             action = Action::ReplaceAll;
         }
     });
+    if replacement_too_long {
+        ui.label(
+            RichText::new(format!("Replacement exceeds {MAX_TEXT_BYTES} bytes."))
+                .size(SIZE_SMALL)
+                .color(p.danger),
+        );
+    }
     if let Some(message) = &editor.ui.find.message {
         ui.label(RichText::new(message.as_str()).color(p.text_secondary));
     }
@@ -373,6 +381,7 @@ fn run_replace(editor: &mut Editor, params: Json) {
 
 /// Select the slide, layer, object or question tab a hit lives in.
 pub(crate) fn go_to(editor: &mut Editor, hit: &Hit) {
+    editor.ui.story_view = false;
     let on_master = hit
         .slide
         .as_deref()

@@ -56,6 +56,7 @@ fn claims() -> Value {
         "https://purl.imsglobal.org/spec/lti/claim/message_type": "LtiResourceLinkRequest",
         "https://purl.imsglobal.org/spec/lti/claim/version": "1.3.0",
         "https://purl.imsglobal.org/spec/lti/claim/deployment_id": "deployment-1",
+        "https://purl.imsglobal.org/spec/lti/claim/target_link_uri": "https://tool.example/course/index.html",
         "https://purl.imsglobal.org/spec/lti/claim/context": {"id": "context-1"},
         "https://purl.imsglobal.org/spec/lti/claim/resource_link": {"id": "link-1"},
         "https://purl.imsglobal.org/spec/lti/claim/roles": [
@@ -372,4 +373,51 @@ fn oversized_token_is_bad_request() {
         validate_id_token(&cfg, &token, &jwks(&cfg), NONCE, NOW),
         Err(LtiError::BadRequest(_))
     ));
+}
+
+#[test]
+fn lineitem_score_url_trims_trailing_slash() {
+    assert_eq!(
+        lineitem_score_url("https://platform.example/lineitems/42/"),
+        "https://platform.example/lineitems/42/scores"
+    );
+    assert_eq!(
+        lineitem_score_url("https://platform.example/lineitems/42/?ctx=9"),
+        "https://platform.example/lineitems/42/scores?ctx=9"
+    );
+}
+
+#[test]
+fn missing_or_empty_target_link_uri_is_refused() {
+    let cfg = cfg();
+    let mut missing = claims();
+    missing
+        .as_object_mut()
+        .expect("object")
+        .remove("https://purl.imsglobal.org/spec/lti/claim/target_link_uri");
+    assert_invalid(&cfg, &signed(&header(), &missing));
+
+    let mut empty = claims();
+    empty["https://purl.imsglobal.org/spec/lti/claim/target_link_uri"] = json!("");
+    assert_invalid(&cfg, &signed(&header(), &empty));
+}
+
+#[test]
+fn missing_or_non_array_roles_is_refused_while_empty_array_is_accepted() {
+    let cfg = cfg();
+    let mut missing = claims();
+    missing
+        .as_object_mut()
+        .expect("object")
+        .remove("https://purl.imsglobal.org/spec/lti/claim/roles");
+    assert_invalid(&cfg, &signed(&header(), &missing));
+
+    let mut non_array = claims();
+    non_array["https://purl.imsglobal.org/spec/lti/claim/roles"] = json!("Learner");
+    assert_invalid(&cfg, &signed(&header(), &non_array));
+
+    let mut empty_array = claims();
+    empty_array["https://purl.imsglobal.org/spec/lti/claim/roles"] = json!([]);
+    let launch = validate(&cfg, &signed(&header(), &empty_array)).expect("empty roles");
+    assert!(launch.roles.is_empty());
 }

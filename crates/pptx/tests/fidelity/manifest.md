@@ -1,6 +1,6 @@
 # Fidelity deck manifest
 
-Slide number -> contents. Deck: fidelity.pptx (16:9, 19 slides).
+Slide number -> contents. Deck: fidelity.pptx (16:9, 20 slides).
 
 - **Slide 1**: Basic auto shapes: rect, rounded rect, ellipse, triangle, diamond, pentagon, hexagon, star 5, star 8, heart; row 1 no text, row 2 with text; solid slide bg; adjusted rounded rect / star
 - **Slide 2**: Arrows (right/left/up/down/chevron/block arc), callouts (rect, rounded, oval), cloud, lightning, moon, smiley, cross, donut, flowchart shapes; mixed with/without text
@@ -21,3 +21,4 @@ Slide number -> contents. Deck: fidelity.pptx (16:9, 19 slides).
 - **Slide 17**: Slide background: stretched picture fill (plasma.png with corner letters), shapes and text on top
 - **Slide 18**: Layout placeholders (title + body): positions and formats inherited from layout (title Georgia 44 bold red at 1.0,0.5; body 28pt blue with triangle bullets, level 2 italic green 20pt); plus a normal text box and a shape on the slide
 - **Slide 19**: Hidden slide (show="0"): should import as hidden or at least not break numbering; contains text and a shape
+- **Slide 20**: Animations & Motion Paths (added by `add_animated_slide.py`): title box; blue rect Entrance Fade (`withEffect`, `0ms`, `600ms`); green rounded rect Entrance Fly In from Left (`afterEffect`, `delay=200ms`, `500ms`); orange shape Entrance Wipe from Bottom (`withEffect`, `delay=100ms`, `400ms`) + Exit Fly Out to Right (`afterEffect`, `delay=700ms`, `500ms`); purple circle Entrance Zoom (`clickEffect`, `500ms`) + Motion Path (`M 0 0 L 0.25 0.0 L 0.25 0.20 E`, `afterEffect`, `1000ms`); red star Entrance Float In (`afterEffect`, `500ms`) + Emphasis Spin (`repeatCount="2000"`, skipped with `SkipKind::Animation` diagnostics)

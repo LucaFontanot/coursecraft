@@ -1017,7 +1017,19 @@ fn test_all_skip_kinds_recorded_in_report() {
            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
         <p:transition><p:fade/></p:transition>
-        <p:timing><p:tnLst/></p:timing>
+        <p:timing>
+            <p:tnLst>
+                <p:par><p:cTn id="1" nodeType="tmRoot"><p:childTnLst>
+                    <p:seq><p:cTn id="2" nodeType="mainSeq"><p:childTnLst>
+                        <p:par><p:cTn id="3"><p:childTnLst>
+                            <p:par><p:cTn id="4" presetID="8" presetClass="emph" nodeType="withEffect" dur="500">
+                                <p:childTnLst><p:animRot><p:cBhvr><p:tgtEl><p:spTgt spid="8"/></p:tgtEl></p:cBhvr></p:animRot></p:childTnLst>
+                            </p:cTn></p:par>
+                        </p:childTnLst></p:cTn></p:par>
+                    </p:childTnLst></p:cTn></p:seq>
+                </p:childTnLst></p:cTn></p:par>
+            </p:tnLst>
+        </p:timing>
         <p:cSld>
             <p:spTree>
                 <!-- 1. Connector -->

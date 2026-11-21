@@ -268,6 +268,22 @@ pub fn version_path(config_dir: &Path, project: &Path, id: &str) -> Option<PathB
     path.is_file().then_some(path)
 }
 
+fn invalidate_cached_version(path: &Path) {
+    if let Some(cache) = VERSION_CACHE.get()
+        && let Ok(mut guard) = cache.lock()
+    {
+        guard.remove(path);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn is_cached(path: &Path) -> bool {
+    VERSION_CACHE
+        .get()
+        .and_then(|cache| cache.lock().ok())
+        .is_some_and(|guard| guard.contains_key(path))
+}
+
 /// Delete one version.
 ///
 /// # Errors
@@ -275,7 +291,9 @@ pub fn version_path(config_dir: &Path, project: &Path, id: &str) -> Option<PathB
 pub fn delete_version(config_dir: &Path, project: &Path, id: &str) -> Result<(), String> {
     let path = version_path(config_dir, project, id)
         .ok_or_else(|| "That version no longer exists.".to_string())?;
-    std::fs::remove_file(&path).map_err(|e| format!("Couldn't delete that version: {e}"))
+    std::fs::remove_file(&path).map_err(|e| format!("Couldn't delete that version: {e}"))?;
+    invalidate_cached_version(&path);
+    Ok(())
 }
 
 /// Whether two files hold the same bytes, compared in chunks.
@@ -395,7 +413,9 @@ pub fn prune(config_dir: &Path, project: &Path, keep: u32, cap_bytes: u64) {
     let ids = ids(config_dir, project);
     let keep = usize::try_from(keep).unwrap_or(usize::MAX);
     for id in ids.iter().skip(keep) {
-        let _ = std::fs::remove_file(version_file(config_dir, project, id));
+        let file = version_file(config_dir, project, id);
+        let _ = std::fs::remove_file(&file);
+        invalidate_cached_version(&file);
     }
     let kept: Vec<&String> = ids.iter().take(keep).collect();
     let sizes: Vec<u64> = kept
@@ -408,7 +428,9 @@ pub fn prune(config_dir: &Path, project: &Path, keep: u32, cap_bytes: u64) {
         if total <= cap_bytes {
             break;
         }
-        let _ = std::fs::remove_file(version_file(config_dir, project, id));
+        let file = version_file(config_dir, project, id);
+        let _ = std::fs::remove_file(&file);
+        invalidate_cached_version(&file);
         total = total.saturating_sub(*size);
     }
 }

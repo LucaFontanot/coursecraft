@@ -176,6 +176,18 @@ mod m25_input_tests;
 #[cfg(test)]
 mod m26_text_format_tests;
 #[cfg(test)]
+mod m27_find_a11y_tests;
+#[cfg(test)]
+mod m27_layers_questions_tests;
+#[cfg(test)]
+mod m27_masters_scenes_tests;
+#[cfg(test)]
+mod m27_timeline_media_tests;
+#[cfg(test)]
+mod m27_triggers_states_tests;
+#[cfg(test)]
+mod m27_undo_clipboard_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -2702,6 +2714,12 @@ impl Editor {
 
     /// Import a WebVTT caption file and attach it to the selected audio or video object.
     pub fn import_captions(&mut self, file_name: &str, bytes: &[u8]) -> Option<String> {
+        if !file_name.to_ascii_lowercase().ends_with(".vtt") {
+            let msg = format!("Failed to import captions '{file_name}': expected a .vtt file");
+            self.ui.last_error = Some((msg.clone(), self.ui.current_time));
+            self.ui.error_history.push(msg);
+            return None;
+        }
         if bytes.len() > Self::MAX_MEDIA_IMPORT_BYTES {
             let msg = format!(
                 "Failed to import captions '{file_name}': file exceeds maximum allowed size of 200 MiB"
@@ -2718,14 +2736,20 @@ impl Editor {
         let Some(object_id) = self.pending_replace_object.take() else {
             return Some(path);
         };
-        self.run(
-            "object.set_captions",
-            serde_json::json!({
-                "slide": self.selection.slide,
-                "object": object_id,
-                "captions": path.clone(),
-            }),
-        );
+        if self
+            .run(
+                "object.set_captions",
+                serde_json::json!({
+                    "slide": self.selection.slide,
+                    "object": object_id,
+                    "captions": path.clone(),
+                }),
+            )
+            .is_none()
+        {
+            self.media.retain(|(name, _)| name != &path);
+            return None;
+        }
         Some(path)
     }
 
@@ -2784,23 +2808,22 @@ impl Editor {
         if faces.is_empty() {
             return false;
         }
-        self.run("course.remove_font", serde_json::json!({ "family": old }));
+        let mut steps = Vec::with_capacity(faces.len() + 1);
+        steps.push((
+            "course.remove_font".to_owned(),
+            serde_json::json!({ "family": old }),
+        ));
         for face in faces {
-            if self
-                .run(
-                    "course.add_font",
-                    serde_json::json!({
-                        "src": face.src,
-                        "family": new,
-                        "style": face.style,
-                    }),
-                )
-                .is_none()
-            {
-                return false;
-            }
+            steps.push((
+                "course.add_font".to_owned(),
+                serde_json::json!({
+                    "src": face.src,
+                    "family": new,
+                    "style": face.style,
+                }),
+            ));
         }
-        true
+        self.run_batch(&steps).is_some()
     }
 
     /// Remove every face of `family`. The caller confirms first when text uses it.
@@ -3134,22 +3157,45 @@ impl Editor {
         })
     }
 
-    /// Dispatch `object.reorder` for each moved id at its index in `target`, as one step.
+    /// Dispatch `object.reorder` for each moved id so `current` becomes `target`, as one step.
     fn run_reorder_steps(&mut self, slide_id: &str, target: &[String], moved: &[String]) {
-        let steps: Vec<(String, Json)> = moved
+        let Some(mut sim) = self.stack_ids() else {
+            return;
+        };
+        let mut remaining: std::collections::BTreeSet<&str> =
+            moved.iter().map(String::as_str).collect();
+        let ordered_moved: Vec<&str> = target
             .iter()
-            .filter_map(|id| {
-                let index = target.iter().position(|candidate| candidate == id)?;
-                Some((
+            .map(String::as_str)
+            .filter(|id| remaining.contains(id))
+            .collect();
+        let mut steps = Vec::with_capacity(ordered_moved.len());
+        for id in ordered_moved {
+            remaining.remove(id);
+            let Some(cur_pos) = sim.iter().position(|x| x == id) else {
+                continue;
+            };
+            sim.remove(cur_pos);
+            let target_pos = target.iter().position(|x| x == id).unwrap_or(target.len());
+            let next_anchor = target[target_pos + 1..]
+                .iter()
+                .map(String::as_str)
+                .find(|after| !remaining.contains(after));
+            let insert_at = next_anchor
+                .and_then(|anchor| sim.iter().position(|x| x == anchor))
+                .unwrap_or(sim.len());
+            sim.insert(insert_at, id.to_owned());
+            if cur_pos != insert_at {
+                steps.push((
                     "object.reorder".to_owned(),
                     serde_json::json!({
                         "slide": slide_id,
                         "object": id,
-                        "index": index,
+                        "index": insert_at,
                     }),
-                ))
-            })
-            .collect();
+                ));
+            }
+        }
         match steps.len() {
             0 => {}
             1 => {
@@ -3971,6 +4017,7 @@ impl Editor {
 
         // Auto-switch inspector tab on selection change
         if self.selection.object != self.ui.last_selected_object {
+            self.ui.preview_state = None;
             match (&self.selection.object, &self.ui.inspector_tab) {
                 (Some(_), InspectorTab::Slide | InspectorTab::Course) => {
                     self.ui.inspector_tab = InspectorTab::Format;
@@ -4393,6 +4440,7 @@ pub fn web_folder_prefixes(course: &Course) -> Vec<String> {
         .slides()
         .chain(course.masters.iter())
         .chain(course.templates.iter())
+        .chain(course.banks.iter().flat_map(|bank| bank.slides.iter()))
     {
         for obj in &slide.objects {
             if let coursecraft_course::ObjectKind::Web {

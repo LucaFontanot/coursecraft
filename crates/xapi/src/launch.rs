@@ -147,13 +147,16 @@ fn required(params: &BTreeMap<String, String>, name: &'static str) -> Result<Str
 }
 
 fn is_http_url(value: &str) -> bool {
-    value.starts_with("http://") || value.starts_with("https://")
+    let Some(rest) = value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    !rest.is_empty() && !rest.starts_with('/')
 }
 
 fn normalize_endpoint(value: &str) -> Option<String> {
-    if value == "http://" || value == "https://" {
-        return Some(value.to_owned());
-    }
     let trimmed = value.trim_end_matches('/');
     if !is_http_url(trimmed) {
         return None;

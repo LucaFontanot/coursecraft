@@ -41,6 +41,20 @@ fn xapi_marker_is_read() {
 }
 
 #[test]
+fn lti_marker_is_read() {
+    let (standard, warning) = reporting_from_marker(Some(r#"{"standard":"lti"}"#));
+    assert_eq!(standard, ReportingStandard::Lti);
+    assert!(warning.is_none());
+}
+
+#[test]
+fn web_marker_is_read() {
+    let (standard, warning) = reporting_from_marker(Some(r#"{"standard":"web"}"#));
+    assert_eq!(standard, ReportingStandard::Web);
+    assert!(warning.is_none());
+}
+
+#[test]
 fn bad_json_falls_back_with_warning() {
     let (standard, warning) = reporting_from_marker(Some("{not json"));
     assert_eq!(standard, ReportingStandard::Scorm(Standard::Scorm12));

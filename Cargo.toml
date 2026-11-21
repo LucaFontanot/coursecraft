@@ -1,10 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "apps/*", "xtask"]
+members = ["crates/*", "apps/*", "xtask", "xtask/strict-lms-wasm"]
 default-members = ["crates/*", "apps/coursecraft-cli", "apps/coursecraft-mcp"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.5"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.99"
@@ -33,6 +33,7 @@ coursecraft-playback = { path = "crates/playback" }
 coursecraft-video-native = { path = "crates/video-native" }
 coursecraft-xapi = { path = "crates/xapi" }
 coursecraft-spell = { path = "crates/spell" }
+coursecraft-strict-lms = { path = "crates/strict-lms" }
 
 # external
 serde = { version = "1", features = ["derive"] }

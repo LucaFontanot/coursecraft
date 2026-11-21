@@ -1,0 +1,34 @@
+[
+  { "input": "start" },
+  { "input": "tick", "ms": 2100 },
+  { "input": "click", "object": "s01-btn-action" },
+  { "input": "set_variable", "variable": "v_tag", "value": "Alpha" },
+  { "input": "click", "object": "s01-btn-next" },
+  { "input": "click", "object": "btn-s02-next" },
+  { "input": "click", "object": "s03-btn-next" },
+  { "input": "click", "object": "s04-btn-next" },
+  { "input": "click", "object": "s05-btn-next" },
+  { "input": "click", "object": "btn-to-quiz" },
+
+  { "input": "select_choice", "choice": "a" },
+  { "input": "click", "object": "s07-submit" },
+  { "input": "click", "object": "s07-ok-btn" },
+
+  { "input": "select_choice", "choice": "a" },
+  { "input": "select_choice", "choice": "b" },
+  { "input": "submit" },
+  { "input": "click", "object": "s08-next" },
+
+  { "input": "select_choice", "choice": "true" },
+  { "input": "click", "object": "s09-submit" },
+  { "input": "click", "object": "s09-next" },
+
+  { "input": "text_entered", "text": "CourseCraft" },
+  { "input": "click", "object": "s10-submit" },
+  { "input": "click", "object": "s10-next" },
+
+  { "input": "sequence_moved", "choice": "first", "to": 0 },
+  { "input": "sequence_moved", "choice": "second", "to": 1 },
+  { "input": "sequence_moved", "choice": "third", "to": 2 },
+  { "input": "click", "object": "s11-submit" }
+]

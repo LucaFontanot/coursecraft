@@ -108,6 +108,8 @@ pub struct MediaReference {
     pub place: String,
     /// The slide that owns the reference, if any.
     pub slide: Option<String>,
+    /// The object that owns the reference, if any.
+    pub object: Option<String>,
 }
 
 /// Every media reference in a course, in play order then masters, templates
@@ -131,6 +133,7 @@ pub fn media_references(course: &Course) -> Vec<MediaReference> {
                 src: face.src.clone(),
                 place: format!("Fonts ▸ {name}"),
                 slide: None,
+                object: None,
             });
         }
     }
@@ -141,6 +144,7 @@ pub fn media_references(course: &Course) -> Vec<MediaReference> {
             src: audio.src.clone(),
             place: "Course ▸ Background audio".to_owned(),
             slide: None,
+            object: None,
         });
     }
     if let Some(logo) = &course.player.logo
@@ -150,6 +154,7 @@ pub fn media_references(course: &Course) -> Vec<MediaReference> {
             src: logo.clone(),
             place: "Course ▸ Player logo".to_owned(),
             slide: None,
+            object: None,
         });
     }
     for resource in &course.resources {
@@ -160,6 +165,7 @@ pub fn media_references(course: &Course) -> Vec<MediaReference> {
                 src: src.clone(),
                 place: format!("Resources ▸ {}", resource.title),
                 slide: None,
+                object: None,
             });
         }
     }
@@ -218,6 +224,7 @@ fn walk_object_media_references(
                 src: src.to_owned(),
                 place: object_place.clone(),
                 slide: Some(slide.id.clone()),
+                object: Some(object.id.clone()),
             });
         }
     };
@@ -266,6 +273,7 @@ fn walk_object_media_references(
                 src: src.clone(),
                 place: format!("{object_place} ▸ State \"{}\"", state.name),
                 slide: Some(slide.id.clone()),
+                object: Some(object.id.clone()),
             });
         }
     }

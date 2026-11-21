@@ -90,7 +90,8 @@ fn a13_1_fidelity_pptx_visual_similarity_meets_thresholds() {
     let dir = fidelity_dir();
     let pptx_bytes = std::fs::read(dir.join("fidelity.pptx")).expect("read fidelity.pptx");
     let imported = import_pptx(&pptx_bytes, "Fidelity").expect("import fidelity.pptx");
-    assert_eq!(imported.course.scenes[0].slides.len(), 18);
+    // 19 visible slides (Slides 1-18 + Slide 20; hidden slide 19 skipped).
+    assert_eq!(imported.course.scenes[0].slides.len(), 19);
 
     let media_map: HashMap<String, Arc<[u8]>> = imported
         .media
@@ -132,7 +133,8 @@ fn a13_2_fidelity_pptx_structural_invariants() {
     let pptx_bytes = std::fs::read(dir.join("fidelity.pptx")).expect("read fidelity.pptx");
     let imported = import_pptx(&pptx_bytes, "Fidelity").expect("import fidelity.pptx");
     let slides = &imported.course.scenes[0].slides;
-    assert_eq!(slides.len(), 18);
+    // 19 visible slides (Slides 1-18 + Slide 20; hidden slide 19 skipped).
+    assert_eq!(slides.len(), 19);
 
     // S01: solid bg + basic shapes
     assert!(slides[0].background.is_some());

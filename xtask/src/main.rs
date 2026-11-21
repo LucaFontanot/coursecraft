@@ -31,6 +31,7 @@ const LAYERS: &[(&str, u8, bool)] = &[
     ("spell", 0, true),
     ("xapi", 0, true),
     ("course", 1, false),
+    ("strict-lms", 1, false),
     ("video-native", 1, true),
     ("logic", 2, false),
     ("media", 2, true),
@@ -55,6 +56,7 @@ const EXEMPT: &[&str] = &[
     "coursecraft-lti-server",
     "coursecraft-mcp",
     "coursecraft-player",
+    "coursecraft-strict-lms-wasm",
     "xtask",
 ];
 
@@ -129,6 +131,7 @@ fn cargo(args: &[&str]) -> bool {
 /// Crates that must keep building for the browser.
 const WASM_CRATES: &[&str] = &[
     "coursecraft-scorm",
+    "coursecraft-strict-lms",
     "coursecraft-course",
     "coursecraft-logic",
     "coursecraft-media",
@@ -344,6 +347,49 @@ fn build_player() -> Result<(), String> {
     Ok(())
 }
 
+/// Build `xtask/strict-lms-wasm` into `target/mock-lms/strict-lms-wasm/` using `wasm-bindgen`.
+fn build_strict_lms_wasm(root: &Path, mock: &Path) -> Result<(), String> {
+    if !cargo(&[
+        "build",
+        "--release",
+        "-p",
+        "coursecraft-strict-lms-wasm",
+        "--target",
+        "wasm32-unknown-unknown",
+    ]) {
+        return Err("cargo build failed for coursecraft-strict-lms-wasm".into());
+    }
+    // Cargo writes to CARGO_TARGET_DIR when it is set, not to `<root>/target`.
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join("target"));
+    let wasm_in =
+        target_dir.join("wasm32-unknown-unknown/release/coursecraft_strict_lms_wasm.wasm");
+    let out_dir = mock.join("strict-lms-wasm");
+    if out_dir.exists() {
+        std::fs::remove_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    }
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    let out_arg = out_dir.to_string_lossy().into_owned();
+    let wasm_arg = wasm_in.to_string_lossy().into_owned();
+    println!("$ wasm-bindgen --target web --no-typescript --out-dir {out_arg} {wasm_arg}");
+    let bound = Command::new("wasm-bindgen")
+        .args([
+            "--target",
+            "web",
+            "--no-typescript",
+            "--out-dir",
+            &out_arg,
+            &wasm_arg,
+        ])
+        .status()
+        .map_err(|e| format!("wasm-bindgen: {e}"))?;
+    if !bound.success() {
+        return Err("wasm-bindgen failed for coursecraft-strict-lms-wasm".into());
+    }
+    Ok(())
+}
+
 /// Build the release web player, publish hello-course and showcase into the mock LMS.
 fn package_example() -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -365,6 +411,7 @@ fn package_example() -> Result<(), String> {
         std::fs::remove_dir_all(&package).map_err(|e| format!("{}: {e}", package.display()))?;
     }
     std::fs::create_dir_all(&mock).map_err(|e| format!("{}: {e}", mock.display()))?;
+    build_strict_lms_wasm(root, &mock)?;
     let dist = player_dir.join("dist");
     let package_arg = package.to_string_lossy().into_owned();
     let dist_arg = dist.to_string_lossy().into_owned();
@@ -498,7 +545,92 @@ fn package_example() -> Result<(), String> {
             &hello,
             None,
         )?;
+        let reference = mock_lrs.join(flavor).join("reference");
+        let reference_zip = root.join(format!("target/reference-course-{flavor}.zip"));
+        publish_course(
+            &dist,
+            "examples/reference-course/course.json",
+            flavor,
+            &reference,
+            Some(&reference_zip),
+        )?;
     }
+
+    let reference_mock = mock.join("reference");
+    let reference_package = reference_mock.join("package");
+    if reference_package.exists() {
+        std::fs::remove_dir_all(&reference_package)
+            .map_err(|e| format!("{}: {e}", reference_package.display()))?;
+    }
+    std::fs::create_dir_all(&reference_mock)
+        .map_err(|e| format!("{}: {e}", reference_mock.display()))?;
+    let reference_package_arg = reference_package.to_string_lossy().into_owned();
+    let reference_zip_arg = root
+        .join("target/reference-course.zip")
+        .to_string_lossy()
+        .into_owned();
+    let published_reference = cargo(&[
+        "run",
+        "-q",
+        "-p",
+        "coursecraft-cli",
+        "--",
+        "publish",
+        "examples/reference-course/course.json",
+        "--player",
+        &dist_arg,
+        "--out-dir",
+        &reference_package_arg,
+        "-o",
+        &reference_zip_arg,
+    ]);
+    if !published_reference {
+        return Err("coursecraft-cli publish failed for reference-course".into());
+    }
+    std::fs::copy(
+        root.join("xtask/mock-lms/index.html"),
+        reference_mock.join("index.html"),
+    )
+    .map_err(|e| format!("mock LMS reference page: {e}"))?;
+
+    let reference_2004_mock = mock.join("reference-2004");
+    let reference_2004_package = reference_2004_mock.join("package");
+    if reference_2004_package.exists() {
+        std::fs::remove_dir_all(&reference_2004_package)
+            .map_err(|e| format!("{}: {e}", reference_2004_package.display()))?;
+    }
+    std::fs::create_dir_all(&reference_2004_mock)
+        .map_err(|e| format!("{}: {e}", reference_2004_mock.display()))?;
+    let reference_2004_package_arg = reference_2004_package.to_string_lossy().into_owned();
+    let reference_2004_zip_arg = root
+        .join("target/reference-course-2004.zip")
+        .to_string_lossy()
+        .into_owned();
+    let published_reference_2004 = cargo(&[
+        "run",
+        "-q",
+        "-p",
+        "coursecraft-cli",
+        "--",
+        "publish",
+        "--standard",
+        "scorm2004",
+        "examples/reference-course/course.json",
+        "--player",
+        &dist_arg,
+        "--out-dir",
+        &reference_2004_package_arg,
+        "-o",
+        &reference_2004_zip_arg,
+    ]);
+    if !published_reference_2004 {
+        return Err("coursecraft-cli publish failed for SCORM 2004 reference-course".into());
+    }
+    std::fs::copy(
+        root.join("xtask/mock-lms/index.html"),
+        reference_2004_mock.join("index.html"),
+    )
+    .map_err(|e| format!("mock LMS SCORM 2004 reference page: {e}"))?;
 
     println!(
         "package-example: open target/mock-lms/index.html, /showcase/index.html or /scorm2004/index.html over http (launch config `mock-lms`); xAPI packages are under target/mock-lrs (launch config `mock-lrs`)"

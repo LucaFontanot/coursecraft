@@ -18,6 +18,9 @@ use coursecraft_course::Course;
 use coursecraft_logic::{Effect, HostInfo, Player};
 
 use coursecraft_lms::LtiReporter;
+use web_sys::wasm_bindgen::JsCast;
+use web_sys::wasm_bindgen::JsValue;
+use web_sys::wasm_bindgen::closure::Closure;
 
 /// Reference-counted, mutable handle to the reporter and its transport.
 pub type LtiHandle = Rc<RefCell<LtiHandleInner>>;
@@ -103,6 +106,75 @@ pub fn lost(handle: &LtiHandle) -> bool {
         .try_borrow()
         .map(|guard| guard.reporter.lost())
         .unwrap_or(false)
+}
+
+/// Register `pagehide` and `beforeunload` once, flushing any pending score with `keepalive`.
+pub fn register_page_close(handle: &LtiHandle) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let handle = Rc::clone(handle);
+    let closure = Closure::<dyn FnMut(JsValue)>::wrap(Box::new(move |_event| {
+        flush_keepalive(&handle);
+    }));
+    let js_fn: &js_sys::Function = closure.as_ref().unchecked_ref();
+    let _ = window.add_event_listener_with_callback("pagehide", js_fn);
+    let _ = window.add_event_listener_with_callback("beforeunload", js_fn);
+    closure.forget();
+}
+
+fn flush_keepalive(handle: &LtiHandle) {
+    let Ok(mut guard) = handle.try_borrow_mut() else {
+        return;
+    };
+    let Some(report) = guard.reporter.take_pending() else {
+        return;
+    };
+    send_keepalive(&report.json_body());
+}
+
+fn send_keepalive(body: &str) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let global: &JsValue = window.as_ref();
+    let Ok(fetch) = js_sys::Reflect::get(global, &JsValue::from_str("fetch")) else {
+        return;
+    };
+    if !fetch.is_function() {
+        return;
+    }
+    let fetch: js_sys::Function = fetch.unchecked_into();
+
+    let init = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(
+        &init,
+        &JsValue::from_str("method"),
+        &JsValue::from_str("POST"),
+    );
+    let _ = js_sys::Reflect::set(
+        &init,
+        &JsValue::from_str("credentials"),
+        &JsValue::from_str("include"),
+    );
+    let _ = js_sys::Reflect::set(&init, &JsValue::from_str("keepalive"), &JsValue::TRUE);
+
+    let headers = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(
+        &headers,
+        &JsValue::from_str("Content-Type"),
+        &JsValue::from_str("application/json"),
+    );
+    let _ = js_sys::Reflect::set(&init, &JsValue::from_str("headers"), &headers);
+    let _ = js_sys::Reflect::set(&init, &JsValue::from_str("body"), &JsValue::from_str(body));
+
+    let Ok(promise) = fetch.call2(global, &JsValue::from_str("../lti/score"), &init) else {
+        return;
+    };
+    let promise: js_sys::Promise = promise.unchecked_into();
+    wasm_bindgen_futures::spawn_local(async move {
+        let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+    });
 }
 
 fn pump(handle: &mut LtiHandleInner) {

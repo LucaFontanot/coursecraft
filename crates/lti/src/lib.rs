@@ -24,6 +24,7 @@ use serde_json::{Value, json};
 const MESSAGE_TYPE: &str = "https://purl.imsglobal.org/spec/lti/claim/message_type";
 const VERSION: &str = "https://purl.imsglobal.org/spec/lti/claim/version";
 const DEPLOYMENT_ID: &str = "https://purl.imsglobal.org/spec/lti/claim/deployment_id";
+const TARGET_LINK_URI: &str = "https://purl.imsglobal.org/spec/lti/claim/target_link_uri";
 const CONTEXT: &str = "https://purl.imsglobal.org/spec/lti/claim/context";
 const RESOURCE_LINK: &str = "https://purl.imsglobal.org/spec/lti/claim/resource_link";
 const ROLES: &str = "https://purl.imsglobal.org/spec/lti/claim/roles";
@@ -286,8 +287,8 @@ pub fn score_payload(
 /// Append `/scores` to a line-item URL, before any query string.
 pub fn lineitem_score_url(lineitem: &str) -> String {
     match lineitem.split_once('?') {
-        Some((base, query)) => format!("{base}/scores?{query}"),
-        None => format!("{lineitem}/scores"),
+        Some((base, query)) => format!("{}/scores?{query}", base.trim_end_matches('/')),
+        None => format!("{}/scores", lineitem.trim_end_matches('/')),
     }
 }
 
@@ -382,6 +383,13 @@ fn check_claims(
     if claims.get(DEPLOYMENT_ID).and_then(Value::as_str) != Some(cfg.deployment_id.as_str()) {
         return Err(invalid("deployment_id does not match"));
     }
+    if claims
+        .get(TARGET_LINK_URI)
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(invalid("target_link_uri is missing"));
+    }
     Ok(())
 }
 
@@ -417,7 +425,7 @@ fn build_launch(claims: &Value) -> Result<Launch, LtiError> {
             .map(str::to_string)
             .collect(),
         Some(_) => return Err(invalid("roles is not an array")),
-        None => Vec::new(),
+        None => return Err(invalid("roles is missing")),
     };
     let ags = match claims.get(AGS) {
         Some(value) => Some(Ags {

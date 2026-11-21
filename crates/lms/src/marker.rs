@@ -14,6 +14,10 @@ pub enum ReportingStandard {
     Scorm(Standard),
     /// cmi5 or plain xAPI.
     Xapi(Flavor),
+    /// LTI 1.3 through the CourseCraft LTI server.
+    Lti,
+    /// Standalone web hosting with no LMS reporting.
+    Web,
 }
 
 /// Read the reporting standard from `coursecraft-package.json`.
@@ -46,6 +50,11 @@ pub fn reporting_from_marker(text: Option<&str>) -> (ReportingStandard, Option<S
     }
     if let Some(flavor) = Flavor::from_id(id) {
         return (ReportingStandard::Xapi(flavor), None);
+    }
+    match id {
+        "lti" => return (ReportingStandard::Lti, None),
+        "web" => return (ReportingStandard::Web, None),
+        _ => {}
     }
     (
         ReportingStandard::Scorm(Standard::Scorm12),
