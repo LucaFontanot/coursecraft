@@ -8210,3 +8210,117 @@ fn text_effects_reach_the_layout() {
     assert!((font.size - 20.0 * crate::text_layout::SCRIPT_SCALE).abs() < 0.01);
     assert_eq!(sup.galley.job.sections[0].format.valign, egui::Align::TOP);
 }
+
+#[test]
+fn exit_animations_render_with_and_without_slide_transition() {
+    use coursecraft_course::{
+        AnimEffect, Animation, Direction, Easing, Transition, TransitionEffect,
+    };
+
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    {
+        let s2 = course.slide_mut("s-quiz").expect("s-quiz");
+        s2.duration_ms = 5000;
+        s2.transition = Some(Transition {
+            effect: TransitionEffect::Push {
+                from: Direction::Right,
+            },
+            duration_ms: 500,
+        });
+        s2.objects = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "fly-obj",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+                "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 100.0 },
+                "timing": { "start_ms": 0, "end_ms": null }
+            }))
+            .expect("fly-obj"),
+            serde_json::from_value(serde_json::json!({
+                "id": "fade-obj",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#10B981" },
+                "frame": { "x": 400.0, "y": 100.0, "w": 200.0, "h": 100.0 },
+                "timing": { "start_ms": 0, "end_ms": null }
+            }))
+            .expect("fade-obj"),
+        ];
+        s2.objects[0].exit = Some(Animation {
+            effect: AnimEffect::FlyIn {
+                from: Direction::Left,
+            },
+            duration_ms: 1000,
+            easing: Easing::Linear,
+        });
+        s2.objects[1].exit = Some(Animation {
+            effect: AnimEffect::Fade,
+            duration_ms: 1000,
+            easing: Easing::Linear,
+        });
+        s2.triggers.clear();
+    }
+
+    let mut player = Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+
+    let ctx = egui::Context::default();
+    let mut view = SlideView::new();
+    let run_frame = |view: &mut SlideView, player: &Player<'_>, time: f64| {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            time: Some(time),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            let _ = view.show(ui, player, None);
+        });
+        out.textures_delta.clear();
+    };
+
+    // Frame 1 on s-intro, then navigate to s-quiz (starts Push transition).
+    run_frame(&mut view, &player, 0.0);
+    player.handle(&Input::Jump {
+        slide: "s-quiz".into(),
+    });
+    assert_eq!(player.current_slide().expect("s2").id, "s-quiz");
+    run_frame(&mut view, &player, 0.1);
+    assert!(view.transition_active());
+
+    // Advance past transition (0.6s) and to mid-exit (4500ms).
+    player.handle(&Input::Tick { ms: 4500 });
+    run_frame(&mut view, &player, 4.6);
+    assert!(!view.transition_active());
+
+    let fly_item = view
+        .last_items()
+        .iter()
+        .find(|it| it.hit == Hit::Object("fly-obj".into()))
+        .expect("fly-obj mid-exit");
+    assert!(
+        (fly_item.rect.min.x - (-50.0)).abs() < 1e-2,
+        "fly-obj should have moved halfway off-screen left (100 - 150 = -50), got {}",
+        fly_item.rect.min.x
+    );
+    let fade_item = view
+        .last_items()
+        .iter()
+        .find(|it| it.hit == Hit::Object("fade-obj".into()))
+        .expect("fade-obj mid-exit");
+    assert!(
+        (fade_item.opacity - 0.5).abs() < 1e-2,
+        "fade-obj should be at 0.5 opacity mid-exit, got {}",
+        fade_item.opacity
+    );
+
+    // Advance to end of timeline (5000ms): both gone.
+    player.handle(&Input::Tick { ms: 500 });
+    run_frame(&mut view, &player, 5.1);
+    assert!(
+        !view
+            .last_items()
+            .iter()
+            .any(|it| it.hit == Hit::Object("fly-obj".into())
+                || it.hit == Hit::Object("fade-obj".into()))
+    );
+}

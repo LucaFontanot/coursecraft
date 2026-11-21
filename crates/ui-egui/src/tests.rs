@@ -17663,3 +17663,80 @@ fn sanitize_media_src_avoids_case_only_collisions() {
     assert!(!picked.eq_ignore_ascii_case("Logo.png"));
     assert_eq!(picked, "logo-2.png");
 }
+
+#[test]
+fn exit_animations_play_in_preview_with_slide_transition() {
+    let mut harness = TestHarness::new(timeline_media_course());
+    harness.editor.selection.slide = "s1".into();
+    // Add a second object on s1 for the Disappear/Fade exit.
+    let added = harness.editor.run(
+        "object.add",
+        serde_json::json!({
+            "slide": "s1",
+            "id": "shape2",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#10B981" },
+            "frame": { "x": 400.0, "y": 120.0, "w": 160.0, "h": 80.0 }
+        }),
+    );
+    assert!(added.is_some());
+
+    let (cmd1, params1) = crate::properties::animation_command(
+        "exit",
+        "fly_in",
+        coursecraft_course::Direction::Left,
+        1000,
+        coursecraft_course::Easing::Linear,
+        "s1",
+        "txt",
+    );
+    assert!(harness.editor.run(cmd1, params1).is_some());
+
+    let (cmd2, params2) = crate::properties::animation_command(
+        "exit",
+        "fade",
+        coursecraft_course::Direction::Bottom,
+        1000,
+        coursecraft_course::Easing::Linear,
+        "s1",
+        "shape2",
+    );
+    assert!(harness.editor.run(cmd2, params2).is_some());
+
+    // Add slide transition on s1.
+    assert!(
+        harness
+            .editor
+            .run(
+                "slide.set_transition",
+                serde_json::json!({
+                    "slide": "s1",
+                    "transition": { "type": "fade", "duration_ms": 500 }
+                }),
+            )
+            .is_some()
+    );
+
+    let slide = harness.editor.session.course.slide("s1").expect("s1");
+    let duration_ms = slide.duration_ms;
+    assert!(slide.transition.is_some());
+    assert!(slide.object("txt").expect("txt").0.exit.is_some());
+    assert!(slide.object("shape2").expect("shape2").0.exit.is_some());
+
+    let mut preview = crate::preview::Preview::new(&harness.editor.session.course, Some("s1"));
+    let state = preview.state.take().expect("preview state");
+    let mut player =
+        coursecraft_logic::Player::resume(&preview.course, state).expect("resume player");
+
+    // Advance to mid-exit (duration_ms - 500ms).
+    let mid_ms = duration_ms.saturating_sub(500);
+    player.handle(&coursecraft_logic::Input::Tick { ms: mid_ms });
+    let txt_mid = player.sample_object("txt").expect("txt mid-exit");
+    assert!(txt_mid.offset.0 < 0.0, "fly_in exit should shift left");
+    let shape_mid = player.sample_object("shape2").expect("shape2 mid-exit");
+    assert!((shape_mid.opacity - 0.5).abs() < 1e-2);
+
+    // Advance to end of timeline.
+    player.handle(&coursecraft_logic::Input::Tick { ms: 500 });
+    assert!(player.sample_object("txt").is_none());
+    assert!(player.sample_object("shape2").is_none());
+}
