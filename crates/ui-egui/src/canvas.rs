@@ -4781,13 +4781,23 @@ fn draw_placement_preview(editor: &Editor, painter: &Painter, t: &SlideTransform
     let p = coursecraft_render::palette(ui.ctx());
     let screen_rect = t.to_screen_rect(drag.frame);
     let fill = Color32::from_rgba_unmultiplied(p.accent.r(), p.accent.g(), p.accent.b(), 24);
-    painter.rect_filled(screen_rect, CornerRadius::ZERO, fill);
-    painter.rect_stroke(
-        screen_rect,
-        CornerRadius::ZERO,
-        Stroke::new(1.5, p.accent),
-        StrokeKind::Inside,
-    );
+    if let Some(PlacementTool::Shape(kind)) = editor.ui.placement_tool {
+        coursecraft_render::paint_shape(painter, screen_rect, kind, &[], fill);
+        let outline = coursecraft_render::ResolvedOutline {
+            color: p.accent,
+            width: 1.5,
+            dash: coursecraft_course::DashStyle::Solid,
+        };
+        coursecraft_render::paint_outline(painter, screen_rect, kind, &[], &outline, 1.0);
+    } else {
+        painter.rect_filled(screen_rect, CornerRadius::ZERO, fill);
+        painter.rect_stroke(
+            screen_rect,
+            CornerRadius::ZERO,
+            Stroke::new(1.5, p.accent),
+            StrokeKind::Inside,
+        );
+    }
 
     let label = format!(
         "{:.0} × {:.0}",

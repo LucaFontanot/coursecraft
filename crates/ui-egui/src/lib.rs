@@ -139,6 +139,8 @@ mod publish_tests;
 #[cfg(test)]
 mod rename_tests;
 #[cfg(test)]
+mod shape_preview_tests;
+#[cfg(test)]
 mod spacing_tests;
 #[cfg(test)]
 mod spell_check_tests;
