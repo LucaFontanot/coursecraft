@@ -743,10 +743,11 @@ impl LmsBridge {
         warnings: &mut Vec<String>,
     ) {
         if self.passed
-            && matches!(
+            && (matches!(
                 status,
                 CompletionStatus::Failed | CompletionStatus::Incomplete
-            )
+            ) || (self.mapping.standard == Standard::Scorm12
+                && status == CompletionStatus::Completed))
         {
             return;
         }

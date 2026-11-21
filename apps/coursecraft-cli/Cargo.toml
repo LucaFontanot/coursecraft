@@ -31,5 +31,9 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[dev-dependencies]
+coursecraft-lms.workspace = true
+coursecraft-strict-lms.workspace = true
+
 [lints]
 workspace = true
