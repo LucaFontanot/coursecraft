@@ -1,20 +1,28 @@
 //! M27 Part B: Automated multi-standard runs on `examples/reference-course/`.
 //!
 //! Step B-3: Shared runner harness + SCORM 1.2 (B1.1–B1.8) + SCORM 2004 (B2.1–B2.8).
+//! Step B-4: cmi5 & xAPI 1.0.3 (B3.1–B3.10).
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use coursecraft_course::{CompletionStatus, Course, Severity, Value};
-use coursecraft_lms::{CmiApi, LmsBridge, StartPlan};
+use coursecraft_lms::{
+    CmiApi, HANDSHAKE_TIMEOUT_MS, LmsBridge, LrsApi, LrsMethod, LrsRequest, LrsResponse, StartPlan,
+    Tick, XapiBridge,
+};
 use coursecraft_logic::{Effect, Input, Player};
 use coursecraft_publish::{
     PackageFile, PackageInput, PackageStandard, build_package_standard_with_folders,
 };
 use coursecraft_scorm::Standard;
 use coursecraft_strict_lms::{
-    PackageStandardKind, Scorm12Config, Scorm2004Config, Scorm2004Edition, StrictScorm12,
-    StrictScorm2004, validate_package,
+    Flavor as StrictFlavor, LaunchSpec, PackageStandardKind, Scorm12Config, Scorm2004Config,
+    Scorm2004Edition, StrictLrs, StrictScorm12, StrictScorm2004, build_cmi5_launch_data,
+    validate_package,
 };
+use coursecraft_xapi::{Flavor, LaunchParams};
+use serde_json::{Value as JsonValue, json};
 
 // ---------------------------------------------------------------------------
 // Shared adapters & reference-course loading helpers
@@ -1390,5 +1398,1307 @@ fn b2_8_scorm2004_location_limit_and_corrupt_interactions_count() {
         api2.inner.violations().is_empty(),
         "{:?}",
         api2.inner.violations()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// B3. cmi5 & xAPI 1.0.3 Automated Runs
+// ---------------------------------------------------------------------------
+
+struct StrictLrsAdapter {
+    lrs: StrictLrs,
+    inbox: VecDeque<LrsResponse>,
+    held_fetch: VecDeque<LrsResponse>,
+    hold_fetch: bool,
+    inject_statement_statuses: VecDeque<u16>,
+    requests: Vec<LrsRequest>,
+    uuid_counter: u64,
+}
+
+impl StrictLrsAdapter {
+    fn new(lrs: StrictLrs) -> Self {
+        Self {
+            lrs,
+            inbox: VecDeque::new(),
+            held_fetch: VecDeque::new(),
+            hold_fetch: false,
+            inject_statement_statuses: VecDeque::new(),
+            requests: Vec::new(),
+            uuid_counter: 0,
+        }
+    }
+}
+
+impl LrsApi for StrictLrsAdapter {
+    fn send(&mut self, request: LrsRequest) {
+        self.requests.push(request.clone());
+        let method = match request.method {
+            LrsMethod::Get => "GET",
+            LrsMethod::Post => "POST",
+            LrsMethod::Put => "PUT",
+        };
+        let body = request.body.as_deref().unwrap_or("").as_bytes();
+        let (path, query) = request.url.split_once('?').unwrap_or((&request.url, ""));
+        if let Some(fetch_id) = path
+            .rsplit("/fetch/")
+            .next()
+            .filter(|_| path.contains("/fetch/"))
+        {
+            let resp = self.lrs.handle_fetch(method, fetch_id, &request.headers);
+            let lrs_resp = LrsResponse {
+                id: request.id,
+                status: resp.status,
+                body: String::from_utf8_lossy(&resp.body).into_owned(),
+            };
+            if self.hold_fetch {
+                self.held_fetch.push_back(lrs_resp);
+            } else {
+                self.inbox.push_back(lrs_resp);
+            }
+            return;
+        }
+        if path.ends_with("/statements")
+            && let Some(status) = self.inject_statement_statuses.pop_front()
+        {
+            self.inbox.push_back(LrsResponse {
+                id: request.id,
+                status,
+                body: format!("{{\"injected\":{status}}}"),
+            });
+            return;
+        }
+        let resp = if path.ends_with("/statements") {
+            self.lrs.handle_statements(method, &request.headers, body)
+        } else if path.ends_with("/activities/state") {
+            self.lrs.handle_state(method, query, &request.headers, body)
+        } else {
+            coursecraft_strict_lms::LrsResponse {
+                status: 404,
+                headers: vec![],
+                body: b"not found".to_vec(),
+            }
+        };
+        self.inbox.push_back(LrsResponse {
+            id: request.id,
+            status: resp.status,
+            body: String::from_utf8_lossy(&resp.body).into_owned(),
+        });
+    }
+
+    fn poll(&mut self) -> Vec<LrsResponse> {
+        self.inbox.drain(..).collect()
+    }
+
+    fn now_iso(&mut self) -> String {
+        "2026-11-21T10:00:00Z".to_owned()
+    }
+
+    fn new_uuid(&mut self) -> String {
+        self.uuid_counter += 1;
+        format!("00000000-0000-4000-8000-{:012x}", self.uuid_counter)
+    }
+}
+
+fn cmi5_actor_json() -> JsonValue {
+    json!({
+        "objectType": "Agent",
+        "account": { "homePage": "https://lms.example", "name": "alice" },
+        "name": "Alice"
+    })
+}
+
+const CMI5_ACTOR_ENCODED: &str = "%7B%22objectType%22%3A%22Agent%22%2C%22account%22%3A%7B%22homePage%22%3A%22https%3A%2F%2Flms.example%22%2C%22name%22%3A%22alice%22%7D%2C%22name%22%3A%22Alice%22%7D";
+const REF_ACTIVITY_ID: &str = "https://lms.example/activities/reference-course";
+const REF_ACTIVITY_ENCODED: &str = "https%3A%2F%2Flms.example%2Factivities%2Freference-course";
+
+fn register_cmi5_launch(
+    lrs: &mut StrictLrs,
+    fetch_id: &str,
+    session_id: &str,
+    auth_token: &str,
+    launch_mode: &str,
+    mastery_score: Option<f64>,
+    return_url: Option<&str>,
+) -> LaunchParams {
+    let registration = "11111111-1111-4111-8111-111111111111";
+    let launch_doc = build_cmi5_launch_data(
+        REF_ACTIVITY_ID,
+        session_id,
+        launch_mode,
+        mastery_score,
+        return_url,
+    );
+    lrs.register_launch(
+        LaunchSpec {
+            flavor: StrictFlavor::Cmi5,
+            activity_id: REF_ACTIVITY_ID.to_owned(),
+            actor: cmi5_actor_json(),
+            registration: Some(registration.to_owned()),
+            launch_mode: launch_mode.to_owned(),
+            mastery_score,
+            session_id: session_id.to_owned(),
+            grouping_ids: vec![REF_ACTIVITY_ID.to_owned()],
+            fetch_id: Some(fetch_id.to_owned()),
+            auth_token: Some(auth_token.to_owned()),
+        },
+        Some(launch_doc),
+    );
+    let query = format!(
+        "endpoint=https://lrs.example/xapi&fetch=https://lrs.example/fetch/{fetch_id}&actor={CMI5_ACTOR_ENCODED}&registration={registration}&activityId={REF_ACTIVITY_ENCODED}"
+    );
+    LaunchParams::parse(&query, Flavor::Cmi5).expect("cmi5 launch params")
+}
+
+fn register_xapi_launch(
+    lrs: &mut StrictLrs,
+    registration: Option<&str>,
+    session_id: &str,
+    auth_token: &str,
+) -> LaunchParams {
+    lrs.register_launch(
+        LaunchSpec {
+            flavor: StrictFlavor::Xapi,
+            activity_id: REF_ACTIVITY_ID.to_owned(),
+            actor: cmi5_actor_json(),
+            registration: registration.map(str::to_owned),
+            launch_mode: "Normal".to_owned(),
+            mastery_score: None,
+            session_id: session_id.to_owned(),
+            grouping_ids: Vec::new(),
+            fetch_id: None,
+            auth_token: Some(auth_token.to_owned()),
+        },
+        None,
+    );
+    let mut query = format!(
+        "endpoint=https://lrs.example/xapi&auth={auth_token}&actor={CMI5_ACTOR_ENCODED}&activityId={REF_ACTIVITY_ENCODED}"
+    );
+    if let Some(reg) = registration {
+        query.push_str("&registration=");
+        query.push_str(reg);
+    }
+    LaunchParams::parse(&query, Flavor::Xapi).expect("xapi launch params")
+}
+
+fn start_xapi_session<'a>(
+    course: &'a Course,
+    params: LaunchParams,
+    flavor: Flavor,
+    api: &mut StrictLrsAdapter,
+    seed: u32,
+    now_ms: &mut u64,
+) -> (Player<'a>, XapiBridge, Tick, Vec<String>) {
+    let mut bridge = XapiBridge::new(params, flavor, course);
+    bridge.start(api);
+    let mut warnings = Vec::new();
+    let mut plan_tick = None;
+    for _ in 0..10 {
+        *now_ms += 100;
+        let tick = bridge.tick(api, course, *now_ms);
+        warnings.extend(tick.warnings.clone());
+        if tick.plan.is_some() {
+            plan_tick = Some(tick);
+            break;
+        }
+    }
+    let tick = plan_tick.expect("xapi handshake plan");
+    let player = match tick.plan.as_ref().and_then(|p| p.resume.clone()) {
+        Some(state) => Player::resume(course, state).expect("resume player"),
+        None => Player::with_draw_seed(course, seed).expect("fresh player"),
+    };
+    (player, bridge, tick, warnings)
+}
+
+fn pump_xapi(
+    bridge: &mut XapiBridge,
+    api: &mut StrictLrsAdapter,
+    course: &Course,
+    now_ms: &mut u64,
+    warnings: &mut Vec<String>,
+) {
+    for _ in 0..20 {
+        if !bridge.is_busy() {
+            break;
+        }
+        *now_ms += 1000;
+        let tick = bridge.tick(api, course, *now_ms);
+        warnings.extend(tick.warnings);
+    }
+}
+
+fn drive_xapi_inputs(
+    player: &mut Player<'_>,
+    bridge: &mut XapiBridge,
+    api: &mut StrictLrsAdapter,
+    course: &Course,
+    inputs: &[Input],
+    start_ms: u64,
+    now_ms: &mut u64,
+) -> RunResult {
+    let mut effects = Vec::new();
+    let mut runtime_warnings = Vec::new();
+    let mut bridge_warnings = Vec::new();
+    let mut session_ms = start_ms;
+
+    for input in inputs {
+        if let Input::Tick { ms } = input {
+            session_ms = session_ms.saturating_add(u64::from(*ms));
+            *now_ms = now_ms.saturating_add(u64::from(*ms));
+        } else {
+            session_ms = session_ms.saturating_add(250);
+            *now_ms = now_ms.saturating_add(250);
+        }
+        let step_effects = player.handle(input);
+        for eff in &step_effects {
+            if let Effect::Warning { message } = eff {
+                runtime_warnings.push(message.clone());
+            }
+        }
+        let bw = bridge.after_input(
+            api,
+            course,
+            player.state(),
+            &step_effects,
+            session_ms,
+            *now_ms,
+        );
+        bridge_warnings.extend(bw);
+        effects.extend(step_effects);
+        pump_xapi(bridge, api, course, now_ms, &mut bridge_warnings);
+    }
+
+    RunResult {
+        effects,
+        runtime_warnings,
+        bridge_warnings,
+        session_ms,
+    }
+}
+
+fn verb_short(stmt: &JsonValue) -> &str {
+    stmt.pointer("/verb/id")
+        .and_then(JsonValue::as_str)
+        .and_then(|s| s.rsplit('/').next())
+        .unwrap_or("")
+}
+
+fn category_ids(stmt: &JsonValue) -> Vec<&str> {
+    stmt.pointer("/context/contextActivities/category")
+        .and_then(JsonValue::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.get("id").and_then(JsonValue::as_str))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn build_80_percent_inputs() -> Vec<Input> {
+    // 12 graded questions (9 in sc-quiz + 3 drawn from bank-pool = 120 pts).
+    // Answer s07-s15 + 1st bank draw right (100/120 = 83% >= 70% course pass, < 90% LMS mastery),
+    // and last 2 bank draws wrong ("b").
+    let mut inputs = load_inputs("partial-1.inputs.json");
+    let mut part2 = load_inputs("partial-2-resume.inputs.json");
+    // Replace the last 2 bank answers ("a" -> "b") before btn-cert/btn-exit-cert.
+    let len = part2.len();
+    assert!(len >= 8);
+    part2[len - 8] = Input::SelectChoice {
+        choice: "b".to_owned(),
+    };
+    part2[len - 5] = Input::SelectChoice {
+        choice: "b".to_owned(),
+    };
+    inputs.extend(part2);
+    inputs
+}
+
+fn assert_cmi5_pass_statements(stmts: &[JsonValue]) {
+    let verbs: Vec<&str> = stmts.iter().map(verb_short).collect();
+    assert_eq!(verbs.first().copied(), Some("initialized"));
+    assert_eq!(verbs.last().copied(), Some("terminated"));
+    assert_eq!(verbs.iter().filter(|&&v| v == "answered").count(), 15);
+    assert_eq!(verbs.iter().filter(|&&v| v == "passed").count(), 1);
+    assert_eq!(verbs.iter().filter(|&&v| v == "completed").count(), 1);
+
+    const MASTERY_EXT: &str = "https://w3id.org/xapi/cmi5/context/extensions/masteryscore";
+    const CMI5_CAT: &str = "https://w3id.org/xapi/cmi5/context/categories/cmi5";
+    const MOVEON_CAT: &str = "https://w3id.org/xapi/cmi5/context/categories/moveon";
+    let mastery_ptr = format!("/context/extensions/{}", MASTERY_EXT.replace('/', "~1"));
+
+    for stmt in stmts {
+        let v = verb_short(stmt);
+        let cats = category_ids(stmt);
+        let has_mastery = stmt.pointer(&mastery_ptr).is_some();
+        match v {
+            "passed" => {
+                assert!(has_mastery, "passed must include masteryscore");
+                assert_eq!(
+                    stmt.pointer(&mastery_ptr).and_then(JsonValue::as_f64),
+                    Some(0.8)
+                );
+                assert_eq!(
+                    stmt.pointer("/result/score/scaled")
+                        .and_then(JsonValue::as_f64),
+                    Some(1.0)
+                );
+                assert!(cats.contains(&CMI5_CAT));
+                assert!(cats.contains(&MOVEON_CAT));
+            }
+            "completed" => {
+                assert!(!has_mastery, "masteryscore must be on passed/failed only");
+                assert!(cats.contains(&CMI5_CAT));
+                assert!(cats.contains(&MOVEON_CAT));
+            }
+            "initialized" | "terminated" => {
+                assert!(!has_mastery);
+                assert!(cats.contains(&CMI5_CAT));
+                assert!(!cats.contains(&MOVEON_CAT));
+            }
+            "answered" => {
+                assert!(!has_mastery);
+                assert!(!cats.contains(&CMI5_CAT));
+                assert!(!cats.contains(&MOVEON_CAT));
+            }
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn b3_1_cmi5_full_pass() {
+    let (course, course_json) = load_course("course.json");
+    package_and_validate(
+        &course,
+        &course_json,
+        PackageStandard::Xapi(Flavor::Cmi5),
+        PackageStandardKind::Cmi5,
+    );
+
+    let mut lrs = StrictLrs::new();
+    let params = register_cmi5_launch(
+        &mut lrs,
+        "f1",
+        "sess-1",
+        "tok-1",
+        "Normal",
+        Some(0.8),
+        Some("https://lms.example/return"),
+    );
+    let mut api = StrictLrsAdapter::new(lrs);
+    let mut now_ms = 0;
+    let (mut player, mut bridge, _tick, start_w) =
+        start_xapi_session(&course, params, Flavor::Cmi5, &mut api, 42, &mut now_ms);
+    assert!(start_w.is_empty(), "start warnings: {start_w:?}");
+    assert_eq!(bridge.return_url(), Some("https://lms.example/return"));
+
+    let inputs = load_inputs("pass.inputs.json");
+    let res = drive_xapi_inputs(
+        &mut player,
+        &mut bridge,
+        &mut api,
+        &course,
+        &inputs,
+        0,
+        &mut now_ms,
+    );
+    assert!(
+        res.runtime_warnings.is_empty(),
+        "{:?}",
+        res.runtime_warnings
+    );
+    assert!(res.bridge_warnings.is_empty(), "{:?}", res.bridge_warnings);
+    assert!(!bridge.reporting_lost());
+    assert!(
+        api.lrs.violations().is_empty(),
+        "cmi5 violations: {:?}",
+        api.lrs.violations()
+    );
+
+    assert_cmi5_pass_statements(api.lrs.statements());
+}
+
+#[test]
+fn b3_2_cmi5_lms_mastery_overrides_course_passing() {
+    let (course, _) = load_course("course.json");
+    let mut lrs = StrictLrs::new();
+    let params = register_cmi5_launch(&mut lrs, "f1", "sess-1", "tok-1", "Normal", Some(0.9), None);
+    let mut api = StrictLrsAdapter::new(lrs);
+    let mut now_ms = 0;
+    let (mut player, mut bridge, _tick, start_w) =
+        start_xapi_session(&course, params, Flavor::Cmi5, &mut api, 42, &mut now_ms);
+    assert!(start_w.is_empty(), "{start_w:?}");
+
+    let inputs = build_80_percent_inputs();
+    let res = drive_xapi_inputs(
+        &mut player,
+        &mut bridge,
+        &mut api,
+        &course,
+        &inputs,
+        0,
+        &mut now_ms,
+    );
+    assert!(
+        res.runtime_warnings.is_empty(),
+        "{:?}",
+        res.runtime_warnings
+    );
+    assert!(res.bridge_warnings.is_empty(), "{:?}", res.bridge_warnings);
+    assert!(
+        api.lrs.violations().is_empty(),
+        "violations: {:?}",
+        api.lrs.violations()
+    );
+
+    let verbs: Vec<&str> = api.lrs.statements().iter().map(verb_short).collect();
+    assert!(verbs.contains(&"failed"), "expected failed: {verbs:?}");
+    assert!(
+        !verbs.contains(&"passed"),
+        "must not emit passed: {verbs:?}"
+    );
+    assert!(
+        verbs.contains(&"completed"),
+        "expected completed: {verbs:?}"
+    );
+
+    let failed_stmt = api
+        .lrs
+        .statements()
+        .iter()
+        .find(|s| verb_short(s) == "failed")
+        .expect("failed statement");
+    assert_eq!(
+        failed_stmt
+            .pointer("/context/extensions/https:~1~1w3id.org~1xapi~1cmi5~1context~1extensions~1masteryscore")
+            .and_then(JsonValue::as_f64),
+        Some(0.9)
+    );
+}
+
+#[test]
+fn b3_3_cmi5_fail_relaunch_resume_pass_two_sessions() {
+    let (course, _) = load_course("course.json");
+    let mut lrs = StrictLrs::new();
+    let params1 =
+        register_cmi5_launch(&mut lrs, "f1", "sess-1", "tok-1", "Normal", Some(0.7), None);
+    let mut api = StrictLrsAdapter::new(lrs);
+    let mut now_ms = 0;
+    let (mut player1, mut bridge1, _tick1, start_w1) =
+        start_xapi_session(&course, params1, Flavor::Cmi5, &mut api, 42, &mut now_ms);
+    assert!(start_w1.is_empty(), "{start_w1:?}");
+
+    let mut fail_no_exit = load_inputs("fail.inputs.json");
+    fail_no_exit.pop(); // btn-exit
+    let res1 = drive_xapi_inputs(
+        &mut player1,
+        &mut bridge1,
+        &mut api,
+        &course,
+        &fail_no_exit,
+        0,
+        &mut now_ms,
+    );
+    assert!(
+        res1.runtime_warnings.is_empty(),
+        "{:?}",
+        res1.runtime_warnings
+    );
+    assert!(
+        res1.bridge_warnings.is_empty(),
+        "{:?}",
+        res1.bridge_warnings
+    );
+
+    // Click btn-retry before closing Session 1 so Session 2 resumes at s07-q-mc rather
+    // than re-entering s19-results (whose timeline_starts submit_results would re-emit
+    // failed in Session 2).
+    let retry_fx = player1.handle(&Input::Click {
+        object: "btn-retry".to_owned(),
+    });
+    let _ = bridge1.after_input(
+        &mut api,
+        &course,
+        player1.state(),
+        &retry_fx,
+        res1.session_ms + 250,
+        now_ms,
+    );
+    let fin_w1 = bridge1.finish_session(
+        &mut api,
+        &course,
+        Some(player1.state()),
+        res1.session_ms + 250,
+    );
+    assert!(fin_w1.is_empty(), "{fin_w1:?}");
+
+    let verbs1: Vec<&str> = api.lrs.statements().iter().map(verb_short).collect();
+    assert!(verbs1.contains(&"failed"));
+    assert!(verbs1.contains(&"completed"));
+    assert!(verbs1.contains(&"terminated"));
+
+    let progress_json = api
+        .lrs
+        .get_state(
+            "coursecraft.progress",
+            REF_ACTIVITY_ID,
+            &cmi5_actor_json(),
+            Some("11111111-1111-4111-8111-111111111111"),
+        )
+        .expect("saved progress state");
+    let progress_val: JsonValue = serde_json::from_slice(progress_json).expect("progress json");
+    assert_eq!(
+        progress_val.get("completed").and_then(JsonValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        progress_val.get("passed").and_then(JsonValue::as_bool),
+        Some(false)
+    );
+
+    // Session 2: relaunch with new session_id & fetch token, resume, retry & pass.
+    let s1_count = api.lrs.statements().len();
+    let params2 = register_cmi5_launch(
+        &mut api.lrs,
+        "f2",
+        "sess-2",
+        "tok-2",
+        "Normal",
+        Some(0.7),
+        None,
+    );
+    let (mut player2, mut bridge2, tick2, start_w2) =
+        start_xapi_session(&course, params2, Flavor::Cmi5, &mut api, 99, &mut now_ms);
+    assert!(start_w2.is_empty(), "{start_w2:?}");
+    assert!(
+        tick2
+            .plan
+            .as_ref()
+            .and_then(|p| p.resume.as_ref())
+            .is_some()
+    );
+    let start_fx2 = player2.handle(&Input::Start);
+    let _ = bridge2.after_input(
+        &mut api,
+        &course,
+        player2.state(),
+        &start_fx2,
+        res1.session_ms + 250,
+        now_ms,
+    );
+
+    // Skip start..btn-lb-jump in pass.inputs.json, replay quiz + cert + exit.
+    let pass_all = load_inputs("pass.inputs.json");
+    let quiz_start = pass_all
+        .iter()
+        .position(|i| matches!(i, Input::Click { object } if object == "btn-lb-jump"))
+        .expect("btn-lb-jump")
+        + 1;
+    let pass_retry = pass_all[quiz_start..].to_vec();
+
+    let res2 = drive_xapi_inputs(
+        &mut player2,
+        &mut bridge2,
+        &mut api,
+        &course,
+        &pass_retry,
+        res1.session_ms,
+        &mut now_ms,
+    );
+    assert!(
+        res2.runtime_warnings.is_empty(),
+        "{:?}",
+        res2.runtime_warnings
+    );
+    assert!(
+        res2.bridge_warnings.is_empty(),
+        "{:?}",
+        res2.bridge_warnings
+    );
+    assert!(
+        api.lrs.violations().is_empty(),
+        "violations across 2 sessions: {:?}",
+        api.lrs.violations()
+    );
+
+    let verbs2: Vec<&str> = api.lrs.statements()[s1_count..]
+        .iter()
+        .map(verb_short)
+        .collect();
+    assert!(verbs2.contains(&"initialized"));
+    assert!(verbs2.contains(&"passed"));
+    assert!(verbs2.contains(&"terminated"));
+    assert!(
+        !verbs2.contains(&"completed"),
+        "must not emit second completed in session 2: {verbs2:?}"
+    );
+}
+
+#[test]
+fn b3_4_cmi5_fail_retry_pass_same_session_guard() {
+    let (course, _) = load_course("course.json");
+    let mut lrs = StrictLrs::new();
+    let params = register_cmi5_launch(&mut lrs, "f1", "sess-1", "tok-1", "Normal", Some(0.7), None);
+    let mut api = StrictLrsAdapter::new(lrs);
+    let mut now_ms = 0;
+    let (mut player, mut bridge, _tick, start_w) =
+        start_xapi_session(&course, params, Flavor::Cmi5, &mut api, 42, &mut now_ms);
+    assert!(start_w.is_empty(), "{start_w:?}");
+
+    // Fail attempt 1 (stop before btn-exit so we stay in the same session).
+    let mut fail_no_exit = load_inputs("fail.inputs.json");
+    fail_no_exit.pop(); // btn-exit
+    let res1 = drive_xapi_inputs(
+        &mut player,
+        &mut bridge,
+        &mut api,
+        &course,
+        &fail_no_exit,
+        0,
+        &mut now_ms,
+    );
+    assert!(
+        res1.runtime_warnings.is_empty(),
+        "{:?}",
+        res1.runtime_warnings
+    );
+    assert!(
+        res1.bridge_warnings.is_empty(),
+        "{:?}",
+        res1.bridge_warnings
+    );
+
+    // Retry and pass in the SAME session.
+    let mut retry_pass = vec![Input::Click {
+        object: "btn-retry".to_owned(),
+    }];
+    let pass_all = load_inputs("pass.inputs.json");
+    let quiz_start = pass_all
+        .iter()
+        .position(|i| matches!(i, Input::Click { object } if object == "btn-lb-jump"))
+        .expect("btn-lb-jump")
+        + 1;
+    retry_pass.extend_from_slice(&pass_all[quiz_start..]);
+
+    let res2 = drive_xapi_inputs(
+        &mut player,
+        &mut bridge,
+        &mut api,
+        &course,
+        &retry_pass,
+        res1.session_ms,
+        &mut now_ms,
+    );
+    assert!(
+        res2.runtime_warnings.is_empty(),
+        "{:?}",
+        res2.runtime_warnings
+    );
+    assert!(
+        res2.bridge_warnings.is_empty(),
+        "{:?}",
+        res2.bridge_warnings
+    );
+    assert!(
+        api.lrs.violations().is_empty(),
+        "cmi5 §9.3.1 guard must prevent passed-after-failed violations: {:?}",
+        api.lrs.violations()
+    );
+
+    let verbs: Vec<&str> = api.lrs.statements().iter().map(verb_short).collect();
+    assert!(verbs.contains(&"failed"));
+    assert!(
+        !verbs.contains(&"passed"),
+        "XapiBridge must suppress passed after failed in same session: {verbs:?}"
+    );
+}
+
+#[test]
+fn b3_5_cmi5_partial_suspend_resume_with_lightbox() {
+    let (course, _) = load_course("course.json");
+    let mut lrs = StrictLrs::new();
+    let params1 =
+        register_cmi5_launch(&mut lrs, "f1", "sess-1", "tok-1", "Normal", Some(0.7), None);
+    let mut api = StrictLrsAdapter::new(lrs);
+    let mut now_ms = 0;
+    let (mut player1, mut bridge1, _tick1, start_w1) =
+        start_xapi_session(&course, params1, Flavor::Cmi5, &mut api, 42, &mut now_ms);
+    assert!(start_w1.is_empty(), "{start_w1:?}");
+
+    // Walk partial-1.inputs.json, inserting lightbox open+close on s06-branch-lightbox (BUG-A9).
+    let mut partial1 = load_inputs("partial-1.inputs.json");
+    let to_quiz_idx = partial1
+        .iter()
+        .position(|i| matches!(i, Input::Click { object } if object == "btn-to-quiz"))
+        .expect("btn-to-quiz");
+    partial1.splice(
+        to_quiz_idx..to_quiz_idx,
+        [
+            Input::Click {
+                object: "btn-open-lb".to_owned(),
+            },
+            Input::Click {
+                object: "btn-close-lb".to_owned(),
+            },
+        ],
+    );
+
+    let res1 = drive_xapi_inputs(
+        &mut player1,
+        &mut bridge1,
+        &mut api,
+        &course,
+        &partial1,
+        0,
+        &mut now_ms,
+    );
+    assert!(
+        res1.runtime_warnings.is_empty(),
+        "{:?}",
+        res1.runtime_warnings
+    );
+    assert!(
+        res1.bridge_warnings.is_empty(),
+        "{:?}",
+        res1.bridge_warnings
+    );
+
+    let pre_state = player1.state().clone();
+    assert!(pre_state.visited.contains("s06c-lightbox"));
+
+    let finish_w = bridge1.finish_session(&mut api, &course, Some(&pre_state), res1.session_ms);
+    assert!(finish_w.is_empty(), "{finish_w:?}");
+
+    // Relaunch in Session 2.
+    let params2 = register_cmi5_launch(
+        &mut api.lrs,
+        "f2",
+        "sess-2",
+        "tok-2",
+        "Normal",
+        Some(0.7),
+        None,
+    );
+    let (mut player2, mut bridge2, tick2, start_w2) =
+        start_xapi_session(&course, params2, Flavor::Cmi5, &mut api, 99, &mut now_ms);
+    assert!(start_w2.is_empty(), "{start_w2:?}");
+    assert!(
+        tick2
+            .plan
+            .as_ref()
+            .and_then(|p| p.resume.as_ref())
+            .is_some()
+    );
+    let start_fx2 = player2.handle(&Input::Start);
+    let _ = bridge2.after_input(
+        &mut api,
+        &course,
+        player2.state(),
+        &start_fx2,
+        res1.session_ms,
+        now_ms,
+    );
+    assert_resumed_state_matches(&pre_state, player2.state());
+
+    let partial2 = load_inputs("partial-2-resume.inputs.json");
+    let res2 = drive_xapi_inputs(
+        &mut player2,
+        &mut bridge2,
+        &mut api,
+        &course,
+        &partial2,
+        res1.session_ms,
+        &mut now_ms,
+    );
+    assert!(
+        res2.runtime_warnings.is_empty(),
+        "{:?}",
+        res2.runtime_warnings
+    );
+    assert!(
+        res2.bridge_warnings.is_empty(),
+        "{:?}",
+        res2.bridge_warnings
+    );
+    assert!(
+        api.lrs.violations().is_empty(),
+        "violations: {:?}",
+        api.lrs.violations()
+    );
+
+    let verbs: Vec<&str> = api.lrs.statements().iter().map(verb_short).collect();
+    assert!(verbs.contains(&"passed"));
+    assert!(verbs.contains(&"completed"));
+}
+
+#[test]
+fn b3_6_cmi5_browse_and_review_modes() {
+    let (course, _) = load_course("course.json");
+    let inputs = load_inputs("pass.inputs.json");
+
+    for mode in ["Browse", "Review"] {
+        let mut lrs = StrictLrs::new();
+        let params = register_cmi5_launch(&mut lrs, "f1", "sess-1", "tok-1", mode, Some(0.8), None);
+        let mut api = StrictLrsAdapter::new(lrs);
+        let mut now_ms = 0;
+        let (mut player, mut bridge, _tick, start_w) =
+            start_xapi_session(&course, params, Flavor::Cmi5, &mut api, 42, &mut now_ms);
+        assert!(start_w.is_empty(), "{mode} start warnings: {start_w:?}");
+
+        let res = drive_xapi_inputs(
+            &mut player,
+            &mut bridge,
+            &mut api,
+            &course,
+            &inputs,
+            0,
+            &mut now_ms,
+        );
+        assert!(
+            res.runtime_warnings.is_empty(),
+            "{mode}: {:?}",
+            res.runtime_warnings
+        );
+        assert!(
+            res.bridge_warnings.is_empty(),
+            "{mode}: {:?}",
+            res.bridge_warnings
+        );
+        assert!(
+            !bridge.reporting_lost(),
+            "{mode} must not mark reporting_lost"
+        );
+        assert!(
+            api.lrs.violations().is_empty(),
+            "{mode} violations: {:?}",
+            api.lrs.violations()
+        );
+
+        let verbs: Vec<&str> = api.lrs.statements().iter().map(verb_short).collect();
+        assert_eq!(
+            verbs,
+            vec!["initialized", "terminated"],
+            "{mode} must emit only initialized + terminated"
+        );
+        let put_state_count = api
+            .requests
+            .iter()
+            .filter(|r| r.method == LrsMethod::Put && r.url.contains("/activities/state"))
+            .count();
+        assert_eq!(put_state_count, 0, "{mode} must not PUT progress");
+    }
+}
+
+#[test]
+fn b3_7_cmi5_5xx_retry_storm_and_401_lost_reporting() {
+    let (course, _) = load_course("course.json");
+    let mut lrs = StrictLrs::new();
+    let params = register_cmi5_launch(&mut lrs, "f1", "sess-1", "tok-1", "Normal", Some(0.8), None);
+    let mut api = StrictLrsAdapter::new(lrs);
+    // Inject 3x HTTP 500 on /statements (will hit initialized batch).
+    api.inject_statement_statuses.push_back(500);
+    api.inject_statement_statuses.push_back(500);
+    api.inject_statement_statuses.push_back(500);
+
+    let mut now_ms = 0;
+    let (mut player, mut bridge, _tick, start_w) =
+        start_xapi_session(&course, params, Flavor::Cmi5, &mut api, 42, &mut now_ms);
+    assert!(start_w.is_empty(), "{start_w:?}");
+
+    // Pump backoff ticks so all 3x 500s recover and initialized lands.
+    let mut pump_w = Vec::new();
+    for _ in 0..20 {
+        if api
+            .lrs
+            .statements()
+            .iter()
+            .any(|s| verb_short(s) == "initialized")
+        {
+            break;
+        }
+        now_ms += 2000;
+        let t = bridge.tick(&mut api, &course, now_ms);
+        pump_w.extend(t.warnings);
+    }
+    assert!(
+        api.lrs
+            .statements()
+            .iter()
+            .any(|s| verb_short(s) == "initialized"),
+        "initialized must succeed after 3x 500 retries"
+    );
+    assert!(!bridge.reporting_lost());
+
+    // Now inject 401 on the next /statements POST.
+    api.inject_statement_statuses.push_back(401);
+    let step_effects = player.handle(&Input::Tick { ms: 2100 });
+    let w_after = bridge.after_input(
+        &mut api,
+        &course,
+        player.state(),
+        &step_effects,
+        2100,
+        now_ms,
+    );
+    let _ = w_after;
+
+    // Trigger an answered or completion effect to force a /statements POST that hits 401.
+    let step_effects2 = player.handle(&Input::Click {
+        object: "s01-btn-action".to_owned(),
+    });
+    let _ = bridge.after_input(
+        &mut api,
+        &course,
+        player.state(),
+        &step_effects2,
+        2350,
+        now_ms,
+    );
+    let w_comp = bridge.after_input(
+        &mut api,
+        &course,
+        player.state(),
+        &[Effect::Completion {
+            status: CompletionStatus::Completed,
+        }],
+        2400,
+        now_ms,
+    );
+    now_ms += 1000;
+    let tick_after_401 = bridge.tick(&mut api, &course, now_ms);
+    assert!(
+        !w_comp.is_empty() || !tick_after_401.warnings.is_empty() || bridge.reporting_lost(),
+        "expected 401 to trigger reporting_lost"
+    );
+    assert!(bridge.reporting_lost(), "expected reporting_lost after 401");
+
+    let reqs_at_lost = api.requests.len();
+    let _ = bridge.after_input(
+        &mut api,
+        &course,
+        player.state(),
+        &[Effect::Score {
+            raw: 100,
+            max: 100,
+            percent: 100,
+            status: CompletionStatus::Passed,
+        }],
+        2500,
+        now_ms,
+    );
+    let _ = bridge.finish_session(&mut api, &course, Some(player.state()), 2600);
+    assert_eq!(
+        api.requests.len(),
+        reqs_at_lost,
+        "zero HTTP requests allowed after 401 reporting_lost"
+    );
+    assert!(
+        api.lrs.violations().is_empty(),
+        "violations: {:?}",
+        api.lrs.violations()
+    );
+}
+
+#[test]
+fn b3_8_cmi5_handshake_timeout_and_reused_fetch() {
+    let (course, _) = load_course("course.json");
+
+    // (a) Handshake timeout past HANDSHAKE_TIMEOUT_MS (8000ms).
+    let mut lrs_a = StrictLrs::new();
+    let params_a = register_cmi5_launch(
+        &mut lrs_a,
+        "f1",
+        "sess-1",
+        "tok-1",
+        "Normal",
+        Some(0.8),
+        None,
+    );
+    let mut api_a = StrictLrsAdapter::new(lrs_a);
+    api_a.hold_fetch = true;
+
+    let mut bridge_a = XapiBridge::new(params_a, Flavor::Cmi5, &course);
+    bridge_a.start(&mut api_a);
+    let t1 = bridge_a.tick(&mut api_a, &course, 100);
+    assert!(t1.plan.is_none());
+    let t2 = bridge_a.tick(&mut api_a, &course, 100 + HANDSHAKE_TIMEOUT_MS);
+    assert!(t2.plan.is_some(), "expected Fresh plan on timeout");
+    assert!(t2.plan.as_ref().and_then(|p| p.resume.as_ref()).is_none());
+    assert!(bridge_a.reporting_lost());
+
+    // Deliver the held late fetch response; bridge must ignore it.
+    let late = api_a.held_fetch.drain(..).collect::<Vec<_>>();
+    api_a.inbox.extend(late);
+    let reqs_before = api_a.requests.len();
+    let _ = bridge_a.tick(&mut api_a, &course, 200 + HANDSHAKE_TIMEOUT_MS);
+    assert_eq!(
+        api_a.requests.len(),
+        reqs_before,
+        "late fetch response after timeout must be ignored"
+    );
+
+    // (b) Reused fetch URL returns error-code "1".
+    let mut lrs_b = StrictLrs::new();
+    let params_b = register_cmi5_launch(
+        &mut lrs_b,
+        "f-reused",
+        "sess-1",
+        "tok-1",
+        "Normal",
+        Some(0.8),
+        None,
+    );
+    // Pre-consume the single-use fetch URL.
+    let first = lrs_b.handle_fetch("POST", "f-reused", &[]);
+    assert_eq!(first.status, 200);
+
+    let mut api_b = StrictLrsAdapter::new(lrs_b);
+    let mut now_ms = 0;
+    let (_player_b, bridge_b, tick_b, _w_b) =
+        start_xapi_session(&course, params_b, Flavor::Cmi5, &mut api_b, 42, &mut now_ms);
+    assert!(
+        tick_b
+            .plan
+            .as_ref()
+            .and_then(|p| p.resume.as_ref())
+            .is_none()
+    );
+    assert!(bridge_b.reporting_lost());
+}
+
+#[test]
+fn b3_9_plain_xapi_pass_fail_resume_relaunch_and_no_registration() {
+    let (course, course_json) = load_course("course.json");
+    package_and_validate(
+        &course,
+        &course_json,
+        PackageStandard::Xapi(Flavor::Xapi),
+        PackageStandardKind::Xapi,
+    );
+
+    // 1. Pass with registration.
+    {
+        let mut lrs = StrictLrs::new();
+        let params = register_xapi_launch(
+            &mut lrs,
+            Some("22222222-2222-4222-8222-222222222222"),
+            "xapi-pass",
+            "Basic dG9r",
+        );
+        let mut api = StrictLrsAdapter::new(lrs);
+        let mut now_ms = 0;
+        let (mut player, mut bridge, _tick, start_w) =
+            start_xapi_session(&course, params, Flavor::Xapi, &mut api, 42, &mut now_ms);
+        assert!(start_w.is_empty(), "{start_w:?}");
+        let res = drive_xapi_inputs(
+            &mut player,
+            &mut bridge,
+            &mut api,
+            &course,
+            &load_inputs("pass.inputs.json"),
+            0,
+            &mut now_ms,
+        );
+        assert!(
+            res.runtime_warnings.is_empty(),
+            "{:?}",
+            res.runtime_warnings
+        );
+        assert!(res.bridge_warnings.is_empty(), "{:?}", res.bridge_warnings);
+        assert!(
+            api.lrs.violations().is_empty(),
+            "xapi pass violations: {:?}",
+            api.lrs.violations()
+        );
+        for stmt in api.lrs.statements() {
+            let cats = category_ids(stmt);
+            assert!(
+                !cats
+                    .iter()
+                    .any(|c| c.contains("cmi5") || c.contains("moveon")),
+                "plain xAPI must not emit cmi5/moveon categories: {cats:?}"
+            );
+        }
+    }
+
+    // 2. Fail with registration.
+    {
+        let mut lrs = StrictLrs::new();
+        let params = register_xapi_launch(
+            &mut lrs,
+            Some("33333333-3333-4333-8333-333333333333"),
+            "xapi-fail",
+            "Basic dG9r",
+        );
+        let mut api = StrictLrsAdapter::new(lrs);
+        let mut now_ms = 0;
+        let (mut player, mut bridge, _tick, start_w) =
+            start_xapi_session(&course, params, Flavor::Xapi, &mut api, 42, &mut now_ms);
+        assert!(start_w.is_empty(), "{start_w:?}");
+        let res = drive_xapi_inputs(
+            &mut player,
+            &mut bridge,
+            &mut api,
+            &course,
+            &load_inputs("fail.inputs.json"),
+            0,
+            &mut now_ms,
+        );
+        assert!(
+            res.runtime_warnings.is_empty(),
+            "{:?}",
+            res.runtime_warnings
+        );
+        assert!(res.bridge_warnings.is_empty(), "{:?}", res.bridge_warnings);
+        assert!(
+            api.lrs.violations().is_empty(),
+            "{:?}",
+            api.lrs.violations()
+        );
+        let verbs: Vec<&str> = api.lrs.statements().iter().map(verb_short).collect();
+        assert!(verbs.contains(&"failed"));
+        assert!(verbs.contains(&"completed"));
+    }
+
+    // 3. Partial + Resume + Relaunch on same registration.
+    {
+        let mut lrs = StrictLrs::new();
+        let reg = "44444444-4444-4444-8444-444444444444";
+        let params1 = register_xapi_launch(&mut lrs, Some(reg), "xapi-s1", "Basic dG9rMQ==");
+        let mut api = StrictLrsAdapter::new(lrs);
+        let mut now_ms = 0;
+        let (mut player1, mut bridge1, _tick1, _) =
+            start_xapi_session(&course, params1, Flavor::Xapi, &mut api, 42, &mut now_ms);
+        let res1 = drive_xapi_inputs(
+            &mut player1,
+            &mut bridge1,
+            &mut api,
+            &course,
+            &load_inputs("partial-1.inputs.json"),
+            0,
+            &mut now_ms,
+        );
+        let _ = bridge1.finish_session(&mut api, &course, Some(player1.state()), res1.session_ms);
+
+        let params2 = register_xapi_launch(&mut api.lrs, Some(reg), "xapi-s2", "Basic dG9rMg==");
+        let (mut player2, mut bridge2, tick2, _) =
+            start_xapi_session(&course, params2, Flavor::Xapi, &mut api, 99, &mut now_ms);
+        assert!(
+            tick2
+                .plan
+                .as_ref()
+                .and_then(|p| p.resume.as_ref())
+                .is_some()
+        );
+        let start_fx2 = player2.handle(&Input::Start);
+        let _ = bridge2.after_input(
+            &mut api,
+            &course,
+            player2.state(),
+            &start_fx2,
+            res1.session_ms,
+            now_ms,
+        );
+        let res2 = drive_xapi_inputs(
+            &mut player2,
+            &mut bridge2,
+            &mut api,
+            &course,
+            &load_inputs("partial-2-resume.inputs.json"),
+            res1.session_ms,
+            &mut now_ms,
+        );
+        assert!(
+            res2.runtime_warnings.is_empty(),
+            "{:?}",
+            res2.runtime_warnings
+        );
+        assert!(
+            res2.bridge_warnings.is_empty(),
+            "{:?}",
+            res2.bridge_warnings
+        );
+        assert!(
+            api.lrs.violations().is_empty(),
+            "relaunch on same registration violations: {:?}",
+            api.lrs.violations()
+        );
+    }
+
+    // 4. Launch with registration: None.
+    {
+        let mut lrs = StrictLrs::new();
+        let params = register_xapi_launch(&mut lrs, None, "xapi-noreg", "Basic dG9r");
+        let mut api = StrictLrsAdapter::new(lrs);
+        let mut now_ms = 0;
+        let (mut player, mut bridge, _tick, start_w) =
+            start_xapi_session(&course, params, Flavor::Xapi, &mut api, 42, &mut now_ms);
+        assert!(start_w.is_empty(), "{start_w:?}");
+        let res = drive_xapi_inputs(
+            &mut player,
+            &mut bridge,
+            &mut api,
+            &course,
+            &load_inputs("pass.inputs.json"),
+            0,
+            &mut now_ms,
+        );
+        assert!(
+            res.runtime_warnings.is_empty(),
+            "{:?}",
+            res.runtime_warnings
+        );
+        assert!(res.bridge_warnings.is_empty(), "{:?}", res.bridge_warnings);
+        assert!(
+            api.lrs.violations().is_empty(),
+            "{:?}",
+            api.lrs.violations()
+        );
+    }
+}
+
+#[test]
+fn b3_10_cmi5_completion_only_with_mastery_score() {
+    let (course, _) = load_course("completion-only.json");
+    let mut lrs = StrictLrs::new();
+    let params = register_cmi5_launch(&mut lrs, "f1", "sess-1", "tok-1", "Normal", Some(0.8), None);
+    let mut api = StrictLrsAdapter::new(lrs);
+    let mut now_ms = 0;
+    let (mut player, mut bridge, _tick, start_w) =
+        start_xapi_session(&course, params, Flavor::Cmi5, &mut api, 42, &mut now_ms);
+    assert!(start_w.is_empty(), "{start_w:?}");
+
+    let res = drive_xapi_inputs(
+        &mut player,
+        &mut bridge,
+        &mut api,
+        &course,
+        &load_inputs("completion-only.inputs.json"),
+        0,
+        &mut now_ms,
+    );
+    assert!(
+        res.runtime_warnings.is_empty(),
+        "{:?}",
+        res.runtime_warnings
+    );
+    assert!(res.bridge_warnings.is_empty(), "{:?}", res.bridge_warnings);
+    assert!(
+        api.lrs.violations().is_empty(),
+        "violations: {:?}",
+        api.lrs.violations()
+    );
+
+    let verbs: Vec<&str> = api.lrs.statements().iter().map(verb_short).collect();
+    assert!(
+        verbs.contains(&"completed"),
+        "expected completed: {verbs:?}"
+    );
+    assert!(
+        !verbs.contains(&"passed"),
+        "must not emit passed: {verbs:?}"
+    );
+    assert!(
+        !verbs.contains(&"failed"),
+        "must not emit failed: {verbs:?}"
     );
 }
