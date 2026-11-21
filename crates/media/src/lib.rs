@@ -24,12 +24,16 @@ mod tests;
 pub mod animation;
 pub mod font;
 pub mod svg;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod system_fonts;
 pub mod webvtt;
 pub use animation::{
     Animation, AnimationFrame, MAX_ANIMATION_BYTES, MAX_ANIMATION_FRAMES, MAX_FRAME_DELAY_MS,
     MIN_FRAME_DELAY_MS, TINY_FRAME_DELAY_MS, clamp_frame_delay_ms, decode_animation,
 };
-pub use font::{FontFileStyle, FontInfo, MAX_FONT_BYTES, font_info};
+pub use font::{
+    FontFileStyle, FontInfo, MAX_FONT_BYTES, font_collection_info, font_info, font_info_at,
+};
 pub use svg::{MAX_SVG_BYTES, MAX_SVG_ELEMENTS, decode_svg, svg_natural_size};
 pub use webvtt::{CaptionError, Cue, cue_text_at, parse_webvtt};
 

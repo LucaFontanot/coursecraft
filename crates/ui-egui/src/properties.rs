@@ -3282,7 +3282,7 @@ fn show_text_controls(
                                 .hint_text("Search fonts"),
                         );
                         let query = props.system_font_search.to_lowercase();
-                        for choice in choices
+                        let filtered: Vec<&crate::SystemFontChoice> = choices
                             .iter()
                             .filter(|choice| choice.name.to_lowercase().contains(&query))
                             .filter(|choice| {
@@ -3290,31 +3290,43 @@ fn show_text_controls(
                                     .iter()
                                     .any(|name| name.eq_ignore_ascii_case(&choice.name))
                             })
-                        {
-                            ui.horizontal(|ui| {
-                                if ui.selectable_label(false, &choice.name).clicked() {
-                                    font_requests.push(crate::EditorRequest::AddSystemFont {
-                                        family: choice.name.clone(),
-                                        apply: Some((
-                                            "text.style_range".to_owned(),
-                                            serde_json::json!({
-                                                "slide": slide_id,
-                                                "object": obj_id,
-                                                "start": char_range.0,
-                                                "end": char_range.1,
-                                                "font": choice.name,
-                                            }),
-                                        )),
+                            .collect();
+                        let row_height = ui.spacing().interact_size.y;
+                        egui::ScrollArea::vertical()
+                            .id_salt(("sys_font_list", id_prefix))
+                            .max_height(200.0)
+                            .show_rows(ui, row_height, filtered.len(), |ui, row_range| {
+                                for choice in &filtered[row_range] {
+                                    ui.horizontal(|ui| {
+                                        if ui.selectable_label(false, &choice.name).clicked() {
+                                            font_requests.push(
+                                                crate::EditorRequest::AddSystemFont {
+                                                    family: choice.name.clone(),
+                                                    apply: Some((
+                                                        "text.style_range".to_owned(),
+                                                        serde_json::json!({
+                                                            "slide": slide_id,
+                                                            "object": obj_id,
+                                                            "start": char_range.0,
+                                                            "end": char_range.1,
+                                                            "font": choice.name,
+                                                        }),
+                                                    )),
+                                                },
+                                            );
+                                            ui.close();
+                                        }
+                                        if choice.embedding_restricted {
+                                            ui.label(
+                                                RichText::new("restricted").small().color(
+                                                    coursecraft_render::palette(ui.ctx())
+                                                        .text_secondary,
+                                                ),
+                                            );
+                                        }
                                     });
-                                    ui.close();
-                                }
-                                if choice.embedding_restricted {
-                                    ui.label(RichText::new("restricted").small().color(
-                                        coursecraft_render::palette(ui.ctx()).text_secondary,
-                                    ));
                                 }
                             });
-                        }
                     }
                 }
                 ui.separator();

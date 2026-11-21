@@ -294,11 +294,15 @@ An author can add TrueType or OpenType files with File ▸ Add font…, or throu
 
 - `style` is `regular`, `bold`, `italic` or `bold_italic`. A family may register any subset of faces.
 - At most 40 faces per course. A family name is trimmed, stripped of control characters, and 1–64 characters. `(family, style)` is unique, compared case-insensitively.
-- `src` is a safe relative media path under `fonts/` ending in `.ttf` or `.otf`. The file must parse as TrueType/OpenType and be at most 15 MiB. The editor validates the bytes before copying them and the `course.add_font` command enforces the model rules.
-- `TextStyle.font`, `TextRun.font` and `Theme.font` may name `Inter` or a registered family. A run's `font` overrides its style. Rendering resolves the exact `(family, bold, italic)` face, then the family's `regular` face, then Inter. An unknown or missing family renders in Inter.
-- Fonts are media: they are kept by `.ccraft` save/load, checked for missing files, and shipped by every publish standard. The player loads them from `media/`.
+- `src` is a safe relative media path under `fonts/` ending in `.ttf`, `.otf`, `.ttc` or `.otc`. The file must parse as TrueType/OpenType and be at most 15 MiB. The editor validates the bytes before copying them and the `course.add_font` command enforces the model rules.
+- `TextStyle.font`, `TextRun.font` and `Theme.font` may name `Inter`, a registered course family, or (on desktop) an installed system font. A run's `font` overrides its style. Rendering resolves a family in order:
+  1. course-embedded face (exact `(family, bold, italic)`, then `regular`),
+  2. installed system face on desktop (exact `(family, bold, italic)`, then `regular`; absent in the web player),
+  3. `Inter` (exact bold/italic, then regular).
+  An unknown or missing family renders in `Inter`.
+- Fonts are media: they are kept by `.ccraft` save/load, checked for missing files, and shipped by every publish standard. At publish on desktop, installed system font faces used by the course's text (whose OS/2 `fsType` permits embedding) are auto-embedded into the published package; restricted or missing fonts are warned (`Learners without <font> will see Inter.`) along with `Font licences are your responsibility.`. The player loads embedded fonts from `media/`.
 - `course.add_font` takes `{src, family, style}` and is undoable. `course.remove_font` takes `{family, style?}` or `{src}` and is undoable. Removing a font used by text is confirmed by the editor first; that text then falls back to Inter.
-- PowerPoint import keeps each run's `a:latin@typeface` in `TextRun.font` and reports fonts used by the deck or its theme (`a:majorFont`/`a:minorFont`) that are not Inter: "Add these fonts to keep the look: …". Adding them later makes the imported text render in them.
+- PowerPoint import extracts `p:embeddedFontLst` (including ECMA-376 `.fntdata` obfuscated parts) into `course.fonts`, keeps each run's `a:latin@typeface` in `TextRun.font`, and reports fonts used by the deck or its theme (`a:majorFont`/`a:minorFont`) that are neither embedded nor installed: `"Add these fonts to keep the look: … (shown as Inter)."`
 
 ### Shapes
 

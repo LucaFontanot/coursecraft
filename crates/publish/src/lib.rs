@@ -16,7 +16,9 @@
 use std::collections::HashSet;
 use std::io::Write as _;
 
-use coursecraft_course::{BACKGROUND_AUDIO_ID, Course, Object, ObjectKind};
+use coursecraft_course::{
+    BACKGROUND_AUDIO_ID, Course, FontFace, FontStyle, Object, ObjectKind, TextRun, TextStyle,
+};
 use coursecraft_scorm::Standard;
 use coursecraft_xapi::{Flavor, PackageSpec, cmi5_xml, tincan_xml};
 
@@ -583,4 +585,269 @@ pub fn zip_package_to<W: std::io::Write + std::io::Seek>(
     }
     writer.finish()?;
     Ok(())
+}
+
+/// Outcome of looking up an installed font face for auto-embedding at publish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublishFontLookup {
+    /// Embeddable font bytes (already validated).
+    Found {
+        style: FontStyle,
+        bytes: Vec<u8>,
+        extension: &'static str,
+    },
+    /// Installed on this computer, but its OS/2 `fsType` restricts embedding.
+    Restricted,
+    /// Installed on this computer, but could not be read.
+    Unreadable,
+    /// Not installed on this computer.
+    Missing,
+}
+
+/// Optional provider of installed fonts for auto-embedding at publish.
+pub trait PublishFontProvider {
+    fn lookup_font(&self, family: &str, style: FontStyle) -> PublishFontLookup;
+}
+
+/// Result of auto-embedding installed fonts used by a course before packaging.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoEmbedResult {
+    pub course: Course,
+    pub embedded_files: Vec<(FontFace, Vec<u8>)>,
+    pub embedded_families: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+fn font_style_for(bold: bool, italic: bool) -> FontStyle {
+    match (bold, italic) {
+        (false, false) => FontStyle::Regular,
+        (true, false) => FontStyle::Bold,
+        (false, true) => FontStyle::Italic,
+        (true, true) => FontStyle::BoldItalic,
+    }
+}
+
+fn is_bundled_font(name: &str) -> bool {
+    let trimmed = name.trim();
+    trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("Inter")
+        || trimmed.eq_ignore_ascii_case("Open Sans")
+}
+
+fn push_used_face(out: &mut Vec<(String, FontStyle)>, family: &str, style: FontStyle) {
+    let trimmed = family.trim();
+    if is_bundled_font(trimmed) {
+        return;
+    }
+    if !out
+        .iter()
+        .any(|(f, s)| f.eq_ignore_ascii_case(trimmed) && *s == style)
+    {
+        out.push((trimmed.to_owned(), style));
+    }
+}
+
+fn collect_runs_faces(out: &mut Vec<(String, FontStyle)>, style: &TextStyle, runs: &[TextRun]) {
+    push_used_face(out, &style.font, font_style_for(style.bold, style.italic));
+    for run in runs {
+        let fam = run.font.as_deref().unwrap_or(&style.font);
+        let bold = run.bold.unwrap_or(style.bold);
+        let italic = run.italic.unwrap_or(style.italic);
+        push_used_face(out, fam, font_style_for(bold, italic));
+    }
+}
+
+fn collect_object_faces(out: &mut Vec<(String, FontStyle)>, obj: &Object) {
+    match &obj.kind {
+        ObjectKind::Text { style, runs, .. } => collect_runs_faces(out, style, runs),
+        ObjectKind::Shape {
+            text: Some(text), ..
+        } => collect_runs_faces(out, &text.style, &text.runs),
+        ObjectKind::Table { rows, .. } => {
+            for row in rows {
+                for cell in &row.cells {
+                    collect_runs_faces(out, &cell.style, &cell.runs);
+                }
+            }
+        }
+        ObjectKind::Marker { runs, .. } => {
+            for run in runs {
+                if let Some(font) = &run.font {
+                    let bold = run.bold.unwrap_or(false);
+                    let italic = run.italic.unwrap_or(false);
+                    push_used_face(out, font, font_style_for(bold, italic));
+                }
+            }
+        }
+        ObjectKind::Timer { style, .. } => {
+            push_used_face(out, &style.font, font_style_for(style.bold, style.italic));
+        }
+        _ => {}
+    }
+}
+
+/// Collect every non-Inter `(family, style)` face used by text in `course`
+/// (excluding authoring-only templates, which are not published).
+#[must_use]
+pub fn collect_used_font_faces(course: &Course) -> Vec<(String, FontStyle)> {
+    let mut out = Vec::new();
+    push_used_face(&mut out, &course.theme.font, FontStyle::Regular);
+    for ts in &course.text_styles {
+        push_used_face(
+            &mut out,
+            &ts.style.font,
+            font_style_for(ts.style.bold, ts.style.italic),
+        );
+    }
+    for slide in course.slides() {
+        for obj in &slide.objects {
+            collect_object_faces(&mut out, obj);
+        }
+        for layer in &slide.layers {
+            for obj in &layer.objects {
+                collect_object_faces(&mut out, obj);
+            }
+        }
+    }
+    for master in &course.masters {
+        for obj in &master.objects {
+            collect_object_faces(&mut out, obj);
+        }
+    }
+    for bank in &course.banks {
+        for slide in &bank.slides {
+            for obj in &slide.objects {
+                collect_object_faces(&mut out, obj);
+            }
+            for layer in &slide.layers {
+                for obj in &layer.objects {
+                    collect_object_faces(&mut out, obj);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn sanitize_font_slug(family: &str) -> String {
+    let mut slug = String::new();
+    for ch in family.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if (ch == ' ' || ch == '-' || ch == '_') && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let trimmed = slug.trim_matches('-').to_owned();
+    if trimmed.is_empty() {
+        "font".to_owned()
+    } else {
+        trimmed
+    }
+}
+
+/// Auto-embed installed font faces used by `course` that are not yet in
+/// `course.fonts`, respecting embedding permissions.
+///
+/// For any font that could not be embedded (restricted, missing, or unreadable),
+/// adds `"Learners without <font> will see Inter."` to `warnings`, followed by
+/// `"Font licences are your responsibility."` when any font was embedded or warned.
+#[must_use]
+pub fn auto_embed_fonts(
+    course: &Course,
+    provider: Option<&dyn PublishFontProvider>,
+) -> AutoEmbedResult {
+    let mut out_course = course.clone();
+    let mut embedded_files = Vec::new();
+    let mut embedded_families: Vec<String> = Vec::new();
+    let mut unembedded_families: Vec<String> = Vec::new();
+
+    let mut used_paths: HashSet<String> = out_course
+        .fonts
+        .iter()
+        .map(|f| f.src.to_ascii_lowercase())
+        .collect();
+
+    let push_unique = |list: &mut Vec<String>, name: &str| {
+        if !list
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(name))
+        {
+            list.push(name.to_owned());
+        }
+    };
+
+    for (family, style) in collect_used_font_faces(course) {
+        let already_in_course = out_course
+            .fonts
+            .iter()
+            .any(|f| f.family.eq_ignore_ascii_case(&family) && f.style == style);
+        if already_in_course {
+            continue;
+        }
+        // If Regular is already embedded and the requested style isn't, only
+        // try to embed the exact style when available; otherwise Regular covers it.
+        let regular_in_course = out_course
+            .fonts
+            .iter()
+            .any(|f| f.family.eq_ignore_ascii_case(&family) && f.style == FontStyle::Regular);
+
+        let lookup = provider
+            .map(|p| p.lookup_font(&family, style))
+            .unwrap_or(PublishFontLookup::Missing);
+
+        match lookup {
+            PublishFontLookup::Found {
+                style: actual_style,
+                bytes,
+                extension,
+            } => {
+                let dup = out_course
+                    .fonts
+                    .iter()
+                    .any(|f| f.family.eq_ignore_ascii_case(&family) && f.style == actual_style);
+                if dup {
+                    continue;
+                }
+                let slug = sanitize_font_slug(&family);
+                let mut candidate = format!("fonts/{slug}-{}.{extension}", actual_style.as_str());
+                let mut n = 2usize;
+                while used_paths.contains(&candidate.to_ascii_lowercase()) {
+                    candidate = format!("fonts/{slug}-{}-{n}.{extension}", actual_style.as_str());
+                    n += 1;
+                }
+                used_paths.insert(candidate.to_ascii_lowercase());
+                let face = FontFace {
+                    family: family.clone(),
+                    style: actual_style,
+                    src: candidate,
+                };
+                out_course.fonts.push(face.clone());
+                embedded_files.push((face, bytes));
+                push_unique(&mut embedded_families, &family);
+            }
+            PublishFontLookup::Restricted
+            | PublishFontLookup::Unreadable
+            | PublishFontLookup::Missing => {
+                if !regular_in_course {
+                    push_unique(&mut unembedded_families, &family);
+                }
+            }
+        }
+    }
+
+    let mut warnings: Vec<String> = unembedded_families
+        .into_iter()
+        .map(|family| format!("Learners without {family} will see Inter."))
+        .collect();
+    if !embedded_families.is_empty() || !warnings.is_empty() {
+        warnings.push("Font licences are your responsibility.".to_owned());
+    }
+
+    AutoEmbedResult {
+        course: out_course,
+        embedded_files,
+        embedded_families,
+        warnings,
+    }
 }

@@ -77,8 +77,11 @@ pub use focus::{
     ChromeButton, ExternalFocus, FocusManager, FocusTarget, KeyboardDragVisual, build_list,
     fill_in_id, input_text_id,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use font::IndexFontProvider;
 pub use font::{
-    course_face_family, install_course_fonts, install_fonts, slide_font, slide_font_named,
+    SystemFontData, SystemFontProvider, course_face_family, install_course_fonts, install_fonts,
+    set_system_font_provider, slide_font, slide_font_named, system_face_family,
 };
 pub use icons::{Icon, icon, icon_fill, icon_text};
 pub use layout::SlideTransform;

@@ -1268,6 +1268,22 @@ fn run_publish(
 
     let player_files = collect_player_files(&player)?;
 
+    let font_index =
+        coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default();
+    let auto = coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)));
+    let published_course = if auto.embedded_files.is_empty() {
+        c
+    } else {
+        auto.course
+    };
+    let published_course_text = if auto.embedded_files.is_empty() {
+        course_text
+    } else {
+        let mut s = published_course.to_json().map_err(|e| e.to_string())?;
+        s.push('\n');
+        s
+    };
+
     let course_dir = course.parent().unwrap_or_else(|| Path::new("."));
     let course_dir = if course_dir.as_os_str().is_empty() {
         Path::new(".")
@@ -1277,12 +1293,22 @@ fn run_publish(
 
     // `src` is relative to the project's `media/` folder (docs/spec/course-model.md);
     // `build_package_for` checks it is a safe relative path before asking for it.
-    let media_resolver = |src: &str| std::fs::read(course_dir.join("media").join(src)).ok();
+    let embedded_map: std::collections::HashMap<&str, &[u8]> = auto
+        .embedded_files
+        .iter()
+        .map(|(face, bytes)| (face.src.as_str(), bytes.as_slice()))
+        .collect();
+    let media_resolver = |src: &str| {
+        embedded_map
+            .get(src)
+            .map(|b| (*b).to_vec())
+            .or_else(|| std::fs::read(course_dir.join("media").join(src)).ok())
+    };
     let web_folders = |path: &str| collect_web_folder_files(&course_dir.join("media"), path);
 
     let pkg_input = PackageInput {
-        course: &c,
-        course_json: &course_text,
+        course: &published_course,
+        course_json: &published_course_text,
         player_files: &player_files,
         media: &media_resolver,
     };
@@ -1290,6 +1316,13 @@ fn run_publish(
     let files = build_package_standard_with_folders(&pkg_input, standard, &web_folders)
         .map_err(|e| format!("publish error: {e}"))?;
     let zip_bytes = zip_package(&files).map_err(|e| format!("zip error: {e}"))?;
+
+    if !auto.embedded_families.is_empty() {
+        println!("embedded fonts: {}", auto.embedded_families.join(", "));
+    }
+    for w in &auto.warnings {
+        eprintln!("warning: {w}");
+    }
 
     if let Some(dir) = &out_dir {
         for file in &files {
@@ -1671,14 +1704,70 @@ fn run_import_questions(
     Ok(ExitCode::SUCCESS)
 }
 
+struct CliFontProvider<'a>(
+    &'a coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex,
+);
+
+impl coursecraft_publish::PublishFontProvider for CliFontProvider<'_> {
+    fn lookup_font(
+        &self,
+        family: &str,
+        style: coursecraft_course::FontStyle,
+    ) -> coursecraft_publish::PublishFontLookup {
+        use coursecraft_course::FontStyle;
+        use coursecraft_ui_egui::coursecraft_media::FontFileStyle;
+        let media_style = match style {
+            FontStyle::Regular => FontFileStyle::Regular,
+            FontStyle::Bold => FontFileStyle::Bold,
+            FontStyle::Italic => FontFileStyle::Italic,
+            FontStyle::BoldItalic => FontFileStyle::BoldItalic,
+        };
+        let Some((_, face)) = self.0.resolve_face(family, media_style) else {
+            return coursecraft_publish::PublishFontLookup::Missing;
+        };
+        if face.embedding_restricted {
+            return coursecraft_publish::PublishFontLookup::Restricted;
+        }
+        let Some(bytes) = self.0.load_face_bytes(face) else {
+            return coursecraft_publish::PublishFontLookup::Unreadable;
+        };
+        let actual_style = match face.style {
+            FontFileStyle::Regular => FontStyle::Regular,
+            FontFileStyle::Bold => FontStyle::Bold,
+            FontFileStyle::Italic => FontStyle::Italic,
+            FontFileStyle::BoldItalic => FontStyle::BoldItalic,
+        };
+        let extension = if bytes.starts_with(b"OTTO") {
+            "otf"
+        } else if bytes.starts_with(b"ttcf") {
+            "ttc"
+        } else {
+            "ttf"
+        };
+        coursecraft_publish::PublishFontLookup::Found {
+            style: actual_style,
+            bytes: bytes.to_vec(),
+            extension,
+        }
+    }
+}
+
 fn run_import_pptx(deck: PathBuf, out: PathBuf) -> Res<ExitCode> {
     let bytes = std::fs::read(&deck).map_err(|e| format!("{}: {e}", deck.display()))?;
     let title = deck
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("Imported course");
-    let imported = coursecraft_pptx::import_pptx(&bytes, title)
+    let mut imported = coursecraft_pptx::import_pptx(&bytes, title)
         .map_err(|e| format!("{}: {e}", deck.display()))?;
+    let font_index =
+        coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default();
+    imported
+        .report
+        .filter_installed_fonts(|name| font_index.has_family(name));
+    if !imported.report.missing_fonts.is_empty() {
+        eprintln!("{}", imported.report.summary_window_text());
+    }
 
     if out.to_string_lossy().ends_with(".ccraft") {
         if let Some(parent) = out.parent()
@@ -1821,11 +1910,27 @@ fn run(cli: Cli) -> Res<ExitCode> {
                 };
                 println!("{tag}: {} — {}", i.path, i.message);
             }
+            let font_index =
+                coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default(
+                );
+            let auto =
+                coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)));
+            for w in &auto.warnings {
+                if !w.contains("responsibility") {
+                    println!("warning: /fonts — {w}");
+                }
+            }
             let errors = issues
                 .iter()
                 .filter(|i| i.severity == Severity::Error)
                 .count();
-            println!("{} error(s), {} warning(s)", errors, issues.len() - errors);
+            let warnings = issues.len() - errors
+                + auto
+                    .warnings
+                    .iter()
+                    .filter(|w| !w.contains("responsibility"))
+                    .count();
+            println!("{errors} error(s), {warnings} warning(s)");
             Ok(if errors == 0 {
                 ExitCode::SUCCESS
             } else {

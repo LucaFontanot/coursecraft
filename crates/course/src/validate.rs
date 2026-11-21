@@ -296,11 +296,13 @@ fn check_course_fonts(cx: &mut Ctx<'_>) {
                 format!("font src {src:?} must be under fonts/"),
             );
         } else if !(src.to_ascii_lowercase().ends_with(".ttf")
-            || src.to_ascii_lowercase().ends_with(".otf"))
+            || src.to_ascii_lowercase().ends_with(".otf")
+            || src.to_ascii_lowercase().ends_with(".ttc")
+            || src.to_ascii_lowercase().ends_with(".otc"))
         {
             cx.err(
                 format!("{p}/src"),
-                format!("font src {src:?} must be a .ttf or .otf file"),
+                format!("font src {src:?} must be a .ttf or .otf file (or .ttc/.otc)"),
             );
         }
     }

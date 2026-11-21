@@ -2447,3 +2447,140 @@ fn import_skips_unused_zip_entries_without_reading_them() {
         .expect("unused oversized entry must not be read or fail import");
     assert_eq!(imported.report.slides, 1);
 }
+
+#[test]
+fn import_pptx_extracts_and_deobfuscates_embedded_fonts_and_reports_corrupt_ones() {
+    use coursecraft_course::FontStyle;
+    use std::io::Write as _;
+
+    let dm_serif =
+        include_bytes!("../../../examples/healthy-habits/media/fonts/dm-serif-display-regular.ttf");
+    // ECMA-376 obfuscate first 32 bytes with reversed 16-byte GUID key.
+    let guid = "{11223344-5566-7788-99AA-BBCCDDEEFF00}";
+    let key: [u8; 16] = [
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+        0x00,
+    ];
+    let mut obfuscated = dm_serif.to_vec();
+    for (i, b) in obfuscated.iter_mut().take(32).enumerate() {
+        *b ^= key[15 - (i % 16)];
+    }
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut buf);
+        let opt = zip::write::SimpleFileOptions::default();
+
+        zip.start_file("ppt/presentation.xml", opt).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+                xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:sldSz cx="9144000" cy="5143500"/>
+  <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
+  <p:embeddedFontLst>
+    <p:embeddedFont>
+      <p:font typeface="DM Serif Display"/>
+      <p:regular r:id="rId2" fontKey="{11223344-5566-7788-99AA-BBCCDDEEFF00}"/>
+      <p:bold r:id="rId3"/>
+    </p:embeddedFont>
+  </p:embeddedFontLst>
+</p:presentation>"#,
+        )
+        .unwrap();
+
+        zip.start_file("ppt/_rels/presentation.xml.rels", opt)
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/font1.fntdata"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/corrupt.fntdata"/>
+</Relationships>"#,
+        )
+        .unwrap();
+
+        zip.start_file("ppt/slides/slide1.xml", opt).unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+    <p:grpSpPr/>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="500000"/></a:xfrm></p:spPr>
+      <p:txBody><a:bodyPr/><a:lstStyle/>
+        <a:p>
+          <a:r><a:rPr><a:latin typeface="DM Serif Display"/></a:rPr><a:t>Hello</a:t></a:r>
+          <a:r><a:rPr><a:latin typeface="MissingFont"/></a:rPr><a:t>World</a:t></a:r>
+        </a:p>
+      </p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"#,
+        )
+        .unwrap();
+
+        zip.start_file("ppt/fonts/font1.fntdata", opt).unwrap();
+        zip.write_all(&obfuscated).unwrap();
+
+        zip.start_file("ppt/fonts/corrupt.fntdata", opt).unwrap();
+        zip.write_all(b"not a valid font").unwrap();
+        zip.finish().unwrap();
+    }
+    let _ = guid;
+
+    let mut imported = import_pptx(&buf.into_inner(), "Embedded Fonts").expect("import succeeds");
+    assert_eq!(imported.course.fonts.len(), 1);
+    assert_eq!(imported.course.fonts[0].family, "DM Serif Display");
+    assert_eq!(imported.course.fonts[0].style, FontStyle::Regular);
+    let (_, font_bytes) = imported
+        .media
+        .iter()
+        .find(|(src, _)| src == &imported.course.fonts[0].src)
+        .expect("embedded font bytes in media");
+    assert_eq!(font_bytes.as_slice(), dm_serif);
+
+    // Unreadable bold font is reported, not fatal.
+    assert!(
+        imported
+            .report
+            .items
+            .iter()
+            .any(|item| item.note.contains("DM Serif Display")
+                && item.note.contains("could not be read")),
+        "expected corrupt font report item, got {:?}",
+        imported.report.items
+    );
+
+    // Embedded family is not in missing_fonts; MissingFont is.
+    assert!(
+        !imported
+            .report
+            .missing_fonts
+            .iter()
+            .any(|f| f == "DM Serif Display")
+    );
+    assert!(
+        imported
+            .report
+            .missing_fonts
+            .iter()
+            .any(|f| f == "MissingFont")
+    );
+    assert!(
+        imported
+            .report
+            .summary_window_text()
+            .contains("shown as Inter")
+    );
+
+    // filter_installed_fonts removes installed fonts.
+    imported
+        .report
+        .filter_installed_fonts(|name| name.eq_ignore_ascii_case("MissingFont"));
+    assert!(imported.report.missing_fonts.is_empty());
+}

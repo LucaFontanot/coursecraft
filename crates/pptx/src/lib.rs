@@ -322,10 +322,16 @@ impl ImportReport {
             String::new()
         } else {
             format!(
-                "\nAdd these fonts to keep the look: {}.",
+                "\nAdd these fonts to keep the look: {} (shown as Inter).",
                 self.missing_fonts.join(", ")
             )
         }
+    }
+
+    /// Remove any font family from `missing_fonts` that is installed on the
+    /// user's computer (used by desktop/CLI shells after `import_pptx`).
+    pub fn filter_installed_fonts(&mut self, is_installed: impl Fn(&str) -> bool) {
+        self.missing_fonts.retain(|font| !is_installed(font));
     }
 }
 
@@ -1491,6 +1497,14 @@ pub fn import_pptx_with_limits(
 
     report.slides = imported_slides.len();
 
+    let embedded_fonts = import_embedded_fonts(
+        &pres_tree,
+        &pres_rels,
+        &entries,
+        &mut imported_media,
+        &mut report,
+    );
+
     let (mut deck_fonts, major_font, minor_font) =
         collect_theme_fonts(&entries, limits.max_xml_depth);
     if let Some(err) = entries.take_error() {
@@ -1507,7 +1521,11 @@ pub fn import_pptx_with_limits(
     let mut missing_fonts: Vec<String> = deck_fonts
         .into_iter()
         .filter(|font| {
-            !font.eq_ignore_ascii_case("Inter") && !font.eq_ignore_ascii_case("Open Sans")
+            !font.eq_ignore_ascii_case("Inter")
+                && !font.eq_ignore_ascii_case("Open Sans")
+                && !embedded_fonts
+                    .iter()
+                    .any(|face| face.family.eq_ignore_ascii_case(font))
         })
         .collect();
     missing_fonts.sort_by_key(|font| font.to_ascii_lowercase());
@@ -1540,7 +1558,7 @@ pub fn import_pptx_with_limits(
         theme: coursecraft_course::Theme::default(),
         language: None,
         strings: std::collections::BTreeMap::new(),
-        fonts: Vec::new(),
+        fonts: embedded_fonts,
         background_audio: None,
         glossary: Vec::new(),
         editor: Default::default(),
@@ -1564,6 +1582,175 @@ pub fn import_pptx_with_limits(
         media: imported_media,
         report,
     })
+}
+
+/// Parse `<p:embeddedFontLst>` from `ppt/presentation.xml`, de-obfuscating
+/// `.fntdata` / `.odttf` parts using their ECMA-376 GUID key.
+fn import_embedded_fonts(
+    pres_tree: &XmlNode,
+    pres_rels: &HashMap<String, Relationship>,
+    entries: &Entries<'_>,
+    imported_media: &mut Vec<(String, Vec<u8>)>,
+    report: &mut ImportReport,
+) -> Vec<coursecraft_course::FontFace> {
+    use coursecraft_course::{FontFace, FontStyle};
+
+    let Some(list) = pres_tree.find_descendant("embeddedFontLst") else {
+        return Vec::new();
+    };
+    let mut faces = Vec::new();
+    let mut used_paths: HashSet<String> = imported_media
+        .iter()
+        .map(|(p, _)| p.to_ascii_lowercase())
+        .collect();
+
+    for entry in list.children_named("embeddedFont") {
+        let Some(family) = entry
+            .child("font")
+            .and_then(|n| n.attr("typeface"))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+
+        let style_nodes = [
+            ("regular", FontStyle::Regular),
+            ("bold", FontStyle::Bold),
+            ("italic", FontStyle::Italic),
+            ("boldItalic", FontStyle::BoldItalic),
+        ];
+        for (tag, style) in style_nodes {
+            let Some(node) = entry.child(tag) else {
+                continue;
+            };
+            let Some(rid) = node.attr("r:id").or_else(|| node.attr("id")) else {
+                continue;
+            };
+            let Some(target) = pres_rels.get(rid).and_then(|r| r.target.as_deref()) else {
+                continue;
+            };
+            let Ok(Some(raw_bytes)) = entries.get_checked(target) else {
+                report.items.push(ReportItem {
+                    slide: 1,
+                    kind: SkipKind::Media,
+                    note: format!(
+                        "Embedded font \"{family}\" ({}) could not be read",
+                        style.as_str()
+                    ),
+                });
+                continue;
+            };
+            let font_key = node.attr("fontKey");
+            let Some(bytes) = decode_embedded_font_bytes(&raw_bytes, font_key, target) else {
+                report.items.push(ReportItem {
+                    slide: 1,
+                    kind: SkipKind::Media,
+                    note: format!(
+                        "Embedded font \"{family}\" ({}) could not be read",
+                        style.as_str()
+                    ),
+                });
+                continue;
+            };
+            if faces
+                .iter()
+                .any(|f: &FontFace| f.family.eq_ignore_ascii_case(&family) && f.style == style)
+            {
+                continue;
+            }
+            let ext = if bytes.starts_with(b"OTTO") {
+                "otf"
+            } else {
+                "ttf"
+            };
+            let slug = sanitize_font_slug(&family);
+            let mut candidate = format!("fonts/{slug}-{}.{ext}", style.as_str());
+            let mut n = 2usize;
+            while used_paths.contains(&candidate.to_ascii_lowercase()) {
+                candidate = format!("fonts/{slug}-{}-{n}.{ext}", style.as_str());
+                n += 1;
+            }
+            used_paths.insert(candidate.to_ascii_lowercase());
+            imported_media.push((candidate.clone(), bytes));
+            faces.push(FontFace {
+                family: family.clone(),
+                style,
+                src: candidate,
+            });
+        }
+    }
+    faces
+}
+
+fn sanitize_font_slug(family: &str) -> String {
+    let mut slug = String::new();
+    for ch in family.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if (ch == ' ' || ch == '-' || ch == '_') && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let trimmed = slug.trim_matches('-').to_owned();
+    if trimmed.is_empty() {
+        "font".to_owned()
+    } else {
+        trimmed
+    }
+}
+
+fn parse_guid_bytes(text: &str) -> Option<[u8; 16]> {
+    let hex: Vec<u8> = text.bytes().filter(|b| b.is_ascii_hexdigit()).collect();
+    if hex.len() < 32 {
+        return None;
+    }
+    // Search for a 32-hex-digit GUID run (in case filename has extra chars).
+    let start = hex.len().saturating_sub(32);
+    let slice = &hex[start..start + 32];
+    let mut out = [0u8; 16];
+    for i in 0..16 {
+        let pair = std::str::from_utf8(&slice[i * 2..i * 2 + 2]).ok()?;
+        out[i] = u8::from_str_radix(pair, 16).ok()?;
+    }
+    Some(out)
+}
+
+fn xor_font_header(raw: &[u8], key: &[u8; 16], reversed: bool) -> Vec<u8> {
+    let mut out = raw.to_vec();
+    let limit = out.len().min(32);
+    for (i, byte) in out.iter_mut().take(limit).enumerate() {
+        let k = if reversed {
+            key[15 - (i % 16)]
+        } else {
+            key[i % 16]
+        };
+        *byte ^= k;
+    }
+    out
+}
+
+fn decode_embedded_font_bytes(
+    raw: &[u8],
+    font_key: Option<&str>,
+    target_path: &str,
+) -> Option<Vec<u8>> {
+    if coursecraft_media::font_info(raw).is_ok() {
+        return Some(raw.to_vec());
+    }
+    let key = font_key
+        .and_then(parse_guid_bytes)
+        .or_else(|| parse_guid_bytes(target_path))?;
+    let reversed = xor_font_header(raw, &key, true);
+    if coursecraft_media::font_info(&reversed).is_ok() {
+        return Some(reversed);
+    }
+    let forward = xor_font_header(raw, &key, false);
+    if coursecraft_media::font_info(&forward).is_ok() {
+        return Some(forward);
+    }
+    None
 }
 
 /// Fonts named by the presentation's theme parts (`a:majorFont` and
@@ -1608,14 +1795,11 @@ fn collect_theme_fonts(
 /// Replace PowerPoint theme font tokens (`+mj-lt`, `+mn-lt`, and their East
 /// Asian / complex-script variants) with the theme's actual Latin typeface.
 fn resolve_theme_font_tokens(slides: &mut [Slide], major: Option<&str>, minor: Option<&str>) {
-    let resolve = |font: &mut Option<String>| {
-        let Some(token) = font.as_deref() else {
-            return;
-        };
-        if !token.starts_with('+') {
-            return;
+    let resolve_str = |font: &str| -> Option<String> {
+        if !font.starts_with('+') {
+            return None;
         }
-        let lower = token.to_ascii_lowercase();
+        let lower = font.to_ascii_lowercase();
         let chosen = if lower.starts_with("+mj") {
             major
         } else if lower.starts_with("+mn") {
@@ -1623,21 +1807,47 @@ fn resolve_theme_font_tokens(slides: &mut [Slide], major: Option<&str>, minor: O
         } else {
             None
         };
-        *font = chosen.map(str::to_owned);
+        chosen.map(str::to_owned)
     };
-    let resolve_kind = |kind: &mut ObjectKind| {
-        let runs = match kind {
-            ObjectKind::Text { runs, .. } => Some(runs),
-            ObjectKind::Shape {
-                text: Some(text), ..
-            } => Some(&mut text.runs),
-            _ => None,
-        };
-        if let Some(runs) = runs {
+    let resolve = |font: &mut Option<String>| {
+        if let Some(token) = font.as_deref()
+            && token.starts_with('+')
+        {
+            *font = resolve_str(token);
+        }
+    };
+    let resolve_kind = |kind: &mut ObjectKind| match kind {
+        ObjectKind::Text { style, runs, .. } => {
+            if let Some(replacement) = resolve_str(&style.font) {
+                style.font = replacement;
+            }
             for run in runs {
                 resolve(&mut run.font);
             }
         }
+        ObjectKind::Shape {
+            text: Some(text), ..
+        } => {
+            if let Some(replacement) = resolve_str(&text.style.font) {
+                text.style.font = replacement;
+            }
+            for run in &mut text.runs {
+                resolve(&mut run.font);
+            }
+        }
+        ObjectKind::Table { rows, .. } => {
+            for row in rows {
+                for cell in &mut row.cells {
+                    if let Some(replacement) = resolve_str(&cell.style.font) {
+                        cell.style.font = replacement;
+                    }
+                    for run in &mut cell.runs {
+                        resolve(&mut run.font);
+                    }
+                }
+            }
+        }
+        _ => {}
     };
     for slide in slides {
         for object in &mut slide.objects {
@@ -1653,28 +1863,46 @@ fn resolve_theme_font_tokens(slides: &mut [Slide], major: Option<&str>, minor: O
 
 /// Fonts named by text runs on one imported slide.
 fn collect_slide_fonts(slide: &Slide, fonts: &mut HashSet<String>) {
-    let mut add_kind = |kind: &ObjectKind| {
-        let (runs, style_font) = match kind {
-            ObjectKind::Text { runs, style, .. } => (runs.as_slice(), Some(&style.font)),
-            ObjectKind::Shape {
-                text: Some(text), ..
-            } => (text.runs.as_slice(), Some(&text.style.font)),
-            _ => (&[][..], None),
-        };
-        if let Some(font) = style_font
+    let mut push_name = |font: &str| {
+        if !font.trim().is_empty()
             && !font.eq_ignore_ascii_case("Inter")
             && !font.eq_ignore_ascii_case("Open Sans")
         {
-            fonts.insert(font.clone());
+            fonts.insert(font.trim().to_owned());
         }
-        for run in runs {
-            if let Some(font) = &run.font
-                && !font.eq_ignore_ascii_case("Inter")
-                && !font.eq_ignore_ascii_case("Open Sans")
-            {
-                fonts.insert(font.clone());
+    };
+    let mut add_kind = |kind: &ObjectKind| match kind {
+        ObjectKind::Text { runs, style, .. } => {
+            push_name(&style.font);
+            for run in runs {
+                if let Some(font) = &run.font {
+                    push_name(font);
+                }
             }
         }
+        ObjectKind::Shape {
+            text: Some(text), ..
+        } => {
+            push_name(&text.style.font);
+            for run in &text.runs {
+                if let Some(font) = &run.font {
+                    push_name(font);
+                }
+            }
+        }
+        ObjectKind::Table { rows, .. } => {
+            for row in rows {
+                for cell in &row.cells {
+                    push_name(&cell.style.font);
+                    for run in &cell.runs {
+                        if let Some(font) = &run.font {
+                            push_name(font);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     };
     for object in &slide.objects {
         add_kind(&object.kind);

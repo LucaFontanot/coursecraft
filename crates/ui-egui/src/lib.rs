@@ -15,6 +15,10 @@
     clippy::unreachable
 )]
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use coursecraft_render::IndexFontProvider;
+pub use coursecraft_render::SystemFontProvider;
+
 pub mod ai_settings;
 pub mod alt_text;
 pub mod audio_ai;
@@ -146,6 +150,8 @@ mod eyedropper_tests;
 mod fill_style_tests;
 #[cfg(test)]
 mod find_tests;
+#[cfg(test)]
+mod font_harness_tests;
 #[cfg(test)]
 mod guard_counters;
 #[cfg(test)]
@@ -1081,6 +1087,8 @@ pub struct Editor {
     pub spell_cache: spell_check::SpellCache,
     /// Bumped whenever the dictionary or ignored words change.
     pub spell_version: u64,
+    /// Optional provider of installed desktop fonts (unset on wasm).
+    pub system_font_provider: Option<std::sync::Arc<dyn coursecraft_render::SystemFontProvider>>,
 }
 
 /// Text tone of a [`quiet_button`].
@@ -1356,10 +1364,19 @@ impl Editor {
             spell_tried: false,
             spell_cache: spell_check::SpellCache::default(),
             spell_version: 0,
+            system_font_provider: None,
         };
         editor.check_revision();
         editor.refresh_audit_now();
         editor
+    }
+
+    /// Register (or clear) the optional system font provider for slide rendering.
+    pub fn set_system_font_provider(
+        &mut self,
+        provider: Option<std::sync::Arc<dyn coursecraft_render::SystemFontProvider>>,
+    ) {
+        self.system_font_provider = provider;
     }
 
     /// Set the user's active theme preference.
@@ -3637,6 +3654,7 @@ impl Editor {
         self.check_revision();
         self.maybe_run_deferred_audit(ui.ctx());
         properties::publish_theme_colors(ui.ctx(), &self.session.course.theme);
+        coursecraft_render::set_system_font_provider(ui.ctx(), self.system_font_provider.clone());
         coursecraft_render::install_course_fonts(
             ui.ctx(),
             &self.session.course,

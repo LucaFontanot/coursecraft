@@ -1980,3 +1980,59 @@ fn zip_package_to_writes_the_same_bytes_as_zip_package() {
     zip_package_to(&files, &mut out).expect("zip to writer");
     assert_eq!(out.into_inner(), zip_package(&files).expect("zip"));
 }
+
+#[test]
+fn auto_embed_fonts_embeds_allowed_skips_restricted_and_warns_for_unembedded() {
+    use coursecraft_course::FontStyle;
+
+    struct FakeProvider;
+    impl crate::PublishFontProvider for FakeProvider {
+        fn lookup_font(&self, family: &str, style: FontStyle) -> crate::PublishFontLookup {
+            match family {
+                "OpenDisplay" => crate::PublishFontLookup::Found {
+                    style,
+                    bytes: b"TTF-BYTES".to_vec(),
+                    extension: "ttf",
+                },
+                "RestrictedFont" => crate::PublishFontLookup::Restricted,
+                _ => crate::PublishFontLookup::Missing,
+            }
+        }
+    }
+
+    let mut course = minimal_course("Font test");
+    let obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "t1",
+        "name": "T1",
+        "kind": {
+            "type": "text",
+            "text": "Hello",
+            "style": { "font": "OpenDisplay", "size": 18, "color": "#000000" },
+            "runs": [
+                { "text": "A", "font": "RestrictedFont" },
+                { "text": "B", "font": "AbsentFont" }
+            ]
+        },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0 }
+    }))
+    .expect("valid object");
+    course.scenes[0].slides[0].objects.push(obj);
+
+    let res = crate::auto_embed_fonts(&course, Some(&FakeProvider));
+    assert_eq!(res.embedded_families, vec!["OpenDisplay".to_string()]);
+    assert_eq!(res.course.fonts.len(), 1);
+    assert_eq!(res.course.fonts[0].family, "OpenDisplay");
+    assert_eq!(res.embedded_files.len(), 1);
+    assert!(
+        res.warnings
+            .contains(&"Learners without RestrictedFont will see Inter.".to_string())
+    );
+    assert!(
+        res.warnings
+            .contains(&"Learners without AbsentFont will see Inter.".to_string())
+    );
+    assert!(
+        res.warnings
+            .contains(&"Font licences are your responsibility.".to_string())
+    );
+}

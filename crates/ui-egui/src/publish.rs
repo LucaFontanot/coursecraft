@@ -144,6 +144,12 @@ pub struct PublishState {
     pub phase: PublishPhase,
     /// A quiet status line, e.g. when "Show in folder" fails.
     pub status: Option<String>,
+    /// Font families auto-embedded into the published package.
+    pub embedded_fonts: Vec<String>,
+    /// Font warnings from publishing (missing, restricted, licence notice).
+    pub font_warnings: Vec<String>,
+    /// Auto-embedded font faces offered to be saved into the project (undoable).
+    pub pending_save_fonts: Vec<(coursecraft_course::FontFace, std::sync::Arc<[u8]>)>,
 }
 
 impl Editor {
@@ -177,12 +183,27 @@ impl Editor {
 
     /// Show a successful publish.
     pub fn set_publish_success(&mut self, file_name: impl Into<String>, bytes: u64) {
+        self.set_publish_success_with_fonts(file_name, bytes, Vec::new(), Vec::new(), Vec::new());
+    }
+
+    /// Show a successful publish with auto-embedded font summary and warnings.
+    pub fn set_publish_success_with_fonts(
+        &mut self,
+        file_name: impl Into<String>,
+        bytes: u64,
+        embedded_fonts: Vec<String>,
+        font_warnings: Vec<String>,
+        pending_save_fonts: Vec<(coursecraft_course::FontFace, std::sync::Arc<[u8]>)>,
+    ) {
         self.ui.publish.open = true;
         self.ui.publish.phase = PublishPhase::Success {
             file_name: file_name.into(),
             bytes,
         };
         self.ui.publish.status = None;
+        self.ui.publish.embedded_fonts = embedded_fonts;
+        self.ui.publish.font_warnings = font_warnings;
+        self.ui.publish.pending_save_fonts = pending_save_fonts;
     }
 
     /// Show a failed publish and keep the dialog open for a retry.
@@ -399,6 +420,53 @@ fn show_success_details(editor: &mut Editor, ui: &mut egui::Ui) {
     if let Some(ref status) = editor.ui.publish.status {
         ui.add_space(SPACE_SM);
         ui.label(small(status.clone()).color(p.danger));
+    }
+
+    if !editor.ui.publish.embedded_fonts.is_empty() {
+        ui.add_space(SPACE_SM);
+        ui.label(
+            small(format!(
+                "Embedded fonts: {}.",
+                editor.ui.publish.embedded_fonts.join(", ")
+            ))
+            .color(p.text_secondary),
+        );
+    }
+
+    if !editor.ui.publish.font_warnings.is_empty() {
+        ui.add_space(SPACE_SM);
+        for warning in &editor.ui.publish.font_warnings {
+            let color = if warning.contains("responsibility") {
+                p.text_secondary
+            } else {
+                p.warning
+            };
+            ui.label(small(warning.clone()).color(color));
+        }
+    }
+
+    if !editor.ui.publish.pending_save_fonts.is_empty() {
+        ui.add_space(SPACE_SM);
+        if ui.button("Save embedded fonts to project").clicked() {
+            let to_save = std::mem::take(&mut editor.ui.publish.pending_save_fonts);
+            for (face, bytes) in to_save {
+                if !editor
+                    .media
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case(&face.src))
+                {
+                    editor.media.push((face.src.clone(), bytes));
+                }
+                let _ = editor.run(
+                    "course.add_font",
+                    serde_json::json!({
+                        "family": face.family,
+                        "style": face.style,
+                        "src": face.src,
+                    }),
+                );
+            }
+        }
     }
 
     ui.add_space(SPACE_SM);
