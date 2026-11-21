@@ -284,6 +284,16 @@ Feedback: `docs/user-feedback/aurelie-v02-issues.md` (A1–A13 from Aurelie, A14
 - Installed fonts in the editor, fonts from PowerPoint files, fonts embedded automatically at publish (respecting the licence flag).
 - Owner testing: formatting kept while editing, bigger font picker, justify, Fill/Outline switches, dash spacing, timeline past a video, exit effect names.
 
+## M27 Our own testing first ✅
+
+Test plan by Gemini 4 Neon (`docs/testing/m27-plan.md`, reviewed by Opus); 25 steps by Gemini 4 Hydrogen (agy CLI); checked by Opus. Log: `docs/bug-hunt/2026-11-21-m27.md`.
+
+- Strict test LMS (`crates/strict-lms`): SCORM 1.2, SCORM 2004 3rd/4th, cmi5/xAPI, package manifests, and a local LTI 1.3 platform. No installs, no network. The browser mock LMS and mock LRS use the same Rust rules.
+- Reference course (`examples/reference-course/`) using every runtime feature, run by scripted learners through all six publish targets with zero violations.
+- PowerPoint: animations (entrance, exit, motion paths, click triggers) and default table borders; animated slide 20 in the fidelity deck.
+- Editor sweep: triggers, states, timeline, media, undo/redo (every editing command), clipboard, layers, questions, masters, scenes, find, accessibility, save/open/autosave/versions.
+- 48 bugs found and fixed: all 27 suspected by the plan, plus 21 more found by the tests.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
@@ -292,6 +302,8 @@ Feedback: `docs/user-feedback/aurelie-v02-issues.md` (A1–A13 from Aurelie, A14
 ## Later
 
 - Wider real-LMS certification: a local Moodle and other LMSs (completion, pass/fail, score, resume).
+- Word import fidelity (rarely needed; parked by the owner).
+- Find and Replace in glossary entries.
 
 ## Not planned for now
 

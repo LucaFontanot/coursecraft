@@ -87,6 +87,8 @@
     <a href="/index.html">hello-course</a>
     <a href="/showcase/index.html">showcase</a>
     <a href="/scorm2004/index.html">showcase (SCORM 2004)</a>
+    <a href="/reference/index.html">reference course</a>
+    <a href="/reference-2004/index.html">reference course (SCORM 2004)</a>
   </nav>
   <header>
     <h1>Mock LMS</h1>
@@ -125,12 +127,12 @@
     "use strict";
 
     const is2004 = /[?&]standard=2004(?:&|$)/.test(location.search) ||
-      /(^|\/)scorm2004(\/|$)/.test(location.pathname);
+      /(^|\/)(scorm2004|reference-2004)(\/|$)/.test(location.pathname);
     if (is2004) document.body.classList.add("mode-2004");
 
     const KEY = (is2004 ? "coursecraft-mock-lms:scorm2004:" : "coursecraft-mock-lms:") +
       location.pathname.replace(/index\.html$/, "");
-    const wasmBase = /(^|\/)(showcase|scorm2004)(\/|$)/.test(location.pathname)
+    const wasmBase = /(^|\/)(showcase|scorm2004|reference|reference-2004)(\/|$)/.test(location.pathname)
       ? "../strict-lms-wasm/"
       : "./strict-lms-wasm/";
 

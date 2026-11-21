@@ -359,8 +359,12 @@ fn build_strict_lms_wasm(root: &Path, mock: &Path) -> Result<(), String> {
     ]) {
         return Err("cargo build failed for coursecraft-strict-lms-wasm".into());
     }
+    // Cargo writes to CARGO_TARGET_DIR when it is set, not to `<root>/target`.
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| root.join("target"));
     let wasm_in =
-        root.join("target/wasm32-unknown-unknown/release/coursecraft_strict_lms_wasm.wasm");
+        target_dir.join("wasm32-unknown-unknown/release/coursecraft_strict_lms_wasm.wasm");
     let out_dir = mock.join("strict-lms-wasm");
     if out_dir.exists() {
         std::fs::remove_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;

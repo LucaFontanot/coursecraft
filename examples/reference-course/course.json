@@ -26,7 +26,7 @@
   ],
   "quiz": { "passing_percent": 70 },
   "background_audio": {
-    "src": "media/bg-loop.wav",
+    "src": "bg-loop.wav",
     "volume": 0.4,
     "loop": true
   },
@@ -39,7 +39,7 @@
     {
       "id": "res-file",
       "title": "Reference Guide",
-      "target": { "kind": "file", "src": "media/guide.txt" }
+      "target": { "kind": "file", "src": "guide.txt" }
     }
   ],
   "glossary": [
@@ -61,7 +61,7 @@
     "show_speed": true,
     "show_fullscreen": true,
     "show_transcript": true,
-    "logo": "media/logo.png",
+    "logo": "logo.png",
     "navigation": "restricted",
     "next_requires": { "kind": "nothing" }
   },
@@ -91,7 +91,7 @@
         },
         {
           "id": "m-logo",
-          "kind": { "type": "image", "src": "media/logo.png", "alt": "CourseCraft Logo" },
+          "kind": { "type": "image", "src": "logo.png", "alt": "CourseCraft Logo" },
           "frame": { "x": 24, "y": 16, "w": 48, "h": 24 }
         }
       ]
@@ -140,14 +140,14 @@
             },
             {
               "id": "s01-hero",
-              "kind": { "type": "image", "src": "media/hero.png", "alt": "Hero graphic" },
+              "kind": { "type": "image", "src": "hero.png", "alt": "Hero graphic" },
               "frame": { "x": 80, "y": 180, "w": 128, "h": 128 },
               "states": [
                 { "name": "selected", "fill": "#2F6FEB" },
                 { "name": "visited", "fill": "#1D4ED8" },
                 { "name": "disabled", "fill": "#94A3B8" },
                 { "name": "hidden" },
-                { "name": "active", "fill": "#2E8B57", "text": "Active", "src": "media/alt-state.png" }
+                { "name": "active", "fill": "#2E8B57", "text": "Active", "src": "alt-state.png" }
               ]
             },
             {
@@ -446,13 +446,13 @@
               "id": "obj-image",
               "kind": {
                 "type": "image",
-                "src": "media/hero.png",
+                "src": "hero.png",
                 "alt": "Cropped image",
                 "crop": { "x": 0.1, "y": 0.1, "w": 0.8, "h": 0.8 }
               },
               "frame": { "x": 320, "y": 110, "w": 64, "h": 64 },
               "states": [
-                { "name": "alt", "src": "media/alt-state.png" }
+                { "name": "alt", "src": "alt-state.png" }
               ]
             },
             {
@@ -465,7 +465,7 @@
                   { "x": 0.0, "y": 1.0 }
                 ],
                 "closed": true,
-                "fill_style": { "type": "picture", "src": "media/tile.png", "mode": "tile" },
+                "fill_style": { "type": "picture", "src": "tile.png", "mode": "tile" },
                 "outline": { "color": "#1E3A8A", "width": 2 }
               },
               "frame": { "x": 410, "y": 110, "w": 80, "h": 64 }
@@ -700,9 +700,9 @@
               "id": "obj-audio",
               "kind": {
                 "type": "audio",
-                "src": "media/narration.wav",
+                "src": "narration.wav",
                 "autoplay": false,
-                "captions": "media/narration.vtt",
+                "captions": "narration.vtt",
                 "trim": { "start_ms": 200, "end_ms": 800 }
               },
               "frame": { "x": 80, "y": 80, "w": 160, "h": 40 }
@@ -711,10 +711,10 @@
               "id": "obj-video",
               "kind": {
                 "type": "video",
-                "src": "media/clip.mp4",
+                "src": "clip.mp4",
                 "autoplay": true,
-                "captions": "media/clip.vtt",
-                "poster": "media/poster.png",
+                "captions": "clip.vtt",
+                "poster": "poster.png",
                 "cues": [
                   { "id": "c1", "name": "Pause Cue", "at_ms": 1000, "pause": true },
                   { "id": "c2", "name": "Pass Cue", "at_ms": 2000, "pause": false }
@@ -726,7 +726,7 @@
               "id": "obj-lottie",
               "kind": {
                 "type": "lottie",
-                "src": "media/anim.json",
+                "src": "anim.json",
                 "loop": false,
                 "autoplay": true,
                 "speed": 1.0
@@ -782,7 +782,7 @@
               "id": "s06-vid",
               "kind": {
                 "type": "video",
-                "src": "media/clip.mp4",
+                "src": "clip.mp4",
                 "autoplay": true,
                 "cues": [{ "id": "lb-c1", "name": "Cue", "at_ms": 500, "pause": false }]
               },
@@ -1063,7 +1063,7 @@
             ]
           },
           "objects": [
-            { "id": "hs-img", "kind": { "type": "image", "src": "media/hotspot.png", "alt": "Hotspot map" }, "frame": { "x": 80, "y": 80, "w": 400, "h": 300 } },
+            { "id": "hs-img", "kind": { "type": "image", "src": "hotspot.png", "alt": "Hotspot map" }, "frame": { "x": 80, "y": 80, "w": 400, "h": 300 } },
             { "id": "s13-submit", "kind": { "type": "button", "label": "Submit" }, "frame": { "x": 1000, "y": 600, "w": 180, "h": 50 } },
             { "id": "s13-next", "kind": { "type": "button", "label": "Next" }, "frame": { "x": 800, "y": 600, "w": 180, "h": 50 } }
           ],
