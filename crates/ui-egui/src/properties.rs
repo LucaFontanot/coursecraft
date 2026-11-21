@@ -129,6 +129,8 @@ pub struct PropertiesState {
     pub system_font_search: String,
     /// Whether we have already asked the app for the installed font list.
     pub system_fonts_list_requested: bool,
+    /// Recently chosen font families (newest first).
+    pub recent_fonts: Vec<String>,
 
     // Button buffers
     pub button_label: String,
@@ -374,6 +376,7 @@ impl Default for PropertiesState {
             add_font_requested: false,
             system_font_search: String::new(),
             system_fonts_list_requested: false,
+            recent_fonts: Vec::new(),
             button_label: String::new(),
             button_fill: "#2F6FEB".into(),
             shape_kind: ShapeKind::Rectangle,
@@ -3214,30 +3217,20 @@ fn show_text_controls(
         current_font
     };
     inspector_row(ui, "Font", |ui| {
-        let selected_font = coursecraft_render::slide_font_named(
-            ui.ctx(),
-            Some(&shown_font),
-            false,
-            false,
-            coursecraft_render::SIZE_BODY,
-        );
-        egui::ComboBox::from_id_salt(("prop_font", id_prefix))
-            .selected_text(egui::RichText::new(&shown_font).font(selected_font))
-            .show_ui(ui, |ui| {
-                for name in std::iter::once("Inter".to_owned()).chain(font_families.iter().cloned())
-                {
-                    let font = coursecraft_render::slide_font_named(
-                        ui.ctx(),
-                        Some(&name),
-                        false,
-                        false,
-                        coursecraft_render::SIZE_BODY,
-                    );
-                    if ui
-                        .selectable_label(shown_font == name, egui::RichText::new(&name).font(font))
-                        .clicked()
-                        && shown_font != name
-                    {
+        if let Some(picked) = crate::font_picker::show_font_picker(
+            ui,
+            id_prefix,
+            &shown_font,
+            font_families,
+            &mut props.recent_fonts,
+            system_fonts,
+            &mut props.system_fonts_list_requested,
+            &mut props.system_font_search,
+            font_requests,
+        ) {
+            match picked {
+                crate::font_picker::FontPickerAction::PickCourseOrRecent(name) => {
+                    if shown_font != name {
                         action_to_run = Some((
                             "text.style_range",
                             serde_json::json!({
@@ -3248,93 +3241,28 @@ fn show_text_controls(
                                 "font": name,
                             }),
                         ));
-                        ui.close();
                     }
                 }
-                ui.separator();
-                ui.label(
-                    RichText::new("On this computer")
-                        .size(coursecraft_render::SIZE_SMALL)
-                        .color(coursecraft_render::palette(ui.ctx()).text_secondary),
-                );
-                match system_fonts {
-                    None => {
-                        if !props.system_fonts_list_requested {
-                            props.system_fonts_list_requested = true;
-                            font_requests.push(crate::EditorRequest::ListSystemFonts);
-                        }
-                        ui.label(
-                            RichText::new("Loading fonts…")
-                                .size(coursecraft_render::SIZE_SMALL)
-                                .color(coursecraft_render::palette(ui.ctx()).text_secondary),
-                        );
-                    }
-                    Some([]) => {
-                        ui.label(
-                            RichText::new("Not available here")
-                                .size(coursecraft_render::SIZE_SMALL)
-                                .color(coursecraft_render::palette(ui.ctx()).text_secondary),
-                        );
-                    }
-                    Some(choices) => {
-                        ui.add(
-                            TextEdit::singleline(&mut props.system_font_search)
-                                .hint_text("Search fonts"),
-                        );
-                        let query = props.system_font_search.to_lowercase();
-                        let filtered: Vec<&crate::SystemFontChoice> = choices
-                            .iter()
-                            .filter(|choice| choice.name.to_lowercase().contains(&query))
-                            .filter(|choice| {
-                                !font_families
-                                    .iter()
-                                    .any(|name| name.eq_ignore_ascii_case(&choice.name))
-                            })
-                            .collect();
-                        let row_height = ui.spacing().interact_size.y;
-                        egui::ScrollArea::vertical()
-                            .id_salt(("sys_font_list", id_prefix))
-                            .max_height(200.0)
-                            .show_rows(ui, row_height, filtered.len(), |ui, row_range| {
-                                for choice in &filtered[row_range] {
-                                    ui.horizontal(|ui| {
-                                        if ui.selectable_label(false, &choice.name).clicked() {
-                                            font_requests.push(
-                                                crate::EditorRequest::AddSystemFont {
-                                                    family: choice.name.clone(),
-                                                    apply: Some((
-                                                        "text.style_range".to_owned(),
-                                                        serde_json::json!({
-                                                            "slide": slide_id,
-                                                            "object": obj_id,
-                                                            "start": char_range.0,
-                                                            "end": char_range.1,
-                                                            "font": choice.name,
-                                                        }),
-                                                    )),
-                                                },
-                                            );
-                                            ui.close();
-                                        }
-                                        if choice.embedding_restricted {
-                                            ui.label(
-                                                RichText::new("restricted").small().color(
-                                                    coursecraft_render::palette(ui.ctx())
-                                                        .text_secondary,
-                                                ),
-                                            );
-                                        }
-                                    });
-                                }
-                            });
-                    }
+                crate::font_picker::FontPickerAction::PickSystem(name) => {
+                    font_requests.push(crate::EditorRequest::AddSystemFont {
+                        family: name.clone(),
+                        apply: Some((
+                            "text.style_range".to_owned(),
+                            serde_json::json!({
+                                "slide": slide_id,
+                                "object": obj_id,
+                                "start": char_range.0,
+                                "end": char_range.1,
+                                "font": name,
+                            }),
+                        )),
+                    });
                 }
-                ui.separator();
-                if ui.button("Add font…").clicked() {
+                crate::font_picker::FontPickerAction::AddFont => {
                     props.add_font_requested = true;
-                    ui.close();
                 }
-            });
+            }
+        }
     });
 
     if let Some(autofit) = autofit {

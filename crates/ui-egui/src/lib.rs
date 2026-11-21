@@ -40,6 +40,7 @@ pub mod fonts;
 
 /// `(slide, object, selection_range, cursor_pos)` captured from an active inline text edit.
 pub type InlineEditSelection = (String, String, Option<(usize, usize)>, usize);
+pub mod font_picker;
 pub mod format_painter;
 pub mod history;
 pub mod input_insert;
@@ -154,6 +155,8 @@ mod fill_style_tests;
 mod find_tests;
 #[cfg(test)]
 mod font_harness_tests;
+#[cfg(test)]
+mod font_picker_tests;
 #[cfg(test)]
 mod guard_counters;
 #[cfg(test)]
