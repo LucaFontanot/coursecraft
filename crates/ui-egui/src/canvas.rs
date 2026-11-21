@@ -1418,7 +1418,12 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
                 .sum::<f32>()
         })
         + 56.0
-        + 28.0;
+        + 28.0
+        + if editor.selection.layer.is_some() {
+            190.0
+        } else {
+            0.0
+        };
     let pills_x = t
         .slide_rect()
         .min
@@ -1494,6 +1499,54 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             "layer.add",
             serde_json::json!({ "slide": editor.selection.slide }),
         );
+    }
+
+    if !is_base {
+        pills_ui.add_space(8.0);
+        pills_ui.label(coursecraft_render::small("Base slide:").color(p.text_secondary));
+        let current = editor.session.course.editor.base_slide_view;
+        for (mode, label, api_val) in [
+            (coursecraft_course::BaseSlideView::Show, "Show", "show"),
+            (coursecraft_course::BaseSlideView::Dim, "Dim", "dim"),
+            (coursecraft_course::BaseSlideView::Hide, "Hide", "hide"),
+        ] {
+            let active = current == mode;
+            let text = coursecraft_render::small(label).color(if active {
+                p.accent_text
+            } else {
+                p.text_secondary
+            });
+            let btn = egui::Button::new(text)
+                .fill(if active {
+                    p.accent_subtle
+                } else {
+                    Color32::TRANSPARENT
+                })
+                .corner_radius(12)
+                .min_size(vec2(0.0, 24.0));
+            if pills_ui.add(btn).clicked() && !active {
+                editor.run(
+                    "view.set",
+                    serde_json::json!({ "base_slide_view": api_val }),
+                );
+            }
+        }
+    }
+}
+
+fn is_base_slide_item(slide: &coursecraft_course::Slide, item: &DrawItem) -> bool {
+    match &item.hit {
+        Hit::Object(id) => slide.objects.iter().any(|o| &o.id == id),
+        Hit::Choice(_)
+        | Hit::SequenceMove { .. }
+        | Hit::QuestionChrome(_)
+        | Hit::HotspotImage
+        | Hit::DragItem(_) => true,
+        Hit::TextLink { object, .. } => slide.objects.iter().any(|o| &o.id == object),
+        Hit::None => matches!(
+            item.visual,
+            Visual::Prompt { .. } | Visual::DrawCard { .. } | Visual::HotspotMarker
+        ),
     }
 }
 
@@ -5402,13 +5455,23 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             .ui
             .layers
             .extra_layer_ids(slide, editor.selection.layer.as_deref());
+        let dim_base = editor.selection.layer.is_some()
+            && editor.session.course.editor.base_slide_view
+                == coursecraft_course::BaseSlideView::Dim
+            && editor.ui.layers.dim_other_layers;
         let mut items = compose_authoring_layers(
             &editor.session.course,
             slide,
             editor.selection.layer.as_deref(),
             &extra_layers,
-            editor.ui.layers.dim_other_layers,
+            dim_base,
         );
+        if editor.selection.layer.is_some()
+            && editor.session.course.editor.base_slide_view
+                == coursecraft_course::BaseSlideView::Hide
+        {
+            items.retain(|item| !is_base_slide_item(slide, item));
+        }
         items.retain(|item| {
             !matches!(&item.hit, Hit::Object(id)
                 if slide.object(id).is_some_and(|(o, _)| o.editor_hidden))
@@ -5722,7 +5785,11 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         }
         crate::rulers::show(editor, ui, &painter, &t, canvas_rect);
         if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {
-            if let Some(ref q) = slide.question
+            let base_hidden = editor.selection.layer.is_some()
+                && editor.session.course.editor.base_slide_view
+                    == coursecraft_course::BaseSlideView::Hide;
+            if !base_hidden
+                && let Some(ref q) = slide.question
                 && q.kind == QuestionKind::Hotspot
             {
                 draw_hotspot_regions(editor, &painter, &t, q, ui, current_pointer);

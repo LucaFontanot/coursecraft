@@ -393,6 +393,23 @@ pub struct PublishSettings {
     pub standard: String,
 }
 
+/// How the base slide appears in the editor while a layer tab is active.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BaseSlideView {
+    /// Show base slide objects at full opacity.
+    Show,
+    /// Dim base slide objects (~35% opacity) so the active layer stands out.
+    #[default]
+    Dim,
+    /// Hide base slide objects completely while editing a layer.
+    Hide,
+}
+
+fn is_default_base_slide_view(v: &BaseSlideView) -> bool {
+    *v == BaseSlideView::Dim
+}
+
 /// Authoring view settings saved with the course. Ignored by the player and publish.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -405,6 +422,8 @@ pub struct EditorSettings {
     pub snap_to_grid: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub show_guides: bool,
+    #[serde(default, skip_serializing_if = "is_default_base_slide_view")]
+    pub base_slide_view: BaseSlideView,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guides: Vec<Guide>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,6 +437,7 @@ impl EditorSettings {
             && !self.show_grid
             && !self.snap_to_grid
             && !self.show_guides
+            && self.base_slide_view == BaseSlideView::Dim
             && self.guides.is_empty()
             && self.last_publish.is_none()
     }

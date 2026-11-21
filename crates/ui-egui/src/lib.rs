@@ -81,6 +81,9 @@ mod alt_text_tests;
 #[cfg(test)]
 mod audio_ai_tests;
 #[cfg(test)]
+#[cfg(test)]
+mod base_slide_view_tests;
+#[cfg(test)]
 mod bughunt_insert;
 #[cfg(test)]
 mod bughunt_m24_canvas;
