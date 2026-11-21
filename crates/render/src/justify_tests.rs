@@ -328,3 +328,115 @@ fn justified_rotated_box_renders_without_error() {
         "rotated justified text should render visible pixels"
     );
 }
+
+#[test]
+fn justified_words_snap_to_physical_pixels_at_100_and_150_zoom() {
+    let text = "The quick brown fox jumps over the lazy dog and five dozen liquor jugs";
+    for &ppp in &[1.0f32, 1.5f32] {
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(ppp);
+        let output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+        output.drop_without_applying_deltas();
+
+        for &zoom in &[1.0f32, 1.5f32] {
+            for &origin_x in &[0.0f32, 100.37f32] {
+                let box_w = 240.0 * zoom;
+                let rect = Rect::from_min_size(pos2(origin_x, 20.0), vec2(box_w, 300.0 * zoom));
+                let runs = vec![plain_run(text, 16.0)];
+                let laid = layout_text(
+                    &ctx,
+                    rect,
+                    zoom,
+                    &runs,
+                    &[Paragraph::default()],
+                    Align::Justify,
+                    VAlign::Top,
+                    Autofit::None,
+                );
+                let para = laid.paragraphs.first().expect("paragraph");
+                assert!(
+                    para.galley.rows.len() >= 2,
+                    "expected wrapped lines at zoom={zoom}, ppp={ppp}"
+                );
+                for (row_idx, row) in para.galley.rows.iter().enumerate() {
+                    let is_last = row_idx + 1 == para.galley.rows.len();
+                    if is_last || row.ends_with_newline {
+                        continue;
+                    }
+                    let mut in_word = false;
+                    let mut word_count = 0usize;
+                    for glyph in &row.glyphs {
+                        if glyph.chr.is_whitespace() {
+                            in_word = false;
+                        } else if !in_word {
+                            in_word = true;
+                            word_count += 1;
+                            let screen_x = para.pos.x + row.pos.x + glyph.pos.x;
+                            let px = screen_x * ppp;
+                            let frac = (px - px.round()).abs();
+                            assert!(
+                                frac <= 0.01,
+                                "ppp={ppp} zoom={zoom} origin_x={origin_x} row={row_idx} word={word_count}: \
+                                 screen_x={screen_x} * ppp={px} is not integer (frac={frac})"
+                            );
+                        }
+                    }
+                    assert!(word_count >= 2);
+                    let content_r = para.pos.x + row.pos.x + row_content_right(row);
+                    assert!(
+                        (content_r - rect.right()).abs() <= 1.0,
+                        "ppp={ppp} zoom={zoom} origin_x={origin_x} row={row_idx}: \
+                         content_r={content_r} != rect.right()={}",
+                        rect.right()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn left_center_right_text_is_unchanged() {
+    let ctx = text_ctx();
+    let text = "The quick brown fox jumps over the lazy dog and five dozen liquor jugs";
+    let runs = vec![plain_run(text, 16.0)];
+    let rect_zero = Rect::from_min_size(pos2(0.0, 0.0), vec2(240.0, 300.0));
+    let rect_frac = Rect::from_min_size(pos2(100.37, 20.0), vec2(240.0, 300.0));
+
+    for align in [Align::Left, Align::Center, Align::Right] {
+        let laid_zero = layout_text(
+            &ctx,
+            rect_zero,
+            1.0,
+            &runs,
+            &[Paragraph::default()],
+            align,
+            VAlign::Top,
+            Autofit::None,
+        );
+        let laid_frac = layout_text(
+            &ctx,
+            rect_frac,
+            1.0,
+            &runs,
+            &[Paragraph::default()],
+            align,
+            VAlign::Top,
+            Autofit::None,
+        );
+        let g_zero = &laid_zero.paragraphs[0].galley;
+        let g_frac = &laid_frac.paragraphs[0].galley;
+        assert_eq!(g_zero.rows.len(), g_frac.rows.len());
+        for (r0, r1) in g_zero.rows.iter().zip(g_frac.rows.iter()) {
+            assert_eq!(r0.glyphs.len(), r1.glyphs.len());
+            for (g0, g1) in r0.glyphs.iter().zip(r1.glyphs.iter()) {
+                assert!(
+                    (g0.pos.x - g1.pos.x).abs() < 1e-4,
+                    "align={align:?}: glyph pos.x should not depend on rect.min.x ({} vs {})",
+                    g0.pos.x,
+                    g1.pos.x
+                );
+            }
+        }
+    }
+}

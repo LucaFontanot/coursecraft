@@ -4975,7 +4975,19 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         );
         let mut galley = egui_ui.fonts_mut(|fonts| fonts.layout_job(job));
         if course_align == coursecraft_course::Align::Justify && is_multiline && wrap {
-            coursecraft_render::justify_galley(&mut galley, wrap_width.max(1.0));
+            let ppp = egui_ui.ctx().pixels_per_point();
+            let origin_x = text_rect.left()
+                + if insets.is_some() {
+                    0.0
+                } else {
+                    f32::from(frame.inner_margin.left)
+                };
+            coursecraft_render::justify_galley_snapped(
+                &mut galley,
+                wrap_width.max(1.0),
+                ppp,
+                origin_x,
+            );
         }
         galley
     };

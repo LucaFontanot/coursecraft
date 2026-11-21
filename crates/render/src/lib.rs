@@ -121,7 +121,7 @@ pub use shape_geometry::{
 pub use snapshot::{PlayerSnapshotSelect, snapshot_player};
 pub use text_layout::{
     AUTOFIT_MIN_SCALE, INDENT_STEP, LaidLink, LaidMarker, LaidParagraph, LaidText, fill_item_links,
-    inline_edit_layout_job, justify_galley, layout_text,
+    inline_edit_layout_job, justify_galley, justify_galley_snapped, layout_text,
 };
 pub use ticker::Ticker;
 pub use view::{

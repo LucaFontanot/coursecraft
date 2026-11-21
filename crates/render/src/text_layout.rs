@@ -353,15 +353,35 @@ fn halign(align: Align) -> egui::Align {
 }
 
 /// Spread extra horizontal space on wrapped lines across inter-word spaces
-/// so each non-final line fills `target_width`.
+/// so each non-final line fills `target_width`, snapping each word's start
+/// to whole physical pixels for crisp rendering.
 ///
 /// Updates both `row.glyphs` (for hit testing, cursor placement, underlines and
 /// links) and `row.visuals.mesh` (which egui actually renders), plus the row
 /// and galley bounding boxes.
 pub fn justify_galley(galley: &mut Arc<egui::Galley>, target_width: f32) {
+    justify_galley_snapped(galley, target_width, 1.0, 0.0);
+}
+
+/// Like [`justify_galley`], but snaps each word's screen x
+/// (`origin_x + row.pos.x + glyph.pos.x`) to `1.0 / pixels_per_point` so
+/// glyphs land on whole physical pixels at any zoom or DPI scale.
+pub fn justify_galley_snapped(
+    galley: &mut Arc<egui::Galley>,
+    target_width: f32,
+    pixels_per_point: f32,
+    origin_x: f32,
+) {
     if !target_width.is_finite() || target_width <= 0.0 {
         return;
     }
+    let ppp = if pixels_per_point.is_finite() && pixels_per_point > 0.0 {
+        pixels_per_point
+    } else {
+        1.0
+    };
+    let origin_x = if origin_x.is_finite() { origin_x } else { 0.0 };
+
     let g = Arc::make_mut(galley);
     let row_count = g.rows.len();
     for (row_idx, placed_row) in g.rows.iter_mut().enumerate() {
@@ -377,6 +397,10 @@ pub fn justify_galley(galley: &mut Arc<egui::Galley>, target_width: f32) {
             continue;
         };
         let effective_end = last_non_ws + 1;
+        let content_left_orig = glyphs[first_non_ws..effective_end]
+            .iter()
+            .map(|glyph| glyph.pos.x)
+            .fold(f32::INFINITY, f32::min);
         let content_right = glyphs[..effective_end]
             .iter()
             .map(|glyph| glyph.pos.x + glyph.advance_width)
@@ -393,40 +417,60 @@ pub fn justify_galley(galley: &mut Arc<egui::Galley>, target_width: f32) {
             continue;
         }
         let per_space = extra / space_count as f32;
+        let row_origin_x = origin_x + placed_row.pos.x;
         let row = Arc::make_mut(&mut placed_row.row);
         let glyph_vertex_end = row
             .visuals
             .glyph_vertex_range
             .end
             .min(row.visuals.mesh.vertices.len());
-        let mut shift = 0.0f32;
+        let mut ideal_shift = 0.0f32;
+        let mut word_shift = 0.0f32;
+        let mut in_word = false;
         for (idx, glyph) in row.glyphs.iter_mut().enumerate() {
-            glyph.pos.x += shift;
-            if shift != 0.0 && !glyph.uv_rect.is_nothing() {
+            let is_ws = glyph.chr.is_whitespace();
+            let active_shift = if idx >= first_non_ws && idx < effective_end && !is_ws {
+                if !in_word {
+                    in_word = true;
+                    let screen_x = row_origin_x + glyph.pos.x + ideal_shift;
+                    let snapped_screen_x = (screen_x * ppp).round() / ppp;
+                    word_shift = snapped_screen_x - row_origin_x - glyph.pos.x;
+                }
+                word_shift
+            } else {
+                in_word = false;
+                ideal_shift
+            };
+            glyph.pos.x += active_shift;
+            if active_shift != 0.0 && !glyph.uv_rect.is_nothing() {
                 let v_start = glyph.first_vertex as usize;
                 let v_end = v_start.saturating_add(4);
                 if v_end <= glyph_vertex_end {
                     for vertex in &mut row.visuals.mesh.vertices[v_start..v_end] {
-                        vertex.pos.x += shift;
+                        vertex.pos.x += active_shift;
                     }
                 }
             }
             if idx >= first_non_ws && idx < effective_end && glyph.chr == ' ' {
-                shift += per_space;
+                ideal_shift += per_space;
             }
         }
         // Stretch any row-wide strikethrough/underline hline vertices that
         // epaint appended after the glyph vertices.
         if glyph_vertex_end < row.visuals.mesh.vertices.len() && content_right > 0.0 {
-            let content_left = row.glyphs[first_non_ws..effective_end]
+            let new_left = row.glyphs[first_non_ws..effective_end]
                 .iter()
                 .map(|glyph| glyph.pos.x)
                 .fold(f32::INFINITY, f32::min);
-            let old_span = content_right - content_left;
+            let new_right = row.glyphs[first_non_ws..effective_end]
+                .iter()
+                .map(|glyph| glyph.pos.x + glyph.advance_width)
+                .fold(0.0f32, f32::max);
+            let old_span = content_right - content_left_orig;
             if old_span > 0.5 && old_span.is_finite() {
-                let scale_x = (target_width - content_left) / old_span;
+                let scale_x = (new_right - new_left) / old_span;
                 for vertex in &mut row.visuals.mesh.vertices[glyph_vertex_end..] {
-                    vertex.pos.x = content_left + (vertex.pos.x - content_left) * scale_x;
+                    vertex.pos.x = new_left + (vertex.pos.x - content_left_orig) * scale_x;
                 }
             }
         }
@@ -731,19 +775,19 @@ fn layout_at(
                 spans.push((start, char_count, link.clone(), run.text.clone()));
             }
         }
-        let mut galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
-        if align == Align::Justify && wrap {
-            justify_galley(&mut galley, content_width);
-        }
-        let galley_h = galley.size().y;
-        let indent_width = text_indent + galley.size().x;
-        max_width = max_width.max(indent_width);
-
         let x = match align {
             Align::Left | Align::Justify => rect.left() + text_indent,
             Align::Center => rect.left() + text_indent + content_width * 0.5,
             Align::Right => rect.right(),
         };
+        let mut galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
+        if align == Align::Justify && wrap {
+            justify_galley_snapped(&mut galley, content_width, ctx.pixels_per_point(), x);
+        }
+        let galley_h = galley.size().y;
+        let indent_width = text_indent + galley.size().x;
+        max_width = max_width.max(indent_width);
+
         let top = y + space_before;
         let paragraph_pos = pos2(x, rect.top() + top);
         let paragraph_galley = galley.clone();
