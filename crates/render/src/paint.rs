@@ -176,6 +176,11 @@ fn sample_gradient(stops: &[crate::compose::ResolvedGradientStop], t: f32) -> Co
     if t <= first.position {
         return first.color;
     }
+    if let Some(last) = stops.last()
+        && t >= last.position
+    {
+        return last.color;
+    }
     for pair in stops.windows(2) {
         let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
             continue;

@@ -5542,6 +5542,77 @@ mod offscreen_tests {
     }
 
     #[test]
+    fn three_stop_linear_and_radial_gradients_render_all_stops_sorted_by_position() {
+        let stops = serde_json::json!([
+            { "color": "#FFFF00", "position": 1.0 },
+            { "color": "#0000FF", "position": 0.0 },
+            { "color": "#FF0000", "position": 0.5 }
+        ]);
+        let linear = gradient_slide(
+            serde_json::json!({ "type": "linear", "angle": 0, "stops": stops }),
+            0.0,
+        );
+        let img = render_slide_rgba(&linear, "slide1", &RenderOptions::default(), &DummyMedia)
+            .expect("render linear");
+        let left = pixel_at(&img, 205, 300);
+        let mid = pixel_at(&img, 300, 300);
+        let right = pixel_at(&img, 395, 300);
+        assert!(left[2] > 200 && left[0] < 60, "left blue: {left:?}");
+        assert!(
+            mid[0] > 200 && mid[1] < 60 && mid[2] < 60,
+            "mid red: {mid:?}"
+        );
+        assert!(
+            right[0] > 200 && right[1] > 200 && right[2] < 60,
+            "right yellow: {right:?}"
+        );
+
+        let radial = gradient_slide(
+            serde_json::json!({
+                "type": "radial",
+                "center": [0.5, 0.5],
+                "stops": [
+                    { "color": "#0000FF", "position": 0.0 },
+                    { "color": "#FF0000", "position": 0.5 },
+                    { "color": "#FFFF00", "position": 1.0 }
+                ]
+            }),
+            0.0,
+        );
+        let img_r = render_slide_rgba(&radial, "slide1", &RenderOptions::default(), &DummyMedia)
+            .expect("render radial");
+        let c = pixel_at(&img_r, 300, 300);
+        let m = pixel_at(&img_r, 350, 350);
+        let e = pixel_at(&img_r, 397, 397);
+        assert!(c[2] > 200 && c[0] < 60, "centre blue: {c:?}");
+        assert!(m[0] > 200 && m[1] < 60 && m[2] < 60, "mid red: {m:?}");
+        assert!(e[0] > 200 && e[1] > 200 && e[2] < 60, "edge yellow: {e:?}");
+    }
+
+    #[test]
+    fn duplicate_end_stop_still_samples_final_colour() {
+        let linear = gradient_slide(
+            serde_json::json!({
+                "type": "linear",
+                "angle": 0,
+                "stops": [
+                    { "color": "#0000FF", "position": 0.0 },
+                    { "color": "#FF0000", "position": 1.0 },
+                    { "color": "#FFFF00", "position": 1.0 }
+                ]
+            }),
+            0.0,
+        );
+        let img = render_slide_rgba(&linear, "slide1", &RenderOptions::default(), &DummyMedia)
+            .expect("render");
+        let right = pixel_at(&img, 399, 300);
+        assert!(
+            right[0] > 200 && right[1] > 200 && right[2] < 60,
+            "rightmost pixel uses last stop yellow: {right:?}"
+        );
+    }
+
+    #[test]
     fn half_opacity_red_over_white_is_pink() {
         let course = make_course(serde_json::json!({
             "id": "slide1",

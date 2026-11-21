@@ -3913,6 +3913,7 @@ fn show_fill_style_editor(
     actions: &mut Vec<(&'static str, Json)>,
 ) {
     let mut changed = false;
+    let mut live_changed = false;
     let mut next_style: Option<coursecraft_course::FillStyle> = props.fill_style.clone();
 
     inspector_row(ui, "Fill type", |ui| {
@@ -3973,11 +3974,20 @@ fn show_fill_style_editor(
                         .suffix("°"),
                 );
                 let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if r.changed() {
+                    live_changed = true;
+                }
                 if r.drag_stopped() || r.lost_focus() || enter {
                     changed = true;
                 }
             });
-            show_gradient_stops(ui, stops, &mut changed, &mut props.fill_add_stop_rect);
+            show_gradient_stops(
+                ui,
+                stops,
+                &mut changed,
+                &mut live_changed,
+                &mut props.fill_add_stop_rect,
+            );
         }
         Some(coursecraft_course::FillStyle::Radial { center, stops }) => {
             inspector_row(ui, "Centre X", |ui| {
@@ -3988,6 +3998,9 @@ fn show_fill_style_editor(
                     DragValue::new(&mut center[0]).speed(0.01).range(0.0..=1.0),
                 );
                 let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if r.changed() {
+                    live_changed = true;
+                }
                 if r.drag_stopped() || r.lost_focus() || enter {
                     changed = true;
                 }
@@ -4000,11 +4013,20 @@ fn show_fill_style_editor(
                     DragValue::new(&mut center[1]).speed(0.01).range(0.0..=1.0),
                 );
                 let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if r.changed() {
+                    live_changed = true;
+                }
                 if r.drag_stopped() || r.lost_focus() || enter {
                     changed = true;
                 }
             });
-            show_gradient_stops(ui, stops, &mut changed, &mut props.fill_add_stop_rect);
+            show_gradient_stops(
+                ui,
+                stops,
+                &mut changed,
+                &mut live_changed,
+                &mut props.fill_add_stop_rect,
+            );
         }
         Some(coursecraft_course::FillStyle::Picture { src, mode }) => {
             inspector_row(ui, "Image", |ui| {
@@ -4063,6 +4085,13 @@ fn show_fill_style_editor(
     }
 
     if changed {
+        if let Some(
+            coursecraft_course::FillStyle::Linear { stops, .. }
+            | coursecraft_course::FillStyle::Radial { stops, .. },
+        ) = &mut next_style
+        {
+            stops.sort_by(|a, b| a.position.total_cmp(&b.position));
+        }
         props.fill_style = next_style;
         actions.push((
             "object.set_fill_style",
@@ -4072,16 +4101,83 @@ fn show_fill_style_editor(
                 "fill_style": fill_style_json(&props.fill_style),
             }),
         ));
+    } else if live_changed {
+        props.fill_style = next_style;
     }
+}
+
+/// Choose a position in `0.0..=1.0` for a newly added gradient stop by splitting
+/// the largest open gap between existing stops (or the `[0.0, 1.0]` endpoints).
+fn next_gradient_stop_position(stops: &[coursecraft_course::GradientStop]) -> f32 {
+    if stops.is_empty() {
+        return 0.5;
+    }
+    let mut positions: Vec<f32> = stops.iter().map(|s| s.position.clamp(0.0, 1.0)).collect();
+    positions.sort_by(f32::total_cmp);
+
+    let mut best_pos = 0.5;
+    let mut best_gap = -1.0_f32;
+    let mut consider = |a: f32, b: f32| {
+        let gap = b - a;
+        if gap > best_gap {
+            best_gap = gap;
+            best_pos = ((a + b) * 0.5).clamp(0.0, 1.0);
+        }
+    };
+    if let Some(&first) = positions.first() {
+        consider(0.0, first);
+    }
+    for pair in positions.windows(2) {
+        if let (Some(&a), Some(&b)) = (pair.first(), pair.get(1)) {
+            consider(a, b);
+        }
+    }
+    if let Some(&last) = positions.last() {
+        consider(last, 1.0);
+    }
+    best_pos
+}
+
+fn gradient_stop_row<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    use egui::text::{LayoutJob, TextWrapping};
+    let p = coursecraft_render::palette(ui.ctx());
+    let row_h = coursecraft_render::CONTROL_COMPACT;
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), row_h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let (label_rect, _) = ui.allocate_exact_size(vec2(56.0, row_h), Sense::hover());
+            if ui.is_rect_visible(label_rect) {
+                let mut job = LayoutJob::simple_singleline(
+                    label.to_owned(),
+                    FontId::proportional(coursecraft_render::SIZE_BODY),
+                    p.text_secondary,
+                );
+                job.wrap = TextWrapping::truncate_at_width(label_rect.width());
+                let galley = ui.painter().layout_job(job);
+                let pos = egui::pos2(
+                    label_rect.min.x,
+                    label_rect.center().y - galley.size().y * 0.5,
+                );
+                ui.painter().galley(pos, galley, p.text_secondary);
+            }
+            add_contents(ui)
+        },
+    )
+    .inner
 }
 
 fn show_gradient_stops(
     ui: &mut Ui,
     stops: &mut Vec<coursecraft_course::GradientStop>,
     changed: &mut bool,
+    live_changed: &mut bool,
     add_stop_rect: &mut Option<Rect>,
 ) {
     let mut remove: Option<usize> = None;
+    let mut move_up: Option<usize> = None;
+    let mut move_down: Option<usize> = None;
     let mut add = false;
     let len = stops.len();
     let can_remove = len > 2;
@@ -4090,11 +4186,13 @@ fn show_gradient_stops(
             continue;
         };
         ui.push_id(("fill_stop", i), |ui| {
-            inspector_row(ui, &format!("Colour {}", i + 1), |ui| {
-                // Leave room for the position field and the remove button, so the
-                // whole row stays inside the panel.
-                let reserve = 64.0 + if can_remove { 26.0 } else { 0.0 };
-                let field_w = (ui.available_width() - reserve).max(60.0);
+            gradient_stop_row(ui, &format!("Colour {}", i + 1), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.spacing_mut().button_padding = vec2(3.0, 1.0);
+                // Leave room for the position field, move up/down buttons and
+                // optional remove button, so the whole row stays inside the panel.
+                let reserve = 44.0 + 36.0 + if can_remove { 18.0 } else { 0.0 };
+                let field_w = (ui.available_width() - reserve).max(40.0);
                 let (color_response, valid) = ui
                     .allocate_ui_with_layout(
                         vec2(field_w, coursecraft_render::CONTROL_COMPACT),
@@ -4108,7 +4206,7 @@ fn show_gradient_stops(
                 let mut percent = stop.position * 100.0;
                 let response = ui
                     .add_sized(
-                        [58.0, coursecraft_render::CONTROL_COMPACT],
+                        [42.0, coursecraft_render::CONTROL_COMPACT],
                         DragValue::new(&mut percent)
                             .speed(1.0)
                             .range(0.0..=100.0)
@@ -4116,9 +4214,27 @@ fn show_gradient_stops(
                     )
                     .on_hover_text("Where this colour sits along the gradient");
                 let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if response.changed() {
+                    stop.position = (percent / 100.0).clamp(0.0, 1.0);
+                    *live_changed = true;
+                }
                 if response.drag_stopped() || response.lost_focus() || enter {
                     stop.position = (percent / 100.0).clamp(0.0, 1.0);
                     *changed = true;
+                }
+                if ui
+                    .add_enabled(i > 0, egui::Button::new("↑").small())
+                    .on_hover_text("Move colour up")
+                    .clicked()
+                {
+                    move_up = Some(i);
+                }
+                if ui
+                    .add_enabled(i + 1 < len, egui::Button::new("↓").small())
+                    .on_hover_text("Move colour down")
+                    .clicked()
+                {
+                    move_down = Some(i);
                 }
                 if can_remove
                     && ui
@@ -4130,6 +4246,21 @@ fn show_gradient_stops(
                 }
             });
         });
+    }
+    if let Some(i) = move_up
+        && i > 0
+        && i < stops.len()
+    {
+        let (left, right) = stops.split_at_mut(i);
+        std::mem::swap(&mut left[i - 1].color, &mut right[0].color);
+        *changed = true;
+    }
+    if let Some(i) = move_down
+        && i + 1 < stops.len()
+    {
+        let (left, right) = stops.split_at_mut(i + 1);
+        std::mem::swap(&mut left[i].color, &mut right[0].color);
+        *changed = true;
     }
     if let Some(index) = remove
         && stops.len() > 2
@@ -4145,17 +4276,13 @@ fn show_gradient_stops(
         }
     }
     if add && stops.len() < coursecraft_course::MAX_GRADIENT_STOPS {
-        let (position, color) = match stops.last() {
-            Some(last) => (
-                ((last.position + 1.0) * 0.5).clamp(0.0, 1.0),
-                last.color.clone(),
-            ),
-            None => (0.5, Color("#D0D7DE".to_owned())),
-        };
+        let position = next_gradient_stop_position(stops);
+        let color = stops
+            .last()
+            .map_or_else(|| Color("#D0D7DE".to_owned()), |last| last.color.clone());
         stops.push(coursecraft_course::GradientStop { color, position });
         *changed = true;
     }
-    stops.sort_by(|a, b| a.position.total_cmp(&b.position));
 }
 
 /// Shadow and glow toggles with their values.
