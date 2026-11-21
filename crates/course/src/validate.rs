@@ -1058,6 +1058,28 @@ fn check_paragraphs(cx: &mut Ctx<'_>, paragraphs: &[crate::Paragraph], p: &str) 
                 );
             }
         }
+        if let Some(color) = &paragraph.bullet_color
+            && !color.is_valid()
+        {
+            cx.err(
+                format!("{p}/paragraphs/{i}/bullet_color"),
+                "bullet_color must be a valid hex colour",
+            );
+        }
+        if let Some(size) = paragraph.bullet_size
+            && (!size.is_finite() || !(1.0..=400.0).contains(&size))
+        {
+            cx.err(
+                format!("{p}/paragraphs/{i}/bullet_size"),
+                "bullet_size must be finite and within 1..=400",
+            );
+        }
+        if paragraph.start_at == Some(0) {
+            cx.err(
+                format!("{p}/paragraphs/{i}/start_at"),
+                "start_at must be at least 1",
+            );
+        }
     }
 }
 

@@ -237,6 +237,7 @@ fn paragraphs_and_links_survive_xliff_round_trip() {
         line_spacing: 1.5,
         space_before: 4.0,
         space_after: 6.0,
+        ..Default::default()
     }];
     let expected_paragraphs = paragraphs.clone();
     if let Some(run) = runs.first_mut() {

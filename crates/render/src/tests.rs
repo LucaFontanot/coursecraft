@@ -8324,3 +8324,106 @@ fn exit_animations_render_with_and_without_slide_transition() {
                 || it.hit == Hit::Object("fade-obj".into()))
     );
 }
+
+#[test]
+fn text_layout_custom_bullets_numbering_schemes_start_at_and_nested_continuation() {
+    use coursecraft_course::{Autofit, ListKind, NumberScheme, Paragraph, VAlign};
+
+    let ctx = text_layout_context();
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 500.0));
+    let runs = vec![crate::compose::ResolvedTextRun {
+        text: "one\ntwo\nthree\nsubA\nsubB\nfour\nrom1\nrom2\nalpha1\nstart5".into(),
+        size: 16.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        link: None,
+        font: None,
+        strikethrough: false,
+        baseline: coursecraft_course::Baseline::Normal,
+        letter_spacing: 0.0,
+    }];
+    let paragraphs = vec![
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 1,
+            number_scheme: Some(NumberScheme::AlphaLcParenR),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 1,
+            number_scheme: Some(NumberScheme::AlphaLcParenR),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::RomanLcPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::RomanLcPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::AlphaUcPeriod),
+            ..Paragraph::default()
+        },
+        Paragraph {
+            list: ListKind::Number,
+            level: 0,
+            number_scheme: Some(NumberScheme::ArabicParenR),
+            start_at: Some(5),
+            ..Paragraph::default()
+        },
+    ];
+    let laid = crate::text_layout::layout_text(
+        &ctx,
+        rect,
+        1.0,
+        &runs,
+        &paragraphs,
+        coursecraft_course::Align::Left,
+        VAlign::Top,
+        Autofit::None,
+    );
+    let markers: Vec<String> = laid
+        .paragraphs
+        .iter()
+        .filter_map(|p| p.marker.as_ref().map(|m| m.galley.text().to_owned()))
+        .collect();
+    assert_eq!(
+        markers,
+        vec!["1.", "2.", "3.", "a)", "b)", "4.", "i.", "ii.", "A.", "5)"]
+    );
+}

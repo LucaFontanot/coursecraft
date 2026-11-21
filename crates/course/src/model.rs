@@ -2574,6 +2574,27 @@ fn is_default_list_kind(list: &ListKind) -> bool {
     *list == ListKind::None
 }
 
+/// Numbering style for a numbered-list paragraph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NumberScheme {
+    /// `1.`, `2.`, `3.`
+    #[default]
+    ArabicPeriod,
+    /// `1)`, `2)`, `3)`
+    ArabicParenR,
+    /// `a.`, `b.`, `c.`
+    AlphaLcPeriod,
+    /// `a)`, `b)`, `c)`
+    AlphaLcParenR,
+    /// `A.`, `B.`, `C.`
+    AlphaUcPeriod,
+    /// `i.`, `ii.`, `iii.`
+    RomanLcPeriod,
+    /// `I.`, `II.`, `III.`
+    RomanUcPeriod,
+}
+
 /// Paragraph formatting. Entry `i` of `text.paragraphs` styles the `i`-th
 /// `\n`-separated paragraph.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2593,6 +2614,21 @@ pub struct Paragraph {
     /// Space below the paragraph in slide pixels, `0..=200`. Omitted when 0.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub space_after: f32,
+    /// Custom bullet glyph (e.g. `"★"`, `"–"`). `None` uses the level's default bullet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullet: Option<String>,
+    /// Custom bullet or number marker colour. `None` uses the paragraph's first run colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullet_color: Option<Color>,
+    /// Custom bullet or number marker size in slide pixels. `None` uses the paragraph's first run size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bullet_size: Option<f32>,
+    /// Numbering scheme for [`ListKind::Number`]. `None` uses the level's default (`1.`, `a.`, `i.`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_scheme: Option<NumberScheme>,
+    /// Starting number (`1..`) for [`ListKind::Number`]. `None` starts at `1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_at: Option<u32>,
 }
 
 impl Default for Paragraph {
@@ -2603,6 +2639,11 @@ impl Default for Paragraph {
             line_spacing: 1.0,
             space_before: 0.0,
             space_after: 0.0,
+            bullet: None,
+            bullet_color: None,
+            bullet_size: None,
+            number_scheme: None,
+            start_at: None,
         }
     }
 }

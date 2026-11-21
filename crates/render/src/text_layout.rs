@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use coursecraft_course::{Align, Autofit, Link, ListKind, Paragraph, VAlign};
+use coursecraft_course::{Align, Autofit, Link, ListKind, NumberScheme, Paragraph, VAlign};
 use egui::epaint::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Color32, Context, Pos2, Rect, Stroke, pos2};
 
@@ -179,57 +179,95 @@ fn split_paragraphs(runs: &[ResolvedTextRun]) -> Vec<Vec<ResolvedTextRun>> {
 /// Superscript and subscript text draws at this fraction of its size.
 pub const SCRIPT_SCALE: f32 = 0.65;
 
-fn marker_for(
-    counters: &mut [u32; 5],
-    previous: &mut Option<(ListKind, u8)>,
-    list: ListKind,
-    level: u8,
-) -> Option<String> {
-    let level = usize::from(level.min(4));
-    match list {
-        ListKind::None => {
-            *counters = [0; 5];
-            *previous = Some((ListKind::None, level as u8));
-            None
-        }
-        ListKind::Bullet => {
-            *counters = [0; 5];
-            *previous = Some((ListKind::Bullet, level as u8));
-            Some(
-                match level % 3 {
-                    0 => "•",
-                    1 => "◦",
-                    _ => "▪",
-                }
-                .to_owned(),
-            )
-        }
-        ListKind::Number => {
-            let continues =
-                matches!(*previous, Some((ListKind::Number, prev)) if usize::from(prev) == level);
-            let counter = counters.get_mut(level)?;
-            if continues {
-                *counter = counter.saturating_add(1);
-            } else {
-                *counter = 1;
-            }
-            let number = *counter;
-            for deeper in counters.iter_mut().skip(level.saturating_add(1)) {
-                *deeper = 0;
-            }
-            *previous = Some((ListKind::Number, level as u8));
-            Some(format_number(number, level))
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct LevelState {
+    count: u32,
+    scheme: NumberScheme,
+    start_at: Option<u32>,
+}
+
+impl Default for LevelState {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            scheme: NumberScheme::ArabicPeriod,
+            start_at: None,
         }
     }
 }
 
-/// `1.`, `a.`, `i.` by level, cycling every three levels.
-fn format_number(number: u32, level: usize) -> String {
-    let value = number.max(1);
+fn default_scheme_for_level(level: usize) -> NumberScheme {
     match level % 3 {
-        0 => format!("{value}."),
-        1 => format!("{}.", alpha(value)),
-        _ => format!("{}.", roman(value)),
+        0 => NumberScheme::ArabicPeriod,
+        1 => NumberScheme::AlphaLcPeriod,
+        _ => NumberScheme::RomanLcPeriod,
+    }
+}
+
+fn marker_for(
+    levels: &mut [LevelState; 5],
+    previous_list: &mut Option<ListKind>,
+    style: &Paragraph,
+    level: u8,
+) -> Option<String> {
+    let level_idx = usize::from(level.min(4));
+    match style.list {
+        ListKind::None => {
+            *levels = [LevelState::default(); 5];
+            *previous_list = Some(ListKind::None);
+            None
+        }
+        ListKind::Bullet => {
+            *levels = [LevelState::default(); 5];
+            *previous_list = Some(ListKind::Bullet);
+            Some(if let Some(custom) = &style.bullet {
+                custom.clone()
+            } else {
+                match level_idx % 3 {
+                    0 => "•",
+                    1 => "◦",
+                    _ => "▪",
+                }
+                .to_owned()
+            })
+        }
+        ListKind::Number => {
+            let scheme = style
+                .number_scheme
+                .unwrap_or_else(|| default_scheme_for_level(level_idx));
+            let in_number_list = *previous_list == Some(ListKind::Number);
+            let slot = levels.get_mut(level_idx)?;
+            let same_list = in_number_list
+                && slot.count > 0
+                && slot.scheme == scheme
+                && (style.start_at.is_none() || slot.start_at == style.start_at);
+            if same_list {
+                slot.count = slot.count.saturating_add(1);
+            } else {
+                slot.count = style.start_at.unwrap_or(1).max(1);
+                slot.scheme = scheme;
+                slot.start_at = style.start_at;
+            }
+            let number = slot.count;
+            for deeper in levels.iter_mut().skip(level_idx.saturating_add(1)) {
+                *deeper = LevelState::default();
+            }
+            *previous_list = Some(ListKind::Number);
+            Some(format_number_scheme(number, scheme))
+        }
+    }
+}
+
+fn format_number_scheme(number: u32, scheme: NumberScheme) -> String {
+    let value = number.max(1);
+    match scheme {
+        NumberScheme::ArabicPeriod => format!("{value}."),
+        NumberScheme::ArabicParenR => format!("{value})"),
+        NumberScheme::AlphaLcPeriod => format!("{}.", alpha(value)),
+        NumberScheme::AlphaLcParenR => format!("{})", alpha(value)),
+        NumberScheme::AlphaUcPeriod => format!("{}.", alpha(value).to_ascii_uppercase()),
+        NumberScheme::RomanLcPeriod => format!("{}.", roman(value)),
+        NumberScheme::RomanUcPeriod => format!("{}.", roman(value).to_ascii_uppercase()),
     }
 }
 
@@ -298,9 +336,10 @@ fn marker_text(
     run: &ResolvedTextRun,
     scale: f32,
     shrink: f32,
+    marker_size: f32,
     color: Color32,
 ) -> Option<(Arc<egui::Galley>, f32)> {
-    let size = (run.size.clamp(1.0, 400.0) * scale * shrink).max(1.0);
+    let size = (marker_size.clamp(1.0, 400.0) * scale * shrink).max(1.0);
     let font_id =
         crate::font::slide_font_named(ctx, run.font.as_deref(), run.bold, run.italic, size);
     let mut job = LayoutJob {
@@ -343,8 +382,8 @@ fn layout_at(
     let mut links = Vec::new();
     let mut y = 0.0f32;
     let mut max_width = 0.0f32;
-    let mut counters = [0u32; 5];
-    let mut previous: Option<(ListKind, u8)> = None;
+    let mut levels = [LevelState::default(); 5];
+    let mut previous_list: Option<ListKind> = None;
 
     for (index, paragraph_runs) in split.iter().enumerate() {
         let style = paragraphs.get(index).cloned().unwrap_or_default();
@@ -372,7 +411,7 @@ fn layout_at(
             indent + step
         };
         let content_width = (rect.width() - text_indent).max(1.0);
-        let marker = marker_for(&mut counters, &mut previous, style.list, level);
+        let marker = marker_for(&mut levels, &mut previous_list, &style, level);
 
         let mut job = LayoutJob {
             halign: halign(align),
@@ -451,8 +490,21 @@ fn layout_at(
         let paragraph_galley = galley.clone();
         let marker = marker.and_then(|text| {
             let marker_run = paragraph_runs.first()?;
-            let (galley, width) =
-                marker_text(ctx, &text, marker_run, scale, shrink, marker_run.color)?;
+            let marker_color = style
+                .bullet_color
+                .as_ref()
+                .and_then(crate::color::parse_color)
+                .unwrap_or(marker_run.color);
+            let marker_size = style.bullet_size.unwrap_or(marker_run.size);
+            let (galley, width) = marker_text(
+                ctx,
+                &text,
+                marker_run,
+                scale,
+                shrink,
+                marker_size,
+                marker_color,
+            )?;
             let right = rect.left() + text_indent - (6.0 * scale * shrink).max(1.0);
             let _ = width;
             // Sit the marker on the first line's baseline. Line spacing makes the
