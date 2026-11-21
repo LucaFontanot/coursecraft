@@ -5516,6 +5516,25 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             }
         }
 
+        let playhead_ms = editor.ui.timeline.playhead_ms;
+        let time_view = editor.timeline_playback.is_playing() || playhead_ms > 0;
+        let input_animated = if time_view {
+            editor
+                .session
+                .course
+                .slide(&editor.selection.slide)
+                .map(|slide| {
+                    timeline_animated_items(
+                        &items,
+                        slide,
+                        editor.session.course.slide_size,
+                        playhead_ms,
+                    )
+                })
+        } else {
+            None
+        };
+
         let gesture_active = editor.ui.canvas_drag.is_some()
             || editor.ui.placement_drag.is_some()
             || editor.ui.draw.is_some();
@@ -5562,7 +5581,13 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                     && primary_pressed
                     && let Some(start_pos) = current_pointer
                 {
-                    start_drag_if_pressed(editor, start_pos, &t, &items, modifiers);
+                    start_drag_if_pressed(
+                        editor,
+                        start_pos,
+                        &t,
+                        input_animated.as_deref().unwrap_or(&items),
+                        modifiers,
+                    );
                 }
 
                 if editor.ui.canvas_drag.is_some() {
@@ -5572,10 +5597,11 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                     && response.clicked()
                     && let Some(pos) = current_pointer
                 {
+                    let click_items = input_animated.as_deref().unwrap_or(&items);
                     if response.double_clicked() {
-                        handle_canvas_double_click(editor, pos, &t, &items, modifiers);
+                        handle_canvas_double_click(editor, pos, &t, click_items, modifiers);
                     } else {
-                        handle_canvas_click(editor, pos, &t, &items, modifiers);
+                        handle_canvas_click(editor, pos, &t, click_items, modifiers);
                     }
                 }
             }
@@ -5592,7 +5618,12 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             && response.secondary_clicked()
             && let Some(pos) = current_pointer
         {
-            handle_canvas_secondary_click(editor, pos, &t, &items);
+            handle_canvas_secondary_click(
+                editor,
+                pos,
+                &t,
+                input_animated.as_deref().unwrap_or(&items),
+            );
         }
         response.context_menu(|ui| show_canvas_context_menu(editor, ui, special_mode));
 
@@ -5630,10 +5661,10 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 .as_shape(t.slide_rect(), CornerRadius::ZERO),
         );
 
-        // While the timeline plays, show entrances and exits as the
-        // learner will see them. Paused or scrubbed, every object stays at
-        // rest so it can be selected and edited.
-        let animated = if editor.timeline_playback.is_playing() {
+        // While playing or scrubbed past 0, show objects at `playhead_ms`
+        // (hidden outside their start/end, with entrance/exit progress). At
+        // playhead 0 when paused, every object stays at rest for editing.
+        let animated = if time_view {
             editor
                 .session
                 .course
@@ -5649,10 +5680,11 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         } else {
             None
         };
+        let view_items = animated.as_deref().unwrap_or(&items);
         paint(
             &painter,
             &t,
-            animated.as_deref().unwrap_or(&items),
+            view_items,
             Highlight::default(),
             Some((&mut editor.media_cache, &source)),
             theme,
@@ -5674,9 +5706,9 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         if editor.ui.crop_edit.is_some() {
             draw_crop_overlay(editor, &painter, &t, ui);
         } else {
-            draw_handles_and_outline(editor, &painter, &t, &items, current_pointer, ui);
+            draw_handles_and_outline(editor, &painter, &t, view_items, current_pointer, ui);
             draw_connector_sites(editor, &painter, &t, ui);
-            draw_snap_guides(editor, &painter, &t, &items, ui);
+            draw_snap_guides(editor, &painter, &t, view_items, ui);
         }
         crate::rulers::show(editor, ui, &painter, &t, canvas_rect);
         if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {
