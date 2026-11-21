@@ -253,7 +253,6 @@ fn a13_4_canva_style_constructs_nested_groups_custgeom_blipfill_bgref() {
 // ============================================================================
 
 #[test]
-#[ignore = "BUG: Decorative non-placeholder shapes on slideMaster1.xml are not inherited onto slides"]
 fn a13_5_master_and_layout_inheritance_cascade() {
     let master = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
@@ -325,7 +324,6 @@ fn a13_6_color_map_overrides_on_dark_themed_slide() {
 }
 
 #[test]
-#[ignore = "BUG: Non-16:9 slide sizes (4:3, 9:16) are hardcoded to 16:9 (1.7778) on PPTX import"]
 fn a13_7_non_16_9_slide_sizes_4_3_and_9_16() {
     for (cx, cy, expected_ratio) in [
         (9_144_000, 6_858_000, 4.0 / 3.0),

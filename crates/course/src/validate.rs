@@ -1114,6 +1114,26 @@ fn check_fill_style(cx: &mut Ctx<'_>, style: &crate::FillStyle, p: &str) {
                 );
             }
         }
+        crate::FillStyle::Pattern { preset, fg, bg } => {
+            if preset.trim().is_empty() {
+                cx.warn(
+                    format!("{p}/fill_style/preset"),
+                    "pattern fill has no preset name; falling back to default pattern",
+                );
+            }
+            if !fg.is_valid() {
+                cx.err(
+                    format!("{p}/fill_style/fg"),
+                    format!("color {:?} is not #RRGGBB or #RRGGBBAA", fg.0),
+                );
+            }
+            if !bg.is_valid() {
+                cx.err(
+                    format!("{p}/fill_style/bg"),
+                    format!("color {:?} is not #RRGGBB or #RRGGBBAA", bg.0),
+                );
+            }
+        }
     }
 }
 

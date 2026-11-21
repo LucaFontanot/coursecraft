@@ -368,7 +368,6 @@ fn a12_7_lightbox_open_inside_preview_closes_with_backdrop_and_esc() {
 }
 
 #[test]
-#[ignore = "BUG: Editor shortcuts (Delete, Cmd+M, Cmd+Z) mutate the course while Preview modal is open"]
 fn a12_9_editor_shortcuts_do_not_mutate_course_while_preview_open() {
     let mut h = TestHarness::new(simple_course());
     h.editor.selection.slide = "s-1".into();
@@ -441,4 +440,44 @@ fn a12_10_repeated_open_close_across_x_backdrop_and_esc() {
     h.press(Key::Escape, Modifiers::NONE);
     h.idle_frame();
     assert!(h.editor.preview.is_none());
+}
+
+#[test]
+fn a15_desktop_preview_play_at_end_replays_and_never_advances() {
+    let mut h = TestHarness::new(simple_course());
+    h.idle_frame();
+    h.editor.open_preview();
+    h.idle_frame();
+    h.idle_frame();
+
+    // Drive the preview player to the end of slide 0.
+    {
+        let preview = h.editor.preview.as_mut().expect("preview open");
+        let st = preview.state.take().expect("preview state");
+        let mut player = coursecraft_logic::Player::resume(&preview.course, st).expect("resume");
+        let dur = player.seek_info().duration_ms;
+        player.handle(&coursecraft_logic::Input::Tick { ms: dur });
+        assert!(player.state().base.ended);
+        preview.state = Some(player.state().clone());
+    }
+    h.idle_frame();
+
+    // Play button should show Play icon (not Pause or Replay), and clicking it
+    // replays from 0 on slide 0 without advancing.
+    let play_pos = h
+        .find_icon_last(coursecraft_render::Icon::Play)
+        .expect("Play icon at end of slide in desktop preview");
+    h.click_at(play_pos);
+    h.idle_frame();
+
+    let preview = h.editor.preview.as_ref().expect("preview still open");
+    let st = preview.state.as_ref().expect("preview state");
+    let player = coursecraft_logic::Player::resume(&preview.course, st.clone()).expect("resume");
+    assert_eq!(player.state().slide, 0);
+    assert!(
+        player.seek_info().elapsed_ms < 100,
+        "expected replay from 0, got elapsed_ms={}",
+        player.seek_info().elapsed_ms
+    );
+    assert!(!player.state().base.ended);
 }

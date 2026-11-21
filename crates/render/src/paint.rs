@@ -168,6 +168,14 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 }
 
 fn sample_gradient(stops: &[crate::compose::ResolvedGradientStop], t: f32) -> Color32 {
+    sample_gradient_side(stops, t, t)
+}
+
+fn sample_gradient_side(
+    stops: &[crate::compose::ResolvedGradientStop],
+    t: f32,
+    tri_mid_t: f32,
+) -> Color32 {
     let Some(first) = stops.first() else {
         return Color32::TRANSPARENT;
     };
@@ -176,22 +184,31 @@ fn sample_gradient(stops: &[crate::compose::ResolvedGradientStop], t: f32) -> Co
     } else {
         0.0
     };
-    if t <= first.position {
+    if t < first.position
+        || (t <= first.position && (first.position <= 1e-6 || tri_mid_t <= first.position))
+    {
         return first.color;
     }
     if let Some(last) = stops.last()
-        && t >= last.position
+        && (t > last.position
+            || (t >= last.position && (last.position >= 1.0 - 1e-6 || tri_mid_t >= last.position)))
     {
         return last.color;
     }
+    let prefer_right = tri_mid_t > t + 1e-6;
     for pair in stops.windows(2) {
         let (Some(a), Some(b)) = (pair.first(), pair.get(1)) else {
             continue;
         };
-        if t <= b.position {
+        let in_span = if prefer_right {
+            t < b.position
+        } else {
+            t <= b.position
+        };
+        if in_span {
             let span = b.position - a.position;
             if span.abs() <= 1e-6 {
-                return b.color;
+                return if prefer_right { b.color } else { a.color };
             }
             return lerp_color(a.color, b.color, (t - a.position) / span);
         }
@@ -215,6 +232,74 @@ fn paint_gradient_fill(
     paint_gradient_contours(painter, rect, &contours, style, dimmed, opacity);
 }
 
+fn pattern_pixel(preset: &str, x: usize, y: usize, n: usize) -> bool {
+    match preset {
+        "ltUpDiag" => (x + y).is_multiple_of(4),
+        "wdUpDiag" => (x + y) % 8 < 3,
+        "ltDnDiag" => (x + n - (y % n)).is_multiple_of(4),
+        "wdDnDiag" => (x + n - (y % n)) % 8 < 3,
+        "smCheck" => ((x / 4) + (y / 4)).is_multiple_of(2),
+        "lgCheck" => ((x / 8) + (y / 8)).is_multiple_of(2),
+        "dotGrid" => (x % 6) < 2 && (y % 6) < 2,
+        "horz" | "ltHorz" => y.is_multiple_of(4),
+        "wdHorz" => y % 8 < 3,
+        "vert" | "ltVert" => x.is_multiple_of(4),
+        "wdVert" => x % 8 < 3,
+        "cross" => x.is_multiple_of(8) || y.is_multiple_of(8),
+        "diagCross" => (x + y).is_multiple_of(8) || (x + n - (y % n)).is_multiple_of(8),
+        "pct50" => (x + y).is_multiple_of(2),
+        "pct10" => x.is_multiple_of(4) && y.is_multiple_of(4),
+        "pct20" | "pct25" => x.is_multiple_of(2) && y.is_multiple_of(2),
+        "pct75" | "pct80" => !(x.is_multiple_of(2) && y.is_multiple_of(2)),
+        "pct90" => !(x.is_multiple_of(4) && y.is_multiple_of(4)),
+        "dashVert" => x.is_multiple_of(4) && y % 8 < 4,
+        "dashHorz" => y.is_multiple_of(4) && x % 8 < 4,
+        "trellis" => (x + y) % 8 < 2 || (x + n - (y % n)) % 8 < 2,
+        _ => (x + y).is_multiple_of(4),
+    }
+}
+
+fn pattern_tile_texture(
+    ctx: &egui::Context,
+    preset: &str,
+    fg: Color32,
+    bg: Color32,
+) -> (egui::TextureHandle, f32) {
+    let n = if preset == "dotGrid" {
+        12usize
+    } else {
+        16usize
+    };
+    let key = egui::Id::unique(("cc_patt_tile", preset, fg.to_array(), bg.to_array()));
+    if let Some(handle) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+        return (handle, n as f32);
+    }
+    let mut pixels = Vec::with_capacity(n * n);
+    for y in 0..n {
+        for x in 0..n {
+            pixels.push(if pattern_pixel(preset, x, y, n) {
+                fg
+            } else {
+                bg
+            });
+        }
+    }
+    let image = egui::ColorImage {
+        size: [n, n],
+        source_size: egui::vec2(n as f32, n as f32),
+        pixels,
+    };
+    let opts = egui::TextureOptions {
+        magnification: egui::TextureFilter::Nearest,
+        minification: egui::TextureFilter::Nearest,
+        wrap_mode: egui::TextureWrapMode::Repeat,
+        ..Default::default()
+    };
+    let handle = ctx.load_texture(format!("patt_{preset}"), image, opts);
+    ctx.data_mut(|d| d.insert_temp(key, handle.clone()));
+    (handle, n as f32)
+}
+
 fn paint_gradient_contours(
     painter: &Painter,
     rect: Rect,
@@ -233,18 +318,33 @@ fn paint_gradient_contours(
             };
             let (sin, cos) = radians.sin_cos();
             let extent = (rect.width() * cos).abs() + (rect.height() * sin).abs();
-            fill_contours_shaded(
+            let mut split_ts = Vec::new();
+            for pair in stops.windows(2) {
+                if (pair[1].position - pair[0].position).abs() <= 1e-5
+                    && split_ts
+                        .last()
+                        .is_none_or(|&prev: &f32| (prev - pair[0].position).abs() > 1e-5)
+                {
+                    split_ts.push(pair[0].position);
+                }
+            }
+            let t_at = |point: crate::shape_geometry::Pt| {
+                let distance = (point.0 - centre.x) * cos + (point.1 - centre.y) * sin;
+                if extent > 1e-6 {
+                    0.5 + distance / extent
+                } else {
+                    0.5
+                }
+            };
+            crate::shape_fill::fill_contours_linear_shaded(
                 contours,
                 painter.pixels_per_point(),
                 GRADIENT_MAX_EDGE,
-                |point| {
-                    let distance = (point.0 - centre.x) * cos + (point.1 - centre.y) * sin;
-                    let t = if extent > 1e-6 {
-                        0.5 + distance / extent
-                    } else {
-                        0.5
-                    };
-                    apply_dim(sample_gradient(stops, t), dimmed, opacity)
+                &split_ts,
+                t_at,
+                |point, tri_mid_t| {
+                    let t = t_at(point);
+                    apply_dim(sample_gradient_side(stops, t, tri_mid_t), dimmed, opacity)
                 },
             )
         }
@@ -283,6 +383,26 @@ fn paint_gradient_contours(
             )
         }
         ResolvedFill::Picture { .. } => return,
+        ResolvedFill::Pattern { preset, fg, bg } => {
+            let fg = apply_dim(*fg, dimmed, opacity);
+            let bg = apply_dim(*bg, dimmed, opacity);
+            let (handle, tile_px) = pattern_tile_texture(painter.ctx(), preset, fg, bg);
+            let mut mesh = crate::shape_fill::fill_contours_uv(
+                contours,
+                painter.pixels_per_point(),
+                |point| {
+                    (
+                        (point.0 - rect.min.x) / tile_px,
+                        (point.1 - rect.min.y) / tile_px,
+                    )
+                },
+            );
+            mesh.texture_id = handle.id();
+            if !mesh.is_empty() {
+                painter.add(egui::Shape::mesh(mesh));
+            }
+            return;
+        }
     };
     if !mesh.is_empty() {
         painter.add(egui::Shape::mesh(mesh));

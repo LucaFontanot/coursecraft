@@ -301,3 +301,157 @@ fn undo_and_redo_single_slide_delete_reselects_restored_slide() {
     assert_eq!(h.editor.selection.slide, "s36");
     assert_eq!(h.editor.ui.slides_scrolled_to.as_deref(), Some("s36"));
 }
+
+#[test]
+fn delete_first_slide_selects_new_first_and_scrolls() {
+    let mut h = TestHarness::new(course_with_slides(40));
+    h.idle_frame();
+    assert_eq!(h.editor.selection.slide, "s1");
+
+    let panel = h.left_panel_rect();
+    let pos = h
+        .find_text_in("Slide 1", panel)
+        .expect("Slide 1 visible in slide list");
+    h.click_at(pos);
+    h.idle_frame();
+
+    h.press(Key::Delete, Modifiers::NONE);
+    h.idle_frame();
+    h.idle_frame();
+
+    assert_eq!(h.editor.selection.slide, "s2");
+    assert_eq!(h.editor.session.course.slides().count(), 39);
+    assert_eq!(h.editor.ui.slides_scrolled_to.as_deref(), Some("s2"));
+}
+
+#[test]
+fn delete_middle_of_300_slides_keeps_position_and_scrolls() {
+    let mut h = TestHarness::new(course_with_slides(300));
+    h.idle_frame();
+    let panel = h.left_panel_rect();
+    let mut clicked = false;
+    for _ in 0..200 {
+        if let Some(pos) = h.find_text_in("Slide 180", panel)
+            && pos.y < panel.max.y - 30.0
+        {
+            h.click_at(pos);
+            h.idle_frame();
+            clicked = true;
+            break;
+        }
+        h.scroll_over(panel.center(), -400.0);
+        h.idle_frame();
+    }
+    assert!(clicked, "Slide 180 scrolled into view");
+    assert_eq!(h.editor.selection.slide, "s180");
+    assert!(h.editor.ui.slides_scroll_y > 0.0);
+
+    h.press(Key::Delete, Modifiers::NONE);
+    h.idle_frame();
+    h.idle_frame();
+
+    assert_eq!(h.editor.selection.slide, "s181");
+    assert_eq!(h.editor.session.course.slides().count(), 299);
+    assert!(h.editor.ui.slides_scroll_y > 0.0);
+    assert_eq!(h.editor.ui.slides_scrolled_to.as_deref(), Some("s181"));
+}
+
+#[test]
+fn delete_non_contiguous_selected_slides_and_undo_redo() {
+    let mut h = TestHarness::new(course_with_slides(40));
+    h.idle_frame();
+    select_slide_in_list(&mut h, "Slide 33");
+    let panel = h.left_panel_rect();
+    for _ in 0..5 {
+        if let Some(pos36) = h.find_text_in("Slide 36", panel) {
+            h.click_at_with(pos36, Modifiers::COMMAND);
+            h.idle_frame();
+            break;
+        }
+        h.scroll_over(panel.center(), -150.0);
+        h.idle_frame();
+    }
+    assert!(h.editor.selection.is_slide_selected("s33"));
+    assert!(h.editor.selection.is_slide_selected("s36"));
+    assert!(!h.editor.selection.is_slide_selected("s34"));
+
+    h.press(Key::Delete, Modifiers::NONE);
+    h.idle_frame();
+    h.idle_frame();
+
+    assert_eq!(h.editor.session.course.slides().count(), 38);
+    assert!(h.editor.session.course.slide("s33").is_none());
+    assert!(h.editor.session.course.slide("s36").is_none());
+    assert!(h.editor.session.course.slide("s34").is_some());
+
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    h.idle_frame();
+    assert_eq!(h.editor.session.course.slides().count(), 40);
+    assert!(h.editor.selection.is_slide_selected("s33"));
+    assert!(h.editor.selection.is_slide_selected("s36"));
+
+    h.press(Key::Y, Modifiers::COMMAND);
+    h.idle_frame();
+    h.idle_frame();
+    assert_eq!(h.editor.session.course.slides().count(), 38);
+}
+
+#[test]
+fn delete_only_slide_of_second_scene_moves_to_adjacent_scene() {
+    // Scene 1: s1, s2; Scene 2: s3 (only slide in scene 2)
+    let mut h = TestHarness::new(multi_scene_course(&[2, 1]));
+    h.idle_frame();
+    select_slide_in_list(&mut h, "Slide 3");
+    assert_eq!(h.editor.selection.slide, "s3");
+
+    h.press(Key::Delete, Modifiers::NONE);
+    h.idle_frame();
+    h.idle_frame();
+
+    assert_eq!(h.editor.session.course.slides().count(), 2);
+    assert!(h.editor.session.course.slide("s3").is_none());
+    assert_eq!(h.editor.selection.slide, "s2");
+}
+
+#[test]
+fn delete_slide_while_layer_open_selects_replacement_and_clears_layer() {
+    use coursecraft_course::Layer;
+    let mut course = course_with_slides(10);
+    let layer: Layer = serde_json::from_value(serde_json::json!({
+        "id": "l1",
+        "name": "Layer 1",
+    }))
+    .expect("layer");
+    course.scenes[0].slides[4].layers.push(layer);
+    let mut h = TestHarness::new(course);
+    h.idle_frame();
+    select_slide_in_list(&mut h, "Slide 5");
+    h.editor.selection.layer = Some("l1".into());
+    h.idle_frame();
+
+    h.press(Key::Delete, Modifiers::NONE);
+    h.idle_frame();
+    h.idle_frame();
+
+    assert_eq!(h.editor.selection.slide, "s6");
+    assert_eq!(h.editor.selection.layer, None);
+    assert_eq!(h.editor.session.course.slides().count(), 9);
+}
+
+#[test]
+fn delete_key_while_master_view_open_does_not_delete_slide() {
+    let mut h = TestHarness::new(course_with_slides(5));
+    h.idle_frame();
+    select_slide_in_list(&mut h, "Slide 3");
+    h.editor.enter_master_view();
+    h.idle_frame();
+    assert!(h.editor.ui.master_view);
+
+    h.press(Key::Delete, Modifiers::NONE);
+    h.idle_frame();
+    h.idle_frame();
+
+    assert_eq!(h.editor.session.course.slides().count(), 5);
+    assert!(h.editor.session.course.slide("s3").is_some());
+}

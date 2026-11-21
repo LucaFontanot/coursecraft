@@ -186,7 +186,6 @@ fn a8_3_release_yml_and_iss_defines_parity() {
 }
 
 #[test]
-#[ignore = "BUG: .github/workflows/release.yml has continue-on-error: true on Build Windows installer step, risking silent missing -setup.exe"]
 fn a8_4_release_yml_installer_step_must_not_continue_on_error() {
     let yml = std::fs::read_to_string(repo_root().join(".github/workflows/release.yml"))
         .expect("release.yml");

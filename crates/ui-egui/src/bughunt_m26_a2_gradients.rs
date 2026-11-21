@@ -399,7 +399,6 @@ fn a2_6_fill_type_round_trip_and_undo() {
 }
 
 #[test]
-#[ignore = "BUG: Format Painter (apply_look) does not copy gradient fill_style onto closed ObjectKind::Path"]
 fn a2_8_duplicate_copy_paste_and_format_painter_with_4_stop_gradient() {
     let mut course = hello();
     let s1 = Object {
@@ -567,7 +566,6 @@ fn a2_8_duplicate_copy_paste_and_format_painter_with_4_stop_gradient() {
 // ============================================================================
 
 #[test]
-#[ignore = "BUG: Hard-step gradient (two stops at 0.5) blurs across mesh triangles instead of crisp step"]
 fn a2_4_same_position_hard_step_stops_and_reorder() {
     let mut course = hello();
     let mut s1 = course.scenes[0].slides[0].objects[0].clone();

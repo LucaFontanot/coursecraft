@@ -560,7 +560,6 @@ fn a4_9_master_objects_stay_visible_and_editor_hidden_stays_hidden_when_scrubbed
 // ============================================================================
 
 #[test]
-#[ignore = "BUG: Spacebar toggles timeline playback even while inline text edit is focused"]
 fn a4_10_spacebar_toggles_play_only_when_no_text_input_focused() {
     let mut h = TestHarness::new(scrub_course());
     h.idle_frame();
@@ -573,14 +572,14 @@ fn a4_10_spacebar_toggles_play_only_when_no_text_input_focused() {
     h.idle_frame();
     assert!(!h.editor.timeline_playback.is_playing());
 
-    // Open inline edit
+    // Open inline edit on an object visible at t=0 ("fade")
     let central = h.central_panel_rect();
-    let rect =
-        crate::canvas::object_screen_rect(&h.editor.session.course, "s1", "delayed", central)
-            .expect("delayed rect");
+    let rect = crate::canvas::object_screen_rect(&h.editor.session.course, "s1", "fade", central)
+        .expect("fade rect");
     h.click_at(rect.center());
     h.click_at(rect.center());
     h.idle_frame();
+    assert!(h.editor.ui.inline_edit.is_some());
     h.press(Key::Space, Modifiers::NONE);
     h.idle_frame();
     assert!(!h.editor.timeline_playback.is_playing());

@@ -33,6 +33,9 @@ pub mod export_dialog;
 pub(crate) mod eyedropper;
 pub mod find;
 pub mod fonts;
+
+/// `(slide, object, selection_range, cursor_pos)` captured from an active inline text edit.
+pub type InlineEditSelection = (String, String, Option<(usize, usize)>, usize);
 pub mod format_painter;
 pub mod history;
 pub mod input_insert;
@@ -813,6 +816,10 @@ pub struct UiState {
     /// The table cell selected in the inspector and by a canvas click.
     pub table_cell: Option<(usize, usize)>,
     pub inline_edit: Option<canvas::InlineEdit>,
+    /// Last observed `(slide, object, selection_range, cursor_pos)` from inline edit.
+    pub inline_edit_selection: Option<InlineEditSelection>,
+    /// True after a click in the right panel while inline edit is open, so the canvas editor doesn't steal focus back.
+    pub inline_edit_yielded_to_panel: bool,
     /// Image crop mode: the canvas edits a window, Apply writes it in one step.
     pub crop_edit: Option<CropSession>,
     /// Active pointer drag inside crop mode.
@@ -1243,6 +1250,8 @@ impl Editor {
                 canvas_drag: None,
                 table_cell: None,
                 inline_edit: None,
+                inline_edit_selection: None,
+                inline_edit_yielded_to_panel: false,
                 crop_edit: None,
                 crop_drag: None,
                 scene_rename: None,

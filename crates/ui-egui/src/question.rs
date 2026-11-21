@@ -306,7 +306,7 @@ pub(crate) fn prompt_overlap_names(
 fn show_prompt_overlap_warning(ui: &mut Ui, names: &[String]) {
     let p = coursecraft_render::palette(ui.ctx());
     for name in names {
-        ui.horizontal(|ui| {
+        ui.horizontal_top(|ui| {
             ui.label(
                 coursecraft_render::icon(
                     coursecraft_render::Icon::Warning,
@@ -314,13 +314,18 @@ fn show_prompt_overlap_warning(ui: &mut Ui, names: &[String]) {
                 )
                 .color(p.warning),
             );
-            ui.label(
-                RichText::new(format!(
-                    "The question prompt overlaps \"{name}\". Move it or remove it."
-                ))
-                .color(p.warning)
-                .size(coursecraft_render::SIZE_BODY),
-            );
+            ui.vertical(|ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "The question prompt overlaps \"{name}\". Move it or remove it."
+                        ))
+                        .color(p.warning)
+                        .size(coursecraft_render::SIZE_BODY),
+                    )
+                    .wrap(),
+                );
+            });
         });
     }
 }
@@ -328,53 +333,8 @@ fn show_prompt_overlap_warning(ui: &mut Ui, names: &[String]) {
 /// Whether `obj_id` is part of the slide's question (hotspot image, drag/drop
 /// item or target, or a trigger control that submits the question).
 #[must_use]
-pub(crate) fn is_question_object(slide: &Slide, obj_id: &str) -> bool {
-    let Some(ref q) = slide.question else {
-        return false;
-    };
-    let in_kind = match q.kind {
-        QuestionKind::Hotspot => q.hotspot_image.as_deref() == Some(obj_id),
-        QuestionKind::DragDrop => {
-            q.drag_items
-                .iter()
-                .any(|d| d.item == obj_id || d.target == obj_id)
-                || q.drop_targets.iter().any(|t| t == obj_id)
-        }
-        _ => false,
-    };
-    if in_kind {
-        return true;
-    }
-    slide
-        .triggers
-        .iter()
-        .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
-        .any(|t| t.action == Action::SubmitQuestion && event_references_object(&t.when, obj_id))
-}
-
-fn event_references_object(when: &Event, obj_id: &str) -> bool {
-    match when {
-        Event::Click { object }
-        | Event::HoverStart { object }
-        | Event::HoverEnd { object }
-        | Event::StateChanges { object, .. }
-        | Event::MediaEnds { object }
-        | Event::CueReached { object, .. }
-        | Event::AnimationCompletes { object, .. }
-        | Event::MarkerOpened { object }
-        | Event::MarkerClosed { object } => object == obj_id,
-        Event::KeyPressed { object, .. } => object.as_deref() == Some(obj_id),
-        Event::DroppedOn { object, target } => object == obj_id || target == obj_id,
-        Event::ObjectsIntersect { a, b } | Event::ObjectsStopIntersecting { a, b } => {
-            a == obj_id || b == obj_id
-        }
-        Event::TimelineStarts { .. }
-        | Event::TimelineEnds { .. }
-        | Event::TimelineReaches { .. }
-        | Event::VariableChanges { .. }
-        | Event::TimerEnds { .. }
-        | Event::Submit => false,
-    }
+pub(crate) fn is_question_object(slide: &Slide, _obj_id: &str) -> bool {
+    slide.question.is_some()
 }
 
 /// Whether the currently selected object is related to the slide's question.
@@ -503,6 +463,7 @@ fn show_question_editor_body(
             .all(|trigger| trigger.when == Event::Submit);
 
     ui.push_id(id_salt, |ui| {
+        ui.set_max_width(ui.available_width());
         let wide = ui.available_width() >= TWO_COLUMN_MIN_WIDTH;
 
         // Header bar: Kind, tip line, Remove button
@@ -881,12 +842,12 @@ fn show_choice_rows(
 
             // Leave room for the three reorder/remove buttons so narrow windows never overflow.
             let narrow = ui.available_width() < 520.0;
-            let mut reserve = if list_edit { 130.0 } else { 8.0 };
+            let mut reserve = if list_edit { 170.0 } else { 48.0 };
             let per_answer = editor.ui.question.scoring == Scoring::PerAnswer;
             if per_answer {
                 reserve += 64.0;
             }
-            let text_w = (ui.available_width() - reserve).clamp(100.0, 320.0);
+            let text_w = (ui.available_width() - reserve).clamp(40.0, 320.0);
             let text_committed = {
                 let c = &mut editor.ui.question.choices[idx];
                 show_singleline_text_field(

@@ -376,7 +376,6 @@ fn a11_3_painting_onto_text_box_preserves_hyperlinks() {
 }
 
 #[test]
-#[ignore = "BUG: Clicking empty canvas while non-sticky Format Painter is armed does not disarm it"]
 fn a11_5_clicking_self_empty_canvas_and_right_click_while_armed() {
     let mut h = TestHarness::new(two_slide_course());
     h.editor.selection.slide = "s1".into();
@@ -403,7 +402,7 @@ fn a11_5_clicking_self_empty_canvas_and_right_click_while_armed() {
     h.idle_frame();
     h.click_at(paint);
     h.idle_frame();
-    h.click_at(pos2(central.max.x - 20.0, central.max.y - 20.0));
+    h.click_at(pos2(central.min.x + 40.0, central.max.y - 40.0));
     h.idle_frame();
     assert!(h.editor.ui.format_painter.is_none());
 }

@@ -316,19 +316,13 @@ fn test_size_scaling_with_letterbox_for_4_3() {
     let slide = &res.course.scenes[0].slides[0];
     let obj = &slide.objects[0];
 
-    // Scale = 720 / 6,858,000. Scaled w = 960 px. Offset x = (1280 - 960) / 2 = 160 px.
-    assert!((obj.frame.x - 160.0).abs() < 1.0);
+    // 4:3 slides import at 1280x960 without letterboxing.
+    assert_eq!(res.course.slide_size.w, 1280);
+    assert_eq!(res.course.slide_size.h, 960);
+    assert!((obj.frame.x - 0.0).abs() < 1.0);
     assert!((obj.frame.y - 0.0).abs() < 1.0);
-    assert!((obj.frame.w - 960.0).abs() < 1.0);
-    assert!((obj.frame.h - 720.0).abs() < 1.0);
-
-    // Should have recorded aspect ratio letterbox note
-    assert!(
-        res.report
-            .items
-            .iter()
-            .any(|i| i.kind == SkipKind::AspectRatioMismatch)
-    );
+    assert!((obj.frame.w - 1280.0).abs() < 1.0);
+    assert!((obj.frame.h - 960.0).abs() < 1.0);
     assert!(res.course.is_playable(), "{:?}", res.course.validate());
 }
 
@@ -1517,10 +1511,10 @@ fn test_run_size_exact_on_16_9_and_4_3() {
     assert_eq!(b, None);
     assert!((style - 37.333).abs() < 0.01);
 
-    // 10x7.5in 4:3 deck letterboxed into 720 px height: also 96 px per inch.
+    // 10x7.5in 4:3 deck at 1280x960: 128 px per inch => 28pt = 49.778 px.
     let bytes = fixture_pptx_with_size(&[&slide], 9_144_000, 6_858_000, &[]);
     let (a, b, _) = run_sizes(&bytes);
-    assert!((a.unwrap() - 37.333).abs() < 0.01);
+    assert!((a.unwrap() - 49.778).abs() < 0.01);
     assert_eq!(b, None);
 
     // 10in wide 16:9 deck: 128 px per inch => 28pt = 49.78 px.

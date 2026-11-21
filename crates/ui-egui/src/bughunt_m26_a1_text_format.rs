@@ -41,7 +41,6 @@ fn base_object(id: &str, frame: Rect, kind: ObjectKind) -> Object {
 // ============================================================================
 
 #[test]
-#[ignore = "BUG: Timer Size DragValue does not commit on Enter (missing enter check and text_size_seen guard in properties.rs:5462-5469)"]
 fn a1_1_timer_size_field_accepts_enter_blur_and_drag() {
     let mut course = hello();
     let timer = base_object(
@@ -86,7 +85,8 @@ fn a1_1_timer_size_field_accepts_enter_blur_and_drag() {
     };
 
     // 1. Typing + Enter
-    let field = field_next_to_label(&mut h, "Size");
+    let panel = h.right_panel_rect();
+    let field = h.find_text_in("24", panel).expect("Timer Size DragValue");
     let rev_before = h.editor.session.revision;
     h.set_field(field, "40");
     assert!(
@@ -342,7 +342,6 @@ fn a1_3_shape_with_text_enter_blur_and_line_spacing() {
 }
 
 #[test]
-#[ignore = "BUG: Multi-select Size field does not commit on blur/click-away (properties.rs:2363-2403)"]
 fn a1_4_multi_select_mixed_sizes_and_shape_text() {
     let mut course = hello();
     let t1 = base_object(
@@ -433,8 +432,9 @@ fn a1_4_multi_select_mixed_sizes_and_shape_text() {
         h.find_text_in("Mixed", panel).is_some(),
         "expected Mixed hint when selected text sizes differ"
     );
-    let size_label = h.find_text_in("Size", panel).expect("Size label");
-    let field = pos2(panel.min.x + 150.0, size_label.y);
+    let field = h
+        .find_text_in("Mixed", panel)
+        .expect("Mixed text size field");
 
     // Click, type 36, and click away (blur)
     h.click_at(field);
@@ -477,7 +477,6 @@ fn a1_4_multi_select_mixed_sizes_and_shape_text() {
 }
 
 #[test]
-#[ignore = "BUG: Custom line spacing DragValue inside ComboBox popup closes popup before Enter/blur commit"]
 fn a1_6_line_spacing_custom_enter_blur_and_presets() {
     let mut course = hello();
     let body = base_object(
@@ -568,7 +567,6 @@ fn a1_6_line_spacing_custom_enter_blur_and_presets() {
 // ============================================================================
 
 #[test]
-#[ignore = "BUG: Inline edit loses partial substring selection when inspector Font size field takes focus, resizing whole text box"]
 fn a1_5_inline_edit_partial_substring_selection() {
     let mut course = hello();
     let hw = base_object(

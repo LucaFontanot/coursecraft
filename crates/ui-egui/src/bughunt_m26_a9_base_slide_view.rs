@@ -51,7 +51,6 @@ fn text_color_in(shapes: &[ClippedShape], needle: &str, in_rect: egui::Rect) -> 
 // ============================================================================
 
 #[test]
-#[ignore = "BUG: BaseSlideView::Dim does not dim base slide when editor.ui.layers.dim_other_layers is false (canvas.rs:5463-5466)"]
 fn a9_1_base_slide_view_dim_works_even_when_dim_other_layers_off() {
     let mut h = TestHarness::new(hello());
     h.editor.selection.slide = "s-intro".into();
@@ -314,7 +313,6 @@ fn a9_7_marquee_selection_on_layer_never_selects_base_objects() {
 // ============================================================================
 
 #[test]
-#[ignore = "BUG: BaseSlideView::Hide does not hide Master slide objects while editing a layer"]
 fn a9_3_master_slide_objects_under_show_dim_and_hide() {
     let mut h = TestHarness::new(hello());
     let mid = h
@@ -429,7 +427,6 @@ fn a9_8_timeline_scrubbing_while_editing_layer_under_hide() {
 }
 
 #[test]
-#[ignore = "BUG: Base slide Show/Dim/Hide toggle clips off central panel at 1024x680 with 6 layers"]
 fn a9_9_toggle_bar_layout_on_narrow_window_with_six_layers() {
     let mut h = TestHarness::new_with_size(hello(), (1024.0, 680.0));
     for (i, name) in [

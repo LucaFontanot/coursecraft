@@ -558,6 +558,135 @@ pub fn fill_contours_shaded(
     mesh
 }
 
+fn lerp_vertex(a: &egui::epaint::Vertex, b: &egui::epaint::Vertex, u: f32) -> egui::epaint::Vertex {
+    let u = u.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * u).round() as u8;
+    egui::epaint::Vertex {
+        pos: pos2(
+            a.pos.x + (b.pos.x - a.pos.x) * u,
+            a.pos.y + (b.pos.y - a.pos.y) * u,
+        ),
+        uv: pos2(
+            a.uv.x + (b.uv.x - a.uv.x) * u,
+            a.uv.y + (b.uv.y - a.uv.y) * u,
+        ),
+        color: Color32::from_rgba_premultiplied(
+            mix(a.color.r(), b.color.r()),
+            mix(a.color.g(), b.color.g()),
+            mix(a.color.b(), b.color.b()),
+            mix(a.color.a(), b.color.a()),
+        ),
+    }
+}
+
+fn split_mesh_at_cuts(mesh: &mut Mesh, split_ts: &[f32], t_at: &impl Fn(Pt) -> f32) {
+    const CUT_EPS: f32 = 1e-5;
+    for &cut in split_ts {
+        if !cut.is_finite() || mesh.indices.len() < 3 {
+            continue;
+        }
+        let mut out = Mesh {
+            texture_id: mesh.texture_id,
+            ..Mesh::default()
+        };
+        for triangle in mesh.indices.as_chunks::<3>().0 {
+            let (Some(a), Some(b), Some(c)) = (
+                mesh.vertices.get(triangle[0] as usize).copied(),
+                mesh.vertices.get(triangle[1] as usize).copied(),
+                mesh.vertices.get(triangle[2] as usize).copied(),
+            ) else {
+                continue;
+            };
+            let ta = t_at((a.pos.x, a.pos.y));
+            let tb = t_at((b.pos.x, b.pos.y));
+            let tc = t_at((c.pos.x, c.pos.y));
+            let has_below = ta < cut - CUT_EPS || tb < cut - CUT_EPS || tc < cut - CUT_EPS;
+            let has_above = ta > cut + CUT_EPS || tb > cut + CUT_EPS || tc > cut + CUT_EPS;
+            if !has_below || !has_above || out.vertices.len() + 9 > MAX_SHADED_FILL_VERTICES {
+                let base = out.vertices.len() as u32;
+                out.vertices.extend([a, b, c]);
+                out.add_triangle(base, base.saturating_add(1), base.saturating_add(2));
+                continue;
+            }
+            let verts = [(a, ta), (b, tb), (c, tc)];
+            // Case 1: one vertex is on the cut, the other two are on opposite sides.
+            if let Some(on_idx) = (0..3).find(|&i| (verts[i].1 - cut).abs() <= CUT_EPS) {
+                let (v0, _) = verts[on_idx];
+                let (v1, t1) = verts[(on_idx + 1) % 3];
+                let (v2, t2) = verts[(on_idx + 2) % 3];
+                let u = ((cut - t1) / (t2 - t1)).clamp(0.0, 1.0);
+                let p = lerp_vertex(&v1, &v2, u);
+                let base = out.vertices.len() as u32;
+                out.vertices.extend([v0, v1, p, v0, p, v2]);
+                out.add_triangle(base, base + 1, base + 2);
+                out.add_triangle(base + 3, base + 4, base + 5);
+                continue;
+            }
+            // Case 2: one vertex is alone on its side, two are on the other side.
+            let below_count = usize::from(ta < cut) + usize::from(tb < cut) + usize::from(tc < cut);
+            let want_below = below_count == 1;
+            let lone_idx = (0..3)
+                .find(|&i| (verts[i].1 < cut) == want_below)
+                .unwrap_or(0);
+            let (v0, t0) = verts[lone_idx];
+            let (v1, t1) = verts[(lone_idx + 1) % 3];
+            let (v2, t2) = verts[(lone_idx + 2) % 3];
+            let p1 = lerp_vertex(&v0, &v1, (cut - t0) / (t1 - t0));
+            let p2 = lerp_vertex(&v0, &v2, (cut - t0) / (t2 - t0));
+            let base = out.vertices.len() as u32;
+            out.vertices.extend([v0, p1, p2, p1, v1, v2, p1, v2, p2]);
+            out.add_triangle(base, base + 1, base + 2);
+            out.add_triangle(base + 3, base + 4, base + 5);
+            out.add_triangle(base + 6, base + 7, base + 8);
+        }
+        *mesh = out;
+    }
+}
+
+/// Triangulate `contours`, split triangles at hard-step iso-lines `split_ts`,
+/// and colour every triangle's vertices from `color_at(point, tri_mid_t)`.
+#[must_use]
+pub fn fill_contours_linear_shaded(
+    contours: &[Vec<Pt>],
+    pixels_per_point: f32,
+    max_edge: f32,
+    split_ts: &[f32],
+    t_at: impl Fn(Pt) -> f32,
+    color_at: impl Fn(Pt, f32) -> Color32,
+) -> Mesh {
+    let mut mesh = fill_contours(contours, Color32::WHITE, pixels_per_point);
+    subdivide_mesh(&mut mesh, max_edge);
+    if !split_ts.is_empty() {
+        split_mesh_at_cuts(&mut mesh, split_ts, &t_at);
+    }
+    for tri in mesh.indices.as_chunks::<3>().0 {
+        let (Some(i0), Some(i1), Some(i2)) = (
+            Some(tri[0] as usize),
+            Some(tri[1] as usize),
+            Some(tri[2] as usize),
+        ) else {
+            continue;
+        };
+        if i2 >= mesh.vertices.len() || i1 >= mesh.vertices.len() || i0 >= mesh.vertices.len() {
+            continue;
+        }
+        let t0 = t_at((mesh.vertices[i0].pos.x, mesh.vertices[i0].pos.y));
+        let t1 = t_at((mesh.vertices[i1].pos.x, mesh.vertices[i1].pos.y));
+        let t2 = t_at((mesh.vertices[i2].pos.x, mesh.vertices[i2].pos.y));
+        let tri_mid_t = (t0 + t1 + t2) / 3.0;
+        for idx in [i0, i1, i2] {
+            let v = &mut mesh.vertices[idx];
+            let coverage = v.color.a();
+            let mut color = color_at((v.pos.x, v.pos.y), tri_mid_t);
+            if coverage < 255 {
+                color = color.gamma_multiply(f32::from(coverage) / 255.0);
+            }
+            v.color = color;
+        }
+    }
+    mesh
+}
+
 /// Triangulate `contours` and set each vertex's texture coordinates from `uv_at`.
 ///
 /// The mesh keeps its default (white) colour, so the caller can tint it by

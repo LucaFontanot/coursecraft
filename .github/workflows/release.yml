@@ -50,7 +50,6 @@ jobs:
           Copy-Item target/release/coursecraft.exe "dist/CourseCraft-$($env:GITHUB_REF_NAME)-portable.exe"
       - name: Build Windows installer
         if: matrix.name == 'windows'
-        continue-on-error: true
         shell: pwsh
         run: |
           $cmd = Get-Command iscc -ErrorAction SilentlyContinue

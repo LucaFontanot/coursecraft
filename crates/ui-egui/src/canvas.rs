@@ -5,10 +5,7 @@ use coursecraft_course::{
     ConnectorStyle, Course, Glue, HotspotShape, LineEnd, Object, ObjectKind, Path, PathStyle,
     Point, QuestionKind, ShapeKind, shape_info, shape_label,
 };
-use coursecraft_render::{
-    DrawItem, Highlight, Hit, SlideTransform, Visual, compose_authoring_layers, compose_object,
-    paint,
-};
+use coursecraft_render::{DrawItem, Highlight, Hit, SlideTransform, Visual, compose_object, paint};
 use egui::{
     Align2, Area, Color32, CornerRadius, CursorIcon, FontId, Id, Painter, Pos2, Rect, RichText,
     ScrollArea, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
@@ -268,6 +265,7 @@ fn start_inline_edit(editor: &mut Editor, object_id: &str) {
         cell: None,
         just_entered: true,
     });
+    editor.ui.inline_edit_yielded_to_panel = false;
 }
 
 /// The slide-space rect of one table cell, including its spans.
@@ -397,6 +395,7 @@ fn start_table_cell_edit(editor: &mut Editor, object_id: &str, row: usize, colum
         cell: Some((row, column)),
         just_entered: true,
     });
+    editor.ui.inline_edit_yielded_to_panel = false;
 }
 
 /// Enter point editing for a path object.
@@ -1430,15 +1429,18 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         .x
         .min(canvas_right - estimated_w)
         .max(canvas_left);
+    let has_layer_selected = editor.selection.layer.is_some();
+    let wraps = has_layer_selected || estimated_w > (canvas_right - pills_x);
+    let pills_h = if wraps { 64.0 } else { 24.0 };
     let pills_rect = Rect::from_min_size(
         pos2(pills_x, t.slide_rect().min.y - 24.0 - 8.0),
-        vec2((canvas_right - pills_x).max(t.slide_rect().width()), 24.0),
+        vec2((canvas_right - pills_x).max(1.0), pills_h),
     );
 
     let mut pills_ui = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(pills_rect)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            .layout(egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true)),
     );
     pills_ui.spacing_mut().item_spacing.x = 4.0;
 
@@ -1531,22 +1533,6 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
                 );
             }
         }
-    }
-}
-
-fn is_base_slide_item(slide: &coursecraft_course::Slide, item: &DrawItem) -> bool {
-    match &item.hit {
-        Hit::Object(id) => slide.objects.iter().any(|o| &o.id == id),
-        Hit::Choice(_)
-        | Hit::SequenceMove { .. }
-        | Hit::QuestionChrome(_)
-        | Hit::HotspotImage
-        | Hit::DragItem(_) => true,
-        Hit::TextLink { object, .. } => slide.objects.iter().any(|o| &o.id == object),
-        Hit::None => matches!(
-            item.visual,
-            Visual::Prompt { .. } | Visual::DrawCard { .. } | Visual::HotspotMarker
-        ),
     }
 }
 
@@ -4010,6 +3996,13 @@ fn handle_canvas_click(
             if let Some(id) = picked {
                 let targets = editor.selection.group_members(&editor.session.course, &id);
                 editor.apply_format_painter(&targets);
+            } else if editor
+                .ui
+                .format_painter
+                .as_ref()
+                .is_some_and(|fp| !fp.sticky)
+            {
+                editor.ui.format_painter = None;
             }
             return;
         }
@@ -4039,6 +4032,15 @@ fn handle_canvas_click(
                 editor.ui.group_focus = None;
             }
             None => {}
+        }
+    } else if editor.ui.format_painter.is_some() {
+        if editor
+            .ui
+            .format_painter
+            .as_ref()
+            .is_some_and(|fp| !fp.sticky)
+        {
+            editor.ui.format_painter = None;
         }
     } else if !additive {
         editor.selection.clear_objects();
@@ -4523,6 +4525,28 @@ fn apply_inline_edit_style_shortcut(
     }
 }
 
+fn update_inline_edit_panel_yield(
+    editor: &mut Editor,
+    ui: &Ui,
+    rect: Rect,
+    panel_right: f32,
+) -> bool {
+    let (clicked_in_panel, clicked_in_edit) = ui.input(|i| {
+        let pressed = i.pointer.primary_pressed();
+        let pos = i.pointer.interact_pos();
+        (
+            pressed && pos.is_some_and(|p| p.x >= panel_right),
+            pressed && pos.is_some_and(|p| rect.contains(p)),
+        )
+    });
+    if clicked_in_panel {
+        editor.ui.inline_edit_yielded_to_panel = true;
+    } else if clicked_in_edit {
+        editor.ui.inline_edit_yielded_to_panel = false;
+    }
+    editor.ui.inline_edit_yielded_to_panel
+}
+
 fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let Some(edit) = editor.ui.inline_edit.clone() else {
         return;
@@ -4741,20 +4765,24 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let toggle_bold = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::B));
     let toggle_italic = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::I));
     let toggle_underline = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::U));
+    let panel_right = ui.max_rect().max.x;
     let clicked_outside = ui.input(|i| {
         i.pointer.primary_pressed()
             && !menu_open_at_start
             && i.pointer
                 .interact_pos()
-                .is_some_and(|pos| !rect.contains(pos))
+                .is_some_and(|pos| !rect.contains(pos) && pos.x < panel_right)
     });
+    let yielded_to_panel = update_inline_edit_panel_yield(editor, ui, rect, panel_right);
 
     // Keep keyboard focus on the in-place editor while it is open. The canvas
     // interaction and the click that placed the object can otherwise take it.
     let pointer_active = ui.input(|i| {
         i.pointer.primary_down() || i.pointer.primary_pressed() || i.pointer.primary_released()
     });
-    if edit.just_entered || (!output.response.has_focus() && !clicked_outside && !escaped) {
+    if edit.just_entered
+        || (!output.response.has_focus() && !clicked_outside && !escaped && !yielded_to_panel)
+    {
         output.response.request_focus();
     }
     let cursor_range = output.state.cursor.char_range();
@@ -4780,6 +4808,18 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
 
     if let Some(state) = editor.ui.inline_edit.as_mut() {
         state.buffer = buffer.clone();
+    }
+    if output.response.has_focus()
+        && let Some(cr) = cursor_range
+    {
+        let (sel_range, cpos) = if !cr.is_empty() {
+            let sorted = cr.as_sorted_char_range();
+            (Some((sorted.start.0, sorted.end.0)), sorted.start.0)
+        } else {
+            (None, cr.primary.index.0)
+        };
+        editor.ui.inline_edit_selection =
+            Some((edit.slide.clone(), edit.object.clone(), sel_range, cpos));
     }
     if (toggle_bold || toggle_italic || toggle_underline) && !escaped {
         apply_inline_edit_style_shortcut(
@@ -5460,23 +5500,20 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             .ui
             .layers
             .extra_layer_ids(slide, editor.selection.layer.as_deref());
+        let hide_base_view = editor.selection.layer.is_some()
+            && editor.session.course.editor.base_slide_view
+                == coursecraft_course::BaseSlideView::Hide;
         let dim_base = editor.selection.layer.is_some()
             && editor.session.course.editor.base_slide_view
-                == coursecraft_course::BaseSlideView::Dim
-            && editor.ui.layers.dim_other_layers;
-        let mut items = compose_authoring_layers(
+                == coursecraft_course::BaseSlideView::Dim;
+        let mut items = coursecraft_render::compose_authoring_layers_opts(
             &editor.session.course,
             slide,
             editor.selection.layer.as_deref(),
             &extra_layers,
             dim_base,
+            !hide_base_view,
         );
-        if editor.selection.layer.is_some()
-            && editor.session.course.editor.base_slide_view
-                == coursecraft_course::BaseSlideView::Hide
-        {
-            items.retain(|item| !is_base_slide_item(slide, item));
-        }
         items.retain(|item| {
             !matches!(&item.hit, Hit::Object(id)
                 if slide.object(id).is_some_and(|(o, _)| o.editor_hidden))

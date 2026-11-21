@@ -119,6 +119,10 @@ pub struct PropertiesState {
     /// Last custom line-spacing value entered.
     pub line_spacing_custom: f32,
     pub line_spacing_seen: f32,
+    /// Whether the custom line-spacing DragValue inside the ComboBox popup was interacted with.
+    pub line_spacing_editing: bool,
+    /// Snapshot of active canvas inline-edit `(slide, object, selection_range, cursor_pos)`.
+    pub inline_selection: Option<crate::InlineEditSelection>,
     /// The font picker's "Add font…" entry was clicked.
     pub add_font_requested: bool,
     /// Search text for the "On this computer" font list.
@@ -365,6 +369,8 @@ impl Default for PropertiesState {
             link_use_slide: false,
             line_spacing_custom: 1.0,
             line_spacing_seen: f32::NAN,
+            line_spacing_editing: false,
+            inline_selection: None,
             add_font_requested: false,
             system_font_search: String::new(),
             system_fonts_list_requested: false,
@@ -1162,6 +1168,8 @@ fn inspector_row_inner<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&m
             );
             child.spacing_mut().button_padding = vec2(4.0, 2.0);
             child.spacing_mut().item_spacing.x = 4.0;
+            child.spacing_mut().text_edit_width =
+                child.spacing().text_edit_width.min((rem_w - 8.0).max(30.0));
             let inner = add_contents(&mut child);
             let used = child.min_rect();
             ui.allocate_rect(
@@ -1811,6 +1819,11 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
         &editor.selection,
         editor.session.revision,
     );
+    editor.ui.properties.inline_selection = if editor.ui.inline_edit.is_some() {
+        editor.ui.inline_edit_selection.clone()
+    } else {
+        None
+    };
 
     // Spell data is computed once per frame here, where the editor is mutable,
     // and read by the Text Content box without threading `Editor` through the
@@ -1870,16 +1883,24 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
     }
     scroll.show(ui, |ui| {
         ui.add_space(coursecraft_render::PANEL_MARGIN);
+        let inner_w = (avail_w - 2.0 * coursecraft_render::PANEL_MARGIN).max(40.0);
         egui::Frame::NONE
             .inner_margin(egui::Margin::symmetric(
                 coursecraft_render::PANEL_MARGIN as i8,
                 0,
             ))
-            .show(ui, |ui| match editor.ui.inspector_tab {
-                InspectorTab::Format => show_format_tab(editor, ui, &mut actions_to_run),
-                InspectorTab::Animate => show_animate_tab(editor, ui, &mut actions_to_run),
-                InspectorTab::Slide => show_slide_tab(editor, ui, &mut actions_to_run),
-                InspectorTab::Course => show_course_tab(editor, ui, &mut actions_to_run),
+            .show(ui, |ui| {
+                ui.set_max_width(inner_w);
+                ui.spacing_mut().text_edit_width = ui
+                    .spacing()
+                    .text_edit_width
+                    .min((inner_w - LABEL_COL_WIDTH - 16.0).max(40.0));
+                match editor.ui.inspector_tab {
+                    InspectorTab::Format => show_format_tab(editor, ui, &mut actions_to_run),
+                    InspectorTab::Animate => show_animate_tab(editor, ui, &mut actions_to_run),
+                    InspectorTab::Slide => show_slide_tab(editor, ui, &mut actions_to_run),
+                    InspectorTab::Course => show_course_tab(editor, ui, &mut actions_to_run),
+                }
             });
         ui.add_space(coursecraft_render::PANEL_MARGIN);
     });
@@ -3163,13 +3184,19 @@ fn show_text_controls(
     let text_edit_id = egui::Id::unique(("prop_text_body", id_prefix));
     let text_edit_state = egui::TextEdit::load_state(ui.ctx(), text_edit_id);
     let cursor_range = text_edit_state.as_ref().and_then(|s| s.cursor.char_range());
-    let (char_range, cursor_pos): ((usize, usize), usize) = if let Some(cr) = cursor_range {
-        if !cr.is_empty() {
-            let sorted = cr.as_sorted_char_range();
-            ((sorted.start.0, sorted.end.0), sorted.start.0)
-        } else {
-            ((0, 0), cr.primary.index.0)
-        }
+    let (char_range, cursor_pos): ((usize, usize), usize) = if let Some(cr) = cursor_range
+        && !cr.is_empty()
+    {
+        let sorted = cr.as_sorted_char_range();
+        ((sorted.start.0, sorted.end.0), sorted.start.0)
+    } else if let Some((_, _, inline_range, inline_cursor)) = props
+        .inline_selection
+        .as_ref()
+        .filter(|(s, o, _, _)| s == slide_id && o == obj_id)
+    {
+        (inline_range.unwrap_or((0, 0)), *inline_cursor)
+    } else if let Some(cr) = cursor_range {
+        ((0, 0), cr.primary.index.0)
     } else {
         ((0, 0), 0)
     };
@@ -3738,13 +3765,19 @@ fn show_paragraph_controls(
     let text_edit_id = egui::Id::unique(("prop_text_body", id_prefix));
     let text_edit_state = egui::TextEdit::load_state(ui.ctx(), text_edit_id);
     let cursor_range = text_edit_state.as_ref().and_then(|s| s.cursor.char_range());
-    let (char_range, cursor_pos): ((usize, usize), usize) = if let Some(cr) = cursor_range {
-        if !cr.is_empty() {
-            let sorted = cr.as_sorted_char_range();
-            ((sorted.start.0, sorted.end.0), sorted.start.0)
-        } else {
-            ((0, 0), cr.primary.index.0)
-        }
+    let (char_range, cursor_pos): ((usize, usize), usize) = if let Some(cr) = cursor_range
+        && !cr.is_empty()
+    {
+        let sorted = cr.as_sorted_char_range();
+        ((sorted.start.0, sorted.end.0), sorted.start.0)
+    } else if let Some((_, _, inline_range, inline_cursor)) = props
+        .inline_selection
+        .as_ref()
+        .filter(|(s, o, _, _)| s == slide_id && o == obj_id)
+    {
+        (inline_range.unwrap_or((0, 0)), *inline_cursor)
+    } else if let Some(cr) = cursor_range {
+        ((0, 0), cr.primary.index.0)
     } else {
         ((0, 0), 0)
     };
@@ -3827,15 +3860,20 @@ fn show_paragraph_controls(
         }
         let id = egui::Id::unique(("line_spacing", id_prefix, obj_id));
         let mut chosen = None;
+        let mut popup_was_drawn = false;
         egui::ComboBox::from_id_salt(id)
             .selected_text(format!("{current:.2}x"))
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show_ui(ui, |ui| {
+                popup_was_drawn = true;
                 for value in [1.0_f32, 1.15, 1.5, 2.0] {
                     if ui
                         .selectable_label((current - value).abs() < 0.001, format!("{value}x"))
                         .clicked()
                     {
                         chosen = Some(value);
+                        props.line_spacing_editing = false;
+                        ui.close();
                     }
                 }
                 ui.separator();
@@ -3845,14 +3883,27 @@ fn show_paragraph_controls(
                         .range(0.8..=3.0)
                         .prefix("custom "),
                 );
+                if response.has_focus() || response.changed() || response.dragged() {
+                    props.line_spacing_editing = true;
+                }
                 let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if (response.drag_stopped() || response.lost_focus() || enter)
                     && props.line_spacing_custom.is_finite()
                     && (props.line_spacing_custom - current).abs() > 0.001
                 {
                     chosen = Some(props.line_spacing_custom);
+                    props.line_spacing_editing = false;
+                    ui.close();
                 }
             });
+        if chosen.is_none() && props.line_spacing_editing && !popup_was_drawn {
+            props.line_spacing_editing = false;
+            if props.line_spacing_custom.is_finite()
+                && (props.line_spacing_custom - current).abs() > 0.001
+            {
+                chosen = Some(props.line_spacing_custom);
+            }
+        }
         if let Some(value) = chosen {
             let mut params = paragraph_base();
             params["line_spacing"] = serde_json::json!(value);
@@ -3990,6 +4041,7 @@ fn fill_style_kind(style: &Option<coursecraft_course::FillStyle>) -> &'static st
         Some(coursecraft_course::FillStyle::Linear { .. }) => "Linear gradient",
         Some(coursecraft_course::FillStyle::Radial { .. }) => "Radial gradient",
         Some(coursecraft_course::FillStyle::Picture { .. }) => "Picture",
+        Some(coursecraft_course::FillStyle::Pattern { .. }) => "Pattern",
     }
 }
 
@@ -4179,6 +4231,11 @@ fn show_fill_style_editor(
                             }
                         }
                     });
+            });
+        }
+        Some(coursecraft_course::FillStyle::Pattern { preset, .. }) => {
+            inspector_row(ui, "Pattern", |ui| {
+                ui.label(preset.as_str());
             });
         }
         None => {}
@@ -4883,7 +4940,8 @@ fn show_table_controls(
                     .range(0.0..=50.0)
                     .suffix(" px"),
             );
-            if response.drag_stopped() || response.lost_focus() {
+            let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if response.drag_stopped() || response.lost_focus() || enter {
                 actions.push((
                     "table.set_borders",
                     serde_json::json!({
@@ -4944,7 +5002,8 @@ fn show_table_controls(
                     .range(0.0..=50.0)
                     .suffix(" px"),
             );
-            if response.drag_stopped() || response.lost_focus() {
+            let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if response.drag_stopped() || response.lost_focus() || enter {
                 actions.push((
                     "table.set_borders",
                     serde_json::json!({
@@ -5386,7 +5445,8 @@ fn show_timer_controls(
                 .suffix(" ms"),
         );
         props.timer_duration_rect = Some(r.rect);
-        if r.drag_stopped() || r.lost_focus() {
+        let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if r.drag_stopped() || r.lost_focus() || enter {
             action_to_run = Some(commit(props));
         }
     });
@@ -5464,7 +5524,8 @@ fn show_timer_controls(
                 .speed(1.0)
                 .range(1.0..=400.0),
         );
-        if r.drag_stopped() || r.lost_focus() {
+        let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if r.drag_stopped() || r.lost_focus() || enter {
             action_to_run = Some(commit(props));
         }
     });
@@ -5606,13 +5667,15 @@ fn show_meter_controls(
     }
     inspector_row(ui, "Min", |ui| {
         let r = ui.add(DragValue::new(&mut props.input_min).speed(1.0));
-        if r.drag_stopped() || r.lost_focus() {
+        let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if r.drag_stopped() || r.lost_focus() || enter {
             action_to_run = Some(commit(props));
         }
     });
     inspector_row(ui, "Max", |ui| {
         let r = ui.add(DragValue::new(&mut props.input_max).speed(1.0));
-        if r.drag_stopped() || r.lost_focus() {
+        let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if r.drag_stopped() || r.lost_focus() || enter {
             action_to_run = Some(commit(props));
         }
     });
@@ -6968,7 +7031,8 @@ fn show_object_properties(
                                 .suffix(" ms"),
                         );
                         name_commit = is_committed(&name, ui);
-                        time_commit = at.drag_stopped() || at.lost_focus();
+                        let enter = at.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        time_commit = at.drag_stopped() || at.lost_focus() || enter;
                     });
                     let mut pause_changed = false;
                     let mut delete = false;
@@ -7576,7 +7640,9 @@ fn show_slide_properties(
         let rem_w = ui.available_width().max(30.0);
         let r = ui.add_sized(
             [rem_w, coursecraft_render::CONTROL_COMPACT],
-            TextEdit::singleline(&mut props.slide_title).id_salt("prop_slide_title"),
+            TextEdit::singleline(&mut props.slide_title)
+                .desired_width(rem_w)
+                .id_salt("prop_slide_title"),
         );
         props.slide_title_rect = Some(r.rect);
         if is_committed(&r, ui)

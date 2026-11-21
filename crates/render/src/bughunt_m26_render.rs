@@ -377,7 +377,7 @@ fn a2_5_alpha_gradient_over_dark_background_no_grey_halo() {
 }
 
 #[test]
-#[ignore = "BUG: Hover state with solid fill override does not mask 3-stop gradient in render_player_rgba"]
+#[ignore = "NOT A BUG: hover is presentational in SlideView/Highlight per docs/spec/triggers.md; Player does not store hover in PlayerState and render_player_rgba renders with Highlight::default()"]
 fn a2_7_multi_stop_gradient_with_interactive_states() {
     let json = serde_json::json!({
         "schema_version": 1,

@@ -1141,6 +1141,13 @@ pub enum FillStyle {
         )]
         tile_scale: [f32; 2],
     },
+    /// A repeating preset pattern fill with foreground and background colours.
+    Pattern {
+        #[serde(default)]
+        preset: String,
+        fg: Color,
+        bg: Color,
+    },
 }
 
 impl FillStyle {
@@ -1149,7 +1156,7 @@ impl FillStyle {
     pub fn picture_src(&self) -> Option<&str> {
         match self {
             Self::Picture { src, .. } => Some(src.as_str()),
-            Self::Linear { .. } | Self::Radial { .. } => None,
+            Self::Linear { .. } | Self::Radial { .. } | Self::Pattern { .. } => None,
         }
     }
 }

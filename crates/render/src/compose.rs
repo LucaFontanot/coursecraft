@@ -181,6 +181,12 @@ pub enum ResolvedFill {
         tile: bool,
         tile_scale: [f32; 2],
     },
+    /// A repeating preset pattern fill with foreground and background colours.
+    Pattern {
+        preset: String,
+        fg: egui::Color32,
+        bg: egui::Color32,
+    },
 }
 
 /// A resolved drop shadow.
@@ -711,6 +717,11 @@ fn resolve_fill_style(style: &FillStyle) -> Option<ResolvedFill> {
                 tile_scale: *tile_scale,
             })
         }
+        FillStyle::Pattern { preset, fg, bg } => Some(ResolvedFill::Pattern {
+            preset: preset.clone(),
+            fg: parse_color(fg).unwrap_or(egui::Color32::BLACK),
+            bg: parse_color(bg).unwrap_or(egui::Color32::WHITE),
+        }),
     }
 }
 
@@ -2635,17 +2646,33 @@ pub fn compose_authoring_layers(
     extra_layers: &[String],
     dim_others: bool,
 ) -> Vec<DrawItem> {
+    compose_authoring_layers_opts(course, slide, focus_layer, extra_layers, dim_others, true)
+}
+
+/// Like [`compose_authoring_layers`], with `show_base` controlling whether the
+/// master slide, base objects, question chrome and draw card are included.
+#[must_use]
+pub fn compose_authoring_layers_opts(
+    course: &Course,
+    slide: &Slide,
+    focus_layer: Option<&str>,
+    extra_layers: &[String],
+    dim_others: bool,
+    show_base: bool,
+) -> Vec<DrawItem> {
     let mut items = Vec::new();
     let focused_layer = focus_layer.and_then(|id| slide.layer(id));
     let has_focus_layer = focused_layer.is_some();
-    let hide_base = focused_layer.is_some_and(|layer| layer.hide_base_objects);
+    let hide_base = !show_base || focused_layer.is_some_and(|layer| layer.hide_base_objects);
     // With the base hidden there is nothing to dim; masters stay.
     let dim_base = has_focus_layer && dim_others && !hide_base;
     let theme = Some(&course.theme);
 
     // 1. Master objects, under everything. They dim with the base objects when
     // a layer is focused and never take a press.
-    push_master_items(course, slide, theme, true, dim_base, &mut items);
+    if show_base {
+        push_master_items(course, slide, theme, true, dim_base, &mut items);
+    }
 
     // 2. Base objects
     if !hide_base {

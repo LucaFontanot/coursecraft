@@ -328,7 +328,9 @@ pub fn show_shape_gallery_window(editor: &mut crate::Editor, ctx: &egui::Context
             GalleryPick::Draw(tool) => crate::toolbar::insert_draw(editor, tool),
         }
         editor.ui.show_shape_gallery_window = false;
+        editor.ui.shape_gallery_query.clear();
     } else if !open || escape {
         editor.ui.show_shape_gallery_window = false;
+        editor.ui.shape_gallery_query.clear();
     }
 }

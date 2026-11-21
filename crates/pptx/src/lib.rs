@@ -23,7 +23,7 @@ use coursecraft_course::{
     Align, Autofit, Baseline, Color, ConnectorStyle, Course, DashStyle, FillStyle, Glow, Glue,
     GradientStop, LineEnd, Link, ListKind, MAX_OBJECT_FRAME_SIZE, NumberScheme, Object, ObjectKind,
     Outline, Paragraph, Path, PathPoint, PathStyle, PictureFillMode, Point, Rect, SCHEMA_VERSION,
-    Scene, Shadow, ShapeKind, ShapeText, Size, Slide, TableBorders, TableCell, TableRow, TextRun,
+    Scene, Shadow, ShapeKind, ShapeText, Slide, TableBorders, TableCell, TableRow, TextRun,
     TextStyle, Timing, VAlign, is_valid_link_url, normalize_table_fractions, path_frame_and_points,
 };
 
@@ -720,6 +720,7 @@ fn parse_relationships(
 /// Safe relative scale and letterboxing transform.
 #[derive(Debug, Clone, Copy)]
 struct SlideLayout {
+    slide_size: coursecraft_course::Size,
     scale: f64,
     offset_x: f64,
     offset_y: f64,
@@ -741,19 +742,23 @@ impl SlideLayout {
             5_143_500.0
         };
 
-        let scale = (1280.0 / valid_cx).min(720.0 / valid_cy);
-        let scaled_w = valid_cx * scale;
-        let scaled_h = valid_cy * scale;
-        let offset_x = (1280.0 - scaled_w) / 2.0;
-        let offset_y = (720.0 - scaled_h) / 2.0;
-
-        let aspect_ratio_mismatch = (valid_cx * 720.0 - valid_cy * 1280.0).abs() > 100.0;
+        let (w, h) = if valid_cx >= valid_cy {
+            let w = 1280_u32;
+            let h = ((1280.0 * valid_cy / valid_cx).round() as u32).clamp(1, 8192);
+            (w, h)
+        } else {
+            let h = 1280_u32;
+            let w = ((1280.0 * valid_cx / valid_cy).round() as u32).clamp(1, 8192);
+            (w, h)
+        };
+        let scale = f64::from(w) / valid_cx;
 
         Self {
+            slide_size: coursecraft_course::Size { w, h },
             scale,
-            offset_x,
-            offset_y,
-            aspect_ratio_mismatch,
+            offset_x: 0.0,
+            offset_y: 0.0,
+            aspect_ratio_mismatch: false,
             cx: valid_cx,
             cy: valid_cy,
         }
@@ -1096,6 +1101,23 @@ pub fn import_pptx(bytes: &[u8], title: &str) -> Result<Imported, PptxError> {
 ///
 /// # Errors
 /// Returns [`PptxError`] if the archive violates limits or is malformed.
+fn slide_layout_from_presentation(pres_tree: &XmlNode) -> SlideLayout {
+    let (mut emu_cx, mut emu_cy) = (9_144_000.0, 5_143_500.0);
+    if let Some(sld_sz) = pres_tree.find_descendant("sldSz") {
+        if let Some(cx_str) = sld_sz.attr("cx")
+            && let Some(val) = parse_emu(cx_str)
+        {
+            emu_cx = val;
+        }
+        if let Some(cy_str) = sld_sz.attr("cy")
+            && let Some(val) = parse_emu(cy_str)
+        {
+            emu_cy = val;
+        }
+    }
+    SlideLayout::from_emu(emu_cx, emu_cy)
+}
+
 pub fn import_pptx_with_limits(
     bytes: &[u8],
     title: &str,
@@ -1164,21 +1186,7 @@ pub fn import_pptx_with_limits(
 
     let pres_tree = parse_xml_tree(pres_xml_str, "ppt/presentation.xml", limits.max_xml_depth)?;
 
-    // Geometry slide size from <p:sldSz cx="..." cy="..."/>
-    let (mut emu_cx, mut emu_cy) = (9_144_000.0, 5_143_500.0);
-    if let Some(sld_sz) = pres_tree.find_descendant("sldSz") {
-        if let Some(cx_str) = sld_sz.attr("cx")
-            && let Some(val) = parse_emu(cx_str)
-        {
-            emu_cx = val;
-        }
-        if let Some(cy_str) = sld_sz.attr("cy")
-            && let Some(val) = parse_emu(cy_str)
-        {
-            emu_cy = val;
-        }
-    }
-    let layout = SlideLayout::from_emu(emu_cx, emu_cy);
+    let layout = slide_layout_from_presentation(&pres_tree);
 
     // Read slide order from <p:sldIdLst>
     struct SlideRef {
@@ -1360,6 +1368,73 @@ pub fn import_pptx_with_limits(
 
         let table_styles = parse_table_styles(&entries, &theme_palette);
 
+        let slide_hide_master = slide_tree
+            .attr("showMasterSp")
+            .is_some_and(|s| s == "0" || s == "false");
+        let layout_tree_opt = layout_path
+            .as_deref()
+            .and_then(|lp| resolver.tree(&entries, lp).cloned());
+        let layout_hide_master = layout_tree_opt.as_ref().is_some_and(|lt| {
+            lt.attr("showMasterSp")
+                .is_some_and(|s| s == "0" || s == "false")
+        });
+        if !slide_hide_master && !layout_hide_master {
+            let master_path = layout_path
+                .as_deref()
+                .and_then(|lp| resolver.master_of(&entries, lp))
+                .or_else(|| {
+                    entries
+                        .contains_key("ppt/slideMasters/slideMaster1.xml")
+                        .then(|| "ppt/slideMasters/slideMaster1.xml".to_string())
+                });
+            if let Some(mp) = master_path
+                && let Some(master_tree) = resolver.tree(&entries, &mp).cloned()
+                && let Some(sp_tree) = master_tree.find_descendant("spTree")
+            {
+                let master_rels = resolver.rels_of(&entries, &mp);
+                let mut mcx = SlideContext {
+                    layout: &layout,
+                    slide_rels: &master_rels,
+                    entries: &entries,
+                    objects: &mut objects,
+                    slide_title: &mut None,
+                    imported_media: &mut imported_media,
+                    existing_media_names: &mut existing_media_names,
+                    tracker: &mut tracker,
+                    limits: &limits,
+                    resolver: &mut resolver,
+                    layout_path: layout_path.clone(),
+                    slide_parts: &slide_parts,
+                    theme: &theme_palette,
+                    table_styles: &table_styles,
+                };
+                process_non_placeholder_children(sp_tree, GroupTransform::default(), 0, &mut mcx)?;
+            }
+        }
+        if let Some(lp) = layout_path.as_deref()
+            && let Some(layout_tree) = layout_tree_opt.as_ref()
+            && let Some(sp_tree) = layout_tree.find_descendant("spTree")
+        {
+            let layout_rels = resolver.rels_of(&entries, lp);
+            let mut lcx = SlideContext {
+                layout: &layout,
+                slide_rels: &layout_rels,
+                entries: &entries,
+                objects: &mut objects,
+                slide_title: &mut None,
+                imported_media: &mut imported_media,
+                existing_media_names: &mut existing_media_names,
+                tracker: &mut tracker,
+                limits: &limits,
+                resolver: &mut resolver,
+                layout_path: layout_path.clone(),
+                slide_parts: &slide_parts,
+                theme: &theme_palette,
+                table_styles: &table_styles,
+            };
+            process_non_placeholder_children(sp_tree, GroupTransform::default(), 0, &mut lcx)?;
+        }
+
         if let Some(sp_tree) = slide_tree.find_descendant("spTree") {
             let initial_xfrm = GroupTransform::default();
             let mut cx = SlideContext {
@@ -1449,7 +1524,7 @@ pub fn import_pptx_with_limits(
         schema_version: SCHEMA_VERSION,
         id: "imported-course".to_string(),
         title: clean_title,
-        slide_size: Size { w: 1280, h: 720 },
+        slide_size: layout.slide_size,
         variables: Vec::new(),
         scenes: vec![Scene {
             id: "imported".to_string(),
@@ -2099,7 +2174,9 @@ fn extract_slide_background(
                     .first()
                     .map(|s| s.color.clone())
                     .unwrap_or_else(|| Color("#FFFFFF".to_string())),
-                FillStyle::Picture { .. } => Color("#FFFFFF".to_string()),
+                FillStyle::Picture { .. } | FillStyle::Pattern { .. } => {
+                    Color("#FFFFFF".to_string())
+                }
             };
             return (None, Some(make_background_shape(fallback, fill_style)));
         }
@@ -2395,6 +2472,43 @@ fn resolve_connector_glues(objects: &mut [Object], tracker: &mut SlideTracker) {
 }
 
 /// Recursively process children of a group or shape tree up to depth 8.
+fn is_placeholder_node(node: &XmlNode) -> bool {
+    [
+        "nvSpPr",
+        "nvPicPr",
+        "nvGrpSpPr",
+        "nvCxnSpPr",
+        "nvGraphicFramePr",
+    ]
+    .iter()
+    .any(|nv| {
+        node.child(nv)
+            .and_then(|n| n.child("nvPr"))
+            .and_then(|p| p.child("ph"))
+            .is_some()
+    })
+}
+
+fn process_non_placeholder_children(
+    parent: &XmlNode,
+    transform: GroupTransform,
+    depth: usize,
+    cx: &mut SlideContext<'_, '_>,
+) -> Result<(), PptxError> {
+    let filtered = XmlNode {
+        name: parent.name.clone(),
+        attributes: parent.attributes.clone(),
+        text: parent.text.clone(),
+        children: parent
+            .children
+            .iter()
+            .filter(|c| !is_placeholder_node(c))
+            .cloned()
+            .collect(),
+    };
+    process_group_children(&filtered, transform, depth, cx)
+}
+
 fn process_group_children(
     parent: &XmlNode,
     transform: GroupTransform,
@@ -4369,18 +4483,16 @@ fn extract_shape_info(sp_pr: &XmlNode, cx: &mut SlideContext<'_, '_>) -> Extract
             .child("bgClr")
             .and_then(|n| resolve_first_color_child(n, cx.theme))
             .unwrap_or_else(|| Color("#FFFFFF".to_string()));
-        let weight = match patt.attr("prst") {
-            Some("pct50" | "smCheck" | "lgCheck") => 0.50,
-            Some("pct25" | "ltUpDiag" | "ltDnDiag" | "dashVert" | "dashHorz") => 0.25,
-            Some("wdUpDiag" | "wdDnDiag" | "cross" | "diagCross" | "trellis") => 0.40,
-            Some("dotGrid" | "pct20" | "pct10") => 0.20,
+        let preset = patt.attr("prst").unwrap_or("pct50").to_string();
+        let weight = match preset.as_str() {
+            "pct50" | "smCheck" | "lgCheck" => 0.50,
+            "pct25" | "ltUpDiag" | "ltDnDiag" | "dashVert" | "dashHorz" => 0.25,
+            "wdUpDiag" | "wdDnDiag" | "cross" | "diagCross" | "trellis" => 0.40,
+            "dotGrid" | "pct20" | "pct10" => 0.20,
             _ => 0.35,
         };
         fill = Some(blend_hex_colors(&bg.0, &fg.0, weight));
-        cx.tracker.report_skip(
-            SkipKind::UnsupportedFill,
-            "Pattern fill approximated with foreground/background blend",
-        );
+        fill_style = Some(FillStyle::Pattern { preset, fg, bg });
     }
 
     let outline = extract_outline(sp_pr, *cx.layout, cx.theme);
@@ -4716,6 +4828,14 @@ fn extract_body_props(
             found_dir = true;
         }
     }
+    if !found_insets && tx_body.child("bodyPr").is_some() {
+        insets = Some(coursecraft_course::TextInsets {
+            left: (91_440.0 * layout.scale) as f32,
+            top: (45_720.0 * layout.scale) as f32,
+            right: (91_440.0 * layout.scale) as f32,
+            bottom: (45_720.0 * layout.scale) as f32,
+        });
+    }
     (valign, autofit, wrap, insets, direction)
 }
 
@@ -4978,12 +5098,27 @@ fn paragraph_from(
     let line_spacing = p_pr_chain
         .iter()
         .find_map(|pr| {
-            pr.child("lnSpc")
-                .and_then(|spc| spc.child("spcPct"))
+            let spc = pr.child("lnSpc")?;
+            if let Some(val) = spc
+                .child("spcPct")
                 .and_then(|pct| pct.attr("val"))
                 .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|v| v.is_finite())
+            {
+                return Some((val / 100_000.0) as f32);
+            }
+            if let Some(pts) = spc
+                .child("spcPts")
+                .and_then(|p| p.attr("val"))
+                .and_then(|value| value.trim().parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v > 0.0)
+            {
+                let exact_px = (pts / 100.0) * (4.0 / 3.0) * layout.font_scale();
+                let base_px = f64::from(para_base_px.max(1.0));
+                return Some((exact_px / base_px) as f32);
+            }
+            None
         })
-        .map(|value| (value / 100_000.0) as f32)
         .filter(|value| value.is_finite())
         .map(|value| value.clamp(0.8, 3.0))
         .unwrap_or(1.0);

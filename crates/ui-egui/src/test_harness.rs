@@ -193,11 +193,10 @@ impl TestHarness {
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
-        let found = output
-            .shapes
-            .iter()
-            .rev()
-            .find_map(|cs| walk(&cs.shape, label));
+        let found = output.shapes.iter().rev().find_map(|cs| {
+            let pos = walk(&cs.shape, label)?;
+            cs.clip_rect.contains(pos).then_some(pos)
+        });
         output.drop_without_applying_deltas();
         found
     }

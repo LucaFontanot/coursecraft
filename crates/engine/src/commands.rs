@@ -5651,6 +5651,14 @@ fn look_of(object: &Object) -> Look {
             look.fill = Some(fill.clone());
             look.fill_style = Some(fill_style.clone());
         }
+        ObjectKind::Path { path } => {
+            if path.closed {
+                look.fill = path.fill.clone();
+                look.fill_style = Some(path.fill_style.clone());
+            }
+            look.outline = Some(Some(path.outline.clone()));
+            look.text_style = path.text.as_ref().map(|t| t.style.clone());
+        }
         _ => {}
     }
     look
@@ -5712,6 +5720,23 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
             }
             if let Some(src) = &look.fill_style {
                 *fill_style = src.clone();
+            }
+        }
+        ObjectKind::Path { path } => {
+            if path.closed {
+                if let Some(src) = &look.fill {
+                    path.fill = Some(src.clone());
+                }
+                if let Some(src) = &look.fill_style {
+                    path.fill_style = src.clone();
+                }
+            }
+            if let Some(Some(src)) = &look.outline {
+                path.outline = src.clone();
+            }
+            if let (Some(src), Some(t)) = (&look.text_style, path.text.as_mut()) {
+                t.style = src.clone();
+                clear_run_look(&mut t.runs);
             }
         }
         _ => {}

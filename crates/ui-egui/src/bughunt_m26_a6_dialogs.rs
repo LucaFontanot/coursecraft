@@ -135,7 +135,6 @@ fn a6_2_close_by_x_escape_and_card_reopens_full_size() {
 }
 
 #[test]
-#[ignore = "BUG: Shapes gallery reopens at shrunk 1-row height after filtering before close"]
 fn a6_3_shapes_gallery_filtered_close_reopens_full_size() {
     let mut h = TestHarness::new(hello());
     h.idle_frame();

@@ -24,7 +24,6 @@ fn png_bytes() -> Vec<u8> {
 // ============================================================================
 
 #[test]
-#[ignore = "BUG: Right panel Question editor clips/overlaps widgets in narrow right panel width on question kinds"]
 fn a10_1_every_question_kind_renders_cleanly_in_right_panel() {
     let kinds = [
         "multiple_choice",
@@ -183,9 +182,15 @@ fn a10_3_changing_question_kind_from_right_panel() {
 }
 
 #[test]
-#[ignore = "BUG: Selecting a Multiple Choice answer/prompt object on a question slide does not expose Question section in right panel (is_question_object only checks Submit/Hotspot/DragDrop)"]
 fn a10_4_selecting_every_kind_of_question_object_shows_question_section() {
-    let mut h = TestHarness::new(hello());
+    let mut course = hello();
+    if let Some(quiz) = course.slide_mut("s-quiz") {
+        let mut choice_obj = quiz.objects[0].clone();
+        choice_obj.id = "mc-choice-1".into();
+        choice_obj.name = "Choice 1".into();
+        quiz.objects.push(choice_obj);
+    }
+    let mut h = TestHarness::new(course);
     h.editor.selection.slide = "s-quiz".into();
     // Select submit button -> shows Question
     h.editor.selection.object = Some("btn-submit".into());
