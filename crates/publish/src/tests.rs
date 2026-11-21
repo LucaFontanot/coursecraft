@@ -302,6 +302,8 @@ fn course_with_image_packaged_under_media() {
             crop: None,
             src: "media/pic.png".into(),
             alt: "A picture".into(),
+            outline: None,
+            shape: None,
         },
         frame: Rect {
             x: 0.0,
@@ -373,6 +375,8 @@ fn course_with_svg_image_packaged_under_media() {
             crop: None,
             src: "media/logo.svg".into(),
             alt: "Logo".into(),
+            outline: None,
+            shape: None,
         },
         frame: Rect {
             x: 0.0,
@@ -478,6 +482,8 @@ fn missing_media_errors() {
             crop: None,
             src: "media/pic.png".into(),
             alt: "".into(),
+            outline: None,
+            shape: None,
         },
         frame: Rect {
             x: 0.0,
@@ -554,6 +560,8 @@ fn each_unsafe_path_case_errors() {
                 crop: None,
                 src: unsafe_src.into(),
                 alt: "".into(),
+                outline: None,
+                shape: None,
             },
             frame: Rect {
                 x: 0.0,
@@ -714,6 +722,8 @@ fn dedupes_identical_media_sources() {
             crop: None,
             src: "media/logo.png".into(),
             alt: "".into(),
+            outline: None,
+            shape: None,
         },
         frame: Rect {
             x: 0.0,
@@ -754,6 +764,8 @@ fn dedupes_identical_media_sources() {
             crop: None,
             src: "media/logo.png".into(),
             alt: "".into(),
+            outline: None,
+            shape: None,
         },
         frame: Rect {
             x: 10.0,
@@ -865,6 +877,7 @@ fn skips_remote_http_and_https_sources() {
             volume: 1.0,
             trim: None,
             cues: Vec::new(),
+            poster: None,
         },
         frame: Rect {
             x: 0.0,
@@ -950,6 +963,8 @@ fn distinct_sources_never_collide_in_package() {
                 crop: None,
                 src: src.into(),
                 alt: "".into(),
+                outline: None,
+                shape: None,
             },
             frame: Rect {
                 x: 0.0,
@@ -1009,6 +1024,8 @@ fn editor_saved_project_roundtrips_to_publish_package() {
             crop: None,
             src: "photo.png".into(),
             alt: "A scenic photo".into(),
+            outline: None,
+            shape: None,
         },
         frame: Rect {
             x: 0.0,
@@ -1120,6 +1137,7 @@ fn course_with_audio_and_video_packaged_under_media() {
             volume: 1.0,
             trim: None,
             cues: Vec::new(),
+            poster: None,
         },
         frame: Rect {
             x: 10.0,
@@ -1562,6 +1580,7 @@ fn missing_caption_file_fails_publish_for_audio_and_video() {
             volume: 1.0,
             trim: None,
             cues: Vec::new(),
+            poster: None,
         },
     ] {
         let mut course = minimal_course("Missing captions");
@@ -1610,6 +1629,7 @@ fn caption_files_are_packaged_under_media_for_audio_and_video() {
                 volume: 1.0,
                 trim: None,
                 cues: Vec::new(),
+                poster: None,
             },
             "clip.vtt",
         ),
@@ -1644,6 +1664,8 @@ fn master_media_is_packaged_templates_are_stripped_and_their_media_is_not() {
             crop: None,
             src: src.to_owned(),
             alt: String::new(),
+            outline: None,
+            shape: None,
         },
         frame: Rect {
             x: 0.0,
@@ -1745,6 +1767,7 @@ fn a_picture_shape_fill_is_packaged_as_media() {
             fill_style: Some(coursecraft_course::FillStyle::Picture {
                 src: "texture.png".into(),
                 mode: coursecraft_course::PictureFillMode::Stretch,
+                tile_scale: [1.0, 1.0],
             }),
             outline: None,
             text: None,
@@ -1811,6 +1834,8 @@ fn media_used_only_on_a_bank_slide_is_packaged() {
             src: "bank-only.png".into(),
             alt: "Only on a bank slide".into(),
             crop: None,
+            outline: None,
+            shape: None,
         },
         frame: Rect {
             x: 0.0,

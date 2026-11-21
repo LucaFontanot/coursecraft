@@ -77,6 +77,7 @@ fn link_clicks_run_open_url_and_slide_jumps_without_firing_object_clicks() {
             paragraphs: Vec::new(),
             autofit: Autofit::None,
             text_style: None,
+            outline: None,
         };
         slide.triggers.push(Trigger {
             action: Action::SetVariable {
@@ -3655,6 +3656,7 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                         paragraphs: Vec::new(),
                         autofit: coursecraft_course::Autofit::None,
                         text_style: None,
+                        outline: None,
                     },
                     frame: Rect {
                         x: 80.0,
