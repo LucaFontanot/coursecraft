@@ -2266,7 +2266,9 @@ fn commit_draw(
         points: fractions,
         style,
         closed,
+        subpaths: Vec::new(),
         fill: closed.then(|| theme.accent.clone()),
+        fill_style: None,
         outline: coursecraft_course::Outline {
             color: theme.text.clone(),
             width: 2.0,
@@ -2281,6 +2283,7 @@ fn commit_draw(
         connector,
         start_glue: start_glue.clone(),
         end_glue: end_glue.clone(),
+        text: None,
     };
     let name = next_draw_name(editor, tool.base_name());
     if wants_glue {
@@ -4346,7 +4349,7 @@ fn draw_crop_overlay(editor: &Editor, painter: &Painter, t: &SlideTransform, ui:
 
 fn align_for(align: coursecraft_course::Align) -> egui::Align {
     match align {
-        coursecraft_course::Align::Left => egui::Align::LEFT,
+        coursecraft_course::Align::Left | coursecraft_course::Align::Justify => egui::Align::LEFT,
         coursecraft_course::Align::Center => egui::Align::Center,
         coursecraft_course::Align::Right => egui::Align::RIGHT,
     }

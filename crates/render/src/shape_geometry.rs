@@ -262,7 +262,7 @@ fn push_corner(
         let cut = (radius.max(0.0)).min(len_in * 0.5).min(len_out * 0.5);
         let a = sub(p, mul(v_in, cut));
         let b = add(p, mul(v_out, cut));
-        out.extend(bezier2(a, p, b, 4));
+        out.extend(bezier2(a, p, b, 12));
     } else {
         out.push(p);
     }
@@ -3419,7 +3419,10 @@ pub fn shape_contours_adjusted(kind: ShapeKind, w: f32, h: f32, adjust: &[f32]) 
             )]
         }
         ShapeKind::Ellipse => vec![ellipse_in_frame(w, h)],
-        ShapeKind::Triangle => vec![vec![(w * 0.5, 0.0), (w, h), (0.0, h)]],
+        ShapeKind::Triangle => {
+            let apex = value(&a, 0, 0.5);
+            vec![vec![(w * apex, 0.0), (w, h), (0.0, h)]]
+        }
         ShapeKind::RightTriangle => vec![vec![(0.0, 0.0), (0.0, h), (w, h)]],
         ShapeKind::Parallelogram => {
             let slant = d * value(&a, 0, 0.25);
@@ -3437,9 +3440,15 @@ pub fn shape_contours_adjusted(kind: ShapeKind, w: f32, h: f32, adjust: &[f32]) 
         ]],
         ShapeKind::Pentagon => vec![regular_in_frame(5, w, h)],
         ShapeKind::Hexagon => {
-            let points = regular_in_frame(6, w, h);
-            let all: Vec<usize> = (0..points.len()).collect();
-            vec![snip_polygon(&points, &all, d * value(&a, 0, 0.0))]
+            let inset = (d * value(&a, 0, 0.25)).min(w * 0.5);
+            vec![vec![
+                (inset, 0.0),
+                (w - inset, 0.0),
+                (w, h * 0.5),
+                (w - inset, h),
+                (inset, h),
+                (0.0, h * 0.5),
+            ]]
         }
         ShapeKind::Heptagon => vec![regular_in_frame(7, w, h)],
         ShapeKind::Octagon => {

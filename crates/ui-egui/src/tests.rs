@@ -2793,6 +2793,7 @@ fn describe_covers_all_action_and_event_variants() {
                     paragraphs: Vec::new(),
                     autofit: coursecraft_course::Autofit::None,
                     text_style: None,
+                    outline: None,
                 },
                 frame: Rect::default(),
                 timing: Default::default(),
@@ -7949,6 +7950,8 @@ fn image_object(src: &str) -> Object {
             src: src.to_owned(),
             alt: "Picture".to_owned(),
             crop: None,
+            outline: None,
+            shape: None,
         },
         frame: CourseRect {
             x: 600.0,
@@ -7993,6 +7996,8 @@ fn accessibility_section_renders_and_a_click_selects_the_object() {
                 src: "photo.png".to_owned(),
                 alt: String::new(),
                 crop: None,
+                outline: None,
+                shape: None,
             },
             frame: CourseRect {
                 x: 600.0,
@@ -8404,6 +8409,8 @@ fn inspector_reset_clears_the_crop_and_restores_the_scale() {
             w: 0.5,
             h: 1.0,
         }),
+        outline: None,
+        shape: None,
     };
     let id = object.id.clone();
     course

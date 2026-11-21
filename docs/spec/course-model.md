@@ -62,10 +62,10 @@ Course
 
 | `kind.type` | fields |
 |---|---|
-| `text` | `text`, `style {font, size, color, bold, italic?, underline?, strikethrough?, baseline?, letter_spacing?, align?, valign?}`, `runs? [{text, bold?, italic?, underline?, strikethrough?, baseline?, letter_spacing?, size?, color?, font?, link?}]`, `paragraphs? [Paragraph]`, `autofit?` |
+| `text` | `text`, `style {font, size, color, bold, italic?, underline?, strikethrough?, baseline?, letter_spacing?, align?, valign?, wrap?, insets?, direction?}`, `runs? [{text, bold?, italic?, underline?, strikethrough?, baseline?, letter_spacing?, size?, color?, font?, link?}]`, `paragraphs? [Paragraph]`, `autofit?`, `outline? {color, width, dash?}` |
 | `shape` | `shape` (see [Shapes](#shapes)), `fill`, `fill_style?`, `outline? {color, width, dash?}`, `text? {text, style, runs?, paragraphs?, autofit?}`, `adjust? [number]` |
-| `image` | `src`, `alt`, `crop?` |
-| `audio` / `video` | `src`, `autoplay`, `captions?`, `volume?`, `trim?`, `cues[]?` (video only, see [Interactive video cues](#interactive-video-cues)) |
+| `image` | `src`, `alt`, `crop?`, `outline? {color, width, dash?}`, `shape?` |
+| `audio` / `video` | `src`, `autoplay`, `captions?`, `volume?`, `trim?`, `cues[]?` (video only, see [Interactive video cues](#interactive-video-cues)), `poster?` (video only) |
 | `lottie` | `src`, `loop?`, `autoplay?`, `speed?` |
 | `web` | `source` (see [Web objects](#web-objects)) |
 | `text_entry` | `variable`, `placeholder?`, `multiline?`, `max_chars?` (default 0 = no limit, at most 10000) |
@@ -320,7 +320,7 @@ Hit testing stays the object's frame (rotated and flipped when the object is), n
 
 ### Shape outlines, no fill and text
 
-A shape may set `outline` to `{color, width, dash}`. `color` is a normal `#RRGGBB`/`#RRGGBBAA` colour, `width` is in slide pixels and must be finite and within `0..=50`, and `dash` is `solid` (default), `dash` or `dot`. The outline is a band centred on the shape's edge, including a hole's edge; it is a mesh, not an `egui::Stroke`, so the wasm player and the offscreen rasteriser draw it the same way. Miter joins fall back to a bevel past a limit. Non-finite or zero widths draw nothing. `Lines` kinds keep their filled bands and take neither an outline nor text.
+A shape may set `outline` to `{color, width, dash}`. `color` is a normal `#RRGGBB`/`#RRGGBBAA` colour, `width` is in slide pixels and must be finite and within `0..=50`, and `dash` is `solid` (default), `dash`, `dot` or `dash_dot`. The outline is a band centred on the shape's edge, including a hole's edge; it is a mesh, not an `egui::Stroke`, so the wasm player and the offscreen rasteriser draw it the same way. Miter joins fall back to a bevel past a limit. Non-finite or zero widths draw nothing. `Lines` kinds keep their filled bands and take neither an outline nor text. `text` and `image` objects may also carry an optional `outline` (and `image` may carry an optional `shape` mask).
 
 "No fill" is `fill: "#00000000"`; the shape then draws only its outline and text. `outline` and `text` are omitted when unset, so a plain shape saves exactly as it did before these fields existed.
 

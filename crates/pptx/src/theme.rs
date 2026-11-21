@@ -10,7 +10,7 @@ use crate::XmlNode;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ThemePalette {
     /// Theme colour slots (`dk1`, `lt1`, `dk2`, `lt2`, `accent1`..`accent6`, `hlink`, `folHlink`).
-    slots: HashMap<String, (u8, u8, u8)>,
+    pub(crate) slots: HashMap<String, (u8, u8, u8)>,
     /// Colour mapping aliases (`tx1` -> `dk1`, `bg1` -> `lt1`, etc.).
     clr_map: HashMap<String, String>,
 }

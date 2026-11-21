@@ -134,6 +134,8 @@ mod layout_tests;
 #[cfg(test)]
 mod m25_input_tests;
 #[cfg(test)]
+mod m26_text_format_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -2392,6 +2394,7 @@ impl Editor {
         let style = coursecraft_course::FillStyle::Picture {
             src: src.to_owned(),
             mode,
+            tile_scale: [1.0, 1.0],
         };
         let fill_style = serde_json::to_value(&style).unwrap_or(serde_json::Value::Null);
         self.run(

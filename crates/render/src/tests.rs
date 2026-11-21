@@ -1836,7 +1836,9 @@ fn image_state_src_overrides_base_src_keeping_alt() {
         Visual::Image {
             crop: None,
             src: "b.png".into(),
-            alt: "A photo".into()
+            alt: "A photo".into(),
+            outline: None,
+            shape: None,
         }
     );
     for state in ["normal", "undefined-state"] {
@@ -1845,7 +1847,9 @@ fn image_state_src_overrides_base_src_keeping_alt() {
             Visual::Image {
                 crop: None,
                 src: "a.png".into(),
-                alt: "A photo".into()
+                alt: "A photo".into(),
+                outline: None,
+                shape: None,
             }
         );
     }
@@ -1898,6 +1902,8 @@ fn compose_produces_visual_image() {
             crop: None,
             src: "picture.png".to_string(),
             alt: "A mountain view".to_string(),
+            outline: None,
+            shape: None,
         }
     );
 }
@@ -1978,6 +1984,8 @@ fn a_full_crop_composes_exactly_like_no_crop() {
             crop: None,
             src: "picture.png".into(),
             alt: "A view".into(),
+            outline: None,
+            shape: None,
         }
     );
 }
@@ -2029,6 +2037,8 @@ fn a_crop_passes_through_to_the_visual() {
             )),
             src: "picture.png".into(),
             alt: "A view".into(),
+            outline: None,
+            shape: None,
         }
     );
 }
@@ -2092,6 +2102,8 @@ fn painting_registers_texture_caches_failure_and_retain_drops() {
                 crop: None,
                 src: "photo.png".to_string(),
                 alt: "Good Image".to_string(),
+                outline: None,
+                shape: None,
             },
             dimmed: false,
             opacity: 1.0,
@@ -2114,6 +2126,8 @@ fn painting_registers_texture_caches_failure_and_retain_drops() {
                 crop: None,
                 src: "missing.png".to_string(),
                 alt: "Missing Image".to_string(),
+                outline: None,
+                shape: None,
             },
             dimmed: false,
             opacity: 1.0,
@@ -2853,6 +2867,10 @@ fn paint_without_install_fonts_falls_back_without_panic() {
                 valign: coursecraft_course::VAlign::Top,
                 paragraphs: Vec::new(),
                 autofit: coursecraft_course::Autofit::None,
+                outline: None,
+                wrap: true,
+                insets: None,
+                direction: coursecraft_course::TextDirection::Horizontal,
             },
             dimmed: false,
             opacity: 1.0,
@@ -3377,6 +3395,7 @@ fn keyboard_focus_reaches_text_links() {
         paragraphs: Vec::new(),
         autofit: Autofit::None,
         text_style: None,
+        outline: None,
     };
     let mut player = Player::new(&course).expect("player");
     player.handle(&Input::Start);
@@ -3481,7 +3500,9 @@ fn align_and_valign_positions_on_known_frame() {
         (coursecraft_course::Align::Right, 500.0),
     ] {
         let x = match align {
-            coursecraft_course::Align::Left => screen_rect.left(),
+            coursecraft_course::Align::Left | coursecraft_course::Align::Justify => {
+                screen_rect.left()
+            }
             coursecraft_course::Align::Center => screen_rect.center().x,
             coursecraft_course::Align::Right => screen_rect.right(),
         };
@@ -3515,6 +3536,7 @@ fn plain_text_renders_as_one_run() {
             paragraphs: Vec::new(),
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
+            outline: None,
         },
         frame: coursecraft_course::Rect {
             x: 0.0,
@@ -6356,7 +6378,9 @@ fn a_diagonal_path_hits_its_line_not_its_bounding_box() {
                 ],
                 style: coursecraft_course::PathStyle::Straight,
                 closed: false,
+                subpaths: Vec::new(),
                 fill: None,
+                fill_style: None,
                 outline: coursecraft_course::Outline {
                     color: Color("#1F1F1F".into()),
                     width: 2.0,
@@ -6367,6 +6391,7 @@ fn a_diagonal_path_hits_its_line_not_its_bounding_box() {
                 connector: None,
                 start_glue: None,
                 end_glue: None,
+                text: None,
             },
         },
         frame: ModelRect {
@@ -6427,7 +6452,9 @@ fn a_closed_filled_path_hits_inside_its_outline() {
                 ],
                 style: coursecraft_course::PathStyle::Straight,
                 closed: true,
+                subpaths: Vec::new(),
                 fill: Some(Color("#2F6FEB".into())),
+                fill_style: None,
                 outline: coursecraft_course::Outline {
                     color: Color("#1F1F1F".into()),
                     width: 2.0,
@@ -6438,6 +6465,7 @@ fn a_closed_filled_path_hits_inside_its_outline() {
                 connector: None,
                 start_glue: None,
                 end_glue: None,
+                text: None,
             },
         },
         frame: ModelRect {

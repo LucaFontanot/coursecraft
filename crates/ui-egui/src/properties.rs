@@ -2439,12 +2439,14 @@ fn show_multi_properties(
                 (Align::Left, "Left"),
                 (Align::Center, "Center"),
                 (Align::Right, "Right"),
+                (Align::Justify, "Justify"),
             ] {
                 if ui.selectable_label(current == Some(align), label).clicked() {
                     let name = match align {
                         Align::Left => "left",
                         Align::Center => "center",
                         Align::Right => "right",
+                        Align::Justify => "justify",
                     };
                     for object in &objects {
                         let needs = matches!(
@@ -2577,6 +2579,7 @@ fn show_multi_properties(
                         coursecraft_course::DashStyle::Solid => "Solid",
                         coursecraft_course::DashStyle::Dash => "Dash",
                         coursecraft_course::DashStyle::Dot => "Dot",
+                        coursecraft_course::DashStyle::DashDot => "Dash-dot",
                     };
                     let rem_w = ui.available_width().max(30.0);
                     egui::ComboBox::from_id_salt("prop_multi_shape_outline_dash")
@@ -2587,6 +2590,7 @@ fn show_multi_properties(
                                 (coursecraft_course::DashStyle::Solid, "Solid"),
                                 (coursecraft_course::DashStyle::Dash, "Dash"),
                                 (coursecraft_course::DashStyle::Dot, "Dot"),
+                                (coursecraft_course::DashStyle::DashDot, "Dash-dot"),
                             ] {
                                 if ui
                                     .selectable_value(
@@ -3522,11 +3526,13 @@ fn show_text_controls(
             (Align::Left, "left"),
             (Align::Center, "center"),
             (Align::Right, "right"),
+            (Align::Justify, "justify"),
         ] {
             let label = match align {
                 Align::Left => "Left",
                 Align::Center => "Center",
                 Align::Right => "Right",
+                Align::Justify => "Justify",
             };
             if ui.selectable_label(cur_align == align, label).clicked() && cur_align != align {
                 action_to_run = Some((
@@ -3555,6 +3561,72 @@ fn show_text_controls(
                     serde_json::json!({ "slide": slide_id, "object": obj_id, "valign": name }),
                 ));
             }
+        }
+    });
+
+    inspector_row(ui, "Wrap", |ui| {
+        let mut wrap = style.wrap;
+        if ui.checkbox(&mut wrap, "Wrap text").changed() {
+            action_to_run = Some((
+                "text.set_paragraph",
+                serde_json::json!({ "slide": slide_id, "object": obj_id, "wrap": wrap }),
+            ));
+        }
+    });
+
+    inspector_row(ui, "Direction", |ui| {
+        let cur_dir = style.direction;
+        for (dir, name, label) in [
+            (
+                coursecraft_course::TextDirection::Horizontal,
+                "horizontal",
+                "Horiz",
+            ),
+            (
+                coursecraft_course::TextDirection::Vertical,
+                "vertical",
+                "Vert 90",
+            ),
+            (
+                coursecraft_course::TextDirection::Vertical270,
+                "vertical270",
+                "Vert 270",
+            ),
+        ] {
+            if ui.selectable_label(cur_dir == dir, label).clicked() && cur_dir != dir {
+                action_to_run = Some((
+                    "text.set_paragraph",
+                    serde_json::json!({ "slide": slide_id, "object": obj_id, "direction": name }),
+                ));
+            }
+        }
+    });
+
+    inspector_row(ui, "Insets", |ui| {
+        let mut ins = style.insets.unwrap_or_default();
+        let mut changed = false;
+        for (label, val) in [
+            ("L", &mut ins.left),
+            ("T", &mut ins.top),
+            ("R", &mut ins.right),
+            ("B", &mut ins.bottom),
+        ] {
+            ui.label(label);
+            let r = ui.add(
+                DragValue::new(val)
+                    .speed(0.5)
+                    .range(0.0..=200.0)
+                    .max_decimals(1),
+            );
+            if r.changed() {
+                changed = true;
+            }
+        }
+        if changed {
+            action_to_run = Some((
+                "text.set_paragraph",
+                serde_json::json!({ "slide": slide_id, "object": obj_id, "insets": ins }),
+            ));
         }
     });
 
@@ -3964,6 +4036,7 @@ fn show_fill_style_editor(
                                     Some(src) => Some(coursecraft_course::FillStyle::Picture {
                                         src,
                                         mode: coursecraft_course::PictureFillMode::Stretch,
+                                        tile_scale: [1.0, 1.0],
                                     }),
                                     None => {
                                         // No picture in the course yet: go straight to the
@@ -4048,7 +4121,7 @@ fn show_fill_style_editor(
                 &mut props.fill_add_stop_rect,
             );
         }
-        Some(coursecraft_course::FillStyle::Picture { src, mode }) => {
+        Some(coursecraft_course::FillStyle::Picture { src, mode, .. }) => {
             inspector_row(ui, "Image", |ui| {
                 let rem_w = ui.available_width().max(30.0);
                 let selected = if src.is_empty() {
@@ -5975,6 +6048,7 @@ fn show_object_properties(
             style,
             runs,
             autofit,
+            outline,
             ..
         } => {
             if let Some(action) = show_text_controls(
@@ -5994,6 +6068,50 @@ fn show_object_properties(
             ) {
                 action_to_run = Some(action);
             }
+            inspector_row(ui, "Border", |ui| {
+                let mut has_border = outline.is_some();
+                let mut changed = ui.checkbox(&mut has_border, "").changed();
+                let mut cur = outline
+                    .clone()
+                    .unwrap_or_else(|| coursecraft_course::Outline {
+                        color: coursecraft_course::Color("#1F1F1F".to_owned()),
+                        width: 1.0,
+                        dash: coursecraft_course::DashStyle::Solid,
+                    });
+                if has_border {
+                    let r = ui.add(
+                        DragValue::new(&mut cur.width)
+                            .speed(0.25)
+                            .range(0.5..=50.0)
+                            .suffix(" px"),
+                    );
+                    if r.changed() {
+                        changed = true;
+                    }
+                    let mut hex = cur.color.0.clone();
+                    let (cr, valid) = show_color_field(ui, "", &mut hex, "prop_text_border_color");
+                    if is_committed(&cr, ui) && valid && hex.trim() != cur.color.0 {
+                        cur.color = coursecraft_course::Color(hex.trim().to_owned());
+                        changed = true;
+                    }
+                }
+                if changed {
+                    let mut kind = serde_json::to_value(&obj.kind).unwrap_or(Json::Null);
+                    kind["outline"] = if has_border {
+                        serde_json::to_value(&cur).unwrap_or(Json::Null)
+                    } else {
+                        Json::Null
+                    };
+                    action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            });
         }
         ObjectKind::Button {
             label: _,
@@ -6276,6 +6394,7 @@ fn show_object_properties(
                         coursecraft_course::DashStyle::Solid => "Solid",
                         coursecraft_course::DashStyle::Dash => "Dash",
                         coursecraft_course::DashStyle::Dot => "Dot",
+                        coursecraft_course::DashStyle::DashDot => "Dash-dot",
                     };
                     let rem_w = ui.available_width().max(30.0);
                     let mut changed = false;
@@ -6287,6 +6406,7 @@ fn show_object_properties(
                                 (coursecraft_course::DashStyle::Solid, "Solid"),
                                 (coursecraft_course::DashStyle::Dash, "Dash"),
                                 (coursecraft_course::DashStyle::Dot, "Dot"),
+                                (coursecraft_course::DashStyle::DashDot, "Dash-dot"),
                             ] {
                                 if ui
                                     .selectable_value(&mut props.shape_outline_dash, dash, label)
@@ -6421,6 +6541,7 @@ fn show_object_properties(
                     coursecraft_course::DashStyle::Solid => "Solid",
                     coursecraft_course::DashStyle::Dash => "Dash",
                     coursecraft_course::DashStyle::Dot => "Dot",
+                    coursecraft_course::DashStyle::DashDot => "Dash-dot",
                 };
                 let rem_w = ui.available_width().max(30.0);
                 let mut changed = false;
@@ -6432,6 +6553,7 @@ fn show_object_properties(
                             (coursecraft_course::DashStyle::Solid, "Solid"),
                             (coursecraft_course::DashStyle::Dash, "Dash"),
                             (coursecraft_course::DashStyle::Dot, "Dot"),
+                            (coursecraft_course::DashStyle::DashDot, "Dash-dot"),
                         ] {
                             if ui
                                 .selectable_value(&mut props.path_outline_dash, dash, label)
@@ -6611,7 +6733,7 @@ fn show_object_properties(
                 });
             }
         }
-        ObjectKind::Image { src, alt, crop } => {
+        ObjectKind::Image { src, alt, crop, .. } => {
             let cropping = editor
                 .ui
                 .crop_edit

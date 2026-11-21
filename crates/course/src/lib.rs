@@ -59,24 +59,24 @@ pub use model::{
     MAX_TIMELINE_DURATION_MS, MAX_TIMER_DURATION_MS, MAX_TRIM_MS, MIN_LETTER_SPACING,
     MIN_RADIO_OPTIONS, MarkerIcon, MatchPair, MeterStyle, MotionPath, NamedTextStyle, NavMode,
     NextRequirement, NumberScheme, Object, ObjectKind, Orientation, Outline, PATH_MAX_POINTS,
-    PATH_MIN_POINTS, PaletteColor, Paragraph, Path, PathPoint, PathStyle, PictureFillMode,
-    PlayerSettings, PlayerTheme, Point, PublishSettings, Question, QuestionBank, QuestionKind,
-    QuizSettings, RadioOption, Rect, Resource, ResourceTarget, RevisitMode, SCHEMA_VERSION, Scene,
-    Scoring, ScrollBar, SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide, SlideCue,
-    SlidePlayerOverrides, SlideTarget, StateDef, TABLE_MAX_AXIS, TABLE_MAX_CELLS,
-    TABLE_MIN_FRACTION, TableBorders, TableCell, TableRow, TextRun, TextStyle, Theme, TimerFormat,
-    Timing, Transition, TransitionEffect, Trigger, Trim, VALID_TRIGGER_KEYS, VAlign, Value,
-    ValueKind, ValueSource, VarOp, VariableDef, WEB_DEFAULT_ENTRY, WEB_MAX_BYTES, WEB_MAX_FILES,
-    WebSource, builtin_variable_kind, clamp_letter_spacing, clamp_lottie_speed, clamp_opacity,
-    clamp_panel_offset, d500, d1000, default_accent_color, default_background_color,
-    default_bar_color, default_bar_text_color, default_theme_font, default_theme_text_color, fill,
-    format_timer_text, is_image_src, is_language_tag_valid, is_safe_media_path,
-    is_timer_remaining_variable_on, is_valid_link_url, is_valid_trigger_key, is_valid_web_entry,
-    is_valid_web_folder_path, is_valid_web_url, normalize_rotation, normalize_table_fractions,
-    path_frame_and_points, safe_clamp, safe_clamp_ord, script_unsupported, snap_to_step,
-    sort_and_repair_cues, table_cell_is_visible, table_cell_owners, table_fraction_offsets,
-    timer_id_for_remaining_variable, timer_remaining_seconds, timer_remaining_variable,
-    web_folder_within_caps,
+    PATH_MIN_POINTS, PaletteColor, Paragraph, Path, PathPoint, PathStyle, PathSubpath,
+    PictureFillMode, PlayerSettings, PlayerTheme, Point, PublishSettings, Question, QuestionBank,
+    QuestionKind, QuizSettings, RadioOption, Rect, Resource, ResourceTarget, RevisitMode,
+    SCHEMA_VERSION, Scene, Scoring, ScrollBar, SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide,
+    SlideCue, SlidePlayerOverrides, SlideTarget, StateDef, TABLE_MAX_AXIS, TABLE_MAX_CELLS,
+    TABLE_MIN_FRACTION, TableBorders, TableCell, TableRow, TextDirection, TextInsets, TextRun,
+    TextStyle, Theme, TimerFormat, Timing, Transition, TransitionEffect, Trigger, Trim,
+    VALID_TRIGGER_KEYS, VAlign, Value, ValueKind, ValueSource, VarOp, VariableDef,
+    WEB_DEFAULT_ENTRY, WEB_MAX_BYTES, WEB_MAX_FILES, WebSource, builtin_variable_kind,
+    clamp_letter_spacing, clamp_lottie_speed, clamp_opacity, clamp_panel_offset, d500, d1000,
+    default_accent_color, default_background_color, default_bar_color, default_bar_text_color,
+    default_theme_font, default_theme_text_color, fill, format_timer_text, is_image_src,
+    is_language_tag_valid, is_safe_media_path, is_timer_remaining_variable_on, is_valid_link_url,
+    is_valid_trigger_key, is_valid_web_entry, is_valid_web_folder_path, is_valid_web_url,
+    normalize_rotation, normalize_table_fractions, path_frame_and_points, safe_clamp,
+    safe_clamp_ord, script_unsupported, snap_to_step, sort_and_repair_cues, table_cell_is_visible,
+    table_cell_owners, table_fraction_offsets, timer_id_for_remaining_variable,
+    timer_remaining_seconds, timer_remaining_variable, web_folder_within_caps,
 };
 pub use outline::{
     CourseOutline, MAX_BODY_LINES, MAX_CHOICES, MAX_LINE_BYTES, MAX_OUTLINE_SLIDES, OutlineChoice,
@@ -223,14 +223,33 @@ fn walk_object_media_references(
     };
     match &object.kind {
         ObjectKind::Image { src, .. } | ObjectKind::Lottie { src, .. } => push(src),
-        ObjectKind::Audio { src, captions, .. } | ObjectKind::Video { src, captions, .. } => {
+        ObjectKind::Audio { src, captions, .. } => {
             push(src);
             if let Some(captions) = captions {
                 push(captions);
             }
         }
+        ObjectKind::Video {
+            src,
+            captions,
+            poster,
+            ..
+        } => {
+            push(src);
+            if let Some(captions) = captions {
+                push(captions);
+            }
+            if let Some(poster) = poster {
+                push(poster);
+            }
+        }
         ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
             if let Some(src) = fill_style.as_ref().and_then(FillStyle::picture_src) {
+                push(src);
+            }
+        }
+        ObjectKind::Path { path } => {
+            if let Some(src) = path.fill_style.as_ref().and_then(FillStyle::picture_src) {
                 push(src);
             }
         }

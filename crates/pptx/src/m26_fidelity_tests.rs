@@ -430,34 +430,36 @@ fn text_features_bullets_numbering_and_frame_clamping() {
     let imported = import_pptx(&bytes, "Features").unwrap();
     let objs = &imported.course.scenes[0].slides[0].objects;
 
-    match &objs[0].kind {
+    let (style, runs, paragraphs) = match &objs[0].kind {
+        ObjectKind::Text {
+            style,
+            runs,
+            paragraphs,
+            ..
+        } => (style, runs, paragraphs),
         ObjectKind::Shape {
             text: Some(shape_text),
             ..
-        } => {
-            assert_eq!(shape_text.style.valign, VAlign::Middle);
-            // 18pt default on 1280x720 (font_scale 4/3) = 32px
-            assert!((shape_text.style.size - 32.0).abs() < 0.2);
-            assert_eq!(shape_text.runs[0].strikethrough, Some(true));
-            assert_eq!(shape_text.runs[0].baseline, Some(Baseline::Superscript));
-            assert_eq!(shape_text.runs[0].font.as_deref(), Some("Courier New"));
-            assert_eq!(shape_text.runs[1].baseline, Some(Baseline::Subscript));
-            assert_eq!(shape_text.paragraphs[0].bullet.as_deref(), Some("★"));
-            assert_eq!(
-                shape_text.paragraphs[0].bullet_color,
-                Some(Color("#E67E22".into()))
-            );
-            assert!((shape_text.paragraphs[0].bullet_size.unwrap() - 38.4).abs() < 0.2);
-            assert_eq!(shape_text.paragraphs[1].list, ListKind::Number);
-            assert_eq!(shape_text.paragraphs[1].level, 2);
-            assert_eq!(
-                shape_text.paragraphs[1].number_scheme,
-                Some(NumberScheme::RomanLcPeriod)
-            );
-            assert_eq!(shape_text.paragraphs[1].start_at, Some(5));
-        }
-        other => panic!("expected shape with text, got {other:?}"),
-    }
+        } => (&shape_text.style, &shape_text.runs, &shape_text.paragraphs),
+        other => panic!("expected text box or shape with text, got {other:?}"),
+    };
+    assert_eq!(style.valign, VAlign::Middle);
+    // 18pt default on 1280x720 (font_scale 4/3) = 32px
+    assert!((style.size - 32.0).abs() < 0.2);
+    assert_eq!(runs[0].strikethrough, Some(true));
+    assert_eq!(runs[0].baseline, Some(Baseline::Superscript));
+    assert_eq!(runs[0].font.as_deref(), Some("Courier New"));
+    assert_eq!(runs[1].baseline, Some(Baseline::Subscript));
+    assert_eq!(paragraphs[0].bullet.as_deref(), Some("★"));
+    assert_eq!(paragraphs[0].bullet_color, Some(Color("#E67E22".into())));
+    assert!((paragraphs[0].bullet_size.unwrap() - 38.4).abs() < 0.2);
+    assert_eq!(paragraphs[1].list, ListKind::Number);
+    assert_eq!(paragraphs[1].level, 2);
+    assert_eq!(
+        paragraphs[1].number_scheme,
+        Some(NumberScheme::RomanLcPeriod)
+    );
+    assert_eq!(paragraphs[1].start_at, Some(5));
 
     assert!(objs[1].frame.w <= MAX_OBJECT_FRAME_SIZE);
     assert!(objs[1].frame.h <= MAX_OBJECT_FRAME_SIZE);
@@ -468,4 +470,249 @@ fn text_features_bullets_numbering_and_frame_clamping() {
             .iter()
             .any(|i| i.kind == SkipKind::InvalidGeometry)
     );
+}
+
+#[test]
+fn video_imports_with_poster_and_missing_media_falls_back_to_poster_image() {
+    let slide_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
+    <p:pic>
+      <p:nvPicPr><p:cNvPr id="2" name="clip.mp4"/><p:cNvPicPr/><p:nvPr><a:videoFile r:link="rId2"/><p:extLst><p:ext uri="{DAA4B4D4-6D71-4841-9C94-3DE7FCFB9230}"><p14:media xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" r:embed="rId2"/></p:ext></p:extLst></p:nvPr></p:nvPicPr>
+      <p:blipFill><a:blip r:embed="rId3"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+    </p:pic>
+    <p:pic>
+      <p:nvPicPr><p:cNvPr id="3" name="missing.mp4"/><p:cNvPicPr/><p:nvPr><a:videoFile r:link="rId4"/></p:nvPr></p:nvPicPr>
+      <p:blipFill><a:blip r:embed="rId3"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+      <p:spPr><a:xfrm><a:off x="1000000" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>
+    </p:pic>
+  </p:spTree></p:cSld>
+</p:sld>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2007/relationships/media" Target="../media/clip.mp4"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/poster.png"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/video" Target="../media/missing.mp4"/>
+</Relationships>"#;
+    let bytes = build_pptx(
+        &[slide_xml],
+        &[
+            ("ppt/slides/_rels/slide1.xml.rels", rels.as_bytes()),
+            ("ppt/media/clip.mp4", b"ftypmp42"),
+            ("ppt/media/poster.png", TINY_PNG),
+        ],
+    );
+    let imported = import_pptx(&bytes, "Video").unwrap();
+    let objs = &imported.course.scenes[0].slides[0].objects;
+    assert_eq!(objs.len(), 2);
+    match &objs[0].kind {
+        ObjectKind::Video { src, poster, .. } => {
+            assert_eq!(src, "clip.mp4");
+            assert_eq!(poster.as_deref(), Some("poster.png"));
+        }
+        other => panic!("expected video, got {other:?}"),
+    }
+    match &objs[1].kind {
+        ObjectKind::Image { src, .. } => assert!(src.starts_with("poster")),
+        other => panic!("expected fallback poster image, got {other:?}"),
+    }
+    assert!(
+        imported
+            .report
+            .items
+            .iter()
+            .any(|i| i.kind == SkipKind::Media)
+    );
+}
+
+#[test]
+fn table_style_banding_and_merged_cells_import() {
+    let slide_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
+    <p:graphicFrame>
+      <p:nvGraphicFramePr><p:cNvPr id="2" name="Tbl"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr>
+      <p:xfrm><a:off x="0" y="0"/><a:ext cx="4000000" cy="2000000"/></p:xfrm>
+      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl>
+        <a:tblPr firstRow="1" bandRow="1"><a:tableStyleId>{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}</a:tableStyleId></a:tblPr>
+        <a:tblGrid><a:gridCol w="1000000"/><a:gridCol w="1000000"/><a:gridCol w="1000000"/></a:tblGrid>
+        <a:tr h="500000">
+          <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>H1</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+          <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>H2</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+          <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>H3</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+        </a:tr>
+        <a:tr h="500000">
+          <a:tc gridSpan="2"><a:txBody><a:bodyPr/><a:p><a:r><a:t>Span</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+          <a:tc hMerge="1"><a:txBody><a:bodyPr/><a:p/></a:txBody><a:tcPr/></a:tc>
+          <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>Last</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc>
+        </a:tr>
+      </a:tbl></a:graphicData></a:graphic>
+    </p:graphicFrame>
+  </p:spTree></p:cSld>
+</p:sld>"#;
+    let bytes = build_pptx(&[slide_xml], &[]);
+    let imported = import_pptx(&bytes, "Table").unwrap();
+    let ObjectKind::Table {
+        rows, header_row, ..
+    } = &imported.course.scenes[0].slides[0].objects[0].kind
+    else {
+        panic!("expected table");
+    };
+    assert!(*header_row);
+    assert!(rows[0].cells[0].fill.is_some());
+    assert_eq!(rows[1].cells[0].col_span, 2);
+    assert_eq!(rows[1].cells[2].text, "Last");
+}
+
+#[test]
+fn custom_geometry_subpaths_gradient_and_text_import() {
+    let slide_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="2" name="Ring"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr>
+        <a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm>
+        <a:custGeom><a:pathLst>
+          <a:path w="100" h="100">
+            <a:moveTo><a:pt x="0" y="50"/></a:moveTo>
+            <a:arcTo wR="50" hR="50" stAng="10800000" swAng="21600000"/><a:close/>
+            <a:moveTo><a:pt x="25" y="50"/></a:moveTo>
+            <a:arcTo wR="25" hR="25" stAng="10800000" swAng="-21600000"/><a:close/>
+          </a:path>
+          <a:path w="100" h="100" fill="none"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="100" y="100"/></a:lnTo></a:path>
+        </a:pathLst></a:custGeom>
+        <a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>
+      </p:spPr>
+      <p:txBody><a:bodyPr/><a:p><a:r><a:t>Inside</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"#;
+    let bytes = build_pptx(&[slide_xml], &[]);
+    let imported = import_pptx(&bytes, "CustGeom").unwrap();
+    let objs = &imported.course.scenes[0].slides[0].objects;
+    assert_eq!(objs.len(), 2);
+    let ObjectKind::Path { path } = &objs[0].kind else {
+        panic!("expected path");
+    };
+    assert_eq!(path.subpaths.len(), 1);
+    assert!(path.fill_style.is_some());
+    assert_eq!(path.text.as_ref().map(|t| t.text.as_str()), Some("Inside"));
+}
+
+#[test]
+fn pattern_fill_tile_scale_and_alpha_gradient_import() {
+    let slide_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="2" name="Pat"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:pattFill prst="pct50"><a:fgClr><a:srgbClr val="FF0000"/></a:fgClr><a:bgClr><a:srgbClr val="0000FF"/></a:bgClr></a:pattFill></p:spPr>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="3" name="Tile"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:blipFill><a:blip r:embed="rId2"/><a:tile sx="40000" sy="40000"/></a:blipFill></p:spPr>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/tile.png"/>
+</Relationships>"#;
+    let bytes = build_pptx(
+        &[slide_xml],
+        &[
+            ("ppt/slides/_rels/slide1.xml.rels", rels.as_bytes()),
+            ("ppt/media/tile.png", TINY_PNG),
+        ],
+    );
+    let imported = import_pptx(&bytes, "Fills").unwrap();
+    let objs = &imported.course.scenes[0].slides[0].objects;
+    if let ObjectKind::Shape { fill, .. } = &objs[0].kind {
+        assert_ne!(fill.0, "#D9D9D9");
+    }
+    if let ObjectKind::Shape {
+        fill_style: Some(FillStyle::Picture {
+            mode, tile_scale, ..
+        }),
+        ..
+    } = &objs[1].kind
+    {
+        assert_eq!(*mode, PictureFillMode::Tile);
+        assert!((tile_scale[0] - 0.4).abs() < 0.01);
+    } else {
+        panic!("expected tiled picture fill");
+    }
+}
+
+#[test]
+fn geometry_dash_dot_picture_outline_ellipse_and_text_gaps_import() {
+    let slide_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="2" name="Tri"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="triangle"><a:avLst><a:gd name="adj" fmla="val 20000"/></a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="112233"/></a:solidFill><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:prstDash val="dashDot"/></a:ln></p:spPr>
+    </p:sp>
+    <p:pic>
+      <p:nvPicPr><p:cNvPr id="3" name="EllPic"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr>
+      <p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></p:spPr>
+    </p:pic>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="4" name="TxtBox"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1000000" cy="1000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/><a:ln w="12700"><a:solidFill><a:srgbClr val="334455"/></a:solidFill></a:ln></p:spPr>
+      <p:txBody><a:bodyPr wrap="none" vert="vert270" lIns="127000" tIns="0" rIns="0" bIns="0"/><a:p><a:pPr algn="just"/><a:r><a:t>Hi</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/pic.png"/>
+</Relationships>"#;
+    let bytes = build_pptx(
+        &[slide_xml],
+        &[
+            ("ppt/slides/_rels/slide1.xml.rels", rels.as_bytes()),
+            ("ppt/media/pic.png", TINY_PNG),
+        ],
+    );
+    let imported = import_pptx(&bytes, "GeoText").unwrap();
+    let objs = &imported.course.scenes[0].slides[0].objects;
+    if let ObjectKind::Shape {
+        adjust, outline, ..
+    } = &objs[0].kind
+    {
+        assert!((adjust[0] - 0.2).abs() < 0.01);
+        assert_eq!(
+            outline.as_ref().unwrap().dash,
+            coursecraft_course::DashStyle::DashDot
+        );
+    } else {
+        panic!("expected triangle shape");
+    }
+    if let ObjectKind::Image { outline, shape, .. } = &objs[1].kind {
+        assert_eq!(*shape, Some(coursecraft_course::ShapeKind::Ellipse));
+        assert!(outline.is_some());
+    } else {
+        panic!("expected ellipse image");
+    }
+    if let ObjectKind::Text { style, outline, .. } = &objs[2].kind {
+        assert_eq!(style.align, coursecraft_course::Align::Justify);
+        assert!(!style.wrap);
+        assert_eq!(
+            style.direction,
+            coursecraft_course::TextDirection::Vertical270
+        );
+        assert!(style.insets.unwrap().left > 5.0);
+        assert!(outline.is_some());
+    } else {
+        panic!("expected text box");
+    }
 }

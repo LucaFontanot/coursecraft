@@ -632,7 +632,14 @@ pub fn path_mesh(
 
     if !closed {
         if let (Some(&tip), Some(direction)) = (flat.first(), start_direction) {
-            add_line_end(&mut mesh, tip, direction, start_end, spec.width, spec.color);
+            add_line_end(
+                &mut mesh,
+                tip,
+                (-direction.0, -direction.1),
+                start_end,
+                spec.width,
+                spec.color,
+            );
         }
         if let (Some(&tip), Some(direction)) = (flat.last(), end_direction) {
             add_line_end(&mut mesh, tip, direction, end_end, spec.width, spec.color);

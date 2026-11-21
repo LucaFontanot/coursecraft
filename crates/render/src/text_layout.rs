@@ -22,6 +22,14 @@ pub const INDENT_STEP: f32 = 24.0;
 const FALLBACK_COLOR: Color32 = Color32::from_rgb(0x1F, 0x1F, 0x1F);
 const FALLBACK_SIZE: f32 = 20.0;
 
+/// A vector-drawn bullet when the bundled font lacks the symbol glyph.
+#[derive(Debug, Clone, Copy)]
+pub struct VectorBullet {
+    pub ch: char,
+    pub size: f32,
+    pub color: Color32,
+}
+
 /// One laid-out marker (bullet or number).
 #[derive(Debug, Clone)]
 pub struct LaidMarker {
@@ -29,6 +37,8 @@ pub struct LaidMarker {
     /// Screen-space top-left passed to `Painter::galley`. For a right-aligned
     /// marker this is its right edge, as egui expects.
     pub pos: Pos2,
+    /// When `Some`, draw this vector symbol instead of `galley`.
+    pub vector: Option<VectorBullet>,
 }
 
 /// One laid-out paragraph.
@@ -86,6 +96,25 @@ pub fn layout_text(
     valign: VAlign,
     autofit: Autofit,
 ) -> LaidText {
+    layout_text_with_wrap(
+        ctx, rect, scale, runs, paragraphs, align, valign, autofit, true,
+    )
+}
+
+/// Lay out `runs` inside `rect`, with explicit `wrap` control.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn layout_text_with_wrap(
+    ctx: &Context,
+    rect: Rect,
+    scale: f32,
+    runs: &[ResolvedTextRun],
+    paragraphs: &[Paragraph],
+    align: Align,
+    valign: VAlign,
+    autofit: Autofit,
+    wrap: bool,
+) -> LaidText {
     let scale = if scale.is_finite() && scale > 0.0 {
         scale
     } else {
@@ -102,7 +131,7 @@ pub fn layout_text(
         Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1.0, 1.0))
     };
 
-    let full = layout_at(ctx, rect, scale, runs, paragraphs, align, valign, 1.0);
+    let full = layout_at(ctx, rect, scale, runs, paragraphs, align, valign, 1.0, wrap);
     if autofit != Autofit::Shrink || full.fits(rect) {
         return full;
     }
@@ -116,6 +145,7 @@ pub fn layout_text(
         align,
         valign,
         AUTOFIT_MIN_SCALE,
+        wrap,
     );
     if !floor.fits(rect) {
         return floor;
@@ -126,14 +156,14 @@ pub fn layout_text(
     let mut high = 1.0;
     for _ in 0..20 {
         let mid = (low + high) * 0.5;
-        let candidate = layout_at(ctx, rect, scale, runs, paragraphs, align, valign, mid);
+        let candidate = layout_at(ctx, rect, scale, runs, paragraphs, align, valign, mid, wrap);
         if candidate.fits(rect) {
             low = mid;
         } else {
             high = mid;
         }
     }
-    layout_at(ctx, rect, scale, runs, paragraphs, align, valign, low)
+    layout_at(ctx, rect, scale, runs, paragraphs, align, valign, low, wrap)
 }
 
 /// Split runs at newlines. Every paragraph has at least one run so an empty
@@ -316,9 +346,175 @@ fn roman(value: u32) -> String {
 
 fn halign(align: Align) -> egui::Align {
     match align {
-        Align::Left => egui::Align::LEFT,
+        Align::Left | Align::Justify => egui::Align::LEFT,
         Align::Center => egui::Align::Center,
         Align::Right => egui::Align::RIGHT,
+    }
+}
+
+fn justify_galley(galley: &mut Arc<egui::Galley>, target_width: f32) {
+    if !target_width.is_finite() || target_width <= 0.0 {
+        return;
+    }
+    let g = Arc::make_mut(galley);
+    let row_count = g.rows.len();
+    for (row_idx, placed_row) in g.rows.iter_mut().enumerate() {
+        let is_last = row_idx + 1 == row_count;
+        if is_last || placed_row.ends_with_newline {
+            continue;
+        }
+        let extra = target_width - placed_row.size.x;
+        if extra <= 0.5 || !extra.is_finite() {
+            continue;
+        }
+        let space_count = placed_row
+            .glyphs
+            .iter()
+            .filter(|glyph| glyph.chr == ' ')
+            .count();
+        if space_count == 0 {
+            continue;
+        }
+        let per_space = extra / space_count as f32;
+        let row = Arc::make_mut(&mut placed_row.row);
+        let mut shift = 0.0f32;
+        for glyph in &mut row.glyphs {
+            glyph.pos.x += shift;
+            if glyph.chr == ' ' {
+                shift += per_space;
+            }
+        }
+        row.size.x = target_width;
+    }
+}
+
+fn is_vector_bullet_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '★' | '☆'
+            | '✔'
+            | '✓'
+            | '➤'
+            | '➢'
+            | '➔'
+            | '→'
+            | '◆'
+            | '◇'
+            | '►'
+            | '▶'
+            | '▪'
+            | '■'
+            | '□'
+            | '●'
+            | '○'
+            | '•'
+    )
+}
+
+fn marker_needs_vector(galley: &egui::Galley, ch: char) -> bool {
+    if is_vector_bullet_char(ch) {
+        return true;
+    }
+    galley
+        .rows
+        .first()
+        .and_then(|row| row.glyphs.first())
+        .is_some_and(|glyph| glyph.chr == '\u{FFFD}' || glyph.uv_rect.size.x <= 0.0)
+}
+
+/// Draw one bullet or number marker (vector symbol when the font lacks it,
+/// otherwise the laid-out galley). Shared across text boxes, shapes and tables.
+pub fn paint_marker(painter: &egui::Painter, marker: &LaidMarker, fallback_color: Color32) {
+    if let Some(vb) = marker.vector {
+        let r = (vb.size * 0.28).max(1.8);
+        let cx = marker.pos.x - r * 1.1;
+        let cy = marker.pos.y + vb.size * 0.48;
+        let color = vb.color;
+        let stroke = Stroke::new((r * 0.35).max(1.0), color);
+        match vb.ch {
+            '★' | '☆' => {
+                let mut pts = Vec::with_capacity(10);
+                for i in 0..10 {
+                    let angle =
+                        -std::f32::consts::FRAC_PI_2 + (i as f32) * std::f32::consts::PI / 5.0;
+                    let rad = if i % 2 == 0 { r * 1.25 } else { r * 0.52 };
+                    pts.push(pos2(cx + rad * angle.cos(), cy + rad * angle.sin()));
+                }
+                if vb.ch == '★' {
+                    painter.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+                } else {
+                    painter.add(egui::Shape::closed_line(pts, stroke));
+                }
+            }
+            '✔' | '✓' => {
+                let pts = vec![
+                    pos2(cx - r * 0.9, cy + r * 0.05),
+                    pos2(cx - r * 0.2, cy + r * 0.75),
+                    pos2(cx + r * 1.0, cy - r * 0.65),
+                ];
+                painter.add(egui::Shape::line(
+                    pts,
+                    Stroke::new((r * 0.45).max(1.2), color),
+                ));
+            }
+            '➤' | '➢' | '►' | '▶' => {
+                let pts = vec![
+                    pos2(cx - r * 0.75, cy - r * 0.85),
+                    pos2(cx + r * 0.95, cy),
+                    pos2(cx - r * 0.75, cy + r * 0.85),
+                ];
+                painter.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+            }
+            '➔' | '→' => {
+                let line_y = cy;
+                painter.line_segment(
+                    [pos2(cx - r * 0.95, line_y), pos2(cx + r * 0.5, line_y)],
+                    stroke,
+                );
+                let head = vec![
+                    pos2(cx + r * 0.2, cy - r * 0.6),
+                    pos2(cx + r * 1.0, cy),
+                    pos2(cx + r * 0.2, cy + r * 0.6),
+                ];
+                painter.add(egui::Shape::convex_polygon(head, color, Stroke::NONE));
+            }
+            '◆' | '◇' => {
+                let pts = vec![
+                    pos2(cx, cy - r),
+                    pos2(cx + r, cy),
+                    pos2(cx, cy + r),
+                    pos2(cx - r, cy),
+                ];
+                if vb.ch == '◆' {
+                    painter.add(egui::Shape::convex_polygon(pts, color, Stroke::NONE));
+                } else {
+                    painter.add(egui::Shape::closed_line(pts, stroke));
+                }
+            }
+            '▪' | '■' | '□' => {
+                let side = if vb.ch == '▪' { r * 0.72 } else { r * 0.9 };
+                let rect = Rect::from_center_size(pos2(cx, cy), egui::vec2(side * 2.0, side * 2.0));
+                if vb.ch == '□' {
+                    painter.rect_stroke(
+                        rect,
+                        egui::CornerRadius::ZERO,
+                        stroke,
+                        egui::StrokeKind::Inside,
+                    );
+                } else {
+                    painter.rect_filled(rect, egui::CornerRadius::ZERO, color);
+                }
+            }
+            '○' => {
+                painter.circle_stroke(pos2(cx, cy), r * 0.75, stroke);
+            }
+            _ => {
+                let rad = if vb.ch == '•' { r * 0.65 } else { r * 0.8 };
+                painter.circle_filled(pos2(cx, cy), rad, color);
+            }
+        }
+    } else {
+        painter.galley(marker.pos, marker.galley.clone(), fallback_color);
     }
 }
 
@@ -371,6 +567,7 @@ fn layout_at(
     align: Align,
     valign: VAlign,
     shrink: f32,
+    wrap: bool,
 ) -> LaidText {
     let shrink = if shrink.is_finite() {
         shrink.clamp(AUTOFIT_MIN_SCALE, 1.0)
@@ -416,7 +613,7 @@ fn layout_at(
         let mut job = LayoutJob {
             halign: halign(align),
             wrap: TextWrapping {
-                max_width: content_width,
+                max_width: if wrap { content_width } else { f32::INFINITY },
                 ..Default::default()
             },
             break_on_newline: false,
@@ -475,13 +672,16 @@ fn layout_at(
                 spans.push((start, char_count, link.clone(), run.text.clone()));
             }
         }
-        let galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
+        let mut galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
+        if align == Align::Justify && wrap {
+            justify_galley(&mut galley, content_width);
+        }
         let galley_h = galley.size().y;
         let indent_width = text_indent + galley.size().x;
         max_width = max_width.max(indent_width);
 
         let x = match align {
-            Align::Left => rect.left() + text_indent,
+            Align::Left | Align::Justify => rect.left() + text_indent,
             Align::Center => rect.left() + text_indent + content_width * 0.5,
             Align::Right => rect.right(),
         };
@@ -514,9 +714,23 @@ fn layout_at(
                 (Some(text), Some(mark)) => text - mark,
                 _ => 0.0,
             };
+            let mut chars = text.chars();
+            let vector = match (chars.next(), chars.next()) {
+                (Some(ch), None)
+                    if style.list == ListKind::Bullet && marker_needs_vector(&galley, ch) =>
+                {
+                    Some(VectorBullet {
+                        ch,
+                        size: (marker_size.clamp(1.0, 400.0) * scale * shrink).max(1.0),
+                        color: marker_color,
+                    })
+                }
+                _ => None,
+            };
             Some(LaidMarker {
                 galley,
                 pos: pos2(right, rect.top() + top + shift),
+                vector,
             })
         });
         laid.push(LaidParagraph {
@@ -688,6 +902,7 @@ pub fn fill_item_links(ctx: &Context, items: &mut [DrawItem]) {
                 valign,
                 paragraphs,
                 autofit,
+                ..
             } => {
                 let laid =
                     layout_text(ctx, frame, 1.0, runs, paragraphs, *align, *valign, *autofit);

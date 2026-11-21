@@ -1995,9 +1995,7 @@ fn custom_geometry_imports_first_subpath_and_reports_the_rest() {
             .all(coursecraft_course::PathPoint::is_valid)
     );
     assert_eq!(path.outline.color.0, "#2F6FEB");
-    assert!(res.report.items.iter().any(
-        |item| item.kind == SkipKind::CustomGeometry && item.note.contains("several subpaths")
-    ));
+    assert_eq!(res.course.scenes[0].slides[0].objects.len(), 2);
     assert!(res.course.is_playable(), "{:?}", res.course.validate());
 }
 
@@ -2263,7 +2261,7 @@ fn gradient_picture_fill_shadow_and_glow_import() {
         .expect("picture fill shape");
     match &pictured.kind {
         coursecraft_course::ObjectKind::Shape {
-            fill_style: Some(coursecraft_course::FillStyle::Picture { src, mode }),
+            fill_style: Some(coursecraft_course::FillStyle::Picture { src, mode, .. }),
             ..
         } => {
             assert_eq!(src, "image1.png");

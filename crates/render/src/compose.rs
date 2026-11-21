@@ -87,15 +87,24 @@ pub struct ResolvedOutline {
 
 /// Resolved drawn path. Points stay as fractions of the item's frame.
 #[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedSubpath {
+    pub points: Vec<PathPoint>,
+    pub closed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedPath {
     pub points: Vec<PathPoint>,
     pub style: PathStyle,
     pub closed: bool,
+    pub subpaths: Vec<ResolvedSubpath>,
     pub fill: Option<egui::Color32>,
+    pub fill_style: Option<ResolvedFill>,
     pub outline: Option<ResolvedOutline>,
     pub start_end: LineEnd,
     pub end_end: LineEnd,
     pub connector: Option<ConnectorStyle>,
+    pub text: Option<ResolvedShapeText>,
 }
 
 /// Resolved text carried inside a shape.
@@ -106,6 +115,9 @@ pub struct ResolvedShapeText {
     pub valign: coursecraft_course::VAlign,
     pub paragraphs: Vec<Paragraph>,
     pub autofit: Autofit,
+    pub wrap: bool,
+    pub insets: Option<coursecraft_course::TextInsets>,
+    pub direction: coursecraft_course::TextDirection,
 }
 
 /// Resolved text carried inside one table cell.
@@ -164,7 +176,11 @@ pub enum ResolvedFill {
         stops: Vec<ResolvedGradientStop>,
     },
     /// A picture clipped to the shape, stretched or tiled.
-    Picture { src: String, tile: bool },
+    Picture {
+        src: String,
+        tile: bool,
+        tile_scale: [f32; 2],
+    },
 }
 
 /// A resolved drop shadow.
@@ -203,6 +219,10 @@ pub enum Visual {
         valign: coursecraft_course::VAlign,
         paragraphs: Vec<Paragraph>,
         autofit: Autofit,
+        outline: Option<ResolvedOutline>,
+        wrap: bool,
+        insets: Option<coursecraft_course::TextInsets>,
+        direction: coursecraft_course::TextDirection,
     },
     Button {
         label: String,
@@ -229,6 +249,8 @@ pub enum Visual {
         /// The kept part of the source, as validated source fractions. `None`
         /// shows the whole picture.
         crop: Option<egui::Rect>,
+        outline: Option<ResolvedOutline>,
+        shape: Option<ShapeKind>,
     },
     ImagePlaceholder {
         label: String,
@@ -675,13 +697,18 @@ fn resolve_fill_style(style: &FillStyle) -> Option<ResolvedFill> {
                 stops,
             })
         }
-        FillStyle::Picture { src, mode } => {
+        FillStyle::Picture {
+            src,
+            mode,
+            tile_scale,
+        } => {
             if src.trim().is_empty() {
                 return None;
             }
             Some(ResolvedFill::Picture {
                 src: src.clone(),
                 tile: *mode == PictureFillMode::Tile,
+                tile_scale: *tile_scale,
             })
         }
     }
@@ -805,25 +832,40 @@ fn resolve_table(
 fn resolve_path(
     path: &coursecraft_course::Path,
     state_fill: Option<&coursecraft_course::Color>,
+    default_txt_color: egui::Color32,
+    default_btn_color: egui::Color32,
+    theme_font: Option<&str>,
 ) -> Option<ResolvedPath> {
-    let mut points: Vec<PathPoint> = Vec::with_capacity(path.points.len().min(2000));
-    for point in path.points.iter().take(coursecraft_course::PATH_MAX_POINTS) {
-        if !point.x.is_finite() || !point.y.is_finite() {
-            continue;
-        }
-        points.push(PathPoint {
-            x: point.x.clamp(0.0, 1.0),
-            y: point.y.clamp(0.0, 1.0),
-        });
-    }
+    let clean_points = |pts: &[PathPoint]| -> Vec<PathPoint> {
+        pts.iter()
+            .take(coursecraft_course::PATH_MAX_POINTS)
+            .filter(|point| point.x.is_finite() && point.y.is_finite())
+            .map(|point| PathPoint {
+                x: point.x.clamp(0.0, 1.0),
+                y: point.y.clamp(0.0, 1.0),
+            })
+            .collect()
+    };
+    let points = clean_points(&path.points);
     if points.len() < coursecraft_course::PATH_MIN_POINTS {
         return None;
     }
+    let subpaths: Vec<ResolvedSubpath> = path
+        .subpaths
+        .iter()
+        .filter_map(|sub| {
+            let pts = clean_points(&sub.points);
+            (pts.len() >= coursecraft_course::PATH_MIN_POINTS).then_some(ResolvedSubpath {
+                points: pts,
+                closed: sub.closed,
+            })
+        })
+        .collect();
     let start_end = path.start_end;
     let end_end = path.end_end;
     let connector = path
         .connector
-        .filter(|_| points.len() == coursecraft_course::PATH_MIN_POINTS);
+        .filter(|_| points.len() == coursecraft_course::PATH_MIN_POINTS && subpaths.is_empty());
     let fill = if path.closed {
         state_fill
             .and_then(parse_color)
@@ -831,15 +873,44 @@ fn resolve_path(
     } else {
         None
     };
+    let fill_style = if path.closed && state_fill.is_none() {
+        path.fill_style.as_ref().and_then(resolve_fill_style)
+    } else {
+        None
+    };
+    let text = path.text.as_ref().map(|text| {
+        let style_color = parse_color(&text.style.color).unwrap_or(default_txt_color);
+        ResolvedShapeText {
+            runs: resolve_text_runs(
+                &text.text,
+                &text.style,
+                &text.runs,
+                None,
+                style_color,
+                default_btn_color,
+                theme_font,
+            ),
+            align: text.style.align,
+            valign: text.style.valign,
+            paragraphs: text.paragraphs.clone(),
+            autofit: text.autofit,
+            wrap: text.style.wrap,
+            insets: text.style.insets,
+            direction: text.style.direction,
+        }
+    });
     Some(ResolvedPath {
         points,
         style: path.style,
         closed: path.closed,
+        subpaths,
         fill,
+        fill_style,
         outline: resolve_outline(&path.outline),
         start_end,
         end_end,
         connector,
+        text,
     })
 }
 
@@ -1119,6 +1190,7 @@ fn compose_object_opts(
             runs,
             paragraphs,
             autofit,
+            outline,
             ..
         } => {
             let style_color = state_def
@@ -1142,6 +1214,10 @@ fn compose_object_opts(
                 valign: style.valign,
                 paragraphs: paragraphs.clone(),
                 autofit: *autofit,
+                outline: outline.as_ref().and_then(resolve_outline),
+                wrap: style.wrap,
+                insets: style.insets,
+                direction: style.direction,
             }
         }
         ObjectKind::Button {
@@ -1202,6 +1278,9 @@ fn compose_object_opts(
                     valign: text.style.valign,
                     paragraphs: text.paragraphs.clone(),
                     autofit: text.autofit,
+                    wrap: text.style.wrap,
+                    insets: text.style.insets,
+                    direction: text.style.direction,
                 })
             } else {
                 override_text.map(|override_text| ResolvedShapeText {
@@ -1222,6 +1301,9 @@ fn compose_object_opts(
                     valign: coursecraft_course::VAlign::Middle,
                     paragraphs: Vec::new(),
                     autofit: Autofit::None,
+                    wrap: true,
+                    insets: None,
+                    direction: coursecraft_course::TextDirection::Horizontal,
                 })
             };
             Visual::Shape {
@@ -1244,7 +1326,13 @@ fn compose_object_opts(
             }
         }
         ObjectKind::Path { path } => {
-            let resolved = resolve_path(path, state_def.and_then(|s| s.fill.as_ref()))?;
+            let resolved = resolve_path(
+                path,
+                state_def.and_then(|s| s.fill.as_ref()),
+                default_txt_color,
+                default_btn_color,
+                theme.map(|t| t.font.as_str()),
+            )?;
             Visual::Path(resolved)
         }
         ObjectKind::Table {
@@ -1260,7 +1348,13 @@ fn compose_object_opts(
             default_btn_color,
             theme,
         )),
-        ObjectKind::Image { src, alt, crop } => Visual::Image {
+        ObjectKind::Image {
+            src,
+            alt,
+            crop,
+            outline,
+            shape,
+        } => Visual::Image {
             src: state_def
                 .and_then(|s| s.src.as_deref())
                 .filter(|s| !s.is_empty())
@@ -1268,14 +1362,16 @@ fn compose_object_opts(
                 .to_string(),
             alt: alt.clone(),
             crop: crop.as_ref().and_then(valid_crop_rect),
+            outline: outline.as_ref().and_then(resolve_outline),
+            shape: *shape,
         },
-        ObjectKind::Video { src, .. } => Visual::Video {
+        ObjectKind::Video { src, poster, .. } => Visual::Video {
             src: state_def
                 .and_then(|s| s.src.as_deref())
                 .filter(|s| !s.is_empty())
                 .unwrap_or(src)
                 .to_string(),
-            poster: None,
+            poster: poster.clone(),
         },
         ObjectKind::Web { source } => Visual::Web {
             label: source.label(),

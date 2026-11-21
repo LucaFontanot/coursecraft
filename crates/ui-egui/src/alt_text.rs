@@ -598,7 +598,7 @@ fn apply_rows(editor: &mut Editor) {
             skipped = skipped.saturating_add(1);
             continue;
         };
-        let ObjectKind::Image { src, alt, crop } = &object.kind else {
+        let ObjectKind::Image { src, alt, crop, .. } = &object.kind else {
             skipped = skipped.saturating_add(1);
             continue;
         };

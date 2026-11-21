@@ -3120,6 +3120,7 @@ fn layout_text(
             paragraphs: Vec::new(),
             autofit: Autofit::None,
             text_style: None,
+            outline: None,
         },
         frame,
         timing: Timing::default(),
@@ -3262,6 +3263,8 @@ fn layout_objects(layout: &str, slide: &Slide, size: Size, theme: &Theme) -> Vec
                     src: "placeholder.png".to_owned(),
                     alt: "Choose an image".to_owned(),
                     crop: None,
+                    outline: None,
+                    shape: None,
                 },
                 frame: p.frame,
                 timing: Timing::default(),
@@ -7572,12 +7575,16 @@ fn text_set_paragraph(s: &mut Session, p: &Json) -> Result<Json> {
     let oid: String = req(C, p, "object")?;
     let align_str: Option<String> = opt(C, p, "align")?;
     let valign_str: Option<String> = opt(C, p, "valign")?;
+    let wrap: Option<bool> = opt(C, p, "wrap")?;
+    let dir_str: Option<String> = opt(C, p, "direction")?;
+    let insets_val: Option<coursecraft_course::TextInsets> = opt(C, p, "insets")?;
 
     let align = match align_str.as_deref() {
         None => None,
         Some("left") => Some(Align::Left),
         Some("center") => Some(Align::Center),
         Some("right") => Some(Align::Right),
+        Some("justify") => Some(Align::Justify),
         Some(other) => return Err(bad(C, format!("unknown align {other:?}"))),
     };
     let valign = match valign_str.as_deref() {
@@ -7586,6 +7593,13 @@ fn text_set_paragraph(s: &mut Session, p: &Json) -> Result<Json> {
         Some("middle") => Some(VAlign::Middle),
         Some("bottom") => Some(VAlign::Bottom),
         Some(other) => return Err(bad(C, format!("unknown valign {other:?}"))),
+    };
+    let direction = match dir_str.as_deref() {
+        None => None,
+        Some("horizontal") => Some(coursecraft_course::TextDirection::Horizontal),
+        Some("vertical") => Some(coursecraft_course::TextDirection::Vertical),
+        Some("vertical270") => Some(coursecraft_course::TextDirection::Vertical270),
+        Some(other) => return Err(bad(C, format!("unknown direction {other:?}"))),
     };
 
     let sl = slide_mut(s, &sid)?;
@@ -7602,6 +7616,15 @@ fn text_set_paragraph(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             parts.style.valign = v;
         }
+    }
+    if let Some(w) = wrap {
+        parts.style.wrap = w;
+    }
+    if let Some(d) = direction {
+        parts.style.direction = d;
+    }
+    if let Some(ins) = insets_val {
+        parts.style.insets = Some(ins);
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
@@ -8530,6 +8553,8 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                         src: "placeholder.png".to_owned(),
                         alt: "Choose an image for the hotspot".to_owned(),
                         crop: None,
+                        outline: None,
+                        shape: None,
                     },
                     frame: Rect {
                         x: 240.0,
@@ -8660,6 +8685,7 @@ fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, theme: &Theme)
                         paragraphs: Vec::new(),
                         autofit: Autofit::None,
                         text_style: None,
+                        outline: None,
                     },
                     frame: Rect {
                         x: target_frame.x + 40.0,
@@ -8927,6 +8953,7 @@ fn add_feedback_layers(slide: &mut Slide, theme: &Theme, slide_size: Size) -> (S
                     paragraphs: Vec::new(),
                     autofit: Autofit::None,
                     text_style: None,
+                    outline: None,
                 },
                 frame,
                 timing: Timing::default(),
@@ -9004,6 +9031,7 @@ fn add_try_again_layer(slide: &mut Slide, theme: &Theme, slide_size: Size) -> St
                 paragraphs: Vec::new(),
                 autofit: Autofit::None,
                 text_style: None,
+                outline: None,
             },
             frame: text_frame,
             timing: Timing::default(),
@@ -9356,6 +9384,7 @@ fn certificate_text(
             paragraphs: Vec::new(),
             autofit: Autofit::None,
             text_style: None,
+            outline: None,
         },
         frame,
         timing: Timing::default(),
@@ -9597,6 +9626,7 @@ fn interaction_text(id: String, name: String, text: String, frame: Rect, theme: 
             paragraphs: Vec::new(),
             autofit: Autofit::None,
             text_style: None,
+            outline: None,
         },
         frame,
         timing: Timing::default(),

@@ -551,9 +551,7 @@ pub fn fill_contours_shaded(
         let coverage = vertex.color.a();
         let mut color = color_at((vertex.pos.x, vertex.pos.y));
         if coverage < 255 {
-            let alpha = (u16::from(color.a()) * u16::from(coverage) / 255) as u8;
-            let [r, g, b, _] = color.to_srgba_unmultiplied();
-            color = Color32::from_rgba_unmultiplied(r, g, b, alpha);
+            color = color.gamma_multiply(f32::from(coverage) / 255.0);
         }
         vertex.color = color;
     }
@@ -705,9 +703,80 @@ pub fn stroke_contours(
                     }
                 }
             }
+            coursecraft_course::DashStyle::DashDot => {
+                add_dash_dot(
+                    &mut mesh,
+                    contour,
+                    true,
+                    width,
+                    half,
+                    feather,
+                    color,
+                    pixels_per_point,
+                );
+            }
         }
     }
     mesh
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_dash_dot(
+    mesh: &mut Mesh,
+    points: &[Pt],
+    closed: bool,
+    width: f32,
+    half: f32,
+    feather: f32,
+    color: Color32,
+    pixels_per_point: f32,
+) {
+    let dash_len = width * 3.0;
+    let gap = width * 2.0;
+    let period = dash_len + gap + gap;
+    for piece in dash_pieces(points, closed, dash_len, gap * 2.0) {
+        add_band(mesh, &piece, false, half, feather, color);
+    }
+    let samples = sample_path(points, closed, period);
+    // Offset dots to sit midway in the gap between dashes: dash_len + gap.
+    let _ = samples;
+    let total = dash_pieces_dots(points, closed, dash_len + gap, period);
+    for (cx, cy) in total {
+        let dot = circle_contour(cx, cy, half, DOT_SEGMENTS);
+        if dot.len() >= 3 {
+            let filled = fill_contours(&[dot], color, pixels_per_point);
+            append_mesh(mesh, &filled);
+        }
+    }
+}
+
+fn dash_pieces_dots(points: &[Pt], closed: bool, offset: f32, period: f32) -> Vec<Pt> {
+    if points.len() < 2 || !period.is_finite() || period <= 0.0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let count = if closed {
+        points.len()
+    } else {
+        points.len() - 1
+    };
+    let mut next_at = offset.max(0.0);
+    let mut covered = 0.0f32;
+    for i in 0..count {
+        let a = points[i];
+        let b = points[(i + 1) % points.len()];
+        let seg_len = distance(a, b);
+        if seg_len <= 1e-4 {
+            continue;
+        }
+        while next_at <= covered + seg_len {
+            let t = ((next_at - covered) / seg_len).clamp(0.0, 1.0);
+            out.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
+            next_at += period;
+        }
+        covered += seg_len;
+    }
+    out
 }
 
 /// Build a mesh for a band of `width` centred on an open or closed polyline.
@@ -765,6 +834,18 @@ pub fn stroke_path(
                     append_mesh(&mut mesh, &filled);
                 }
             }
+        }
+        coursecraft_course::DashStyle::DashDot => {
+            add_dash_dot(
+                &mut mesh,
+                &cleaned,
+                closed && cleaned.len() > 2,
+                width,
+                half,
+                feather,
+                color,
+                pixels_per_point,
+            );
         }
     }
     mesh
