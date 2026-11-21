@@ -341,6 +341,7 @@ impl Playing {
         start_ms: f64,
         log_effects: bool,
     ) -> Self {
+        crate::lti::register_page_close(&lti);
         Self::assemble(
             course,
             ctx,

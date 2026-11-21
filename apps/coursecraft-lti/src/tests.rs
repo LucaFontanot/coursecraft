@@ -255,7 +255,11 @@ fn platform_token(nonce: &str) -> String {
         "https://purl.imsglobal.org/spec/lti/claim/message_type": "LtiResourceLinkRequest",
         "https://purl.imsglobal.org/spec/lti/claim/version": "1.3.0",
         "https://purl.imsglobal.org/spec/lti/claim/deployment_id": DEPLOYMENT_ID,
-        "https://purl.imsglobal.org/spec/lti/claim/resource_link": {"id": "link-1"}
+        "https://purl.imsglobal.org/spec/lti/claim/target_link_uri": "https://tool.example/course/index.html",
+        "https://purl.imsglobal.org/spec/lti/claim/resource_link": {"id": "link-1"},
+        "https://purl.imsglobal.org/spec/lti/claim/roles": [
+            "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"
+        ]
     });
     jwt::sign_rs256(TEST_KEY, &header, &claims).expect("sign platform token")
 }
@@ -462,7 +466,7 @@ fn score_posts_to_the_platform_lineitem() {
         ags: Some(Ags {
             lineitem: Some(format!("http://{}/lineitems/1", platform.addr)),
             lineitems: None,
-            scope: Vec::new(),
+            scope: vec![SCORE_SCOPE_URI.into()],
         }),
         deployment_id: DEPLOYMENT_ID.into(),
     };
@@ -533,7 +537,7 @@ fn score_without_a_percent_sends_progress_only() {
         ags: Some(Ags {
             lineitem: Some(format!("http://{}/lineitems/1", platform.addr)),
             lineitems: None,
-            scope: Vec::new(),
+            scope: vec![SCORE_SCOPE_URI.into()],
         }),
         deployment_id: DEPLOYMENT_ID.into(),
     };
@@ -663,7 +667,7 @@ fn score_accepts_json_with_charset_and_tool_origin() {
         ags: Some(Ags {
             lineitem: Some(format!("http://{}/lineitems/1", platform.addr)),
             lineitems: None,
-            scope: Vec::new(),
+            scope: vec![SCORE_SCOPE_URI.into()],
         }),
         deployment_id: DEPLOYMENT_ID.into(),
     };
@@ -830,7 +834,11 @@ fn launch_refetches_jwks_once_on_unknown_kid_and_rate_limits_retries() {
         "https://purl.imsglobal.org/spec/lti/claim/message_type": "LtiResourceLinkRequest",
         "https://purl.imsglobal.org/spec/lti/claim/version": "1.3.0",
         "https://purl.imsglobal.org/spec/lti/claim/deployment_id": DEPLOYMENT_ID,
-        "https://purl.imsglobal.org/spec/lti/claim/resource_link": {"id": "link-1"}
+        "https://purl.imsglobal.org/spec/lti/claim/target_link_uri": "https://tool.example/course/index.html",
+        "https://purl.imsglobal.org/spec/lti/claim/resource_link": {"id": "link-1"},
+        "https://purl.imsglobal.org/spec/lti/claim/roles": [
+            "http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"
+        ]
     });
     let rotated_token = jwt::sign_rs256(TEST_KEY, &header, &claims).expect("sign rotated");
     let body = format!(
@@ -1124,4 +1132,735 @@ fn ags_token_is_cached_per_server_across_learners() {
         1,
         "second learner must reuse the server-cached AGS token"
     );
+}
+
+// ===========================================================================
+// M27 Step A-6: StrictLtiPlatform conformance suite (A4.1-A4.8, A4.10)
+// ===========================================================================
+
+const SCORE_SCOPE_URI: &str = "https://purl.imsglobal.org/spec/lti-ags/scope/score";
+
+fn strict_tool_config(
+    platform: &crate::strict_platform::StrictLtiPlatform,
+    tool_url: &str,
+) -> ToolConfig {
+    ToolConfig {
+        issuer: platform.issuer(),
+        client_id: CLIENT_ID.into(),
+        deployment_id: DEPLOYMENT_ID.into(),
+        auth_login_url: platform.auth_login_url(),
+        auth_token_url: platform.auth_token_url(),
+        jwks_url: platform.jwks_url(),
+        tool_url: tool_url.into(),
+        private_key_pkcs8: TEST_KEY.to_vec(),
+        key_id: "tool-key".into(),
+    }
+}
+
+fn oidc_login(
+    server: &TestServer,
+    platform: &crate::strict_platform::StrictLtiPlatform,
+    target_link_uri: &str,
+) -> (String, String, String) {
+    let login_path = format!(
+        "/lti/login?iss={}&login_hint=user-1&target_link_uri={}&client_id={}",
+        encode(&platform.issuer()),
+        encode(target_link_uri),
+        encode(CLIENT_ID),
+    );
+    let (status, headers, _) = request(server.addr, "GET", &login_path, &[], "");
+    assert_eq!(status, 302, "login must redirect");
+    let location = headers.get("location").expect("location header");
+    let set_cookie = headers.get("set-cookie").expect("state cookie");
+    let state_cookie = set_cookie
+        .split(';')
+        .next()
+        .expect("cookie pair")
+        .to_string();
+
+    // Forward the OIDC redirect to StrictLtiPlatform so it validates all OIDC params.
+    let oidc_path = location
+        .strip_prefix(&format!("http://{}", platform.addr()))
+        .expect("redirect points to strict platform");
+    let (oidc_status, _, _) = request(platform.addr(), "GET", oidc_path, &[], "");
+    assert_eq!(oidc_status, 200, "strict platform must accept OIDC params");
+
+    let params = platform.last_oidc_params().expect("recorded oidc params");
+    let state = params.get("state").expect("state").clone();
+    let nonce = params.get("nonce").expect("nonce").clone();
+    (state, nonce, state_cookie)
+}
+
+fn do_launch(
+    server: &TestServer,
+    state: &str,
+    state_cookie: &str,
+    id_token: &str,
+) -> (u16, BTreeMap<String, String>, Vec<u8>) {
+    let body = format!("state={}&id_token={}", encode(state), encode(id_token));
+    request(
+        server.addr,
+        "POST",
+        "/lti/launch",
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded"),
+            ("Cookie", state_cookie),
+        ],
+        &body,
+    )
+}
+
+fn session_cookie_from_headers(headers: &BTreeMap<String, String>) -> String {
+    headers
+        .get("set-cookie")
+        .expect("cc_lti set-cookie")
+        .split(';')
+        .next()
+        .expect("cc_lti pair")
+        .to_string()
+}
+
+#[test]
+fn a4_1_full_oidc_launch_course_and_ags_pass_score() {
+    let platform = crate::strict_platform::StrictLtiPlatform::start(CLIENT_ID).expect("platform");
+    let dir = temp_course_dir();
+    std::fs::write(dir.join("index.html"), "<html>course</html>").expect("index.html");
+    std::fs::write(dir.join("course.json"), r#"{"title":"Test"}"#).expect("course.json");
+
+    let server = start_server(strict_tool_config(&platform, "https://tool.example"), dir);
+    platform.set_tool_jwks_url(format!("http://{}/.well-known/jwks.json", server.addr));
+
+    let (state, nonce, state_cookie) =
+        oidc_login(&server, &platform, "https://tool.example/course/index.html");
+    let lineitem = platform.lineitem_url("1");
+    let claims = platform.default_claims(
+        &nonce,
+        unix_now(),
+        "https://tool.example/course/index.html",
+        Some(&lineitem),
+        &[SCORE_SCOPE_URI],
+    );
+    let token = platform.sign_id_token(&claims).expect("sign id_token");
+    let (status, headers, _) = do_launch(&server, &state, &state_cookie, &token);
+    assert_eq!(status, 302);
+    let location = headers.get("location").expect("redirect location");
+    assert_eq!(location, "/course/index.html?name=Ada%20Lovelace");
+    let session_cookie = session_cookie_from_headers(&headers);
+
+    let (html_status, _, html_body) = request(server.addr, "GET", "/course/index.html", &[], "");
+    assert_eq!(html_status, 200);
+    assert_eq!(String::from_utf8_lossy(&html_body), "<html>course</html>");
+
+    let (json_status, _, json_body) = request(server.addr, "GET", "/course/course.json", &[], "");
+    assert_eq!(json_status, 200);
+    assert_eq!(String::from_utf8_lossy(&json_body), r#"{"title":"Test"}"#);
+
+    let (score_status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/score",
+        &[
+            ("Cookie", &session_cookie),
+            ("Content-Type", "application/json"),
+            ("Origin", "https://tool.example"),
+        ],
+        r#"{"percent":85,"status":"passed"}"#,
+    );
+    assert_eq!(score_status, 204);
+    assert!(
+        platform.violations().is_empty(),
+        "violations: {:?}",
+        platform.violations()
+    );
+    let scores = platform.scores();
+    assert_eq!(scores.len(), 1);
+    assert_eq!(scores[0].payload["scoreGiven"], 85);
+    assert_eq!(scores[0].payload["scoreMaximum"], 100);
+    assert_eq!(scores[0].payload["activityProgress"], "Completed");
+    assert_eq!(scores[0].payload["gradingProgress"], "FullyGraded");
+    assert_eq!(scores[0].payload["comment"], "passed");
+}
+
+#[test]
+fn a4_2_completion_only_and_incomplete_ags_payloads() {
+    let platform = crate::strict_platform::StrictLtiPlatform::start(CLIENT_ID).expect("platform");
+    let server = start_server(
+        strict_tool_config(&platform, "https://tool.example"),
+        temp_course_dir(),
+    );
+    platform.set_tool_jwks_url(format!("http://{}/.well-known/jwks.json", server.addr));
+
+    let (state, nonce, state_cookie) =
+        oidc_login(&server, &platform, "https://tool.example/course/index.html");
+    let lineitem = platform.lineitem_url("2");
+    let claims = platform.default_claims(
+        &nonce,
+        unix_now(),
+        "https://tool.example/course/index.html",
+        Some(&lineitem),
+        &[SCORE_SCOPE_URI],
+    );
+    let token = platform.sign_id_token(&claims).expect("sign id_token");
+    let (status, headers, _) = do_launch(&server, &state, &state_cookie, &token);
+    assert_eq!(status, 302);
+    let session_cookie = session_cookie_from_headers(&headers);
+
+    let (s1, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/score",
+        &[
+            ("Cookie", &session_cookie),
+            ("Content-Type", "application/json"),
+            ("Origin", "https://tool.example"),
+        ],
+        r#"{"percent":null,"status":"completed"}"#,
+    );
+    assert_eq!(s1, 204);
+
+    let (s2, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/score",
+        &[
+            ("Cookie", &session_cookie),
+            ("Content-Type", "application/json"),
+            ("Origin", "https://tool.example"),
+        ],
+        r#"{"percent":null,"status":"incomplete"}"#,
+    );
+    assert_eq!(s2, 204);
+
+    assert!(
+        platform.violations().is_empty(),
+        "violations: {:?}",
+        platform.violations()
+    );
+    let scores = platform.scores();
+    assert_eq!(scores.len(), 2);
+    assert!(scores[0].payload.get("scoreGiven").is_none());
+    assert!(scores[0].payload.get("scoreMaximum").is_none());
+    assert_eq!(scores[0].payload["activityProgress"], "Completed");
+    assert_eq!(scores[0].payload["gradingProgress"], "FullyGraded");
+
+    assert!(scores[1].payload.get("scoreGiven").is_none());
+    assert_eq!(scores[1].payload["activityProgress"], "InProgress");
+    assert_eq!(scores[1].payload["gradingProgress"], "Pending");
+}
+
+#[test]
+fn a4_3_trailing_slash_lineitem_and_query_string_preservation() {
+    let platform = crate::strict_platform::StrictLtiPlatform::start(CLIENT_ID).expect("platform");
+    let server = start_server(
+        strict_tool_config(&platform, "https://tool.example"),
+        temp_course_dir(),
+    );
+    platform.set_tool_jwks_url(format!("http://{}/.well-known/jwks.json", server.addr));
+
+    let lineitem_trailing = format!("http://{}/ags/lineitems/42/", platform.addr());
+    let lineitem_query = format!("http://{}/ags/lineitems/42/?ctx=9", platform.addr());
+
+    for (idx, lineitem) in [lineitem_trailing, lineitem_query].iter().enumerate() {
+        let (state, nonce, state_cookie) =
+            oidc_login(&server, &platform, "https://tool.example/course/index.html");
+        let claims = platform.default_claims(
+            &nonce,
+            unix_now(),
+            "https://tool.example/course/index.html",
+            Some(lineitem),
+            &[SCORE_SCOPE_URI],
+        );
+        let token = platform.sign_id_token(&claims).expect("sign");
+        let (status, headers, _) = do_launch(&server, &state, &state_cookie, &token);
+        assert_eq!(status, 302);
+        let session_cookie = session_cookie_from_headers(&headers);
+        let (score_status, _, _) = request(
+            server.addr,
+            "POST",
+            "/lti/score",
+            &[
+                ("Cookie", &session_cookie),
+                ("Content-Type", "application/json"),
+                ("Origin", "https://tool.example"),
+            ],
+            r#"{"percent":90,"status":"passed"}"#,
+        );
+        assert_eq!(score_status, 204, "case {idx} failed");
+    }
+
+    assert!(
+        platform.violations().is_empty(),
+        "violations: {:?}",
+        platform.violations()
+    );
+    let scores = platform.scores();
+    assert_eq!(scores.len(), 2);
+    assert_eq!(scores[0].path, "/ags/lineitems/42/scores");
+    assert!(scores[0].query.is_empty());
+    assert_eq!(scores[1].path, "/ags/lineitems/42/scores");
+    assert_eq!(scores[1].query.get("ctx").map(String::as_str), Some("9"));
+}
+
+#[test]
+fn a4_4_missing_ags_score_scope_returns_403_without_token_request() {
+    let platform = crate::strict_platform::StrictLtiPlatform::start(CLIENT_ID).expect("platform");
+    let server = start_server(
+        strict_tool_config(&platform, "https://tool.example"),
+        temp_course_dir(),
+    );
+    platform.set_tool_jwks_url(format!("http://{}/.well-known/jwks.json", server.addr));
+
+    let (state, nonce, state_cookie) =
+        oidc_login(&server, &platform, "https://tool.example/course/index.html");
+    let lineitem = platform.lineitem_url("4");
+    let claims = platform.default_claims(
+        &nonce,
+        unix_now(),
+        "https://tool.example/course/index.html",
+        Some(&lineitem),
+        &["https://purl.imsglobal.org/spec/lti-ags/scope/lineitem.readonly"],
+    );
+    let token = platform.sign_id_token(&claims).expect("sign");
+    let (status, headers, _) = do_launch(&server, &state, &state_cookie, &token);
+    assert_eq!(status, 302);
+    let session_cookie = session_cookie_from_headers(&headers);
+
+    let (score_status, _, _) = request(
+        server.addr,
+        "POST",
+        "/lti/score",
+        &[
+            ("Cookie", &session_cookie),
+            ("Content-Type", "application/json"),
+            ("Origin", "https://tool.example"),
+        ],
+        r#"{"percent":80,"status":"passed"}"#,
+    );
+    assert_eq!(score_status, 403);
+    assert_eq!(platform.token_requests_count(), 0);
+    assert!(platform.scores().is_empty());
+}
+
+#[test]
+fn a4_5_id_token_negative_security_matrix() {
+    let platform = crate::strict_platform::StrictLtiPlatform::start(CLIENT_ID).expect("platform");
+    let server = start_server(
+        strict_tool_config(&platform, "https://tool.example"),
+        temp_course_dir(),
+    );
+
+    let now = unix_now();
+    let base_claims = |nonce: &str| {
+        platform.default_claims(
+            nonce,
+            now,
+            "https://tool.example/course/index.html",
+            None,
+            &[],
+        )
+    };
+
+    // 1. Tampered signature
+    {
+        let (state, nonce, cookie) = oidc_login(&server, &platform, "https://tool.example");
+        let mut tok = platform.sign_id_token(&base_claims(&nonce)).expect("sign");
+        tok.pop();
+        tok.push(if tok.ends_with('A') { 'B' } else { 'A' });
+        let (st, _, _) = do_launch(&server, &state, &cookie, &tok);
+        assert_eq!(st, 400);
+    }
+
+    // 2. alg: "none" and alg: "HS256"
+    for alg in ["none", "HS256"] {
+        let (state, nonce, cookie) = oidc_login(&server, &platform, "https://tool.example");
+        let header = json!({"alg": alg, "typ": "JWT", "kid": "kid-1"});
+        let h_b64 = jwt::base64url_encode(header.to_string().as_bytes());
+        let p_b64 = jwt::base64url_encode(base_claims(&nonce).to_string().as_bytes());
+        let tok = format!("{h_b64}.{p_b64}.sig");
+        let (st, _, _) = do_launch(&server, &state, &cookie, &tok);
+        assert_eq!(st, 400, "alg {alg} must be 400");
+    }
+
+    // 3. Expired exp, future iat, wrong iss, wrong aud, multi-aud wrong azp, wrong nonce,
+    //    wrong message_type, wrong version, wrong deployment_id, missing target_link_uri, missing roles
+    type ClaimMutator = (&'static str, Box<dyn Fn(&mut Value)>);
+    let mut mutators: Vec<ClaimMutator> = vec![
+        ("expired", Box::new(move |c| c["exp"] = json!(now - 10))),
+        ("future_iat", Box::new(move |c| c["iat"] = json!(now + 301))),
+        (
+            "wrong_iss",
+            Box::new(|c| c["iss"] = json!("https://evil.example")),
+        ),
+        ("wrong_aud", Box::new(|c| c["aud"] = json!("other-client"))),
+        (
+            "multi_aud_wrong_azp",
+            Box::new(|c| {
+                c["aud"] = json!(["other-client", CLIENT_ID]);
+                c["azp"] = json!("other-client");
+            }),
+        ),
+        (
+            "wrong_nonce",
+            Box::new(|c| c["nonce"] = json!("wrong-nonce")),
+        ),
+        (
+            "wrong_message_type",
+            Box::new(|c| {
+                c["https://purl.imsglobal.org/spec/lti/claim/message_type"] =
+                    json!("LtiDeepLinkingRequest");
+            }),
+        ),
+        (
+            "wrong_version",
+            Box::new(|c| c["https://purl.imsglobal.org/spec/lti/claim/version"] = json!("1.1.0")),
+        ),
+        (
+            "wrong_deployment_id",
+            Box::new(|c| {
+                c["https://purl.imsglobal.org/spec/lti/claim/deployment_id"] = json!("wrong-dep");
+            }),
+        ),
+        (
+            "missing_target_link_uri",
+            Box::new(|c| {
+                c.as_object_mut()
+                    .expect("obj")
+                    .remove("https://purl.imsglobal.org/spec/lti/claim/target_link_uri");
+            }),
+        ),
+        (
+            "missing_roles",
+            Box::new(|c| {
+                c.as_object_mut()
+                    .expect("obj")
+                    .remove("https://purl.imsglobal.org/spec/lti/claim/roles");
+            }),
+        ),
+    ];
+
+    for (label, mutate) in mutators.drain(..) {
+        let (state, nonce, cookie) = oidc_login(&server, &platform, "https://tool.example");
+        let mut c = base_claims(&nonce);
+        mutate(&mut c);
+        let tok = platform.sign_id_token(&c).expect("sign");
+        let (st, _, _) = do_launch(&server, &state, &cookie, &tok);
+        assert_eq!(st, 400, "mutator {label} must be 400");
+    }
+
+    // 4. Missing/mismatched cookie and replayed state
+    let (state, nonce, cookie) = oidc_login(&server, &platform, "https://tool.example");
+    let tok = platform.sign_id_token(&base_claims(&nonce)).expect("sign");
+    let (st_no_cookie, _, _) = do_launch(&server, &state, "cc_lti_state=wrong", &tok);
+    assert_eq!(st_no_cookie, 400);
+    let (st_ok, _, _) = do_launch(&server, &state, &cookie, &tok);
+    assert_eq!(st_ok, 302);
+    let (st_replay, _, _) = do_launch(&server, &state, &cookie, &tok);
+    assert_eq!(st_replay, 400, "replayed state must be 400");
+}
+
+#[test]
+fn a4_6_platform_jwks_key_rotation_and_cooldown() {
+    let platform = crate::strict_platform::StrictLtiPlatform::start(CLIENT_ID).expect("platform");
+    let server = start_server(
+        strict_tool_config(&platform, "https://tool.example"),
+        temp_course_dir(),
+    );
+
+    // Launch 1 with kid-1
+    let (state1, nonce1, cookie1) = oidc_login(&server, &platform, "https://tool.example");
+    let tok1 = platform
+        .sign_id_token(&platform.default_claims(
+            &nonce1,
+            unix_now(),
+            "https://tool.example",
+            None,
+            &[],
+        ))
+        .expect("sign");
+    assert_eq!(do_launch(&server, &state1, &cookie1, &tok1).0, 302);
+    assert_eq!(platform.jwks_requests_count(), 1);
+
+    // Rotate to kid-2 -> refreshes JWKS once and succeeds
+    platform.rotate_key("kid-2");
+    let (state2, nonce2, cookie2) = oidc_login(&server, &platform, "https://tool.example");
+    let tok2 = platform
+        .sign_id_token(&platform.default_claims(
+            &nonce2,
+            unix_now(),
+            "https://tool.example",
+            None,
+            &[],
+        ))
+        .expect("sign");
+    assert_eq!(do_launch(&server, &state2, &cookie2, &tok2).0, 302);
+    assert_eq!(platform.jwks_requests_count(), 2);
+
+    // Unknown kid-3 within 60s cooldown -> rejected with 400 without hammering /jwks
+    let (state3, nonce3, cookie3) = oidc_login(&server, &platform, "https://tool.example");
+    let tok3 = platform
+        .sign_id_token_with_kid(
+            "kid-3",
+            &platform.default_claims(&nonce3, unix_now(), "https://tool.example", None, &[]),
+        )
+        .expect("sign");
+    assert_eq!(do_launch(&server, &state3, &cookie3, &tok3).0, 400);
+    assert_eq!(platform.jwks_requests_count(), 2);
+}
+
+#[test]
+fn a4_7_tool_jwks_client_assertion_and_token_caching() {
+    let platform = crate::strict_platform::StrictLtiPlatform::start(CLIENT_ID).expect("platform");
+    let server = start_server(
+        strict_tool_config(&platform, "https://tool.example"),
+        temp_course_dir(),
+    );
+    platform.set_tool_jwks_url(format!("http://{}/.well-known/jwks.json", server.addr));
+
+    let (jwks_st, _, jwks_body) = request(server.addr, "GET", "/.well-known/jwks.json", &[], "");
+    assert_eq!(jwks_st, 200);
+    let jwks_val: Value = serde_json::from_slice(&jwks_body).expect("jwks");
+    assert_eq!(jwks_val["keys"][0]["kid"], "tool-key");
+
+    let (state, nonce, cookie) = oidc_login(&server, &platform, "https://tool.example");
+    let lineitem = platform.lineitem_url("7");
+    let claims = platform.default_claims(
+        &nonce,
+        unix_now(),
+        "https://tool.example",
+        Some(&lineitem),
+        &[SCORE_SCOPE_URI],
+    );
+    let tok = platform.sign_id_token(&claims).expect("sign");
+    let (st, headers, _) = do_launch(&server, &state, &cookie, &tok);
+    assert_eq!(st, 302);
+    let session_cookie = session_cookie_from_headers(&headers);
+
+    for pct in [70, 95] {
+        let body = format!(r#"{{"percent":{pct},"status":"passed"}}"#);
+        let (s, _, _) = request(
+            server.addr,
+            "POST",
+            "/lti/score",
+            &[
+                ("Cookie", &session_cookie),
+                ("Content-Type", "application/json"),
+                ("Origin", "https://tool.example"),
+            ],
+            &body,
+        );
+        assert_eq!(s, 204);
+    }
+
+    assert_eq!(platform.token_requests_count(), 1);
+    assert!(
+        platform.violations().is_empty(),
+        "violations: {:?}",
+        platform.violations()
+    );
+}
+
+#[test]
+fn a4_8_score_csrf_auth_and_json_validation() {
+    let platform = crate::strict_platform::StrictLtiPlatform::start(CLIENT_ID).expect("platform");
+    let server = start_server(
+        strict_tool_config(&platform, "https://tool.example"),
+        temp_course_dir(),
+    );
+    let lineitem = platform.lineitem_url("8");
+    let cookie = server.shared.insert_session(Launch {
+        subject: "u1".into(),
+        name: None,
+        context_id: None,
+        resource_link_id: "rl-1".into(),
+        roles: vec![],
+        ags: Some(Ags {
+            lineitem: Some(lineitem),
+            lineitems: None,
+            scope: vec![SCORE_SCOPE_URI.into()],
+        }),
+        deployment_id: DEPLOYMENT_ID.into(),
+    });
+    let session_hdr = format!("cc_lti={cookie}");
+
+    // Wrong Origin -> 403
+    assert_eq!(
+        request(
+            server.addr,
+            "POST",
+            "/lti/score",
+            &[
+                ("Cookie", &session_hdr),
+                ("Content-Type", "application/json"),
+                ("Origin", "https://evil.example"),
+            ],
+            r#"{"percent":50,"status":"passed"}"#,
+        )
+        .0,
+        403
+    );
+    // Missing Origin -> 403
+    assert_eq!(
+        request(
+            server.addr,
+            "POST",
+            "/lti/score",
+            &[
+                ("Cookie", &session_hdr),
+                ("Content-Type", "application/json")
+            ],
+            r#"{"percent":50,"status":"passed"}"#,
+        )
+        .0,
+        403
+    );
+    // Content-Type: text/plain -> 403
+    assert_eq!(
+        request(
+            server.addr,
+            "POST",
+            "/lti/score",
+            &[
+                ("Cookie", &session_hdr),
+                ("Content-Type", "text/plain"),
+                ("Origin", "https://tool.example"),
+            ],
+            r#"{"percent":50,"status":"passed"}"#,
+        )
+        .0,
+        403
+    );
+    // Missing cookie -> 401
+    assert_eq!(
+        request(
+            server.addr,
+            "POST",
+            "/lti/score",
+            &[
+                ("Content-Type", "application/json"),
+                ("Origin", "https://tool.example"),
+            ],
+            r#"{"percent":50,"status":"passed"}"#,
+        )
+        .0,
+        401
+    );
+    // Unknown cookie -> 401
+    assert_eq!(
+        request(
+            server.addr,
+            "POST",
+            "/lti/score",
+            &[
+                ("Cookie", "cc_lti=unknown-session"),
+                ("Content-Type", "application/json"),
+                ("Origin", "https://tool.example"),
+            ],
+            r#"{"percent":50,"status":"passed"}"#,
+        )
+        .0,
+        401
+    );
+    // Extra unknown JSON field -> 400
+    assert_eq!(
+        request(
+            server.addr,
+            "POST",
+            "/lti/score",
+            &[
+                ("Cookie", &session_hdr),
+                ("Content-Type", "application/json"),
+                ("Origin", "https://tool.example"),
+            ],
+            r#"{"percent":50,"status":"passed","extra":1}"#,
+        )
+        .0,
+        400
+    );
+    // percent: 101 -> 400
+    assert_eq!(
+        request(
+            server.addr,
+            "POST",
+            "/lti/score",
+            &[
+                ("Cookie", &session_hdr),
+                ("Content-Type", "application/json"),
+                ("Origin", "https://tool.example"),
+            ],
+            r#"{"percent":101,"status":"passed"}"#,
+        )
+        .0,
+        400
+    );
+
+    assert_eq!(platform.token_requests_count(), 0);
+    assert!(platform.scores().is_empty());
+}
+
+#[test]
+fn a4_10_path_prefix_mount_and_static_course_range_etag_traversal() {
+    let platform = crate::strict_platform::StrictLtiPlatform::start(CLIENT_ID).expect("platform");
+    let dir = temp_course_dir();
+    std::fs::write(dir.join("index.html"), b"0123456789abcdef").expect("index.html");
+    let server = start_server(
+        strict_tool_config(&platform, "https://tool.example/sub/app"),
+        dir,
+    );
+
+    let (state, nonce, cookie) = oidc_login(
+        &server,
+        &platform,
+        "https://tool.example/sub/app/course/index.html",
+    );
+    let tok = platform
+        .sign_id_token(&platform.default_claims(
+            &nonce,
+            unix_now(),
+            "https://tool.example/sub/app/course/index.html",
+            None,
+            &[],
+        ))
+        .expect("sign");
+    let (st, headers, _) = do_launch(&server, &state, &cookie, &tok);
+    assert_eq!(st, 302);
+    assert_eq!(
+        headers.get("location").map(String::as_str),
+        Some("/sub/app/course/index.html?name=Ada%20Lovelace")
+    );
+
+    let (st_get, hdrs_get, body_get) = request(server.addr, "GET", "/course/index.html", &[], "");
+    assert_eq!(st_get, 200);
+    assert_eq!(body_get, b"0123456789abcdef");
+    let etag = hdrs_get.get("etag").expect("etag").clone();
+
+    let (st_304, _, _) = request(
+        server.addr,
+        "GET",
+        "/course/index.html",
+        &[("If-None-Match", &etag)],
+        "",
+    );
+    assert_eq!(st_304, 304);
+
+    let (st_206, _, body_206) = request(
+        server.addr,
+        "GET",
+        "/course/index.html",
+        &[("Range", "bytes=0-9")],
+        "",
+    );
+    assert_eq!(st_206, 206);
+    assert_eq!(body_206, b"0123456789");
+
+    let (st_416, _, _) = request(
+        server.addr,
+        "GET",
+        "/course/index.html",
+        &[("Range", "bytes=999-1000")],
+        "",
+    );
+    assert_eq!(st_416, 416);
+
+    let (st_404, _, _) = request(server.addr, "GET", "/course/../secret", &[], "");
+    assert_eq!(st_404, 404);
 }

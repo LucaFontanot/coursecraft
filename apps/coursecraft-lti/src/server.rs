@@ -648,9 +648,15 @@ fn score(shared: &Shared, request: &Request) -> Response {
         }
         session.launch.clone()
     };
-    let Some(lineitem) = launch.ags.as_ref().and_then(|ags| ags.lineitem.clone()) else {
+    let Some(ags) = launch.ags.as_ref() else {
         return Response::text(403, "this launch has no line item");
     };
+    let Some(lineitem) = ags.lineitem.as_ref() else {
+        return Response::text(403, "this launch has no line item");
+    };
+    if !ags.scope.iter().any(|scope| scope == SCORE_SCOPE) {
+        return Response::text(403, "this launch does not have AGS score scope");
+    }
     let Some(text) = request.body_text() else {
         return Response::text(400, "score must be JSON");
     };
@@ -667,7 +673,7 @@ fn score(shared: &Shared, request: &Request) -> Response {
         Ok(token) => token,
         Err(response) => return response,
     };
-    let url = lineitem_score_url(&lineitem);
+    let url = lineitem_score_url(lineitem);
     let sent = http_post(
         &url,
         SCORE_CONTENT_TYPE,

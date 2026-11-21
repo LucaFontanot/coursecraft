@@ -144,7 +144,14 @@ impl ReportingHost {
                 resume.save_current(course);
                 Vec::new()
             }
-            Self::Lti { .. } | Self::Standalone => Vec::new(),
+            Self::Lti {
+                reporter,
+                transport,
+            } => {
+                pump_lti(reporter, &mut **transport);
+                Vec::new()
+            }
+            Self::Standalone => Vec::new(),
         }
     }
 

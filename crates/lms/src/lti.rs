@@ -198,3 +198,68 @@ fn status_id(status: CompletionStatus) -> &'static str {
         CompletionStatus::Incomplete => "incomplete",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a4_9_lti_reporter_high_water_dedup_and_retry_lost_reporting() {
+        let mut reporter = LtiReporter::new();
+        let mut sent = Vec::new();
+
+        // Score(80, Passed) -> 204
+        reporter.record(&[Effect::Score {
+            raw: 80,
+            max: 100,
+            percent: 80,
+            status: CompletionStatus::Passed,
+        }]);
+        let r1 = reporter.take_pending().expect("80 passed");
+        assert_eq!(r1.percent, Some(80));
+        assert_eq!(r1.status, "passed");
+        sent.push(r1.percent);
+        reporter.mark_sent();
+        assert!(!reporter.lost());
+
+        // Score(60, Failed) -> ignored (already passed)
+        reporter.record(&[Effect::Score {
+            raw: 60,
+            max: 100,
+            percent: 60,
+            status: CompletionStatus::Failed,
+        }]);
+        assert!(reporter.take_pending().is_none());
+
+        // Score(70, Passed) -> ignored (<= high-water 80)
+        reporter.record(&[Effect::Score {
+            raw: 70,
+            max: 100,
+            percent: 70,
+            status: CompletionStatus::Passed,
+        }]);
+        assert!(reporter.take_pending().is_none());
+
+        // Score(90, Passed) -> sent -> 500 -> retried once -> 500 -> lost() == true
+        reporter.record(&[Effect::Score {
+            raw: 90,
+            max: 100,
+            percent: 90,
+            status: CompletionStatus::Passed,
+        }]);
+        let r2 = reporter.take_pending().expect("90 passed");
+        assert_eq!(r2.percent, Some(90));
+        sent.push(r2.percent);
+        reporter.mark_failed();
+        assert!(!reporter.lost());
+
+        let r2_retry = reporter.take_pending().expect("90 retry");
+        assert_eq!(r2_retry.percent, Some(90));
+        sent.push(r2_retry.percent);
+        reporter.mark_failed();
+        assert!(reporter.lost());
+        assert!(reporter.take_pending().is_none());
+
+        assert_eq!(sent, vec![Some(80), Some(90), Some(90)]);
+    }
+}
