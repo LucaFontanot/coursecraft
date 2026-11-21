@@ -1,15 +1,17 @@
 //! OOXML `<p:timing>` parser and timeline scheduler for PowerPoint animations.
 //!
-//! Translates PowerPoint entrance, exit, and emphasis timing trees into
-//! CourseCraft [`Animation`]s, [`ObjectTiming`] bounds, and `SkipKind::Animation`
-//! diagnostics. Motion paths (`p:animMotion`) and interactive sequences
-//! (`interactiveSeq`) are wired in Step C-3.
+//! Translates PowerPoint entrance, exit, emphasis, motion-path (`p:animMotion`),
+//! and interactive click-triggered (`interactiveSeq`) timing trees into
+//! CourseCraft [`Animation`]s, [`MotionPath`]s, [`Trigger`]s,
+//! [`ObjectTiming`] bounds, and `SkipKind::Animation` diagnostics.
 
 use std::collections::{HashMap, HashSet};
 
-use coursecraft_course::{AnimEffect, Animation, Direction, Easing, Object};
+use coursecraft_course::{
+    Action, AnimEffect, Animation, Direction, Easing, Event, MotionPath, Object, Point, Trigger,
+};
 
-use crate::{SlideTracker, XmlNode};
+use crate::{SlideLayout, SlideTracker, XmlNode};
 
 /// Maximum number of timing nodes visited per slide to bound hostile inputs.
 const MAX_ANIM_NODES: usize = 1000;
@@ -29,6 +31,15 @@ const MAX_DURATION_MS: u32 = 60_000;
 /// Maximum valid delay (ms) clamped for hostile inputs.
 const MAX_DELAY_MS: u32 = 86_400_000;
 
+/// Maximum number of points allowed on a CourseCraft [`MotionPath`].
+const MAX_MOTION_PATH_POINTS: usize = 100;
+
+/// Number of linear segments used to approximate each cubic Bézier (`C`) curve.
+const BEZIER_SUBDIVISIONS: usize = 8;
+
+/// Maximum coordinate magnitude allowed by `coursecraft-course` validation.
+const MAX_MOTION_COORD: f64 = 100_000.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StepKind {
     OnClick,
@@ -41,6 +52,7 @@ enum PresetClass {
     Entrance,
     Exit,
     Emphasis,
+    Path,
 }
 
 #[derive(Debug, Clone)]
@@ -93,12 +105,15 @@ impl TimingWalker {
     }
 }
 
-/// Parse `<p:timing>` on a slide and apply entrance/exit timings and emphasis
-/// diagnostics to `objects`. Returns the maximum effect end timestamp (ms)
-/// observed across all scheduled effects so the caller can extend slide duration.
+/// Parse `<p:timing>` on a slide and apply entrance/exit/motion-path timings,
+/// interactive click triggers, and emphasis/repeat diagnostics to `objects` and
+/// `triggers`. Returns the maximum effect end timestamp (ms) observed across
+/// the main sequence so the caller can extend slide duration.
 pub(crate) fn apply_slide_timing(
     timing_node: &XmlNode,
+    layout: &SlideLayout,
     objects: &mut [Object],
+    triggers: &mut Vec<Trigger>,
     tracker: &mut SlideTracker,
 ) -> u32 {
     let Some(tn_lst) = timing_node.child("tnLst") else {
@@ -107,6 +122,7 @@ pub(crate) fn apply_slide_timing(
 
     let mut walker = TimingWalker::default();
     let mut main_effects: Vec<ParsedEffect<'_>> = Vec::new();
+    let mut interactive_seqs: Vec<(String, Vec<ParsedEffect<'_>>)> = Vec::new();
 
     for root_par in tn_lst.children_named("par") {
         if !walker.visit_node(tracker) {
@@ -140,11 +156,44 @@ pub(crate) fn apply_slide_timing(
                         &mut main_effects,
                     );
                 }
+            } else if node_type == "interactiveSeq"
+                && let Some(seq_children) = seq_ctn.child("childTnLst")
+            {
+                let Some(trigger_spid) = find_interactive_trigger_spid(seq_ctn) else {
+                    tracker.report_animation(
+                        "Interactive animation sequence missing onClick trigger spid; skipped",
+                    );
+                    continue;
+                };
+                let mut seq_effects = Vec::new();
+                for step_par in seq_children.children_named("par") {
+                    collect_effects_from_par(
+                        step_par,
+                        0,
+                        0,
+                        None,
+                        &mut walker,
+                        tracker,
+                        &mut seq_effects,
+                    );
+                }
+                interactive_seqs.push((trigger_spid, seq_effects));
             }
         }
     }
 
-    schedule_main_sequence(&main_effects, objects, tracker)
+    let max_end = schedule_main_sequence(&main_effects, layout, objects, triggers, tracker);
+    for (trigger_spid, seq_effects) in &interactive_seqs {
+        schedule_interactive_sequence(
+            trigger_spid,
+            seq_effects,
+            layout,
+            objects,
+            triggers,
+            tracker,
+        );
+    }
+    max_end
 }
 
 fn collect_effects_from_par<'a>(
@@ -216,7 +265,9 @@ fn collect_effects_from_par<'a>(
 
 fn schedule_main_sequence(
     effects: &[ParsedEffect<'_>],
+    layout: &SlideLayout,
     objects: &mut [Object],
+    triggers: &mut Vec<Trigger>,
     tracker: &mut SlideTracker,
 ) -> u32 {
     let mut id_to_index: HashMap<String, usize> = HashMap::with_capacity(objects.len());
@@ -233,9 +284,6 @@ fn schedule_main_sequence(
     let mut emitted_click_note = false;
 
     for eff in effects {
-        // Keep `ctn_node` referenced cleanly for Step C-3 (`repeatCount` / `animMotion`).
-        let _ = eff.ctn_node;
-
         let start_ms = match eff.step_kind {
             StepKind::WithPrevious => last_group_start_ms.saturating_add(eff.delay_ms),
             StepKind::AfterPrevious => {
@@ -285,6 +333,7 @@ fn schedule_main_sequence(
                     "Paragraph-level animation applied to whole text box on {obj_name}"
                 ));
             }
+            check_repeat_count(eff.ctn_node, &obj_name, tracker);
 
             match eff.preset_class {
                 PresetClass::Emphasis => {
@@ -341,6 +390,39 @@ fn schedule_main_sequence(
                         easing: eff.easing,
                     });
                 }
+                PresetClass::Path => {
+                    if let Some((points, relative)) =
+                        parse_anim_motion(eff.ctn_node, layout, &obj_name, tracker)
+                    {
+                        let obj = &mut objects[obj_idx];
+                        let path_id = format!("pptx_path_{}", obj.motion_paths.len() + 1);
+                        obj.motion_paths.push(MotionPath {
+                            id: path_id.clone(),
+                            points,
+                            duration_ms: eff.duration_ms,
+                            easing: eff.easing,
+                            relative,
+                        });
+                        let when = if start_ms == 0 {
+                            Event::TimelineStarts { layer: None }
+                        } else {
+                            Event::TimelineReaches {
+                                ms: start_ms,
+                                layer: None,
+                                cue: None,
+                            }
+                        };
+                        triggers.push(Trigger {
+                            action: Action::MoveOnPath {
+                                object: obj_id,
+                                path: path_id,
+                            },
+                            when,
+                            condition: None,
+                            disabled: false,
+                        });
+                    }
+                }
             }
         }
     }
@@ -348,11 +430,365 @@ fn schedule_main_sequence(
     max_effect_end_ms
 }
 
+fn schedule_interactive_sequence(
+    trigger_spid: &str,
+    effects: &[ParsedEffect<'_>],
+    layout: &SlideLayout,
+    objects: &mut [Object],
+    triggers: &mut Vec<Trigger>,
+    tracker: &mut SlideTracker,
+) {
+    let Some(trigger_obj_ids) = tracker.pptx_ids.get(trigger_spid).cloned() else {
+        tracker.report_animation(format!(
+            "Interactive animation trigger spid {trigger_spid} not found on slide"
+        ));
+        return;
+    };
+
+    let mut id_to_index: HashMap<String, usize> = HashMap::with_capacity(objects.len());
+    for (idx, obj) in objects.iter().enumerate() {
+        id_to_index.insert(obj.id.clone(), idx);
+    }
+
+    for eff in effects {
+        let Some(spid) = eff.spid.as_deref() else {
+            tracker.report_animation("Interactive animation missing target spid; skipped");
+            continue;
+        };
+        let Some(target_obj_ids) = tracker.pptx_ids.get(spid).cloned() else {
+            tracker.report_animation(format!(
+                "Interactive animation target spid {spid} not found on slide"
+            ));
+            continue;
+        };
+
+        for target_id in target_obj_ids {
+            let Some(&obj_idx) = id_to_index.get(&target_id) else {
+                continue;
+            };
+            let obj_name = objects[obj_idx].name.clone();
+            check_repeat_count(eff.ctn_node, &obj_name, tracker);
+
+            match eff.preset_class {
+                PresetClass::Path => {
+                    if let Some((points, relative)) =
+                        parse_anim_motion(eff.ctn_node, layout, &obj_name, tracker)
+                    {
+                        let obj = &mut objects[obj_idx];
+                        let path_id = format!("pptx_path_{}", obj.motion_paths.len() + 1);
+                        obj.motion_paths.push(MotionPath {
+                            id: path_id.clone(),
+                            points,
+                            duration_ms: eff.duration_ms,
+                            easing: eff.easing,
+                            relative,
+                        });
+                        for trigger_id in &trigger_obj_ids {
+                            triggers.push(Trigger {
+                                action: Action::MoveOnPath {
+                                    object: target_id.clone(),
+                                    path: path_id.clone(),
+                                },
+                                when: Event::Click {
+                                    object: trigger_id.clone(),
+                                },
+                                condition: None,
+                                disabled: false,
+                            });
+                        }
+                    }
+                }
+                PresetClass::Entrance => {
+                    objects[obj_idx].initial_state = "hidden".to_owned();
+                    for trigger_id in &trigger_obj_ids {
+                        triggers.push(Trigger {
+                            action: Action::ChangeState {
+                                object: target_id.clone(),
+                                state: "normal".to_owned(),
+                            },
+                            when: Event::Click {
+                                object: trigger_id.clone(),
+                            },
+                            condition: None,
+                            disabled: false,
+                        });
+                    }
+                    tracker.report_animation(format!(
+                        "Interactive click-triggered entrance on {obj_name} mapped to ChangeState"
+                    ));
+                }
+                PresetClass::Exit => {
+                    for trigger_id in &trigger_obj_ids {
+                        triggers.push(Trigger {
+                            action: Action::ChangeState {
+                                object: target_id.clone(),
+                                state: "hidden".to_owned(),
+                            },
+                            when: Event::Click {
+                                object: trigger_id.clone(),
+                            },
+                            condition: None,
+                            disabled: false,
+                        });
+                    }
+                    tracker.report_animation(format!(
+                        "Interactive click-triggered exit on {obj_name} mapped to ChangeState"
+                    ));
+                }
+                PresetClass::Emphasis => {
+                    let preset_name = emphasis_preset_name(eff.preset_id);
+                    tracker.report_animation(format!(
+                        "Emphasis animation ({preset_name}, presetID={}) skipped on {obj_name}",
+                        eff.preset_id
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn find_interactive_trigger_spid(seq_ctn: &XmlNode) -> Option<String> {
+    let st_cond = seq_ctn.child("stCondLst")?;
+    for cond in st_cond.children_named("cond") {
+        let is_click = cond.attr("evt").is_none_or(|e| e == "onClick");
+        if is_click
+            && let Some(tgt) = cond.child("tgtEl")
+            && let Some(sp_tgt) = tgt.child("spTgt")
+            && let Some(spid) = sp_tgt.attr("spid")
+        {
+            return Some(spid.to_owned());
+        }
+    }
+    None
+}
+
+fn check_repeat_count(ctn: &XmlNode, obj_name: &str, tracker: &mut SlideTracker) {
+    let mut raw_repeat = ctn.attr("repeatCount");
+    if raw_repeat.is_none()
+        && let Some(children) = ctn.child("childTnLst")
+    {
+        for behavior in &children.children {
+            if let Some(cbhvr) = behavior.child("cBhvr")
+                && let Some(b_ctn) = cbhvr.child("cTn")
+                && let Some(rc) = b_ctn.attr("repeatCount")
+            {
+                raw_repeat = Some(rc);
+                break;
+            }
+        }
+    }
+    let Some(raw) = raw_repeat.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let is_multi_repeat = if raw.eq_ignore_ascii_case("indefinite") {
+        true
+    } else if let Ok(val) = raw.parse::<u64>() {
+        val > 1000
+    } else {
+        false
+    };
+    if is_multi_repeat {
+        tracker.report_animation(format!(
+            "Animation repeat (repeatCount={raw}) not supported on {obj_name}; plays once"
+        ));
+    }
+}
+
+fn parse_anim_motion(
+    ctn: &XmlNode,
+    layout: &SlideLayout,
+    obj_name: &str,
+    tracker: &mut SlideTracker,
+) -> Option<(Vec<Point>, bool)> {
+    let children = ctn.child("childTnLst")?;
+    let anim_motion = children.child("animMotion")?;
+    let path_str = anim_motion.attr("path").unwrap_or("").trim();
+    if path_str.is_empty() {
+        tracker.report_animation(format!("Empty motion path skipped on {obj_name}"));
+        return None;
+    }
+
+    let relative = !anim_motion
+        .attr("pathEditMode")
+        .is_some_and(|m| m.eq_ignore_ascii_case("fixed"));
+
+    let mut raw_points = match parse_motion_path_grammar(path_str) {
+        Some(pts) if pts.len() >= 2 => pts,
+        _ => {
+            tracker.report_animation(format!(
+                "Malformed or degenerate motion path skipped on {obj_name}"
+            ));
+            return None;
+        }
+    };
+
+    if raw_points.len() > MAX_MOTION_PATH_POINTS {
+        raw_points = downsample_points(&raw_points, MAX_MOTION_PATH_POINTS);
+    }
+
+    let mut points: Vec<Point> = raw_points
+        .into_iter()
+        .map(|(nx, ny)| {
+            let sx =
+                (nx * f64::from(layout.slide_size.w)).clamp(-MAX_MOTION_COORD, MAX_MOTION_COORD);
+            let sy =
+                (ny * f64::from(layout.slide_size.h)).clamp(-MAX_MOTION_COORD, MAX_MOTION_COORD);
+            Point {
+                x: sx as f32,
+                y: sy as f32,
+            }
+        })
+        .collect();
+
+    if relative
+        && let Some(&first) = points.first()
+        && (first.x != 0.0 || first.y != 0.0)
+    {
+        for pt in &mut points {
+            pt.x = (f64::from(pt.x) - f64::from(first.x)).clamp(-MAX_MOTION_COORD, MAX_MOTION_COORD)
+                as f32;
+            pt.y = (f64::from(pt.y) - f64::from(first.y)).clamp(-MAX_MOTION_COORD, MAX_MOTION_COORD)
+                as f32;
+        }
+    }
+
+    Some((points, relative))
+}
+
+fn parse_motion_path_grammar(path_str: &str) -> Option<Vec<(f64, f64)>> {
+    let tokens = tokenize_motion_path(path_str);
+    let mut idx = 0usize;
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    let mut start = (0.0, 0.0);
+    let mut cur = (0.0, 0.0);
+
+    let next_num = |tokens: &[String], i: &mut usize| -> Option<f64> {
+        let tok = tokens.get(*i)?;
+        let val = tok.parse::<f64>().ok()?;
+        if !val.is_finite() {
+            return None;
+        }
+        *i += 1;
+        Some(val)
+    };
+
+    while let Some(cmd) = tokens.get(idx) {
+        idx += 1;
+        match cmd.as_str() {
+            "M" | "m" => {
+                let x = next_num(&tokens, &mut idx)?;
+                let y = next_num(&tokens, &mut idx)?;
+                let pt = if cmd == "m" && !pts.is_empty() {
+                    (cur.0 + x, cur.1 + y)
+                } else {
+                    (x, y)
+                };
+                start = pt;
+                cur = pt;
+                pts.push(pt);
+            }
+            "L" | "l" => {
+                let x = next_num(&tokens, &mut idx)?;
+                let y = next_num(&tokens, &mut idx)?;
+                let pt = if cmd == "l" {
+                    (cur.0 + x, cur.1 + y)
+                } else {
+                    (x, y)
+                };
+                cur = pt;
+                pts.push(pt);
+            }
+            "C" | "c" => {
+                let x1 = next_num(&tokens, &mut idx)?;
+                let y1 = next_num(&tokens, &mut idx)?;
+                let x2 = next_num(&tokens, &mut idx)?;
+                let y2 = next_num(&tokens, &mut idx)?;
+                let x = next_num(&tokens, &mut idx)?;
+                let y = next_num(&tokens, &mut idx)?;
+                let (p1, p2, p3) = if cmd == "c" {
+                    (
+                        (cur.0 + x1, cur.1 + y1),
+                        (cur.0 + x2, cur.1 + y2),
+                        (cur.0 + x, cur.1 + y),
+                    )
+                } else {
+                    ((x1, y1), (x2, y2), (x, y))
+                };
+                let p0 = cur;
+                for step in 1..=BEZIER_SUBDIVISIONS {
+                    let t = step as f64 / BEZIER_SUBDIVISIONS as f64;
+                    let mt = 1.0 - t;
+                    let bx = mt * mt * mt * p0.0
+                        + 3.0 * mt * mt * t * p1.0
+                        + 3.0 * mt * t * t * p2.0
+                        + t * t * t * p3.0;
+                    let by = mt * mt * mt * p0.1
+                        + 3.0 * mt * mt * t * p1.1
+                        + 3.0 * mt * t * t * p2.1
+                        + t * t * t * p3.1;
+                    pts.push((bx, by));
+                }
+                cur = p3;
+            }
+            "Z" | "z" => {
+                if pts.last().copied() != Some(start) {
+                    pts.push(start);
+                }
+                cur = start;
+            }
+            "E" | "e" => break,
+            _ => return None,
+        }
+    }
+
+    Some(pts)
+}
+
+fn tokenize_motion_path(path_str: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for ch in path_str.chars() {
+        if ch.is_ascii_whitespace() || ch == ',' {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else if matches!(
+            ch,
+            'M' | 'm' | 'L' | 'l' | 'C' | 'c' | 'Z' | 'z' | 'E' | 'e'
+        ) {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            tokens.push(ch.to_string());
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn downsample_points(pts: &[(f64, f64)], max_len: usize) -> Vec<(f64, f64)> {
+    if pts.len() <= max_len || max_len < 2 {
+        return pts.to_vec();
+    }
+    let mut out = Vec::with_capacity(max_len);
+    let last_idx = pts.len() - 1;
+    for i in 0..max_len {
+        let src_idx = (i * last_idx) / (max_len - 1);
+        out.push(pts[src_idx]);
+    }
+    out
+}
+
 fn parse_preset_class(raw: &str) -> Option<PresetClass> {
     match raw {
         "entr" => Some(PresetClass::Entrance),
         "exit" => Some(PresetClass::Exit),
         "emph" => Some(PresetClass::Emphasis),
+        "path" => Some(PresetClass::Path),
         _ => None,
     }
 }
@@ -680,7 +1116,15 @@ mod tests {
             .pptx_ids
             .insert("3".to_owned(), vec!["obj_b".to_owned()]);
 
-        let max_end = apply_slide_timing(&timing_tree, &mut objects, &mut tracker);
+        let layout = SlideLayout::from_emu(12_192_000.0, 6_858_000.0);
+        let mut triggers = Vec::new();
+        let max_end = apply_slide_timing(
+            &timing_tree,
+            &layout,
+            &mut objects,
+            &mut triggers,
+            &mut tracker,
+        );
 
         assert_eq!(objects[0].timing.start_ms, 0);
         assert_eq!(
@@ -753,7 +1197,15 @@ mod tests {
             vec!["c1".to_owned(), "c2".to_owned(), "c3".to_owned()],
         );
 
-        apply_slide_timing(&timing_tree, &mut objects, &mut tracker);
+        let layout = SlideLayout::from_emu(12_192_000.0, 6_858_000.0);
+        let mut triggers = Vec::new();
+        apply_slide_timing(
+            &timing_tree,
+            &layout,
+            &mut objects,
+            &mut triggers,
+            &mut tracker,
+        );
         for obj in &objects {
             assert_eq!(
                 obj.entrance,
@@ -802,7 +1254,15 @@ mod tests {
             .pptx_ids
             .insert("3".to_owned(), vec!["o2".to_owned()]);
 
-        apply_slide_timing(&timing_tree, &mut objects, &mut tracker);
+        let layout = SlideLayout::from_emu(12_192_000.0, 6_858_000.0);
+        let mut triggers = Vec::new();
+        apply_slide_timing(
+            &timing_tree,
+            &layout,
+            &mut objects,
+            &mut triggers,
+            &mut tracker,
+        );
 
         assert_eq!(objects[0].timing.start_ms, 1000);
         assert_eq!(objects[0].entrance, None);
@@ -872,7 +1332,7 @@ mod tests {
         let mut resolver = crate::PlaceholderResolver::new(limits.max_xml_depth);
         let slide_parts = HashMap::new();
         let theme = crate::ThemePalette::default();
-        let table_styles = HashMap::new();
+        let table_styles = crate::TableStyleSet::default();
         let mut cx = crate::SlideContext {
             layout: &layout,
             slide_rels: &rels,
@@ -898,5 +1358,121 @@ mod tests {
         assert_eq!(tracker.pptx_ids.get("11").map(Vec::len), Some(1));
         assert_eq!(tracker.pptx_ids.get("12").map(Vec::len), Some(1));
         assert_eq!(tracker.pptx_ids.get("20").map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn motion_path_interactive_seq_and_repeat_count() {
+        let xml = r#"
+        <p:timing xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+          <p:tnLst>
+            <p:par><p:cTn id="1" nodeType="tmRoot"><p:childTnLst>
+              <p:seq><p:cTn id="2" nodeType="mainSeq"><p:childTnLst>
+                <p:par><p:cTn id="3"><p:childTnLst>
+                  <p:par><p:cTn id="4" presetID="0" presetClass="path" nodeType="afterEffect" dur="1200" repeatCount="3000">
+                    <p:stCondLst><p:cond delay="300"/></p:stCondLst>
+                    <p:childTnLst>
+                      <p:animMotion path="M 0 0 L 0.25 0 C 0.25 0.1 0.1 0.2 0 0.2 Z E" origin="layout" pathEditMode="relative">
+                        <p:cBhvr><p:cTn id="5" dur="1200"/><p:tgtEl><p:spTgt spid="2"/></p:tgtEl></p:cBhvr>
+                      </p:animMotion>
+                    </p:childTnLst>
+                  </p:cTn></p:par>
+                </p:childTnLst></p:cTn></p:par>
+              </p:childTnLst></p:cTn></p:seq>
+              <p:seq><p:cTn id="10" nodeType="interactiveSeq">
+                <p:stCondLst><p:cond evt="onClick"><p:tgtEl><p:spTgt spid="9"/></p:tgtEl></p:cond></p:stCondLst>
+                <p:childTnLst>
+                  <p:par><p:cTn id="11"><p:childTnLst>
+                    <p:par><p:cTn id="12" presetID="0" presetClass="path" dur="800">
+                      <p:childTnLst>
+                        <p:animMotion path="M 0 0 L 0.5 0.5 E" origin="layout" pathEditMode="relative">
+                          <p:cBhvr><p:cTn id="13" dur="800"/><p:tgtEl><p:spTgt spid="3"/></p:tgtEl></p:cBhvr>
+                        </p:animMotion>
+                      </p:childTnLst>
+                    </p:cTn></p:par>
+                    <p:par><p:cTn id="14" presetID="10" presetClass="entr" dur="500">
+                      <p:childTnLst><p:set><p:cBhvr><p:tgtEl><p:spTgt spid="4"/></p:tgtEl></p:cBhvr></p:set></p:childTnLst>
+                    </p:cTn></p:par>
+                  </p:childTnLst></p:cTn></p:par>
+                </p:childTnLst>
+              </p:cTn></p:seq>
+            </p:childTnLst></p:cTn></p:par>
+          </p:tnLst>
+        </p:timing>"#;
+
+        let timing_tree = parse_xml_tree(xml, "slide1.xml", 64).expect("valid xml");
+        let mut objects = vec![
+            dummy_object("obj_a", "Mover A"),
+            dummy_object("obj_b", "Mover B"),
+            dummy_object("obj_c", "Reveal C"),
+            dummy_object("btn", "Trigger Btn"),
+        ];
+        let mut tracker = SlideTracker::new(1);
+        tracker
+            .pptx_ids
+            .insert("2".to_owned(), vec!["obj_a".to_owned()]);
+        tracker
+            .pptx_ids
+            .insert("3".to_owned(), vec!["obj_b".to_owned()]);
+        tracker
+            .pptx_ids
+            .insert("4".to_owned(), vec!["obj_c".to_owned()]);
+        tracker
+            .pptx_ids
+            .insert("9".to_owned(), vec!["btn".to_owned()]);
+
+        let layout = SlideLayout::from_emu(12_192_000.0, 6_858_000.0);
+        let mut triggers = Vec::new();
+        let max_end = apply_slide_timing(
+            &timing_tree,
+            &layout,
+            &mut objects,
+            &mut triggers,
+            &mut tracker,
+        );
+
+        assert_eq!(max_end, 1500);
+        assert_eq!(objects[0].motion_paths.len(), 1);
+        let mp_a = &objects[0].motion_paths[0];
+        assert!(mp_a.relative);
+        assert_eq!(mp_a.points.first().copied(), Some(Point { x: 0.0, y: 0.0 }));
+        assert_eq!(mp_a.points.last().copied(), Some(Point { x: 0.0, y: 0.0 }));
+        assert!(mp_a.points.len() >= 10 && mp_a.points.len() <= MAX_MOTION_PATH_POINTS);
+
+        assert_eq!(objects[1].motion_paths.len(), 1);
+        assert_eq!(objects[2].initial_state, "hidden");
+
+        assert!(triggers.iter().any(|t| {
+            t.when
+                == Event::TimelineReaches {
+                    ms: 300,
+                    layer: None,
+                    cue: None,
+                }
+                && matches!(&t.action, Action::MoveOnPath { object, .. } if object == "obj_a")
+        }));
+        assert!(triggers.iter().any(|t| {
+            t.when
+                == Event::Click {
+                    object: "btn".to_owned(),
+                }
+                && matches!(&t.action, Action::MoveOnPath { object, .. } if object == "obj_b")
+        }));
+        assert!(triggers.iter().any(|t| {
+            t.when
+                == Event::Click {
+                    object: "btn".to_owned(),
+                }
+                && t.action
+                    == Action::ChangeState {
+                        object: "obj_c".to_owned(),
+                        state: "normal".to_owned(),
+                    }
+        }));
+        assert!(
+            tracker
+                .items
+                .iter()
+                .any(|i| i.kind == SkipKind::Animation && i.note.contains("repeatCount=3000"))
+        );
     }
 }

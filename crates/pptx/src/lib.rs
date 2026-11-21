@@ -35,7 +35,6 @@ pub use zip;
 
 mod docx;
 mod theme;
-#[cfg_attr(not(test), allow(dead_code))]
 mod timing;
 
 use theme::{ThemePalette, resolve_first_color_child, resolve_solid_fill};
@@ -1336,11 +1335,6 @@ pub fn import_pptx_with_limits(
             tracker.report_skip(SkipKind::Transition, "Slide transition skipped");
         }
 
-        // Check for animations / timing
-        if slide_tree.find_descendant("timing").is_some() {
-            tracker.report_skip(SkipKind::Animation, "Animations/timing skipped");
-        }
-
         // Extract slide notes if present
         let mut slide_notes = String::new();
         for rel in slide_rels.values() {
@@ -1477,6 +1471,23 @@ pub fn import_pptx_with_limits(
         }
         resolve_connector_glues(&mut objects, &mut tracker);
 
+        let mut triggers: Vec<coursecraft_course::Trigger> = Vec::new();
+        let max_anim_end_ms = slide_tree
+            .find_descendant("timing")
+            .map(|timing_node| {
+                timing::apply_slide_timing(
+                    timing_node,
+                    &layout,
+                    &mut objects,
+                    &mut triggers,
+                    &mut tracker,
+                )
+            })
+            .unwrap_or(0);
+        let slide_duration_ms = 5000u32
+            .max(max_anim_end_ms.saturating_add(500))
+            .min(coursecraft_course::MAX_TIMELINE_DURATION_MS);
+
         let final_title = slide_title
             .filter(|t| !t.trim().is_empty())
             .unwrap_or_else(|| format!("Slide {slide_idx}"));
@@ -1484,11 +1495,11 @@ pub fn import_pptx_with_limits(
         let slide = Slide {
             id: format!("slide{slide_idx}"),
             title: final_title,
-            duration_ms: 5000,
+            duration_ms: slide_duration_ms,
             background: slide_background,
             objects,
             layers: Vec::new(),
-            triggers: Vec::new(),
+            triggers,
             cue_points: Vec::new(),
             question: None,
             draw: None,
@@ -2378,7 +2389,7 @@ struct SlideContext<'a, 'z> {
     layout_path: Option<String>,
     slide_parts: &'a HashMap<String, String>,
     theme: &'a ThemePalette,
-    table_styles: &'a HashMap<String, TableStyleDef>,
+    table_styles: &'a TableStyleSet,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2439,7 +2450,7 @@ fn extract_slide_background(
                 layout_path: layout_path.map(str::to_string),
                 slide_parts,
                 theme: theme_palette,
-                table_styles: &HashMap::new(),
+                table_styles: &TableStyleSet::default(),
             };
             if let Some((src, mode, tile_scale)) = extract_picture_fill(blip_fill, &mut bg_cx) {
                 return (
@@ -2957,19 +2968,21 @@ fn parse_table_part_style(node: &XmlNode, theme: &ThemePalette) -> TablePartStyl
     }
 }
 
-fn parse_table_styles(
-    entries: &Entries<'_>,
-    theme: &ThemePalette,
-) -> HashMap<String, TableStyleDef> {
-    let mut map = HashMap::new();
+#[derive(Default)]
+struct TableStyleSet {
+    styles: HashMap<String, TableStyleDef>,
+}
+
+fn parse_table_styles(entries: &Entries<'_>, theme: &ThemePalette) -> TableStyleSet {
+    let mut set = TableStyleSet::default();
     let Some(bytes) = entries.get("ppt/tableStyles.xml") else {
-        return map;
+        return set;
     };
     let Ok(xml_str) = std::str::from_utf8(&bytes) else {
-        return map;
+        return set;
     };
     let Ok(root) = parse_xml_tree(xml_str, "ppt/tableStyles.xml", 32) else {
-        return map;
+        return set;
     };
     for style_node in root.children_named("tblStyle") {
         let Some(id) = style_node.attr("styleId") else {
@@ -3003,9 +3016,9 @@ fn parse_table_styles(
         if let Some(part) = style_node.child("band2V") {
             def.band2_v = parse_table_part_style(part, theme);
         }
-        map.insert(id.to_ascii_uppercase(), def);
+        set.styles.insert(id.to_ascii_uppercase(), def);
     }
-    map
+    set
 }
 
 fn blend_hex_colors(a: &str, b: &str, t: f32) -> Color {
@@ -3212,15 +3225,31 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
     let last_col = tbl_pr.is_some_and(|p| attr_flag(p, "lastCol"));
     let band_row = tbl_pr.is_some_and(|p| attr_flag(p, "bandRow"));
     let band_col = tbl_pr.is_some_and(|p| attr_flag(p, "bandCol"));
-    let table_style = tbl_pr
+    let explicit_style_id = tbl_pr
         .and_then(|p| p.child("tableStyleId"))
-        .map(|n| n.text.trim().to_ascii_uppercase())
-        .and_then(|id| {
-            cx.table_styles
-                .get(&id)
-                .cloned()
-                .or_else(|| builtin_table_style(&id, cx.theme, *cx.layout))
-        });
+        .map(|n| n.text.trim())
+        .filter(|s| !s.is_empty());
+    let lookup_style = |id: &str| -> Option<TableStyleDef> {
+        let upper = id.to_ascii_uppercase();
+        cx.table_styles
+            .styles
+            .get(&upper)
+            .cloned()
+            .or_else(|| builtin_table_style(&upper, cx.theme, *cx.layout))
+    };
+    let (table_style, apply_default_grid) = match explicit_style_id {
+        Some(raw_id) => match lookup_style(raw_id) {
+            Some(style) => (Some(style), false),
+            None => {
+                cx.tracker.report_skip(
+                    SkipKind::Table,
+                    format!("Table style {raw_id} not recognized; borders may differ"),
+                );
+                (None, false)
+            }
+        },
+        None => (None, true),
+    };
 
     let links = TextLinkContext {
         slide_rels: cx.slide_rels,
@@ -3383,7 +3412,7 @@ fn process_table(frame_node: &XmlNode, transform: GroupTransform, cx: &mut Slide
         });
     }
 
-    let borders = border_acc.finish(table_style.as_ref(), *cx.layout);
+    let borders = border_acc.finish(table_style.as_ref(), apply_default_grid, *cx.layout);
 
     cx.tracker.table_count = cx.tracker.table_count.saturating_add(1);
     let name = frame_node
@@ -3499,7 +3528,12 @@ impl TableBorderAccumulator {
         }
     }
 
-    fn finish(self, table_style: Option<&TableStyleDef>, layout: SlideLayout) -> TableBorders {
+    fn finish(
+        self,
+        table_style: Option<&TableStyleDef>,
+        apply_default_grid: bool,
+        layout: SlideLayout,
+    ) -> TableBorders {
         let style_border = table_style.and_then(|s| {
             s.whole
                 .border
@@ -3512,10 +3546,14 @@ impl TableBorderAccumulator {
             }
             if table_style.is_some() {
                 if all_none { None } else { style_border.clone() }
-            } else if all_none {
-                None
+            } else if apply_default_grid {
+                if all_none {
+                    None
+                } else {
+                    Some(default_table_grid_outline(layout))
+                }
             } else {
-                Some(default_table_grid_outline(layout))
+                None
             }
         };
         TableBorders {

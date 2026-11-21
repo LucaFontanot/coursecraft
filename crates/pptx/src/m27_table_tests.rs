@@ -306,17 +306,62 @@ fn c2_7_styled_table_medium_style_2_accent_1_unaffected() {
 }
 
 #[test]
-fn c2_8_unrecognized_table_style_id_falls_back_to_default_1pt_black_grid() {
-    let tbl = format!(
+fn c2_8_unrecognized_table_style_id_keeps_no_style_borders_and_reports_note() {
+    let tbl_no_cell_borders = format!(
         r#"<a:tbl>
           <a:tblPr><a:tableStyleId>{{DEADBEEF-0000-0000-0000-000000000000}}</a:tableStyleId></a:tblPr>
           {}
         </a:tbl>"#,
         plain_3x3_rows()
     );
-    let (_, borders, _) = import_single_table(STD_16_9_CX, STD_16_9_CY, &tbl);
-    let expected_w = (12_700.0 * (1280.0 / STD_16_9_CX as f64)) as f32;
-    assert_default_1pt_black_grid(&borders, expected_w);
+    let pptx = build_table_pptx(STD_16_9_CX, STD_16_9_CY, &tbl_no_cell_borders);
+    let result = import_pptx(&pptx, "Table Test").expect("import pptx");
+    let borders = result.course.scenes[0].slides[0]
+        .objects
+        .iter()
+        .find_map(|o| match &o.kind {
+            ObjectKind::Table { borders, .. } => Some(borders.clone()),
+            _ => None,
+        })
+        .expect("table imported");
+    assert_eq!(borders.outer, None);
+    assert_eq!(borders.inner, None);
+    assert!(result.report.items.iter().any(|item| {
+        item.kind == crate::SkipKind::Table
+            && item.note.contains(
+                "Table style {DEADBEEF-0000-0000-0000-000000000000} not recognized; borders may differ",
+            )
+    }));
+
+    // Explicit cell <a:ln*> is still honoured on an unrecognized style GUID.
+    let tbl_with_explicit_outer = r#"<a:tbl>
+      <a:tblPr><a:tableStyleId>{DEADBEEF-0000-0000-0000-000000000000}</a:tableStyleId></a:tblPr>
+      <a:tblGrid><a:gridCol w="2286000"/><a:gridCol w="2286000"/></a:tblGrid>
+      <a:tr h="914400">
+        <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>A</a:t></a:r></a:p></a:txBody><a:tcPr>
+          <a:lnL w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnL>
+          <a:lnT w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnT>
+        </a:tcPr></a:tc>
+        <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>B</a:t></a:r></a:p></a:txBody><a:tcPr>
+          <a:lnR w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnR>
+          <a:lnT w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnT>
+        </a:tcPr></a:tc>
+      </a:tr>
+      <a:tr h="914400">
+        <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>C</a:t></a:r></a:p></a:txBody><a:tcPr>
+          <a:lnL w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnL>
+          <a:lnB w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnB>
+        </a:tcPr></a:tc>
+        <a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:t>D</a:t></a:r></a:p></a:txBody><a:tcPr>
+          <a:lnR w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnR>
+          <a:lnB w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnB>
+        </a:tcPr></a:tc>
+      </a:tr>
+    </a:tbl>"#;
+    let (_, explicit_borders, _) =
+        import_single_table(STD_16_9_CX, STD_16_9_CY, tbl_with_explicit_outer);
+    assert_eq!(explicit_borders.outer.as_ref().unwrap().color.0, "#FF0000");
+    assert_eq!(explicit_borders.inner, None);
 }
 
 #[test]
