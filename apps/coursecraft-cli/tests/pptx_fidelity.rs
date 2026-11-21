@@ -1,0 +1,306 @@
+//! Permanent PowerPoint import fidelity integration test (M26 item A13).
+//!
+//! Imports `crates/pptx/tests/fidelity/fidelity.pptx`, renders each visible
+//! slide at 640 px using the player render path, compares against the
+//! PowerPoint-exported PNGs, and verifies structural import invariants.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use coursecraft_course::{FillStyle, ListKind, ObjectKind, ShapeKind};
+use coursecraft_pptx::import_pptx;
+use coursecraft_render::{
+    MediaFetch, MediaSource, RenderMode, RenderOptions, RgbaImage, decode_png, render_slide_rgba,
+};
+
+struct InMemoryMedia(HashMap<String, Arc<[u8]>>);
+
+impl MediaSource for InMemoryMedia {
+    fn get(&self, src: &str) -> MediaFetch {
+        match self.0.get(src) {
+            Some(bytes) => MediaFetch::Ready(Arc::clone(bytes)),
+            None => MediaFetch::Missing,
+        }
+    }
+}
+
+fn fidelity_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../crates/pptx/tests/fidelity")
+}
+
+/// Bilinearly resize an RGBA image to `(dst_w, dst_h)`.
+fn resize_rgba(src: &RgbaImage, dst_w: u32, dst_h: u32) -> RgbaImage {
+    if src.width == dst_w && src.height == dst_h {
+        return src.clone();
+    }
+    let mut out = vec![0u8; (dst_w * dst_h * 4) as usize];
+    let x_scale = src.width as f64 / dst_w as f64;
+    let y_scale = src.height as f64 / dst_h as f64;
+
+    for dy in 0..dst_h {
+        let sy = ((dy as f64 + 0.5) * y_scale - 0.5).clamp(0.0, (src.height - 1) as f64);
+        let y0 = sy.floor() as u32;
+        let y1 = (y0 + 1).min(src.height - 1);
+        let fy = sy - y0 as f64;
+
+        for dx in 0..dst_w {
+            let sx = ((dx as f64 + 0.5) * x_scale - 0.5).clamp(0.0, (src.width - 1) as f64);
+            let x0 = sx.floor() as u32;
+            let x1 = (x0 + 1).min(src.width - 1);
+            let fx = sx - x0 as f64;
+
+            let dst_idx = ((dy * dst_w + dx) * 4) as usize;
+            for c in 0..4 {
+                let p00 = src.pixels[((y0 * src.width + x0) * 4) as usize + c] as f64;
+                let p10 = src.pixels[((y0 * src.width + x1) * 4) as usize + c] as f64;
+                let p01 = src.pixels[((y1 * src.width + x0) * 4) as usize + c] as f64;
+                let p11 = src.pixels[((y1 * src.width + x1) * 4) as usize + c] as f64;
+                let top = p00 * (1.0 - fx) + p10 * fx;
+                let bot = p01 * (1.0 - fx) + p11 * fx;
+                let val = top * (1.0 - fy) + bot * fy;
+                out[dst_idx + c] = val.round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+
+    RgbaImage {
+        width: dst_w,
+        height: dst_h,
+        pixels: out,
+    }
+}
+
+/// Similarity score in `0.0..=1.0` (1.0 = identical), based on mean absolute
+/// difference per RGB channel.
+fn rgb_similarity(a: &RgbaImage, b: &RgbaImage) -> f64 {
+    assert_eq!(a.width, b.width, "image widths must match");
+    assert_eq!(a.height, b.height, "image heights must match");
+    let mut sum_abs_diff: u64 = 0;
+    let pixel_count = (a.width as usize) * (a.height as usize);
+    for i in 0..pixel_count {
+        let base = i * 4;
+        for c in 0..3 {
+            sum_abs_diff += a.pixels[base + c].abs_diff(b.pixels[base + c]) as u64;
+        }
+    }
+    let max_diff = (pixel_count as f64) * 3.0 * 255.0;
+    1.0 - (sum_abs_diff as f64 / max_diff)
+}
+
+/// Per-slide minimum similarity thresholds (measured baseline minus 0.03).
+const MIN_SCORES: [f64; 18] = [
+    0.9375, // Slide 01 (measured 0.9675)
+    0.9301, // Slide 02 (measured 0.9601)
+    0.9408, // Slide 03 (measured 0.9708)
+    0.9535, // Slide 04 (measured 0.9835)
+    0.9494, // Slide 05 (measured 0.9794)
+    0.8856, // Slide 06 (measured 0.9156)
+    0.9399, // Slide 07 (measured 0.9699)
+    0.9155, // Slide 08 (measured 0.9455)
+    0.8938, // Slide 09 (measured 0.9238)
+    0.9265, // Slide 10 (measured 0.9565)
+    0.9339, // Slide 11 (measured 0.9639)
+    0.9276, // Slide 12 (measured 0.9576)
+    0.9415, // Slide 13 (measured 0.9715)
+    0.9535, // Slide 14 (measured 0.9835)
+    0.9619, // Slide 15 (measured 0.9919)
+    0.9566, // Slide 16 (measured 0.9866)
+    0.9590, // Slide 17 (measured 0.9890)
+    0.9387, // Slide 18 (measured 0.9687)
+];
+
+#[test]
+fn pptx_fidelity_pixel_similarity() {
+    let dir = fidelity_dir();
+    let pptx_bytes = std::fs::read(dir.join("fidelity.pptx")).expect("read fidelity.pptx");
+    let imported = import_pptx(&pptx_bytes, "Fidelity").expect("import fidelity.pptx");
+
+    let media_map: HashMap<String, Arc<[u8]>> = imported
+        .media
+        .into_iter()
+        .map(|(name, bytes)| (name, Arc::<[u8]>::from(bytes)))
+        .collect();
+    let media = InMemoryMedia(media_map);
+
+    let slides = &imported.course.scenes[0].slides;
+    assert!(
+        slides.len() >= 18,
+        "expected at least 18 slides, got {}",
+        slides.len()
+    );
+
+    let opts = RenderOptions {
+        width: 640,
+        mode: RenderMode::Player,
+        layers: Vec::new(),
+        at_ms: None,
+    };
+
+    let mut failures = Vec::new();
+    for (idx, min_score) in MIN_SCORES.iter().enumerate() {
+        let slide_num = idx + 1;
+        let slide = &slides[idx];
+        let rendered = render_slide_rgba(&imported.course, &slide.id, &opts, &media)
+            .unwrap_or_else(|e| panic!("render slide {slide_num} ({}): {e}", slide.id));
+
+        let ref_path = dir.join(format!("Slide{slide_num}.png"));
+        let ref_bytes =
+            std::fs::read(&ref_path).unwrap_or_else(|e| panic!("read {}: {e}", ref_path.display()));
+        let ref_raw =
+            decode_png(&ref_bytes).unwrap_or_else(|e| panic!("decode {}: {e}", ref_path.display()));
+        let ref_img = resize_rgba(&ref_raw, rendered.width, rendered.height);
+
+        let score = rgb_similarity(&rendered, &ref_img);
+        println!("slide {slide_num:02}: score={score:.4} (min={min_score:.4})");
+        if score < *min_score {
+            failures.push(format!(
+                "slide {slide_num:02}: score {score:.4} < min {min_score:.4}"
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "PPTX fidelity regressions:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn pptx_fidelity_structural_checks() {
+    let dir = fidelity_dir();
+    let pptx_bytes = std::fs::read(dir.join("fidelity.pptx")).expect("read fidelity.pptx");
+    let imported = import_pptx(&pptx_bytes, "Fidelity").expect("import fidelity.pptx");
+    let slides = &imported.course.scenes[0].slides;
+
+    // 1. Slide count: 18 visible slides (hidden slide 19 skipped).
+    assert_eq!(
+        slides.len(),
+        18,
+        "expected 18 visible slides (hidden slide 19 skipped), got {}",
+        slides.len()
+    );
+
+    // 2. Slide backgrounds: Slide 1 has solid background, Slide 16 has gradient
+    //    (background or full-slide gradient shape), Slide 17 has picture background.
+    assert!(
+        slides[0].background.is_some(),
+        "slide 1 should have a solid background"
+    );
+    let slide16_has_bg = slides[15].background.is_some()
+        || slides[15].objects.iter().any(|o| {
+            matches!(
+                &o.kind,
+                ObjectKind::Shape {
+                    fill_style: Some(FillStyle::Linear { .. } | FillStyle::Radial { .. }),
+                    ..
+                }
+            )
+        });
+    assert!(slide16_has_bg, "slide 16 should have a gradient background");
+    let slide17_has_bg = slides[16].background.is_some()
+        || slides[16].objects.iter().any(|o| {
+            matches!(
+                &o.kind,
+                ObjectKind::Image { .. }
+                    | ObjectKind::Shape {
+                        fill_style: Some(FillStyle::Picture { .. }),
+                        ..
+                    }
+            )
+        });
+    assert!(slide17_has_bg, "slide 17 should have a picture background");
+
+    // 3. Gradient stop counts (2, 3, 5) on Slide 6.
+    let mut stop_counts = BTreeSet::new();
+    for obj in &slides[5].objects {
+        if let ObjectKind::Shape {
+            fill_style: Some(FillStyle::Linear { stops, .. } | FillStyle::Radial { stops, .. }),
+            ..
+        } = &obj.kind
+        {
+            stop_counts.insert(stops.len());
+        }
+    }
+    for expected in [2usize, 3, 5] {
+        assert!(
+            stop_counts.contains(&expected),
+            "slide 6 should have a {expected}-stop gradient, found stop counts: {stop_counts:?}"
+        );
+    }
+
+    // 4. Cropped picture has its crop (Slide 12).
+    let has_crop = slides[11]
+        .objects
+        .iter()
+        .any(|o| matches!(&o.kind, ObjectKind::Image { crop: Some(_), .. }));
+    assert!(has_crop, "slide 12 should contain a cropped Image object");
+
+    // 5. Star and heart shapes are not rectangles (Slide 1).
+    let slide1_shapes: Vec<ShapeKind> = slides[0]
+        .objects
+        .iter()
+        .filter_map(|o| match &o.kind {
+            ObjectKind::Shape { shape, .. } => Some(*shape),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        slide1_shapes.contains(&ShapeKind::Star5),
+        "slide 1 should contain Star5, found: {slide1_shapes:?}"
+    );
+    assert!(
+        slide1_shapes.contains(&ShapeKind::Star8),
+        "slide 1 should contain Star8, found: {slide1_shapes:?}"
+    );
+    assert!(
+        slide1_shapes.contains(&ShapeKind::Heart),
+        "slide 1 should contain Heart, found: {slide1_shapes:?}"
+    );
+
+    // 6. Video object exists (Slide 15).
+    let has_video = slides[14]
+        .objects
+        .iter()
+        .any(|o| matches!(&o.kind, ObjectKind::Video { .. }));
+    assert!(has_video, "slide 15 should contain a Video object");
+
+    // 7. Table has its merged cell (Slide 14).
+    let has_merged_cell = slides[13].objects.iter().any(|o| {
+        if let ObjectKind::Table { rows, .. } = &o.kind {
+            rows.iter()
+                .flat_map(|r| &r.cells)
+                .any(|c| c.col_span > 1 || c.row_span > 1)
+        } else {
+            false
+        }
+    });
+    assert!(
+        has_merged_cell,
+        "slide 14 table should contain at least one merged cell"
+    );
+
+    // 8. Bullet levels present (Slide 10 and/or Slide 18).
+    let mut bullet_levels = BTreeSet::new();
+    for slide_idx in [9usize, 17] {
+        for obj in &slides[slide_idx].objects {
+            let paras = match &obj.kind {
+                ObjectKind::Text { paragraphs, .. } => paragraphs.as_slice(),
+                ObjectKind::Shape { text: Some(st), .. } => st.paragraphs.as_slice(),
+                _ => &[],
+            };
+            for p in paras {
+                if p.list == ListKind::Bullet {
+                    bullet_levels.insert(p.level);
+                }
+            }
+        }
+    }
+    assert!(
+        bullet_levels.contains(&0) && bullet_levels.iter().any(|&lvl| lvl > 0),
+        "slides 10/18 should have multi-level bullets (level 0 and >0), found: {bullet_levels:?}"
+    );
+}

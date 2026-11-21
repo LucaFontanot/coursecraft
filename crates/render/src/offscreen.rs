@@ -785,6 +785,22 @@ pub fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, RenderError> {
         .map_err(RenderError::Media)
 }
 
+/// Decode a PNG (or supported raster image) into an [`RgbaImage`].
+///
+/// Delegates to `coursecraft-media`'s safe image decoder.
+///
+/// # Errors
+/// Returns [`RenderError::Media`] if decoding fails or image dimensions exceed limits.
+pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, RenderError> {
+    let img = coursecraft_media::decode_image(bytes, &coursecraft_media::Limits::default())
+        .map_err(RenderError::Media)?;
+    Ok(RgbaImage {
+        width: img.width,
+        height: img.height,
+        pixels: img.pixels,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

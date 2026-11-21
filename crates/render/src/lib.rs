@@ -88,7 +88,8 @@ pub use media_driver::{
 };
 pub use offscreen::{
     DEFAULT_RENDER_WIDTH, MAX_RENDER_WIDTH, MIN_RENDER_WIDTH, RenderError, RenderMode,
-    RenderOptions, RgbaImage, encode_png, render_player_rgba, render_slide_rgba, render_ui,
+    RenderOptions, RgbaImage, decode_png, encode_png, render_player_rgba, render_slide_rgba,
+    render_ui,
 };
 pub use paint::{
     DEFAULT_BACKGROUND_COLOR, Highlight, dial_point, paint, paint_outline, paint_shape,
