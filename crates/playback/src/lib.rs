@@ -1278,23 +1278,6 @@ impl RodioBackend {
                 }
                 return;
             };
-            // The audio track is decoded to PCM on its own dedicated thread
-            // (never the UI thread, and never the video worker).
-            let audio_shared = Arc::clone(&shared_thread);
-            let audio_path = path.clone();
-            std::thread::spawn(move || {
-                let Ok(Some(pcm)) = coursecraft_video_native::VideoFile::decode_audio(&audio_path)
-                else {
-                    return;
-                };
-                if let Ok(mut state) = audio_shared.lock() {
-                    state.audio = Some(Arc::new(AudioPcm {
-                        sample_rate: pcm.sample_rate,
-                        channels: pcm.channels,
-                        samples: pcm.samples,
-                    }));
-                }
-            });
             let Ok(file) = coursecraft_video_native::VideoFile::open(&path) else {
                 if let Ok(mut state) = shared_thread.lock() {
                     state.failed = true;
@@ -1303,6 +1286,26 @@ impl RodioBackend {
                 }
                 return;
             };
+            if file.has_audio() {
+                // The audio track is decoded to PCM on its own dedicated thread
+                // (never the UI thread, and never the video worker).
+                let audio_shared = Arc::clone(&shared_thread);
+                let audio_path = path.clone();
+                std::thread::spawn(move || {
+                    let Ok(Some(pcm)) =
+                        coursecraft_video_native::VideoFile::decode_audio(&audio_path)
+                    else {
+                        return;
+                    };
+                    if let Ok(mut state) = audio_shared.lock() {
+                        state.audio = Some(Arc::new(AudioPcm {
+                            sample_rate: pcm.sample_rate,
+                            channels: pcm.channels,
+                            samples: pcm.samples,
+                        }));
+                    }
+                });
+            }
             run_video_worker(
                 RealDecoder { file },
                 cmd_rx,
