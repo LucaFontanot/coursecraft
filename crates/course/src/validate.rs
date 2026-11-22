@@ -2261,7 +2261,12 @@ fn check_object_animations(cx: &mut Ctx<'_>, o: &Object, p: &str) {
 /// The same rule package paths use: no absolute paths, drive letters, URL
 /// schemes, backslashes, control characters, or `.`/`..` segments.
 fn is_safe_relative_path(path: &str) -> bool {
-    if path.is_empty() || path.starts_with('/') || path.contains('\\') || path.contains(':') {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path.contains(':')
+        || path.contains('"')
+    {
         return false;
     }
     if path.chars().any(char::is_control) {

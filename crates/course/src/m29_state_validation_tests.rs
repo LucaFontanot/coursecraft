@@ -483,3 +483,171 @@ fn state_def_rejects_unknown_json_fields() {
     .to_string();
     assert!(err.contains("unknown field"), "got: {err}");
 }
+
+#[test]
+fn recolor_course_updates_widened_state_def_colors_and_preserves_alpha() {
+    let course = course_with_slide_object(serde_json::json!({
+        "id": "shp-1",
+        "name": "Shape 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 100 },
+        "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+        "states": [{
+            "name": "hover",
+            "fill": "#AABBCC80",
+            "fill_style": {
+                "type": "linear",
+                "angle": 90.0,
+                "stops": [
+                    { "position": 0.0, "color": "#AABBCC" },
+                    { "position": 1.0, "color": "#000000" }
+                ]
+            },
+            "outline": { "color": "#AABBCC40", "width": 2.0 },
+            "shadow": { "color": "#AABBCC", "blur": 4.0, "offset_x": 1.0, "offset_y": 2.0 },
+            "glow": { "color": "#AABBCC99", "size": 6.0 },
+            "text_style": { "font": "Inter", "size": 16.0, "color": "#AABBCC" },
+            "runs": [
+                { "text": "Hi", "color": "#AABBCC20" }
+            ]
+        }]
+    }));
+    let (recolored, changed) =
+        crate::recolor_course(&course, "#AABBCC", "#445566", false).expect("recolor");
+    assert_eq!(changed, 7);
+    let st = &recolored.scenes[0].slides[0].objects[0].states[0];
+    assert_eq!(st.fill.as_ref().map(|c| c.0.as_str()), Some("#44556680"));
+    assert_eq!(
+        st.outline.as_ref().map(|o| o.color.0.as_str()),
+        Some("#44556640")
+    );
+    assert_eq!(
+        st.shadow.as_ref().map(|s| s.color.0.as_str()),
+        Some("#445566")
+    );
+    assert_eq!(
+        st.glow.as_ref().map(|g| g.color.0.as_str()),
+        Some("#44556699")
+    );
+    assert_eq!(
+        st.text_style.as_ref().map(|t| t.color.0.as_str()),
+        Some("#445566")
+    );
+    assert_eq!(
+        st.runs
+            .as_ref()
+            .and_then(|r| r[0].color.as_ref())
+            .map(|c| c.0.as_str()),
+        Some("#44556620")
+    );
+    if let Some(crate::FillStyle::Linear { stops, .. }) = &st.fill_style {
+        assert_eq!(stops[0].color.0, "#445566");
+        assert_eq!(stops[1].color.0, "#000000");
+    } else {
+        panic!("expected linear fill_style");
+    }
+}
+
+#[test]
+fn course_strings_and_replace_keep_state_runs_synced_and_protect_vars() {
+    let mut course = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "text": "Hello %user_name%, click next",
+            "runs": [
+                { "text": "Hello ", "bold": true },
+                { "text": "%user_name%, click " },
+                { "text": "next", "italic": true }
+            ]
+        }]
+    }));
+    let strings = crate::strings::course_strings(&course);
+    let hover_item = strings
+        .iter()
+        .find(|s| s.location.field == "state/hover/text")
+        .expect("hover text string item");
+    assert_eq!(hover_item.text, "Hello %user_name%, click next");
+
+    let target = crate::strings::string_mut(&mut course, &hover_item.location)
+        .expect("mutable state text target");
+    assert!(
+        matches!(target, crate::strings::StringTarget::Runs { .. }),
+        "state with runs must resolve to StringTarget::Runs"
+    );
+
+    // Replace "next" -> "forward" and also try replacing "user_name" (must be protected!)
+    let outcome1 =
+        crate::strings::replace_in_target(target, "next", "forward", true, false, usize::MAX);
+    assert_eq!(outcome1.replaced, 1);
+    let target2 = crate::strings::string_mut(&mut course, &hover_item.location)
+        .expect("mutable state text target");
+    let outcome2 =
+        crate::strings::replace_in_target(target2, "user_name", "someone", true, false, usize::MAX);
+    assert_eq!(outcome2.replaced, 0);
+    assert_eq!(outcome2.skipped, 1);
+
+    let st = &course.scenes[0].slides[0].objects[0].states[0];
+    assert_eq!(st.text.as_deref(), Some("Hello %user_name%, click forward"));
+    let runs = st.runs.as_ref().expect("runs kept");
+    let joined: String = runs.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(joined, "Hello %user_name%, click forward");
+    assert_eq!(runs[0].bold, Some(true));
+    assert_eq!(runs[2].italic, Some(true));
+}
+
+#[test]
+fn media_references_includes_state_fill_style_picture() {
+    let course = course_with_slide_object(serde_json::json!({
+        "id": "shp-1",
+        "name": "Shape 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 100 },
+        "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+        "states": [{
+            "name": "hover",
+            "fill_style": { "type": "picture", "src": "hover-bg.png" }
+        }]
+    }));
+    let refs = crate::media_references(&course);
+    assert!(
+        refs.iter().any(|r| r.src == "hover-bg.png"),
+        "expected hover-bg.png in media_references: {refs:?}"
+    );
+}
+
+#[test]
+fn unsafe_paths_in_state_src_and_fill_style_are_flagged_by_validate() {
+    for bad in [
+        "../secret.png",
+        "C:\\Users\\a.png",
+        "\"a.png\"",
+        "\0bad.png",
+        "https://evil/a.png",
+    ] {
+        let course = course_with_slide_object(serde_json::json!({
+            "id": "img-1",
+            "name": "Image 1",
+            "frame": { "x": 100, "y": 100, "w": 200, "h": 100 },
+            "kind": { "type": "image", "src": "ok.png", "alt": "ok" },
+            "states": [{
+                "name": "hover",
+                "src": bad,
+                "fill_style": { "type": "picture", "src": bad }
+            }]
+        }));
+        let issues = course.validate();
+        assert!(
+            issues.iter().any(|i| i.path.ends_with("/states/0/src")),
+            "expected state.src issue for {bad:?}: {issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == Severity::Error
+                    && i.path.ends_with("/states/0/fill_style/src")),
+            "expected state.fill_style.src error for {bad:?}: {issues:?}"
+        );
+    }
+}

@@ -1393,7 +1393,7 @@ fn d2_3_edit_fill_text_and_src_overrides_across_object_kinds() {
         serde_json::json!({
             "slide": "s1",
             "object": "path-1",
-            "state": StateDef { name: "active".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "active".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     harness.editor.selection.object = Some("path-1".to_owned());
@@ -1430,7 +1430,7 @@ fn d2_3_edit_fill_text_and_src_overrides_across_object_kinds() {
         serde_json::json!({
             "slide": "s1",
             "object": "img-1",
-            "state": StateDef { name: "alt".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "alt".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     harness.editor.selection.object = Some("img-1".to_owned());
@@ -1495,7 +1495,7 @@ fn d2_5_bug_d2_deleting_previewed_state_clears_preview_state() {
         serde_json::json!({
             "slide": "s1",
             "object": "btn-start",
-            "state": StateDef { name: "custom1".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "custom1".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     open_states_panel(&mut harness);
@@ -1537,7 +1537,7 @@ fn d2_6_bug_d2_deleting_initial_or_trigger_referenced_state_refused_with_hint() 
         serde_json::json!({
             "slide": "s1",
             "object": "btn-start",
-            "state": StateDef { name: "custom1".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "custom1".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     harness.editor.run(
@@ -1624,7 +1624,7 @@ fn d2_7_set_initial_state_toggle_and_undo() {
         serde_json::json!({
             "slide": "s1",
             "object": "btn-start",
-            "state": StateDef { name: "disabled".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "disabled".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     open_states_panel(&mut harness);
@@ -1758,6 +1758,7 @@ fn d2_10_rapid_add_edit_delete_undo_stress_20_states() {
                     fill: Some(Color("#2563EB".to_owned())),
                     text: None,
                     src: None,
+                    ..Default::default()
                 }
             }),
         );
@@ -1781,6 +1782,7 @@ fn d2_10_rapid_add_edit_delete_undo_stress_20_states() {
                 fill: Some(Color("#EF4444".to_owned())),
                 text: Some("Edited".to_owned()),
                 src: None,
+                ..Default::default()
             }
         }),
     );

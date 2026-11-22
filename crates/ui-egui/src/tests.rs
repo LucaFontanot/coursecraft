@@ -7728,6 +7728,91 @@ fn background_music_and_bank_question_media_are_kept_on_save() {
     assert!(referenced.contains("bank-only.png"), "{referenced:?}");
 }
 
+#[test]
+fn referenced_media_and_rewrite_walk_state_fill_style_path_fill_style_and_video_poster() {
+    let mut course = Course::from_json(COURSE_JSON).expect("valid course");
+    let shp: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "shp-s",
+        "name": "Shape",
+        "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 },
+        "states": [{
+            "name": "hover",
+            "fill_style": { "type": "picture", "src": "state-bg.png" }
+        }]
+    }))
+    .expect("shape");
+    let path_obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "path-s",
+        "name": "Path",
+        "kind": {
+            "type": "path",
+            "points": [{ "x": 0.0, "y": 0.0 }, { "x": 10.0, "y": 0.0 }, { "x": 10.0, "y": 10.0 }],
+            "closed": true,
+            "outline": { "color": "#000000", "width": 1.0 },
+            "fill_style": { "type": "picture", "src": "path-bg.png" }
+        },
+        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+    }))
+    .expect("path");
+    let vid: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "vid-s",
+        "name": "Video",
+        "kind": { "type": "video", "src": "clip.mp4", "poster": "poster-s.png" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+    }))
+    .expect("video");
+    course.scenes[0].slides[0]
+        .objects
+        .extend([shp, path_obj, vid]);
+
+    let referenced = referenced_media_srcs(&course);
+    assert!(referenced.contains("state-bg.png"), "{referenced:?}");
+    assert!(referenced.contains("path-bg.png"), "{referenced:?}");
+    assert!(referenced.contains("poster-s.png"), "{referenced:?}");
+
+    let mut renames = std::collections::HashMap::new();
+    renames.insert("state-bg.png".to_string(), "state-bg-2.png".to_string());
+    renames.insert("path-bg.png".to_string(), "path-bg-2.png".to_string());
+    renames.insert("poster-s.png".to_string(), "poster-s-2.png".to_string());
+    rewrite_slide_media_srcs(&mut course.scenes[0].slides[0], &renames);
+
+    let after = referenced_media_srcs(&course);
+    assert!(after.contains("state-bg-2.png"), "{after:?}");
+    assert!(after.contains("path-bg-2.png"), "{after:?}");
+    assert!(after.contains("poster-s-2.png"), "{after:?}");
+}
+
+#[test]
+fn object_uses_font_checks_state_text_style_and_runs() {
+    let obj_style: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-1",
+        "name": "Btn",
+        "kind": { "type": "button", "label": "Go" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "text_style": { "font": "Lora", "size": 16.0, "color": "#111111" }
+        }]
+    }))
+    .expect("obj_style");
+    let obj_run: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-2",
+        "name": "Btn 2",
+        "kind": { "type": "button", "label": "Go" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "runs": [{ "text": "Hi", "font": "Fira Code" }]
+        }]
+    }))
+    .expect("obj_run");
+
+    assert!(object_uses_font(&obj_style, &|f| f == "Lora"));
+    assert!(object_uses_font(&obj_run, &|f| f == "Fira Code"));
+    assert!(!object_uses_font(&obj_style, &|f| f == "Other"));
+}
+
 fn click_for_requests(harness: &mut TestHarness, pos: egui::Pos2) -> Vec<EditorRequest> {
     harness.frame(vec![Event::PointerMoved(pos)]);
     harness.frame(vec![Event::PointerButton {

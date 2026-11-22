@@ -4671,8 +4671,7 @@ fn collect_object_media_srcs(
         {
             set.insert(src.clone());
         }
-        coursecraft_course::ObjectKind::Audio { src, captions, .. }
-        | coursecraft_course::ObjectKind::Video { src, captions, .. } => {
+        coursecraft_course::ObjectKind::Audio { src, captions, .. } => {
             if !src.is_empty() {
                 set.insert(src.clone());
             }
@@ -4682,9 +4681,39 @@ fn collect_object_media_srcs(
                 set.insert(captions.clone());
             }
         }
+        coursecraft_course::ObjectKind::Video {
+            src,
+            captions,
+            poster,
+            ..
+        } => {
+            if !src.is_empty() {
+                set.insert(src.clone());
+            }
+            if let Some(captions) = captions
+                && !captions.is_empty()
+            {
+                set.insert(captions.clone());
+            }
+            if let Some(poster) = poster
+                && !poster.is_empty()
+            {
+                set.insert(poster.clone());
+            }
+        }
         coursecraft_course::ObjectKind::Shape { fill_style, .. }
         | coursecraft_course::ObjectKind::Button { fill_style, .. } => {
             if let Some(src) = fill_style
+                .as_ref()
+                .and_then(coursecraft_course::FillStyle::picture_src)
+                && !src.is_empty()
+            {
+                set.insert(src.to_owned());
+            }
+        }
+        coursecraft_course::ObjectKind::Path { path } => {
+            if let Some(src) = path
+                .fill_style
                 .as_ref()
                 .and_then(coursecraft_course::FillStyle::picture_src)
                 && !src.is_empty()
@@ -4704,6 +4733,14 @@ fn collect_object_media_srcs(
             && !src.is_empty()
         {
             set.insert(src.clone());
+        }
+        if let Some(src) = state
+            .fill_style
+            .as_ref()
+            .and_then(coursecraft_course::FillStyle::picture_src)
+            && !src.is_empty()
+        {
+            set.insert(src.to_owned());
         }
     }
 }
@@ -4734,11 +4771,24 @@ fn rewrite_object_media_srcs(
     match &mut obj.kind {
         coursecraft_course::ObjectKind::Image { src, .. }
         | coursecraft_course::ObjectKind::Lottie { src, .. } => remap(src),
-        coursecraft_course::ObjectKind::Audio { src, captions, .. }
-        | coursecraft_course::ObjectKind::Video { src, captions, .. } => {
+        coursecraft_course::ObjectKind::Audio { src, captions, .. } => {
             remap(src);
             if let Some(captions) = captions {
                 remap(captions);
+            }
+        }
+        coursecraft_course::ObjectKind::Video {
+            src,
+            captions,
+            poster,
+            ..
+        } => {
+            remap(src);
+            if let Some(captions) = captions {
+                remap(captions);
+            }
+            if let Some(poster) = poster {
+                remap(poster);
             }
         }
         coursecraft_course::ObjectKind::Shape { fill_style, .. }
@@ -4747,10 +4797,18 @@ fn rewrite_object_media_srcs(
                 remap(src);
             }
         }
+        coursecraft_course::ObjectKind::Path { path } => {
+            if let Some(coursecraft_course::FillStyle::Picture { src, .. }) = &mut path.fill_style {
+                remap(src);
+            }
+        }
         _ => {}
     }
     for state in &mut obj.states {
         if let Some(src) = &mut state.src {
+            remap(src);
+        }
+        if let Some(coursecraft_course::FillStyle::Picture { src, .. }) = &mut state.fill_style {
             remap(src);
         }
     }
@@ -4767,13 +4825,24 @@ fn object_uses_font(object: &coursecraft_course::Object, matches: &impl Fn(&str)
                 .iter()
                 .any(|run| run.font.as_deref().is_some_and(matches))
     };
-    match &object.kind {
+    let base_uses = match &object.kind {
         coursecraft_course::ObjectKind::Text { style, runs, .. } => text_uses(style, runs),
         coursecraft_course::ObjectKind::Shape { text, .. } => text
             .as_ref()
             .is_some_and(|text| text_uses(&text.style, &text.runs)),
         _ => false,
-    }
+    };
+    base_uses
+        || object.states.iter().any(|state| {
+            state
+                .text_style
+                .as_ref()
+                .is_some_and(|style| matches(&style.font))
+                || state.runs.as_deref().is_some_and(|runs| {
+                    runs.iter()
+                        .any(|run| run.font.as_deref().is_some_and(matches))
+                })
+        })
 }
 
 /// Sanitize a font file name into a unique `fonts/<stem>.<ext>` media path.

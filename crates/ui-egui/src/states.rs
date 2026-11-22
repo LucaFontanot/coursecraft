@@ -142,6 +142,7 @@ fn push_add_state(
         fill: default_fill,
         text: None,
         src: None,
+        ..Default::default()
     };
     if let Ok(state_val) = serde_json::to_value(&state_def) {
         actions.push((

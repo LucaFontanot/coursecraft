@@ -968,3 +968,103 @@ fn t14_8_failed_screen_uses_player_ground_raised_card_and_wraps() {
         out.drop_without_applying_deltas();
     }
 }
+
+#[test]
+fn slide_media_and_image_srcs_collect_state_src_and_fill_style_on_objects_and_layers() {
+    let raw = r##"{
+      "schema_version": 1,
+      "id": "course-state-media",
+      "title": "State Media",
+      "slide_size": { "w": 960, "h": 540 },
+      "scenes": [{
+        "id": "scene-1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide 1",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "img1",
+              "name": "Pic",
+              "kind": { "type": "image", "src": "base.png", "alt": "" },
+              "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+              "states": [{
+                "name": "hover",
+                "src": "hover-img.png",
+                "fill_style": { "type": "picture", "src": "hover-fill.png" }
+              }]
+            },
+            {
+              "id": "shp1",
+              "name": "Shape",
+              "kind": { "type": "shape", "shape": "rectangle", "fill": "#ffffff" },
+              "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 },
+              "states": [{
+                "name": "hover",
+                "fill_style": { "type": "picture", "src": "shape-state-fill.png" }
+              }]
+            }
+          ],
+          "layers": [{
+            "id": "l1",
+            "name": "Layer 1",
+            "objects": [{
+              "id": "btn1",
+              "name": "Button",
+              "kind": { "type": "button", "label": "OK" },
+              "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 40.0 },
+              "states": [{
+                "name": "down",
+                "fill_style": { "type": "picture", "src": "layer-btn-fill.png" }
+              }]
+            }]
+          }]
+        }]
+      }]
+    }"##;
+    let course: Course = serde_json::from_str(raw).expect("valid course");
+    let slide = &course.scenes[0].slides[0];
+    let img_srcs = crate::media::slide_image_srcs(&course, slide);
+    let media_srcs = crate::media::slide_media_srcs(&course, slide);
+    for expected in [
+        "base.png",
+        "hover-img.png",
+        "hover-fill.png",
+        "shape-state-fill.png",
+        "layer-btn-fill.png",
+    ] {
+        assert!(
+            img_srcs.contains(&expected.to_string()),
+            "slide_image_srcs missing {expected}: {img_srcs:?}"
+        );
+        assert!(
+            media_srcs.contains(&expected.to_string()),
+            "slide_media_srcs missing {expected}: {media_srcs:?}"
+        );
+    }
+}
+
+#[test]
+fn desktop_and_web_media_sources_reject_unsafe_state_paths() {
+    use coursecraft_render::{MediaFetch, MediaSource};
+    let desktop = crate::media::DesktopMediaSource::new(std::path::Path::new("/tmp/course.json"));
+    let mut web = crate::media::WebMediaState::with_max_bytes(1024 * 1024);
+    for bad in [
+        "../secret.png",
+        "C:\\Users\\a.png",
+        "\"a.png\"",
+        "\0bad.png",
+        "https://evil/a.png",
+    ] {
+        assert!(
+            matches!(desktop.get(bad), MediaFetch::Missing),
+            "DesktopMediaSource must reject {bad:?}"
+        );
+        let (fetch, queued) = web.get_or_queue(bad);
+        assert!(
+            matches!(fetch, MediaFetch::Missing) && !queued,
+            "WebMediaState must reject {bad:?}"
+        );
+    }
+}

@@ -776,11 +776,23 @@ fn collect_object_units<'a>(
         });
     }
     for state in &object.states {
-        if let Some(text) = &state.text
+        let id = format!("{prefix}/state/{}/text", state.name);
+        if let Some(runs) = &state.runs
+            && !runs.is_empty()
+        {
+            let joined: String = runs.iter().map(|run| run.text.as_str()).collect();
+            if !joined.is_empty() {
+                units.push(ExportUnit {
+                    id,
+                    text: state.text.as_deref().unwrap_or(""),
+                    runs: Some(runs.as_slice()),
+                });
+            }
+        } else if let Some(text) = &state.text
             && !text.is_empty()
         {
             units.push(ExportUnit {
-                id: format!("{prefix}/state/{}/text", state.name),
+                id,
                 text,
                 runs: None,
             });
@@ -1355,7 +1367,12 @@ fn object_text(object: &Object, field: &str) -> Option<String> {
             .states
             .iter()
             .find(|state| state.name == name)
-            .and_then(|state| state.text.clone());
+            .and_then(|state| match &state.runs {
+                Some(runs) if !runs.is_empty() => {
+                    Some(runs.iter().map(|run| run.text.as_str()).collect())
+                }
+                _ => state.text.clone(),
+            });
     }
     None
 }
@@ -1690,11 +1707,52 @@ fn set_object_text(object: &mut Object, field: &str, target: &ParsedText) -> boo
         && let Some(name) = rest.strip_suffix("/text")
         && let Some(state) = object.states.iter_mut().find(|state| state.name == name)
     {
-        if state.text.is_some() {
-            state.text = Some(target.text());
-            return true;
+        let has_runs = state.runs.as_ref().is_some_and(|r| !r.is_empty());
+        if state.text.is_none() && !has_runs {
+            return false;
         }
-        return false;
+        let target_has_groups = target.segments.iter().any(|segment| segment.run.is_some());
+        let old_text = state.text.clone().unwrap_or_else(|| {
+            state
+                .runs
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .map(|r| r.text.as_str())
+                .collect()
+        });
+        let new_text = target.text();
+        if let Some(paragraphs) = &mut state.paragraphs {
+            *paragraphs = align_paragraphs(&old_text, paragraphs, &new_text);
+        }
+        state.text = Some(new_text);
+        if target_has_groups || has_runs {
+            let formatting = state.runs.clone().unwrap_or_default();
+            let mut new_runs = Vec::with_capacity(target.segments.len());
+            for segment in &target.segments {
+                let mut run = segment
+                    .run
+                    .and_then(|index| formatting.get(index))
+                    .cloned()
+                    .unwrap_or_else(|| TextRun {
+                        text: String::new(),
+                        bold: None,
+                        italic: None,
+                        underline: None,
+                        size: None,
+                        color: None,
+                        link: None,
+                        font: None,
+                        strikethrough: None,
+                        baseline: None,
+                        letter_spacing: None,
+                    });
+                run.text = segment.text.clone();
+                new_runs.push(run);
+            }
+            state.runs = Some(new_runs);
+        }
+        return true;
     }
     false
 }

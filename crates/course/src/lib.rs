@@ -268,12 +268,23 @@ fn walk_object_media_references(
         _ => {}
     }
     for state in &object.states {
+        let place = || format!("{object_place} ▸ State \"{}\"", state.name);
         if let Some(src) = &state.src
             && !src.is_empty()
         {
             out.push(MediaReference {
                 src: src.clone(),
-                place: format!("{object_place} ▸ State \"{}\"", state.name),
+                place: place(),
+                slide: Some(slide.id.clone()),
+                object: Some(object.id.clone()),
+            });
+        }
+        if let Some(src) = state.fill_style.as_ref().and_then(FillStyle::picture_src)
+            && !src.is_empty()
+        {
+            out.push(MediaReference {
+                src: src.to_owned(),
+                place: place(),
                 slide: Some(slide.id.clone()),
                 object: Some(object.id.clone()),
             });

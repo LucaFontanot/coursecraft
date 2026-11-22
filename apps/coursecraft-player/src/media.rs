@@ -136,16 +136,16 @@ fn collect_object_srcs(
             if !src.is_empty() {
                 out.push(src.clone());
             }
-            for state in &object.states {
-                if let Some(state_src) = &state.src
-                    && !state_src.is_empty()
-                {
-                    out.push(state_src.clone());
-                }
-            }
         }
         ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
             if let Some(src) = fill_style.as_ref().and_then(FillStyle::picture_src)
+                && !src.is_empty()
+            {
+                out.push(src.to_owned());
+            }
+        }
+        ObjectKind::Path { path } => {
+            if let Some(src) = path.fill_style.as_ref().and_then(FillStyle::picture_src)
                 && !src.is_empty()
             {
                 out.push(src.to_owned());
@@ -156,16 +156,42 @@ fn collect_object_srcs(
                 out.push(src.clone());
             }
         }
-        ObjectKind::Audio { captions, .. } | ObjectKind::Video { captions, .. }
-            if include_non_image =>
-        {
-            if let Some(captions) = captions
+        ObjectKind::Audio { captions, .. } => {
+            if include_non_image
+                && let Some(captions) = captions
+                && !captions.is_empty()
+            {
+                out.push(captions.clone());
+            }
+        }
+        ObjectKind::Video {
+            captions, poster, ..
+        } => {
+            if let Some(poster) = poster
+                && !poster.is_empty()
+            {
+                out.push(poster.clone());
+            }
+            if include_non_image
+                && let Some(captions) = captions
                 && !captions.is_empty()
             {
                 out.push(captions.clone());
             }
         }
         _ => {}
+    }
+    for state in &object.states {
+        if let Some(state_src) = &state.src
+            && !state_src.is_empty()
+        {
+            out.push(state_src.clone());
+        }
+        if let Some(src) = state.fill_style.as_ref().and_then(FillStyle::picture_src)
+            && !src.is_empty()
+        {
+            out.push(src.to_owned());
+        }
     }
 }
 

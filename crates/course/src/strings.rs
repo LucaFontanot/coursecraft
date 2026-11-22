@@ -406,11 +406,14 @@ fn walk_object<S: StringSink>(
         );
     }
     for state in &object.states {
-        if let Some(text) = &state.text {
-            out.emit(
+        let runs = state.runs.as_deref().unwrap_or(&[]);
+        let text = state.text.as_deref().unwrap_or("");
+        if state.text.is_some() || !runs.is_empty() {
+            out.emit_runs(
                 at(format!("state/{}/text", state.name)),
                 || format!("{object_place} ▸ State \"{}\" text", state.name),
                 text,
+                runs,
             );
         }
     }
@@ -509,6 +512,14 @@ fn object_target<'a>(object: &'a mut Object, field: &str) -> Option<StringTarget
         .and_then(|rest| rest.strip_suffix("/text"))
     {
         let state = object.states.iter_mut().find(|state| state.name == name)?;
+        if let Some(runs) = &mut state.runs
+            && !runs.is_empty()
+        {
+            let text = state
+                .text
+                .get_or_insert_with(|| runs.iter().map(|r| r.text.as_str()).collect());
+            return Some(StringTarget::Runs { text, runs });
+        }
         return Some(StringTarget::Optional(&mut state.text));
     }
     if let Some(rest) = field
