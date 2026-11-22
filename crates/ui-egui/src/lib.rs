@@ -246,6 +246,8 @@ mod trigger_speed_tests;
 #[cfg(test)]
 mod try_again_tests;
 #[cfg(test)]
+mod u8_inspector_tests;
+#[cfg(test)]
 mod var_compare_tests;
 #[cfg(test)]
 mod video_selection_tests;

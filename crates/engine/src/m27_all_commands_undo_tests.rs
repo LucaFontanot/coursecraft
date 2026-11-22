@@ -1041,6 +1041,10 @@ fn command_cases() -> Vec<(&'static str, Json)> {
             json!({ "slide": "slide1", "object": "obj_shape", "opacity": 0.5 }),
         ),
         (
+            "object.set_outline_join",
+            json!({ "slide": "slide1", "object": "obj_path", "join": "round" }),
+        ),
+        (
             "object.set_fill_style",
             json!({ "slide": "slide1", "object": "obj_shape", "fill_style": { "type": "linear", "angle": 90.0, "stops": [{ "position": 0.0, "color": "#FF0000" }, { "position": 1.0, "color": "#0000FF" }] } }),
         ),

@@ -766,6 +766,15 @@ static REGISTRY: &[Command] = &[
         run: object_set_opacity,
     },
     Command {
+        id: "object.set_outline_join",
+        label: "Set Outline Corners",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object"?: id, "objects"?: id[], "join": "miter"|"round"|"bevel"}"#,
+        mutates: true,
+        run: object_set_outline_join,
+    },
+    Command {
         id: "object.set_fill_style",
         label: "Set Fill Style",
         menu: "",
@@ -5843,6 +5852,40 @@ fn object_set_opacity(s: &mut Session, p: &Json) -> Result<Json> {
     }
     keep_valid(s, was_valid)?;
     Ok(json!({ "opacity": opacity, "changed": changed }))
+}
+
+fn object_set_outline_join(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.set_outline_join";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let ids = object_or_objects_param(C, p)?;
+    let join: coursecraft_course::LineJoin = req(C, p, "join")?;
+    let mut changed = 0;
+    {
+        let slide = slide_mut(s, &sid)?;
+        for id in &ids {
+            let object = find_object_mut(slide, id)?;
+            match &mut object.kind {
+                ObjectKind::Shape {
+                    outline: Some(outline),
+                    ..
+                } if outline.join != join => {
+                    outline.join = join;
+                    changed += 1;
+                }
+                ObjectKind::Path { path } if path.outline.join != join => {
+                    path.outline.join = join;
+                    changed += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    if changed == 0 {
+        s.skip_undo = true;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "join": join, "changed": changed }))
 }
 
 fn object_set_fill_style(s: &mut Session, p: &Json) -> Result<Json> {

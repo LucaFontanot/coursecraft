@@ -270,7 +270,14 @@ pub fn show_states_section(
         let validation = validate_new_state_name(&trimmed, &states_copy);
         let is_valid = validation.is_ok();
 
-        let add_btn = ui.add_enabled(is_valid, egui::Button::new("+ Add"));
+        let add_btn = ui
+            .add_enabled(is_valid, egui::Button::new("+ Add"))
+            .on_disabled_hover_text(
+                validation
+                    .as_ref()
+                    .err()
+                    .map_or("Enter a state name", String::as_str),
+            );
         editor.ui.states.add_button_rect = Some(add_btn.rect);
 
         let enter = ui.input(|i| i.key_pressed(egui::Key::Enter))
@@ -293,6 +300,7 @@ pub fn show_states_section(
             let already_added = states_copy.iter().any(|s| s.name == state_name);
             if ui
                 .add_enabled(!already_added, egui::Button::new(button_label).small())
+                .on_disabled_hover_text("This state is already added")
                 .clicked()
             {
                 push_add_state(actions, &slide_id, &obj_id_str, &obj_kind, state_name);
@@ -300,10 +308,10 @@ pub fn show_states_section(
         }
     });
 
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("states_suggestion_combo")
+    crate::properties::inspector_row(ui, "Preset", |ui| {
+        let rem_w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, "states_suggestion_combo", rem_w)
             .selected_text("Preset name…")
-            .width(130.0)
             .show_ui(ui, |ui| {
                 for name in SUGGESTED_STATE_NAMES {
                     if ui.selectable_label(false, *name).clicked() {

@@ -148,6 +148,7 @@ pub struct PropertiesState {
     pub shape_outline_dash_pattern: Option<Vec<f32>>,
     pub shape_outline_dash_length: f32,
     pub shape_outline_gap: f32,
+    pub shape_outline_join: coursecraft_course::LineJoin,
     /// Search text in the shape gallery popup.
     pub shape_gallery_query: String,
     /// Icon rects painted by the last open gallery (test hook).
@@ -162,6 +163,7 @@ pub struct PropertiesState {
     pub path_outline_dash_pattern: Option<Vec<f32>>,
     pub path_outline_dash_length: f32,
     pub path_outline_gap: f32,
+    pub path_outline_join: coursecraft_course::LineJoin,
     pub path_start_end: coursecraft_course::LineEnd,
     pub path_end_end: coursecraft_course::LineEnd,
     pub path_style: coursecraft_course::PathStyle,
@@ -399,6 +401,7 @@ impl Default for PropertiesState {
             shape_outline_dash_pattern: None,
             shape_outline_dash_length: 3.0,
             shape_outline_gap: 2.0,
+            shape_outline_join: coursecraft_course::LineJoin::Miter,
             shape_gallery_query: String::new(),
             shape_gallery_rects: Vec::new(),
             shape_gallery_search_rect: None,
@@ -408,6 +411,7 @@ impl Default for PropertiesState {
             path_outline_dash_pattern: None,
             path_outline_dash_length: 3.0,
             path_outline_gap: 2.0,
+            path_outline_join: coursecraft_course::LineJoin::Miter,
             path_start_end: coursecraft_course::LineEnd::None,
             path_end_end: coursecraft_course::LineEnd::None,
             path_style: coursecraft_course::PathStyle::Straight,
@@ -696,6 +700,7 @@ impl PropertiesState {
                             &mut self.shape_outline_dash_length,
                             &mut self.shape_outline_gap,
                         );
+                        self.shape_outline_join = outline.join;
                     } else {
                         self.shape_outline_color = "#1F1F1F".into();
                         self.shape_outline_width = 1.5;
@@ -703,6 +708,7 @@ impl PropertiesState {
                         self.shape_outline_dash_pattern = None;
                         self.shape_outline_dash_length = 3.0;
                         self.shape_outline_gap = 2.0;
+                        self.shape_outline_join = coursecraft_course::LineJoin::Miter;
                     }
                     if let Some(text) = text {
                         self.text_body = text.text.clone();
@@ -735,6 +741,7 @@ impl PropertiesState {
                         &mut self.path_outline_dash_length,
                         &mut self.path_outline_gap,
                     );
+                    self.path_outline_join = path.outline.join;
                     self.path_start_end = path.start_end;
                     self.path_end_end = path.end_end;
                     self.path_style = path.style;
@@ -1128,6 +1135,7 @@ impl PropertiesState {
                     &mut self.shape_outline_dash_length,
                     &mut self.shape_outline_gap,
                 );
+                self.shape_outline_join = outline.join;
             } else {
                 self.shape_outline_color = "#1F1F1F".to_owned();
                 self.shape_outline_width = 1.5;
@@ -1135,6 +1143,7 @@ impl PropertiesState {
                 self.shape_outline_dash_pattern = None;
                 self.shape_outline_dash_length = 3.0;
                 self.shape_outline_gap = 2.0;
+                self.shape_outline_join = coursecraft_course::LineJoin::Miter;
             }
         }
 
@@ -1577,7 +1586,7 @@ pub(crate) fn show_paired_numeric_row(
                     let r = add_drag_left(
                         ui,
                         [rem, coursecraft_render::CONTROL_COMPACT],
-                        DragValue::new(v1).speed(speed1),
+                        DragValue::new(v1).speed(speed1).suffix(" px"),
                     );
                     let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     (r, enter)
@@ -1600,7 +1609,7 @@ pub(crate) fn show_paired_numeric_row(
                     let r = add_drag_left(
                         ui,
                         [rem, coursecraft_render::CONTROL_COMPACT],
-                        DragValue::new(v2).speed(speed2),
+                        DragValue::new(v2).speed(speed2).suffix(" px"),
                     );
                     let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     (r, enter)
@@ -1677,8 +1686,7 @@ fn show_anim_row(
 
     inspector_row(ui, "Effect", |ui| {
         let rem_w = ui.available_width().max(30.0);
-        egui::ComboBox::from_id_salt(format!("anim_effect_{which}"))
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, format!("anim_effect_{which}"), rem_w)
             .selected_text(effect_label)
             .show_ui(ui, |ui| {
                 for id in ["none", "fade", "fly_in", "zoom", "wipe", "float"] {
@@ -1718,8 +1726,7 @@ fn show_anim_row(
             };
             inspector_row(ui, "Direction", |ui| {
                 let rem_w = ui.available_width().max(30.0);
-                egui::ComboBox::from_id_salt(format!("anim_dir_{which}"))
-                    .width(rem_w)
+                crate::widgets::styled_combo(ui, format!("anim_dir_{which}"), rem_w)
                     .selected_text(dir_label)
                     .show_ui(ui, |ui| {
                         for (val, l) in [
@@ -1744,8 +1751,7 @@ fn show_anim_row(
         };
         inspector_row(ui, "Easing", |ui| {
             let rem_w = ui.available_width().max(30.0);
-            egui::ComboBox::from_id_salt(format!("anim_ease_{which}"))
-                .width(rem_w)
+            crate::widgets::styled_combo(ui, format!("anim_ease_{which}"), rem_w)
                 .selected_text(ease_label)
                 .show_ui(ui, |ui| {
                     for (val, l) in [
@@ -3009,6 +3015,7 @@ fn show_multi_properties(
                         props.shape_outline_width,
                         props.shape_outline_dash,
                         &props.shape_outline_dash_pattern,
+                        props.shape_outline_join,
                     )
                 } else {
                     Json::Null
@@ -3220,6 +3227,7 @@ fn show_accessibility_section(
                 }
                 if ui
                     .add_enabled(props.focus_order.is_some(), egui::Button::new("Clear"))
+                    .on_disabled_hover_text("No focus order set")
                     .clicked()
                 {
                     props.focus_order = None;
@@ -3370,7 +3378,8 @@ fn show_slide_tab(
                 .unwrap_or_else(|| "None".to_owned());
             let mut set_to: Option<Option<String>> = None;
             inspector_row(ui, "Master", |ui| {
-                egui::ComboBox::from_id_salt("prop_master")
+                let rem_w = ui.available_width().max(30.0);
+                crate::widgets::styled_combo(ui, "prop_master", rem_w)
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
                         if ui.selectable_label(current.is_none(), "None").clicked() {
@@ -3432,7 +3441,8 @@ fn show_slide_tab(
             .map_or(0, |bank| bank.slides.len());
         let mut set_bank: Option<String> = None;
         inspector_row(ui, "Bank", |ui| {
-            egui::ComboBox::from_id_salt("prop_draw_bank")
+            let rem_w = ui.available_width().max(30.0);
+            crate::widgets::styled_combo(ui, "prop_draw_bank", rem_w)
                 .selected_text(current_label)
                 .show_ui(ui, |ui| {
                     for bank in &banks {
@@ -3730,7 +3740,8 @@ fn show_text_controls(
                 "Off"
             };
             let mut chosen = None;
-            egui::ComboBox::from_id_salt(("autofit", id_prefix, obj_id))
+            let rem_w = ui.available_width().max(30.0);
+            crate::widgets::styled_combo(ui, ("autofit", id_prefix, obj_id), rem_w)
                 .selected_text(selected)
                 .show_ui(ui, |ui| {
                     if ui
@@ -3925,7 +3936,8 @@ fn show_text_controls(
             [rem_w, coursecraft_render::CONTROL_COMPACT],
             DragValue::new(&mut props.text_size)
                 .speed(1.0)
-                .range(1.0..=200.0),
+                .range(1.0..=200.0)
+                .suffix(" pt"),
         );
         let enter_size = r_size.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if (r_size.drag_stopped() || r_size.lost_focus() || enter_size)
@@ -4096,7 +4108,8 @@ fn show_text_controls(
                             DragValue::new(val)
                                 .speed(0.5)
                                 .range(0.0..=200.0)
-                                .max_decimals(1),
+                                .max_decimals(1)
+                                .suffix(" px"),
                         );
                         if r.changed() {
                             changed = true;
@@ -4284,6 +4297,7 @@ fn show_paragraph_controls(
         if ui
             .add_enabled(level > 0, egui::Button::new("Decrease"))
             .on_hover_text("Decrease indent")
+            .on_disabled_hover_text("Already at minimum indent")
             .clicked()
         {
             let mut params = paragraph_base();
@@ -4293,6 +4307,7 @@ fn show_paragraph_controls(
         if ui
             .add_enabled(level < 4, egui::Button::new("Increase"))
             .on_hover_text("Increase indent")
+            .on_disabled_hover_text("Already at maximum indent")
             .clicked()
         {
             let mut params = paragraph_base();
@@ -4310,7 +4325,8 @@ fn show_paragraph_controls(
         let id = egui::Id::unique(("line_spacing", id_prefix, obj_id));
         let mut chosen = None;
         let mut popup_was_drawn = false;
-        egui::ComboBox::from_id_salt(id)
+        let rem_w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, id, rem_w)
             .selected_text(format!("{current:.2}x"))
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show_ui(ui, |ui| {
@@ -4330,7 +4346,8 @@ fn show_paragraph_controls(
                     DragValue::new(&mut props.line_spacing_custom)
                         .speed(0.05)
                         .range(0.8..=3.0)
-                        .prefix("custom "),
+                        .prefix("custom ")
+                        .suffix("×"),
                 );
                 if response.has_focus() || response.changed() || response.dragged() {
                     props.line_spacing_editing = true;
@@ -4396,7 +4413,7 @@ fn show_paragraph_controls(
                         .find(|(id, _)| id == &props.link_slide)
                         .map(|(_, title)| title.clone())
                         .unwrap_or_else(|| "Choose a slide…".to_owned());
-                    egui::ComboBox::from_id_salt(("link_slide_pick", id_prefix, obj_id))
+                    crate::widgets::styled_combo(ui, ("link_slide_pick", id_prefix, obj_id), 180.0)
                         .selected_text(chosen)
                         .show_ui(ui, |ui| {
                             for (id, title) in slides {
@@ -4519,8 +4536,7 @@ fn show_fill_style_editor(
     inspector_row(ui, "Fill type", |ui| {
         let rem_w = ui.available_width().max(30.0);
         let current = fill_style_kind(&props.fill_style);
-        egui::ComboBox::from_id_salt("prop_fill_type")
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, "prop_fill_type", rem_w)
             .selected_text(current)
             .show_ui(ui, |ui| {
                 for label in ["Solid", "Linear gradient", "Radial gradient", "Picture"] {
@@ -4637,8 +4653,7 @@ fn show_fill_style_editor(
                 } else {
                     src.clone()
                 };
-                egui::ComboBox::from_id_salt("prop_picture_src")
-                    .width(rem_w)
+                crate::widgets::styled_combo(ui, "prop_picture_src", rem_w)
                     .selected_text(selected)
                     .show_ui(ui, |ui| {
                         if ui.selectable_label(false, "Choose a file…").clicked() {
@@ -4661,8 +4676,7 @@ fn show_fill_style_editor(
             });
             inspector_row(ui, "Picture fit", |ui| {
                 let rem_w = ui.available_width().max(30.0);
-                egui::ComboBox::from_id_salt("prop_picture_mode")
-                    .width(rem_w)
+                crate::widgets::styled_combo(ui, "prop_picture_mode", rem_w)
                     .selected_text(match mode {
                         coursecraft_course::PictureFillMode::Stretch => "Stretch",
                         coursecraft_course::PictureFillMode::Tile => "Tile",
@@ -4831,6 +4845,7 @@ fn show_gradient_stops(
                 if ui
                     .add_enabled(i > 0, egui::Button::new("↑").small())
                     .on_hover_text("Move colour up")
+                    .on_disabled_hover_text("Already first colour")
                     .clicked()
                 {
                     move_up = Some(i);
@@ -4838,6 +4853,7 @@ fn show_gradient_stops(
                 if ui
                     .add_enabled(i + 1 < len, egui::Button::new("↓").small())
                     .on_hover_text("Move colour down")
+                    .on_disabled_hover_text("Already last colour")
                     .clicked()
                 {
                     move_down = Some(i);
@@ -4927,7 +4943,7 @@ fn show_effect_controls(
                 let response = add_drag_left(
                     ui,
                     [rem_w, coursecraft_render::CONTROL_COMPACT],
-                    DragValue::new(value).speed(0.5).range(range),
+                    DragValue::new(value).speed(0.5).range(range).suffix(" px"),
                 );
                 let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if response.drag_stopped() || response.lost_focus() || enter {
@@ -4957,7 +4973,8 @@ fn show_effect_controls(
                 [rem_w, coursecraft_render::CONTROL_COMPACT],
                 DragValue::new(&mut props.glow.size)
                     .speed(0.5)
-                    .range(0.0..=100.0),
+                    .range(0.0..=100.0)
+                    .suffix(" px"),
             );
             let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if response.drag_stopped() || response.lost_focus() || enter {
@@ -5210,6 +5227,7 @@ fn show_table_controls(
         }
         if ui
             .add_enabled(rows.len() > 1, egui::Button::new("Delete row"))
+            .on_disabled_hover_text("A table must have at least one row")
             .clicked()
         {
             actions.push((
@@ -5258,6 +5276,7 @@ fn show_table_controls(
         }
         if ui
             .add_enabled(columns.len() > 1, egui::Button::new("Delete column"))
+            .on_disabled_hover_text("A table must have at least one column")
             .clicked()
         {
             actions.push((
@@ -5592,9 +5611,8 @@ fn show_input_controls(
         } else {
             props.input_variable.clone()
         };
-        let combo = egui::ComboBox::from_id_salt("prop_input_variable")
+        let combo = crate::widgets::styled_combo(ui, "prop_input_variable", rem_w)
             .selected_text(label)
-            .width(rem_w)
             .show_ui(ui, |ui| {
                 for variable in &course.variables {
                     if variable.value.kind() != required {
@@ -6006,7 +6024,8 @@ fn show_timer_controls(
         let r = ui.add(
             DragValue::new(&mut props.text_size)
                 .speed(1.0)
-                .range(1.0..=400.0),
+                .range(1.0..=400.0)
+                .suffix(" pt"),
         );
         let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if r.drag_stopped() || r.lost_focus() || enter {
@@ -6095,9 +6114,8 @@ fn show_meter_controls(
         } else {
             props.input_variable.clone()
         };
-        let combo = egui::ComboBox::from_id_salt("prop_meter_variable")
+        let combo = crate::widgets::styled_combo(ui, "prop_meter_variable", rem_w)
             .selected_text(label)
-            .width(rem_w)
             .show_ui(ui, |ui| {
                 for variable in &course.variables {
                     if variable.value.kind() != coursecraft_course::ValueKind::Number {
@@ -6210,7 +6228,8 @@ fn show_scroll_panel_controls(
         let r = ui.add(
             DragValue::new(&mut props.scroll_content_height)
                 .speed(1.0)
-                .range(frame_height..=coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT),
+                .range(frame_height..=coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT)
+                .suffix(" px"),
         );
         props.scroll_content_height_rect = Some(r.rect);
         if r.changed() {
@@ -6282,9 +6301,8 @@ fn show_panel_picker(
                 .map_or_else(|| props.panel_target.clone(), |(_, name)| name.clone())
         };
         let rem_w = ui.available_width().max(30.0);
-        let combo = egui::ComboBox::from_id_salt("prop_panel_target")
+        let combo = crate::widgets::styled_combo(ui, "prop_panel_target", rem_w)
             .selected_text(label)
-            .width(rem_w)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut props.panel_target, String::new(), "(None)");
                 for (id, name) in panels {
@@ -6372,6 +6390,7 @@ fn show_radio_options(
                         egui::Button::new("✕").small(),
                     )
                     .on_hover_text("Remove option")
+                    .on_disabled_hover_text("At least two options are required")
                     .clicked()
                 {
                     remove = Some(index);
@@ -6379,6 +6398,7 @@ fn show_radio_options(
                 if ui
                     .add_enabled(index + 1 < count, egui::Button::new("↓").small())
                     .on_hover_text("Move down")
+                    .on_disabled_hover_text("Already last option")
                     .clicked()
                 {
                     move_down = Some(index);
@@ -6386,6 +6406,7 @@ fn show_radio_options(
                 if ui
                     .add_enabled(index > 0, egui::Button::new("↑").small())
                     .on_hover_text("Move up")
+                    .on_disabled_hover_text("Already first option")
                     .clicked()
                 {
                     move_up = Some(index);
@@ -6433,6 +6454,7 @@ fn show_radio_options(
             props.input_options.len() < coursecraft_course::MAX_RADIO_OPTIONS,
             egui::Button::new("+ Add option"),
         )
+        .on_disabled_hover_text("Maximum number of options reached")
         .clicked()
     {
         let mut n = props.input_options.len() + 1;
@@ -6902,6 +6924,7 @@ fn show_object_properties(
                             props.shape_outline_width,
                             props.shape_outline_dash,
                             &props.shape_outline_dash_pattern,
+                            props.shape_outline_join,
                         )
                     } else {
                         Json::Null
@@ -6935,6 +6958,7 @@ fn show_object_properties(
                             props.shape_outline_width,
                             props.shape_outline_dash,
                             &props.shape_outline_dash_pattern,
+                            props.shape_outline_join,
                         );
                         action_to_run = Some((
                             "object.update",
@@ -6968,6 +6992,7 @@ fn show_object_properties(
                             props.shape_outline_width,
                             props.shape_outline_dash,
                             &props.shape_outline_dash_pattern,
+                            props.shape_outline_join,
                         );
                         action_to_run = Some((
                             "object.update",
@@ -6994,6 +7019,7 @@ fn show_object_properties(
                         props.shape_outline_width,
                         props.shape_outline_dash,
                         &props.shape_outline_dash_pattern,
+                        props.shape_outline_join,
                     );
                     action_to_run = Some((
                         "object.update",
@@ -7001,6 +7027,16 @@ fn show_object_properties(
                             "slide": slide.id,
                             "object": obj.id,
                             "kind": kind,
+                        }),
+                    ));
+                }
+                if show_corners_control(ui, "prop_shape_outline", &mut props.shape_outline_join) {
+                    action_to_run = Some((
+                        "object.set_outline_join",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "join": props.shape_outline_join,
                         }),
                     ));
                 }
@@ -7064,6 +7100,7 @@ fn show_object_properties(
                         props.path_outline_width,
                         props.path_outline_dash,
                         &props.path_outline_dash_pattern,
+                        props.path_outline_join,
                     );
                     action_to_run = Some((
                         "object.update",
@@ -7097,6 +7134,7 @@ fn show_object_properties(
                         props.path_outline_width,
                         props.path_outline_dash,
                         &props.path_outline_dash_pattern,
+                        props.path_outline_join,
                     );
                     action_to_run = Some((
                         "object.update",
@@ -7123,6 +7161,7 @@ fn show_object_properties(
                     props.path_outline_width,
                     props.path_outline_dash,
                     &props.path_outline_dash_pattern,
+                    props.path_outline_join,
                 );
                 action_to_run = Some((
                     "object.update",
@@ -7176,8 +7215,7 @@ fn show_object_properties(
                 inspector_row(ui, "Connector", |ui| {
                     let rem_w = ui.available_width().max(30.0);
                     let mut changed = false;
-                    egui::ComboBox::from_id_salt("prop_path_connector")
-                        .width(rem_w)
+                    crate::widgets::styled_combo(ui, "prop_path_connector", rem_w)
                         .selected_text(label)
                         .show_ui(ui, |ui| {
                             for (style, label) in [
@@ -7210,8 +7248,7 @@ fn show_object_properties(
                 inspector_row(ui, "Style", |ui| {
                     let rem_w = ui.available_width().max(30.0);
                     let mut changed = false;
-                    egui::ComboBox::from_id_salt("prop_path_style")
-                        .width(rem_w)
+                    crate::widgets::styled_combo(ui, "prop_path_style", rem_w)
                         .selected_text(match props.path_style {
                             coursecraft_course::PathStyle::Straight => "Straight",
                             coursecraft_course::PathStyle::Curved => "Curved",
@@ -7631,7 +7668,8 @@ fn show_object_properties(
                         .range(
                             coursecraft_course::LOTTIE_MIN_SPEED
                                 ..=coursecraft_course::LOTTIE_MAX_SPEED,
-                        ),
+                        )
+                        .suffix("×"),
                 );
                 if r.changed() && (props.lottie_speed - speed).abs() > f32::EPSILON {
                     action_to_run = Some((
@@ -7885,7 +7923,9 @@ fn show_object_properties(
         let r = add_drag_left(
             ui,
             [rem_w, coursecraft_render::CONTROL_COMPACT],
-            DragValue::new(&mut props.start_ms).speed(10.0),
+            DragValue::new(&mut props.start_ms)
+                .speed(10.0)
+                .suffix(" ms"),
         );
         let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         timing_committed |= r.drag_stopped() || r.lost_focus() || enter;
@@ -7906,7 +7946,7 @@ fn show_object_properties(
             let r = add_drag_left(
                 ui,
                 [rem_w, coursecraft_render::CONTROL_COMPACT],
-                DragValue::new(&mut props.end_ms).speed(10.0),
+                DragValue::new(&mut props.end_ms).speed(10.0).suffix(" ms"),
             );
             let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             timing_committed |= r.drag_stopped() || r.lost_focus() || enter;
@@ -8011,8 +8051,7 @@ fn show_object_properties(
 
     inspector_row(ui, "Initial", |ui| {
         let rem_w = ui.available_width().max(30.0);
-        egui::ComboBox::from_id_salt("prop_initial_state")
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, "prop_initial_state", rem_w)
             .selected_text(&props.initial_state)
             .show_ui(ui, |ui| {
                 for state in available_states {
@@ -8176,9 +8215,9 @@ fn show_slide_properties(
                 RevisitMode::Resume => "Resume where it left off",
             };
             let mut chosen = props.slide_revisit;
-            egui::ComboBox::from_id_salt("prop_slide_revisit")
+            let rem_w = ui.available_width().max(90.0);
+            crate::widgets::styled_combo(ui, "prop_slide_revisit", rem_w)
                 .selected_text(label)
-                .width(ui.available_width().max(90.0))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut chosen, RevisitMode::Auto, "Automatic");
                     ui.selectable_value(&mut chosen, RevisitMode::Reset, "Start over");
@@ -8316,9 +8355,9 @@ fn tri_state_combo(
         Some(false) => "Hide",
     };
     let mut chosen = None;
-    egui::ComboBox::from_id_salt(id_salt)
+    let rem_w = ui.available_width().max(90.0);
+    crate::widgets::styled_combo(ui, id_salt, rem_w)
         .selected_text(label)
-        .width(ui.available_width().max(90.0))
         .show_ui(ui, |ui| {
             for (option, text) in [
                 (None, "Course default"),
@@ -8349,8 +8388,7 @@ fn show_transition_section(
 
     inspector_row(ui, "Effect", |ui| {
         let rem_w = ui.available_width().max(30.0);
-        egui::ComboBox::from_id_salt("slide_transition_combo")
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, "slide_transition_combo", rem_w)
             .selected_text(trans_label)
             .show_ui(ui, |ui| {
                 if ui
@@ -8422,8 +8460,7 @@ fn show_transition_section(
             };
             inspector_row(ui, "Direction", |ui| {
                 let rem_w = ui.available_width().max(30.0);
-                egui::ComboBox::from_id_salt("slide_transition_dir_combo")
-                    .width(rem_w)
+                crate::widgets::styled_combo(ui, "slide_transition_dir_combo", rem_w)
                     .selected_text(dir_label)
                     .show_ui(ui, |ui| {
                         for (val, l) in [
@@ -8509,8 +8546,9 @@ fn outline_json(
     width: f32,
     dash: coursecraft_course::DashStyle,
     dash_pattern: &Option<Vec<f32>>,
+    join: coursecraft_course::LineJoin,
 ) -> Json {
-    match dash_pattern {
+    let mut obj = match dash_pattern {
         Some(pattern) => serde_json::json!({
             "color": color.trim(),
             "width": width,
@@ -8522,7 +8560,41 @@ fn outline_json(
             "width": width,
             "dash": dash,
         }),
+    };
+    if !join.is_default() {
+        obj["join"] = serde_json::json!(join);
     }
+    obj
+}
+
+fn show_corners_control(
+    ui: &mut Ui,
+    id_prefix: &str,
+    join: &mut coursecraft_course::LineJoin,
+) -> bool {
+    let mut changed = false;
+    inspector_row(ui, "Corners", |ui| {
+        let label = match *join {
+            coursecraft_course::LineJoin::Miter => "Sharp",
+            coursecraft_course::LineJoin::Round => "Round",
+            coursecraft_course::LineJoin::Bevel => "Bevel",
+        };
+        let rem_w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, format!("{id_prefix}_corners"), rem_w)
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                for (choice, choice_label) in [
+                    (coursecraft_course::LineJoin::Miter, "Sharp"),
+                    (coursecraft_course::LineJoin::Round, "Round"),
+                    (coursecraft_course::LineJoin::Bevel, "Bevel"),
+                ] {
+                    if ui.selectable_value(join, choice, choice_label).clicked() {
+                        changed = true;
+                    }
+                }
+            });
+    });
+    changed
 }
 
 fn show_dash_controls(
@@ -8543,8 +8615,7 @@ fn show_dash_controls(
             coursecraft_course::DashStyle::Custom => "Custom",
         };
         let rem_w = ui.available_width().max(30.0);
-        egui::ComboBox::from_id_salt(format!("{id_prefix}_dash"))
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, format!("{id_prefix}_dash"), rem_w)
             .selected_text(label)
             .show_ui(ui, |ui| {
                 for (choice, choice_label) in [
@@ -8897,9 +8968,9 @@ pub fn show_animations_section(
                         Easing::EaseOut => "EaseOut",
                         Easing::EaseInOut => "EaseInOut",
                     };
-                    egui::ComboBox::from_id_salt(format!("mp_easing_{}", path.id))
+                    let rem_w = ui.available_width().max(30.0);
+                    crate::widgets::styled_combo(ui, format!("mp_easing_{}", path.id), rem_w)
                         .selected_text(ease_label)
-                        .width(ui.available_width().max(30.0))
                         .show_ui(ui, |ui| {
                             for (val, l) in [
                                 (Easing::EaseOut, "EaseOut"),
@@ -9244,8 +9315,7 @@ fn line_end_label(end: coursecraft_course::LineEnd) -> &'static str {
 
 fn show_line_end_combo(ui: &mut Ui, id: &str, value: &mut coursecraft_course::LineEnd) {
     let rem_w = ui.available_width().max(30.0);
-    egui::ComboBox::from_id_salt(id)
-        .width(rem_w)
+    crate::widgets::styled_combo(ui, id, rem_w)
         .selected_text(line_end_label(*value))
         .show_ui(ui, |ui| {
             for end in [
