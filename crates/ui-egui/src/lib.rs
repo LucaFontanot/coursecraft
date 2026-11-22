@@ -165,7 +165,8 @@ mod font_harness_tests;
 mod font_picker_tests;
 #[cfg(test)]
 mod guard_counters;
-#[cfg(test)]
+// The guard tests count work with debug-only counters, so they run in debug test builds only.
+#[cfg(all(test, debug_assertions))]
 mod guard_tests;
 #[cfg(test)]
 mod h7_video_revisit_tests;
