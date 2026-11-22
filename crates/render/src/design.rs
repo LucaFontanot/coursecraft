@@ -117,7 +117,7 @@ impl Palette {
             border_strong: Color32::from_rgb(0x48, 0x48, 0x4E),
             text: Color32::from_rgb(0xF2, 0xF2, 0xF5),
             text_secondary: Color32::from_rgb(0xA8, 0xA8, 0xB0),
-            text_tertiary: Color32::from_rgb(0x8E, 0x8E, 0x96),
+            text_tertiary: Color32::from_rgb(0x98, 0x98, 0xA0),
             text_disabled: Color32::from_rgb(0x55, 0x55, 0x5B),
             accent: Color32::from_rgb(0x0A, 0x6C, 0xFF),
             accent_hover: Color32::from_rgb(0x2B, 0x80, 0xFF),
@@ -127,7 +127,7 @@ impl Palette {
             success: Color32::from_rgb(0x30, 0xD1, 0x58),
             warning: Color32::from_rgb(0xFF, 0xD6, 0x0A),
             adjust_handle: Color32::from_rgb(0xFF, 0xD6, 0x0A),
-            danger: Color32::from_rgb(0xFF, 0x45, 0x3A),
+            danger: Color32::from_rgb(0xFF, 0x6B, 0x63),
         }
     }
 
@@ -151,11 +151,11 @@ impl Palette {
             accent: Color32::from_rgb(0x00, 0x66, 0xE0),
             accent_hover: Color32::from_rgb(0x1A, 0x75, 0xE6),
             accent_pressed: Color32::from_rgb(0x00, 0x55, 0xBD),
-            accent_text: Color32::from_rgb(0x00, 0x66, 0xE0),
+            accent_text: Color32::from_rgb(0x00, 0x55, 0xBD),
             accent_subtle: Color32::from_rgb(0xDC, 0xEB, 0xFF),
             success: Color32::from_rgb(0x1F, 0x9D, 0x44),
-            warning: Color32::from_rgb(0xB3, 0x6B, 0x00),
-            adjust_handle: Color32::from_rgb(0xB3, 0x6B, 0x00),
+            warning: Color32::from_rgb(0x99, 0x5B, 0x00),
+            adjust_handle: Color32::from_rgb(0x99, 0x5B, 0x00),
             danger: Color32::from_rgb(0xD7, 0x00, 0x15),
         }
     }
@@ -567,7 +567,7 @@ mod tests {
         assert_eq!(dark.border_strong, Color32::from_rgb(0x48, 0x48, 0x4E));
         assert_eq!(dark.text, Color32::from_rgb(0xF2, 0xF2, 0xF5));
         assert_eq!(dark.text_secondary, Color32::from_rgb(0xA8, 0xA8, 0xB0));
-        assert_eq!(dark.text_tertiary, Color32::from_rgb(0x8E, 0x8E, 0x96));
+        assert_eq!(dark.text_tertiary, Color32::from_rgb(0x98, 0x98, 0xA0));
         assert_eq!(dark.text_disabled, Color32::from_rgb(0x55, 0x55, 0x5B));
         assert_eq!(dark.accent, Color32::from_rgb(0x0A, 0x6C, 0xFF));
         assert_eq!(dark.accent_hover, Color32::from_rgb(0x2B, 0x80, 0xFF));
@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(dark.success, Color32::from_rgb(0x30, 0xD1, 0x58));
         assert_eq!(dark.warning, Color32::from_rgb(0xFF, 0xD6, 0x0A));
         assert_eq!(dark.adjust_handle, Color32::from_rgb(0xFF, 0xD6, 0x0A));
-        assert_eq!(dark.danger, Color32::from_rgb(0xFF, 0x45, 0x3A));
+        assert_eq!(dark.danger, Color32::from_rgb(0xFF, 0x6B, 0x63));
     }
 
     #[test]
@@ -599,11 +599,11 @@ mod tests {
         assert_eq!(light.accent, Color32::from_rgb(0x00, 0x66, 0xE0));
         assert_eq!(light.accent_hover, Color32::from_rgb(0x1A, 0x75, 0xE6));
         assert_eq!(light.accent_pressed, Color32::from_rgb(0x00, 0x55, 0xBD));
-        assert_eq!(light.accent_text, Color32::from_rgb(0x00, 0x66, 0xE0));
+        assert_eq!(light.accent_text, Color32::from_rgb(0x00, 0x55, 0xBD));
         assert_eq!(light.accent_subtle, Color32::from_rgb(0xDC, 0xEB, 0xFF));
         assert_eq!(light.success, Color32::from_rgb(0x1F, 0x9D, 0x44));
-        assert_eq!(light.warning, Color32::from_rgb(0xB3, 0x6B, 0x00));
-        assert_eq!(light.adjust_handle, Color32::from_rgb(0xB3, 0x6B, 0x00));
+        assert_eq!(light.warning, Color32::from_rgb(0x99, 0x5B, 0x00));
+        assert_eq!(light.adjust_handle, Color32::from_rgb(0x99, 0x5B, 0x00));
         assert_eq!(light.danger, Color32::from_rgb(0xD7, 0x00, 0x15));
     }
 

@@ -849,7 +849,8 @@ fn show_choice_rows(
             }
 
             // Leave room for the three reorder/remove buttons so narrow windows never overflow.
-            let narrow = ui.available_width() < 520.0;
+            // hotspot_missing warning + button needs ~700 pt to sit on one line
+            let narrow = ui.available_width() < 700.0;
             let mut reserve = if list_edit { 170.0 } else { 48.0 };
             let per_answer = editor.ui.question.scoring == Scoring::PerAnswer;
             if per_answer {
@@ -1054,7 +1055,8 @@ fn show_sequence(
                 return;
             };
             ui.label(RichText::new(format!("{}.", idx + 1)).strong());
-            let narrow = ui.available_width() < 520.0;
+            // hotspot_missing warning + button needs ~700 pt to sit on one line
+            let narrow = ui.available_width() < 700.0;
             let text_w = (ui.available_width() - 130.0).clamp(100.0, 320.0);
             let text_committed = {
                 let Some(choice) = editor.ui.question.choices.get_mut(idx) else {
@@ -1298,7 +1300,7 @@ fn show_hotspot(
         src.trim().is_empty() || !editor.media().iter().any(|(name, _)| name == src)
     });
 
-    let narrow = ui.available_width() < 520.0;
+    let narrow_hotspot = ui.available_width() < 660.0;
     // 1. Image picker row
     ui.horizontal(|ui| {
         ui.label(RichText::new("Hotspot image").strong());
@@ -1351,7 +1353,7 @@ fn show_hotspot(
             }
         });
 
-        if hotspot_missing && !narrow {
+        if hotspot_missing && !narrow_hotspot {
             let p = coursecraft_render::palette(ui.ctx());
             ui.add_space(12.0);
             ui.label(
@@ -1376,7 +1378,7 @@ fn show_hotspot(
         }
     });
 
-    if hotspot_missing && narrow {
+    if hotspot_missing && narrow_hotspot {
         let p = coursecraft_render::palette(ui.ctx());
         ui.horizontal(|ui| {
             ui.label(
@@ -1387,7 +1389,7 @@ fn show_hotspot(
                 .color(p.warning),
             );
             ui.label(
-                RichText::new("Choose the image learners will click on.")
+                RichText::new("Choose a hotspot image.")
                     .color(p.warning)
                     .size(coursecraft_render::SIZE_BODY),
             );

@@ -2254,12 +2254,20 @@ fn draw_secondary_controls(
 
     let painter = painter_with(ui, layout.rect);
     if let Some(rect) = layout.title {
-        painter.text(
+        let resp = ui.interact(
+            rect,
+            ui.scope_id().with("strip-title"),
+            egui::Sense::hover(),
+        );
+        paint_truncated_text(
+            &painter,
             Pos2::new(rect.left(), rect.center().y),
             Align2::LEFT_CENTER,
             &layout.title_text,
             FontId::new(SIZE_BODY, FontFamily::Name("inter".into())),
             text,
+            rect.width(),
+            Some(&resp),
         );
     }
     if let Some(rect) = layout.counter {

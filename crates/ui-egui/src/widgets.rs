@@ -138,58 +138,64 @@ fn icon_button_impl(
 ) -> Response {
     let p = palette(ui.ctx());
     let size = vec2(CONTROL_COMPACT, CONTROL_COMPACT);
-    let sense = if enabled {
-        Sense::click()
-    } else {
-        Sense::hover()
-    };
-    let (rect, resp) = ui.allocate_exact_size(size, sense);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tooltip.to_owned()));
+    let resp = ui
+        .add_enabled_ui(enabled, |ui| {
+            let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+            resp.widget_info(|| {
+                let mut info = egui::WidgetInfo::new(egui::Role::Button);
+                info.enabled = enabled;
+                info.label = Some(tooltip.to_owned());
+                info.selected = active.then_some(true);
+                info
+            });
 
-    if ui.is_rect_visible(rect) {
-        let radius = CornerRadius::same(RADIUS_MD as u8);
-        let hovered = enabled && resp.hovered();
-        let pressed = enabled && resp.is_pointer_button_down_on();
+            if ui.is_rect_visible(rect) {
+                let radius = CornerRadius::same(RADIUS_MD as u8);
+                let hovered = enabled && resp.hovered();
+                let pressed = enabled && resp.is_pointer_button_down_on();
 
-        ui.painter().rect_filled(
-            rect,
-            radius,
-            state_fill(ui, &resp, &p, hovered, pressed, active),
-        );
+                ui.painter().rect_filled(
+                    rect,
+                    radius,
+                    state_fill(ui, &resp, &p, hovered, pressed, active),
+                );
 
-        // Icon color
-        let icon_color = if !enabled {
-            p.text_disabled
-        } else if active {
-            p.accent_text
-        } else {
-            match tone {
-                IconTone::Danger if hovered => p.danger,
-                IconTone::Accent => p.accent_text,
-                _ if hovered || pressed => p.text,
-                _ => p.text_secondary,
+                // Icon color
+                let icon_color = if !enabled {
+                    p.text_disabled
+                } else if active {
+                    p.accent_text
+                } else {
+                    match tone {
+                        IconTone::Danger if hovered => p.danger,
+                        IconTone::Accent => p.accent_text,
+                        _ if hovered || pressed => p.text,
+                        _ => p.text_secondary,
+                    }
+                };
+
+                let font_id = FontId::new(
+                    ICON_SM,
+                    if active {
+                        FontFamily::Name("phosphor-fill".into())
+                    } else {
+                        FontFamily::Name("phosphor".into())
+                    },
+                );
+                let galley =
+                    ui.painter()
+                        .layout_no_wrap(icon.codepoint().to_string(), font_id, icon_color);
+                let pos = pos2(
+                    rect.center().x - galley.size().x * 0.5,
+                    rect.center().y - galley.size().y * 0.5,
+                );
+                ui.painter().galley(pos, galley, icon_color);
             }
-        };
+            resp
+        })
+        .inner;
 
-        let font_id = FontId::new(
-            ICON_SM,
-            if active {
-                FontFamily::Name("phosphor-fill".into())
-            } else {
-                FontFamily::Name("phosphor".into())
-            },
-        );
-        let galley = ui
-            .painter()
-            .layout_no_wrap(icon.codepoint().to_string(), font_id, icon_color);
-        let pos = pos2(
-            rect.center().x - galley.size().x * 0.5,
-            rect.center().y - galley.size().y * 0.5,
-        );
-        ui.painter().galley(pos, galley, icon_color);
-    }
-
-    let resp = resp.on_hover_text(tooltip);
+    let resp = resp.on_hover_text(tooltip).on_disabled_hover_text(tooltip);
     if enabled {
         resp.on_hover_cursor(CursorIcon::PointingHand)
     } else {

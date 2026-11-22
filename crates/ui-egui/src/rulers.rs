@@ -349,13 +349,17 @@ fn paint(editor: &Editor, painter: &Painter, t: &SlideTransform, canvas: Rect) {
                 )
             };
             clip.line_segment([a, b], Stroke::new(1.0, p.text_tertiary));
-            clip.text(
-                label_pos,
-                Align2::LEFT_TOP,
-                format!("{value:.0}"),
-                font.clone(),
-                p.text_tertiary,
-            );
+            let text = format!("{value:.0}");
+            let est_len = text.len() as f32 * 6.0 + 4.0;
+            if screen + est_len <= hi {
+                clip.text(
+                    label_pos,
+                    Align2::LEFT_TOP,
+                    text,
+                    font.clone(),
+                    p.text_tertiary,
+                );
+            }
         }
     }
 }

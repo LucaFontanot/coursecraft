@@ -274,7 +274,9 @@ fn desktop_contents(editor: &mut Editor, ui: &mut egui::Ui) -> bool {
                     .color(p.text_secondary),
             );
             ui.add_space(6.0);
-            let record_fill = if p.danger == Color32::from_rgb(0xFF, 0x45, 0x3A) {
+            let record_fill = if coursecraft_render::theme_mode(ui.ctx())
+                == coursecraft_render::ThemeMode::Dark
+            {
                 Color32::from_rgb(0xC9, 0x2A, 0x2A)
             } else {
                 p.danger

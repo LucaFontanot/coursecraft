@@ -1480,8 +1480,13 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let p = coursecraft_render::palette(ui.ctx());
     // The pills line up with the slide's left edge. When they are too many to fit between
     // there and the canvas edge, the row starts further left rather than running off.
+    let ruler_inset = if editor.session.course.editor.show_rulers {
+        crate::rulers::RULER_SIZE
+    } else {
+        0.0
+    };
     let canvas_right = ui.clip_rect().max.x - coursecraft_render::PANEL_MARGIN;
-    let canvas_left = ui.clip_rect().min.x + coursecraft_render::PANEL_MARGIN;
+    let canvas_left = ui.clip_rect().min.x + ruler_inset + coursecraft_render::PANEL_MARGIN;
     let estimated_w = editor
         .session
         .course
@@ -1509,8 +1514,9 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let has_layer_selected = editor.selection.layer.is_some();
     let wraps = has_layer_selected || estimated_w > (canvas_right - pills_x);
     let pills_h = if wraps { 64.0 } else { 24.0 };
+    let pills_y = (t.slide_rect().min.y - 24.0 - 8.0).max(ui.clip_rect().min.y + ruler_inset + 2.0);
     let pills_rect = Rect::from_min_size(
-        pos2(pills_x, t.slide_rect().min.y - 24.0 - 8.0),
+        pos2(pills_x, pills_y),
         vec2((canvas_right - pills_x).max(1.0), pills_h),
     );
 
@@ -1573,7 +1579,13 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     .corner_radius(12)
     .min_size(vec2(24.0, 24.0));
 
-    if pills_ui.add(plus_btn).on_hover_text("Add layer").clicked() {
+    let plus_resp = pills_ui.add(plus_btn).on_hover_text("Add layer");
+    plus_resp.widget_info(|| {
+        let mut info = egui::WidgetInfo::new(egui::Role::Button);
+        info.label = Some("Add layer".to_owned());
+        info
+    });
+    if plus_resp.clicked() {
         editor.run(
             "layer.add",
             serde_json::json!({ "slide": editor.selection.slide }),

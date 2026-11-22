@@ -136,7 +136,12 @@ fn style_menu(
 ) -> Option<Action> {
     let mut action = None;
     let full = course.text_styles.len() >= MAX_TEXT_STYLES;
-    ui.menu_button("⋯", |ui| {
+    let more = crate::widgets::icon_button(
+        ui,
+        coursecraft_render::Icon::DotsThree,
+        "Text style options",
+    );
+    egui::Popup::menu(&more).show(|ui| {
         let new = ui
             .add_enabled(!full, egui::Button::new("New style from selection"))
             .on_disabled_hover_text("A course holds at most 50 text styles");

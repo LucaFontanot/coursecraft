@@ -2298,8 +2298,6 @@ fn show_arrange_icons(
     }
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-        ui.spacing_mut().button_padding = vec2(2.0, 1.0);
-        let icon_size = coursecraft_render::ICON_SM - 2.0;
         for (icon, label, edge) in [
             (Icon::TextAlignLeft, "Align Left", "left"),
             (Icon::TextAlignCenter, "Align Center", "center"),
@@ -2310,57 +2308,51 @@ fn show_arrange_icons(
         ] {
             let params = crate::menu::align_params(editor, edge);
             let enabled = params.is_some();
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            let response = ui.add_enabled(enabled, button);
-            let response = if enabled {
-                response.on_hover_text(label)
+            let tooltip = if enabled {
+                label
             } else {
-                response.on_disabled_hover_text("Select an object first")
+                "Select an object first"
             };
+            let response = crate::widgets::icon_button_enabled(ui, icon, enabled, tooltip);
             if response.clicked()
                 && let Some(params) = params
             {
                 actions_to_run.push(("object.align", params));
             }
         }
-        for (icon, label, axis) in [
-            (Icon::TextColumns, "Distribute Horizontally", "horizontal"),
-            (Icon::Rows, "Distribute Vertically", "vertical"),
-        ] {
-            let params = crate::menu::distribute_params(editor, axis);
-            let enabled = params.is_some();
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            let response = ui.add_enabled(enabled, button);
-            let response = if enabled {
-                response.on_hover_text(label)
-            } else {
-                response.on_disabled_hover_text("Select at least three objects")
-            };
-            if response.clicked()
-                && let Some(params) = params
-            {
-                actions_to_run.push(("object.distribute", params));
+        let more = crate::widgets::icon_button(ui, Icon::DotsThree, "More arrange options");
+        egui::Popup::menu(&more).show(|ui| {
+            for (label, axis) in [
+                ("Distribute Horizontally", "horizontal"),
+                ("Distribute Vertically", "vertical"),
+            ] {
+                let params = crate::menu::distribute_params(editor, axis);
+                let enabled = params.is_some();
+                if ui
+                    .add_enabled(enabled, egui::Button::new(label))
+                    .on_disabled_hover_text("Select at least three objects")
+                    .clicked()
+                    && let Some(params) = params
+                {
+                    actions_to_run.push(("object.distribute", params));
+                    ui.close();
+                }
             }
-        }
-        for (icon, label, dimension) in [
-            (Icon::TextColumns, "Match Width", "width"),
-            (Icon::Rows, "Match Height", "height"),
-        ] {
-            let params = crate::menu::match_size_params(editor, dimension);
-            let enabled = params.is_some();
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            let response = ui.add_enabled(enabled, button);
-            let response = if enabled {
-                response.on_hover_text(label)
-            } else {
-                response.on_disabled_hover_text("Select at least two objects")
-            };
-            if response.clicked()
-                && let Some(params) = params
-            {
-                actions_to_run.push(("object.match_size", params));
+            ui.separator();
+            for (label, dimension) in [("Match Width", "width"), ("Match Height", "height")] {
+                let params = crate::menu::match_size_params(editor, dimension);
+                let enabled = params.is_some();
+                if ui
+                    .add_enabled(enabled, egui::Button::new(label))
+                    .on_disabled_hover_text("Select at least two objects")
+                    .clicked()
+                    && let Some(params) = params
+                {
+                    actions_to_run.push(("object.match_size", params));
+                    ui.close();
+                }
             }
-        }
+        });
     });
 }
 
@@ -3120,7 +3112,6 @@ fn show_multi_properties(
     });
 
     inspector_row(ui, "Flip", |ui| {
-        let icon_size = coursecraft_render::ICON_SM - 2.0;
         for (icon, label, axis) in [
             (
                 coursecraft_render::Icon::ArrowsOut,
@@ -3133,8 +3124,7 @@ fn show_multi_properties(
                 "vertical",
             ),
         ] {
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            if ui.add(button).on_hover_text(label).clicked() {
+            if crate::widgets::icon_button(ui, icon, label).clicked() {
                 let ids: Vec<String> = objects.iter().map(|object| object.id.clone()).collect();
                 actions_to_run.push((
                     "object.flip",
@@ -8007,7 +7997,6 @@ fn show_object_properties(
     });
 
     inspector_row(ui, "Flip", |ui| {
-        let icon_size = coursecraft_render::ICON_SM - 2.0;
         for (icon, label, axis) in [
             (
                 coursecraft_render::Icon::ArrowsOut,
@@ -8020,8 +8009,7 @@ fn show_object_properties(
                 "vertical",
             ),
         ] {
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            if ui.add(button).on_hover_text(label).clicked() {
+            if crate::widgets::icon_button(ui, icon, label).clicked() {
                 action_to_run = Some((
                     "object.flip",
                     serde_json::json!({

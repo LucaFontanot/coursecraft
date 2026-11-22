@@ -221,7 +221,17 @@ pub fn show_variables_tab(
                     ui.end_row();
 
                     for var in &vars {
-                        ui.label(&var.name);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(180.0, coursecraft_render::CONTROL_COMPACT),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_max_width(180.0);
+                                let lbl = ui.add(egui::Label::new(&var.name).truncate());
+                                if var.name.len() > 24 {
+                                    lbl.on_hover_text(&var.name);
+                                }
+                            },
+                        );
                         ui.label(value_kind_name(var.value.kind()));
 
                         match &var.value {

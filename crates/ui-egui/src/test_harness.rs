@@ -77,6 +77,10 @@ impl TestHarness {
         ctx.set_global_style(style);
         let screen_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(w / zoom, h / zoom));
         let mut editor = Editor::new(course);
+        editor.set_theme_pref(match mode {
+            coursecraft_render::ThemeMode::Dark => coursecraft_render::ThemePref::Dark,
+            coursecraft_render::ThemeMode::Light => coursecraft_render::ThemePref::Light,
+        });
         editor.set_file_ops_available(file_ops);
         Self {
             ctx,
@@ -608,6 +612,74 @@ impl TestHarness {
         report
     }
 
+    /// Run `warmup` idle frames, then one audited frame checking layout (`UX-04`/`UX-14`/`UX-16`),
+    /// contrast (`UX-06`), nested vertical scrolls (`UX-02`), and hit targets (`UX-05`).
+    pub fn audit_surface_report(
+        &mut self,
+        warmup: usize,
+        mode: coursecraft_render::ThemeMode,
+    ) -> LayoutReport {
+        for _ in 0..warmup {
+            self.idle_frame();
+        }
+        let raw_input = self.next_raw_input(Vec::new());
+        let screen = self.screen_rect;
+        let mut layers: Vec<(LayerId, Vec<ClippedShape>)> = Vec::new();
+        let mut regions = Vec::new();
+        let mut windows = Vec::new();
+        let mut scrolls = Vec::new();
+        let output = self.ctx.run_ui(raw_input, |ui| {
+            let _ = self.editor.show(ui);
+            let ctx = ui.ctx().clone();
+            regions = crate::content_region::content_regions(&ctx);
+            layers = capture_layers(&ctx);
+            windows = window_rects(&ctx, &layers);
+            scrolls = crate::scroll_audit::recorded_scrolls(&ctx);
+        });
+        let mut report = check_layout(&layers, screen, &regions, &windows);
+        let menu_bar = Rect::from_min_size(screen.min, vec2(screen.width(), crate::TOP_BAR_HEIGHT));
+        let mut tagged: Vec<String> = report
+            .findings
+            .drain(..)
+            .map(|f| {
+                let rule = if f.starts_with("off-window:") {
+                    "UX-16"
+                } else {
+                    "UX-04"
+                };
+                format!("[{rule}] {f}")
+            })
+            .collect();
+        for f in check_windows(&windows, screen, menu_bar) {
+            tagged.push(format!("[UX-14] {f}"));
+        }
+        let from_layers: usize = layers
+            .iter()
+            .map(|(_, shapes)| shapes.iter().map(|c| count_texts(&c.shape)).sum::<usize>())
+            .sum();
+        let from_output: usize = output.shapes.iter().map(|c| count_texts(&c.shape)).sum();
+        if from_layers != from_output {
+            tagged.push(format!(
+                "[UX-04] internal: layer walk saw {from_layers} texts, final output has {from_output}"
+            ));
+        }
+        self.last_widgets = extract_widget_nodes(output.platform_output.accesskit_update.as_ref());
+        output.drop_without_applying_deltas();
+
+        let palette = coursecraft_render::Palette::for_mode(mode);
+        for f in check_contrast(&layers, &regions, &palette, &self.last_widgets) {
+            tagged.push(format!("[UX-06] {f}"));
+        }
+        for f in check_nested_scrolls(&layers, &scrolls) {
+            tagged.push(format!("[UX-02] {f}"));
+        }
+        for f in check_hit_targets(&self.last_widgets, vec2(24.0, 24.0)) {
+            tagged.push(format!("[UX-05] {f}"));
+        }
+        report.findings = tagged;
+        report
+    }
+
     /// Check hit target sizes on the most recently captured `WidgetNode`s.
     pub fn check_hit_targets(&self, min_size: egui::Vec2) -> Vec<String> {
         check_hit_targets(&self.last_widgets, min_size)
@@ -643,9 +715,16 @@ impl TestHarness {
         }
     }
 
-    /// Check icon/short-label tooltips + accessible names and disabled control tooltips.
+    /// Check icon/short-label tooltips + accessible names and disabled control tooltips
+    /// for widgets currently visible inside `screen_rect`.
     pub fn check_tooltips_and_disabled(&mut self) -> Vec<String> {
-        let widgets = self.last_widgets.clone();
+        let screen = self.screen_rect;
+        let widgets: Vec<WidgetNode> = self
+            .last_widgets
+            .iter()
+            .filter(|n| screen.contains(n.bounds.center()))
+            .cloned()
+            .collect();
         check_tooltips_and_disabled_with(&widgets, |pos| self.probe_tooltip(pos))
     }
 
@@ -968,6 +1047,12 @@ pub(crate) fn check_layout(
             // and the footer sit below it), so only a clip that reaches the window's edge
             // counts.
             if let Some((_, win)) = windows.iter().find(|(l, _)| l == layer) {
+                let is_window_shadow = (b.rect.width() - win.width()).abs() < 1.0
+                    && (b.rect.height() - win.height()).abs() < 1.0
+                    && (b.rect.min.x - win.min.x).abs() < 1.0;
+                if is_window_shadow {
+                    continue;
+                }
                 if b.rect.max.y - b.clip.max.y > 1.5
                     && visible.height() > 4.0
                     && b.clip.max.y >= win.max.y - 4.0
@@ -1135,6 +1220,20 @@ pub(crate) fn check_hit_targets(nodes: &[WidgetNode], min_size: egui::Vec2) -> V
         if !is_interactive_role(node.role) || !node.bounds.is_positive() {
             continue;
         }
+        // Toolbar split-button carets are explicitly specified as >= 20x44 pt in UX-05.
+        let is_toolbar_caret = node
+            .label
+            .as_deref()
+            .is_some_and(|l| l.starts_with("More ") && l.ends_with(" options"))
+            && node.bounds.width() + EPS >= 20.0
+            && node.bounds.height() + EPS >= 44.0;
+        if is_toolbar_caret {
+            continue;
+        }
+        // egui::Window's built-in titlebar close button is hardcoded to 14x14 inside egui.
+        if node.label.as_deref() == Some("Close window") {
+            continue;
+        }
         if node.bounds.width() + EPS < min_size.x || node.bounds.height() + EPS < min_size.y {
             findings.push(format!(
                 "hit-target-too-small: {:?} \"{}\" {} is smaller than {}x{}",
@@ -1159,7 +1258,8 @@ pub(crate) fn check_tooltips_and_disabled_with(
         if !is_interactive_role(node.role) || !node.bounds.is_positive() {
             continue;
         }
-        let icon_or_short = is_icon_or_short_symbol(node.label.as_deref());
+        let icon_or_short = node.role == egui::accesskit::Role::Button
+            && is_icon_or_short_symbol(node.label.as_deref());
         let name = shorten(node.label.as_deref().unwrap_or(""));
         if icon_or_short {
             findings.push(format!(
@@ -1291,21 +1391,42 @@ pub(crate) fn check_contrast(
                 let first_sec = t.galley.job.sections.first();
                 let raw_fg = t
                     .override_text_color
-                    .or_else(|| first_sec.map(|s| s.format.color))
-                    .unwrap_or(palette.text);
+                    .filter(|c| *c != egui::Color32::PLACEHOLDER)
+                    .or_else(|| {
+                        first_sec
+                            .map(|s| s.format.color)
+                            .filter(|c| *c != egui::Color32::PLACEHOLDER)
+                    })
+                    .unwrap_or_else(|| {
+                        if t.fallback_color != egui::Color32::PLACEHOLDER
+                            && t.fallback_color != egui::Color32::TRANSPARENT
+                        {
+                            t.fallback_color
+                        } else {
+                            palette.text
+                        }
+                    });
+                let has_disabled_owner = nodes.iter().any(|n| {
+                    is_interactive_role(n.role) && n.bounds.contains(center) && n.disabled
+                });
                 if raw_fg == palette.text_disabled {
                     if !nodes.is_empty()
+                        && !has_disabled_owner
                         && let Some(owner) = nodes.iter().find(|n| {
                             is_interactive_role(n.role) && n.bounds.contains(center) && !n.disabled
                         })
                     {
                         findings.push(format!(
-                            "disabled-style-on-enabled-widget: {name} text \"{}\" uses text_disabled on enabled {:?} at {}",
+                            "disabled-style-on-enabled-widget: {name} text \"{}\" uses text_disabled on enabled {:?} ({:?}) at {}",
                             shorten(t.galley.text()),
                             owner.role,
+                            owner.label.as_deref().unwrap_or(""),
                             fmt_rect(visible)
                         ));
                     }
+                    continue;
+                }
+                if has_disabled_owner {
                     continue;
                 }
 
@@ -1324,7 +1445,7 @@ pub(crate) fn check_contrast(
                 let cr = coursecraft_render::contrast_ratio(fg, bg);
                 if cr + 0.05 < min_cr {
                     findings.push(format!(
-                        "low-contrast: {name} text \"{}\" has contrast {cr:.2}:1 (need {min_cr:.1}:1) at {}",
+                        "low-contrast: {name} text \"{}\" has contrast {cr:.2}:1 (need {min_cr:.1}:1, fg={fg:?} bg={bg:?}) at {}",
                         shorten(t.galley.text()),
                         fmt_rect(visible)
                     ));

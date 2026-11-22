@@ -77,15 +77,15 @@ fn edge_color(p: coursecraft_render::Palette, kind: MapEdgeKind) -> Color32 {
 
 /// One line of the legend: a sample stroke and its label.
 fn legend_entry(ui: &mut Ui, color: Color32, dashed: bool, label: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(22.0, 2.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(14.0, 2.0), Sense::hover());
     let y = rect.center().y;
     let stroke = Stroke::new(1.5, color);
     if dashed {
         for shape in egui::Shape::dashed_line(
             &[pos2(rect.min.x, y), pos2(rect.max.x, y)],
             stroke,
-            5.0,
-            3.0,
+            4.0,
+            2.0,
         ) {
             ui.painter().add(shape);
         }
@@ -109,7 +109,8 @@ pub fn show_course_map(editor: &mut Editor, ui: &mut Ui) {
 
     // Legend, pinned above the scroll area.
     ui.horizontal(|ui| {
-        ui.label(coursecraft_render::small("Course map"));
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(coursecraft_render::small("Map"));
         legend_entry(ui, edge_color(p, MapEdgeKind::Jump), false, "Jump");
         legend_entry(ui, edge_color(p, MapEdgeKind::Lightbox), false, "Lightbox");
         legend_entry(ui, edge_color(p, MapEdgeKind::Link), false, "Link");
@@ -202,7 +203,7 @@ pub fn show_course_map(editor: &mut Editor, ui: &mut Ui) {
             // Insertion marker while dragging.
             handle_map_drag(editor, ui, &rows, &headers);
         });
-    let _ = out;
+    crate::content_region::mark_content_region(ui.ctx(), ui.layer_id(), out.inner_rect);
     editor.ui.course_map.cached_map = Some(map);
 }
 

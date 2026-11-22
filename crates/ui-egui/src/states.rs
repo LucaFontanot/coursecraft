@@ -299,7 +299,10 @@ pub fn show_states_section(
         ] {
             let already_added = states_copy.iter().any(|s| s.name == state_name);
             if ui
-                .add_enabled(!already_added, egui::Button::new(button_label).small())
+                .add_enabled(
+                    !already_added,
+                    egui::Button::new(button_label).min_size(egui::vec2(0.0, 24.0)),
+                )
                 .on_disabled_hover_text("This state is already added")
                 .clicked()
             {

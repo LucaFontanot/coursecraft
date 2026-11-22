@@ -264,6 +264,10 @@ mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;
 #[cfg(test)]
+mod uiux_allowlist;
+#[cfg(test)]
+mod uiux_sweep_tests;
+#[cfg(test)]
 mod var_compare_tests;
 #[cfg(test)]
 mod video_selection_tests;

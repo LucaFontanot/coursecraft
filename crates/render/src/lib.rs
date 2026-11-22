@@ -50,6 +50,8 @@ mod review_tests;
 mod shape_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod uiux_player_tests;
 
 pub use access::{
     ANSWER_REQUIRED_ANNOUNCEMENT, AccessNode, AccessRole, AccessTree, announcement,

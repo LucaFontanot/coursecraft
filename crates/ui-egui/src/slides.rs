@@ -120,7 +120,7 @@ pub fn show_slides_panel(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
         .show_separator_line(true)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let caret_w = 22.0;
+                let caret_w = 24.0;
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let add_btn = egui::Button::new(
                     coursecraft_render::icon_text(coursecraft_render::Icon::Plus, "New slide")
@@ -135,17 +135,24 @@ pub fn show_slides_panel(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 if ui.add(add_btn).clicked() {
                     crate::toolbar::add_new_slide(editor);
                 }
-                let caret = ui.add(
-                    egui::Button::new(
-                        coursecraft_render::icon(
-                            coursecraft_render::Icon::CaretDown,
-                            coursecraft_render::ICON_SM,
+                let caret = ui
+                    .add(
+                        egui::Button::new(
+                            coursecraft_render::icon(
+                                coursecraft_render::Icon::CaretDown,
+                                coursecraft_render::ICON_SM,
+                            )
+                            .color(p.text_secondary),
                         )
-                        .color(p.text_secondary),
+                        .frame(false)
+                        .min_size(vec2(caret_w, coursecraft_render::CONTROL_COMPACT)),
                     )
-                    .frame(false)
-                    .min_size(vec2(caret_w, coursecraft_render::CONTROL_COMPACT)),
-                );
+                    .on_hover_text("More slide options");
+                caret.widget_info(|| {
+                    let mut info = egui::WidgetInfo::new(egui::Role::Button);
+                    info.label = Some("More slide options".to_owned());
+                    info
+                });
                 egui::Popup::menu(&caret)
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .show(|ui| {
@@ -1286,27 +1293,18 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             }
             // "+" at the right of the header: a new slide at the end of this
             // scene, so a slide never has to be made elsewhere and dragged in.
-            let add_size = vec2(22.0, 22.0);
+            let add_size = vec2(26.0, 26.0);
             let add_rect = Rect::from_center_size(
                 pos2(header_rect.max.x - add_size.x * 0.5, header_rect.center().y),
                 add_size,
             );
-            let add_btn = egui::Button::new(
-                coursecraft_render::icon(
-                    coursecraft_render::Icon::Plus,
-                    coursecraft_render::ICON_SM,
-                )
-                .color(p.text_secondary),
-            )
-            .fill(egui::Color32::TRANSPARENT)
-            .corner_radius(coursecraft_render::RADIUS_SM as u8)
-            .min_size(add_size);
-            if ui
-                .put(add_rect, add_btn)
-                .on_hover_text(format!("New slide in {}", scene.title))
-                .clicked()
-                && !editor.ui.master_view
-            {
+            let add_tooltip = format!("New slide in {}", scene.title);
+            let add_resp = ui
+                .scope_builder(egui::UiBuilder::new().max_rect(add_rect), |ui| {
+                    crate::widgets::icon_button(ui, coursecraft_render::Icon::Plus, &add_tooltip)
+                })
+                .inner;
+            if add_resp.clicked() && !editor.ui.master_view {
                 action_to_run = Some((
                     "slide.add",
                     serde_json::json!({
@@ -1522,6 +1520,11 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 let more_resp = ui
                     .interact(more_btn_rect, more_id, Sense::click())
                     .on_hover_text("Slide options");
+                more_resp.widget_info(|| {
+                    let mut info = egui::WidgetInfo::new(egui::Role::Button);
+                    info.label = Some("Slide options".to_owned());
+                    info
+                });
                 let icon_color = if more_resp.hovered() {
                     p.text
                 } else {
