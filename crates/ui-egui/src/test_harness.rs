@@ -883,6 +883,12 @@ pub(crate) fn check_windows(
     const TOLERANCE: f32 = 1.0;
     let mut findings = Vec::new();
     for (layer, rect) in windows {
+        // Full-screen modal backdrops intentionally cover and dim the menu bar.
+        if (rect.width() - screen.width()).abs() <= TOLERANCE
+            && (rect.height() - screen.height()).abs() <= TOLERANCE
+        {
+            continue;
+        }
         let name = layer_name(*layer);
         if rect.min.x < screen.min.x - TOLERANCE
             || rect.min.y < screen.min.y - TOLERANCE

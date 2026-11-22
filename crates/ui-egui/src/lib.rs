@@ -256,6 +256,8 @@ mod u13_core_authoring_dialogs_tests;
 #[cfg(test)]
 mod u14_ai_dialogs_tests;
 #[cfg(test)]
+mod u15_status_welcome_tests;
+#[cfg(test)]
 mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;
@@ -4247,7 +4249,7 @@ impl Editor {
         }
 
         // 4. Left slides panel
-        Panel::left("editor_slides_panel")
+        let slides_panel = Panel::left("editor_slides_panel")
             .default_size(220.0)
             .size_range(180.0..=320.0)
             .resizable(true)
@@ -4259,7 +4261,7 @@ impl Editor {
             });
 
         // 5. Right properties panel (Inspector: Format, Animate, Slide, Course)
-        Panel::right("editor_properties_panel")
+        let properties_panel = Panel::right("editor_properties_panel")
             .default_size(PROPERTIES_PANEL_WIDTH)
             .size_range(260.0..=400.0)
             .resizable(true)
@@ -4274,6 +4276,12 @@ impl Editor {
                 properties::show_properties_panel(self, &mut content);
                 ui.allocate_rect(rect, egui::Sense::hover());
             });
+        coach::set_chrome_rects(
+            ui.ctx(),
+            toolbar_panel.response.rect,
+            slides_panel.response.rect,
+            properties_panel.response.rect,
+        );
 
         // 6. Central canvas and layers strip, or the course map.
         egui::CentralPanel::default()

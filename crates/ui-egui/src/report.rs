@@ -356,21 +356,27 @@ fn show_crash_prompt(editor: &mut Editor, ctx: &Context, requests: &mut Vec<Edit
     if !editor.ui.report.crash_prompt {
         return;
     }
-    Dialog::new("CourseCraft closed unexpectedly").show(ctx, |ui| {
-        ui.label("CourseCraft closed unexpectedly last time. Report it?");
-        ui.add_space(design::SPACE_MD);
-        ui.horizontal(|ui| {
-            if ui.add(Button::new("Report…")).clicked() {
-                editor.report_crash(requests);
-            }
-            if ui.add(Button::new("Not now")).clicked() {
-                editor.dismiss_crash(requests);
-            }
-            if ui.add(Button::new("Don't ask again")).clicked() {
-                editor.dismiss_crash(requests);
-            }
+    let mut open = true;
+    Dialog::new("CourseCraft closed unexpectedly")
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.label("CourseCraft closed unexpectedly last time. Report it?");
+            ui.add_space(design::SPACE_MD);
+            ui.horizontal(|ui| {
+                if ui.add(Button::new("Report…")).clicked() {
+                    editor.report_crash(requests);
+                }
+                if ui.add(Button::new("Not now")).clicked() {
+                    editor.dismiss_crash(requests);
+                }
+                if ui.add(Button::new("Don't ask again")).clicked() {
+                    editor.dismiss_crash(requests);
+                }
+            });
         });
-    });
+    if !open && editor.ui.report.crash_prompt {
+        editor.dismiss_crash(requests);
+    }
 }
 
 fn show_report_window(editor: &mut Editor, ctx: &Context) {
@@ -419,6 +425,9 @@ fn report_fields(state: &mut ReportState, ui: &mut egui::Ui) {
                 .desired_rows(8)
                 .desired_width(f32::INFINITY)
                 .font(egui::TextStyle::Monospace),
+        )
+        .on_disabled_hover_text(
+            "Check \"Include technical details\" above to preview or share them",
         );
     });
 }

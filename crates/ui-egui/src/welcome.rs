@@ -352,7 +352,7 @@ pub fn show_welcome_screen(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<
     // Allocate child UI for the card
     let mut card_ui = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(
         card_rect.min,
-        vec2(card_w, ground_rect.height() - card_y - 16.0),
+        vec2(card_w, (ground_rect.max.y - card_y - 16.0).max(120.0)),
     )));
 
     let card_frame = egui::Frame::NONE
@@ -599,20 +599,40 @@ pub fn show_welcome_screen(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<
                                     p.hover,
                                 );
                             }
-                            let text_y = row_rect.center().y - 7.0;
+                            let text_y = row_rect.center().y;
+                            let max_name_w = (row_rect.width() * 0.45).max(80.0);
+                            let name_galley = ui.painter().layout(
+                                name.to_owned(),
+                                egui::FontId::proportional(SIZE_BODY),
+                                p.text,
+                                max_name_w,
+                            );
+                            let name_w = name_galley.size().x.min(max_name_w);
                             ui.painter().text(
                                 pos2(row_rect.min.x + 8.0, text_y),
                                 Align2::LEFT_CENTER,
-                                name,
+                                if name_galley.rows.len() > 1 {
+                                    format!("{}…", name.chars().take(24).collect::<String>())
+                                } else {
+                                    name.to_owned()
+                                },
                                 egui::FontId::proportional(SIZE_BODY),
                                 p.text,
                             );
                             if !dir_display.is_empty() {
-                                let truncated = if dir_display.len() > 50 {
-                                    format!(
-                                        "…{}",
-                                        &dir_display[dir_display.len().saturating_sub(47)..]
-                                    )
+                                let avail_dir = (row_rect.width() - name_w - 28.0).max(40.0);
+                                let max_chars = ((avail_dir / 6.5) as usize).clamp(12, 50);
+                                let truncated = if dir_display.chars().count() > max_chars {
+                                    let keep = max_chars.saturating_sub(1);
+                                    let tail: String = dir_display
+                                        .chars()
+                                        .rev()
+                                        .take(keep)
+                                        .collect::<String>()
+                                        .chars()
+                                        .rev()
+                                        .collect();
+                                    format!("…{tail}")
                                 } else {
                                     dir_display.to_owned()
                                 };
