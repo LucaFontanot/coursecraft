@@ -381,8 +381,8 @@ fn build_intro_slide(harness: &mut TestHarness) {
     harness.set_field(layer_dur_rect.center(), "3000");
 
     let prev_chk = harness
-        .find_text("Stop clicks on the base layer")
-        .expect("Stop clicks checkbox");
+        .find_text("Block clicks on the base layer")
+        .expect("Block clicks checkbox");
     harness.click_at(prev_chk);
     harness.idle_frame();
     let ok = harness.find_text_last("OK").expect("Layer Settings OK");

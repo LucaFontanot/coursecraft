@@ -1350,12 +1350,12 @@ fn render_object_rows(
             ui.scope_id().with("timeline_row").with(oid),
             Sense::click(),
         );
-        // Eye and lock buttons at the right end of the name column.
+        // Eye and lock buttons at the right end of the name column (>= 24x24 hit target).
         let lock_rect = Rect::from_center_size(
             pos2(header_row_rect.max.x - 12.0, header_row_rect.center().y),
-            vec2(16.0, 16.0),
+            vec2(24.0, 24.0),
         );
-        let eye_rect = lock_rect.translate(vec2(-18.0, 0.0));
+        let eye_rect = lock_rect.translate(vec2(-26.0, 0.0));
         let (is_hidden, is_locked) = editor
             .session
             .course
@@ -1363,27 +1363,28 @@ fn render_object_rows(
             .and_then(|s| s.object(oid))
             .map(|(o, _)| (o.editor_hidden, o.locked))
             .unwrap_or((false, false));
+        let eye_label = if is_hidden {
+            "Show on canvas"
+        } else {
+            "Hide on canvas"
+        };
+        let lock_label = if is_locked { "Unlock" } else { "Lock" };
         let eye_resp = ui
             .interact(
                 eye_rect,
                 ui.scope_id().with("timeline_eye").with(oid),
                 Sense::click(),
             )
-            .on_hover_text(if is_hidden {
-                "Show on canvas"
-            } else {
-                "Hide on canvas"
-            });
+            .on_hover_text(eye_label);
         let lock_resp = ui
             .interact(
                 lock_rect,
                 ui.scope_id().with("timeline_lock").with(oid),
                 Sense::click(),
             )
-            .on_hover_text(if is_locked { "Unlock" } else { "Lock" });
-        eye_resp
-            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Hide on canvas"));
-        lock_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Lock"));
+            .on_hover_text(lock_label);
+        eye_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, eye_label));
+        lock_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, lock_label));
         if eye_resp.clicked() {
             let next = !is_hidden;
             let slide_id = editor.selection.slide.clone();
@@ -2008,28 +2009,39 @@ fn show_cue_rename_window(
     let Some(mut rename) = editor.ui.timeline.cue_rename.take() else {
         return;
     };
+    let mut open = true;
     let mut commit = false;
     let mut cancel = false;
-    Dialog::new("Rename cue").show(ui.ctx(), |ui| {
-        ui.label("Cue name");
-        let response =
-            ui.add(TextEdit::singleline(&mut rename.text).id_salt("timeline_cue_rename_text"));
-        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            commit = true;
-        }
-        if let Some(error) = &rename.error {
-            ui.colored_label(coursecraft_render::palette(ui.ctx()).danger, error.clone());
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Rename").clicked() {
-                commit = true;
-            }
-            if ui.button("Cancel").clicked() {
-                cancel = true;
-            }
+    Dialog::new("Rename cue")
+        .width(320.0)
+        .open(&mut open)
+        .show_with_footer(ui.ctx(), |dialog| {
+            dialog.body(|ui| {
+                ui.label("Cue name");
+                let response = ui.add(
+                    TextEdit::singleline(&mut rename.text).id_salt("timeline_cue_rename_text"),
+                );
+                if (response.has_focus() || response.lost_focus())
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
+                    commit = true;
+                }
+                if let Some(error) = &rename.error {
+                    ui.colored_label(coursecraft_render::palette(ui.ctx()).danger, error.clone());
+                }
+            });
+            dialog.footer(|ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui.button("Rename").clicked() {
+                        commit = true;
+                    }
+                });
+            });
         });
-    });
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if !open {
         cancel = true;
     }
     if commit {
@@ -2061,28 +2073,40 @@ fn show_slide_cue_rename_window(
     let Some(mut rename) = editor.ui.timeline.slide_cue_rename.take() else {
         return;
     };
+    let mut open = true;
     let mut commit = false;
     let mut cancel = false;
-    Dialog::new("Rename timeline cue").show(ui.ctx(), |ui| {
-        ui.label("Cue name");
-        let response = ui
-            .add(TextEdit::singleline(&mut rename.text).id_salt("timeline_slide_cue_rename_text"));
-        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            commit = true;
-        }
-        if let Some(error) = &rename.error {
-            ui.colored_label(coursecraft_render::palette(ui.ctx()).danger, error.clone());
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Rename").clicked() {
-                commit = true;
-            }
-            if ui.button("Cancel").clicked() {
-                cancel = true;
-            }
+    Dialog::new("Rename timeline cue")
+        .width(320.0)
+        .open(&mut open)
+        .show_with_footer(ui.ctx(), |dialog| {
+            dialog.body(|ui| {
+                ui.label("Cue name");
+                let response = ui.add(
+                    TextEdit::singleline(&mut rename.text)
+                        .id_salt("timeline_slide_cue_rename_text"),
+                );
+                if (response.has_focus() || response.lost_focus())
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
+                    commit = true;
+                }
+                if let Some(error) = &rename.error {
+                    ui.colored_label(coursecraft_render::palette(ui.ctx()).danger, error.clone());
+                }
+            });
+            dialog.footer(|ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui.button("Rename").clicked() {
+                        commit = true;
+                    }
+                });
+            });
         });
-    });
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if !open {
         cancel = true;
     }
     if commit {

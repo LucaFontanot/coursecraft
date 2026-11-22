@@ -246,6 +246,8 @@ mod trigger_speed_tests;
 #[cfg(test)]
 mod try_again_tests;
 #[cfg(test)]
+mod u10_timeline_layers_tests;
+#[cfg(test)]
 mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;
