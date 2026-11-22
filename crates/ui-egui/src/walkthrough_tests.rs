@@ -535,8 +535,8 @@ fn build_tabs_slide(harness: &mut TestHarness) {
     harness.idle_frame();
 
     let add_var_label = harness
-        .find_text("Add Variable")
-        .expect("Add Variable label");
+        .find_text("Add variable")
+        .expect("Add variable label");
     harness.set_field(add_var_label + vec2(80.0, 0.0), "tabs_seen");
 
     let add_btn = harness

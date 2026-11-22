@@ -87,7 +87,7 @@ pub fn show_variables_tab(
     // 1. Add Variable bar (header button hidden when empty so there is only one primary action)
     let p = coursecraft_render::palette(ui.ctx());
     ui.horizontal(|ui| {
-        ui.label(coursecraft_render::caption("Add Variable").color(p.text_secondary));
+        ui.label(coursecraft_render::caption("Add variable").color(p.text_secondary));
 
         let name_resp = ui.add(
             TextEdit::singleline(&mut editor.ui.variables.new_name)
@@ -95,7 +95,7 @@ pub fn show_variables_tab(
                 .desired_width(120.0),
         );
 
-        egui::ComboBox::from_id_salt("var_new_type_combo")
+        crate::widgets::styled_combo(ui, "var_new_type_combo", crate::widgets::COMBO_MIN_WIDTH)
             .selected_text(value_kind_name(editor.ui.variables.new_kind))
             .show_ui(ui, |ui| {
                 for kind in ALL_VALUE_KINDS {
@@ -127,14 +127,18 @@ pub fn show_variables_tab(
             }
         }
 
-        let name_valid = !editor.ui.variables.new_name.trim().is_empty();
+        let trimmed_name = editor.ui.variables.new_name.trim();
+        let name_valid = !trimmed_name.is_empty() && !vars.iter().any(|v| v.name == trimmed_name);
         let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter))
             && (name_resp.has_focus() || name_resp.lost_focus());
         let mut add_clicked = false;
         if !vars.is_empty() {
             let add_btn = egui::Button::new(coursecraft_render::body("+ Add").color(p.accent_text))
                 .fill(egui::Color32::TRANSPARENT);
-            add_clicked = ui.add_enabled(name_valid, add_btn).clicked();
+            add_clicked = ui
+                .add_enabled(name_valid, add_btn)
+                .on_disabled_hover_text("Enter a unique variable name")
+                .clicked();
         }
         if name_valid && (add_clicked || enter_pressed) {
             let name = editor.ui.variables.new_name.trim().to_owned();
@@ -212,7 +216,7 @@ pub fn show_variables_tab(
                 .show(ui, |ui| {
                     ui.label(RichText::new("Name").strong());
                     ui.label(RichText::new("Type").strong());
-                    ui.label(RichText::new("Initial Value").strong());
+                    ui.label(RichText::new("Initial value").strong());
                     ui.label(RichText::new("Actions").strong());
                     ui.end_row();
 

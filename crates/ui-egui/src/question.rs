@@ -471,18 +471,22 @@ fn show_question_editor_body(
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Kind").strong());
                 let prev_kind = editor.ui.question.kind;
-                egui::ComboBox::from_id_salt("question_kind_combo")
-                    .height(320.0)
-                    .selected_text(question_kind_name(editor.ui.question.kind))
-                    .show_ui(ui, |ui| {
-                        for kind in ALL_QUESTION_KINDS {
-                            ui.selectable_value(
-                                &mut editor.ui.question.kind,
-                                kind,
-                                question_kind_name(kind),
-                            );
-                        }
-                    });
+                crate::widgets::styled_combo(
+                    ui,
+                    "question_kind_combo",
+                    ui.available_width().clamp(120.0, 200.0),
+                )
+                .truncate()
+                .selected_text(question_kind_name(editor.ui.question.kind))
+                .show_ui(ui, |ui| {
+                    for kind in ALL_QUESTION_KINDS {
+                        ui.selectable_value(
+                            &mut editor.ui.question.kind,
+                            kind,
+                            question_kind_name(kind),
+                        );
+                    }
+                });
 
                 if editor.ui.question.kind != prev_kind {
                     // `question.set_kind` seeds a valid question for the new kind.
@@ -523,18 +527,22 @@ fn show_question_editor_body(
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Kind").strong());
                 let prev_kind = editor.ui.question.kind;
-                egui::ComboBox::from_id_salt("question_kind_combo")
-                    .height(320.0)
-                    .selected_text(question_kind_name(editor.ui.question.kind))
-                    .show_ui(ui, |ui| {
-                        for kind in ALL_QUESTION_KINDS {
-                            ui.selectable_value(
-                                &mut editor.ui.question.kind,
-                                kind,
-                                question_kind_name(kind),
-                            );
-                        }
-                    });
+                crate::widgets::styled_combo(
+                    ui,
+                    "question_kind_combo",
+                    ui.available_width().clamp(120.0, 200.0),
+                )
+                .truncate()
+                .selected_text(question_kind_name(editor.ui.question.kind))
+                .show_ui(ui, |ui| {
+                    for kind in ALL_QUESTION_KINDS {
+                        ui.selectable_value(
+                            &mut editor.ui.question.kind,
+                            kind,
+                            question_kind_name(kind),
+                        );
+                    }
+                });
 
                 if editor.ui.question.kind != prev_kind {
                     kind_change = Some(editor.ui.question.kind);
@@ -876,7 +884,12 @@ fn show_choice_rows(
                     .map(|c| c.points);
                 let pr = {
                     let c = &mut editor.ui.question.choices[idx];
-                    ui.add(DragValue::new(&mut c.points).speed(1.0).range(-1000..=1000))
+                    ui.add(
+                        DragValue::new(&mut c.points)
+                            .speed(1.0)
+                            .range(-1000..=1000)
+                            .suffix(" pts"),
+                    )
                 }
                 .on_hover_text("Points for this answer");
                 let enter = pr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -895,7 +908,16 @@ fn show_choice_rows(
                 {
                     choice_to_swap = Some((idx, idx + 1));
                 }
-                if icon_button_danger(ui, Icon::Trash, true, "Remove choice").clicked() {
+                let min_choices = if marks { 2 } else { 1 };
+                let can_remove = choices_count > min_choices;
+                let remove_tip = if can_remove {
+                    "Remove choice"
+                } else if min_choices == 2 {
+                    "At least 2 choices are required"
+                } else {
+                    "At least 1 choice is required"
+                };
+                if icon_button_danger(ui, Icon::Trash, can_remove, remove_tip).clicked() {
                     choice_to_remove = Some(idx);
                 }
             }
@@ -935,7 +957,11 @@ fn show_fill_in(
         ui.label(coursecraft_render::caption("Accepted answers").color(p.text_secondary));
         let btn = egui::Button::new(coursecraft_render::body("+ Add answer").color(p.accent_text))
             .fill(Color32::TRANSPARENT);
-        if ui.add_enabled(n < 50, btn).clicked() {
+        if ui
+            .add_enabled(n < 50, btn)
+            .on_disabled_hover_text("Maximum 50 answers reached")
+            .clicked()
+        {
             structural.push(("question.add_accepted", serde_json::json!({ "slide": sid })));
         }
     });
@@ -1003,7 +1029,11 @@ fn show_sequence(
         ui.label(coursecraft_render::caption("Items (correct order)").color(p.text_secondary));
         let btn = egui::Button::new(coursecraft_render::body("+ Add item").color(p.accent_text))
             .fill(Color32::TRANSPARENT);
-        if ui.add_enabled(n < 20, btn).clicked() {
+        if ui
+            .add_enabled(n < 20, btn)
+            .on_disabled_hover_text("Maximum 20 items reached")
+            .clicked()
+        {
             let next_id = next_choice_id(&editor.ui.question.choices);
             let label = format!("Item {}", n.saturating_add(1));
             editor.ui.question.choices.push(Choice {
@@ -1086,7 +1116,11 @@ fn show_pairs(
         ui.label(coursecraft_render::caption("Pairs").color(p.text_secondary));
         let btn = egui::Button::new(coursecraft_render::body("+ Add pair").color(p.accent_text))
             .fill(Color32::TRANSPARENT);
-        if ui.add_enabled(n < 20, btn).clicked() {
+        if ui
+            .add_enabled(n < 20, btn)
+            .on_disabled_hover_text("Maximum 20 items reached")
+            .clicked()
+        {
             structural.push(("question.add_pair", serde_json::json!({ "slide": sid })));
         }
     });
@@ -1295,22 +1329,27 @@ fn show_hotspot(
                 current_image_id
             });
 
-        egui::ComboBox::from_id_salt("hotspot_image_combo")
-            .selected_text(current_image_name)
-            .show_ui(ui, |ui| {
-                for (id, name) in &base_images {
-                    let is_selected = *id == current_image_id;
-                    if ui.selectable_label(is_selected, *name).clicked() && !is_selected {
-                        structural.push((
-                            "question.set_hotspot_image",
-                            serde_json::json!({
-                                "slide": sid,
-                                "image": *id,
-                            }),
-                        ));
-                    }
+        crate::widgets::styled_combo(
+            ui,
+            "hotspot_image_combo",
+            ui.available_width().clamp(100.0, 180.0),
+        )
+        .truncate()
+        .selected_text(current_image_name)
+        .show_ui(ui, |ui| {
+            for (id, name) in &base_images {
+                let is_selected = *id == current_image_id;
+                if ui.selectable_label(is_selected, *name).clicked() && !is_selected {
+                    structural.push((
+                        "question.set_hotspot_image",
+                        serde_json::json!({
+                            "slide": sid,
+                            "image": *id,
+                        }),
+                    ));
                 }
-            });
+            }
+        });
 
         if hotspot_missing && !narrow {
             let p = coursecraft_render::palette(ui.ctx());
@@ -1390,7 +1429,11 @@ fn show_hotspot(
         ui.label(coursecraft_render::caption("Regions").color(p.text_secondary));
         let btn = egui::Button::new(coursecraft_render::body("+ Add region").color(p.accent_text))
             .fill(Color32::TRANSPARENT);
-        if ui.add_enabled(n < 20, btn).clicked() {
+        if ui
+            .add_enabled(n < 20, btn)
+            .on_disabled_hover_text("Maximum 20 items reached")
+            .clicked()
+        {
             structural.push(("question.add_region", serde_json::json!({ "slide": sid })));
         }
     });
@@ -1417,9 +1460,8 @@ fn show_hotspot(
                 HotspotShape::Rect => "Rectangle",
                 HotspotShape::Ellipse => "Ellipse",
             };
-            egui::ComboBox::from_id_salt(format!("region_shape_{}", r.id))
+            crate::widgets::styled_combo(ui, format!("region_shape_{}", r.id), 120.0)
                 .selected_text(shape_text)
-                .width(90.0)
                 .show_ui(ui, |ui| {
                     if ui
                         .selectable_value(&mut r.shape.clone(), HotspotShape::Rect, "Rectangle")
@@ -1461,7 +1503,8 @@ fn show_hotspot(
             let xr = ui.add(
                 DragValue::new(&mut x)
                     .speed(1.0)
-                    .range(-100_000.0..=100_000.0),
+                    .range(-100_000.0..=100_000.0)
+                    .suffix(" px"),
             );
             let enter_x = xr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (xr.drag_stopped() || xr.lost_focus() || enter_x) && (x - r.x).abs() > 1e-3 {
@@ -1480,7 +1523,8 @@ fn show_hotspot(
             let yr = ui.add(
                 DragValue::new(&mut y)
                     .speed(1.0)
-                    .range(-100_000.0..=100_000.0),
+                    .range(-100_000.0..=100_000.0)
+                    .suffix(" px"),
             );
             let enter_y = yr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (yr.drag_stopped() || yr.lost_focus() || enter_y) && (y - r.y).abs() > 1e-3 {
@@ -1494,37 +1538,47 @@ fn show_hotspot(
                 ));
             }
 
-            ui.label("W");
-            let mut w = r.w;
-            let wr = ui.add(DragValue::new(&mut w).speed(1.0).range(1.0..=100_000.0));
-            let enter_w = wr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (wr.drag_stopped() || wr.lost_focus() || enter_w) && (w - r.w).abs() > 1e-3 {
-                structural.push((
-                    "question.update_region",
-                    serde_json::json!({
-                        "slide": sid,
-                        "id": r.id,
-                        "w": w,
-                    }),
-                ));
-            }
-
-            ui.label("H");
-            let mut h = r.h;
-            let hr = ui.add(DragValue::new(&mut h).speed(1.0).range(1.0..=100_000.0));
-            let enter_h = hr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (hr.drag_stopped() || hr.lost_focus() || enter_h) && (h - r.h).abs() > 1e-3 {
-                structural.push((
-                    "question.update_region",
-                    serde_json::json!({
-                        "slide": sid,
-                        "id": r.id,
-                        "h": h,
-                    }),
-                ));
-            }
-
             if !narrow_region {
+                ui.label("W");
+                let mut w = r.w;
+                let wr = ui.add(
+                    DragValue::new(&mut w)
+                        .speed(1.0)
+                        .range(1.0..=100_000.0)
+                        .suffix(" px"),
+                );
+                let enter_w = wr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (wr.drag_stopped() || wr.lost_focus() || enter_w) && (w - r.w).abs() > 1e-3 {
+                    structural.push((
+                        "question.update_region",
+                        serde_json::json!({
+                            "slide": sid,
+                            "id": r.id,
+                            "w": w,
+                        }),
+                    ));
+                }
+
+                ui.label("H");
+                let mut h = r.h;
+                let hr = ui.add(
+                    DragValue::new(&mut h)
+                        .speed(1.0)
+                        .range(1.0..=100_000.0)
+                        .suffix(" px"),
+                );
+                let enter_h = hr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (hr.drag_stopped() || hr.lost_focus() || enter_h) && (h - r.h).abs() > 1e-3 {
+                    structural.push((
+                        "question.update_region",
+                        serde_json::json!({
+                            "slide": sid,
+                            "id": r.id,
+                            "h": h,
+                        }),
+                    ));
+                }
+
                 let mut correct = r.correct;
                 let can_toggle_correct =
                     !correct || regions.iter().filter(|reg| reg.correct).count() > 1;
@@ -1533,6 +1587,7 @@ fn show_hotspot(
                         can_toggle_correct,
                         egui::Checkbox::new(&mut correct, "Correct"),
                     )
+                    .on_disabled_hover_text("At least one region must be marked correct")
                     .changed()
                 {
                     structural.push((
@@ -1555,6 +1610,48 @@ fn show_hotspot(
         if narrow_region {
             ui.horizontal(|ui| {
                 ui.add_space(22.0);
+                ui.label("W");
+                let mut w = r.w;
+                let wr = ui.add(
+                    DragValue::new(&mut w)
+                        .speed(1.0)
+                        .range(1.0..=100_000.0)
+                        .suffix(" px"),
+                );
+                let enter_w = wr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (wr.drag_stopped() || wr.lost_focus() || enter_w) && (w - r.w).abs() > 1e-3 {
+                    structural.push((
+                        "question.update_region",
+                        serde_json::json!({
+                            "slide": sid,
+                            "id": r.id,
+                            "w": w,
+                        }),
+                    ));
+                }
+
+                ui.label("H");
+                let mut h = r.h;
+                let hr = ui.add(
+                    DragValue::new(&mut h)
+                        .speed(1.0)
+                        .range(1.0..=100_000.0)
+                        .suffix(" px"),
+                );
+                let enter_h = hr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (hr.drag_stopped() || hr.lost_focus() || enter_h) && (h - r.h).abs() > 1e-3 {
+                    structural.push((
+                        "question.update_region",
+                        serde_json::json!({
+                            "slide": sid,
+                            "id": r.id,
+                            "h": h,
+                        }),
+                    ));
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.add_space(22.0);
                 let mut correct = r.correct;
                 let can_toggle_correct =
                     !correct || regions.iter().filter(|reg| reg.correct).count() > 1;
@@ -1563,6 +1660,7 @@ fn show_hotspot(
                         can_toggle_correct,
                         egui::Checkbox::new(&mut correct, "Correct"),
                     )
+                    .on_disabled_hover_text("At least one region must be marked correct")
                     .changed()
                 {
                     structural.push((
@@ -1687,7 +1785,13 @@ fn show_drag_drop(
         let can_add = n < 20 && !available_new_items.is_empty() && !target_candidates.is_empty();
         let btn = egui::Button::new(coursecraft_render::body("+ Add item").color(p.accent_text))
             .fill(Color32::TRANSPARENT);
-        if ui.add_enabled(can_add, btn).clicked() {
+        if ui
+            .add_enabled(can_add, btn)
+            .on_disabled_hover_text(
+                "Add at least 2 objects on the slide to create drag items (max 20)",
+            )
+            .clicked()
+        {
             let new_item = available_new_items[0].clone();
             let new_target = target_candidates
                 .iter()
@@ -1712,9 +1816,10 @@ fn show_drag_drop(
             ui.label(format!("{} →", obj_name(&d.item)));
 
             let current_target_name = obj_name(&d.target);
-            egui::ComboBox::from_id_salt(format!("target_combo_{}", d.item))
+            let combo_w = (ui.available_width() - 34.0).clamp(90.0, 160.0);
+            crate::widgets::styled_combo(ui, format!("target_combo_{}", d.item), combo_w)
+                .truncate()
                 .selected_text(current_target_name)
-                .width(140.0)
                 .show_ui(ui, |ui| {
                     for t_id in &target_candidates {
                         if t_id == &d.item {
@@ -1804,7 +1909,8 @@ fn layer_picker(
     committed: &mut bool,
 ) {
     ui.label(label);
-    egui::ComboBox::from_id_salt(salt)
+    crate::widgets::styled_combo(ui, salt, ui.available_width().clamp(100.0, 140.0))
+        .truncate()
         .selected_text(layer_label(slide, current.as_deref()))
         .show_ui(ui, |ui| {
             let is_none = current.is_none();
@@ -1835,7 +1941,8 @@ fn points_ui(editor: &mut crate::Editor, ui: &mut Ui, slide: &Slide, committed: 
     let pr = ui.add(
         DragValue::new(&mut editor.ui.question.points)
             .speed(1.0)
-            .range(0..=1000),
+            .range(0..=1000)
+            .suffix(" pts"),
     );
     let enter = pr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     if (pr.drag_stopped() || pr.lost_focus() || enter)
@@ -1861,17 +1968,22 @@ fn scoring_ui(editor: &mut crate::Editor, ui: &mut Ui, committed: &mut bool) {
     ui.label("Scoring");
     let current = editor.ui.question.scoring;
     let selected = scoring_label(current);
-    egui::ComboBox::from_id_salt("question_scoring_combo")
-        .selected_text(selected)
-        .show_ui(ui, |ui| {
-            for &scoring in options {
-                let label = scoring_label(scoring);
-                if ui.selectable_label(scoring == current, label).clicked() && scoring != current {
-                    editor.ui.question.scoring = scoring;
-                    *committed = true;
-                }
+    crate::widgets::styled_combo(
+        ui,
+        "question_scoring_combo",
+        ui.available_width().clamp(100.0, 140.0),
+    )
+    .truncate()
+    .selected_text(selected)
+    .show_ui(ui, |ui| {
+        for &scoring in options {
+            let label = scoring_label(scoring);
+            if ui.selectable_label(scoring == current, label).clicked() && scoring != current {
+                editor.ui.question.scoring = scoring;
+                *committed = true;
             }
-        });
+        }
+    });
 }
 
 fn attempts_ui(editor: &mut crate::Editor, ui: &mut Ui, slide: &Slide, committed: &mut bool) {
