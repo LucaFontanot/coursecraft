@@ -12,6 +12,8 @@
 //! count at zero, makes a one-object move cost exactly one redraw, and counts
 //! the rows that come back into view after a scroll. This is the work step 4's
 //! off-screen paint skip is meant to protect.
+// Only the debug-only guard tests read these counters.
+#![cfg_attr(not(debug_assertions), allow(dead_code))]
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;

@@ -4,6 +4,8 @@
 //! All counters live in `guard_counters` (editor work) and in
 //! `coursecraft_render::media::test_counts` (picture decodes), and are compiled
 //! out of release builds. See `docs/performance.md` for what each one protects.
+//! The counters only exist in debug builds, so these tests do too.
+#![cfg(debug_assertions)]
 
 use std::sync::Arc;
 
