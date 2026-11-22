@@ -250,9 +250,10 @@ impl PointerState {
                 if let Some(drag) = &mut self.value_drag {
                     if slide_pos.x.is_finite()
                         && slide_pos.y.is_finite()
-                        && let Some(item) = items
-                            .iter()
-                            .find(|item| matches!(&item.hit, Hit::Object(id) if id == &drag.object))
+                        && let Some(item) = items.iter().find(|item| {
+                            !item.is_state_extra
+                                && matches!(&item.hit, Hit::Object(id) if id == &drag.object)
+                        })
                         && let Some(Value::Number(number)) = input_value_at(item, slide_pos)
                         && (number - drag.last).abs() > f64::EPSILON
                     {
@@ -358,10 +359,10 @@ impl PointerState {
                     if let Some(Hit::DragItem(id)) = &hit
                         && slide_pos.x.is_finite()
                         && slide_pos.y.is_finite()
-                        && let Some(item) = items
-                            .iter()
-                            .rev()
-                            .find(|it| matches!(&it.hit, Hit::DragItem(drag_id) if drag_id == id))
+                        && let Some(item) = items.iter().rev().find(|it| {
+                            !it.is_state_extra
+                                && matches!(&it.hit, Hit::DragItem(drag_id) if drag_id == id)
+                        })
                     {
                         self.drag = Some(ItemDrag {
                             item: id.clone(),
@@ -378,10 +379,10 @@ impl PointerState {
                         && slide_pos.y.is_finite()
                         && let Some((_, targets)) =
                             self.draggable_specs.iter().find(|(obj_id, _)| obj_id == id)
-                        && let Some(item) = items
-                            .iter()
-                            .rev()
-                            .find(|it| matches!(&it.hit, Hit::Object(hit_id) if hit_id == id))
+                        && let Some(item) = items.iter().rev().find(|it| {
+                            !it.is_state_extra
+                                && matches!(&it.hit, Hit::Object(hit_id) if hit_id == id)
+                        })
                     {
                         self.drag = Some(ItemDrag {
                             item: id.clone(),
@@ -396,10 +397,10 @@ impl PointerState {
                     if let Some(Hit::Object(id)) = &hit
                         && slide_pos.x.is_finite()
                         && slide_pos.y.is_finite()
-                        && let Some(item) = items
-                            .iter()
-                            .rev()
-                            .find(|it| matches!(&it.hit, Hit::Object(hit_id) if hit_id == id))
+                        && let Some(item) = items.iter().rev().find(|it| {
+                            !it.is_state_extra
+                                && matches!(&it.hit, Hit::Object(hit_id) if hit_id == id)
+                        })
                         && matches!(item.visual, Visual::Slider { .. } | Visual::Dial { .. })
                         && let Some(Value::Number(number)) = input_value_at(item, slide_pos)
                     {
@@ -417,7 +418,8 @@ impl PointerState {
                         | Some(Hit::Choice(_))
                         | Some(Hit::SequenceMove { .. }) => true,
                         Some(Hit::Object(id)) => items.iter().rev().any(|item| {
-                            matches!(&item.hit, Hit::Object(hit_id) if hit_id == id)
+                            !item.is_state_extra
+                                && matches!(&item.hit, Hit::Object(hit_id) if hit_id == id)
                                 && matches!(
                                     item.visual,
                                     Visual::Slider { .. }
@@ -493,9 +495,10 @@ impl PointerState {
                     {
                         match pressed_hit {
                             Hit::Object(object) => {
-                                let item = items.iter().rev().find(
-                                    |it| matches!(&it.hit, Hit::Object(hit_id) if hit_id == &object),
-                                );
+                                let item = items.iter().rev().find(|it| {
+                                    !it.is_state_extra
+                                        && matches!(&it.hit, Hit::Object(hit_id) if hit_id == &object)
+                                });
                                 let input = item
                                     .and_then(|item| input_value_at(item, t.to_slide_pos(*pos)));
                                 match input {
@@ -790,7 +793,7 @@ fn lifted_items(items: &[DrawItem], drag: &ItemDrag) -> Vec<DrawItem> {
         return items.to_vec();
     }
     let mut out = Vec::with_capacity(items.len());
-    let mut lifted = None;
+    let mut lifted = Vec::new();
     for item in items {
         let is_target_item = if drag.is_draggable_object {
             matches!(&item.hit, Hit::Object(id) if id == &drag.item)
@@ -800,14 +803,12 @@ fn lifted_items(items: &[DrawItem], drag: &ItemDrag) -> Vec<DrawItem> {
         if is_target_item {
             let mut copy = item.clone();
             copy.rect = copy.rect.translate(delta);
-            lifted = Some(copy);
+            lifted.push(copy);
         } else {
             out.push(item.clone());
         }
     }
-    if let Some(item) = lifted {
-        out.push(item);
-    }
+    out.extend(lifted);
     out
 }
 
@@ -1147,14 +1148,14 @@ impl SlideView {
             }
         }
         let keyboard_drag = self.keyboard_drag.as_ref().and_then(|drag| {
-            let item = items.iter().rev().find(
-                |item| matches!(&item.hit, Hit::DragItem(id) | Hit::Object(id) if id == &drag.item),
-            )?;
+            let item = items.iter().rev().find(|item| {
+                !item.is_state_extra
+                    && matches!(&item.hit, Hit::DragItem(id) | Hit::Object(id) if id == &drag.item)
+            })?;
             let target = drag.target.as_ref().and_then(|target_id| {
-                items
-                    .iter()
-                    .rev()
-                    .find(|item| matches!(&item.hit, Hit::Object(id) if id == target_id))
+                items.iter().rev().find(|item| {
+                    !item.is_state_extra && matches!(&item.hit, Hit::Object(id) if id == target_id)
+                })
             });
             let is_draggable_object = player
                 .current_slide()

@@ -103,6 +103,8 @@ Each layer resolves independently per property:
 | `crop`, `image_shape` | Highest layer with `Some(...)` wins; `clear_crop: true` / `clear_image_shape: true` clears lower layers back to `None`. |
 | `opacity` | Highest layer with `Some(o)` replaces base `opacity` (then multiplied by any active animation sample). |
 | `shadow`, `glow` | Highest layer with `Some(...)` wins; `clear_shadow: true` / `clear_glow: true` clears lower layers to `None`. |
+
+Visual extras (`StateDef.extras`) draw immediately after their parent in list order (runtime state extras first, then pointer state extras when not `disabled` or `hidden`). Extras use parent-relative coordinates, inherit the parent's resolved rotation, flip, entrance/exit animation (`offset`, `scale`, `opacity`, `clip`), motion paths, scroll-panel clipping/offset, and drag-and-drop lifting, and substitute `%var%` tokens. All extra `DrawItem`s carry `is_state_extra: true` and the parent's `Hit` (`Hit::Object(parent_id)` or `Hit::DragItem(parent_id)`), so pointer hovers, presses, clicks, and drags on overhanging extras drive the parent without replacing the parent's primary item or drag-target label pills.
 | `rotation`, `flip_h`, `flip_v` | Highest layer with `Some(...)` replaces the base transform value (not additive). |
 
 ## Text links

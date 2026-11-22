@@ -43,6 +43,8 @@ mod bughunt_m26_render;
 #[cfg(test)]
 mod justify_tests;
 #[cfg(test)]
+mod m29_state_extras_tests;
+#[cfg(test)]
 mod m29_state_resolver_tests;
 #[cfg(test)]
 mod outline_tests;
@@ -71,7 +73,7 @@ pub use compose::{
     DEFAULT_BUTTON_COLOR, DEFAULT_TEXT_COLOR, DrawItem, Hit, ResolvedCellText, ResolvedLinkRect,
     ResolvedOutline, ResolvedPath, ResolvedShapeText, ResolvedTable, ResolvedTableCell,
     ResolvedTableRow, ResolvedTextRun, ReviewMark, Visual, compose, compose_authoring,
-    compose_authoring_layers, compose_authoring_layers_opts, compose_object,
+    compose_authoring_layers, compose_authoring_layers_opts, compose_object, compose_object_items,
     compose_object_with_theme, compose_object_with_value, compose_with_pointer, flip_point,
     item_bounds, item_corners, item_hit_test, item_link_at, item_local_point, question_prompt_rect,
     resolve_text_runs, rotate_point,
