@@ -82,8 +82,10 @@ pub struct PropertiesState {
     pub pick_picture_fill: bool,
     pub shadow_enabled: bool,
     pub shadow: coursecraft_course::Shadow,
+    pub shadow_alpha: u8,
     pub glow_enabled: bool,
     pub glow: coursecraft_course::Glow,
+    pub glow_alpha: u8,
     pub drag_enabled: bool,
     pub drag: coursecraft_course::DragSpec,
     pub drag_toggle_rect: Option<Rect>,
@@ -349,11 +351,13 @@ impl Default for PropertiesState {
                 offset_y: 4.0,
                 blur: 8.0,
             },
+            shadow_alpha: 0x80,
             glow_enabled: false,
             glow: Glow {
                 color: Color("#2F6FEB80".into()),
                 size: 8.0,
             },
+            glow_alpha: 0x80,
             drag_enabled: false,
             drag: coursecraft_course::DragSpec::default(),
             drag_toggle_rect: None,
@@ -594,10 +598,12 @@ impl PropertiesState {
             if let Some(shadow) = &obj.shadow {
                 self.shadow = shadow.clone();
             }
+            self.shadow_alpha = parse_color(&self.shadow.color).map_or(255, |c| c.a());
             self.glow_enabled = obj.glow.is_some();
             if let Some(glow) = &obj.glow {
                 self.glow = glow.clone();
             }
+            self.glow_alpha = parse_color(&self.glow.color).map_or(255, |c| c.a());
             self.drag_enabled = obj.drag.is_some();
             self.drag_toggle_rect = None;
             if let Some(drag) = &obj.drag {
@@ -4897,6 +4903,23 @@ fn show_gradient_stops(
     }
 }
 
+fn alpha_to_percent(alpha: u8) -> f32 {
+    (f32::from(alpha) / 255.0 * 100.0).round()
+}
+
+fn set_color_alpha_percent(color: &mut Color, percent: f32) -> u8 {
+    let c = parse_color(color).unwrap_or(Color32::BLACK);
+    let a = (percent.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8;
+    color.0 = color_to_hex(Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a));
+    a
+}
+
+fn apply_color_alpha(color: &mut Color, alpha: u8) {
+    if let Some(c) = parse_color(color) {
+        color.0 = color_to_hex(Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha));
+    }
+}
+
 /// Shadow and glow toggles with their values.
 fn show_effect_controls(
     ui: &mut Ui,
@@ -4920,6 +4943,27 @@ fn show_effect_controls(
             let (response, valid) =
                 show_color_field(ui, "", &mut props.shadow.color.0, "prop_shadow_color");
             if is_committed(&response, ui) && valid {
+                apply_color_alpha(&mut props.shadow.color, props.shadow_alpha);
+                shadow_changed = true;
+            }
+        });
+        inspector_row(ui, "Opacity", |ui| {
+            let mut opacity_pct = alpha_to_percent(props.shadow_alpha);
+            let rem_w = ui.available_width().max(30.0);
+            let response = add_drag_left(
+                ui,
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                DragValue::new(&mut opacity_pct)
+                    .speed(1.0)
+                    .range(0.0..=100.0)
+                    .fixed_decimals(0)
+                    .suffix(" %"),
+            );
+            if response.changed() {
+                props.shadow_alpha = set_color_alpha_percent(&mut props.shadow.color, opacity_pct);
+            }
+            let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if response.drag_stopped() || response.lost_focus() || enter {
                 shadow_changed = true;
             }
         });
@@ -4953,6 +4997,27 @@ fn show_effect_controls(
             let (response, valid) =
                 show_color_field(ui, "", &mut props.glow.color.0, "prop_glow_color");
             if is_committed(&response, ui) && valid {
+                apply_color_alpha(&mut props.glow.color, props.glow_alpha);
+                glow_changed = true;
+            }
+        });
+        inspector_row(ui, "Opacity", |ui| {
+            let mut opacity_pct = alpha_to_percent(props.glow_alpha);
+            let rem_w = ui.available_width().max(30.0);
+            let response = add_drag_left(
+                ui,
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                DragValue::new(&mut opacity_pct)
+                    .speed(1.0)
+                    .range(0.0..=100.0)
+                    .fixed_decimals(0)
+                    .suffix(" %"),
+            );
+            if response.changed() {
+                props.glow_alpha = set_color_alpha_percent(&mut props.glow.color, opacity_pct);
+            }
+            let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if response.drag_stopped() || response.lost_focus() || enter {
                 glow_changed = true;
             }
         });

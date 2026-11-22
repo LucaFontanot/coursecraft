@@ -1925,6 +1925,7 @@ fn draw_strip(
             let sense = Sense::click_and_drag();
             let response = child
                 .interact(rect, strip_id("volume"), sense)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(player.course().chrome_string("volume"));
             if let Some(pos) = response.interact_pointer_pos()
                 && (response.is_pointer_button_down_on()
@@ -2009,6 +2010,7 @@ fn draw_speed_and_fullscreen(
         let id = strip_id("speed");
         let resp = ui
             .interact(rect, id, Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(course.chrome_string("playbackSpeed"));
         let painter = ui.painter();
         let radius = CornerRadius::same(8);
@@ -2096,11 +2098,13 @@ fn draw_speed_popup(
             ),
             vec2(width - 8.0, SPEED_ROW),
         );
-        let resp = ui.interact(
-            row,
-            Id::unique(("coursecraft-speed-row", index)),
-            Sense::click(),
-        );
+        let resp = ui
+            .interact(
+                row,
+                Id::unique(("coursecraft-speed-row", index)),
+                Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         let selected = (*rate - current).abs() < 1e-3;
         if selected {
             painter.rect_filled(row, CornerRadius::same(6), accent);
@@ -2324,6 +2328,11 @@ fn draw_seek_bar(
             },
         )
         .on_hover_text(player.course().chrome_string("slidePosition"));
+    let response = if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    };
     let info = player.seek_info();
     if enabled {
         let interacting = response.is_pointer_button_down_on()
@@ -2488,6 +2497,11 @@ fn button(
         },
     );
     let resp = resp.on_hover_text(tooltip);
+    let resp = if enabled {
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        resp
+    };
     let painter = ui.painter();
     let hovered = enabled && resp.hovered();
     let radius = CornerRadius::same(8);
@@ -2537,6 +2551,7 @@ fn draw_lightbox_close(
     let (bar, text, accent) = bar_colors(player);
     let resp = ui
         .interact(rect, strip_id("close-lightbox"), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(player.course().chrome_string("closeLightbox"));
     let painter = ui.painter();
     let radius = rect.width().min(rect.height()) * 0.5;
@@ -2878,6 +2893,11 @@ fn draw_drawer(
                     };
                     let (row, resp) =
                         ui.allocate_exact_size(vec2(ui.available_width(), 30.0), sense);
+                    let resp = if settled && reachable {
+                        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+                    } else {
+                        resp
+                    };
                     // Report only the vertically visible part; a row scrolled out of
                     // view gets an empty rect instead of one over the header, while
                     // horizontal bounds keep their full width during the slide-in so
@@ -2989,6 +3009,11 @@ fn draw_drawer(
         };
         let (btn_rect, resp) =
             child.allocate_exact_size(vec2(child.available_width(), 32.0), sense);
+        let resp = if settled {
+            resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        } else {
+            resp
+        };
         chrome.push((crate::focus::ChromeButton::StartOver, btn_rect));
         let bg = if resp.hovered() {
             Color32::from_white_alpha(0x1E)
@@ -3040,6 +3065,7 @@ fn draw_tab_row(
         ui.spacing_mut().item_spacing.x = gap;
         for tab in tabs {
             let (rect, resp) = ui.allocate_exact_size(vec2(each, 30.0), Sense::click());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             let kind = crate::focus::ChromeButton::DrawerTab(*tab);
             chrome.push((kind.clone(), rect));
             let selected = *tab == current;
@@ -3091,6 +3117,7 @@ fn drawer_item(
     accent: Color32,
 ) -> (Rect, egui::Response) {
     let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     chrome.push((kind.clone(), row));
     if selected {
         ui.painter().rect_filled(

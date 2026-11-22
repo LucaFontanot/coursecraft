@@ -53,6 +53,8 @@ mod tests;
 #[cfg(test)]
 mod u19_state_hover_tests;
 #[cfg(test)]
+mod u23_hand_pointer_tests;
+#[cfg(test)]
 mod uiux_player_tests;
 
 pub use access::{

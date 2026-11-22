@@ -1182,6 +1182,19 @@ impl SlideView {
             Some(list) => list,
             None => &items,
         };
+        if self.pointer.drag.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if let Some(pos) = ui.input(|i| i.pointer.hover_pos())
+            && active_t.slide_rect().contains(pos)
+            && !covered(pos)
+        {
+            let slide_pos = active_t.to_slide_pos(pos);
+            if let Some(icon) =
+                hover_cursor_icon(player, display, &self.pointer.draggable_specs, slide_pos)
+            {
+                ui.ctx().set_cursor_icon(icon);
+            }
+        }
         let drop_outline = if let Some(drag) = self.pointer.drag.as_ref() {
             let delta = drag.current - drag.press;
             if !delta.x.is_finite() || !delta.y.is_finite() {
@@ -1405,6 +1418,95 @@ impl SlideView {
         self.last_items = items;
 
         inputs
+    }
+}
+
+fn is_object_disabled_or_hidden(player: &Player<'_>, id: &str) -> bool {
+    matches!(player.object_state(id), Some("disabled") | Some("hidden"))
+}
+
+fn has_click_trigger(triggers: &[coursecraft_course::Trigger], id: &str) -> bool {
+    triggers
+        .iter()
+        .any(|t| matches!(&t.when, coursecraft_course::Event::Click { object } if object == id))
+}
+
+fn is_object_clickable(player: &Player<'_>, id: &str) -> bool {
+    let Some(slide) = player.current_slide() else {
+        return false;
+    };
+    let master = slide
+        .master
+        .as_deref()
+        .and_then(|mid| player.course().master(mid));
+    let (obj, on_base) = if let Some((obj, layer_id)) = slide.object(id) {
+        (obj, layer_id.is_none())
+    } else if let Some(obj) = master.and_then(|m| m.objects.iter().find(|o| o.id == id)) {
+        (obj, true)
+    } else {
+        return false;
+    };
+
+    if on_base
+        && player
+            .state()
+            .visible_layers
+            .iter()
+            .any(|lid| slide.layer(lid).is_some_and(|l| l.prevent_base_clicks))
+    {
+        return false;
+    }
+
+    if matches!(
+        obj.kind,
+        coursecraft_course::ObjectKind::Button { .. }
+            | coursecraft_course::ObjectKind::Marker { .. }
+    ) || obj.kind.input_kind().is_some()
+    {
+        return true;
+    }
+
+    has_click_trigger(&slide.triggers, id)
+        || player.state().visible_layers.iter().any(|lid| {
+            slide
+                .layer(lid)
+                .is_some_and(|l| has_click_trigger(&l.triggers, id))
+        })
+        || master.is_some_and(|m| has_click_trigger(&m.triggers, id))
+}
+
+fn hover_cursor_icon(
+    player: &Player<'_>,
+    items: &[DrawItem],
+    draggable_specs: &[(String, Vec<String>)],
+    slide_pos: Pos2,
+) -> Option<egui::CursorIcon> {
+    match hit_test(items, slide_pos)? {
+        Hit::None | Hit::QuestionChrome(_) => None,
+        Hit::Choice(_) | Hit::SequenceMove { .. } | Hit::HotspotImage => {
+            Some(egui::CursorIcon::PointingHand)
+        }
+        Hit::DragItem(_) => Some(egui::CursorIcon::Grab),
+        Hit::TextLink { object, .. } => {
+            if is_object_disabled_or_hidden(player, &object) {
+                None
+            } else {
+                Some(egui::CursorIcon::PointingHand)
+            }
+        }
+        Hit::Object(id) => {
+            if is_object_disabled_or_hidden(player, &id) {
+                return None;
+            }
+            if draggable_specs.iter().any(|(obj_id, _)| obj_id == &id) {
+                return Some(egui::CursorIcon::Grab);
+            }
+            if is_object_clickable(player, &id) {
+                Some(egui::CursorIcon::PointingHand)
+            } else {
+                None
+            }
+        }
     }
 }
 

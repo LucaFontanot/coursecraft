@@ -266,6 +266,8 @@ mod u20_state_image_picker_tests;
 #[cfg(test)]
 mod u21_publish_status_tests;
 #[cfg(test)]
+mod u23_shadow_glow_opacity_tests;
+#[cfg(test)]
 mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;
