@@ -120,7 +120,7 @@
           "title": "Intro & Core Triggers",
           "master": "m-main",
           "duration_ms": 2000,
-          "revisit": "auto",
+          "revisit": "reset",
           "notes": "Welcome to the CourseCraft Reference Course.",
           "transition": { "type": "fade", "duration_ms": 300 },
           "player": { "next_requires": { "kind": "timeline_ends" } },

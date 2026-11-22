@@ -166,6 +166,8 @@ mod guard_counters;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
+mod h7_video_revisit_tests;
+#[cfg(test)]
 mod history_tests;
 #[cfg(test)]
 mod idle_tests;

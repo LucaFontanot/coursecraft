@@ -3492,6 +3492,7 @@
      "id": "video",
      "title": "Three desk stretches",
      "duration_ms": 15000,
+     "revisit": "reset",
      "background": "#FBF6EE",
      "transition": {
       "type": "cover",

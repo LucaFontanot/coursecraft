@@ -711,12 +711,42 @@ fn check_slide(cx: &mut Ctx<'_>, slide: &Slide, p: &str) {
         }
     }
     check_question(cx, slide, p);
+    if slide.revisit == crate::RevisitMode::Auto
+        && slide_changes_states_from_timeline_or_media(slide)
+    {
+        cx.warn(
+            format!("{p}/revisit"),
+            format!(
+                "Slide \u{201C}{}\u{201D} changes object states from its timeline or media, but revisiting keeps old states while the timeline restarts. Set When revisiting to Reset to start fresh.",
+                slide.title
+            ),
+        );
+    }
     if slide_has_unsupported_script(slide) {
         cx.warn(
             p,
             "text uses characters the bundled Inter font has no glyphs for; right-to-left and complex shaping are not supported",
         );
     }
+}
+
+fn slide_changes_states_from_timeline_or_media(slide: &Slide) -> bool {
+    slide
+        .triggers
+        .iter()
+        .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+        .any(|t| {
+            !t.disabled
+                && matches!(
+                    t.when,
+                    Event::TimelineStarts { .. }
+                        | Event::TimelineEnds { .. }
+                        | Event::TimelineReaches { .. }
+                        | Event::CueReached { .. }
+                        | Event::MediaEnds { .. }
+                )
+                && matches!(t.action, Action::ChangeState { .. })
+        })
 }
 
 /// Check a slide master. A master is a slide for authoring, but it must never

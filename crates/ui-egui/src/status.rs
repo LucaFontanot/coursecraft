@@ -421,6 +421,9 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
             let previous = editor.selection.slide.clone();
             if navigate_to_issue_path(&editor.session.course, &mut editor.selection, &path) {
                 finish_slide_navigation(editor, previous);
+                if path.ends_with("/revisit") {
+                    editor.ui.inspector_tab = crate::properties::InspectorTab::Slide;
+                }
             }
         }
         if let Some((slide, object)) = audit_to_navigate {

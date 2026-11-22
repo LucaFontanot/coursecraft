@@ -418,6 +418,7 @@ trig(s, {"event": "timeline_starts"}, setv("tips_opened", 0.0))
 # ------------------------------------------------------------------ 5. Video with cues and captions
 s = "video"
 setup(s, CREAM, T_COVER("bottom"), "Follow along with three gentle stretches you can do at your desk.", duration=15000)
+slide(s)["revisit"] = "reset"
 add(s, eyebrow("v_eyebrow", "LESSON 1  ·  MOVE", 80, 52))
 add(s, heading("v_title", "Three stretches you can do at your desk", 78, 80, 1000))
 vid = add(s, obj("v_video", "Stretch video", {"type": "video", "src": "stretch.mp4", "autoplay": False, "captions": "stretch.vtt", "cues": [

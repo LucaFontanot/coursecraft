@@ -7902,6 +7902,8 @@ fn video_frame_draws_as_texture_instead_of_poster() {
             visual: Visual::Video {
                 src: "clip.mp4".to_owned(),
                 poster: None,
+                playing: false,
+                show_placeholder: false,
             },
             dimmed: false,
             opacity: 1.0,

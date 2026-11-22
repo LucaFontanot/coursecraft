@@ -715,4 +715,7 @@ impl MediaSource for PlaybackMediaSource<'_> {
     fn video_frame(&self, object: &str) -> Option<Arc<coursecraft_playback::VideoFrame>> {
         self.backend.video_frame(object)
     }
+    fn video_error(&self, object: &str) -> Option<&str> {
+        self.backend.video_error(object)
+    }
 }

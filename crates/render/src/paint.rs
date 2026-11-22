@@ -2334,7 +2334,12 @@ pub fn paint_items(
             Visual::ImagePlaceholder { label } => {
                 draw_image_placeholder(&item_painter, screen_rect, scale, label, item.dimmed, op);
             }
-            Visual::Video { src: _, poster } => {
+            Visual::Video {
+                src: _,
+                poster,
+                playing,
+                show_placeholder,
+            } => {
                 // Desktop playback: draw the newest decoded frame as a texture
                 // when one exists, with the poster as the fallback.
                 let mut drawn_frame = false;
@@ -2369,69 +2374,83 @@ pub fn paint_items(
                         }
                     }
                 }
-                if drawn_frame {
-                    continue;
+                if !drawn_frame {
+                    let bg = apply_dim(Color32::from_rgb(0x1A, 0x1A, 0x1A), item.dimmed, op);
+                    item_painter.rect_filled(screen_rect, CornerRadius::ZERO, bg);
+                    let border = apply_dim(Color32::from_rgb(0x33, 0x33, 0x33), item.dimmed, op);
+                    let stroke_w = (1.0 * scale).max(1.0);
+                    item_painter.rect_stroke(
+                        screen_rect,
+                        CornerRadius::ZERO,
+                        Stroke::new(stroke_w, border),
+                        StrokeKind::Inside,
+                    );
                 }
-                let bg = apply_dim(Color32::from_rgb(0x1A, 0x1A, 0x1A), item.dimmed, op);
-                item_painter.rect_filled(screen_rect, CornerRadius::ZERO, bg);
-                let border = apply_dim(Color32::from_rgb(0x33, 0x33, 0x33), item.dimmed, op);
-                let stroke_w = (1.0 * scale).max(1.0);
-                item_painter.rect_stroke(
-                    screen_rect,
-                    CornerRadius::ZERO,
-                    Stroke::new(stroke_w, border),
-                    StrokeKind::Inside,
-                );
 
-                // Play icon in center
+                // Poster text (on editor canvas) or plain error message if preview decode failed.
+                let error_text = if drawn_frame {
+                    None
+                } else {
+                    media.as_ref().and_then(|(_, source)| {
+                        if let Hit::Object(id) = &item.hit {
+                            source.video_error(id)
+                        } else {
+                            None
+                        }
+                    })
+                };
+                let label = if let Some(err) = error_text {
+                    Some(err.to_owned())
+                } else if !drawn_frame && *show_placeholder {
+                    Some("Video plays in the published course".to_owned())
+                } else {
+                    None
+                };
+
                 let center = screen_rect.center();
                 let play_radius = (24.0 * scale).min(screen_rect.height() * 0.25).max(4.0);
-                let circle_color = apply_dim(
-                    Color32::from_rgba_unmultiplied(255, 255, 255, 48),
-                    item.dimmed,
-                    op,
-                );
-                item_painter.circle_filled(
-                    pos2(center.x, center.y - 12.0 * scale),
-                    play_radius,
-                    circle_color,
-                );
+                let icon_offset_y = if label.is_some() { 12.0 * scale } else { 0.0 };
+                if !*playing {
+                    let icon_center = pos2(center.x, center.y - icon_offset_y);
+                    let circle_color = apply_dim(
+                        Color32::from_rgba_unmultiplied(0, 0, 0, 140),
+                        item.dimmed,
+                        op,
+                    );
+                    item_painter.circle_filled(icon_center, play_radius, circle_color);
 
-                let tri_size = play_radius * 0.5;
-                let tri_center_y = center.y - 12.0 * scale;
-                let tri_points = vec![
-                    pos2(center.x - tri_size * 0.5, tri_center_y - tri_size * 0.7),
-                    pos2(center.x + tri_size * 0.8, tri_center_y),
-                    pos2(center.x - tri_size * 0.5, tri_center_y + tri_size * 0.7),
-                ];
-                let tri_color = apply_dim(Color32::WHITE, item.dimmed, op);
-                item_painter.add(PathShape::convex_polygon(
-                    tri_points,
-                    tri_color,
-                    Stroke::NONE,
-                ));
+                    let tri_size = play_radius * 0.5;
+                    let tri_points = vec![
+                        pos2(center.x - tri_size * 0.5, icon_center.y - tri_size * 0.7),
+                        pos2(center.x + tri_size * 0.8, icon_center.y),
+                        pos2(center.x - tri_size * 0.5, icon_center.y + tri_size * 0.7),
+                    ];
+                    let tri_color = apply_dim(Color32::WHITE, item.dimmed, op);
+                    item_painter.add(PathShape::convex_polygon(
+                        tri_points,
+                        tri_color,
+                        Stroke::NONE,
+                    ));
+                }
 
-                // Poster text (or plain error message if preview decode failed)
-                let error_text = media.as_ref().and_then(|(_, source)| {
-                    if let Hit::Object(id) = &item.hit {
-                        source.video_error(id)
-                    } else {
-                        None
-                    }
-                });
-                let label = error_text
-                    .unwrap_or("Video plays in the published course")
-                    .to_string();
-                let font_size = (14.0 * scale).max(1.0);
-                let font_id = crate::font::slide_font(item_painter.ctx(), false, false, font_size);
-                let text_color = apply_dim(Color32::from_rgb(0xAA, 0xAA, 0xAA), item.dimmed, op);
-                let galley =
-                    item_painter.layout(label, font_id, text_color, screen_rect.width().max(0.0));
-                let text_pos = pos2(
-                    center.x - galley.size().x * 0.5,
-                    center.y + play_radius + 4.0 * scale - 12.0 * scale,
-                );
-                item_painter.galley(text_pos, galley, text_color);
+                if let Some(label) = label {
+                    let font_size = (14.0 * scale).max(1.0);
+                    let font_id =
+                        crate::font::slide_font(item_painter.ctx(), false, false, font_size);
+                    let text_color =
+                        apply_dim(Color32::from_rgb(0xAA, 0xAA, 0xAA), item.dimmed, op);
+                    let galley = item_painter.layout(
+                        label,
+                        font_id,
+                        text_color,
+                        screen_rect.width().max(0.0),
+                    );
+                    let text_pos = pos2(
+                        center.x - galley.size().x * 0.5,
+                        center.y + play_radius + 4.0 * scale - icon_offset_y,
+                    );
+                    item_painter.galley(text_pos, galley, text_color);
+                }
             }
             Visual::Web { label } => {
                 draw_web_placeholder(&item_painter, screen_rect, scale, label, item.dimmed, op);

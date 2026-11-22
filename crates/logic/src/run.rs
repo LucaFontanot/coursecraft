@@ -2572,6 +2572,7 @@ impl<'c> Player<'c> {
                     ObjectKind::Button { .. }
                         | ObjectKind::Marker { .. }
                         | ObjectKind::ScrollPanel { .. }
+                        | ObjectKind::Video { .. }
                 )
                 || self
                     .slide_cache
@@ -2623,6 +2624,23 @@ impl<'c> Player<'c> {
                 return; // disabled objects swallow clicks silently
             }
         };
+        let is_video = matches!(obj.kind, ObjectKind::Video { .. });
+        let has_author_click_trigger = is_video
+            && self.slide().is_some_and(|slide| {
+                slide
+                    .triggers
+                    .iter()
+                    .chain(
+                        self.st
+                            .visible_layers
+                            .iter()
+                            .filter_map(|lid| slide.layer(lid))
+                            .flat_map(|l| l.triggers.iter()),
+                    )
+                    .any(|t| {
+                        !t.disabled && matches!(&t.when, Event::Click { object } if object == id)
+                    })
+            });
         let before = self.object_state(id).map(str::to_owned);
         let epoch = self.st.epoch;
         let mut q = Queue::new();
@@ -2633,6 +2651,14 @@ impl<'c> Player<'c> {
             },
         );
         self.process(&mut q, out);
+
+        if is_video && !has_author_click_trigger && self.st.epoch == epoch && !self.st.exited {
+            if self.st.media_playback.get(id) == Some(&MediaPlaybackState::Playing) {
+                self.pause_media(id, out);
+            } else {
+                self.play_media(id, out);
+            }
+        }
 
         // Built-in states apply after the click's triggers, and only if those
         // triggers left the object's state alone and stayed on this slide.

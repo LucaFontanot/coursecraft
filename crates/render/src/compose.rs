@@ -267,6 +267,8 @@ pub enum Visual {
     Video {
         src: String,
         poster: Option<String>,
+        playing: bool,
+        show_placeholder: bool,
     },
     /// A web object. Only the published player shows the page; every other host
     /// draws a placeholder card naming the source.
@@ -1134,6 +1136,15 @@ struct ComposeOpts {
     timer_remaining_ms: Option<u32>,
 }
 
+fn apply_runtime_media_state(item: &mut DrawItem, player: &Player<'_>, id: &str) {
+    if matches!(item.visual, Visual::Lottie { .. }) {
+        item.media_time_ms = player.media_clock_ms(id);
+    }
+    if let Visual::Video { playing, .. } = &mut item.visual {
+        *playing = player.is_media_playing(id);
+    }
+}
+
 /// Compose a marker or panel as the running player draws it.
 pub(crate) fn compose_object_with_runtime(
     object: &Object,
@@ -1389,6 +1400,8 @@ fn compose_object_opts(
                 .unwrap_or(src)
                 .to_string(),
             poster: poster.clone(),
+            playing: false,
+            show_placeholder: opts.authoring,
         },
         ObjectKind::Web { source } => Visual::Web {
             label: source.label(),
@@ -2138,9 +2151,7 @@ fn push_base_items(
             item.rect = egui::Rect::from_min_max(center - half, center + half);
             item.opacity = (item.opacity * sample.opacity).clamp(0.0, 1.0);
             item.clip = sample.clip;
-            if matches!(item.visual, Visual::Lottie { .. }) {
-                item.media_time_ms = player.media_clock_ms(&obj.id);
-            }
+            apply_runtime_media_state(&mut item, player, &obj.id);
             items.push(item);
         }
     }
@@ -2339,9 +2350,7 @@ pub fn compose(player: &Player<'_>) -> Vec<DrawItem> {
                     item.rect = egui::Rect::from_min_max(center - half, center + half);
                     item.opacity = (item.opacity * sample.opacity).clamp(0.0, 1.0);
                     item.clip = sample.clip;
-                    if matches!(item.visual, Visual::Lottie { .. }) {
-                        item.media_time_ms = player.media_clock_ms(&obj.id);
-                    }
+                    apply_runtime_media_state(&mut item, player, &obj.id);
                     items.push(item);
                 }
             }
