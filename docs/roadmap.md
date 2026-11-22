@@ -315,6 +315,23 @@ From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Sugges
 - Contributions from Luca: seekbar behaviour and the web Play button.
 - Released as 0.4.0.
 
+## M30 Ribbon UI parity (planned)
+
+A Storyline 360 author should find every command where they look for it. Plan and full inventory:
+`docs/ui/` (start at `docs/ui/README.md`), taken from a public beginner tutorial. Clean-room: same
+tabs, groups and order; our own look and coined names.
+
+1. Ribbon drawn from one declarative spec (`crates/ui-egui/src/ribbon/spec.rs`), widgets ported
+   from DeckCraft; Home first, beside the old toolbar.
+2. Every main tab (File, Home, Insert, Slides, Design, Transitions, Animations, View, Help) with
+   built controls wired and the rest **drawn disabled** with a "Not available yet" or "Not planned"
+   tooltip.
+3. Contextual tabs (Drawing, Picture, Audio/Video, Table, Question Tools) and modes (Slide Master,
+   Preview); then the menu bar and flat toolbar go, the quick access toolbar arrives.
+4. Shell: view tabs for open slides, status bar, right panel (Triggers over Slide Layers), Slide
+   Properties in the Course Map, undockable panels.
+5. Dialog front-ends over existing commands: Trigger, Insert Slide, Player Properties, Publish.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.

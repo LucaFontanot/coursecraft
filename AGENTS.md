@@ -12,6 +12,7 @@ It is built to the conventions of the ArtCraft Crafting Apps (storytold) so it c
 | `docs/spec/course-model.md` | `course.json` schema |
 | `docs/spec/triggers.md` | Exact runtime semantics (the contract) |
 | `docs/roadmap.md` | Milestones and current focus |
+| `docs/ui/README.md` | Ribbon UI parity plan: every tab, group and button, built or disabled |
 | `docs/cli.md` | CLI and MCP setup for agents, and every command |
 | `docs/contributing.md` | Gate, add-a-command checklist, clean-room rules |
 
