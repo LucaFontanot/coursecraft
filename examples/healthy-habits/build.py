@@ -588,6 +588,7 @@ trig(s, click("breathe_next"), jump("next"))
 # ------------------------------------------------------------------ 10. Steps (process steps insert)
 s = "steps"
 setup(s, CREAM, T_PUSH("right"), "Use Next and Back to walk through the four steps.")
+slide(s)["revisit"] = "reset"
 steps4 = [("Sit tall", "Feet flat, hands resting in your lap. Let your shoulders drop away from your ears."),
           ("Breathe in · 4", "Breathe in slowly through your nose while you count to four."),
           ("Hold · 4", "Hold the breath gently, without strain, for another count of four."),
@@ -753,6 +754,7 @@ for i in (1, 2, 3):
 # ------------------------------------------------------------------ 16. Tips (reveal grid insert)
 s = "tips"
 setup(s, CREAM, T_PUSH("right"), "Tap each tile to reveal a quick win.")
+slide(s)["revisit"] = "reset"
 add(s, eyebrow("tp_eyebrow", "SIX QUICK WINS", 80, 40))
 tips = [("Stand for calls", "Every phone call is a chance to stand and walk."),
         ("Stairs first", "One flight up beats the lift for your heart."),

@@ -6671,6 +6671,7 @@
     {
      "id": "steps",
      "title": "A one-minute reset",
+     "revisit": "reset",
      "duration_ms": 5000,
      "objects": [
       {
@@ -11873,6 +11874,7 @@
     {
      "id": "tips",
      "title": "Six quick wins",
+     "revisit": "reset",
      "duration_ms": 5000,
      "objects": [
       {
