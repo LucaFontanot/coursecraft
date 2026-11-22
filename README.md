@@ -134,14 +134,17 @@ Choose Help > Report a Problem to tell us what went wrong, or Help > Suggest a F
 | `coursecraft-player` | Desktop and web player |
 | `coursecraft-cli`, `coursecraft-mcp` | Headless tool and MCP server; agents start at [docs/cli.md](docs/cli.md) |
 
-See [docs/architecture.md](docs/architecture.md) and [docs/roadmap.md](docs/roadmap.md).
+See [docs/architecture.md](docs/architecture.md) and [docs/roadmap.md](docs/roadmap.md). The editor's
+layout (a tabbed ribbon a Storyline 360 author will know, with every planned button already in
+place) is specified in [docs/ui/](docs/ui/README.md); what CourseCraft can and cannot do yet,
+feature by feature, is in [docs/ui/feature-parity.md](docs/ui/feature-parity.md).
 
 ## Help and contributing
 
 - **Questions and ideas:** the Discussions tab of this repository.
 - **Bugs:** Help → Report a Problem in the app, or open an issue.
 - **Security problems:** report privately, see [SECURITY.md](SECURITY.md).
-- **Code:** read [docs/contributing.md](docs/contributing.md) (and [AGENTS.md](AGENTS.md) if you use an AI agent), then open a pull request. Every pull request runs `cargo xtask ci`, the same checks you can run yourself.
+- **Code:** read [docs/contributing.md](docs/contributing.md) (and [AGENTS.md](AGENTS.md) if you use an AI agent), then open a pull request. Editor UI work starts at [docs/ui/README.md](docs/ui/README.md). Every pull request runs `cargo xtask ci`, the same checks you can run yourself.
 - Be kind: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## License

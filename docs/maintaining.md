@@ -35,7 +35,7 @@ Settings → Actions → General: allow GitHub Actions. For pull requests from f
 
 1. Someone forks the repository, works on a branch, and opens a pull request.
 2. CI runs `cargo xtask ci` on it. A red cross means it doesn't build or a test fails; ask them to fix it before reviewing.
-3. Review it, or ask Claude Code to: `gh pr checkout <number>`, then review and run it. Check the clean-room box in the template and the [patent watch list](contributing.md#patent-watch-list).
+3. Review it, or ask Claude Code to: `gh pr checkout <number>`, then review and run it. Check the clean-room box in the template and the [patent watch list](contributing.md#patent-watch-list). For editor UI changes, check the layout matches `docs/ui/` and its status tables were updated.
 4. Ask for changes in comments, or **Squash and merge** when it's good.
 5. Small fixes from you can still go through a pull request, so CI checks them the same way.
 
