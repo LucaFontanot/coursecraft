@@ -47,6 +47,10 @@ pub struct StatesState {
     pub new_state_name: String,
     pub show_new_state_input: bool,
     pub focus_override_bar: bool,
+    pub renaming_state: Option<String>,
+    pub rename_buffer: String,
+    pub rename_just_started: bool,
+    pub card_strip_focused: bool,
     pub edit_buffers: HashMap<String, StateEditBuffer>,
     pub delete_error: Option<(String, String)>,
 
@@ -158,6 +162,9 @@ fn validate_new_state_name(trimmed: &str, existing: &[StateDef]) -> Result<(), S
     if trimmed.eq_ignore_ascii_case("normal") {
         return Err("'normal' is a built-in state name".to_owned());
     }
+    if trimmed.eq_ignore_ascii_case("hidden") {
+        return Err("Hidden is built in — choose it in Initial or a trigger".to_owned());
+    }
     if trimmed.chars().count() > MAX_STATE_NAME_LEN {
         return Err(format!(
             "State name cannot exceed {MAX_STATE_NAME_LEN} characters"
@@ -215,6 +222,16 @@ fn state_delete_blocker(
     if used_by_trigger {
         return Some(format!(
             "Cannot delete '{state_name}': referenced by a trigger"
+        ));
+    }
+    let used_by_question = slide
+        .question
+        .as_ref()
+        .and_then(|q| q.correct_when.as_ref())
+        .is_some_and(|c| condition_references_state(c, obj_id, state_name));
+    if used_by_question {
+        return Some(format!(
+            "Cannot delete '{state_name}': referenced by the slide question"
         ));
     }
     None
@@ -944,6 +961,26 @@ fn paint_state_thumbnail(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn start_inline_rename(editor: &mut Editor, state_name: &str) {
+    editor.ui.states.renaming_state = Some(state_name.to_owned());
+    editor.ui.states.rename_buffer = state_name.to_owned();
+    editor.ui.states.rename_just_started = true;
+}
+
+fn select_card_state(editor: &mut Editor, obj: &Object, state_name: &str) {
+    editor.ui.states.card_strip_focused = true;
+    if state_name == "normal" {
+        editor.ui.preview_state = if obj.initial_state != "normal" {
+            Some("normal".to_owned())
+        } else {
+            None
+        };
+    } else {
+        editor.ui.preview_state = Some(state_name.to_owned());
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn show_state_card(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -953,12 +990,17 @@ fn show_state_card(
     display_name: &str,
     is_initial: bool,
     is_active: bool,
-    is_custom: bool,
+    custom_index: Option<usize>,
+    total_custom: usize,
     actions: &mut Vec<(&'static str, Json)>,
 ) -> Rect {
+    let is_custom = custom_index.is_some();
     let p = coursecraft_render::palette(ui.ctx());
     let (card_rect, card_resp) =
         ui.allocate_exact_size(vec2(CARD_WIDTH, CARD_HEIGHT), Sense::click());
+    card_resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{display_name} state"))
+    });
 
     let fill = if is_active { p.hover } else { p.raised };
     let stroke = if is_active {
@@ -987,16 +1029,83 @@ fn show_state_card(
         pos2(card_rect.max.x - 8.0, card_rect.max.y - 6.0),
     );
     let mut menu_clicked = false;
+    let mut label_clicked = false;
+    let is_renaming = is_custom && editor.ui.states.renaming_state.as_deref() == Some(state_name);
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(footer_rect));
     child.horizontal(|ui| {
         let label_w = if is_initial { 48.0 } else { 88.0 };
-        ui.add_sized(
-            vec2(label_w, 24.0),
-            egui::Label::new(RichText::new(display_name).strong()).truncate(),
-        )
-        .on_hover_text(display_name);
+        if is_renaming {
+            let r_rename = ui.add(
+                TextEdit::singleline(&mut editor.ui.states.rename_buffer)
+                    .id_salt(format!("state_card_rename_{state_name}"))
+                    .desired_width(label_w),
+            );
+            if editor.ui.states.rename_just_started {
+                r_rename.request_focus();
+                editor.ui.states.rename_just_started = false;
+            }
+            let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            let enter = r_rename.has_focus()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            if esc {
+                editor.ui.states.renaming_state = None;
+                editor.ui.states.rename_just_started = false;
+            } else if enter || r_rename.lost_focus() {
+                let trimmed = editor.ui.states.rename_buffer.trim().to_owned();
+                if trimmed == state_name {
+                    editor.ui.states.renaming_state = None;
+                } else {
+                    let other_states: Vec<StateDef> = obj
+                        .states
+                        .iter()
+                        .filter(|s| s.name != state_name)
+                        .cloned()
+                        .collect();
+                    match validate_new_state_name(&trimmed, &other_states) {
+                        Ok(()) => {
+                            actions.push((
+                                "object.rename_state",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "from": state_name,
+                                    "to": trimmed,
+                                }),
+                            ));
+                            if editor.ui.preview_state.as_deref() == Some(state_name) {
+                                editor.ui.preview_state = Some(trimmed);
+                            }
+                            editor.ui.states.renaming_state = None;
+                        }
+                        Err(err) => {
+                            if enter {
+                                editor.ui.last_error = Some((err, editor.ui.current_time));
+                            } else {
+                                editor.ui.states.renaming_state = None;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            let label_resp = ui
+                .add_sized(
+                    vec2(label_w, 24.0),
+                    egui::Label::new(RichText::new(display_name).strong())
+                        .truncate()
+                        .sense(Sense::click()),
+                )
+                .on_hover_text(display_name);
+            if is_custom && label_resp.double_clicked() {
+                start_inline_rename(editor, state_name);
+                label_clicked = true;
+            } else if label_resp.clicked() {
+                label_clicked = true;
+                select_card_state(editor, obj, state_name);
+            }
+        }
 
-        if is_initial {
+        if is_initial && !is_renaming {
             egui::Frame::new()
                 .fill(p.hover)
                 .corner_radius(CornerRadius::same(4))
@@ -1007,67 +1116,121 @@ fn show_state_card(
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let menu_btn = ui.menu_button(
-                RichText::new("⋯").size(coursecraft_render::SIZE_BODY),
-                |ui| {
-                    menu_clicked = true;
-                    if ui
-                        .add_enabled(!is_initial, egui::Button::new("Set as initial"))
-                        .on_disabled_hover_text("Already the initial state")
-                        .clicked()
-                    {
-                        actions.push((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "initial_state": state_name,
-                            }),
-                        ));
-                        ui.close();
-                    }
-                    if is_custom && ui.button("Edit state").clicked() {
-                        editor.ui.preview_state = Some(state_name.to_owned());
-                        editor.ui.states.focus_override_bar = true;
-                        ui.close();
-                    }
-                    if is_custom {
-                        ui.separator();
-                        let blocker =
-                            state_delete_blocker(slide, &obj.id, state_name, &obj.initial_state);
-                        let del_btn = ui
-                            .add_enabled(blocker.is_none(), egui::Button::new("Delete"))
-                            .on_disabled_hover_text(
-                                blocker.as_deref().unwrap_or("Cannot delete state"),
-                            );
-                        if del_btn.clicked() {
-                            actions.push((
-                                "object.delete_state",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "name": state_name,
-                                }),
-                            ));
-                            ui.close();
-                        }
-                    }
-                },
-            );
+            let menu_btn = ui
+                .scope(|ui| {
+                    ui.spacing_mut().interact_size = vec2(24.0, 24.0);
+                    ui.menu_button(
+                        RichText::new("⋯").size(coursecraft_render::SIZE_BODY),
+                        |ui| {
+                            menu_clicked = true;
+                            if is_custom && ui.button("Edit state").clicked() {
+                                editor.ui.preview_state = Some(state_name.to_owned());
+                                editor.ui.states.focus_override_bar = true;
+                                ui.close();
+                            }
+                            if is_custom && ui.button("Duplicate").clicked() {
+                                actions.push((
+                                    "object.duplicate_state",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "name": state_name,
+                                    }),
+                                ));
+                                ui.close();
+                            }
+                            if is_custom && ui.button("Rename…").clicked() {
+                                start_inline_rename(editor, state_name);
+                                ui.close();
+                            }
+                            if ui
+                                .add_enabled(!is_initial, egui::Button::new("Set as initial"))
+                                .on_disabled_hover_text("Already the initial state")
+                                .clicked()
+                            {
+                                actions.push((
+                                    "object.update",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "initial_state": state_name,
+                                    }),
+                                ));
+                                ui.close();
+                            }
+                            if let Some(idx) = custom_index {
+                                if ui
+                                    .add_enabled(idx > 0, egui::Button::new("Move left"))
+                                    .on_disabled_hover_text("Already first custom state")
+                                    .clicked()
+                                {
+                                    actions.push((
+                                        "object.reorder_state",
+                                        serde_json::json!({
+                                            "slide": slide.id,
+                                            "object": obj.id,
+                                            "name": state_name,
+                                            "index": idx - 1,
+                                        }),
+                                    ));
+                                    ui.close();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        idx + 1 < total_custom,
+                                        egui::Button::new("Move right"),
+                                    )
+                                    .on_disabled_hover_text("Already last custom state")
+                                    .clicked()
+                                {
+                                    actions.push((
+                                        "object.reorder_state",
+                                        serde_json::json!({
+                                            "slide": slide.id,
+                                            "object": obj.id,
+                                            "name": state_name,
+                                            "index": idx + 1,
+                                        }),
+                                    ));
+                                    ui.close();
+                                }
+                                ui.separator();
+                                let blocker = state_delete_blocker(
+                                    slide,
+                                    &obj.id,
+                                    state_name,
+                                    &obj.initial_state,
+                                );
+                                let del_btn = ui
+                                    .add_enabled(blocker.is_none(), egui::Button::new("Delete"))
+                                    .on_disabled_hover_text(
+                                        blocker.as_deref().unwrap_or("Cannot delete state"),
+                                    );
+                                if del_btn.clicked() {
+                                    actions.push((
+                                        "object.delete_state",
+                                        serde_json::json!({
+                                            "slide": slide.id,
+                                            "object": obj.id,
+                                            "name": state_name,
+                                        }),
+                                    ));
+                                    ui.close();
+                                }
+                            }
+                        },
+                    )
+                })
+                .inner;
+            menu_btn.response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, true, "State actions")
+            });
             menu_btn.response.on_hover_text("State actions");
         });
     });
 
-    if card_resp.clicked() && !menu_clicked {
-        if state_name == "normal" {
-            editor.ui.preview_state = if obj.initial_state != "normal" {
-                Some("normal".to_owned())
-            } else {
-                None
-            };
-        } else {
-            editor.ui.preview_state = Some(state_name.to_owned());
-        }
+    if card_resp.clicked() && !menu_clicked && !label_clicked {
+        select_card_state(editor, obj, state_name);
     }
 
     card_rect
@@ -1080,6 +1243,8 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
     {
         editor.ui.preview_state = None;
         editor.ui.states.show_new_state_input = false;
+        editor.ui.states.renaming_state = None;
+        editor.ui.states.card_strip_focused = false;
     }
     editor.ui.states.sync(
         &editor.session.course,
@@ -1356,7 +1521,8 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
                                 "Normal",
                                 obj.initial_state == "normal",
                                 normal_active,
-                                false,
+                                None,
+                                obj.states.len(),
                                 actions,
                             );
                             editor
@@ -1365,7 +1531,8 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
                                 .state_row_rects
                                 .insert("normal".to_owned(), normal_rect);
 
-                            for state in &obj.states {
+                            let total_custom = obj.states.len();
+                            for (idx, state) in obj.states.iter().enumerate() {
                                 let is_active =
                                     editor.ui.preview_state.as_deref() == Some(&state.name);
                                 let rect = show_state_card(
@@ -1377,7 +1544,8 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
                                     &state.name,
                                     obj.initial_state == state.name,
                                     is_active,
-                                    true,
+                                    Some(idx),
+                                    total_custom,
                                     actions,
                                 );
                                 editor
@@ -1616,4 +1784,57 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
             });
         }
     });
+
+    // Keyboard navigation when focus is inside the card strip
+    if editor.ui.states.card_strip_focused
+        && editor.ui.states.renaming_state.is_none()
+        && !editor.ui.states.show_new_state_input
+        && !ui.ctx().egui_wants_keyboard_input()
+    {
+        let mut names = Vec::with_capacity(1 + obj.states.len());
+        names.push("normal");
+        for s in &obj.states {
+            names.push(s.name.as_str());
+        }
+        let cur_idx = editor
+            .ui
+            .preview_state
+            .as_deref()
+            .and_then(|p| names.iter().position(|&n| n == p))
+            .unwrap_or(0);
+        let cur_name = names[cur_idx];
+
+        let left = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft));
+        let right = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight));
+        let f2 = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2));
+        let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        let del = ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+        });
+        let esc = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+
+        if right && cur_idx + 1 < names.len() {
+            select_card_state(editor, &obj, names[cur_idx + 1]);
+        } else if left && cur_idx > 0 {
+            select_card_state(editor, &obj, names[cur_idx - 1]);
+        } else if f2 && cur_name != "normal" {
+            start_inline_rename(editor, cur_name);
+        } else if enter && cur_name != "normal" {
+            editor.ui.states.focus_override_bar = true;
+        } else if del && cur_name != "normal" {
+            if state_delete_blocker(&slide, &obj.id, cur_name, &obj.initial_state).is_none() {
+                actions.push((
+                    "object.delete_state",
+                    serde_json::json!({
+                        "slide": slide.id,
+                        "object": obj.id,
+                        "name": cur_name,
+                    }),
+                ));
+            }
+        } else if esc {
+            editor.ui.preview_state = None;
+        }
+    }
 }

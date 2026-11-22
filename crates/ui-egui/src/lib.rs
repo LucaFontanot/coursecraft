@@ -4005,6 +4005,12 @@ impl Editor {
             .collect();
         shortcuts.sort_by_key(|(_, shortcut)| std::cmp::Reverse(shortcut.matches('+').count()));
         for (cmd, sc_str) in shortcuts {
+            if cmd.id == "object.delete"
+                && self.ui.bottom_tab == BottomTab::States
+                && self.ui.states.card_strip_focused
+            {
+                continue;
+            }
             if let Some(sc) = menu::parse_shortcut(sc_str)
                 && ui.input_mut(|i| i.consume_shortcut(&sc))
             {
@@ -4068,6 +4074,7 @@ impl Editor {
             && !self.ui.translate.open
             && !ui.ctx().egui_wants_keyboard_input()
             && !ui.memory(|m| m.focused().is_some())
+            && !(self.ui.bottom_tab == BottomTab::States && self.ui.states.card_strip_focused)
         {
             let del_pressed = ui.input_mut(|i| {
                 i.consume_key(Modifiers::NONE, Key::Delete)

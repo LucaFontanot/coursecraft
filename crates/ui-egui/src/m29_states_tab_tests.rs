@@ -255,3 +255,459 @@ fn sus03_canvas_preview_state_uses_course_theme() {
         other => panic!("expected Text visual, got {other:?}"),
     }
 }
+
+#[test]
+fn u04_quick_add_chips_and_custom_name_validation_no_hidden_chip() {
+    let mut h = TestHarness::new(course_with_states(0));
+    h.editor.selection.object = Some("btn1".to_owned());
+    h.editor.ui.bottom_tab = BottomTab::States;
+    h.idle_frame();
+
+    assert!(
+        h.find_text("+ Hidden").is_none(),
+        "Hidden must not appear as a quick-add chip"
+    );
+
+    let hover_chip = h
+        .find_text("+ Hover")
+        .expect("+ Hover chip should be visible");
+    h.click_at(hover_chip);
+    h.idle_frame();
+    let slide = h.editor.session.course.slide("s1").unwrap();
+    let (obj, _) = slide.object("btn1").unwrap();
+    assert!(obj.has_state("hover"), "+ Hover must add 'hover' state");
+    assert_eq!(
+        h.editor.ui.preview_state.as_deref(),
+        Some("hover"),
+        "newly added state should become preview_state"
+    );
+    let hover_node = h
+        .last_widgets
+        .iter()
+        .find(|w| w.role == egui::accesskit::Role::Button && w.label.as_deref() == Some("+ Hover"))
+        .expect("+ Hover accesskit node");
+    assert!(
+        hover_node.disabled,
+        "+ Hover chip must be disabled once added"
+    );
+    let hover_bounds = hover_node.bounds;
+    h.hover_at(pos2(0.0, 0.0));
+    h.idle_frame();
+    let tip = h.probe_tooltip(hover_bounds.center());
+    assert_eq!(tip.as_deref(), Some("Already added"));
+
+    // Add custom state via "+ New state" + Enter
+    let new_btn = h.find_text("+ New state").expect("+ New state button");
+    h.click_at(new_btn);
+    h.idle_frame();
+    let input_rect = h
+        .editor
+        .ui
+        .states
+        .new_state_name_rect
+        .expect("new state input rect");
+    h.click_at(input_rect.center());
+    h.type_text("custom_1");
+    h.press(egui::Key::Enter, egui::Modifiers::NONE);
+    h.idle_frame();
+    let slide = h.editor.session.course.slide("s1").unwrap();
+    let (obj, _) = slide.object("btn1").unwrap();
+    assert!(
+        obj.has_state("custom_1"),
+        "typing 'custom_1' + Enter must add 'custom_1'"
+    );
+
+    // Reserved names "normal" and "hidden" show inline hint and disable Add
+    let new_btn = h.find_text("+ New state").expect("+ New state button");
+    h.click_at(new_btn);
+    h.idle_frame();
+    for reserved in ["normal", "hidden"] {
+        let input_rect = h
+            .editor
+            .ui
+            .states
+            .new_state_name_rect
+            .expect("new state input rect");
+        h.set_field(input_rect.center(), reserved);
+        h.idle_frame();
+        let add_rect = h.editor.ui.states.add_button_rect.expect("Add button rect");
+        let add_node = h
+            .last_widgets
+            .iter()
+            .find(|w| w.role == egui::accesskit::Role::Button && w.bounds.intersects(add_rect))
+            .expect("Add button accesskit node");
+        assert!(
+            add_node.disabled,
+            "Add button must be disabled for reserved name '{reserved}'"
+        );
+        h.hover_at(pos2(0.0, 0.0));
+        h.idle_frame();
+        assert!(
+            h.probe_tooltip(add_rect.center()).is_some(),
+            "disabled Add button must show validation tooltip for '{reserved}'"
+        );
+    }
+}
+
+#[test]
+fn u05_card_actions_duplicate_inline_rename_reorder_set_initial_delete_and_undo() {
+    let mut course = course_with_states(2); // hover, selected
+    // Add a freeform question with correct_when referencing "selected" (SUS-09)
+    course.slide_mut("s1").unwrap().question = Some(
+        serde_json::from_value(serde_json::json!({
+            "kind": "freeform",
+            "prompt": "Make btn1 selected",
+            "choices": [],
+            "correct_when": { "object_state": { "object": "btn1", "state": "selected", "is": true } }
+        }))
+        .unwrap(),
+    );
+
+    let mut h = TestHarness::new(course);
+    h.editor.selection.object = Some("btn1".to_owned());
+    h.editor.ui.bottom_tab = BottomTab::States;
+    h.idle_frame();
+
+    // 1. Duplicate "hover" via card ⋯ menu -> "hover copy" inserted right after "hover"
+    let hover_card = *h
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("hover")
+        .expect("hover card rect");
+    let menu_pos = pos2(hover_card.max.x - 18.0, hover_card.max.y - 16.0);
+    h.click_at(menu_pos);
+    h.idle_frame();
+    let dup_pos = h.find_text("Duplicate").expect("Duplicate in card menu");
+    h.click_at(dup_pos);
+    h.idle_frame();
+    let names: Vec<&str> = h
+        .editor
+        .session
+        .course
+        .slide("s1")
+        .unwrap()
+        .object("btn1")
+        .unwrap()
+        .0
+        .states
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["hover", "hover copy", "selected"]);
+
+    // Single-step Undo / Redo
+    h.press(egui::Key::Z, egui::Modifiers::COMMAND);
+    h.idle_frame();
+    let names_after_undo: Vec<&str> = h
+        .editor
+        .session
+        .course
+        .slide("s1")
+        .unwrap()
+        .object("btn1")
+        .unwrap()
+        .0
+        .states
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names_after_undo, vec!["hover", "selected"]);
+
+    h.press(
+        egui::Key::Z,
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+    );
+    h.idle_frame();
+    let names_after_redo: Vec<&str> = h
+        .editor
+        .session
+        .course
+        .slide("s1")
+        .unwrap()
+        .object("btn1")
+        .unwrap()
+        .0
+        .states
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names_after_redo, vec!["hover", "hover copy", "selected"]);
+
+    // 2. Rename "hover copy" via card ⋯ menu -> "Rename…"
+    let copy_card = *h
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("hover copy")
+        .expect("hover copy card rect");
+    h.click_at(pos2(copy_card.max.x - 18.0, copy_card.max.y - 16.0));
+    h.idle_frame();
+    let rename_pos = h.find_text("Rename…").expect("Rename… in card menu");
+    h.click_at(rename_pos);
+    h.idle_frame();
+    h.press(egui::Key::A, egui::Modifiers::COMMAND);
+    h.type_text("active");
+    h.press(egui::Key::Enter, egui::Modifiers::NONE);
+    h.idle_frame();
+    let names: Vec<&str> = h
+        .editor
+        .session
+        .course
+        .slide("s1")
+        .unwrap()
+        .object("btn1")
+        .unwrap()
+        .0
+        .states
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["hover", "active", "selected"]);
+
+    // 3. Move right on "active" -> ["hover", "selected", "active"]
+    let active_card = *h
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("active")
+        .expect("active card rect");
+    h.click_at(pos2(active_card.max.x - 18.0, active_card.max.y - 16.0));
+    h.idle_frame();
+    let move_right = h.find_text("Move right").expect("Move right in card menu");
+    h.click_at(move_right);
+    h.idle_frame();
+    let names: Vec<&str> = h
+        .editor
+        .session
+        .course
+        .slide("s1")
+        .unwrap()
+        .object("btn1")
+        .unwrap()
+        .0
+        .states
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["hover", "selected", "active"]);
+
+    // 4. Set as initial on "active"
+    let active_card = *h
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("active")
+        .expect("active card rect");
+    h.click_at(pos2(active_card.max.x - 18.0, active_card.max.y - 16.0));
+    h.idle_frame();
+    let set_init = h
+        .find_text("Set as initial")
+        .expect("Set as initial in card menu");
+    h.click_at(set_init);
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide("s1")
+            .unwrap()
+            .object("btn1")
+            .unwrap()
+            .0
+            .initial_state,
+        "active"
+    );
+
+    // 5. SUS-09: Delete on "selected" (referenced by question.correct_when) must be disabled with blocker tooltip
+    let selected_card = *h
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("selected")
+        .expect("selected card rect");
+    h.click_at(pos2(selected_card.max.x - 18.0, selected_card.max.y - 16.0));
+    h.idle_frame();
+    let del_pos = h.find_text("Delete").expect("Delete in card menu");
+    let del_node = h
+        .last_widgets
+        .iter()
+        .find(|w| {
+            w.role == egui::accesskit::Role::Button
+                && w.label.as_deref() == Some("Delete")
+                && w.bounds.contains(del_pos)
+        })
+        .expect("Delete button node");
+    assert!(
+        del_node.disabled,
+        "Delete must be disabled when state is referenced by question.correct_when (SUS-09)"
+    );
+    h.hover_at(pos2(0.0, 0.0));
+    let del_tip = h
+        .probe_tooltip(del_pos)
+        .expect("disabled Delete must show blocker tooltip");
+    assert!(
+        del_tip.to_lowercase().contains("question"),
+        "blocker tooltip should mention question reference, got: {del_tip}"
+    );
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+
+    // 6. Delete on unblocked "hover" succeeds and undoes
+    let hover_card = *h
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("hover")
+        .expect("hover card rect");
+    h.click_at(pos2(hover_card.max.x - 18.0, hover_card.max.y - 16.0));
+    h.idle_frame();
+    let del_pos = h.find_text("Delete").expect("Delete in card menu");
+    h.click_at(del_pos);
+    h.idle_frame();
+    assert!(
+        !h.editor
+            .session
+            .course
+            .slide("s1")
+            .unwrap()
+            .object("btn1")
+            .unwrap()
+            .0
+            .has_state("hover")
+    );
+    h.press(egui::Key::Z, egui::Modifiers::COMMAND);
+    h.idle_frame();
+    assert!(
+        h.editor
+            .session
+            .course
+            .slide("s1")
+            .unwrap()
+            .object("btn1")
+            .unwrap()
+            .0
+            .has_state("hover")
+    );
+}
+
+#[test]
+fn u07_keyboard_navigation_and_accesskit_in_states_tab() {
+    let mut h = TestHarness::new(course_with_states(2)); // hover, selected
+    h.editor.selection.object = Some("btn1".to_owned());
+    h.editor.ui.bottom_tab = BottomTab::States;
+    h.idle_frame();
+
+    // Click Normal card to focus the card strip
+    let normal_card = *h
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("normal")
+        .expect("normal card rect");
+    h.click_at(normal_card.center());
+    h.idle_frame();
+
+    // ArrowRight moves active card to "hover", then "selected"
+    h.press(egui::Key::ArrowRight, egui::Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(h.editor.ui.preview_state.as_deref(), Some("hover"));
+
+    h.press(egui::Key::ArrowRight, egui::Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(h.editor.ui.preview_state.as_deref(), Some("selected"));
+
+    // ArrowLeft moves back to "hover"
+    h.press(egui::Key::ArrowLeft, egui::Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(h.editor.ui.preview_state.as_deref(), Some("hover"));
+
+    // F2 starts inline rename on "hover", Esc cancels rename without clearing preview_state
+    h.press(egui::Key::F2, egui::Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        h.editor.ui.states.renaming_state.as_deref(),
+        Some("hover"),
+        "F2 should start inline rename on active custom state"
+    );
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.states.renaming_state.is_none(),
+        "Esc should cancel inline rename"
+    );
+    assert_eq!(
+        h.editor.ui.preview_state.as_deref(),
+        Some("hover"),
+        "Esc cancelling rename must not clear preview_state"
+    );
+
+    // Delete removes unblocked "hover"
+    h.press(egui::Key::Delete, egui::Modifiers::NONE);
+    h.idle_frame();
+    assert!(
+        !h.editor
+            .session
+            .course
+            .slide("s1")
+            .unwrap()
+            .object("btn1")
+            .unwrap()
+            .0
+            .has_state("hover"),
+        "Delete key should remove unblocked active custom state"
+    );
+
+    // AccessKit labels & >= 24x24 hit targets on visible state cards and ⋯ buttons
+    let selected_card = *h
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("selected")
+        .expect("selected card rect");
+    let menu_btn_node = h
+        .last_widgets
+        .iter()
+        .find(|w| {
+            w.role == egui::accesskit::Role::Button
+                && selected_card.contains(w.bounds.center())
+                && w.bounds.width() < 40.0
+        })
+        .expect("⋯ menu button should have an accesskit Button node");
+    assert!(
+        menu_btn_node
+            .label
+            .as_deref()
+            .is_some_and(|l| !l.trim().is_empty()),
+        "⋯ menu button must have a non-empty accesskit label"
+    );
+    assert!(
+        menu_btn_node.bounds.width() >= 24.0 && menu_btn_node.bounds.height() >= 24.0,
+        "⋯ menu button must be >= 24x24 pt, got {:?}",
+        menu_btn_node.bounds.size()
+    );
+    let card_node = h
+        .last_widgets
+        .iter()
+        .find(|w| {
+            w.role == egui::accesskit::Role::Button
+                && w.bounds.width() >= 100.0
+                && selected_card.contains(w.bounds.center())
+        })
+        .expect("state card must have an accesskit Button node");
+    assert!(
+        card_node
+            .label
+            .as_deref()
+            .is_some_and(|l| !l.trim().is_empty()),
+        "state card must have a non-empty accesskit label"
+    );
+}
