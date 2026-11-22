@@ -369,7 +369,9 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                         CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
                         p.raised,
                     );
-                    let more = ui.interact(more_btn_rect, more_id, Sense::click());
+                    let more = ui
+                        .interact(more_btn_rect, more_id, Sense::click())
+                        .on_hover_text("Master options");
                     let icon_color = if more.hovered() {
                         p.text
                     } else {
@@ -417,20 +419,33 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                 if renaming {
                     show_master_rename_editor(editor, ui, title_rect);
                 } else {
-                    ui.painter_at(title_rect).text(
-                        title_rect.left_top(),
-                        Align2::LEFT_TOP,
-                        &master.title,
+                    let title_color = if is_selected {
+                        p.text
+                    } else {
+                        p.text_secondary
+                    };
+                    let mut job = egui::text::LayoutJob::simple_singleline(
+                        master.title.clone(),
                         FontId::new(
                             coursecraft_render::SIZE_SMALL,
                             egui::FontFamily::Name("inter".into()),
                         ),
-                        if is_selected {
-                            p.text
-                        } else {
-                            p.text_secondary
-                        },
+                        title_color,
                     );
+                    job.wrap =
+                        egui::text::TextWrapping::truncate_at_width(title_rect.width().max(16.0));
+                    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                    let elided = galley.elided;
+                    ui.painter_at(title_rect)
+                        .galley(title_rect.left_top(), galley, title_color);
+                    if elided {
+                        ui.interact(
+                            title_rect,
+                            ui.scope_id().with("master_title").with(&master.id),
+                            Sense::hover(),
+                        )
+                        .on_hover_text(&master.title);
+                    }
                 }
 
                 y += row_height;
@@ -627,20 +642,26 @@ pub fn show_master_delete_dialog(editor: &mut Editor, ctx: &egui::Context) {
     let count = slides_using_master(&editor.session.course, &master_id);
     let mut close = false;
     let mut delete = false;
-    Dialog::new("Delete master").show(ctx, |ui| {
-        ui.label(format!(
+    let mut open = true;
+    Dialog::new("Delete master")
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.label(format!(
             "Delete the master \"{title}\"? {count} slide(s) use it and will draw with no master."
         ));
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("Delete master").clicked() {
-                delete = true;
-            }
-            if ui.button("Cancel").clicked() {
-                close = true;
-            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Delete master").clicked() {
+                    delete = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+            });
         });
-    });
+    if !open {
+        close = true;
+    }
     if delete {
         editor.run("master.delete", serde_json::json!({ "master": master_id }));
         editor.ui.pending_delete_master = None;
@@ -967,6 +988,7 @@ fn show_slide_menu_items(
     };
     if ui
         .add_enabled(can_delete, egui::Button::new("Delete"))
+        .on_disabled_hover_text("A course needs at least one slide")
         .clicked()
     {
         if multi_selected {
@@ -1253,11 +1275,15 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             job.wrap =
                 egui::text::TextWrapping::truncate_at_width((header_rect.width() - 28.0).max(16.0));
             let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+            let elided = galley.elided;
             let title_pos = pos2(
                 header_rect.min.x,
                 header_rect.center().y - galley.size().y * 0.5,
             );
             painter.galley(title_pos, galley, p.text_secondary);
+            if elided {
+                header_resp.on_hover_text(&scene.title);
+            }
             // "+" at the right of the header: a new slide at the end of this
             // scene, so a slide never has to be made elsewhere and dragged in.
             let add_size = vec2(22.0, 22.0);
@@ -1382,9 +1408,16 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 ui.interact(thumb_rect, ui.scope_id().with(&slide.id), Sense::click());
             let raw_pointer = ui.input(|i| i.pointer.interact_pos());
             let covered = raw_pointer.is_some_and(|pos| !crate::widgets::pointer_reaches(ui, pos));
+            let more_btn_size = vec2(24.0, 24.0);
+            let more_btn_rect = Rect::from_min_size(
+                pos2(thumb_rect.max.x - 24.0 - 4.0, thumb_rect.min.y + 4.0),
+                more_btn_size,
+            );
+            let over_more_btn = raw_pointer.is_some_and(|pos| more_btn_rect.contains(pos));
             let click_mods = ui.input(|i| i.modifiers);
             let multi_mod = click_mods.shift || click_mods.command || click_mods.ctrl;
             if !covered
+                && !over_more_btn
                 && !multi_mod
                 && editor.ui.slide_drag.is_none()
                 && ui.input(|i| i.pointer.primary_pressed())
@@ -1471,11 +1504,6 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             }
 
             // DotsThree button at thumbnail top-right on hover or when selected
-            let more_btn_size = vec2(24.0, 24.0);
-            let more_btn_rect = Rect::from_min_size(
-                pos2(thumb_rect.max.x - 24.0 - 4.0, thumb_rect.min.y + 4.0),
-                more_btn_size,
-            );
             let more_id = ui.scope_id().with("more").with(&slide.id);
             let is_menu_open = egui::Popup::is_id_open(ui.ctx(), more_id);
 
@@ -1491,7 +1519,9 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     p.raised,
                 );
 
-                let more_resp = ui.interact(more_btn_rect, more_id, Sense::click());
+                let more_resp = ui
+                    .interact(more_btn_rect, more_id, Sense::click())
+                    .on_hover_text("Slide options");
                 let icon_color = if more_resp.hovered() {
                     p.text
                 } else {
@@ -1590,16 +1620,22 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     p.text_secondary
                 };
                 let painter = ui.painter_at(title_rect);
-                painter.text(
-                    title_rect.left_top(),
-                    Align2::LEFT_TOP,
-                    &slide.title,
+                let mut job = egui::text::LayoutJob::simple_singleline(
+                    slide.title.clone(),
                     FontId::new(
                         coursecraft_render::SIZE_SMALL,
                         egui::FontFamily::Name("inter".into()),
                     ),
                     title_color,
                 );
+                job.wrap =
+                    egui::text::TextWrapping::truncate_at_width(title_rect.width().max(16.0));
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                let elided = galley.elided;
+                painter.galley(title_rect.left_top(), galley, title_color);
+                if elided {
+                    title_resp.on_hover_text(&slide.title);
+                }
             }
 
             current_y += row_height;
@@ -2144,7 +2180,8 @@ pub fn show_scene_delete_dialog(editor: &mut Editor, ctx: &egui::Context) {
     let title = scene.title.clone();
     let mut close = false;
     let mut delete = false;
-    Dialog::new("Delete scene").show(ctx, |ui| {
+    let mut open = true;
+    Dialog::new("Delete scene").open(&mut open).show(ctx, |ui| {
         if slide_count == 0 {
             ui.label(format!("Delete the scene \"{title}\"?"));
         } else {
@@ -2165,6 +2202,9 @@ pub fn show_scene_delete_dialog(editor: &mut Editor, ctx: &egui::Context) {
             }
         });
     });
+    if !open {
+        close = true;
+    }
     if delete {
         editor.run("scene.delete", serde_json::json!({ "scene": scene_id }));
         editor.ui.pending_delete_scene = None;

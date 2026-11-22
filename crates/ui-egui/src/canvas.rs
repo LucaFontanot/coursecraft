@@ -5867,11 +5867,16 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         ),
     };
 
+    let screen = ui
+        .ctx()
+        .data(|d| d.get_temp::<Rect>(egui::Id::unique("coursecraft_screen_rect")))
+        .unwrap_or_else(|| ui.ctx().content_rect());
+    let hud_bounds = viewport_rect.intersect(screen);
     let zoom_hud_w = 132.0;
     let zoom_hud_h = 32.0;
     let zoom_hud_pos = pos2(
-        viewport_rect.max.x - zoom_hud_w - 16.0,
-        viewport_rect.max.y - zoom_hud_h - 16.0,
+        (hud_bounds.max.x - zoom_hud_w - 16.0).max(hud_bounds.min.x + 4.0),
+        (hud_bounds.max.y - zoom_hud_h - 16.0).max(hud_bounds.min.y + 4.0),
     );
     let zoom_hud_rect = Rect::from_min_size(zoom_hud_pos, vec2(zoom_hud_w, zoom_hud_h));
 
@@ -6374,7 +6379,7 @@ fn zoom_value_button(ui: &mut Ui, label: &str) -> egui::Response {
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 24.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 26.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, label.to_owned()));
     if ui.is_rect_visible(rect) {
         let hovered = resp.hovered();
@@ -6400,7 +6405,8 @@ fn zoom_value_button(ui: &mut Ui, label: &str) -> egui::Response {
         );
         ui.painter().galley(caret_pos, caret, color);
     }
-    resp.on_hover_cursor(CursorIcon::PointingHand)
+    resp.on_hover_text("Zoom level")
+        .on_hover_cursor(CursorIcon::PointingHand)
 }
 
 fn draw_dashed_rect(painter: &Painter, rect: Rect, stroke: Stroke) {

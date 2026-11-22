@@ -231,16 +231,22 @@ fn show_scene_header(editor: &mut Editor, ui: &mut Ui, scene_id: &str, title: &s
     if renaming {
         show_map_rename_editor(editor, ui, rect);
     } else {
-        ui.painter_at(rect).text(
-            rect.left_center(),
-            Align2::LEFT_CENTER,
-            title,
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            title.to_owned(),
             FontId::new(
                 coursecraft_render::SIZE_CAPTION,
                 egui::FontFamily::Name("inter-bold".into()),
             ),
             p.text,
         );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width().max(16.0));
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        let elided = galley.elided;
+        let title_pos = pos2(rect.min.x, rect.center().y - galley.size().y * 0.5);
+        ui.painter_at(rect).galley(title_pos, galley, p.text);
+        if elided {
+            resp.on_hover_text(title);
+        }
     }
 }
 
@@ -444,16 +450,18 @@ fn show_map_thumbnail(
     } else {
         p.text_secondary
     };
-    ui.painter_at(title_rect).text(
-        title_rect.left_top(),
-        Align2::LEFT_TOP,
-        &slide_title,
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        slide_title,
         FontId::new(
             coursecraft_render::SIZE_SMALL,
             egui::FontFamily::Name("inter".into()),
         ),
         title_color,
     );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(title_rect.width().max(16.0));
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    ui.painter_at(title_rect)
+        .galley(title_rect.left_top(), galley, title_color);
 }
 
 /// Where a slide sits: (scene id, index in that scene).
