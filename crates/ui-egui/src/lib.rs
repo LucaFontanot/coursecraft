@@ -192,6 +192,8 @@ mod m27_triggers_states_tests;
 #[cfg(test)]
 mod m27_undo_clipboard_tests;
 #[cfg(test)]
+mod m29_edit_state_mode_tests;
+#[cfg(test)]
 mod m29_states_tab_tests;
 #[cfg(test)]
 mod outline_tests;
@@ -935,6 +937,8 @@ pub struct UiState {
     /// Open the Text styles window on the next frame (it keeps its open flag in the context).
     pub open_text_styles_window: bool,
     pub preview_state: Option<String>,
+    /// Active canvas edit-state session (`M29` Slice 2).
+    pub editing_state: Option<StateEditSession>,
     /// Remembered non-fullscreen preview window size for the current session.
     pub preview_size: Option<egui::Vec2>,
     pub bottom_tab: BottomTab,
@@ -1260,6 +1264,18 @@ pub fn destructive_action_button(ui: &mut Ui, text: &str) -> egui::Response {
     resp
 }
 
+/// Active canvas state-editing session (`M29` Slice 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateEditSession {
+    pub slide_id: String,
+    pub object_id: String,
+    pub state_name: String,
+    pub selected_extra: Option<String>,
+}
+
+/// Shared tooltip for object-level controls locked during Edit-State Mode.
+pub const STATE_LOCK_TOOLTIP: &str = "Shared across all states — exit state editing to change";
+
 impl Editor {
     /// Create a new editor for the given course.
     #[must_use]
@@ -1373,6 +1389,7 @@ impl Editor {
                 show_theme_window: false,
                 open_text_styles_window: false,
                 preview_state: None,
+                editing_state: None,
                 preview_size: None,
                 bottom_tab: BottomTab::Timeline,
                 inspector_tab: InspectorTab::Slide,
@@ -1682,6 +1699,7 @@ impl Editor {
             self.ui.translate = TranslateState::default();
         }
         self.ui.preview_state = None;
+        self.ui.editing_state = None;
         self.ui.inspector_tab = InspectorTab::Slide;
         self.ui.last_selected_object = None;
         self.ui.zoom = ZoomLevel::Fit;
@@ -2185,6 +2203,34 @@ impl Editor {
                 "h": crop.h,
             })
         };
+        if let Some(state_session) = self.ui.editing_state.clone()
+            && state_session.slide_id == session.slide
+            && state_session.object_id == session.object
+        {
+            let base_has_crop = matches!(
+                object.kind,
+                coursecraft_course::ObjectKind::Image { crop: Some(_), .. }
+            );
+            let patch = if full {
+                if base_has_crop {
+                    serde_json::json!({ "clear_crop": true })
+                } else {
+                    serde_json::json!({ "crop": Json::Null })
+                }
+            } else {
+                serde_json::json!({ "crop": crop_json })
+            };
+            self.run(
+                "object.patch_state",
+                serde_json::json!({
+                    "slide": state_session.slide_id,
+                    "object": state_session.object_id,
+                    "name": state_session.state_name,
+                    "patch": patch,
+                }),
+            );
+            return;
+        }
         let params = serde_json::json!({
             "slide": session.slide,
             "object": session.object,
@@ -2207,6 +2253,37 @@ impl Editor {
         else {
             return;
         };
+        if let Some(state_session) = self.ui.editing_state.clone()
+            && state_session.slide_id == slide_id
+            && state_session.object_id == object_id
+        {
+            let base_has_crop = self
+                .session
+                .course
+                .slide(&slide_id)
+                .and_then(|slide| slide.object(&object_id))
+                .is_some_and(|(object, _)| {
+                    matches!(
+                        object.kind,
+                        coursecraft_course::ObjectKind::Image { crop: Some(_), .. }
+                    )
+                });
+            let patch = if base_has_crop {
+                serde_json::json!({ "clear_crop": true })
+            } else {
+                serde_json::json!({ "crop": Json::Null })
+            };
+            self.run(
+                "object.patch_state",
+                serde_json::json!({
+                    "slide": state_session.slide_id,
+                    "object": state_session.object_id,
+                    "name": state_session.state_name,
+                    "patch": patch,
+                }),
+            );
+            return;
+        }
         let found = self
             .session
             .course
@@ -2995,11 +3072,57 @@ impl Editor {
         }
     }
 
+    /// Enter Canvas Edit-State Mode for `state_name` on `object_id` (`slide_id`).
+    pub fn enter_edit_state(&mut self, slide_id: &str, object_id: &str, state_name: &str) {
+        if self.ui.master_view || state_name == "normal" {
+            return;
+        }
+        let exists = self
+            .session
+            .course
+            .slide(slide_id)
+            .and_then(|s| s.object(object_id))
+            .is_some_and(|(o, _)| o.states.iter().any(|st| st.name == state_name));
+        if !exists {
+            return;
+        }
+        self.selection.slide = slide_id.to_owned();
+        self.selection.set_many([object_id.to_owned()]);
+        self.ui.last_selected_object = Some(object_id.to_owned());
+        self.ui.editing_state = Some(StateEditSession {
+            slide_id: slide_id.to_owned(),
+            object_id: object_id.to_owned(),
+            state_name: state_name.to_owned(),
+            selected_extra: None,
+        });
+        self.ui.preview_state = Some(state_name.to_owned());
+        self.ui.inspector_tab = InspectorTab::Format;
+        self.ui.format_painter = None;
+        self.ui.placement_tool = None;
+        self.ui.placement_drag = None;
+        self.ui.draw = None;
+        self.ui.path_edit = None;
+        self.ui.canvas_drag = None;
+        self.ui.group_focus = None;
+        self.ui.states.card_strip_focused = false;
+    }
+
+    /// Exit Canvas Edit-State Mode without clearing the selected object.
+    pub fn exit_edit_state(&mut self) {
+        if self.ui.editing_state.take().is_some() {
+            self.ui.canvas_drag = None;
+            self.ui.inline_edit = None;
+            self.ui.crop_edit = None;
+            self.ui.crop_drag = None;
+        }
+    }
+
     /// Enter Master View, remembering the slide to return to.
     pub fn enter_master_view(&mut self) {
         if self.ui.master_view {
             return;
         }
+        self.exit_edit_state();
         self.ui.master_view = true;
         // The Course map shows play slides: it cannot stay open here.
         self.ui.story_view = false;
@@ -3073,6 +3196,7 @@ impl Editor {
     /// Bank slides live outside play order, so starting a preview at one
     /// falls back to the whole course from its start slide.
     pub fn open_preview_at(&mut self, slide: Option<&str>) {
+        self.exit_edit_state();
         let slide = slide.filter(|id| self.session.course.bank_slide(id).is_none());
         let mut preview = Preview::new(&self.session.course, slide);
         preview.set_initial_size(self.ui.preview_size);
@@ -3083,6 +3207,7 @@ impl Editor {
     ///
     /// Bank slides are ignored; if no scene slides remain, opens the whole course.
     pub fn open_preview_subset(&mut self, slides: &[String]) {
+        self.exit_edit_state();
         let filtered: Vec<String> = slides
             .iter()
             .filter(|id| !id.is_empty() && self.session.course.bank_slide(id).is_none())
@@ -3731,6 +3856,26 @@ impl Editor {
             });
             if stale {
                 self.cancel_crop();
+            }
+        }
+        if let Some(session) = self.ui.editing_state.clone() {
+            let state_exists = self
+                .session
+                .course
+                .slide(&session.slide_id)
+                .and_then(|slide| slide.object(&session.object_id))
+                .is_some_and(|(obj, _)| obj.states.iter().any(|st| st.name == session.state_name));
+            let context_invalid = self.ui.master_view
+                || self.ui.story_view
+                || self.preview.is_some()
+                || session.slide_id != self.selection.slide
+                || self.selection.is_multi()
+                || self.selection.object.as_deref() != Some(session.object_id.as_str());
+            if !state_exists {
+                self.ui.preview_state = None;
+                self.exit_edit_state();
+            } else if context_invalid {
+                self.exit_edit_state();
             }
         }
         if self

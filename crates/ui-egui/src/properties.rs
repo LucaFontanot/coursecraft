@@ -2302,6 +2302,7 @@ fn show_arrange_icons(
     if editor.selection.object.is_none() {
         return;
     }
+    let state_edit_locked = editor.ui.editing_state.is_some();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
         for (icon, label, edge) in [
@@ -2313,8 +2314,10 @@ fn show_arrange_icons(
             (Icon::ArrowDown, "Align Bottom", "bottom"),
         ] {
             let params = crate::menu::align_params(editor, edge);
-            let enabled = params.is_some();
-            let tooltip = if enabled {
+            let enabled = !state_edit_locked && params.is_some();
+            let tooltip = if state_edit_locked {
+                crate::STATE_LOCK_TOOLTIP
+            } else if params.is_some() {
                 label
             } else {
                 "Select an object first"
@@ -2326,7 +2329,16 @@ fn show_arrange_icons(
                 actions_to_run.push(("object.align", params));
             }
         }
-        let more = crate::widgets::icon_button(ui, Icon::DotsThree, "More arrange options");
+        let more = crate::widgets::icon_button_enabled(
+            ui,
+            Icon::DotsThree,
+            !state_edit_locked,
+            if state_edit_locked {
+                crate::STATE_LOCK_TOOLTIP
+            } else {
+                "More arrange options"
+            },
+        );
         egui::Popup::menu(&more).show(|ui| {
             for (label, axis) in [
                 ("Distribute Horizontally", "horizontal"),
@@ -3252,6 +3264,11 @@ fn show_animate_tab(
     actions_to_run: &mut Vec<(&'static str, Json)>,
 ) {
     let p = coursecraft_render::palette(ui.ctx());
+    if editor.ui.editing_state.is_some() {
+        ui.label(RichText::new(crate::STATE_LOCK_TOOLTIP).color(p.text_secondary));
+        ui.add_space(6.0);
+        ui.disable();
+    }
 
     if editor.selection.is_multi() {
         let slide_id = editor.selection.slide.clone();
@@ -6628,24 +6645,30 @@ fn show_object_properties(
         ui.label(RichText::new(&obj.id).monospace().strong());
     });
 
+    let state_edit_locked = editor.ui.editing_state.is_some();
+
     // 2. Name
-    inspector_row(ui, "Name", |ui| {
-        let rem_w = ui.available_width().max(30.0);
-        let r = ui.add_sized(
-            [rem_w, coursecraft_render::CONTROL_COMPACT],
-            TextEdit::singleline(&mut props.name).id_salt("prop_obj_name"),
-        );
-        if is_committed(&r, ui) && props.name != obj.name {
-            action_to_run = Some((
-                "object.update",
-                serde_json::json!({
-                    "slide": slide.id,
-                    "object": obj.id,
-                    "name": props.name.trim(),
-                }),
-            ));
-        }
-    });
+    ui.add_enabled_ui(!state_edit_locked, |ui| {
+        inspector_row(ui, "Name", |ui| {
+            let rem_w = ui.available_width().max(30.0);
+            let r = ui.add_sized(
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                TextEdit::singleline(&mut props.name).id_salt("prop_obj_name"),
+            );
+            if is_committed(&r, ui) && props.name != obj.name {
+                action_to_run = Some((
+                    "object.update",
+                    serde_json::json!({
+                        "slide": slide.id,
+                        "object": obj.id,
+                        "name": props.name.trim(),
+                    }),
+                ));
+            }
+        });
+    })
+    .response
+    .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
 
     inspector_row(ui, "Opacity", |ui| {
         let rem_w = ui.available_width().max(30.0);
@@ -7915,32 +7938,36 @@ fn show_object_properties(
     inspector_section_header(ui, "Frame");
     let mut frame_committed = false;
 
-    let ((rx, enter_x), (ry, enter_y)) = show_paired_numeric_row(
-        ui,
-        "Position",
-        "X",
-        &mut props.frame_x,
-        1.0,
-        "Y",
-        &mut props.frame_y,
-        1.0,
-    );
-    props.frame_x_rect = Some(rx.rect);
-    frame_committed |= rx.drag_stopped() || rx.lost_focus() || enter_x;
-    frame_committed |= ry.drag_stopped() || ry.lost_focus() || enter_y;
+    ui.add_enabled_ui(!state_edit_locked, |ui| {
+        let ((rx, enter_x), (ry, enter_y)) = show_paired_numeric_row(
+            ui,
+            "Position",
+            "X",
+            &mut props.frame_x,
+            1.0,
+            "Y",
+            &mut props.frame_y,
+            1.0,
+        );
+        props.frame_x_rect = Some(rx.rect);
+        frame_committed |= rx.drag_stopped() || rx.lost_focus() || enter_x;
+        frame_committed |= ry.drag_stopped() || ry.lost_focus() || enter_y;
 
-    let ((rw, enter_w), (rh, enter_h)) = show_paired_numeric_row(
-        ui,
-        "Size",
-        "W",
-        &mut props.frame_w,
-        1.0,
-        "H",
-        &mut props.frame_h,
-        1.0,
-    );
-    frame_committed |= rw.drag_stopped() || rw.lost_focus() || enter_w;
-    frame_committed |= rh.drag_stopped() || rh.lost_focus() || enter_h;
+        let ((rw, enter_w), (rh, enter_h)) = show_paired_numeric_row(
+            ui,
+            "Size",
+            "W",
+            &mut props.frame_w,
+            1.0,
+            "H",
+            &mut props.frame_h,
+            1.0,
+        );
+        frame_committed |= rw.drag_stopped() || rw.lost_focus() || enter_w;
+        frame_committed |= rh.drag_stopped() || rh.lost_focus() || enter_h;
+    })
+    .response
+    .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
 
     if frame_committed {
         let fx = props.frame_x.round();
@@ -7975,40 +8002,44 @@ fn show_object_properties(
     inspector_section_header(ui, "Timing");
     let mut timing_committed = false;
 
-    inspector_row(ui, "Start (ms)", |ui| {
-        let rem_w = ui.available_width().max(30.0);
-        let r = add_drag_left(
-            ui,
-            [rem_w, coursecraft_render::CONTROL_COMPACT],
-            DragValue::new(&mut props.start_ms)
-                .speed(10.0)
-                .suffix(" ms"),
-        );
-        let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        timing_committed |= r.drag_stopped() || r.lost_focus() || enter;
-    });
-
-    inspector_row(ui, "End", |ui| {
-        if ui
-            .checkbox(&mut props.until_end, "Until slide end")
-            .changed()
-        {
-            timing_committed = true;
-        }
-    });
-
-    if !props.until_end {
-        inspector_row(ui, "End (ms)", |ui| {
+    ui.add_enabled_ui(!state_edit_locked, |ui| {
+        inspector_row(ui, "Start (ms)", |ui| {
             let rem_w = ui.available_width().max(30.0);
             let r = add_drag_left(
                 ui,
                 [rem_w, coursecraft_render::CONTROL_COMPACT],
-                DragValue::new(&mut props.end_ms).speed(10.0).suffix(" ms"),
+                DragValue::new(&mut props.start_ms)
+                    .speed(10.0)
+                    .suffix(" ms"),
             );
             let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             timing_committed |= r.drag_stopped() || r.lost_focus() || enter;
         });
-    }
+
+        inspector_row(ui, "End", |ui| {
+            if ui
+                .checkbox(&mut props.until_end, "Until slide end")
+                .changed()
+            {
+                timing_committed = true;
+            }
+        });
+
+        if !props.until_end {
+            inspector_row(ui, "End (ms)", |ui| {
+                let rem_w = ui.available_width().max(30.0);
+                let r = add_drag_left(
+                    ui,
+                    [rem_w, coursecraft_render::CONTROL_COMPACT],
+                    DragValue::new(&mut props.end_ms).speed(10.0).suffix(" ms"),
+                );
+                let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                timing_committed |= r.drag_stopped() || r.lost_focus() || enter;
+            });
+        }
+    })
+    .response
+    .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
 
     if timing_committed {
         let new_timing = Timing {

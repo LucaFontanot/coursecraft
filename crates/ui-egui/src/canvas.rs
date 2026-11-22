@@ -2918,6 +2918,33 @@ fn start_drag_if_pressed(
     modifiers: egui::Modifiers,
 ) {
     editor.ui.last_active_area = crate::ActiveArea::Canvas;
+    if let Some(ref session) = editor.ui.editing_state {
+        if !is_locked(editor, &session.object_id)
+            && let Some(item) = items
+                .iter()
+                .find(|item| item.hit == Hit::Object(session.object_id.clone()))
+        {
+            let screen_rect = t.to_screen_rect(item.rect);
+            let handle = rotate_handle_center(screen_rect, item.rotation);
+            if Rect::from_center_size(handle, vec2(14.0, 14.0)).contains(start_pos) {
+                let centre = screen_rect.center();
+                let start_angle = (start_pos.y - centre.y).atan2(start_pos.x - centre.x);
+                editor.ui.canvas_drag = Some(CanvasDrag {
+                    op: DragOp::Rotate {
+                        centre,
+                        start_angle,
+                        orig_rotation: item.rotation,
+                    },
+                    object_id: session.object_id.clone(),
+                    orig_frame: item.rect,
+                    start_screen: start_pos,
+                    frames: Vec::new(),
+                    alt_duplicate: false,
+                });
+            }
+        }
+        return;
+    }
     // A locked object has no canvas handles: pressing the canvas leaves it.
     if editor
         .selection
@@ -3611,14 +3638,30 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
             editor.ui.canvas_drag = None;
             let orig = coursecraft_course::normalize_rotation(orig_rotation);
             if (rotation - orig).abs() > 0.001 {
-                editor.run(
-                    "object.set_rotation",
-                    serde_json::json!({
-                        "slide": editor.selection.slide,
-                        "object": drag.object_id,
-                        "degrees": rotation,
-                    }),
-                );
+                if let Some(session) = editor.ui.editing_state.clone()
+                    && session.object_id == drag.object_id
+                {
+                    editor.run(
+                        "object.patch_state",
+                        serde_json::json!({
+                            "slide": session.slide_id,
+                            "object": session.object_id,
+                            "name": session.state_name,
+                            "patch": {
+                                "rotation": rotation,
+                            },
+                        }),
+                    );
+                } else {
+                    editor.run(
+                        "object.set_rotation",
+                        serde_json::json!({
+                            "slide": editor.selection.slide,
+                            "object": drag.object_id,
+                            "degrees": rotation,
+                        }),
+                    );
+                }
             }
         } else {
             for item in items.iter_mut() {
@@ -4037,6 +4080,9 @@ fn handle_canvas_secondary_click(
     } else {
         None
     };
+    if editor.ui.editing_state.is_some() {
+        return;
+    }
     if let Some(id) = picked {
         if !editor.selection.contains(&id) {
             editor.select_object_group(&id);
@@ -4065,6 +4111,9 @@ fn handle_canvas_click(
     modifiers: egui::Modifiers,
 ) {
     editor.ui.last_active_area = crate::ActiveArea::Canvas;
+    if editor.ui.editing_state.is_some() {
+        return;
+    }
     let additive = modifiers.shift || modifiers.command;
     if t.slide_rect().contains(pos) {
         let slide_pos = t.to_slide_pos(pos);
@@ -4084,6 +4133,11 @@ fn handle_canvas_click(
         }
         let picked = pick_object(&editor.session.course, &editor.selection, slide_pos, items)
             .map(|(id, _)| id);
+        if let Some(ref session) = editor.ui.editing_state
+            && picked.as_deref() != Some(session.object_id.as_str())
+        {
+            return;
+        }
         if editor.ui.format_painter.is_some() {
             if let Some(id) = picked {
                 let targets = editor.selection.group_members(&editor.session.course, &id);
@@ -4152,6 +4206,11 @@ fn handle_canvas_double_click(
         let slide_pos = t.to_slide_pos(pos);
         let picked = pick_object(&editor.session.course, &editor.selection, slide_pos, items)
             .map(|(id, _)| id);
+        if let Some(ref session) = editor.ui.editing_state
+            && picked.as_deref() != Some(session.object_id.as_str())
+        {
+            return;
+        }
         if let Some(id) = picked {
             let group_size = editor
                 .selection
@@ -5497,10 +5556,21 @@ fn draw_handles_and_outline(
             .map(|point| t.to_screen_pos(point))
             .collect();
         if corners.len() == 4 {
-            painter.add(egui::Shape::closed_line(
-                corners,
-                Stroke::new(2.0, accent_color),
-            ));
+            if editor.ui.editing_state.is_some() {
+                for i in 0..4 {
+                    painter.add(egui::Shape::dashed_line(
+                        &[corners[i], corners[(i + 1) % 4]],
+                        Stroke::new(1.5, accent_color),
+                        6.0,
+                        4.0,
+                    ));
+                }
+            } else {
+                painter.add(egui::Shape::closed_line(
+                    corners,
+                    Stroke::new(2.0, accent_color),
+                ));
+            }
         }
         let bounds = coursecraft_render::item_bounds(item);
         bbox = Some(match bbox {
@@ -5602,7 +5672,8 @@ fn draw_handles_and_outline(
             painter.circle_stroke(handle, 6.0, Stroke::new(1.5, accent_color));
         }
 
-        if editor.ui.canvas_drag.is_none()
+        if editor.ui.editing_state.is_none()
+            && editor.ui.canvas_drag.is_none()
             && editor.ui.placement_tool.is_none()
             && editor.ui.format_painter.is_none()
             && let Some(pos) = current_pointer
@@ -5622,15 +5693,17 @@ fn draw_handles_and_outline(
             }
         }
 
-        for (_, c) in centers {
-            let handle_rect = Rect::from_center_size(c, vec2(handle_size, handle_size));
-            painter.rect_filled(handle_rect, CornerRadius::ZERO, Color32::WHITE);
-            painter.rect_stroke(
-                handle_rect,
-                CornerRadius::ZERO,
-                Stroke::new(1.0, accent_color),
-                StrokeKind::Middle,
-            );
+        if editor.ui.editing_state.is_none() {
+            for (_, c) in centers {
+                let handle_rect = Rect::from_center_size(c, vec2(handle_size, handle_size));
+                painter.rect_filled(handle_rect, CornerRadius::ZERO, Color32::WHITE);
+                painter.rect_stroke(
+                    handle_rect,
+                    CornerRadius::ZERO,
+                    Stroke::new(1.0, accent_color),
+                    StrokeKind::Middle,
+                );
+            }
         }
     }
 
@@ -5843,10 +5916,110 @@ fn draw_motion_paths(
     }
 }
 
+fn show_edit_state_banner(editor: &mut Editor, ui: &mut Ui) {
+    let Some(session) = editor.ui.editing_state.clone() else {
+        return;
+    };
+    let p = coursecraft_render::palette(ui.ctx());
+    let (object_label, has_overrides) = editor
+        .session
+        .course
+        .slide(&session.slide_id)
+        .and_then(|s| s.object(&session.object_id))
+        .map_or_else(
+            || (session.object_id.clone(), false),
+            |(obj, _)| {
+                let label = if obj.name.trim().is_empty() {
+                    obj.id.clone()
+                } else {
+                    obj.name.clone()
+                };
+                let has = obj
+                    .states
+                    .iter()
+                    .find(|st| st.name == session.state_name)
+                    .is_some_and(crate::states::state_has_overrides);
+                (label, has)
+            },
+        );
+
+    let mut do_reset = false;
+    let mut do_done = false;
+    egui::Frame::NONE
+        .fill(p.accent.gamma_multiply(0.12))
+        .stroke(Stroke::new(1.0, p.accent))
+        .inner_margin(egui::Margin::symmetric(
+            coursecraft_render::PANEL_MARGIN as i8,
+            2,
+        ))
+        .show(ui, |ui| {
+            ui.allocate_ui_with_layout(
+                vec2(ui.available_width(), 32.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.label(
+                        RichText::new(
+                            coursecraft_render::Icon::SlidersHorizontal
+                                .codepoint()
+                                .to_string(),
+                        )
+                        .font(FontId::new(15.0, egui::FontFamily::Name("phosphor".into())))
+                        .color(p.accent),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "Editing state \u{201c}{}\u{201d} of {object_label}",
+                            session.state_name
+                        ))
+                        .strong()
+                        .color(p.text),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let done_btn =
+                            egui::Button::new(RichText::new("Done editing").color(p.accent_text))
+                                .fill(p.accent)
+                                .min_size(vec2(0.0, 32.0));
+                        if ui.add(done_btn).clicked() {
+                            do_done = true;
+                        }
+                        let reset_btn = ui
+                            .add_enabled(
+                                has_overrides,
+                                egui::Button::new("Reset overrides").min_size(vec2(0.0, 24.0)),
+                            )
+                            .on_disabled_hover_text("No overrides to reset");
+                        if reset_btn.clicked() {
+                            do_reset = true;
+                        }
+                    });
+                },
+            );
+        });
+
+    if do_reset {
+        editor.run(
+            "object.patch_state",
+            serde_json::json!({
+                "slide": session.slide_id,
+                "object": session.object_id,
+                "name": session.state_name,
+                "reset_all": true,
+            }),
+        );
+    }
+    if do_done {
+        editor.exit_edit_state();
+    }
+}
+
 /// Show the layers strip, the central slide canvas, and the floating zoom HUD.
 #[allow(clippy::cognitive_complexity)]
 pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
     ui.spacing_mut().item_spacing.y = 0.0;
+
+    if editor.ui.editing_state.is_some() {
+        show_edit_state_banner(editor, ui);
+    }
 
     let available_size = ui.available_size();
     if !available_size.x.is_finite()
@@ -6017,6 +6190,11 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             }
         }
         missing_images_as_placeholders(&mut items, &editor.media);
+        if let Some(ref session) = editor.ui.editing_state {
+            for item in &mut items {
+                item.dimmed = item.hit != Hit::Object(session.object_id.clone());
+            }
+        }
 
         let popup_was_open = ui
             .ctx()
@@ -6057,7 +6235,18 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 && !ui.ctx().egui_wants_keyboard_input()
                 && !ui.memory(|m| m.focused().is_some())
             {
-                editor.selection.clear_objects();
+                if editor
+                    .ui
+                    .editing_state
+                    .as_mut()
+                    .is_some_and(|s| s.selected_extra.take().is_some())
+                {
+                    // Cleared selected_extra; keep editing_state active.
+                } else if editor.ui.editing_state.is_some() {
+                    editor.exit_edit_state();
+                } else {
+                    editor.selection.clear_objects();
+                }
             }
         }
 

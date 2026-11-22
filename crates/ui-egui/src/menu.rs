@@ -1205,25 +1205,36 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
         })
         .clicked()
     {
+        if let Some(state_name) = editor.ui.preview_state.clone().filter(|s| s != "normal")
+            && let Some(obj_id) = editor.selection.object.clone()
+        {
+            let slide_id = editor.selection.slide.clone();
+            editor.enter_edit_state(&slide_id, &obj_id, &state_name);
+        }
         editor.ui.bottom_tab = crate::BottomTab::States;
         ui.close();
     }
 
     ui.separator();
-    render_group_ungroup_items(editor, ui, true);
-    ui.separator();
-    ui.menu_button("Order", |ui| {
-        render_reorder_menu_item(editor, ui);
-    });
-    ui.menu_button("Align", |ui| {
-        let mut action_to_run: Option<(&'static str, Json)> = None;
-        render_align_actions(editor, ui, &mut action_to_run);
+    let state_edit_locked = editor.ui.editing_state.is_some();
+    ui.add_enabled_ui(!state_edit_locked, |ui| {
+        render_group_ungroup_items(editor, ui, true);
         ui.separator();
-        ui.checkbox(&mut editor.ui.align_to_slide, "Align to Slide");
-        if let Some((cmd, params)) = action_to_run {
-            editor.run(cmd, params);
-        }
-    });
+        ui.menu_button("Order", |ui| {
+            render_reorder_menu_item(editor, ui);
+        });
+        ui.menu_button("Align", |ui| {
+            let mut action_to_run: Option<(&'static str, Json)> = None;
+            render_align_actions(editor, ui, &mut action_to_run);
+            ui.separator();
+            ui.checkbox(&mut editor.ui.align_to_slide, "Align to Slide");
+            if let Some((cmd, params)) = action_to_run {
+                editor.run(cmd, params);
+            }
+        });
+    })
+    .response
+    .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
     ui.separator();
 
     let select_all = Button::new("Select all").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+A"));

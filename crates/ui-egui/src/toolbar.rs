@@ -521,8 +521,12 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     // Format Painter: click arms once, double click keeps it armed.
     left_ui.add_space(coursecraft_render::SPACE_MD);
     let painter_armed = editor.ui.format_painter.is_some();
-    let painter_enabled = !master_view && (painter_armed || editor.can_arm_format_painter());
-    let painter_tooltip = if master_view {
+    let state_edit_locked = editor.ui.editing_state.is_some();
+    let painter_enabled =
+        !master_view && !state_edit_locked && (painter_armed || editor.can_arm_format_painter());
+    let painter_tooltip = if state_edit_locked {
+        crate::STATE_LOCK_TOOLTIP
+    } else if master_view {
         "Not available in Master View"
     } else if !painter_enabled {
         "Select an object to copy its format"

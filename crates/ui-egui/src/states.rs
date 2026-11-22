@@ -968,15 +968,47 @@ fn start_inline_rename(editor: &mut Editor, state_name: &str) {
     editor.ui.states.rename_just_started = true;
 }
 
+/// Return `true` if `state` has any visual override or explicit `clear_*` flag set.
+pub(crate) fn state_has_overrides(state: &StateDef) -> bool {
+    state.fill.is_some()
+        || state.text.is_some()
+        || state.src.is_some()
+        || state.fill_style.is_some()
+        || state.clear_fill_style
+        || state.outline.is_some()
+        || state.clear_outline
+        || state.text_style.is_some()
+        || state.runs.is_some()
+        || state.paragraphs.is_some()
+        || state.autofit.is_some()
+        || state.opacity.is_some()
+        || state.shadow.is_some()
+        || state.clear_shadow
+        || state.glow.is_some()
+        || state.clear_glow
+        || state.crop.is_some()
+        || state.clear_crop
+        || state.image_shape.is_some()
+        || state.clear_image_shape
+        || state.rotation.is_some()
+        || state.flip_h.is_some()
+        || state.flip_v.is_some()
+}
+
 fn select_card_state(editor: &mut Editor, obj: &Object, state_name: &str) {
     editor.ui.states.card_strip_focused = true;
     if state_name == "normal" {
+        editor.exit_edit_state();
         editor.ui.preview_state = if obj.initial_state != "normal" {
             Some("normal".to_owned())
         } else {
             None
         };
     } else {
+        if let Some(session) = editor.ui.editing_state.as_mut() {
+            session.state_name = state_name.to_owned();
+            session.selected_extra = None;
+        }
         editor.ui.preview_state = Some(state_name.to_owned());
     }
 }
@@ -1125,8 +1157,7 @@ fn show_state_card(
                         |ui| {
                             menu_clicked = true;
                             if is_custom && ui.button("Edit state").clicked() {
-                                editor.ui.preview_state = Some(state_name.to_owned());
-                                editor.ui.states.focus_override_bar = true;
+                                editor.enter_edit_state(&slide.id, &obj.id, state_name);
                                 ui.close();
                             }
                             if is_custom && ui.button("Duplicate").clicked() {
@@ -1230,7 +1261,9 @@ fn show_state_card(
         });
     });
 
-    if card_resp.clicked() && !menu_clicked && !label_clicked {
+    if is_custom && card_resp.double_clicked() && !menu_clicked && !label_clicked {
+        editor.enter_edit_state(&slide.id, &obj.id, state_name);
+    } else if card_resp.clicked() && !menu_clicked && !label_clicked {
         select_card_state(editor, obj, state_name);
     }
 
@@ -1418,8 +1451,10 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
                         )
                         .on_disabled_hover_text("Select a custom state to edit its overrides")
                         .clicked()
+                        && let Some(state_name) =
+                            editor.ui.preview_state.clone().filter(|s| s != "normal")
                     {
-                        editor.ui.states.focus_override_bar = true;
+                        editor.enter_edit_state(&slide.id, &obj.id, &state_name);
                     }
                 });
             });
@@ -1790,6 +1825,9 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
     if editor.ui.states.card_strip_focused
         && editor.ui.states.renaming_state.is_none()
         && !editor.ui.states.show_new_state_input
+        && editor.ui.inline_edit.is_none()
+        && editor.ui.crop_edit.is_none()
+        && editor.ui.editing_state.is_none()
         && !ui.ctx().egui_wants_keyboard_input()
     {
         let mut names = Vec::with_capacity(1 + obj.states.len());
