@@ -1361,10 +1361,30 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
         ))
         .show(ui, |ui| {
             ui.set_min_height(32.0);
-            ui.horizontal(|ui| {
+            let wide_header = ui.available_width() >= 780.0;
+            let show_edit_btn = |ui: &mut Ui, editor: &mut Editor| {
+                let custom_active = editor
+                    .ui
+                    .preview_state
+                    .as_deref()
+                    .is_some_and(|s| s != "normal");
+                if ui
+                    .add_enabled(
+                        custom_active,
+                        egui::Button::new("Edit state").min_size(vec2(0.0, 32.0)),
+                    )
+                    .on_disabled_hover_text("Select a custom state to edit its overrides")
+                    .clicked()
+                    && let Some(state_name) =
+                        editor.ui.preview_state.clone().filter(|s| s != "normal")
+                {
+                    editor.enter_edit_state(&slide.id, &obj.id, &state_name);
+                }
+            };
+            let show_identity = |ui: &mut Ui, actions: &mut Vec<(&'static str, Json)>| {
                 ui.add(egui::Label::new(RichText::new(obj_display_name).strong()).truncate())
                     .on_hover_text(obj_display_name);
-                ui.label(RichText::new(count_label).color(p.text_secondary));
+                ui.label(RichText::new(&count_label).color(p.text_secondary));
 
                 ui.separator();
                 ui.label("Initial");
@@ -1408,56 +1428,57 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
                             );
                         });
                 }
-
-                ui.separator();
-                for (state_name, button_label) in [
-                    ("hover", "+ Hover"),
-                    ("down", "+ Down"),
-                    ("selected", "+ Selected"),
-                    ("visited", "+ Visited"),
-                    ("disabled", "+ Disabled"),
-                ] {
-                    let already_added = obj.states.iter().any(|s| s.name == state_name);
+            };
+            let show_chips =
+                |ui: &mut Ui, editor: &mut Editor, actions: &mut Vec<(&'static str, Json)>| {
+                    for (state_name, button_label) in [
+                        ("hover", "+ Hover"),
+                        ("down", "+ Down"),
+                        ("selected", "+ Selected"),
+                        ("visited", "+ Visited"),
+                        ("disabled", "+ Disabled"),
+                    ] {
+                        let already_added = obj.states.iter().any(|s| s.name == state_name);
+                        if ui
+                            .add_enabled(
+                                !already_added,
+                                egui::Button::new(button_label).min_size(vec2(0.0, 24.0)),
+                            )
+                            .on_disabled_hover_text("Already added")
+                            .clicked()
+                        {
+                            push_add_state(actions, &slide.id, &obj.id, &obj.kind, state_name);
+                            editor.ui.preview_state = Some(state_name.to_owned());
+                        }
+                    }
                     if ui
-                        .add_enabled(
-                            !already_added,
-                            egui::Button::new(button_label).min_size(vec2(0.0, 24.0)),
-                        )
-                        .on_disabled_hover_text("Already added")
+                        .add(egui::Button::new("+ New state").min_size(vec2(0.0, 24.0)))
                         .clicked()
                     {
-                        push_add_state(actions, &slide.id, &obj.id, &obj.kind, state_name);
-                        editor.ui.preview_state = Some(state_name.to_owned());
+                        editor.ui.states.show_new_state_input =
+                            !editor.ui.states.show_new_state_input;
                     }
-                }
-
-                if ui
-                    .add(egui::Button::new("+ New state").min_size(vec2(0.0, 24.0)))
-                    .clicked()
-                {
-                    editor.ui.states.show_new_state_input = !editor.ui.states.show_new_state_input;
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let custom_active = editor
-                        .ui
-                        .preview_state
-                        .as_deref()
-                        .is_some_and(|s| s != "normal");
-                    if ui
-                        .add_enabled(
-                            custom_active,
-                            egui::Button::new("Edit state").min_size(vec2(0.0, 32.0)),
-                        )
-                        .on_disabled_hover_text("Select a custom state to edit its overrides")
-                        .clicked()
-                        && let Some(state_name) =
-                            editor.ui.preview_state.clone().filter(|s| s != "normal")
-                    {
-                        editor.enter_edit_state(&slide.id, &obj.id, &state_name);
-                    }
+                };
+            if wide_header {
+                ui.horizontal(|ui| {
+                    show_identity(ui, actions);
+                    ui.separator();
+                    show_chips(ui, editor, actions);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        show_edit_btn(ui, editor);
+                    });
                 });
-            });
+            } else {
+                ui.horizontal(|ui| {
+                    show_identity(ui, actions);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        show_edit_btn(ui, editor);
+                    });
+                });
+                ui.horizontal(|ui| {
+                    show_chips(ui, editor, actions);
+                });
+            }
 
             if editor.ui.states.show_new_state_input {
                 ui.horizontal(|ui| {
@@ -1518,14 +1539,16 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
 
     let avail_w = ui.available_width();
     let override_w = if active_custom_state.is_some() {
-        (avail_w * 0.34).clamp(220.0, 320.0)
+        (avail_w * 0.34)
+            .clamp(180.0, 320.0)
+            .min((avail_w - 184.0).max(140.0))
     } else {
         0.0
     };
     let strip_w = (avail_w
         - override_w
         - if active_custom_state.is_some() {
-            12.0
+            24.0
         } else {
             0.0
         })
@@ -1680,10 +1703,11 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
                 if allows_state_text {
                     ui.horizontal(|ui| {
                         ui.label("Text");
+                        let text_w = (ui.available_width() - 56.0).clamp(80.0, 140.0);
                         let r_text = ui.add(
                             TextEdit::singleline(&mut buf.text_override)
                                 .id_salt(format!("state_tab_text_{active_name}"))
-                                .desired_width(140.0),
+                                .desired_width(text_w),
                         );
                         buf.text_rect = Some(r_text.rect);
                         if editor.ui.states.focus_override_bar {

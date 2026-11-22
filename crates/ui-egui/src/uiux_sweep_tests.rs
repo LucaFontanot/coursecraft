@@ -123,6 +123,98 @@ fn all_surfaces() -> Vec<SurfaceCase> {
             extra_setup: None,
         });
     }
+    cases.push(SurfaceCase {
+        label: "bottom-states-empty".to_owned(),
+        select: SnapshotSelect {
+            slide: Some("s-layers".to_owned()),
+            object: None,
+            bottom_tab: Some(BottomTab::States),
+            ..Default::default()
+        },
+        shows: None,
+        extra_setup: Some(|e| e.selection.clear_objects()),
+    });
+    cases.push(SurfaceCase {
+        label: "bottom-states-multi".to_owned(),
+        select: SnapshotSelect {
+            slide: Some("s-layers".to_owned()),
+            bottom_tab: Some(BottomTab::States),
+            ..Default::default()
+        },
+        shows: None,
+        extra_setup: Some(|e| {
+            let ids: Vec<String> = e
+                .session
+                .course
+                .slide("s-layers")
+                .map(|s| s.objects.iter().take(2).map(|o| o.id.clone()).collect())
+                .unwrap_or_default();
+            if ids.len() >= 2 {
+                e.selection.set_many(ids);
+            }
+        }),
+    });
+    cases.push(SurfaceCase {
+        label: "bottom-states-1".to_owned(),
+        select: SnapshotSelect {
+            bottom_tab: Some(BottomTab::States),
+            ..base_select()
+        },
+        shows: None,
+        extra_setup: Some(|e| {
+            let _ = e.run(
+                "object.add_state",
+                serde_json::json!({
+                    "slide": "s-layers",
+                    "object": "obj-layers-title",
+                    "state": { "name": "hover", "opacity": 0.8 }
+                }),
+            );
+        }),
+    });
+    cases.push(SurfaceCase {
+        label: "bottom-states-8".to_owned(),
+        select: SnapshotSelect {
+            bottom_tab: Some(BottomTab::States),
+            ..base_select()
+        },
+        shows: None,
+        extra_setup: Some(|e| {
+            for name in [
+                "hover", "down", "visited", "selected", "disabled", "custom_1", "custom_2",
+                "custom_3",
+            ] {
+                let _ = e.run(
+                    "object.add_state",
+                    serde_json::json!({
+                        "slide": "s-layers",
+                        "object": "obj-layers-title",
+                        "state": { "name": name, "opacity": 0.9 }
+                    }),
+                );
+            }
+        }),
+    });
+    cases.push(SurfaceCase {
+        label: "edit-state-mode".to_owned(),
+        select: SnapshotSelect {
+            inspector_tab: Some(InspectorTab::Format),
+            bottom_tab: Some(BottomTab::States),
+            ..base_select()
+        },
+        shows: None,
+        extra_setup: Some(|e| {
+            let _ = e.run(
+                "object.add_state",
+                serde_json::json!({
+                    "slide": "s-layers",
+                    "object": "obj-layers-title",
+                    "state": { "name": "hover", "opacity": 0.8 }
+                }),
+            );
+            e.enter_edit_state("s-layers", "obj-layers-title", "hover");
+        }),
+    });
     for slide in [
         "s-q-mc",
         "s-q-mr",

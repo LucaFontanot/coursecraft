@@ -196,6 +196,8 @@ mod m29_edit_state_mode_tests;
 #[cfg(test)]
 mod m29_format_state_routing_tests;
 #[cfg(test)]
+mod m29_slice2_interactions_tests;
+#[cfg(test)]
 mod m29_states_tab_tests;
 #[cfg(test)]
 mod outline_tests;
@@ -3068,6 +3070,14 @@ impl Editor {
             self.leave_master_view();
         } else {
             self.enter_master_view();
+        }
+    }
+
+    pub(crate) fn preview_navigated_state(&mut self, state_name: String) {
+        if !self.ui.master_view {
+            self.ui.bottom_tab = BottomTab::States;
+            self.ui.preview_state = Some(state_name);
+            self.ui.last_selected_object = self.selection.object.clone();
         }
     }
 

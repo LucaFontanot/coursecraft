@@ -6073,42 +6073,46 @@ fn show_edit_state_banner(editor: &mut Editor, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.allocate_ui_with_layout(
                 vec2(ui.available_width(), 32.0),
-                egui::Layout::left_to_right(egui::Align::Center),
+                egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
-                    ui.label(
-                        RichText::new(
-                            coursecraft_render::Icon::SlidersHorizontal
-                                .codepoint()
-                                .to_string(),
+                    let done_btn = egui::Button::new(
+                        RichText::new("Done editing").color(egui::Color32::WHITE),
+                    )
+                    .fill(p.accent)
+                    .min_size(vec2(0.0, 32.0));
+                    if ui.add(done_btn).clicked() {
+                        do_done = true;
+                    }
+                    let reset_btn = ui
+                        .add_enabled(
+                            has_overrides,
+                            egui::Button::new("Reset overrides").min_size(vec2(0.0, 24.0)),
                         )
-                        .font(FontId::new(15.0, egui::FontFamily::Name("phosphor".into())))
-                        .color(p.accent),
-                    );
-                    ui.label(
-                        RichText::new(format!(
-                            "Editing state \u{201c}{}\u{201d} of {object_label}",
-                            session.state_name
-                        ))
-                        .strong()
-                        .color(p.text),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let done_btn =
-                            egui::Button::new(RichText::new("Done editing").color(p.accent_text))
-                                .fill(p.accent)
-                                .min_size(vec2(0.0, 32.0));
-                        if ui.add(done_btn).clicked() {
-                            do_done = true;
-                        }
-                        let reset_btn = ui
-                            .add_enabled(
-                                has_overrides,
-                                egui::Button::new("Reset overrides").min_size(vec2(0.0, 24.0)),
+                        .on_disabled_hover_text("No overrides to reset");
+                    if reset_btn.clicked() {
+                        do_reset = true;
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(
+                                coursecraft_render::Icon::SlidersHorizontal
+                                    .codepoint()
+                                    .to_string(),
                             )
-                            .on_disabled_hover_text("No overrides to reset");
-                        if reset_btn.clicked() {
-                            do_reset = true;
-                        }
+                            .font(FontId::new(15.0, egui::FontFamily::Name("phosphor".into())))
+                            .color(p.accent),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "Editing state \u{201c}{}\u{201d} of {object_label}",
+                                    session.state_name
+                                ))
+                                .strong()
+                                .color(p.text),
+                            )
+                            .truncate(),
+                        );
                     });
                 },
             );

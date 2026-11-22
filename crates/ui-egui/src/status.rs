@@ -153,6 +153,33 @@ fn select_slide_subpath(
     }
 }
 
+/// Extract the state name from a `media_references` place string (`… ▸ State "<name>"`).
+pub(crate) fn state_name_from_place(place: &str) -> Option<String> {
+    let (_, rest) = place.rsplit_once("▸ State \"")?;
+    let name = rest.split('"').next()?;
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+fn state_name_from_issue_path(
+    course: &Course,
+    slide_id: &str,
+    object_id: Option<&str>,
+    path: &str,
+) -> Option<String> {
+    if let Some(name) = state_name_from_place(path) {
+        return Some(name);
+    }
+    let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    let idx = segments.windows(2).find_map(|pair| {
+        (pair[0] == "states")
+            .then(|| pair[1].parse::<usize>().ok())
+            .flatten()
+    })?;
+    let slide = course.slide(slide_id)?;
+    let (obj, _) = slide.object(object_id?)?;
+    obj.states.get(idx).map(|state| state.name.clone())
+}
+
 fn finish_slide_navigation(editor: &mut Editor, previous: String) {
     editor.ui.story_view = false;
     if editor
@@ -433,6 +460,15 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
                 finish_slide_navigation(editor, previous);
                 if path.ends_with("/revisit") {
                     editor.ui.inspector_tab = crate::properties::InspectorTab::Slide;
+                } else if !editor.ui.master_view
+                    && let Some(state_name) = state_name_from_issue_path(
+                        &editor.session.course,
+                        &editor.selection.slide,
+                        editor.selection.object.as_deref(),
+                        &path,
+                    )
+                {
+                    editor.preview_navigated_state(state_name);
                 }
             }
         }
