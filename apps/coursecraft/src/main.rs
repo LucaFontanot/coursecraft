@@ -1213,8 +1213,8 @@ impl EditorApp {
             EditorRequest::PickImage => {
                 let picked = files::pick_image_file();
                 if picked.is_none() {
-                    // Cancelled: a picture fill waiting for this file is off.
-                    self.editor.pending_picture_fill = None;
+                    // Cancelled: any pending pick waiting for this file is off.
+                    self.editor.pending_image_pick = None;
                 }
                 if let Some(path) = picked {
                     let name = path
@@ -1576,7 +1576,7 @@ impl EditorApp {
                 } else if is_lottie {
                     self.editor.import_lottie(&name, &bytes);
                 } else if is_vtt {
-                    if self.editor.pending_replace_object.is_none()
+                    if self.editor.pending_image_pick.is_none()
                         && let Some(obj_id) = self.editor.selection.object.clone()
                         && let Some(slide) = self
                             .editor
@@ -1590,7 +1590,8 @@ impl EditorApp {
                                 | coursecraft_course::ObjectKind::Video { .. }
                         )
                     {
-                        self.editor.pending_replace_object = Some(obj_id);
+                        self.editor.pending_image_pick =
+                            Some(coursecraft_ui_egui::PendingImagePick::ReplaceObject(obj_id));
                     }
                     self.editor.import_captions(&name, &bytes);
                 } else {

@@ -1371,8 +1371,8 @@ fn show_hotspot(
             if let Some((image_id, _)) = hotspot_image.as_ref()
                 && crate::quiet_primary_button(ui, "Choose image…").clicked()
             {
-                editor.pending_replace_object = Some(image_id.clone());
-                editor.pending_picture_fill = None;
+                editor.pending_image_pick =
+                    Some(crate::PendingImagePick::ReplaceObject(image_id.clone()));
                 editor.request(crate::EditorRequest::PickImage);
             }
         }
@@ -1397,8 +1397,8 @@ fn show_hotspot(
         if let Some((image_id, _)) = hotspot_image.as_ref()
             && crate::quiet_primary_button(ui, "Choose image…").clicked()
         {
-            editor.pending_replace_object = Some(image_id.clone());
-            editor.pending_picture_fill = None;
+            editor.pending_image_pick =
+                Some(crate::PendingImagePick::ReplaceObject(image_id.clone()));
             editor.request(crate::EditorRequest::PickImage);
         }
     }

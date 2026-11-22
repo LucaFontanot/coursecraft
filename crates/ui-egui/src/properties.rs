@@ -8774,25 +8774,42 @@ fn handle_image_actions(
     if std::mem::take(&mut editor.ui.properties.pick_picture_fill)
         && let Some(object) = editor.selection.object.clone()
     {
-        editor.pending_replace_object = None;
-        editor.pending_picture_fill = Some((editor.selection.slide.clone(), object));
+        editor.pending_image_pick = Some(crate::PendingImagePick::PictureFill {
+            slide: editor.selection.slide.clone(),
+            object,
+        });
         editor.request(crate::EditorRequest::PickImage);
     }
     if replace_image_requested {
-        editor.pending_picture_fill = None;
-        editor.pending_replace_object = editor.selection.object.clone();
+        editor.pending_image_pick = editor
+            .selection
+            .object
+            .clone()
+            .map(crate::PendingImagePick::ReplaceObject);
         editor.request(crate::EditorRequest::PickImage);
     }
     if replace_audio_requested {
-        editor.pending_replace_object = editor.selection.object.clone();
+        editor.pending_image_pick = editor
+            .selection
+            .object
+            .clone()
+            .map(crate::PendingImagePick::ReplaceObject);
         editor.request(crate::EditorRequest::PickAudio);
     }
     if replace_video_requested {
-        editor.pending_replace_object = editor.selection.object.clone();
+        editor.pending_image_pick = editor
+            .selection
+            .object
+            .clone()
+            .map(crate::PendingImagePick::ReplaceObject);
         editor.request(crate::EditorRequest::PickVideo);
     }
     if pick_captions_requested {
-        editor.pending_replace_object = editor.selection.object.clone();
+        editor.pending_image_pick = editor
+            .selection
+            .object
+            .clone()
+            .map(crate::PendingImagePick::ReplaceObject);
         editor.request(crate::EditorRequest::PickCaptions);
     }
     if let Some(src) = reset_natural_size_src

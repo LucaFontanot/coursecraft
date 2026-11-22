@@ -201,8 +201,7 @@ pub fn insert_ellipse(editor: &mut Editor) {
 
 /// Request image file picker for insertion.
 pub fn insert_image(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
-    editor.pending_replace_object = None;
-    editor.pending_picture_fill = None;
+    editor.pending_image_pick = None;
     requests.push(EditorRequest::PickImage);
 }
 
@@ -212,7 +211,7 @@ pub fn insert_video(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
         editor.set_status("Not available in Master View");
         return;
     }
-    editor.pending_replace_object = None;
+    editor.pending_image_pick = None;
     requests.push(EditorRequest::PickVideo);
 }
 
@@ -222,7 +221,7 @@ pub fn insert_audio(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
         editor.set_status("Not available in Master View");
         return;
     }
-    editor.pending_replace_object = None;
+    editor.pending_image_pick = None;
     requests.push(EditorRequest::PickAudio);
 }
 
@@ -232,7 +231,7 @@ pub fn insert_lottie(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
         editor.set_status("Not available in Master View");
         return;
     }
-    editor.pending_replace_object = None;
+    editor.pending_image_pick = None;
     requests.push(EditorRequest::PickLottie);
 }
 

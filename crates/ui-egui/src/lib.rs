@@ -262,6 +262,8 @@ mod u16_preview_tests;
 #[cfg(test)]
 mod u19_state_check_tests;
 #[cfg(test)]
+mod u20_state_image_picker_tests;
+#[cfg(test)]
 mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;
@@ -1126,10 +1128,8 @@ pub struct Editor {
     /// Cached video durations in ms keyed by media `src`, populated off the UI thread.
     pub video_durations:
         std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<u64>>>>,
-    pub pending_replace_object: Option<String>,
-    /// The shape or button (slide id, object id) whose picture fill the next
-    /// picked image becomes, instead of placing or replacing an object.
-    pub pending_picture_fill: Option<(String, String)>,
+    /// What the next picked file is for, if not inserting a new object on the canvas.
+    pub pending_image_pick: Option<PendingImagePick>,
     pub pending_requests: Vec<EditorRequest>,
     pub automation_available: bool,
     /// This app's own binary, for the Connect an AI agent dialog.
@@ -1215,6 +1215,21 @@ pub fn quiet_button(ui: &mut Ui, text: &str, tone: QuietTone, enabled: bool) -> 
     } else {
         resp
     }
+}
+
+/// What the next picked file is for, if not inserting a new object on the canvas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingImagePick {
+    /// Replace the source file of an existing object (image, audio, video, or captions).
+    ReplaceObject(String),
+    /// Set the picture fill of a shape or button on a slide.
+    PictureFill { slide: String, object: String },
+    /// Set the image override (`src`) of an image object's state.
+    StateImage {
+        slide: String,
+        object: String,
+        state: String,
+    },
 }
 
 /// A quiet button with `accent_text` color used for primary list actions.
@@ -1414,8 +1429,7 @@ impl Editor {
             video_durations: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
-            pending_replace_object: None,
-            pending_picture_fill: None,
+            pending_image_pick: None,
             pending_requests: Vec::new(),
             automation_available: false,
             agent_exe_path: None,
@@ -1703,8 +1717,7 @@ impl Editor {
 
         self.media.clear();
         self.media_cache = coursecraft_render::MediaCache::new();
-        self.pending_replace_object = None;
-        self.pending_picture_fill = None;
+        self.pending_image_pick = None;
         self.pending_requests.clear();
 
         self.check_revision();
@@ -1797,8 +1810,7 @@ impl Editor {
         // The Insert importers arm a placement tool (or replace a queued
         // object). The library wants the bytes only, so keep both untouched.
         let previous_tool = self.ui.placement_tool.take();
-        let previous_replace = self.pending_replace_object.take();
-        let previous_picture_fill = self.pending_picture_fill.take();
+        let previous_pick = self.pending_image_pick.take();
         let src = if is_image || lower.ends_with(".svg") || lower.ends_with(".svgz") {
             self.import_image(file_name, bytes)
         } else if is_lottie {
@@ -1839,8 +1851,7 @@ impl Editor {
             }
         };
         self.ui.placement_tool = previous_tool;
-        self.pending_replace_object = previous_replace;
-        self.pending_picture_fill = previous_picture_fill;
+        self.pending_image_pick = previous_pick;
         let src = src?;
         self.mark_media_changed();
         self.set_status(format!("Added “{src}”. File operations are not undoable."));
@@ -2338,12 +2349,10 @@ impl Editor {
         // import_image validates, stores under a unique name and reports the
         // natural size through the placement tool. Paste always inserts a new
         // picture, so a pending "replace" intent must not consume the import.
-        let pending_replace = self.pending_replace_object.take();
-        let pending_picture_fill = self.pending_picture_fill.take();
+        let pending_pick = self.pending_image_pick.take();
         self.ui.placement_tool = None;
         let Some(src) = self.import_image("pasted-image.png", png_bytes) else {
-            self.pending_replace_object = pending_replace;
-            self.pending_picture_fill = pending_picture_fill;
+            self.pending_image_pick = pending_pick;
             return false;
         };
         let Some(PlacementTool::Image { natural_size, .. }) = self.ui.placement_tool.take() else {
@@ -2442,50 +2451,95 @@ impl Editor {
             (decoded.width as f32, decoded.height as f32)
         };
 
+        let pending_pick = self.pending_image_pick.take();
+        if let Some(PendingImagePick::StateImage {
+            slide: slide_id,
+            object: object_id,
+            state: state_name,
+        }) = pending_pick
+        {
+            let existing_state = self
+                .session
+                .course
+                .slide(&slide_id)
+                .and_then(|s| s.object(&object_id))
+                .and_then(|(o, _)| o.states.iter().find(|st| st.name == state_name))
+                .cloned();
+            let mut updated = existing_state?;
+            let src = sanitize_media_src(file_name, &self.media);
+            let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
+            self.media.push((src.clone(), arc_bytes));
+            updated.src = Some(src.clone());
+            let Ok(state_val) = serde_json::to_value(&updated) else {
+                self.media.retain(|(name, _)| name != &src);
+                return None;
+            };
+            if self
+                .run(
+                    "object.update_state",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": object_id,
+                        "state": state_val,
+                    }),
+                )
+                .is_none()
+            {
+                self.media.retain(|(name, _)| name != &src);
+                return None;
+            }
+            if is_svg && bytes.windows(5).any(|w| w.eq_ignore_ascii_case(b"<text")) {
+                self.set_status(
+                    "This SVG has text, which CourseCraft draws only as shapes. Convert text to outlines in your drawing app.",
+                );
+            }
+            return Some(src);
+        }
+
         let src = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
         self.media.push((src.clone(), arc_bytes));
 
-        // A picture fill applies only while its shape or button is still the
-        // selection; otherwise the picture is placed as usual.
-        let picture_fill = self
-            .pending_picture_fill
-            .take()
-            .filter(|(slide_id, object_id)| {
-                self.selection.slide == *slide_id
-                    && self.selection.object.as_deref() == Some(object_id.as_str())
-            });
-        if let Some((slide_id, object_id)) = picture_fill {
-            self.apply_picture_fill(&slide_id, &object_id, &src);
-        } else if let Some(object_id) = self.pending_replace_object.take() {
-            let current_alt = self
-                .session
-                .course
-                .slide(&self.selection.slide)
-                .and_then(|s| s.objects.iter().find(|o| o.id == object_id))
-                .and_then(|o| match &o.kind {
-                    coursecraft_course::ObjectKind::Image { alt, .. } => Some(alt.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
+        match pending_pick {
+            Some(PendingImagePick::PictureFill {
+                slide: slide_id,
+                object: object_id,
+            }) if self.selection.slide == slide_id
+                && self.selection.object.as_deref() == Some(object_id.as_str()) =>
+            {
+                self.apply_picture_fill(&slide_id, &object_id, &src);
+            }
+            Some(PendingImagePick::ReplaceObject(object_id)) => {
+                let current_alt = self
+                    .session
+                    .course
+                    .slide(&self.selection.slide)
+                    .and_then(|s| s.objects.iter().find(|o| o.id == object_id))
+                    .and_then(|o| match &o.kind {
+                        coursecraft_course::ObjectKind::Image { alt, .. } => Some(alt.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
 
-            self.run(
-                "object.update",
-                serde_json::json!({
-                    "slide": self.selection.slide,
-                    "object": object_id,
-                    "kind": {
-                        "type": "image",
-                        "src": src,
-                        "alt": current_alt,
-                    }
-                }),
-            );
-        } else {
-            self.ui.placement_tool = Some(PlacementTool::Image {
-                src: src.clone(),
-                natural_size: (natural_width, natural_height),
-            });
+                self.run(
+                    "object.update",
+                    serde_json::json!({
+                        "slide": self.selection.slide,
+                        "object": object_id,
+                        "kind": {
+                            "type": "image",
+                            "src": src,
+                            "alt": current_alt,
+                        }
+                    }),
+                );
+            }
+            _ => {
+                self.ui.placement_tool = Some(PlacementTool::Image {
+                    src: src.clone(),
+                    natural_size: (natural_width, natural_height),
+                });
+            }
         }
 
         if is_svg && bytes.windows(5).any(|w| w.eq_ignore_ascii_case(b"<text")) {
@@ -2689,7 +2743,12 @@ impl Editor {
         };
         let src = self.store_media(kind, file_name, bytes)?;
 
-        if let Some(object_id) = self.pending_replace_object.take() {
+        if matches!(
+            self.pending_image_pick,
+            Some(PendingImagePick::ReplaceObject(_))
+        ) && let Some(PendingImagePick::ReplaceObject(object_id)) =
+            self.pending_image_pick.take()
+        {
             let current_autoplay =
                 self.session
                     .course
@@ -2775,7 +2834,14 @@ impl Editor {
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
         self.media.push((path.clone(), arc_bytes));
 
-        let Some(object_id) = self.pending_replace_object.take() else {
+        let Some(PendingImagePick::ReplaceObject(object_id)) = (if matches!(
+            self.pending_image_pick,
+            Some(PendingImagePick::ReplaceObject(_))
+        ) {
+            self.pending_image_pick.take()
+        } else {
+            None
+        }) else {
             return Some(path);
         };
         if self

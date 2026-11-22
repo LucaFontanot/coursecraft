@@ -21,11 +21,9 @@ pub struct StateEditBuffer {
     pub name: String,
     pub fill_hex: String,
     pub text_override: String,
-    pub src_override: String,
 
     pub fill_rect: Option<Rect>,
     pub text_rect: Option<Rect>,
-    pub src_rect: Option<Rect>,
     pub delete_rect: Option<Rect>,
     pub set_initial_rect: Option<Rect>,
     pub preview_rect: Option<Rect>,
@@ -79,7 +77,6 @@ impl StatesState {
             buf.name = state.name.clone();
             buf.fill_hex = state.fill.as_ref().map(|c| c.0.clone()).unwrap_or_default();
             buf.text_override = state.text.clone().unwrap_or_default();
-            buf.src_override = state.src.clone().unwrap_or_default();
         }
     }
 }
@@ -396,6 +393,7 @@ pub fn show_states_section(
             .as_ref()
             .and_then(|(s, msg)| (s == &state_name).then(|| msg.clone()));
 
+        let mut pick_state_image = false;
         let row_resp = ui
             .group(|ui| {
                 ui.horizontal(|ui| {
@@ -536,37 +534,146 @@ pub fn show_states_section(
                     });
                 }
 
-                // Src override edit (for Image)
+                // Image override picker (for Image)
                 if matches!(obj_kind, ObjectKind::Image { .. }) {
+                    let p = coursecraft_render::palette(ui.ctx());
+                    let current_src = state.src.as_deref().filter(|s| !s.trim().is_empty());
+                    let is_unsafe =
+                        current_src.is_some_and(|s| !coursecraft_format::is_safe_relative_path(s));
+
                     ui.horizontal(|ui| {
-                        ui.label("Src");
-                        let r_src = ui.add(
-                            TextEdit::singleline(&mut buf.src_override)
-                                .id_salt(format!("state_src_{state_name}"))
-                                .desired_width(120.0),
-                        );
-                        buf.src_rect = Some(r_src.rect);
-                        let enter =
-                            r_src.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if r_src.lost_focus() || enter {
-                            let new_src = if buf.src_override.trim().is_empty() {
-                                None
+                        if let Some(src) = current_src {
+                            if is_unsafe {
+                                ui.vertical(|ui| {
+                                    ui.add(
+                                        egui::Label::new(RichText::new(src).color(p.danger))
+                                            .truncate(),
+                                    )
+                                    .on_hover_text(src);
+                                    ui.label(
+                                        RichText::new("File not in the course. Choose image…")
+                                            .color(p.danger)
+                                            .size(coursecraft_render::SIZE_BODY),
+                                    );
+                                });
                             } else {
-                                Some(buf.src_override.trim().to_owned())
-                            };
-                            if new_src != state.src {
-                                let mut updated = state.clone();
-                                updated.src = new_src;
-                                if let Ok(state_val) = serde_json::to_value(&updated) {
-                                    actions.push((
-                                        "object.update_state",
-                                        serde_json::json!({
-                                            "slide": slide_id,
-                                            "object": obj_id_str,
-                                            "state": state_val,
-                                        }),
-                                    ));
+                                let thumb_size = egui::vec2(28.0, 28.0);
+                                let (thumb_rect, thumb_resp) =
+                                    ui.allocate_exact_size(thumb_size, egui::Sense::hover());
+                                ui.painter().rect_filled(
+                                    thumb_rect,
+                                    egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+                                    p.hover,
+                                );
+                                let source = crate::MemoryMediaSource {
+                                    media: &editor.media,
+                                };
+                                if let coursecraft_render::MediaView::Ready { texture, .. } = editor
+                                    .media_cache
+                                    .texture_for(ui.ctx(), src, &source, (28, 28))
+                                {
+                                    ui.painter().image(
+                                        texture.id(),
+                                        thumb_rect,
+                                        egui::Rect::from_min_max(
+                                            egui::pos2(0.0, 0.0),
+                                            egui::pos2(1.0, 1.0),
+                                        ),
+                                        egui::Color32::WHITE,
+                                    );
+                                } else {
+                                    ui.painter().text(
+                                        thumb_rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        coursecraft_render::icon(
+                                            coursecraft_render::Icon::Image,
+                                            coursecraft_render::ICON_SM,
+                                        )
+                                        .text()
+                                        .to_owned(),
+                                        egui::FontId::new(
+                                            coursecraft_render::ICON_SM,
+                                            egui::FontFamily::Name("phosphor".into()),
+                                        ),
+                                        p.text_secondary,
+                                    );
                                 }
+                                thumb_resp.on_hover_text(src);
+
+                                let file_name = src.rsplit('/').next().unwrap_or(src);
+                                ui.add(egui::Label::new(file_name).truncate())
+                                    .on_hover_text(src);
+                            }
+                        } else {
+                            ui.label(
+                                RichText::new("Same as Normal")
+                                    .color(p.text_secondary)
+                                    .size(coursecraft_render::SIZE_BODY),
+                            );
+                        }
+                    });
+
+                    ui.horizontal_wrapped(|ui| {
+                        let choose_label = if current_src.is_some() && !is_unsafe {
+                            "Replace…"
+                        } else {
+                            "Choose image…"
+                        };
+                        if ui.button(choose_label).clicked() {
+                            pick_state_image = true;
+                        }
+
+                        ui.menu_button("From project…", |ui| {
+                            let images: Vec<String> = editor
+                                .media
+                                .iter()
+                                .map(|(name, _)| name)
+                                .filter(|name| coursecraft_course::is_image_src(name))
+                                .cloned()
+                                .collect();
+                            if images.is_empty() {
+                                ui.label(
+                                    RichText::new("No images in project")
+                                        .color(p.text_secondary)
+                                        .size(coursecraft_render::SIZE_BODY),
+                                );
+                            } else {
+                                for name in images {
+                                    let selected = current_src == Some(name.as_str());
+                                    if ui.selectable_label(selected, &name).clicked() {
+                                        let mut updated = state.clone();
+                                        updated.src = Some(name);
+                                        if let Ok(state_val) = serde_json::to_value(&updated) {
+                                            actions.push((
+                                                "object.update_state",
+                                                serde_json::json!({
+                                                    "slide": slide_id,
+                                                    "object": obj_id_str,
+                                                    "state": state_val,
+                                                }),
+                                            ));
+                                        }
+                                        ui.close();
+                                    }
+                                }
+                            }
+                        });
+
+                        if state.src.is_some()
+                            && crate::quiet_button(ui, "Clear", crate::QuietTone::Secondary, true)
+                                .clicked()
+                        {
+                            let mut updated = state.clone();
+                            updated.src = None;
+                            if let Ok(state_val) = serde_json::to_value(&updated) {
+                                actions.push((
+                                    "object.update_state",
+                                    serde_json::json!({
+                                        "slide": slide_id,
+                                        "object": obj_id_str,
+                                        "state": state_val,
+                                    }),
+                                ));
                             }
                         }
                     });
@@ -578,6 +685,15 @@ pub fn show_states_section(
             .ui
             .states
             .state_row_rects
-            .insert(state_name, row_resp.rect);
+            .insert(state_name.clone(), row_resp.rect);
+
+        if pick_state_image {
+            editor.pending_image_pick = Some(crate::PendingImagePick::StateImage {
+                slide: slide_id.clone(),
+                object: obj_id_str.clone(),
+                state: state_name,
+            });
+            editor.request(crate::EditorRequest::PickImage);
+        }
     }
 }

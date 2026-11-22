@@ -5308,7 +5308,7 @@ fn image_replace_and_reset_to_natural_size() {
     assert_eq!(obj_after.frame.w, 2.0);
     assert_eq!(obj_after.frame.h, 2.0);
 
-    harness.editor.pending_replace_object = Some(obj.id.clone());
+    harness.editor.pending_image_pick = Some(PendingImagePick::ReplaceObject(obj.id.clone()));
     let src2 = harness.editor.import_image("second.png", &png).unwrap();
     assert_eq!(src2, "second.png");
     let slide_replaced = harness
@@ -8951,8 +8951,8 @@ fn hotspot_panel_asks_for_an_image_that_is_not_in_media_and_opens_the_picker() {
         .expect("Choose image button");
     let requests = click_for_requests(&mut harness, choose);
     assert_eq!(
-        harness.editor.pending_replace_object.as_deref(),
-        Some(image.as_str())
+        harness.editor.pending_image_pick,
+        Some(PendingImagePick::ReplaceObject(image.clone()))
     );
     assert!(
         requests
