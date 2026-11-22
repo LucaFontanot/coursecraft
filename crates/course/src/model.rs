@@ -41,6 +41,7 @@ pub const CHROME_STRINGS: &[(&str, &str)] = &[
     ("courseComplete", "Course complete"),
     ("closeWindow", "You can close this window."),
     ("loading", "Loading"),
+    ("startCourse", "Play"),
     ("fillInPlaceholder", "Type your answer"),
     ("choosePlaceholder", "Choose…"),
     ("captions", "Captions"),
