@@ -194,6 +194,8 @@ mod m27_undo_clipboard_tests;
 #[cfg(test)]
 mod m29_edit_state_mode_tests;
 #[cfg(test)]
+mod m29_format_state_routing_tests;
+#[cfg(test)]
 mod m29_states_tab_tests;
 #[cfg(test)]
 mod outline_tests;
@@ -2541,29 +2543,26 @@ impl Editor {
             state: state_name,
         }) = pending_pick
         {
-            let existing_state = self
+            let state_exists = self
                 .session
                 .course
                 .slide(&slide_id)
                 .and_then(|s| s.object(&object_id))
-                .and_then(|(o, _)| o.states.iter().find(|st| st.name == state_name))
-                .cloned();
-            let mut updated = existing_state?;
+                .is_some_and(|(o, _)| o.states.iter().any(|st| st.name == state_name));
+            if !state_exists {
+                return None;
+            }
             let src = sanitize_media_src(file_name, &self.media);
             let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
             self.media.push((src.clone(), arc_bytes));
-            updated.src = Some(src.clone());
-            let Ok(state_val) = serde_json::to_value(&updated) else {
-                self.media.retain(|(name, _)| name != &src);
-                return None;
-            };
             if self
                 .run(
-                    "object.update_state",
+                    "object.patch_state",
                     serde_json::json!({
                         "slide": slide_id,
                         "object": object_id,
-                        "state": state_val,
+                        "name": state_name,
+                        "patch": { "src": src },
                     }),
                 )
                 .is_none()

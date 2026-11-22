@@ -14874,6 +14874,7 @@ fn timeline_space_does_nothing_in_a_text_field() {
         live_runs: Vec::new(),
         live_paragraphs: Vec::new(),
         last_revision: 0,
+        state_name: None,
     });
     harness.idle_frame();
     harness.press(Key::Space, Modifiers::NONE);

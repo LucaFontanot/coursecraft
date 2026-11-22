@@ -372,6 +372,7 @@ fn type_on_canvas_with_spell_check() {
         live_runs: Vec::new(),
         live_paragraphs: Vec::new(),
         last_revision: 0,
+        state_name: None,
     });
     // First frame selects all and focuses, the second clears `just_entered`,
     // then one arrow key collapses the selection to the end of the paragraph.

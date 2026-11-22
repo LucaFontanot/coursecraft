@@ -58,6 +58,7 @@ pub struct CueEdit {
 pub struct PropertiesState {
     pub last_synced_revision: u64,
     pub last_synced_selection: crate::Selection,
+    pub last_synced_editing_state: Option<String>,
 
     // Tracked rects for test interaction
     pub frame_x_rect: Option<Rect>,
@@ -328,6 +329,7 @@ impl Default for PropertiesState {
         Self {
             last_synced_revision: u64::MAX,
             last_synced_selection: crate::Selection::default(),
+            last_synced_editing_state: None,
             frame_x_rect: None,
             btn_label_rect: None,
             color_rect: None,
@@ -538,12 +540,73 @@ impl Default for PropertiesState {
 
 impl PropertiesState {
     /// Re-sync edit buffers with current course data if selection or revision changed.
-    pub fn sync(&mut self, course: &Course, selection: &crate::Selection, revision: u64) {
-        if self.last_synced_revision == revision && &self.last_synced_selection == selection {
+    fn sync_object_visual_fields(
+        &mut self,
+        obj: &coursecraft_course::Object,
+        edit_state: Option<&coursecraft_course::StateDef>,
+    ) {
+        self.rotation = coursecraft_course::normalize_rotation(
+            edit_state.and_then(|s| s.rotation).unwrap_or(obj.rotation),
+        );
+        self.opacity = coursecraft_course::clamp_opacity(
+            edit_state.and_then(|s| s.opacity).unwrap_or(obj.opacity),
+        );
+        let resolved_shadow = match edit_state {
+            Some(s) if s.clear_shadow => None,
+            Some(s) if s.shadow.is_some() => s.shadow.as_ref(),
+            _ => obj.shadow.as_ref(),
+        };
+        self.shadow_enabled = resolved_shadow.is_some();
+        if let Some(shadow) = resolved_shadow {
+            self.shadow = shadow.clone();
+        }
+        self.shadow_alpha = parse_color(&self.shadow.color).map_or(255, |c| c.a());
+        let resolved_glow = match edit_state {
+            Some(s) if s.clear_glow => None,
+            Some(s) if s.glow.is_some() => s.glow.as_ref(),
+            _ => obj.glow.as_ref(),
+        };
+        self.glow_enabled = resolved_glow.is_some();
+        if let Some(glow) = resolved_glow {
+            self.glow = glow.clone();
+        }
+        self.glow_alpha = parse_color(&self.glow.color).map_or(255, |c| c.a());
+        let base_fill_style = match &obj.kind {
+            ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
+                fill_style.clone()
+            }
+            _ => None,
+        };
+        self.fill_style = match edit_state {
+            Some(s) if s.clear_fill_style => None,
+            Some(s) if s.fill_style.is_some() => s.fill_style.clone(),
+            Some(s) if s.fill.is_some() => None,
+            _ => base_fill_style,
+        };
+    }
+
+    pub fn sync(
+        &mut self,
+        course: &Course,
+        selection: &crate::Selection,
+        revision: u64,
+        editing_state: Option<&crate::StateEditSession>,
+    ) {
+        let active_state_name = editing_state
+            .filter(|s| {
+                s.slide_id == selection.slide
+                    && selection.object.as_deref() == Some(s.object_id.as_str())
+            })
+            .map(|s| s.state_name.clone());
+        if self.last_synced_revision == revision
+            && &self.last_synced_selection == selection
+            && self.last_synced_editing_state == active_state_name
+        {
             return;
         }
         self.last_synced_revision = revision;
         self.last_synced_selection = selection.clone();
+        self.last_synced_editing_state = active_state_name.clone();
 
         self.course_title = course.title.clone();
 
@@ -587,23 +650,15 @@ impl PropertiesState {
         if let Some(ref obj_id) = selection.object
             && let Some((obj, _)) = slide.object(obj_id)
         {
+            let edit_state = active_state_name
+                .as_deref()
+                .and_then(|name| obj.states.iter().find(|s| s.name == name));
+            self.sync_object_visual_fields(obj, edit_state);
             self.name = obj.name.clone();
             self.frame_x = obj.frame.x;
             self.frame_y = obj.frame.y;
             self.frame_w = obj.frame.w;
             self.frame_h = obj.frame.h;
-            self.rotation = coursecraft_course::normalize_rotation(obj.rotation);
-            self.opacity = coursecraft_course::clamp_opacity(obj.opacity);
-            self.shadow_enabled = obj.shadow.is_some();
-            if let Some(shadow) = &obj.shadow {
-                self.shadow = shadow.clone();
-            }
-            self.shadow_alpha = parse_color(&self.shadow.color).map_or(255, |c| c.a());
-            self.glow_enabled = obj.glow.is_some();
-            if let Some(glow) = &obj.glow {
-                self.glow = glow.clone();
-            }
-            self.glow_alpha = parse_color(&self.glow.color).map_or(255, |c| c.a());
             self.drag_enabled = obj.drag.is_some();
             self.drag_toggle_rect = None;
             if let Some(drag) = &obj.drag {
@@ -611,12 +666,6 @@ impl PropertiesState {
             } else {
                 self.drag = coursecraft_course::DragSpec::default();
             }
-            self.fill_style = match &obj.kind {
-                ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
-                    fill_style.clone()
-                }
-                _ => None,
-            };
             self.start_ms = obj.timing.start_ms;
             self.until_end = obj.timing.end_ms.is_none();
             self.end_ms = obj.timing.end_ms.unwrap_or(slide.duration_ms);
@@ -673,18 +722,37 @@ impl PropertiesState {
 
             match &obj.kind {
                 ObjectKind::Text { text, style, .. } => {
-                    self.text_body = text.clone();
-                    self.text_size = style.size;
-                    self.text_color = style.color.0.clone();
-                    self.text_bold = style.bold;
-                    self.text_italic = style.italic;
-                    self.text_underline = style.underline;
-                    self.text_align = style.align;
-                    self.text_valign = style.valign;
+                    let eff_text = edit_state
+                        .and_then(|s| s.text.as_deref())
+                        .unwrap_or(text.as_str());
+                    let mut eff_style = edit_state
+                        .and_then(|s| s.text_style.as_ref())
+                        .unwrap_or(style)
+                        .clone();
+                    if let Some(s) = edit_state
+                        && s.text_style.is_none()
+                        && let Some(c) = &s.fill
+                    {
+                        eff_style.color = c.clone();
+                    }
+                    self.text_body = eff_text.to_owned();
+                    self.text_size = eff_style.size;
+                    self.text_color = eff_style.color.0.clone();
+                    self.text_bold = eff_style.bold;
+                    self.text_italic = eff_style.italic;
+                    self.text_underline = eff_style.underline;
+                    self.text_align = eff_style.align;
+                    self.text_valign = eff_style.valign;
                 }
                 ObjectKind::Button { label, fill, .. } => {
-                    self.button_label = label.clone();
-                    self.button_fill = fill.0.clone();
+                    self.button_label = edit_state
+                        .and_then(|s| s.text.clone())
+                        .unwrap_or_else(|| label.clone());
+                    self.button_fill = edit_state
+                        .and_then(|s| s.fill.as_ref())
+                        .unwrap_or(fill)
+                        .0
+                        .clone();
                 }
                 ObjectKind::Shape {
                     shape,
@@ -694,9 +762,15 @@ impl PropertiesState {
                     ..
                 } => {
                     self.shape_kind = *shape;
-                    self.shape_fill = fill.0.clone();
-                    self.shape_outline_enabled = outline.is_some();
-                    if let Some(outline) = outline {
+                    let eff_fill = edit_state.and_then(|s| s.fill.as_ref()).unwrap_or(fill);
+                    self.shape_fill = eff_fill.0.clone();
+                    let eff_outline = match edit_state {
+                        Some(s) if s.clear_outline => None,
+                        Some(s) if s.outline.is_some() => s.outline.as_ref(),
+                        _ => outline.as_ref(),
+                    };
+                    self.shape_outline_enabled = eff_outline.is_some();
+                    if let Some(outline) = eff_outline {
                         self.shape_outline_color = outline.color.0.clone();
                         self.shape_outline_width = outline.width;
                         sync_dash_fields(
@@ -716,50 +790,53 @@ impl PropertiesState {
                         self.shape_outline_gap = 2.0;
                         self.shape_outline_join = coursecraft_course::LineJoin::Miter;
                     }
-                    if let Some(text) = text {
-                        self.text_body = text.text.clone();
-                        self.text_size = text.style.size;
-                        self.text_color = text.style.color.0.clone();
-                        self.text_bold = text.style.bold;
-                        self.text_italic = text.style.italic;
-                        self.text_underline = text.style.underline;
-                        self.text_align = text.style.align;
-                        self.text_valign = text.style.valign;
-                    } else {
-                        self.text_body.clear();
-                        let default = default_shape_text_style(fill);
-                        self.text_size = default.size;
-                        self.text_color = default.color.0.clone();
-                        self.text_bold = default.bold;
-                        self.text_italic = default.italic;
-                        self.text_underline = default.underline;
-                        self.text_align = default.align;
-                        self.text_valign = default.valign;
-                    }
+                    let base_style = text
+                        .as_ref()
+                        .map(|t| t.style.clone())
+                        .unwrap_or_else(|| default_shape_text_style(eff_fill));
+                    let eff_style = edit_state
+                        .and_then(|s| s.text_style.as_ref())
+                        .unwrap_or(&base_style);
+                    self.text_body = edit_state
+                        .and_then(|s| s.text.clone())
+                        .or_else(|| text.as_ref().map(|t| t.text.clone()))
+                        .unwrap_or_default();
+                    self.text_size = eff_style.size;
+                    self.text_color = eff_style.color.0.clone();
+                    self.text_bold = eff_style.bold;
+                    self.text_italic = eff_style.italic;
+                    self.text_underline = eff_style.underline;
+                    self.text_align = eff_style.align;
+                    self.text_valign = eff_style.valign;
                 }
                 ObjectKind::Path { path } => {
-                    self.path_outline_color = path.outline.color.0.clone();
-                    self.path_outline_width = path.outline.width;
+                    let eff_outline = edit_state
+                        .and_then(|s| s.outline.as_ref())
+                        .unwrap_or(&path.outline);
+                    self.path_outline_color = eff_outline.color.0.clone();
+                    self.path_outline_width = eff_outline.width;
                     sync_dash_fields(
-                        &path.outline,
+                        eff_outline,
                         &mut self.path_outline_dash,
                         &mut self.path_outline_dash_pattern,
                         &mut self.path_outline_dash_length,
                         &mut self.path_outline_gap,
                     );
-                    self.path_outline_join = path.outline.join;
+                    self.path_outline_join = eff_outline.join;
                     self.path_start_end = path.start_end;
                     self.path_end_end = path.end_end;
                     self.path_style = path.style;
                     self.path_closed = path.closed;
-                    self.path_fill = path
-                        .fill
-                        .as_ref()
+                    self.path_fill = edit_state
+                        .and_then(|s| s.fill.as_ref())
+                        .or(path.fill.as_ref())
                         .map_or_else(|| "#2F6FEB".into(), |fill| fill.0.clone());
                     self.path_connector = path.connector;
                 }
                 ObjectKind::Image { src, alt, .. } => {
-                    self.image_src = src.clone();
+                    self.image_src = edit_state
+                        .and_then(|s| s.src.clone())
+                        .unwrap_or_else(|| src.clone());
                     self.image_alt = alt.clone();
                 }
                 ObjectKind::Audio {
@@ -1193,10 +1270,95 @@ pub(crate) fn add_drag_left(ui: &mut Ui, size: [f32; 2], drag: DragValue<'_>) ->
 /// hover. The controls never grow the row: whatever they need beyond the width is cut at the
 /// row edge instead of pushing the following rows past the panel's right margin.
 pub fn inspector_row<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
-    inspector_row_inner(ui, label, add_contents)
+    inspector_row_inner(ui, label, None, add_contents)
 }
 
-fn inspector_row_inner<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+#[derive(Clone, Copy)]
+struct StateEditCtx<'a> {
+    slide_id: &'a str,
+    object_id: &'a str,
+    state_name: &'a str,
+    state: &'a coursecraft_course::StateDef,
+}
+
+fn patch_state_action(ctx: &StateEditCtx<'_>, patch: Json) -> (&'static str, Json) {
+    (
+        "object.patch_state",
+        serde_json::json!({
+            "slide": ctx.slide_id,
+            "object": ctx.object_id,
+            "name": ctx.state_name,
+            "patch": patch,
+        }),
+    )
+}
+
+fn route_text_set_to_state(
+    action: (&'static str, Json),
+    ctx: &StateEditCtx<'_>,
+    base_style: &TextStyle,
+) -> (&'static str, Json) {
+    if action.0 != "text.set" {
+        return action;
+    }
+    let params = action.1;
+    let mut patch = serde_json::Map::new();
+    for key in ["text", "runs", "paragraphs", "autofit"] {
+        if let Some(val) = params.get(key) {
+            patch.insert(key.to_owned(), val.clone());
+        }
+    }
+    if let Some(style_patch) = params.get("style") {
+        let current_style = ctx.state.text_style.as_ref().unwrap_or(base_style);
+        let mut merged = serde_json::to_value(current_style).unwrap_or(Json::Null);
+        if let (Some(dst), Some(src)) = (merged.as_object_mut(), style_patch.as_object()) {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+        patch.insert("text_style".to_owned(), merged);
+    }
+    patch_state_action(ctx, Json::Object(patch))
+}
+
+struct OverrideIndicator<'a> {
+    state_name: &'a str,
+    reset_tooltip: String,
+    reset_clicked: &'a mut bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn inspector_row_state<R>(
+    ui: &mut Ui,
+    label: &str,
+    state_ctx: Option<&StateEditCtx<'_>>,
+    overridden: bool,
+    reset_label: &str,
+    reset_patch: Json,
+    actions: &mut Vec<(&'static str, Json)>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let mut reset_clicked = false;
+    let indicator = state_ctx
+        .filter(|_| overridden)
+        .map(|ctx| OverrideIndicator {
+            state_name: ctx.state_name,
+            reset_tooltip: format!("Reset {reset_label} to Normal"),
+            reset_clicked: &mut reset_clicked,
+        });
+    let res = inspector_row_inner(ui, label, indicator, add_contents);
+    if reset_clicked && let Some(ctx) = state_ctx {
+        actions.push(patch_state_action(ctx, reset_patch));
+    }
+    res
+}
+
+fn inspector_row_inner<R>(
+    ui: &mut Ui,
+    label: &str,
+    mut indicator: Option<OverrideIndicator<'_>>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
     use egui::text::{LayoutJob, TextWrapping};
     let p = coursecraft_render::palette(ui.ctx());
     // Keynote style: labels never carry a trailing colon.
@@ -1211,12 +1373,17 @@ fn inspector_row_inner<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&m
             let (label_rect, label_resp) =
                 ui.allocate_exact_size(vec2(LABEL_COL_WIDTH, row_h), Sense::hover());
             if ui.is_rect_visible(label_rect) {
+                let text_max_w = if indicator.is_some() {
+                    (label_rect.width() - 10.0).max(10.0)
+                } else {
+                    label_rect.width()
+                };
                 let mut job = LayoutJob::simple_singleline(
                     label.to_owned(),
                     FontId::proportional(coursecraft_render::SIZE_BODY),
                     p.text_secondary,
                 );
-                job.wrap = TextWrapping::truncate_at_width(label_rect.width());
+                job.wrap = TextWrapping::truncate_at_width(text_max_w);
                 let galley = ui.painter().layout_job(job);
                 let elided = galley.elided;
                 let pos = egui::pos2(
@@ -1226,11 +1393,18 @@ fn inspector_row_inner<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&m
                 ui.painter()
                     .with_clip_rect(ui.clip_rect().intersect(label_rect))
                     .galley(pos, galley, p.text_secondary);
-                if elided {
+                if let Some(ref ind) = indicator {
+                    let dot_center = egui::pos2(label_rect.right() - 4.0, label_rect.center().y);
+                    ui.painter().circle_filled(dot_center, 3.0, p.accent);
+                    label_resp
+                        .clone()
+                        .on_hover_text(format!("Overridden in \u{201C}{}\u{201D}", ind.state_name));
+                } else if elided {
                     label_resp.on_hover_text(label);
                 }
             }
-            let rem_w = ui.available_width().max(30.0);
+            let reset_reserve = if indicator.is_some() { 34.0 } else { 0.0 };
+            let rem_w = (ui.available_width() - reset_reserve).max(30.0);
             let origin = ui.cursor().min;
             let max_h = row_h;
             let layout = egui::Layout::left_to_right(align);
@@ -1249,6 +1423,16 @@ fn inspector_row_inner<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&m
                 Rect::from_min_size(origin, vec2(rem_w, used.height().max(row_h))),
                 Sense::hover(),
             );
+            if let Some(ref mut ind) = indicator
+                && crate::widgets::icon_button(
+                    ui,
+                    coursecraft_render::Icon::ArrowCounterClockwise,
+                    &ind.reset_tooltip,
+                )
+                .clicked()
+            {
+                *ind.reset_clicked = true;
+            }
             inner
         },
     )
@@ -2161,6 +2345,7 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
         &editor.session.course,
         &editor.selection,
         editor.session.revision,
+        editor.ui.editing_state.as_ref(),
     );
     editor.ui.properties.inline_selection = if editor.ui.inline_edit.is_some() {
         editor.ui.inline_edit_selection.clone()
@@ -4542,56 +4727,71 @@ fn show_fill_style_editor(
     slide_id: &str,
     object_id: &str,
     media_names: &[String],
+    state_ctx: Option<&StateEditCtx<'_>>,
+    base_fill_style_some: bool,
     actions: &mut Vec<(&'static str, Json)>,
 ) {
     let mut changed = false;
     let mut live_changed = false;
     let mut next_style: Option<coursecraft_course::FillStyle> = props.fill_style.clone();
 
-    inspector_row(ui, "Fill type", |ui| {
-        let rem_w = ui.available_width().max(30.0);
-        let current = fill_style_kind(&props.fill_style);
-        crate::widgets::styled_combo(ui, "prop_fill_type", rem_w)
-            .selected_text(current)
-            .show_ui(ui, |ui| {
-                for label in ["Solid", "Linear gradient", "Radial gradient", "Picture"] {
-                    if ui.selectable_label(current == label, label).clicked() && current != label {
-                        next_style = match label {
-                            "Solid" => None,
-                            "Linear gradient" => Some(coursecraft_course::FillStyle::Linear {
-                                angle: 0.0,
-                                stops: default_gradient_stops(solid),
-                            }),
-                            "Radial gradient" => Some(coursecraft_course::FillStyle::Radial {
-                                center: [0.5, 0.5],
-                                stops: default_gradient_stops(solid),
-                            }),
-                            _ => {
-                                let first = media_names
-                                    .iter()
-                                    .find(|name| coursecraft_course::is_image_src(name))
-                                    .cloned();
-                                match first {
-                                    Some(src) => Some(coursecraft_course::FillStyle::Picture {
-                                        src,
-                                        mode: coursecraft_course::PictureFillMode::Stretch,
-                                        tile_scale: [1.0, 1.0],
-                                    }),
-                                    None => {
-                                        // No picture in the course yet: go straight to the
-                                        // file picker. The fill changes when a file arrives,
-                                        // so cancelling the picker leaves it as it was.
-                                        props.pick_picture_fill = true;
-                                        continue;
+    let fill_style_overridden =
+        state_ctx.is_some_and(|ctx| ctx.state.fill_style.is_some() || ctx.state.clear_fill_style);
+    inspector_row_state(
+        ui,
+        "Fill type",
+        state_ctx,
+        fill_style_overridden,
+        "Fill style",
+        serde_json::json!({ "fill_style": null, "clear_fill_style": false }),
+        actions,
+        |ui| {
+            let rem_w = ui.available_width().max(30.0);
+            let current = fill_style_kind(&props.fill_style);
+            crate::widgets::styled_combo(ui, "prop_fill_type", rem_w)
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    for label in ["Solid", "Linear gradient", "Radial gradient", "Picture"] {
+                        if ui.selectable_label(current == label, label).clicked()
+                            && current != label
+                        {
+                            next_style = match label {
+                                "Solid" => None,
+                                "Linear gradient" => Some(coursecraft_course::FillStyle::Linear {
+                                    angle: 0.0,
+                                    stops: default_gradient_stops(solid),
+                                }),
+                                "Radial gradient" => Some(coursecraft_course::FillStyle::Radial {
+                                    center: [0.5, 0.5],
+                                    stops: default_gradient_stops(solid),
+                                }),
+                                _ => {
+                                    let first = media_names
+                                        .iter()
+                                        .find(|name| coursecraft_course::is_image_src(name))
+                                        .cloned();
+                                    match first {
+                                        Some(src) => Some(coursecraft_course::FillStyle::Picture {
+                                            src,
+                                            mode: coursecraft_course::PictureFillMode::Stretch,
+                                            tile_scale: [1.0, 1.0],
+                                        }),
+                                        None => {
+                                            // No picture in the course yet: go straight to the
+                                            // file picker. The fill changes when a file arrives,
+                                            // so cancelling the picker leaves it as it was.
+                                            props.pick_picture_fill = true;
+                                            continue;
+                                        }
                                     }
                                 }
-                            }
-                        };
-                        changed = true;
+                            };
+                            changed = true;
+                        }
                     }
-                }
-            });
-    });
+                });
+        },
+    );
 
     match &mut next_style {
         Some(coursecraft_course::FillStyle::Linear { angle, stops }) => {
@@ -4728,14 +4928,30 @@ fn show_fill_style_editor(
             stops.sort_by(|a, b| a.position.total_cmp(&b.position));
         }
         props.fill_style = next_style;
-        actions.push((
-            "object.set_fill_style",
-            serde_json::json!({
-                "slide": slide_id,
-                "object": object_id,
-                "fill_style": fill_style_json(&props.fill_style),
-            }),
-        ));
+        if let Some(ctx) = state_ctx {
+            let patch = match &props.fill_style {
+                Some(_) => serde_json::json!({
+                    "fill_style": fill_style_json(&props.fill_style),
+                }),
+                None if base_fill_style_some => serde_json::json!({
+                    "clear_fill_style": true,
+                }),
+                None => serde_json::json!({
+                    "fill_style": null,
+                    "clear_fill_style": false,
+                }),
+            };
+            actions.push(patch_state_action(ctx, patch));
+        } else {
+            actions.push((
+                "object.set_fill_style",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": object_id,
+                    "fill_style": fill_style_json(&props.fill_style),
+                }),
+            ));
+        }
     } else if live_changed {
         props.fill_style = next_style;
     }
@@ -4940,11 +5156,15 @@ fn apply_color_alpha(color: &mut Color, alpha: u8) {
 }
 
 /// Shadow and glow toggles with their values.
+#[allow(clippy::too_many_arguments)]
 fn show_effect_controls(
     ui: &mut Ui,
     props: &mut PropertiesState,
     slide_id: &str,
     object_id: &str,
+    state_ctx: Option<&StateEditCtx<'_>>,
+    base_shadow_some: bool,
+    base_glow_some: bool,
     actions: &mut Vec<(&'static str, Json)>,
 ) {
     let mut shadow_changed = false;
@@ -4952,11 +5172,22 @@ fn show_effect_controls(
     inspector_separator(ui);
     inspector_section_header(ui, "Effects");
 
-    inspector_row(ui, "Shadow", |ui| {
-        if ui.checkbox(&mut props.shadow_enabled, "").changed() {
-            shadow_changed = true;
-        }
-    });
+    let shadow_overridden =
+        state_ctx.is_some_and(|ctx| ctx.state.shadow.is_some() || ctx.state.clear_shadow);
+    inspector_row_state(
+        ui,
+        "Shadow",
+        state_ctx,
+        shadow_overridden,
+        "Shadow",
+        serde_json::json!({ "shadow": null, "clear_shadow": false }),
+        actions,
+        |ui| {
+            if ui.checkbox(&mut props.shadow_enabled, "").changed() {
+                shadow_changed = true;
+            }
+        },
+    );
     if props.shadow_enabled {
         inspector_row(ui, "Colour", |ui| {
             let (response, valid) =
@@ -5006,11 +5237,22 @@ fn show_effect_controls(
         }
     }
 
-    inspector_row(ui, "Glow", |ui| {
-        if ui.checkbox(&mut props.glow_enabled, "").changed() {
-            glow_changed = true;
-        }
-    });
+    let glow_overridden =
+        state_ctx.is_some_and(|ctx| ctx.state.glow.is_some() || ctx.state.clear_glow);
+    inspector_row_state(
+        ui,
+        "Glow",
+        state_ctx,
+        glow_overridden,
+        "Glow",
+        serde_json::json!({ "glow": null, "clear_glow": false }),
+        actions,
+        |ui| {
+            if ui.checkbox(&mut props.glow_enabled, "").changed() {
+                glow_changed = true;
+            }
+        },
+    );
     if props.glow_enabled {
         inspector_row(ui, "Colour", |ui| {
             let (response, valid) =
@@ -5058,34 +5300,60 @@ fn show_effect_controls(
     }
 
     if shadow_changed {
-        let shadow = if props.shadow_enabled {
-            serde_json::to_value(&props.shadow).unwrap_or(Json::Null)
+        if let Some(ctx) = state_ctx {
+            let patch = if props.shadow_enabled {
+                serde_json::json!({
+                    "shadow": serde_json::to_value(&props.shadow).unwrap_or(Json::Null),
+                })
+            } else if base_shadow_some {
+                serde_json::json!({ "clear_shadow": true })
+            } else {
+                serde_json::json!({ "shadow": null, "clear_shadow": false })
+            };
+            actions.push(patch_state_action(ctx, patch));
         } else {
-            Json::Null
-        };
-        actions.push((
-            "object.set_shadow",
-            serde_json::json!({
-                "slide": slide_id,
-                "object": object_id,
-                "shadow": shadow,
-            }),
-        ));
+            let shadow = if props.shadow_enabled {
+                serde_json::to_value(&props.shadow).unwrap_or(Json::Null)
+            } else {
+                Json::Null
+            };
+            actions.push((
+                "object.set_shadow",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": object_id,
+                    "shadow": shadow,
+                }),
+            ));
+        }
     }
     if glow_changed {
-        let glow = if props.glow_enabled {
-            serde_json::to_value(&props.glow).unwrap_or(Json::Null)
+        if let Some(ctx) = state_ctx {
+            let patch = if props.glow_enabled {
+                serde_json::json!({
+                    "glow": serde_json::to_value(&props.glow).unwrap_or(Json::Null),
+                })
+            } else if base_glow_some {
+                serde_json::json!({ "clear_glow": true })
+            } else {
+                serde_json::json!({ "glow": null, "clear_glow": false })
+            };
+            actions.push(patch_state_action(ctx, patch));
         } else {
-            Json::Null
-        };
-        actions.push((
-            "object.set_glow",
-            serde_json::json!({
-                "slide": slide_id,
-                "object": object_id,
-                "glow": glow,
-            }),
-        ));
+            let glow = if props.glow_enabled {
+                serde_json::to_value(&props.glow).unwrap_or(Json::Null)
+            } else {
+                Json::Null
+            };
+            actions.push((
+                "object.set_glow",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": object_id,
+                    "glow": glow,
+                }),
+            ));
+        }
     }
 }
 
@@ -6646,6 +6914,24 @@ fn show_object_properties(
     });
 
     let state_edit_locked = editor.ui.editing_state.is_some();
+    let state_ctx_owned = editor
+        .ui
+        .editing_state
+        .as_ref()
+        .filter(|s| s.slide_id == slide.id && s.object_id == obj.id)
+        .and_then(|s| {
+            obj.states
+                .iter()
+                .find(|st| st.name == s.state_name)
+                .map(|st| (s.state_name.clone(), st.clone()))
+        });
+    let state_ctx = state_ctx_owned.as_ref().map(|(name, st)| StateEditCtx {
+        slide_id: &slide.id,
+        object_id: &obj.id,
+        state_name: name,
+        state: st,
+    });
+    let state_ctx_ref = state_ctx.as_ref();
 
     // 2. Name
     ui.add_enabled_ui(!state_edit_locked, |ui| {
@@ -6670,30 +6956,54 @@ fn show_object_properties(
     .response
     .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
 
-    inspector_row(ui, "Opacity", |ui| {
-        let rem_w = ui.available_width().max(30.0);
-        let response = ui.add_sized(
-            [rem_w, coursecraft_render::CONTROL_COMPACT],
-            egui::Slider::new(&mut props.opacity, 0.0..=1.0)
-                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
-        );
-        props.opacity_rect = Some(response.rect);
-        let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if response.drag_stopped() || response.lost_focus() || enter {
-            let opacity = coursecraft_course::clamp_opacity(props.opacity);
-            props.opacity = opacity;
-            if (opacity - obj.opacity).abs() > 0.001 {
-                actions_to_run.push((
-                    "object.set_opacity",
-                    serde_json::json!({
-                        "slide": slide.id,
-                        "object": obj.id,
-                        "opacity": opacity,
-                    }),
-                ));
+    let opacity_overridden = state_ctx_ref.is_some_and(|ctx| ctx.state.opacity.is_some());
+    let mut opacity_action = None;
+    inspector_row_state(
+        ui,
+        "Opacity",
+        state_ctx_ref,
+        opacity_overridden,
+        "Opacity",
+        serde_json::json!({ "opacity": null }),
+        actions_to_run,
+        |ui| {
+            let rem_w = ui.available_width().max(30.0);
+            let response = ui.add_sized(
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                egui::Slider::new(&mut props.opacity, 0.0..=1.0)
+                    .custom_formatter(|value, _| format!("{:.0}%", value * 100.0)),
+            );
+            props.opacity_rect = Some(response.rect);
+            let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if response.drag_stopped() || response.lost_focus() || enter {
+                let opacity = coursecraft_course::clamp_opacity(props.opacity);
+                props.opacity = opacity;
+                let base_or_curr = state_ctx_ref
+                    .and_then(|ctx| ctx.state.opacity)
+                    .unwrap_or(obj.opacity);
+                if (opacity - base_or_curr).abs() > 0.001 || state_ctx_ref.is_some() {
+                    if let Some(ctx) = state_ctx_ref {
+                        opacity_action = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({ "opacity": opacity }),
+                        ));
+                    } else if (opacity - obj.opacity).abs() > 0.001 {
+                        opacity_action = Some((
+                            "object.set_opacity",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "opacity": opacity,
+                            }),
+                        ));
+                    }
+                }
             }
-        }
-    });
+        },
+    );
+    if let Some(act) = opacity_action {
+        actions_to_run.push(act);
+    }
 
     inspector_separator(ui);
 
@@ -6707,159 +7017,260 @@ fn show_object_properties(
             outline,
             ..
         } => {
+            let mut eff_style = state_ctx_ref
+                .and_then(|ctx| ctx.state.text_style.as_ref())
+                .unwrap_or(style)
+                .clone();
+            if let Some(ctx) = state_ctx_ref
+                && ctx.state.text_style.is_none()
+                && let Some(c) = &ctx.state.fill
+            {
+                eff_style.color = c.clone();
+            }
+            let eff_runs = state_ctx_ref
+                .and_then(|ctx| ctx.state.runs.as_deref())
+                .unwrap_or(runs);
+            let eff_text = state_ctx_ref
+                .and_then(|ctx| ctx.state.text.as_deref())
+                .unwrap_or(text.as_str());
+            let eff_autofit = state_ctx_ref
+                .and_then(|ctx| ctx.state.autofit)
+                .unwrap_or(*autofit);
             if let Some(action) = show_text_controls(
                 ui,
                 props,
                 &slide.id,
                 &obj.id,
-                style,
-                runs,
-                text,
+                &eff_style,
+                eff_runs,
+                eff_text,
                 "text",
                 &lists.font_families,
                 None,
-                Some(*autofit),
+                Some(eff_autofit),
                 system_fonts,
                 &mut font_requests,
             ) {
-                action_to_run = Some(action);
+                action_to_run = Some(match state_ctx_ref {
+                    Some(ctx) => route_text_set_to_state(action, ctx, style),
+                    None => action,
+                });
             }
-            inspector_row(ui, "Outline", |ui| {
-                let mut has_border = outline.is_some();
-                let mut changed = ui.checkbox(&mut has_border, "").changed();
-                let mut cur = outline
-                    .clone()
-                    .unwrap_or_else(|| coursecraft_course::Outline {
-                        color: coursecraft_course::Color("#1F1F1F".to_owned()),
-                        width: 1.0,
-                        dash: coursecraft_course::DashStyle::Solid,
-                        dash_pattern: None,
-                        join: coursecraft_course::LineJoin::Miter,
-                        miter_limit: None,
-                    });
-                if has_border {
-                    let r = ui.add(
-                        DragValue::new(&mut cur.width)
-                            .speed(0.25)
-                            .range(0.5..=50.0)
-                            .suffix(" px"),
-                    );
-                    if r.changed() {
-                        changed = true;
+            let outline_overridden = state_ctx_ref
+                .is_some_and(|ctx| ctx.state.outline.is_some() || ctx.state.clear_outline);
+            let eff_outline = match state_ctx_ref {
+                Some(ctx) if ctx.state.clear_outline => None,
+                Some(ctx) if ctx.state.outline.is_some() => ctx.state.outline.as_ref(),
+                _ => outline.as_ref(),
+            };
+            inspector_row_state(
+                ui,
+                "Outline",
+                state_ctx_ref,
+                outline_overridden,
+                "Outline",
+                serde_json::json!({ "outline": null, "clear_outline": false }),
+                actions_to_run,
+                |ui| {
+                    let mut has_border = eff_outline.is_some();
+                    let mut changed = ui.checkbox(&mut has_border, "").changed();
+                    let mut cur =
+                        eff_outline
+                            .cloned()
+                            .unwrap_or_else(|| coursecraft_course::Outline {
+                                color: coursecraft_course::Color("#1F1F1F".to_owned()),
+                                width: 1.0,
+                                dash: coursecraft_course::DashStyle::Solid,
+                                dash_pattern: None,
+                                join: coursecraft_course::LineJoin::Miter,
+                                miter_limit: None,
+                            });
+                    if has_border {
+                        let r = ui.add(
+                            DragValue::new(&mut cur.width)
+                                .speed(0.25)
+                                .range(0.5..=50.0)
+                                .suffix(" px"),
+                        );
+                        if r.changed() {
+                            changed = true;
+                        }
+                        let mut hex = cur.color.0.clone();
+                        let (cr, valid) =
+                            show_color_field(ui, "", &mut hex, "prop_text_border_color");
+                        if is_committed(&cr, ui) && valid && hex.trim() != cur.color.0 {
+                            cur.color = coursecraft_course::Color(hex.trim().to_owned());
+                            changed = true;
+                        }
                     }
-                    let mut hex = cur.color.0.clone();
-                    let (cr, valid) = show_color_field(ui, "", &mut hex, "prop_text_border_color");
-                    if is_committed(&cr, ui) && valid && hex.trim() != cur.color.0 {
-                        cur.color = coursecraft_course::Color(hex.trim().to_owned());
-                        changed = true;
+                    if changed {
+                        if let Some(ctx) = state_ctx_ref {
+                            let patch = if has_border {
+                                serde_json::json!({ "outline": cur })
+                            } else if outline.is_some() {
+                                serde_json::json!({ "clear_outline": true })
+                            } else {
+                                serde_json::json!({ "outline": null, "clear_outline": false })
+                            };
+                            action_to_run = Some(patch_state_action(ctx, patch));
+                        } else {
+                            let mut kind = serde_json::to_value(&obj.kind).unwrap_or(Json::Null);
+                            kind["outline"] = if has_border {
+                                serde_json::to_value(&cur).unwrap_or(Json::Null)
+                            } else {
+                                Json::Null
+                            };
+                            action_to_run = Some((
+                                "object.update",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "kind": kind,
+                                }),
+                            ));
+                        }
                     }
-                }
-                if changed {
-                    let mut kind = serde_json::to_value(&obj.kind).unwrap_or(Json::Null);
-                    kind["outline"] = if has_border {
-                        serde_json::to_value(&cur).unwrap_or(Json::Null)
-                    } else {
-                        Json::Null
-                    };
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": kind,
-                        }),
-                    ));
-                }
-            });
+                },
+            );
         }
         ObjectKind::Button {
-            label: _,
+            label,
             fill,
             fill_style,
         } => {
+            let eff_label = state_ctx_ref
+                .and_then(|ctx| ctx.state.text.as_deref())
+                .unwrap_or(label.as_str());
+            let eff_fill = state_ctx_ref
+                .and_then(|ctx| ctx.state.fill.as_ref())
+                .unwrap_or(fill);
             let fill_style_json = serde_json::to_value(fill_style).unwrap_or(Json::Null);
-            inspector_row(ui, "Label", |ui| {
-                let rem_w = ui.available_width().max(30.0);
-                let r = ui.add_sized(
-                    [rem_w, coursecraft_render::CONTROL_COMPACT],
-                    TextEdit::singleline(&mut props.button_label).id_salt("prop_btn_label"),
-                );
-                props.btn_label_rect = Some(r.rect);
-                if is_committed(&r, ui) && props.button_label != obj.kind_label().unwrap_or("") {
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": {
-                                "type": "button",
-                                "label": props.button_label,
-                                "fill": fill.0,
-                                "fill_style": fill_style_json.clone(),
-                            },
-                        }),
-                    ));
-                }
-            });
-
-            let has_fill = fill.0 != "#00000000";
-            inspector_row(ui, "Fill", |ui| {
-                let mut checked = has_fill;
-                if ui.checkbox(&mut checked, "").changed() {
-                    let next = if !checked {
-                        "#00000000".to_owned()
-                    } else if props.button_fill.trim().is_empty()
-                        || props.button_fill.trim() == "#00000000"
-                    {
-                        "#2F6FEB".to_owned()
-                    } else {
-                        props.button_fill.trim().to_owned()
-                    };
-                    props.button_fill = next.clone();
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": {
-                                "type": "button",
-                                "label": props.button_label,
-                                "fill": next,
-                                "fill_style": if checked { fill_style_json.clone() } else { Json::Null },
-                            },
-                        }),
-                    ));
-                }
-                if has_fill {
-                    let (cr, valid_color) =
-                        show_color_field(ui, "", &mut props.button_fill, "prop_btn_fill");
-                    props.color_rect = Some(cr.rect);
-                    if is_committed(&cr, ui) && valid_color && props.button_fill.trim() != fill.0 {
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "kind": {
-                                    "type": "button",
-                                    "label": props.button_label,
-                                    "fill": props.button_fill.trim(),
-                                    "fill_style": fill_style_json.clone(),
-                                },
-                            }),
-                        ));
+            let label_overridden = state_ctx_ref.is_some_and(|ctx| ctx.state.text.is_some());
+            inspector_row_state(
+                ui,
+                "Label",
+                state_ctx_ref,
+                label_overridden,
+                "Label",
+                serde_json::json!({ "text": null }),
+                actions_to_run,
+                |ui| {
+                    let rem_w = ui.available_width().max(30.0);
+                    let r = ui.add_sized(
+                        [rem_w, coursecraft_render::CONTROL_COMPACT],
+                        TextEdit::singleline(&mut props.button_label).id_salt("prop_btn_label"),
+                    );
+                    props.btn_label_rect = Some(r.rect);
+                    if is_committed(&r, ui) && props.button_label != eff_label {
+                        if let Some(ctx) = state_ctx_ref {
+                            action_to_run = Some(patch_state_action(
+                                ctx,
+                                serde_json::json!({ "text": props.button_label }),
+                            ));
+                        } else {
+                            action_to_run = Some((
+                                "object.update",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "kind": {
+                                        "type": "button",
+                                        "label": props.button_label,
+                                        "fill": fill.0,
+                                        "fill_style": fill_style_json.clone(),
+                                    },
+                                }),
+                            ));
+                        }
                     }
-                }
-            });
+                },
+            );
+
+            let has_fill = eff_fill.0 != "#00000000";
+            let fill_overridden = state_ctx_ref.is_some_and(|ctx| ctx.state.fill.is_some());
+            inspector_row_state(
+                ui,
+                "Fill",
+                state_ctx_ref,
+                fill_overridden,
+                "Fill",
+                serde_json::json!({ "fill": null }),
+                actions_to_run,
+                |ui| {
+                    let mut checked = has_fill;
+                    if ui.checkbox(&mut checked, "").changed() {
+                        let next = if !checked {
+                            "#00000000".to_owned()
+                        } else if props.button_fill.trim().is_empty()
+                            || props.button_fill.trim() == "#00000000"
+                        {
+                            "#2F6FEB".to_owned()
+                        } else {
+                            props.button_fill.trim().to_owned()
+                        };
+                        props.button_fill = next.clone();
+                        if let Some(ctx) = state_ctx_ref {
+                            action_to_run =
+                                Some(patch_state_action(ctx, serde_json::json!({ "fill": next })));
+                        } else {
+                            action_to_run = Some((
+                                "object.update",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "kind": {
+                                        "type": "button",
+                                        "label": props.button_label,
+                                        "fill": next,
+                                        "fill_style": if checked { fill_style_json.clone() } else { Json::Null },
+                                    },
+                                }),
+                            ));
+                        }
+                    }
+                    if has_fill {
+                        let (cr, valid_color) =
+                            show_color_field(ui, "", &mut props.button_fill, "prop_btn_fill");
+                        props.color_rect = Some(cr.rect);
+                        if is_committed(&cr, ui)
+                            && valid_color
+                            && props.button_fill.trim() != eff_fill.0
+                        {
+                            if let Some(ctx) = state_ctx_ref {
+                                action_to_run = Some(patch_state_action(
+                                    ctx,
+                                    serde_json::json!({ "fill": props.button_fill.trim() }),
+                                ));
+                            } else {
+                                action_to_run = Some((
+                                    "object.update",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "kind": {
+                                            "type": "button",
+                                            "label": props.button_label,
+                                            "fill": props.button_fill.trim(),
+                                            "fill_style": fill_style_json.clone(),
+                                        },
+                                    }),
+                                ));
+                            }
+                        }
+                    }
+                },
+            );
 
             if has_fill {
                 show_fill_style_editor(
                     ui,
                     props,
-                    &fill.0,
+                    &eff_fill.0,
                     &slide.id,
                     &obj.id,
                     &lists.media_names,
+                    state_ctx_ref,
+                    fill_style.is_some(),
                     actions_to_run,
                 );
             }
@@ -6868,7 +7279,7 @@ fn show_object_properties(
             shape,
             fill,
             fill_style: _,
-            outline: _,
+            outline,
             text,
             adjust,
         } => {
@@ -6920,107 +7331,173 @@ fn show_object_properties(
                     });
             });
 
-            let has_fill = fill.0 != "#00000000";
-            inspector_row(ui, "Fill", |ui| {
-                let mut checked = has_fill;
-                if ui.checkbox(&mut checked, "").changed() {
-                    let next = if !checked {
-                        "#00000000".to_owned()
-                    } else if props.shape_fill.trim().is_empty()
-                        || props.shape_fill.trim() == "#00000000"
-                    {
-                        "#D0D7DE".to_owned()
-                    } else {
-                        props.shape_fill.trim().to_owned()
-                    };
-                    props.shape_fill = next.clone();
-                    let mut kind = kind_with(*shape, &next);
-                    if !checked {
-                        kind["fill_style"] = Json::Null;
+            let eff_fill = state_ctx_ref
+                .and_then(|ctx| ctx.state.fill.as_ref())
+                .unwrap_or(fill);
+            let has_fill = eff_fill.0 != "#00000000";
+            let fill_overridden = state_ctx_ref.is_some_and(|ctx| ctx.state.fill.is_some());
+            inspector_row_state(
+                ui,
+                "Fill",
+                state_ctx_ref,
+                fill_overridden,
+                "Fill",
+                serde_json::json!({ "fill": null }),
+                actions_to_run,
+                |ui| {
+                    let mut checked = has_fill;
+                    if ui.checkbox(&mut checked, "").changed() {
+                        let next = if !checked {
+                            "#00000000".to_owned()
+                        } else if props.shape_fill.trim().is_empty()
+                            || props.shape_fill.trim() == "#00000000"
+                        {
+                            "#D0D7DE".to_owned()
+                        } else {
+                            props.shape_fill.trim().to_owned()
+                        };
+                        props.shape_fill = next.clone();
+                        if let Some(ctx) = state_ctx_ref {
+                            action_to_run =
+                                Some(patch_state_action(ctx, serde_json::json!({ "fill": next })));
+                        } else {
+                            let mut kind = kind_with(*shape, &next);
+                            if !checked {
+                                kind["fill_style"] = Json::Null;
+                            }
+                            action_to_run = Some((
+                                "object.update",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "kind": kind,
+                                }),
+                            ));
+                        }
                     }
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": kind,
-                        }),
-                    ));
-                }
-                if has_fill {
-                    let (cr, valid_color) =
-                        show_color_field(ui, "", &mut props.shape_fill, "prop_shape_fill");
-                    props.color_rect = Some(cr.rect);
-                    if is_committed(&cr, ui) && valid_color && props.shape_fill.trim() != fill.0 {
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "kind": kind_with(*shape, props.shape_fill.trim()),
-                            }),
-                        ));
+                    if has_fill {
+                        let (cr, valid_color) =
+                            show_color_field(ui, "", &mut props.shape_fill, "prop_shape_fill");
+                        props.color_rect = Some(cr.rect);
+                        if is_committed(&cr, ui)
+                            && valid_color
+                            && props.shape_fill.trim() != eff_fill.0
+                        {
+                            if let Some(ctx) = state_ctx_ref {
+                                action_to_run = Some(patch_state_action(
+                                    ctx,
+                                    serde_json::json!({ "fill": props.shape_fill.trim() }),
+                                ));
+                            } else {
+                                action_to_run = Some((
+                                    "object.update",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "kind": kind_with(*shape, props.shape_fill.trim()),
+                                    }),
+                                ));
+                            }
+                        }
                     }
-                }
-            });
+                },
+            );
 
             if has_fill {
+                let base_fill_style_some = matches!(
+                    &obj.kind,
+                    ObjectKind::Shape {
+                        fill_style: Some(_),
+                        ..
+                    }
+                );
                 show_fill_style_editor(
                     ui,
                     props,
-                    &fill.0,
+                    &eff_fill.0,
                     &slide.id,
                     &obj.id,
                     &lists.media_names,
+                    state_ctx_ref,
+                    base_fill_style_some,
                     actions_to_run,
                 );
             }
 
             if !adjust.is_empty() {
-                inspector_row(ui, "Adjust", |ui| {
-                    if ui.button("Reset shape").clicked() {
-                        let mut kind = kind_with(*shape, &fill.0);
-                        kind["adjust"] = serde_json::json!([]);
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "kind": kind,
-                            }),
-                        ));
-                    }
-                });
+                ui.add_enabled_ui(!state_edit_locked, |ui| {
+                    inspector_row(ui, "Adjust", |ui| {
+                        if ui.button("Reset shape").clicked() {
+                            let mut kind = kind_with(*shape, &fill.0);
+                            kind["adjust"] = serde_json::json!([]);
+                            action_to_run = Some((
+                                "object.update",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "kind": kind,
+                                }),
+                            ));
+                        }
+                    });
+                })
+                .response
+                .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
             }
 
             inspector_separator(ui);
-            inspector_row(ui, "Outline", |ui| {
-                let mut has_outline = props.shape_outline_enabled;
-                if ui.checkbox(&mut has_outline, "").changed() {
-                    props.shape_outline_enabled = has_outline;
-                    let out_json = if has_outline {
-                        outline_json(
-                            &props.shape_outline_color,
-                            props.shape_outline_width,
-                            props.shape_outline_dash,
-                            &props.shape_outline_dash_pattern,
-                            props.shape_outline_join,
-                        )
-                    } else {
-                        Json::Null
-                    };
-                    let mut kind = kind_with(*shape, &fill.0);
-                    kind["outline"] = out_json;
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": kind,
-                        }),
-                    ));
-                }
-            });
+            let shape_outline_overridden = state_ctx_ref
+                .is_some_and(|ctx| ctx.state.outline.is_some() || ctx.state.clear_outline);
+            let build_shape_outline = |props: &PropertiesState| {
+                outline_json(
+                    &props.shape_outline_color,
+                    props.shape_outline_width,
+                    props.shape_outline_dash,
+                    &props.shape_outline_dash_pattern,
+                    props.shape_outline_join,
+                )
+            };
+            inspector_row_state(
+                ui,
+                "Outline",
+                state_ctx_ref,
+                shape_outline_overridden,
+                "Outline",
+                serde_json::json!({ "outline": null, "clear_outline": false }),
+                actions_to_run,
+                |ui| {
+                    let mut has_outline = props.shape_outline_enabled;
+                    if ui.checkbox(&mut has_outline, "").changed() {
+                        props.shape_outline_enabled = has_outline;
+                        if let Some(ctx) = state_ctx_ref {
+                            let patch = if has_outline {
+                                serde_json::json!({ "outline": build_shape_outline(props) })
+                            } else if outline.is_some() {
+                                serde_json::json!({ "clear_outline": true })
+                            } else {
+                                serde_json::json!({ "outline": null, "clear_outline": false })
+                            };
+                            action_to_run = Some(patch_state_action(ctx, patch));
+                        } else {
+                            let out_json = if has_outline {
+                                build_shape_outline(props)
+                            } else {
+                                Json::Null
+                            };
+                            let mut kind = kind_with(*shape, &fill.0);
+                            kind["outline"] = out_json;
+                            action_to_run = Some((
+                                "object.update",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "kind": kind,
+                                }),
+                            ));
+                        }
+                    }
+                },
+            );
 
             if props.shape_outline_enabled {
                 inspector_row(ui, "Colour", |ui| {
@@ -7032,22 +7509,23 @@ fn show_object_properties(
                     );
                     props.color_rect = Some(cr.rect);
                     if is_committed(&cr, ui) && valid_color {
-                        let mut kind = kind_with(*shape, &fill.0);
-                        kind["outline"] = outline_json(
-                            &props.shape_outline_color,
-                            props.shape_outline_width,
-                            props.shape_outline_dash,
-                            &props.shape_outline_dash_pattern,
-                            props.shape_outline_join,
-                        );
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "kind": kind,
-                            }),
-                        ));
+                        if let Some(ctx) = state_ctx_ref {
+                            action_to_run = Some(patch_state_action(
+                                ctx,
+                                serde_json::json!({ "outline": build_shape_outline(props) }),
+                            ));
+                        } else {
+                            let mut kind = kind_with(*shape, &fill.0);
+                            kind["outline"] = build_shape_outline(props);
+                            action_to_run = Some((
+                                "object.update",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "kind": kind,
+                                }),
+                            ));
+                        }
                     }
                 });
 
@@ -7066,22 +7544,23 @@ fn show_object_properties(
                         && props.shape_outline_width.is_finite()
                         && (0.0..=50.0).contains(&props.shape_outline_width)
                     {
-                        let mut kind = kind_with(*shape, &fill.0);
-                        kind["outline"] = outline_json(
-                            &props.shape_outline_color,
-                            props.shape_outline_width,
-                            props.shape_outline_dash,
-                            &props.shape_outline_dash_pattern,
-                            props.shape_outline_join,
-                        );
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "kind": kind,
-                            }),
-                        ));
+                        if let Some(ctx) = state_ctx_ref {
+                            action_to_run = Some(patch_state_action(
+                                ctx,
+                                serde_json::json!({ "outline": build_shape_outline(props) }),
+                            ));
+                        } else {
+                            let mut kind = kind_with(*shape, &fill.0);
+                            kind["outline"] = build_shape_outline(props);
+                            action_to_run = Some((
+                                "object.update",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "kind": kind,
+                                }),
+                            ));
+                        }
                     }
                 });
 
@@ -7093,39 +7572,47 @@ fn show_object_properties(
                     &mut props.shape_outline_dash_length,
                     &mut props.shape_outline_gap,
                 ) {
-                    let mut kind = kind_with(*shape, &fill.0);
-                    kind["outline"] = outline_json(
-                        &props.shape_outline_color,
-                        props.shape_outline_width,
-                        props.shape_outline_dash,
-                        &props.shape_outline_dash_pattern,
-                        props.shape_outline_join,
-                    );
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": kind,
-                        }),
-                    ));
+                    if let Some(ctx) = state_ctx_ref {
+                        action_to_run = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({ "outline": build_shape_outline(props) }),
+                        ));
+                    } else {
+                        let mut kind = kind_with(*shape, &fill.0);
+                        kind["outline"] = build_shape_outline(props);
+                        action_to_run = Some((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "kind": kind,
+                            }),
+                        ));
+                    }
                 }
                 if show_corners_control(ui, "prop_shape_outline", &mut props.shape_outline_join) {
-                    action_to_run = Some((
-                        "object.set_outline_join",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "join": props.shape_outline_join,
-                        }),
-                    ));
+                    if let Some(ctx) = state_ctx_ref {
+                        action_to_run = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({ "outline": build_shape_outline(props) }),
+                        ));
+                    } else {
+                        action_to_run = Some((
+                            "object.set_outline_join",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "join": props.shape_outline_join,
+                            }),
+                        ));
+                    }
                 }
             }
 
             if coursecraft_course::shape_allows_text(*shape) {
                 inspector_separator(ui);
                 let default_style;
-                let (style, runs, current_text, autofit) = match text {
+                let (base_style, base_runs, base_text, base_autofit) = match text {
                     Some(text) => (
                         &text.style,
                         text.runs.as_slice(),
@@ -7133,26 +7620,41 @@ fn show_object_properties(
                         Some(text.autofit),
                     ),
                     None => {
-                        default_style = default_shape_text_style(fill);
+                        default_style = default_shape_text_style(eff_fill);
                         (&default_style, &[][..], "", None)
                     }
                 };
+                let eff_style = state_ctx_ref
+                    .and_then(|ctx| ctx.state.text_style.as_ref())
+                    .unwrap_or(base_style);
+                let eff_runs = state_ctx_ref
+                    .and_then(|ctx| ctx.state.runs.as_deref())
+                    .unwrap_or(base_runs);
+                let eff_text = state_ctx_ref
+                    .and_then(|ctx| ctx.state.text.as_deref())
+                    .unwrap_or(base_text);
+                let eff_autofit = state_ctx_ref
+                    .and_then(|ctx| ctx.state.autofit)
+                    .or(base_autofit);
                 if let Some(action) = show_text_controls(
                     ui,
                     props,
                     &slide.id,
                     &obj.id,
-                    style,
-                    runs,
-                    current_text,
+                    eff_style,
+                    eff_runs,
+                    eff_text,
                     "shape",
                     &lists.font_families,
                     None,
-                    autofit,
+                    eff_autofit,
                     system_fonts,
                     &mut font_requests,
                 ) {
-                    action_to_run = Some(action);
+                    action_to_run = Some(match state_ctx_ref {
+                        Some(ctx) => route_text_set_to_state(action, ctx, base_style),
+                        None => action,
+                    });
                 }
             }
         }
@@ -7165,33 +7667,54 @@ fn show_object_properties(
                 }
             });
 
-            inspector_row(ui, "Colour", |ui| {
-                let (cr, valid_color) = show_color_field(
-                    ui,
-                    "",
-                    &mut props.path_outline_color,
-                    "prop_path_outline_color",
-                );
-                props.color_rect = Some(cr.rect);
-                if is_committed(&cr, ui) && valid_color {
-                    let mut kind = base_kind.clone();
-                    kind["outline"] = outline_json(
-                        &props.path_outline_color,
-                        props.path_outline_width,
-                        props.path_outline_dash,
-                        &props.path_outline_dash_pattern,
-                        props.path_outline_join,
+            let path_outline_overridden = state_ctx_ref
+                .is_some_and(|ctx| ctx.state.outline.is_some() || ctx.state.clear_outline);
+            let build_path_outline = |props: &PropertiesState| {
+                outline_json(
+                    &props.path_outline_color,
+                    props.path_outline_width,
+                    props.path_outline_dash,
+                    &props.path_outline_dash_pattern,
+                    props.path_outline_join,
+                )
+            };
+            inspector_row_state(
+                ui,
+                "Colour",
+                state_ctx_ref,
+                path_outline_overridden,
+                "Outline",
+                serde_json::json!({ "outline": null, "clear_outline": false }),
+                actions_to_run,
+                |ui| {
+                    let (cr, valid_color) = show_color_field(
+                        ui,
+                        "",
+                        &mut props.path_outline_color,
+                        "prop_path_outline_color",
                     );
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": kind,
-                        }),
-                    ));
-                }
-            });
+                    props.color_rect = Some(cr.rect);
+                    if is_committed(&cr, ui) && valid_color {
+                        if let Some(ctx) = state_ctx_ref {
+                            action_to_run = Some(patch_state_action(
+                                ctx,
+                                serde_json::json!({ "outline": build_path_outline(props) }),
+                            ));
+                        } else {
+                            let mut kind = base_kind.clone();
+                            kind["outline"] = build_path_outline(props);
+                            action_to_run = Some((
+                                "object.update",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "kind": kind,
+                                }),
+                            ));
+                        }
+                    }
+                },
+            );
 
             inspector_row(ui, "Width", |ui| {
                 let rem_w = ui.available_width().max(30.0);
@@ -7208,22 +7731,23 @@ fn show_object_properties(
                     && props.path_outline_width.is_finite()
                     && (0.0..=50.0).contains(&props.path_outline_width)
                 {
-                    let mut kind = base_kind.clone();
-                    kind["outline"] = outline_json(
-                        &props.path_outline_color,
-                        props.path_outline_width,
-                        props.path_outline_dash,
-                        &props.path_outline_dash_pattern,
-                        props.path_outline_join,
-                    );
-                    action_to_run = Some((
-                        "object.update",
-                        serde_json::json!({
-                            "slide": slide.id,
-                            "object": obj.id,
-                            "kind": kind,
-                        }),
-                    ));
+                    if let Some(ctx) = state_ctx_ref {
+                        action_to_run = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({ "outline": build_path_outline(props) }),
+                        ));
+                    } else {
+                        let mut kind = base_kind.clone();
+                        kind["outline"] = build_path_outline(props);
+                        action_to_run = Some((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "kind": kind,
+                            }),
+                        ));
+                    }
                 }
             });
 
@@ -7235,22 +7759,23 @@ fn show_object_properties(
                 &mut props.path_outline_dash_length,
                 &mut props.path_outline_gap,
             ) {
-                let mut kind = base_kind.clone();
-                kind["outline"] = outline_json(
-                    &props.path_outline_color,
-                    props.path_outline_width,
-                    props.path_outline_dash,
-                    &props.path_outline_dash_pattern,
-                    props.path_outline_join,
-                );
-                action_to_run = Some((
-                    "object.update",
-                    serde_json::json!({
-                        "slide": slide.id,
-                        "object": obj.id,
-                        "kind": kind,
-                    }),
-                ));
+                if let Some(ctx) = state_ctx_ref {
+                    action_to_run = Some(patch_state_action(
+                        ctx,
+                        serde_json::json!({ "outline": build_path_outline(props) }),
+                    ));
+                } else {
+                    let mut kind = base_kind.clone();
+                    kind["outline"] = build_path_outline(props);
+                    action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
             }
 
             inspector_separator(ui);
@@ -7384,32 +7909,61 @@ fn show_object_properties(
             });
 
             if path.closed {
-                inspector_row(ui, "Fill", |ui| {
-                    let (cr, valid_color) =
-                        show_color_field(ui, "", &mut props.path_fill, "prop_path_fill");
-                    props.color_rect = Some(cr.rect);
-                    if is_committed(&cr, ui) && valid_color {
-                        let mut kind = base_kind.clone();
-                        kind["fill"] = serde_json::json!(props.path_fill.trim());
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "kind": kind,
-                            }),
-                        ));
-                    }
-                });
+                let path_fill_overridden =
+                    state_ctx_ref.is_some_and(|ctx| ctx.state.fill.is_some());
+                inspector_row_state(
+                    ui,
+                    "Fill",
+                    state_ctx_ref,
+                    path_fill_overridden,
+                    "Fill",
+                    serde_json::json!({ "fill": null }),
+                    actions_to_run,
+                    |ui| {
+                        let (cr, valid_color) =
+                            show_color_field(ui, "", &mut props.path_fill, "prop_path_fill");
+                        props.color_rect = Some(cr.rect);
+                        if is_committed(&cr, ui) && valid_color {
+                            if let Some(ctx) = state_ctx_ref {
+                                action_to_run = Some(patch_state_action(
+                                    ctx,
+                                    serde_json::json!({ "fill": props.path_fill.trim() }),
+                                ));
+                            } else {
+                                let mut kind = base_kind.clone();
+                                kind["fill"] = serde_json::json!(props.path_fill.trim());
+                                action_to_run = Some((
+                                    "object.update",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "kind": kind,
+                                    }),
+                                ));
+                            }
+                        }
+                    },
+                );
             }
         }
-        ObjectKind::Image { src, alt, crop, .. } => {
+        ObjectKind::Image {
+            src,
+            alt,
+            crop,
+            shape,
+            ..
+        } => {
             let cropping = editor
                 .ui
                 .crop_edit
                 .as_ref()
                 .is_some_and(|session| session.object == obj.id);
             let can_crop = cropping || src_loaded;
+            let eff_has_crop = match state_ctx_ref {
+                Some(ctx) if ctx.state.clear_crop => false,
+                Some(ctx) if ctx.state.crop.is_some() => true,
+                _ => crop.is_some(),
+            };
             show_image_properties(
                 ui,
                 props,
@@ -7418,14 +7972,19 @@ fn show_object_properties(
                     alt,
                     slide_id: &slide.id,
                     obj_id: &obj.id,
-                    has_crop: crop.is_some(),
+                    has_crop: eff_has_crop,
                     cropping,
                     can_crop,
+                    base_shape: *shape,
+                    state_ctx: state_ctx_ref,
+                    media_names: &lists.media_names,
                 },
+                &mut editor.pending_image_pick,
                 &mut replace_image_requested,
                 &mut reset_natural_size_src,
                 &mut suggest_alt_requested,
                 &mut crop_action,
+                actions_to_run,
                 &mut action_to_run,
             );
             if suggest_alt_requested {
@@ -8066,61 +8625,126 @@ fn show_object_properties(
 
     // 6. Rotation and flips
     inspector_section_header(ui, "Rotate");
-    inspector_row(ui, "Rotation", |ui| {
-        let rem_w = ui.available_width().max(30.0);
-        let r = add_drag_left(
-            ui,
-            [rem_w, coursecraft_render::CONTROL_COMPACT],
-            DragValue::new(&mut props.rotation)
-                .speed(1.0)
-                .range(0.0..=360.0)
-                .suffix("°"),
-        );
-        props.rotation_rect = Some(r.rect);
-        let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if r.drag_stopped() || r.lost_focus() || enter {
-            let rotation = coursecraft_course::normalize_rotation(props.rotation);
-            props.rotation = rotation;
-            if (rotation - coursecraft_course::normalize_rotation(obj.rotation)).abs() > 0.001 {
-                action_to_run = Some((
-                    "object.set_rotation",
-                    serde_json::json!({
-                        "slide": slide.id,
-                        "object": obj.id,
-                        "degrees": rotation,
-                    }),
-                ));
+    let rotation_overridden = state_ctx_ref.is_some_and(|ctx| ctx.state.rotation.is_some());
+    inspector_row_state(
+        ui,
+        "Rotation",
+        state_ctx_ref,
+        rotation_overridden,
+        "Rotation",
+        serde_json::json!({ "rotation": null }),
+        actions_to_run,
+        |ui| {
+            let rem_w = ui.available_width().max(30.0);
+            let r = add_drag_left(
+                ui,
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                DragValue::new(&mut props.rotation)
+                    .speed(1.0)
+                    .range(0.0..=360.0)
+                    .suffix("°"),
+            );
+            props.rotation_rect = Some(r.rect);
+            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if r.drag_stopped() || r.lost_focus() || enter {
+                let rotation = coursecraft_course::normalize_rotation(props.rotation);
+                props.rotation = rotation;
+                let curr = state_ctx_ref
+                    .and_then(|ctx| ctx.state.rotation)
+                    .unwrap_or(obj.rotation);
+                if (rotation - coursecraft_course::normalize_rotation(curr)).abs() > 0.001
+                    || state_ctx_ref.is_some()
+                {
+                    if let Some(ctx) = state_ctx_ref {
+                        action_to_run = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({ "rotation": rotation }),
+                        ));
+                    } else if (rotation - coursecraft_course::normalize_rotation(obj.rotation))
+                        .abs()
+                        > 0.001
+                    {
+                        action_to_run = Some((
+                            "object.set_rotation",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "degrees": rotation,
+                            }),
+                        ));
+                    }
+                }
             }
-        }
-    });
+        },
+    );
 
-    inspector_row(ui, "Flip", |ui| {
-        for (icon, label, axis) in [
-            (
-                coursecraft_render::Icon::ArrowsOut,
-                "Flip horizontal",
-                "horizontal",
-            ),
-            (
-                coursecraft_render::Icon::ArrowsDownUp,
-                "Flip vertical",
-                "vertical",
-            ),
-        ] {
-            if crate::widgets::icon_button(ui, icon, label).clicked() {
-                action_to_run = Some((
-                    "object.flip",
-                    serde_json::json!({
-                        "slide": slide.id,
-                        "object": obj.id,
-                        "axis": axis,
-                    }),
-                ));
+    let flip_overridden =
+        state_ctx_ref.is_some_and(|ctx| ctx.state.flip_h.is_some() || ctx.state.flip_v.is_some());
+    inspector_row_state(
+        ui,
+        "Flip",
+        state_ctx_ref,
+        flip_overridden,
+        "Flip",
+        serde_json::json!({ "flip_h": null, "flip_v": null }),
+        actions_to_run,
+        |ui| {
+            let eff_flip_h = state_ctx_ref
+                .and_then(|ctx| ctx.state.flip_h)
+                .unwrap_or(obj.flip_h);
+            let eff_flip_v = state_ctx_ref
+                .and_then(|ctx| ctx.state.flip_v)
+                .unwrap_or(obj.flip_v);
+            for (icon, label, axis, next_val) in [
+                (
+                    coursecraft_render::Icon::ArrowsOut,
+                    "Flip horizontal",
+                    "horizontal",
+                    !eff_flip_h,
+                ),
+                (
+                    coursecraft_render::Icon::ArrowsDownUp,
+                    "Flip vertical",
+                    "vertical",
+                    !eff_flip_v,
+                ),
+            ] {
+                if crate::widgets::icon_button(ui, icon, label).clicked() {
+                    if let Some(ctx) = state_ctx_ref {
+                        let key = if axis == "horizontal" {
+                            "flip_h"
+                        } else {
+                            "flip_v"
+                        };
+                        action_to_run = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({ (key): next_val }),
+                        ));
+                    } else {
+                        action_to_run = Some((
+                            "object.flip",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "axis": axis,
+                            }),
+                        ));
+                    }
+                }
             }
-        }
-    });
+        },
+    );
 
-    show_effect_controls(ui, props, &slide.id, &obj.id, actions_to_run);
+    show_effect_controls(
+        ui,
+        props,
+        &slide.id,
+        &obj.id,
+        state_ctx_ref,
+        obj.shadow.is_some(),
+        obj.glow.is_some(),
+        actions_to_run,
+    );
 
     show_drag_controls(ui, props, slide, obj, actions_to_run);
 
@@ -8128,23 +8752,36 @@ fn show_object_properties(
     match &obj.kind {
         ObjectKind::Text {
             text,
+            style,
             runs,
             paragraphs,
             ..
         } => {
+            let eff_runs = state_ctx_ref
+                .and_then(|ctx| ctx.state.runs.as_deref())
+                .unwrap_or(runs);
+            let eff_paras = state_ctx_ref
+                .and_then(|ctx| ctx.state.paragraphs.as_deref())
+                .unwrap_or(paragraphs);
+            let eff_text = state_ctx_ref
+                .and_then(|ctx| ctx.state.text.as_deref())
+                .unwrap_or(text.as_str());
             if let Some(action) = show_paragraph_controls(
                 ui,
                 props,
                 &slide.id,
                 &obj.id,
-                runs,
-                paragraphs,
+                eff_runs,
+                eff_paras,
                 &lists.slides,
-                text,
+                eff_text,
                 "text",
                 None,
             ) {
-                action_to_run = Some(action);
+                action_to_run = Some(match state_ctx_ref {
+                    Some(ctx) => route_text_set_to_state(action, ctx, style),
+                    None => action,
+                });
             }
         }
         ObjectKind::Shape {
@@ -8152,19 +8789,31 @@ fn show_object_properties(
             text: Some(text),
             ..
         } if coursecraft_course::shape_allows_text(*shape) => {
+            let eff_runs = state_ctx_ref
+                .and_then(|ctx| ctx.state.runs.as_deref())
+                .unwrap_or(&text.runs);
+            let eff_paras = state_ctx_ref
+                .and_then(|ctx| ctx.state.paragraphs.as_deref())
+                .unwrap_or(&text.paragraphs);
+            let eff_text = state_ctx_ref
+                .and_then(|ctx| ctx.state.text.as_deref())
+                .unwrap_or(text.text.as_str());
             if let Some(action) = show_paragraph_controls(
                 ui,
                 props,
                 &slide.id,
                 &obj.id,
-                &text.runs,
-                &text.paragraphs,
+                eff_runs,
+                eff_paras,
                 &lists.slides,
-                &text.text,
+                eff_text,
                 "shape",
                 None,
             ) {
-                action_to_run = Some(action);
+                action_to_run = Some(match state_ctx_ref {
+                    Some(ctx) => route_text_set_to_state(action, ctx, &text.style),
+                    None => action,
+                });
             }
         }
         _ => {}
@@ -8592,12 +9241,15 @@ struct ImagePropTarget<'a> {
     alt: &'a str,
     slide_id: &'a str,
     obj_id: &'a str,
-    /// The object has a crop stored in the course.
+    /// The object has a crop stored in the course (or active state).
     has_crop: bool,
     /// The canvas is cropping this object right now.
     cropping: bool,
     /// The picture file is loaded, so crop mode can show it.
     can_crop: bool,
+    base_shape: Option<ShapeKind>,
+    state_ctx: Option<&'a StateEditCtx<'a>>,
+    media_names: &'a [String],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8759,54 +9411,209 @@ fn show_dash_controls(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn image_shape_label(shape: Option<ShapeKind>) -> &'static str {
+    match shape {
+        None => "Rectangle",
+        Some(ShapeKind::Rectangle) => "Rectangle",
+        Some(ShapeKind::RoundedRectangle) => "Rounded rectangle",
+        Some(ShapeKind::Ellipse) => "Ellipse",
+        Some(ShapeKind::Triangle) => "Triangle",
+        Some(ShapeKind::Diamond) => "Diamond",
+        Some(ShapeKind::Star5) => "Star",
+        Some(ShapeKind::Pentagon) => "Pentagon",
+        Some(ShapeKind::Hexagon) => "Hexagon",
+        Some(ShapeKind::ArrowRight) => "Right arrow",
+        Some(_) => "Shape",
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn show_image_properties(
     ui: &mut Ui,
     props: &mut PropertiesState,
     target: ImagePropTarget<'_>,
+    pending_image_pick: &mut Option<crate::PendingImagePick>,
     replace_image_requested: &mut bool,
     reset_natural_size_src: &mut Option<String>,
     suggest_alt_requested: &mut bool,
     crop_action: &mut CropAction,
+    actions: &mut Vec<(&'static str, Json)>,
     action_to_run: &mut Option<(&'static str, Json)>,
 ) {
-    inspector_row(ui, "Src", |ui| {
-        ui.label(target.src);
-    });
-    inspector_row(ui, "", |ui| {
-        if ui.button("Replace image…").clicked() {
-            *replace_image_requested = true;
-        }
-    });
-    inspector_row(ui, "", |ui| {
-        if ui.button("Reset to natural size").clicked() {
-            *reset_natural_size_src = Some(target.src.to_owned());
-        }
-    });
-    inspector_row(ui, "Alt", |ui| {
-        let rem_w = (ui.available_width() - 76.0).max(30.0);
-        let r = ui.add_sized(
-            [rem_w, coursecraft_render::CONTROL_COMPACT],
-            TextEdit::singleline(&mut props.image_alt).id_salt("prop_image_alt"),
+    let state_ctx = target.state_ctx;
+    if let Some(ctx) = state_ctx {
+        let src_overridden = ctx.state.src.is_some();
+        let display_src = ctx.state.src.as_deref().unwrap_or("Same as Normal");
+        inspector_row_state(
+            ui,
+            "Image",
+            state_ctx,
+            src_overridden,
+            "Image",
+            serde_json::json!({ "src": null }),
+            actions,
+            |ui| {
+                ui.label(display_src);
+            },
         );
-        if ui.button("Suggest").clicked() {
-            *suggest_alt_requested = true;
+        inspector_row(ui, "", |ui| {
+            if ui.button("Choose image…").clicked() {
+                *pending_image_pick = Some(crate::PendingImagePick::StateImage {
+                    slide: ctx.slide_id.to_owned(),
+                    object: ctx.object_id.to_owned(),
+                    state: ctx.state_name.to_owned(),
+                });
+                *replace_image_requested = true;
+            }
+            ui.menu_button("From project…", |ui| {
+                let images: Vec<&String> = target
+                    .media_names
+                    .iter()
+                    .filter(|n| coursecraft_course::is_image_src(n))
+                    .collect();
+                if images.is_empty() {
+                    ui.label("No images in project");
+                } else {
+                    for name in images {
+                        let selected = ctx.state.src.as_deref() == Some(name.as_str());
+                        if ui.selectable_label(selected, name).clicked() {
+                            actions
+                                .push(patch_state_action(ctx, serde_json::json!({ "src": name })));
+                            ui.close();
+                        }
+                    }
+                }
+            });
+        });
+        if src_overridden {
+            inspector_row(ui, "", |ui| {
+                if ui.button("Clear").clicked() {
+                    actions.push(patch_state_action(ctx, serde_json::json!({ "src": null })));
+                }
+            });
         }
-        if is_committed(&r, ui) && props.image_alt != target.alt {
-            *action_to_run = Some((
-                "object.update",
-                serde_json::json!({
-                    "slide": target.slide_id,
-                    "object": target.obj_id,
-                    "kind": {
-                        "type": "image",
-                        "src": target.src,
-                        "alt": props.image_alt.trim(),
-                    },
-                }),
-            ));
-        }
-    });
-    *crop_action = show_crop_row(ui, target.has_crop, target.cropping, target.can_crop);
+    } else {
+        inspector_row(ui, "Src", |ui| {
+            ui.label(target.src);
+        });
+        inspector_row(ui, "", |ui| {
+            if ui.button("Replace image…").clicked() {
+                *replace_image_requested = true;
+            }
+        });
+    }
+    ui.add_enabled_ui(state_ctx.is_none(), |ui| {
+        inspector_row(ui, "", |ui| {
+            if ui.button("Reset to natural size").clicked() {
+                *reset_natural_size_src = Some(target.src.to_owned());
+            }
+        });
+        inspector_row(ui, "Alt", |ui| {
+            let rem_w = (ui.available_width() - 76.0).max(30.0);
+            let r = ui.add_sized(
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                TextEdit::singleline(&mut props.image_alt).id_salt("prop_image_alt"),
+            );
+            if ui.button("Suggest").clicked() {
+                *suggest_alt_requested = true;
+            }
+            if is_committed(&r, ui) && props.image_alt != target.alt {
+                *action_to_run = Some((
+                    "object.update",
+                    serde_json::json!({
+                        "slide": target.slide_id,
+                        "object": target.obj_id,
+                        "kind": {
+                            "type": "image",
+                            "src": target.src,
+                            "alt": props.image_alt.trim(),
+                        },
+                    }),
+                ));
+            }
+        });
+    })
+    .response
+    .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
+
+    *crop_action = show_crop_row(
+        ui,
+        target.has_crop,
+        target.cropping,
+        target.can_crop,
+        state_ctx,
+        actions,
+    );
+
+    let eff_shape = match state_ctx {
+        Some(ctx) if ctx.state.clear_image_shape => None,
+        Some(ctx) if ctx.state.image_shape.is_some() => ctx.state.image_shape,
+        _ => target.base_shape,
+    };
+    let shape_overridden =
+        state_ctx.is_some_and(|ctx| ctx.state.image_shape.is_some() || ctx.state.clear_image_shape);
+    let mut shape_state_action = None;
+    inspector_row_state(
+        ui,
+        "Image shape",
+        state_ctx,
+        shape_overridden,
+        "Image shape",
+        serde_json::json!({ "image_shape": null, "clear_image_shape": false }),
+        actions,
+        |ui| {
+            let rem_w = ui.available_width().max(30.0);
+            crate::widgets::styled_combo(ui, "prop_image_shape", rem_w)
+                .selected_text(image_shape_label(eff_shape))
+                .show_ui(ui, |ui| {
+                    let choices: [(Option<ShapeKind>, &str); 9] = [
+                        (None, "Rectangle"),
+                        (Some(ShapeKind::RoundedRectangle), "Rounded rectangle"),
+                        (Some(ShapeKind::Ellipse), "Ellipse"),
+                        (Some(ShapeKind::Triangle), "Triangle"),
+                        (Some(ShapeKind::Diamond), "Diamond"),
+                        (Some(ShapeKind::Star5), "Star"),
+                        (Some(ShapeKind::Pentagon), "Pentagon"),
+                        (Some(ShapeKind::Hexagon), "Hexagon"),
+                        (Some(ShapeKind::ArrowRight), "Right arrow"),
+                    ];
+                    for (choice, label) in choices {
+                        let selected = eff_shape == choice;
+                        if ui.selectable_label(selected, label).clicked() && !selected {
+                            if let Some(ctx) = state_ctx {
+                                let patch = match choice {
+                                    Some(kind) => serde_json::json!({ "image_shape": kind }),
+                                    None if target.base_shape.is_some() => {
+                                        serde_json::json!({ "clear_image_shape": true })
+                                    }
+                                    None => {
+                                        serde_json::json!({ "image_shape": null, "clear_image_shape": false })
+                                    }
+                                };
+                                shape_state_action = Some(patch_state_action(ctx, patch));
+                            } else {
+                                *action_to_run = Some((
+                                    "object.update",
+                                    serde_json::json!({
+                                        "slide": target.slide_id,
+                                        "object": target.obj_id,
+                                        "kind": {
+                                            "type": "image",
+                                            "src": target.src,
+                                            "alt": target.alt,
+                                            "shape": choice,
+                                        },
+                                    }),
+                                ));
+                            }
+                        }
+                    }
+                });
+        },
+    );
+    if let Some(act) = shape_state_action {
+        actions.push(act);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8867,11 +9674,13 @@ fn handle_image_actions(
         editor.request(crate::EditorRequest::PickImage);
     }
     if replace_image_requested {
-        editor.pending_image_pick = editor
-            .selection
-            .object
-            .clone()
-            .map(crate::PendingImagePick::ReplaceObject);
+        if editor.pending_image_pick.is_none() {
+            editor.pending_image_pick = editor
+                .selection
+                .object
+                .clone()
+                .map(crate::PendingImagePick::ReplaceObject);
+        }
         editor.request(crate::EditorRequest::PickImage);
     }
     if replace_audio_requested {
@@ -9339,19 +10148,6 @@ fn show_media_trim_row(
     ui.label(RichText::new("End empty = to the end of the file").color(p.text_secondary));
 }
 
-trait ObjectKindHelpers {
-    fn kind_label(&self) -> Option<&str>;
-}
-
-impl ObjectKindHelpers for coursecraft_course::Object {
-    fn kind_label(&self) -> Option<&str> {
-        match &self.kind {
-            ObjectKind::Button { label, .. } => Some(label),
-            _ => None,
-        }
-    }
-}
-
 /// What the inspector's Crop row can ask the editor to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CropAction {
@@ -9364,33 +10160,51 @@ enum CropAction {
 
 /// The inspector's Crop row: opens crop mode, clears the crop, and shows
 /// Apply/Cancel while the canvas is cropping.
-fn show_crop_row(ui: &mut Ui, has_crop: bool, cropping: bool, can_crop: bool) -> CropAction {
+fn show_crop_row(
+    ui: &mut Ui,
+    has_crop: bool,
+    cropping: bool,
+    can_crop: bool,
+    state_ctx: Option<&StateEditCtx<'_>>,
+    actions: &mut Vec<(&'static str, Json)>,
+) -> CropAction {
     let mut action = CropAction::None;
-    inspector_row(ui, "Crop", |ui| {
-        if cropping {
-            if ui.button("Apply").clicked() {
-                action = CropAction::Apply;
+    let crop_overridden =
+        state_ctx.is_some_and(|ctx| ctx.state.crop.is_some() || ctx.state.clear_crop);
+    inspector_row_state(
+        ui,
+        "Crop",
+        state_ctx,
+        crop_overridden,
+        "Crop",
+        serde_json::json!({ "crop": null, "clear_crop": false }),
+        actions,
+        |ui| {
+            if cropping {
+                if ui.button("Apply").clicked() {
+                    action = CropAction::Apply;
+                }
+                if ui.button("Cancel").clicked() {
+                    action = CropAction::Cancel;
+                }
+                return;
             }
-            if ui.button("Cancel").clicked() {
-                action = CropAction::Cancel;
+            ui.add_enabled_ui(can_crop, |ui| {
+                let crop = ui.button("Crop");
+                let crop = if can_crop {
+                    crop
+                } else {
+                    crop.on_disabled_hover_text("Load the image file first")
+                };
+                if crop.clicked() {
+                    action = CropAction::Start;
+                }
+            });
+            if has_crop && ui.button("Reset").clicked() {
+                action = CropAction::Reset;
             }
-            return;
-        }
-        ui.add_enabled_ui(can_crop, |ui| {
-            let crop = ui.button("Crop");
-            let crop = if can_crop {
-                crop
-            } else {
-                crop.on_disabled_hover_text("Load the image file first")
-            };
-            if crop.clicked() {
-                action = CropAction::Start;
-            }
-        });
-        if has_crop && ui.button("Reset").clicked() {
-            action = CropAction::Reset;
-        }
-    });
+        },
+    );
     action
 }
 

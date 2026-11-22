@@ -107,6 +107,7 @@ fn typing_one_letter_checks_one_text_and_no_suggestions() {
         live_runs: Vec::new(),
         live_paragraphs: Vec::new(),
         last_revision: 0,
+        state_name: None,
     });
     // First frame focuses and selects all, the second clears `just_entered`,
     // then ArrowRight collapses the selection so typing lands in the buffer.

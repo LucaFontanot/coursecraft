@@ -235,6 +235,8 @@ pub struct InlineEdit {
     pub live_paragraphs: Vec<coursecraft_course::Paragraph>,
     /// Course revision at which `live_runs` and `live_paragraphs` were synced.
     pub last_revision: u64,
+    /// When editing inside Canvas Edit-State Mode, the state name to patch on commit.
+    pub state_name: Option<String>,
 }
 
 /// Enter in-place editing for a text object, button or shape on the current slide.
@@ -246,7 +248,16 @@ fn start_inline_edit(editor: &mut Editor, object_id: &str) {
     let Some((object, _)) = slide.object(object_id) else {
         return;
     };
-    let (buffer, is_button, is_shape, live_runs, live_paragraphs) = match &object.kind {
+    let state_name = editor
+        .ui
+        .editing_state
+        .as_ref()
+        .filter(|s| s.slide_id == slide_id && s.object_id == object_id)
+        .map(|s| s.state_name.clone());
+    let state_def = state_name
+        .as_deref()
+        .and_then(|name| object.states.iter().find(|s| s.name == name));
+    let (base_buffer, is_button, is_shape, base_runs, base_paragraphs) = match &object.kind {
         coursecraft_course::ObjectKind::Text {
             text,
             runs,
@@ -288,6 +299,26 @@ fn start_inline_edit(editor: &mut Editor, object_id: &str) {
         }
         _ => return,
     };
+    let (buffer, live_runs, live_paragraphs) = if let Some(st) = state_def {
+        let runs = st.runs.clone().unwrap_or_else(|| {
+            if st.text.is_some() {
+                Vec::new()
+            } else {
+                base_runs
+            }
+        });
+        let paragraphs = st.paragraphs.clone().unwrap_or(base_paragraphs);
+        let plain = if !runs.is_empty() {
+            runs.iter().map(|r| r.text.as_str()).collect()
+        } else if let Some(t) = &st.text {
+            t.clone()
+        } else {
+            base_buffer
+        };
+        (plain, runs, paragraphs)
+    } else {
+        (base_buffer, base_runs, base_paragraphs)
+    };
     editor.selection.set_many([object_id.to_owned()]);
     editor.ui.inline_edit = Some(InlineEdit {
         slide: slide_id,
@@ -301,6 +332,7 @@ fn start_inline_edit(editor: &mut Editor, object_id: &str) {
         live_runs,
         live_paragraphs,
         last_revision: editor.session.revision,
+        state_name,
     });
     editor.ui.inline_edit_yielded_to_panel = false;
 }
@@ -439,6 +471,7 @@ fn start_table_cell_edit(editor: &mut Editor, object_id: &str, row: usize, colum
         live_runs: cell.runs.clone(),
         live_paragraphs: cell.paragraphs.clone(),
         last_revision: editor.session.revision,
+        state_name: None,
     });
     editor.ui.inline_edit_yielded_to_panel = false;
 }
@@ -652,6 +685,70 @@ pub(crate) fn commit_inline_edit(editor: &mut Editor) {
     let Some((object, _)) = slide.object(&edit.object) else {
         return;
     };
+    if let Some(state_name) = edit.state_name {
+        let mut patch = serde_json::json!({ "text": edit.buffer });
+        let live_plain: String = edit.live_runs.iter().map(|r| r.text.as_str()).collect();
+        if !edit.live_runs.is_empty() && live_plain == edit.buffer {
+            patch["runs"] =
+                serde_json::to_value(coursecraft_course::normalize_runs(&edit.live_runs))
+                    .unwrap_or_default();
+            patch["paragraphs"] = serde_json::to_value(&edit.live_paragraphs).unwrap_or_default();
+        } else if !matches!(object.kind, coursecraft_course::ObjectKind::Button { .. }) {
+            let state_def = object.states.iter().find(|s| s.name == state_name);
+            let (base_runs, base_paras, base_text) = match &object.kind {
+                coursecraft_course::ObjectKind::Text {
+                    text,
+                    runs,
+                    paragraphs,
+                    ..
+                } => (runs.as_slice(), paragraphs.as_slice(), text.as_str()),
+                coursecraft_course::ObjectKind::Shape { text: Some(t), .. } => {
+                    (t.runs.as_slice(), t.paragraphs.as_slice(), t.text.as_str())
+                }
+                _ => (&[][..], &[][..], ""),
+            };
+            let prev_runs = state_def
+                .and_then(|s| s.runs.as_deref())
+                .unwrap_or(base_runs);
+            let prev_paras = state_def
+                .and_then(|s| s.paragraphs.as_deref())
+                .unwrap_or(base_paras);
+            let prev_plain: String = if prev_runs.is_empty() {
+                state_def
+                    .and_then(|s| s.text.as_deref())
+                    .unwrap_or(base_text)
+                    .to_owned()
+            } else {
+                prev_runs.iter().map(|r| r.text.as_str()).collect()
+            };
+            if !prev_runs.is_empty() {
+                patch["runs"] = serde_json::to_value(coursecraft_course::apply_text_edit(
+                    prev_runs,
+                    &prev_plain,
+                    &edit.buffer,
+                ))
+                .unwrap_or_default();
+            }
+            if !prev_paras.is_empty() {
+                patch["paragraphs"] = serde_json::to_value(coursecraft_course::align_paragraphs(
+                    &prev_plain,
+                    prev_paras,
+                    &edit.buffer,
+                ))
+                .unwrap_or_default();
+            }
+        }
+        editor.run(
+            "object.patch_state",
+            serde_json::json!({
+                "slide": edit.slide,
+                "object": edit.object,
+                "name": state_name,
+                "patch": patch,
+            }),
+        );
+        return;
+    }
     match &object.kind {
         coursecraft_course::ObjectKind::Text { .. } => {
             let mut params = serde_json::json!({
@@ -4769,15 +4866,24 @@ struct InlineEditTextProps {
 fn inline_edit_text_props(
     object: &coursecraft_course::Object,
     cell: Option<(usize, usize)>,
+    state_name: Option<&str>,
 ) -> Option<InlineEditTextProps> {
-    match (&object.kind, cell) {
+    let state_def = state_name.and_then(|name| object.states.iter().find(|s| s.name == name));
+    let mut props = match (&object.kind, cell) {
         (coursecraft_course::ObjectKind::Text { style, autofit, .. }, None) => {
+            let mut st = style.clone();
+            if let Some(sd) = state_def
+                && sd.text_style.is_none()
+                && let Some(c) = &sd.fill
+            {
+                st.color = c.clone();
+            }
             Some(InlineEditTextProps {
-                style: style.clone(),
-                align: align_for(style.align),
-                valign: valign_for(style.valign),
+                style: st.clone(),
+                align: align_for(st.align),
+                valign: valign_for(st.valign),
                 autofit: *autofit,
-                insets: style.insets,
+                insets: st.insets,
             })
         }
         (coursecraft_course::ObjectKind::Button { .. }, None) => Some(InlineEditTextProps {
@@ -4825,7 +4931,19 @@ fn inline_edit_text_props(
             })
         }
         _ => None,
+    }?;
+    if let Some(sd) = state_def {
+        if let Some(ts) = &sd.text_style {
+            props.align = align_for(ts.align);
+            props.valign = valign_for(ts.valign);
+            props.insets = ts.insets;
+            props.style = ts.clone();
+        }
+        if let Some(af) = sd.autofit {
+            props.autofit = af;
+        }
     }
+    Some(props)
 }
 
 fn sync_inline_edit_runs(
@@ -5069,7 +5187,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         valign,
         autofit,
         insets,
-    }) = inline_edit_text_props(object, edit.cell)
+    }) = inline_edit_text_props(object, edit.cell, edit.state_name.as_deref())
     else {
         cancel_inline_edit(editor);
         return;
