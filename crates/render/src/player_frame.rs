@@ -2694,7 +2694,7 @@ fn draw_start_gate(
     );
     let label_rect = Rect::from_min_size(label_pos, label_galley.size());
     let hit = circle.union(label_rect).intersect(rect);
-    let response = ui.interact(hit, Id::new("coursecraft_start_gate"), Sense::click());
+    let response = ui.interact(hit, Id::unique("coursecraft_start_gate"), Sense::click());
     let hovered = response.hovered();
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
