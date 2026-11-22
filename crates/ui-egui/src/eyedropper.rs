@@ -247,36 +247,56 @@ pub(crate) fn paint_overlay(ctx: &Context) {
         return;
     };
 
-    egui::Area::new(egui::Id::unique("coursecraft_eyedropper_swatch_v1"))
+    let screen = ctx.content_rect();
+    let loupe_w = 104.0;
+    let loupe_h = 36.0;
+    let mut loupe_pos = pos + vec2(16.0, 16.0);
+    if screen.is_finite() && screen.is_positive() {
+        if loupe_pos.x + loupe_w > screen.max.x {
+            loupe_pos.x = pos.x - loupe_w - 12.0;
+        }
+        if loupe_pos.y + loupe_h > screen.max.y {
+            loupe_pos.y = pos.y - loupe_h - 12.0;
+        }
+        loupe_pos.x = loupe_pos
+            .x
+            .clamp(screen.min.x, (screen.max.x - loupe_w).max(screen.min.x));
+        loupe_pos.y = loupe_pos
+            .y
+            .clamp(screen.min.y, (screen.max.y - loupe_h).max(screen.min.y));
+    }
+    let mut area = egui::Area::new(egui::Id::unique("coursecraft_eyedropper_swatch_v1"))
         .order(Order::Tooltip)
-        .fixed_pos(pos + vec2(16.0, 16.0))
-        .interactable(false)
-        .show(ctx, |ui| {
-            let p = coursecraft_render::palette(ctx);
-            egui::Frame::new()
-                .fill(p.panel)
-                .corner_radius(egui::CornerRadius::same(6))
-                .inner_margin(egui::Margin::symmetric(8, 6))
-                .stroke(egui::Stroke::new(1.0, p.border_strong))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        let (rect, _) =
-                            ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::hover());
-                        ui.painter()
-                            .rect_filled(rect, egui::CornerRadius::same(4), color);
-                        ui.painter().rect_stroke(
-                            rect,
-                            egui::CornerRadius::same(4),
-                            egui::Stroke::new(1.0, p.border_strong),
-                            egui::StrokeKind::Outside,
-                        );
-                        ui.label(
-                            egui::RichText::new(crate::properties::color_to_hex(color)).monospace(),
-                        );
-                    });
+        .fixed_pos(loupe_pos)
+        .interactable(false);
+    if screen.is_finite() && screen.is_positive() {
+        area = area.constrain_to(screen);
+    }
+    area.show(ctx, |ui| {
+        let p = coursecraft_render::palette(ctx);
+        egui::Frame::new()
+            .fill(p.panel)
+            .corner_radius(egui::CornerRadius::same(6))
+            .inner_margin(egui::Margin::symmetric(8, 6))
+            .stroke(egui::Stroke::new(1.0, p.border_strong))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(rect, egui::CornerRadius::same(4), color);
+                    ui.painter().rect_stroke(
+                        rect,
+                        egui::CornerRadius::same(4),
+                        egui::Stroke::new(1.0, p.border_strong),
+                        egui::StrokeKind::Outside,
+                    );
+                    ui.label(
+                        egui::RichText::new(crate::properties::color_to_hex(color)).monospace(),
+                    );
                 });
-        });
+            });
+    });
 }
 
 #[cfg(test)]

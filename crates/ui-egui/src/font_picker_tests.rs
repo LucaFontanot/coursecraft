@@ -385,3 +385,297 @@ fn font_picker_restricted_font_keeps_marker() {
     open_font_picker(&mut harness, "Inter");
     assert!(harness.find_text("restricted").is_some());
 }
+
+#[test]
+fn font_picker_selected_row_and_restricted_badge_pass_contrast_in_light_and_dark() {
+    use coursecraft_render::{Palette, ThemeMode, contrast_ratio};
+    for (mode, pal) in [
+        (ThemeMode::Light, Palette::light()),
+        (ThemeMode::Dark, Palette::dark()),
+    ] {
+        assert!(
+            contrast_ratio(pal.text, pal.accent_subtle) >= 4.5,
+            "mode={mode:?} selected row text contrast must be >= 4.5"
+        );
+        assert!(
+            contrast_ratio(pal.text_secondary, pal.accent_subtle) >= 4.5,
+            "mode={mode:?} selected row restricted badge contrast must be >= 4.5"
+        );
+        let mut harness =
+            TestHarness::new_with_theme(course_with_text("Georgia", &[]), (1280.0, 800.0), mode);
+        harness.editor.ui.system_fonts = Some(vec![
+            SystemFontChoice {
+                name: "Arial".into(),
+                embedding_restricted: false,
+            },
+            SystemFontChoice {
+                name: "Georgia".into(),
+                embedding_restricted: true,
+            },
+        ]);
+        open_font_picker(&mut harness, "Georgia");
+        assert!(harness.find_text("restricted").is_some());
+        let report = harness.layout_report(1);
+        let popup_contrast: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.contains("low-contrast") && f.contains("Foreground"))
+            .collect();
+        assert!(
+            popup_contrast.is_empty(),
+            "mode={mode:?} should have 0 contrast failures in font picker popup, got: {popup_contrast:#?}"
+        );
+    }
+}
+
+#[test]
+fn font_picker_long_names_keep_stable_width_and_show_full_name_tooltip() {
+    let mut harness = TestHarness::new(course_with_text("Inter", &["Lato"]));
+    let long_prefix =
+        "Noto Sans Traditional Chinese ExtraCondensed SemiBold Italic Display UltraWide Extended";
+    let sys: Vec<SystemFontChoice> = (0..120)
+        .map(|i| {
+            let name = if i % 2 == 0 {
+                format!("Z{i:03}")
+            } else {
+                format!("{long_prefix} {i:03}")
+            };
+            SystemFontChoice {
+                name,
+                embedding_restricted: false,
+            }
+        })
+        .collect();
+    let first_long = sys[1].name.clone();
+    harness.editor.ui.system_fonts = Some(sys);
+
+    open_font_picker(&mut harness, "Inter");
+    let (r0, scroll_clips, bars0) = inspect_popup(&mut harness);
+    assert_eq!(scroll_clips.len(), 1, "must have exactly 1 ScrollArea");
+    assert!(
+        r0.width() >= 370.0 && r0.width() <= 410.0,
+        "popup width should be ~380 pt (+ popup margin), got {}",
+        r0.width()
+    );
+    let bar_x0 = bars0.first().map(|r| r.min.x);
+
+    // Scroll top to bottom in 8 steps and verify width and scrollbar x never jump.
+    for step in 0..8 {
+        harness.scroll_over(r0.center(), -220.0);
+        let (r_i, _, bars_i) = inspect_popup(&mut harness);
+        assert!(
+            (r_i.width() - r0.width()).abs() <= 1.0,
+            "step {step}: popup width jumped from {} to {}",
+            r0.width(),
+            r_i.width()
+        );
+        if let (Some(x0), Some(bi)) = (bar_x0, bars_i.first()) {
+            assert!(
+                (bi.min.x - x0).abs() <= 1.0,
+                "step {step}: scrollbar x jumped from {x0} to {}",
+                bi.min.x
+            );
+        }
+    }
+
+    // Reopen at top and hover a truncated long font name to verify full-name tooltip.
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    open_font_picker(&mut harness, "Inter");
+    harness.idle_frame();
+    harness.idle_frame();
+    let long_pos = harness
+        .find_text_containing("Noto Sans")
+        .expect("long font row should be visible");
+    let tip = harness.probe_tooltip(long_pos);
+    assert_eq!(
+        tip.as_deref(),
+        Some(first_long.as_str()),
+        "hovering truncated font name should show full name tooltip, got {tip:?}"
+    );
+}
+
+#[test]
+fn font_picker_shows_twelve_rows_and_clamps_to_small_viewports() {
+    use coursecraft_render::ThemeMode;
+    // 1440x900 @ 1.0: >= 12 font rows visible simultaneously.
+    let mut big = TestHarness::new_with_config(
+        course_with_text("Inter", &[]),
+        (1440.0, 900.0),
+        ThemeMode::Dark,
+        1.0,
+        true,
+    );
+    big.editor.ui.system_fonts = Some(
+        (0..40)
+            .map(|i| SystemFontChoice {
+                name: format!("FontRow {i:02}"),
+                embedding_restricted: false,
+            })
+            .collect(),
+    );
+    open_font_picker(&mut big, "Inter");
+    let (_, scroll_clips, _) = inspect_popup(&mut big);
+    assert_eq!(scroll_clips.len(), 1);
+    let visible_rows = (0..40)
+        .filter(|i| {
+            big.find_text_in(&format!("FontRow {i:02}"), scroll_clips[0])
+                .is_some()
+        })
+        .count();
+    assert!(
+        visible_rows >= 12,
+        "expected >= 12 visible font rows at 1440x900, got {visible_rows}"
+    );
+
+    // 1024x600 @ 1.5: popup clamps completely inside screen_rect with search & footer visible.
+    let mut small = TestHarness::new_with_config(
+        course_with_text("Inter", &[]),
+        (1024.0, 600.0),
+        ThemeMode::Dark,
+        1.5,
+        true,
+    );
+    small.editor.ui.system_fonts = Some(
+        (0..40)
+            .map(|i| SystemFontChoice {
+                name: format!("FontRow {i:02}"),
+                embedding_restricted: false,
+            })
+            .collect(),
+    );
+    small.editor.selection.slide = "slide1".into();
+    small.editor.selection.object = Some("t1".into());
+    small.editor.ui.inspector_tab = InspectorTab::Format;
+    small.idle_frame();
+    small.idle_frame();
+    let small_panel = small.right_panel_rect();
+    for _ in 0..4 {
+        if small.find_text_in("Inter", small_panel).is_some() {
+            break;
+        }
+        small.scroll_over(small_panel.center(), -60.0);
+    }
+    let small_combo = small
+        .find_text_in("Inter", small_panel)
+        .expect("font picker button in Format panel at 1024x600@1.5");
+    small.click_at(small_combo);
+    small.idle_frame();
+    let (popup_rect, _, _) = inspect_popup(&mut small);
+    let screen = small.screen_rect;
+    assert!(
+        popup_rect.min.x >= screen.min.x - 1.0
+            && popup_rect.min.y >= screen.min.y - 1.0
+            && popup_rect.max.x <= screen.max.x + 1.0
+            && popup_rect.max.y <= screen.max.y + 1.0,
+        "popup {popup_rect:?} should clamp inside screen {screen:?}"
+    );
+    let search_pos = small
+        .find_text("Search fonts")
+        .expect("sticky search must be visible");
+    let add_pos = small
+        .find_text("Add font…")
+        .expect("pinned Add font… footer must be visible");
+    assert!(screen.contains(search_pos));
+    assert!(screen.contains(add_pos));
+}
+
+#[test]
+fn font_picker_escape_closes_only_picker_without_clearing_selection() {
+    let mut harness = TestHarness::new(course_with_text("Inter", &[]));
+    harness.editor.ui.system_fonts = Some(vec![SystemFontChoice {
+        name: "Georgia".into(),
+        embedding_restricted: false,
+    }]);
+    open_font_picker(&mut harness, "Inter");
+    assert!(Popup::is_any_open(&harness.ctx));
+
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(!Popup::is_any_open(&harness.ctx));
+    assert_eq!(
+        harness.editor.selection.object.as_deref(),
+        Some("t1"),
+        "Esc should close only the font picker, not clear canvas selection"
+    );
+}
+
+#[test]
+fn multi_select_and_timer_open_unified_font_picker() {
+    let json = serde_json::json!({
+        "schema_version": 1,
+        "id": "t35-test",
+        "title": "T3.5 Test",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "s1",
+            "title": "Scene",
+            "slides": [{
+                "id": "slide1",
+                "title": "Slide",
+                "objects": [
+                    {
+                        "id": "t1",
+                        "name": "Text 1",
+                        "kind": { "type": "text", "text": "One", "style": { "font": "Inter", "size": 24, "color": "#000000" } },
+                        "frame": { "x": 40, "y": 40, "w": 200, "h": 60 }
+                    },
+                    {
+                        "id": "t2",
+                        "name": "Text 2",
+                        "kind": { "type": "text", "text": "Two", "style": { "font": "Inter", "size": 24, "color": "#000000" } },
+                        "frame": { "x": 40, "y": 120, "w": 200, "h": 60 }
+                    },
+                    {
+                        "id": "tm1",
+                        "name": "Timer 1",
+                        "kind": { "type": "timer", "duration_ms": 10000, "style": { "font": "Inter", "size": 24, "color": "#000000" } },
+                        "frame": { "x": 40, "y": 200, "w": 200, "h": 60 }
+                    }
+                ]
+            }]
+        }]
+    });
+    let course = Course::from_json(&json.to_string()).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.editor.ui.system_fonts = Some(vec![SystemFontChoice {
+        name: "Georgia".into(),
+        embedding_restricted: false,
+    }]);
+
+    // Multi-select two text objects.
+    harness.editor.selection.slide = "slide1".into();
+    harness.editor.selection.object = Some("t1".into());
+    harness.editor.selection.also = vec!["t2".into()];
+    harness.editor.ui.inspector_tab = InspectorTab::Format;
+    harness.idle_frame();
+    harness.idle_frame();
+    let panel = harness.right_panel_rect();
+    let combo = harness
+        .find_text_in("Inter", panel)
+        .expect("multi-select font picker button");
+    harness.click_at(combo);
+    harness.idle_frame();
+    assert!(
+        harness.find_text("Search fonts").is_some() && harness.find_text("Add font…").is_some(),
+        "multi-select must open unified show_font_picker"
+    );
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+
+    // Timer object.
+    harness.editor.selection.object = Some("tm1".into());
+    harness.editor.selection.also.clear();
+    harness.idle_frame();
+    harness.idle_frame();
+    let panel = harness.right_panel_rect();
+    let combo = harness
+        .find_text_in("Inter", panel)
+        .expect("timer font picker button");
+    harness.click_at(combo);
+    harness.idle_frame();
+    assert!(
+        harness.find_text("Search fonts").is_some() && harness.find_text("Add font…").is_some(),
+        "timer must open unified show_font_picker"
+    );
+}

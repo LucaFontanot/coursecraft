@@ -4363,6 +4363,13 @@ impl Editor {
         self.check_revision();
 
         eyedropper::paint_overlay(ui.ctx());
+        let any_popup_open = egui::Popup::is_any_open(ui.ctx());
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::unique("coursecraft_popup_open_prev_frame"),
+                any_popup_open,
+            );
+        });
         widgets::end_press_guard(ui.ctx());
         requests.append(&mut self.pending_requests);
         requests

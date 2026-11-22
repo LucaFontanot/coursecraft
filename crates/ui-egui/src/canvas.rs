@@ -5996,7 +5996,15 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             }
         }
 
-        if !eyedropper_owns_input && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        let popup_was_open = ui
+            .ctx()
+            .data(|d| d.get_temp::<bool>(egui::Id::unique("coursecraft_popup_open_prev_frame")))
+            .unwrap_or(false);
+        if !eyedropper_owns_input
+            && !popup_was_open
+            && !egui::Popup::is_any_open(ui.ctx())
+            && ui.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             let had_tool = editor.ui.placement_tool.is_some();
             let had_draw = editor.ui.draw.is_some();
             let had_path_edit = editor.ui.path_edit.is_some();
