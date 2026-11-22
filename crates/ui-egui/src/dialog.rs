@@ -220,6 +220,14 @@ impl DialogUi<'_> {
             .max_height(height)
             .min_scrolled_height(height)
             .show(self.ui, |ui| {
+                #[cfg(test)]
+                crate::scroll_audit::record_scroll(
+                    ui.ctx(),
+                    ui.layer_id(),
+                    ui.clip_rect(),
+                    true,
+                    true,
+                );
                 if fixed_width {
                     ui.set_min_width(ui.available_width());
                 }

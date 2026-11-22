@@ -37,6 +37,8 @@ pub mod export_dialog;
 pub(crate) mod eyedropper;
 pub mod find;
 pub mod fonts;
+#[cfg(test)]
+mod scroll_audit;
 
 /// `(slide, object, selection_range, cursor_pos)` captured from an active inline text edit.
 pub type InlineEditSelection = (String, String, Option<(usize, usize)>, usize);

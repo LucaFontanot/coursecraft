@@ -648,6 +648,90 @@ impl TestHarness {
         let widgets = self.last_widgets.clone();
         check_tooltips_and_disabled_with(&widgets, |pos| self.probe_tooltip(pos))
     }
+
+    /// Open a popup via `open_fn`, check bounds (`UX-16`), scroll stability (`UX-03`),
+    /// and verify `Escape` dismisses only the popup (`UX-13`).
+    pub fn audit_popup(&mut self, open_fn: impl FnOnce(&mut Self)) -> Vec<String> {
+        open_fn(self);
+        self.idle_frame();
+        self.idle_frame();
+        let mut findings = Vec::new();
+        let layers = self.capture_current_layers();
+        let Some((popup_layer, r0)) = foreground_popup_rect(&layers) else {
+            findings.push("popup-did-not-open: no Order::Foreground popup layer found".to_owned());
+            return findings;
+        };
+        if r0.min.x < self.screen_rect.min.x - 1.0
+            || r0.min.y < self.screen_rect.min.y - 1.0
+            || r0.max.x > self.screen_rect.max.x + 1.0
+            || r0.max.y > self.screen_rect.max.y + 1.0
+        {
+            findings.push(format!(
+                "popup-off-screen: {} extends outside {}",
+                fmt_rect(r0),
+                fmt_rect(self.screen_rect)
+            ));
+        }
+        let mut widths = vec![r0.width()];
+        let mut scrollbar_xs = vec![foreground_scrollbar_x(&layers, popup_layer, r0)];
+        for _ in 0..5 {
+            self.scroll_over(r0.center(), -180.0);
+            let step_layers = self.capture_current_layers();
+            if let Some((l, r)) = foreground_popup_rect(&step_layers) {
+                widths.push(r.width());
+                scrollbar_xs.push(foreground_scrollbar_x(&step_layers, l, r));
+            }
+        }
+        findings.extend(check_popup_stability(&widths, &scrollbar_xs));
+        self.press(Key::Escape, Modifiers::NONE);
+        self.idle_frame();
+        let after_layers = self.capture_current_layers();
+        if foreground_popup_rect(&after_layers).is_some() {
+            findings.push("popup-esc-did-not-close: Escape left foreground popup open".to_owned());
+        }
+        findings
+    }
+
+    /// Open a combo box by its visible label and audit its popup (`UX-03`, `UX-13`, `UX-16`).
+    pub fn audit_combo(&mut self, combo_label: &str) -> Vec<String> {
+        let Some(pos) = self.find_text(combo_label) else {
+            return vec![format!("combo-not-found: \"{combo_label}\"")];
+        };
+        self.audit_popup(|h| {
+            h.click_at(pos);
+        })
+    }
+
+    /// Check modal backdrop alpha (`UX-15`: `>= 0xCC` for preview, `>= 0x99` otherwise) and
+    /// verify clicking outside the modal does not trigger editor requests.
+    pub fn check_modals_and_backdrops(&mut self, is_preview: bool) -> Vec<String> {
+        let layers = self.capture_current_layers();
+        let min_alpha = if is_preview { 0xCC } else { 0x99 };
+        let mut findings = check_backdrop(&layers, self.screen_rect, min_alpha);
+        let probe_pos = pos2(20.0, (self.top_bars_height() - 10.0).max(4.0));
+        let reqs = self.click_at_requests(probe_pos);
+        if !reqs.is_empty() {
+            findings.push(format!(
+                "modal-click-through: clicking at ({:.0}, {:.0}) behind modal emitted {} request(s)",
+                probe_pos.x,
+                probe_pos.y,
+                reqs.len()
+            ));
+        }
+        findings
+    }
+
+    fn capture_current_layers(&mut self) -> Vec<(LayerId, Vec<ClippedShape>)> {
+        let raw_input = self.next_raw_input(Vec::new());
+        let mut layers = Vec::new();
+        let output = self.ctx.run_ui(raw_input, |ui| {
+            let _ = self.editor.show(ui);
+            layers = capture_layers(ui.ctx());
+        });
+        self.last_widgets = extract_widget_nodes(output.platform_output.accesskit_update.as_ref());
+        output.drop_without_applying_deltas();
+        layers
+    }
 }
 
 /// Every layer's painted shapes so far this pass. Only valid inside the `run_ui` closure: the
@@ -1104,6 +1188,383 @@ pub(crate) fn check_tooltips_and_disabled_with(
     findings
 }
 
+fn blend_over(src: egui::Color32, dst: egui::Color32) -> egui::Color32 {
+    if src.a() == 255 {
+        return egui::Color32::from_rgb(src.r(), src.g(), src.b());
+    }
+    let a = src.a() as f32 / 255.0;
+    let inv = 1.0 - a;
+    let r = (src.r() as f32 + dst.r() as f32 * inv)
+        .round()
+        .clamp(0.0, 255.0) as u8;
+    let g = (src.g() as f32 + dst.g() as f32 * inv)
+        .round()
+        .clamp(0.0, 255.0) as u8;
+    let b = (src.b() as f32 + dst.b() as f32 * inv)
+        .round()
+        .clamp(0.0, 255.0) as u8;
+    egui::Color32::from_rgb(r, g, b)
+}
+
+fn collect_contrast_shapes<'a>(
+    shape: &'a Shape,
+    clip: Rect,
+    bg_rects: &mut Vec<(Rect, egui::Color32)>,
+    texts: &mut Vec<(&'a egui::epaint::TextShape, Rect)>,
+) {
+    match shape {
+        Shape::Vec(v) => {
+            for s in v {
+                collect_contrast_shapes(s, clip, bg_rects, texts);
+            }
+        }
+        Shape::Rect(r) => {
+            let visible = r.rect.intersect(clip);
+            if r.fill.a() > 0 && visible.is_positive() {
+                bg_rects.push((visible, r.fill));
+            }
+        }
+        Shape::Text(t) => {
+            texts.push((t, clip));
+        }
+        _ => {}
+    }
+}
+
+fn is_phosphor_only(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|c| c.is_whitespace() || ('\u{E000}'..='\u{F8FF}').contains(&c))
+}
+
+#[allow(dead_code)]
+pub(crate) fn check_contrast(
+    layers: &[(LayerId, Vec<ClippedShape>)],
+    regions: &[(LayerId, Rect)],
+    palette: &coursecraft_render::Palette,
+    nodes: &[WidgetNode],
+) -> Vec<String> {
+    let mut findings = Vec::new();
+    let mut bg_rects: Vec<(Rect, egui::Color32)> = Vec::new();
+
+    for (layer, shapes) in layers {
+        let name = layer_name(*layer);
+        for clipped in shapes {
+            let mut layer_texts = Vec::new();
+            collect_contrast_shapes(
+                &clipped.shape,
+                clipped.clip_rect,
+                &mut bg_rects,
+                &mut layer_texts,
+            );
+            for (t, clip) in layer_texts {
+                if is_invisible(t) {
+                    continue;
+                }
+                let visible = t.visual_bounding_rect().intersect(clip);
+                if !visible.is_positive() {
+                    continue;
+                }
+                let center = visible.center();
+                if regions
+                    .iter()
+                    .any(|(l, r)| l == layer && r.contains(center))
+                {
+                    continue;
+                }
+
+                let mut bg = palette.app;
+                for (rect, fill) in &bg_rects {
+                    if rect.contains(center) {
+                        bg = blend_over(*fill, bg);
+                    }
+                }
+
+                let first_sec = t.galley.job.sections.first();
+                let raw_fg = t
+                    .override_text_color
+                    .or_else(|| first_sec.map(|s| s.format.color))
+                    .unwrap_or(palette.text);
+                if raw_fg == palette.text_disabled {
+                    if !nodes.is_empty()
+                        && let Some(owner) = nodes.iter().find(|n| {
+                            is_interactive_role(n.role) && n.bounds.contains(center) && !n.disabled
+                        })
+                    {
+                        findings.push(format!(
+                            "disabled-style-on-enabled-widget: {name} text \"{}\" uses text_disabled on enabled {:?} at {}",
+                            shorten(t.galley.text()),
+                            owner.role,
+                            fmt_rect(visible)
+                        ));
+                    }
+                    continue;
+                }
+
+                let fg_scaled = if t.opacity_factor < 1.0 {
+                    raw_fg.gamma_multiply(t.opacity_factor)
+                } else {
+                    raw_fg
+                };
+                let fg = blend_over(fg_scaled, bg);
+                let font_size = first_sec.map_or(13.0, |s| s.format.font_id.size);
+                let min_cr = if font_size >= 18.0 || is_phosphor_only(t.galley.text()) {
+                    3.0
+                } else {
+                    4.5
+                };
+                let cr = coursecraft_render::contrast_ratio(fg, bg);
+                if cr + 0.05 < min_cr {
+                    findings.push(format!(
+                        "low-contrast: {name} text \"{}\" has contrast {cr:.2}:1 (need {min_cr:.1}:1) at {}",
+                        shorten(t.galley.text()),
+                        fmt_rect(visible)
+                    ));
+                }
+            }
+        }
+    }
+    findings
+}
+
+fn collect_clip_rects_and_scrollbars(
+    shape: &Shape,
+    clip: Rect,
+    text_clips: &mut Vec<Rect>,
+    thin_v_rects: &mut Vec<Rect>,
+) {
+    match shape {
+        Shape::Vec(v) => {
+            for s in v {
+                collect_clip_rects_and_scrollbars(s, clip, text_clips, thin_v_rects);
+            }
+        }
+        Shape::Text(t) => {
+            if !is_invisible(t) && clip.is_positive() {
+                text_clips.push(clip);
+            }
+        }
+        Shape::Rect(r) if r.fill.a() > 0 && r.rect.width() <= 14.0 && r.rect.height() >= 16.0 => {
+            thin_v_rects.push(r.rect);
+        }
+        _ => {}
+    }
+}
+
+fn rect_contains_with_tol(outer: Rect, inner: Rect, tol: f32) -> bool {
+    outer.min.x - tol <= inner.min.x
+        && outer.min.y - tol <= inner.min.y
+        && inner.max.x <= outer.max.x + tol
+        && inner.max.y <= outer.max.y + tol
+}
+
+#[allow(dead_code)]
+pub(crate) fn check_nested_scrolls(
+    layers: &[(LayerId, Vec<ClippedShape>)],
+    scrolls: &[crate::scroll_audit::ScrollRecord],
+) -> Vec<String> {
+    let mut findings = Vec::new();
+    // 1. Pairwise check among explicitly recorded vertical scroll viewports on the same layer.
+    for (i, a) in scrolls.iter().enumerate() {
+        if !a.vertical {
+            continue;
+        }
+        for b in scrolls.iter().skip(i + 1) {
+            if !b.vertical || a.layer != b.layer {
+                continue;
+            }
+            let (outer, inner) = if a.rect.area() >= b.rect.area() {
+                (a.rect, b.rect)
+            } else {
+                (b.rect, a.rect)
+            };
+            if inner.height() + 2.0 < outer.height()
+                && (rect_contains_with_tol(outer, inner, 1.0)
+                    || outer.intersect(inner).area() > 0.8 * inner.area())
+            {
+                findings.push(format!(
+                    "nested-scroll: {} has nested vertical ScrollArea {} inside {}",
+                    layer_name(a.layer),
+                    fmt_rect(inner),
+                    fmt_rect(outer)
+                ));
+            }
+        }
+    }
+
+    // 2. Inspect clip-rect hierarchy inside DialogUi::body vertical scroll viewports to catch
+    //    any inner vertical ScrollArea without requiring every caller to be wrapped.
+    for s in scrolls {
+        if !s.vertical || !s.from_dialog_body {
+            continue;
+        }
+        let Some((_, shapes)) = layers.iter().find(|(l, _)| *l == s.layer) else {
+            continue;
+        };
+        let mut text_clips = Vec::new();
+        let mut thin_v_rects = Vec::new();
+        for c in shapes {
+            collect_clip_rects_and_scrollbars(
+                &c.shape,
+                c.clip_rect,
+                &mut text_clips,
+                &mut thin_v_rects,
+            );
+        }
+        let mut seen_clips: Vec<Rect> = Vec::new();
+        for clip in &text_clips {
+            if seen_clips.iter().any(|p| {
+                (p.min.x - clip.min.x).abs() < 0.5
+                    && (p.min.y - clip.min.y).abs() < 0.5
+                    && (p.max.x - clip.max.x).abs() < 0.5
+                    && (p.max.y - clip.max.y).abs() < 0.5
+            }) {
+                continue;
+            }
+            if rect_contains_with_tol(s.rect, *clip, 1.0)
+                && clip.height() >= 32.0
+                && clip.height() + 4.0 < s.rect.height()
+            {
+                let text_count = text_clips.iter().filter(|c| *c == clip).count();
+                let has_v_bar = thin_v_rects.iter().any(|r| {
+                    (r.min.x - clip.max.x).abs() <= 14.0
+                        && r.min.y >= clip.min.y - 2.0
+                        && r.max.y <= clip.max.y + 2.0
+                });
+                if has_v_bar || (clip.height() + 24.0 < s.rect.height() && text_count >= 2) {
+                    seen_clips.push(*clip);
+                    findings.push(format!(
+                        "nested-scroll: {} has inner vertical scroll viewport {} inside DialogUi::body {}",
+                        layer_name(s.layer),
+                        fmt_rect(*clip),
+                        fmt_rect(s.rect)
+                    ));
+                }
+            }
+        }
+    }
+    findings
+}
+
+fn foreground_popup_rect(layers: &[(LayerId, Vec<ClippedShape>)]) -> Option<(LayerId, Rect)> {
+    for (layer, shapes) in layers.iter().rev() {
+        if layer.order != Order::Foreground {
+            continue;
+        }
+        let mut bounds = Rect::NOTHING;
+        for c in shapes {
+            let mut boxes = Vec::new();
+            collect_boxes(&c.shape, c.clip_rect, &mut boxes);
+            for b in boxes {
+                bounds = bounds.union(b.rect.intersect(b.clip));
+            }
+        }
+        if bounds.is_positive() {
+            return Some((*layer, bounds));
+        }
+    }
+    None
+}
+
+fn foreground_scrollbar_x(
+    layers: &[(LayerId, Vec<ClippedShape>)],
+    layer: LayerId,
+    popup_rect: Rect,
+) -> Option<f32> {
+    let (_, shapes) = layers.iter().find(|(l, _)| *l == layer)?;
+    let mut best_x: Option<f32> = None;
+    for c in shapes {
+        if let Shape::Rect(r) = &c.shape
+            && r.fill.a() > 0
+            && r.rect.width() <= 14.0
+            && r.rect.height() >= 16.0
+            && r.rect.max.x >= popup_rect.max.x - 18.0
+        {
+            best_x = Some(best_x.map_or(r.rect.min.x, |x| x.max(r.rect.min.x)));
+        }
+    }
+    best_x
+}
+
+#[allow(dead_code)]
+pub(crate) fn check_popup_stability(widths: &[f32], scrollbar_xs: &[Option<f32>]) -> Vec<String> {
+    let mut findings = Vec::new();
+    if let (Some(&first), Some(&last)) = (widths.first(), widths.last()) {
+        let _ = (first, last);
+        let min_w = widths.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_w = widths.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        if max_w - min_w > 1.0 {
+            findings.push(format!(
+                "popup-width-unstable: width drifted by {:.2} pt during scroll (min={min_w:.1}, max={max_w:.1})",
+                max_w - min_w
+            ));
+        }
+    }
+    let xs: Vec<f32> = scrollbar_xs.iter().flatten().copied().collect();
+    if xs.len() >= 2 {
+        let min_x = xs.iter().copied().fold(f32::INFINITY, f32::min);
+        let max_x = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        if max_x - min_x > 1.0 {
+            findings.push(format!(
+                "scrollbar-position-unstable: scrollbar x drifted by {:.2} pt during scroll (min={min_x:.1}, max={max_x:.1})",
+                max_x - min_x
+            ));
+        }
+    }
+    findings
+}
+
+fn collect_backdrop_rects(shape: &Shape, clip: Rect, screen: Rect, out: &mut Vec<egui::Color32>) {
+    match shape {
+        Shape::Vec(v) => {
+            for s in v {
+                collect_backdrop_rects(s, clip, screen, out);
+            }
+        }
+        Shape::Rect(r) => {
+            let vis = r.rect.intersect(clip);
+            if vis.width() >= screen.width() * 0.95 && vis.height() >= screen.height() * 0.95 {
+                out.push(r.fill);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn check_backdrop(
+    layers: &[(LayerId, Vec<ClippedShape>)],
+    screen: Rect,
+    min_alpha: u8,
+) -> Vec<String> {
+    let mut alphas = Vec::new();
+    for (layer, shapes) in layers {
+        if layer.order == Order::Background || layer.order == Order::Tooltip {
+            continue;
+        }
+        for c in shapes {
+            collect_backdrop_rects(&c.shape, c.clip_rect, screen, &mut alphas);
+        }
+    }
+    let Some(&fill) = alphas.last() else {
+        return vec![
+            "missing-modal-backdrop: no full-screen backdrop rect found above Background order"
+                .to_owned(),
+        ];
+    };
+    if fill.a() < min_alpha {
+        vec![format!(
+            "weak-modal-backdrop: backdrop alpha {} (0x{:02X}) is below required {min_alpha} (0x{min_alpha:02X})",
+            fill.a(),
+            fill.a()
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1408,5 +1869,236 @@ mod tests {
             "Publish button should appear when file_ops=true"
         );
         let _ = h_desktop.check_hit_targets(vec2(24.0, 24.0));
+    }
+
+    #[test]
+    fn harness_catches_low_contrast_dark_on_blue() {
+        let ctx = Context::default();
+        coursecraft_render::apply_style(&ctx, coursecraft_render::ThemeMode::Light);
+        let p = coursecraft_render::palette(&ctx);
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0));
+        let mut layers = Vec::new();
+        let out = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(screen),
+                time: Some(0.0),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(180.0, 32.0));
+                    ui.painter().rect_filled(rect, 4.0, p.accent);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Selected Font",
+                        egui::FontId::proportional(13.0),
+                        p.text,
+                    );
+                });
+                layers = capture_layers(ui.ctx());
+            },
+        );
+        out.drop_without_applying_deltas();
+        let findings = check_contrast(&layers, &[], &p, &[]);
+        assert!(
+            findings.iter().any(|f| f.contains("low-contrast")),
+            "expected low-contrast finding for dark-on-blue, got: {findings:?}"
+        );
+
+        let mut ok_layers = Vec::new();
+        let ok_out = ctx.run_ui(
+            RawInput {
+                screen_rect: Some(screen),
+                time: Some(0.1),
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let rect = Rect::from_min_size(pos2(20.0, 20.0), vec2(180.0, 32.0));
+                    ui.painter().rect_filled(rect, 4.0, p.panel);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Readable Text",
+                        egui::FontId::proportional(13.0),
+                        p.text,
+                    );
+                });
+                ok_layers = capture_layers(ui.ctx());
+            },
+        );
+        ok_out.drop_without_applying_deltas();
+        let ok_findings = check_contrast(&ok_layers, &[], &p, &[]);
+        assert!(
+            ok_findings.is_empty(),
+            "expected no low-contrast findings for p.text on p.panel, got: {ok_findings:?}"
+        );
+    }
+
+    #[test]
+    fn harness_catches_nested_vertical_scroll_in_dialog_body() {
+        let ctx = Context::default();
+        coursecraft_render::apply_style(&ctx, coursecraft_render::ThemeMode::Dark);
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let mut layers = Vec::new();
+        let mut scrolls = Vec::new();
+        let mut open = true;
+        for frame_idx in 0..3 {
+            let out = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame_idx as f64 * (1.0 / 60.0)),
+                    ..Default::default()
+                },
+                |ui| {
+                    crate::dialog::Dialog::new("Nested Scroll Test")
+                        .open(&mut open)
+                        .width(420.0)
+                        .show_with_footer(ui.ctx(), |d| {
+                            d.body(|ui| {
+                                egui::ScrollArea::vertical()
+                                    .id_salt("inner_vert")
+                                    .max_height(100.0)
+                                    .show(ui, |ui| {
+                                        for i in 0..20 {
+                                            ui.label(format!("Inner row {i}"));
+                                        }
+                                    });
+                            });
+                        });
+                    layers = capture_layers(ui.ctx());
+                    scrolls = crate::scroll_audit::recorded_scrolls(ui.ctx());
+                },
+            );
+            out.drop_without_applying_deltas();
+        }
+        let findings = check_nested_scrolls(&layers, &scrolls);
+        assert!(
+            findings.iter().any(|f| f.contains("nested-scroll")),
+            "expected nested-scroll finding for ScrollArea inside DialogUi::body, got: {findings:?}"
+        );
+
+        // Horizontal ScrollArea inside DialogUi::body is allowed (Reviewer Note 5).
+        let mut h_layers = Vec::new();
+        let mut h_scrolls = Vec::new();
+        let mut h_open = true;
+        for frame_idx in 0..3 {
+            let out = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(screen),
+                    time: Some((frame_idx + 10) as f64 * (1.0 / 60.0)),
+                    ..Default::default()
+                },
+                |ui| {
+                    crate::dialog::Dialog::new("Horizontal Inside Body")
+                        .open(&mut h_open)
+                        .width(420.0)
+                        .show_with_footer(ui.ctx(), |d| {
+                            d.body(|ui| {
+                                egui::ScrollArea::horizontal().id_salt("inner_horiz").show(
+                                    ui,
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            for i in 0..20 {
+                                                ui.label(format!("Col {i}"));
+                                            }
+                                        });
+                                    },
+                                );
+                            });
+                        });
+                    h_layers = capture_layers(ui.ctx());
+                    h_scrolls = crate::scroll_audit::recorded_scrolls(ui.ctx());
+                },
+            );
+            out.drop_without_applying_deltas();
+        }
+        let h_findings = check_nested_scrolls(&h_layers, &h_scrolls);
+        assert!(
+            h_findings.is_empty(),
+            "expected horizontal ScrollArea inside DialogUi::body to be allowed, got: {h_findings:?}"
+        );
+    }
+
+    #[test]
+    fn harness_catches_width_jumping_popup_scrollbar() {
+        let findings = check_popup_stability(
+            &[140.0, 140.0, 220.0, 220.0, 220.0],
+            &[
+                Some(132.0),
+                Some(132.0),
+                Some(212.0),
+                Some(212.0),
+                Some(212.0),
+            ],
+        );
+        assert!(
+            findings.iter().any(|f| f.contains("popup-width-unstable")),
+            "expected popup-width-unstable finding, got: {findings:?}"
+        );
+        let ok = check_popup_stability(
+            &[220.0, 220.0, 220.0, 220.0, 220.0],
+            &[
+                Some(212.0),
+                Some(212.0),
+                Some(212.0),
+                Some(212.0),
+                Some(212.0),
+            ],
+        );
+        assert!(ok.is_empty(), "expected stable popup to pass, got: {ok:?}");
+    }
+
+    #[test]
+    fn harness_catches_light_or_transparent_modal_backdrop() {
+        let ctx = Context::default();
+        coursecraft_render::apply_style(&ctx, coursecraft_render::ThemeMode::Light);
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        let mut layers = Vec::new();
+        for frame_idx in 0..2 {
+            let out = ctx.run_ui(
+                RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(frame_idx as f64 * (1.0 / 60.0)),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.label("Background");
+                    });
+                    egui::Area::new(egui::Id::unique("weak_backdrop"))
+                        .order(Order::Middle)
+                        .fixed_pos(pos2(0.0, 0.0))
+                        .show(ui.ctx(), |ui| {
+                            let (rect, _) =
+                                ui.allocate_exact_size(screen.size(), egui::Sense::click());
+                            ui.painter().rect_filled(
+                                rect,
+                                0.0,
+                                egui::Color32::from_black_alpha(0x40),
+                            );
+                        });
+                    layers = capture_layers(ui.ctx());
+                },
+            );
+            out.drop_without_applying_deltas();
+        }
+        let findings = check_backdrop(&layers, screen, 0x99);
+        assert!(
+            findings.iter().any(|f| f.contains("weak-modal-backdrop")),
+            "expected weak-modal-backdrop finding, got: {findings:?}"
+        );
+
+        let mut h = TestHarness::new(hello_course());
+        h.idle_frame();
+        h.editor.open_preview();
+        h.idle_frame();
+        h.idle_frame();
+        let preview_findings = h.check_modals_and_backdrops(true);
+        assert!(
+            preview_findings.is_empty(),
+            "expected Preview backdrop (>= 0xCC) to pass, got: {preview_findings:?}"
+        );
     }
 }
