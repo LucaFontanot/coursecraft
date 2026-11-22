@@ -64,6 +64,7 @@ enum SlideMenuAction {
     Paste,
     Rename(String),
     DeleteSelected,
+    PreviewSelected,
 }
 
 enum SlideClick {
@@ -944,6 +945,18 @@ fn show_slide_menu_items(
                 }
             }
         });
+    }
+    ui.separator();
+
+    if ui
+        .add_enabled(
+            multi_selected && selected_count >= 2,
+            egui::Button::new("Preview selected slides"),
+        )
+        .clicked()
+    {
+        *slide_action = Some(SlideMenuAction::PreviewSelected);
+        ui.close();
     }
     ui.separator();
 
@@ -1879,6 +1892,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             SlideMenuAction::Paste => crate::clipboard::paste_private(editor),
             SlideMenuAction::Rename(id) => start_slide_rename(editor, &id),
             SlideMenuAction::DeleteSelected => editor.delete_selected_slides(),
+            SlideMenuAction::PreviewSelected => editor.open_preview_selected(),
         }
     }
 

@@ -913,10 +913,14 @@ impl PlayerFrame {
         let Some(slide) = player.current_slide() else {
             return Vec::new();
         };
-        let (is_first, is_last) = nav_limits(
-            player.play_order().iter().map(|s| s.id.as_str()),
-            slide.id.as_str(),
-        );
+        let (is_first, is_last) = if player.is_partial_preview() {
+            (false, false)
+        } else {
+            nav_limits(
+                player.play_order().iter().map(|s| s.id.as_str()),
+                slide.id.as_str(),
+            )
+        };
         let mut inputs = Vec::new();
         if show_nav {
             let mut used_left = false;
@@ -2047,12 +2051,16 @@ fn draw_secondary_controls(
     bar: Color32,
 ) {
     let slide = player.current_slide();
-    let (is_first, is_last) = slide.map_or((true, true), |slide| {
-        nav_limits(
-            player.play_order().iter().map(|s| s.id.as_str()),
-            slide.id.as_str(),
-        )
-    });
+    let (is_first, is_last) = if player.is_partial_preview() {
+        (false, false)
+    } else {
+        slide.map_or((true, true), |slide| {
+            nav_limits(
+                player.play_order().iter().map(|s| s.id.as_str()),
+                slide.id.as_str(),
+            )
+        })
+    };
     let started = player.state().started;
     let can_nav = show_nav && started && !player.lightbox_open();
     let can_menu = player.effective_player().show_menu && started;

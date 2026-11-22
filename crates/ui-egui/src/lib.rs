@@ -196,6 +196,8 @@ mod preview_close_tests;
 #[cfg(test)]
 mod preview_drawer_tests;
 #[cfg(test)]
+mod preview_subset_tests;
+#[cfg(test)]
 mod preview_variables_tests;
 #[cfg(test)]
 mod preview_window_tests;
@@ -2960,15 +2962,39 @@ impl Editor {
         self.open_preview_at(slide.as_deref());
     }
 
-    /// Open the in-editor course preview window starting at the given slide.
+    /// Open the in-editor course preview window for the given slide, or the whole course if `None`.
     ///
     /// Bank slides live outside play order, so starting a preview at one
-    /// falls back to the course's own start slide.
+    /// falls back to the whole course from its start slide.
     pub fn open_preview_at(&mut self, slide: Option<&str>) {
         let slide = slide.filter(|id| self.session.course.bank_slide(id).is_none());
         let mut preview = Preview::new(&self.session.course, slide);
         preview.set_initial_size(self.ui.preview_size);
         self.preview = Some(preview);
+    }
+
+    /// Open the in-editor course preview window restricted to the given slide IDs.
+    ///
+    /// Bank slides are ignored; if no scene slides remain, opens the whole course.
+    pub fn open_preview_subset(&mut self, slides: &[String]) {
+        let filtered: Vec<String> = slides
+            .iter()
+            .filter(|id| !id.is_empty() && self.session.course.bank_slide(id).is_none())
+            .cloned()
+            .collect();
+        let mut preview = if filtered.is_empty() {
+            Preview::new(&self.session.course, None)
+        } else {
+            Preview::new_subset(&self.session.course, Some(&filtered))
+        };
+        preview.set_initial_size(self.ui.preview_size);
+        self.preview = Some(preview);
+    }
+
+    /// Open the in-editor course preview window for all currently selected slides.
+    pub fn open_preview_selected(&mut self) {
+        let ids = self.selection.slide_ids();
+        self.open_preview_subset(&ids);
     }
 
     /// Show a neutral status message in the status bar.

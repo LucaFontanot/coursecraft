@@ -449,6 +449,24 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
             preview_slide(editor, requests);
             ui.close();
         }
+        let selected_count = editor
+            .selection
+            .slide_ids()
+            .iter()
+            .filter(|id| editor.session.course.bank_slide(id).is_none())
+            .count();
+        if ui
+            .add_enabled(
+                selected_count >= 2,
+                egui::Button::new("Preview selected slides"),
+            )
+            .clicked()
+        {
+            let slide_id = editor.selection.slide.clone();
+            editor.open_preview_selected();
+            requests.push(EditorRequest::Preview { slide: slide_id });
+            ui.close();
+        }
         if ui
             .add(egui::Button::new("Preview from the start").shortcut_text("Shift+F12"))
             .clicked()

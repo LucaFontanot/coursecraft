@@ -155,7 +155,7 @@ pub const WINDOWS: &[WindowSpec] = &[
         e.set_coach_marks_done(false);
         e.ui.current_coach_mark = Some(3);
     }),
-    window!("preview", " / 12", |e| e.open_preview()),
+    window!("preview", " / 12", |e| e.open_preview_at(None)),
     window!("ai-settings", "AI Settings", |e| e.open_ai_settings()),
     window!("agents", "AI Settings", |e| {
         e.automation_available = true;

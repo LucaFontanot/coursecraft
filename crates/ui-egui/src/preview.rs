@@ -202,6 +202,10 @@ pub struct Preview {
     pub fullscreen: bool,
     /// Cached play order for [`Player::resume_trusted`], updated on open/restart/retry.
     play_plan: Option<PlayPlan>,
+    /// Optional subset of slide IDs when running "Preview this slide" or "Preview selected slides".
+    preview_subset: Option<Vec<String>>,
+    /// Whether the "This is the end of the preview" popup is currently visible.
+    pub end_of_preview_popup: bool,
 }
 
 impl Drop for Preview {
@@ -371,9 +375,17 @@ fn collect_object_percent_vars(obj: &Object, out: &mut HashSet<String>) {
     }
 }
 
-fn referenced_variables_in_course(course: &Course) -> HashSet<String> {
+fn referenced_variables_in_course_subset(
+    course: &Course,
+    subset: Option<&[String]>,
+) -> HashSet<String> {
     let mut out = HashSet::new();
     for slide in course.slides() {
+        if let Some(ids) = subset
+            && !ids.iter().any(|id| id == &slide.id)
+        {
+            continue;
+        }
         for obj in &slide.objects {
             collect_object_percent_vars(obj, &mut out);
         }
@@ -503,17 +515,30 @@ fn show_variables_panel(
 }
 
 impl Preview {
-    /// Create a new preview for the given course, optionally overriding the start slide.
+    /// Create a new preview for the given course, optionally previewing only a single slide.
     #[must_use]
     pub fn new(course: &Course, start_slide: Option<&str>) -> Self {
-        let course_start = course.start_slide.clone();
-        let mut course_clone = course.clone();
-        if let Some(slide) = start_slide
-            && !slide.is_empty()
-        {
-            course_clone.start_slide = Some(slide.to_owned());
+        match start_slide.filter(|s| !s.is_empty()) {
+            Some(id) => Self::new_subset(course, Some(&[id.to_owned()])),
+            None => Self::new_subset(course, None),
         }
-        let referenced_vars = referenced_variables_in_course(&course_clone);
+    }
+
+    /// Create a new preview for the given course, optionally restricted to a subset of slide IDs.
+    #[must_use]
+    pub fn new_subset(course: &Course, subset: Option<&[String]>) -> Self {
+        let course_start = course.start_slide.clone();
+        let course_clone = course.clone();
+        let subset_owned: Option<Vec<String>> = subset.and_then(|ids| {
+            let filtered: Vec<String> = ids.iter().filter(|id| !id.is_empty()).cloned().collect();
+            if filtered.is_empty() {
+                None
+            } else {
+                Some(filtered)
+            }
+        });
+        let referenced_vars =
+            referenced_variables_in_course_subset(&course_clone, subset_owned.as_deref());
 
         let errors: Vec<Issue> = course_clone
             .validate()
@@ -524,7 +549,7 @@ impl Preview {
         if !errors.is_empty() {
             return Self {
                 course: course_clone,
-                course_start: course_start.clone(),
+                course_start,
                 state: None,
                 errors,
                 view: SlideView::new(),
@@ -546,10 +571,17 @@ impl Preview {
                 remembered_size: None,
                 fullscreen: false,
                 play_plan: None,
+                preview_subset: subset_owned,
+                end_of_preview_popup: false,
             };
         }
 
-        match Player::with_draw_seed(&course_clone, clock_seed()) {
+        let player_res = match subset_owned.as_deref() {
+            Some(ids) => Player::with_preview_subset(&course_clone, clock_seed(), ids),
+            None => Player::with_draw_seed(&course_clone, clock_seed()),
+        };
+
+        match player_res {
             Ok(mut player) => {
                 player.set_host_info(preview_host_info());
                 let effects = player.handle(&Input::Start);
@@ -570,12 +602,24 @@ impl Preview {
                     &mut ended,
                     None,
                 );
+                let end_of_preview_popup = player.take_preview_boundary();
+                let actual_subset = if player.is_partial_preview() {
+                    Some(
+                        player
+                            .play_order()
+                            .iter()
+                            .map(|s| s.id.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
                 let plan = player.play_plan();
                 let state = player.state().clone();
                 let last_var_values = state.variables.clone();
                 Self {
                     course: course_clone,
-                    course_start: course_start.clone(),
+                    course_start,
                     state: Some(state),
                     errors: Vec::new(),
                     view: SlideView::new(),
@@ -597,11 +641,13 @@ impl Preview {
                     remembered_size: None,
                     fullscreen: false,
                     play_plan: Some(plan),
+                    preview_subset: actual_subset,
+                    end_of_preview_popup,
                 }
             }
             Err(issues) => Self {
                 course: course_clone,
-                course_start: course_start.clone(),
+                course_start,
                 state: None,
                 errors: issues,
                 view: SlideView::new(),
@@ -623,8 +669,16 @@ impl Preview {
                 remembered_size: None,
                 fullscreen: false,
                 play_plan: None,
+                preview_subset: subset_owned,
+                end_of_preview_popup: false,
             },
         }
+    }
+
+    /// Whether this preview is running a partial subset of slides.
+    #[must_use]
+    pub fn is_partial_preview(&self) -> bool {
+        self.preview_subset.is_some()
     }
 
     /// Replace the media playback backend (useful for injecting [`NullBackend`] in tests).
@@ -652,15 +706,19 @@ impl Preview {
         self.errors.is_empty() && self.state.is_some()
     }
 
-    /// Restart playback from the start slide.
+    /// Restart playback from the first slide (or the first slide of the subset in partial preview).
     pub fn restart(&mut self) {
         self.media.stop_all();
+        self.end_of_preview_popup = false;
         if !self.errors.is_empty() {
             return;
         }
-        // A preview can open on the selected slide, but restarting means the whole course.
         self.course.start_slide.clone_from(&self.course_start);
-        if let Ok(mut player) = Player::with_draw_seed(&self.course, clock_seed()) {
+        let player_res = match self.preview_subset.as_deref() {
+            Some(ids) => Player::with_preview_subset(&self.course, clock_seed(), ids),
+            None => Player::with_draw_seed(&self.course, clock_seed()),
+        };
+        if let Ok(mut player) = player_res {
             self.log.clear();
             self.requests.clear();
             player.set_host_info(preview_host_info());
@@ -679,6 +737,9 @@ impl Preview {
                 &mut self.ended,
                 None,
             );
+            if player.take_preview_boundary() {
+                self.end_of_preview_popup = true;
+            }
             self.play_plan = Some(player.play_plan());
             let state = player.state().clone();
             self.last_var_values = state.variables.clone();
@@ -714,6 +775,9 @@ impl Preview {
             &mut self.ended,
             ctx,
         );
+        if player.take_preview_boundary() {
+            self.end_of_preview_popup = true;
+        }
         self.play_plan = Some(player.play_plan());
         self.state = Some(player.state().clone());
         effects
@@ -761,6 +825,7 @@ impl Preview {
 
         let mut should_show_errors = false;
         let mut close_requested = false;
+        let mut boundary_hit = false;
         let current_state = self.state.clone();
         let mut frame_effects = Vec::new();
         let drawer_was_open = self.frame.drawer_open();
@@ -881,6 +946,7 @@ impl Preview {
                         let last_var_values = &mut self.last_var_values;
                         let var_changed_at = &mut self.var_changed_at;
                         let ended = &mut self.ended;
+                        let partial_count = self.preview_subset.as_ref().map(Vec::len);
 
                         let mut player =
                             match resume_with_plan(course, state, self.play_plan.as_ref()) {
@@ -898,6 +964,9 @@ impl Preview {
                             let effects = player.handle(&tick);
                             record_effects(&effects, log, ended, Some(ctx));
                             frame_effects.extend(effects);
+                            if player.take_preview_boundary() {
+                                boundary_hit = true;
+                            }
                         }
 
                         // Keyboard shortcut: F2 toggles effect log
@@ -940,6 +1009,19 @@ impl Preview {
                             .clicked()
                             {
                                 *show_variables = !*show_variables;
+                            }
+                            if let Some(count) = partial_count {
+                                let label = if count == 1 {
+                                    "Partial preview (1 slide)".to_owned()
+                                } else {
+                                    format!("Partial preview ({count} slides)")
+                                };
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(label).small().color(
+                                        coursecraft_render::palette(ui.ctx()).text_secondary,
+                                    ),
+                                );
                             }
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if crate::widgets::icon_button(
@@ -1036,12 +1118,18 @@ impl Preview {
                                         }
                                         record_effects(&effects, log, ended, Some(ctx));
                                         frame_effects.extend(effects);
+                                        if player.take_preview_boundary() {
+                                            boundary_hit = true;
+                                        }
                                     }
                                     if let Some((cache, _)) = media.as_mut() {
                                         for input in cache.lottie_ended(&player) {
                                             let effects = player.handle(&input);
                                             record_effects(&effects, log, ended, Some(ctx));
                                             frame_effects.extend(effects);
+                                            if player.take_preview_boundary() {
+                                                boundary_hit = true;
+                                            }
                                         }
                                     }
                                 },
@@ -1145,7 +1233,69 @@ impl Preview {
             });
 
         let rect = window_area.response.rect;
-        ctx.move_to_top(window_area.response.layer_id);
+        if boundary_hit {
+            self.end_of_preview_popup = true;
+        }
+        if !self.end_of_preview_popup {
+            ctx.move_to_top(window_area.response.layer_id);
+        }
+        let mut popup_replay = false;
+        let mut popup_close_preview = false;
+        if self.end_of_preview_popup {
+            let popup_area = egui::Area::new(Id::unique("preview_end_popup"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .constrain_to(target_rect)
+                .interactable(true)
+                .show(ctx, |ui| {
+                    let p = coursecraft_render::palette(ui.ctx());
+                    egui::Frame::window(ui.style())
+                        .inner_margin(egui::Margin::same(16))
+                        .show(ui, |ui| {
+                            ui.set_min_width(300.0);
+                            ui.set_max_width(360.0);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("This is the end of the preview").strong(),
+                                );
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if crate::widgets::icon_button(
+                                        ui,
+                                        coursecraft_render::Icon::X,
+                                        "Close popup",
+                                    )
+                                    .clicked()
+                                    {
+                                        self.end_of_preview_popup = false;
+                                    }
+                                });
+                            });
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    "Partial preview — only the selected slide(s) are included.",
+                                )
+                                .small()
+                                .color(p.text_secondary),
+                            );
+                            ui.add_space(12.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("Replay Slide(s)").clicked() {
+                                    popup_replay = true;
+                                }
+                                if ui.button("Close Preview").clicked() {
+                                    popup_close_preview = true;
+                                }
+                            });
+                        });
+                });
+            ctx.move_to_top(popup_area.response.layer_id);
+        }
+        if popup_replay {
+            self.restart();
+        } else if popup_close_preview {
+            close_requested = true;
+        }
         if !self.fullscreen
             && let Some(prev_rect) = self.non_fullscreen_rect
         {
@@ -1161,18 +1311,22 @@ impl Preview {
         self.had_text_focus = ctx.egui_wants_keyboard_input();
         self.window_rect = Some(rect);
 
-        // Escape leaves full screen first, then closes the preview (unless the
-        // player drawer or a focused text input used it first).
+        // Escape dismisses the end-of-preview popup first, then leaves full screen,
+        // then closes the preview (unless the player drawer or a focused text input used it first).
         // Clicking the dimmed backdrop outside the window closes it only when not full screen.
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let backdrop_clicked = !self.fullscreen && backdrop.inner.clicked();
         if close_requested || backdrop_clicked {
             *open = false;
-        } else if escape && !drawer_was_open && !text_edit_was_focused {
-            if self.fullscreen {
-                self.fullscreen = false;
-            } else {
-                *open = false;
+        } else if escape && !drawer_was_open {
+            if self.end_of_preview_popup {
+                self.end_of_preview_popup = false;
+            } else if !text_edit_was_focused {
+                if self.fullscreen {
+                    self.fullscreen = false;
+                } else {
+                    *open = false;
+                }
             }
         }
 
@@ -1225,6 +1379,9 @@ impl Preview {
                 Some(ctx),
             );
             self.media.layout_videos(&player, &self.view);
+            if player.take_preview_boundary() {
+                self.end_of_preview_popup = true;
+            }
             self.state = Some(player.state().clone());
         }
 

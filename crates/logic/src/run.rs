@@ -691,8 +691,18 @@ impl<'c> Player<'c> {
                     exclude,
                 });
             }
-            Action::CompleteCourse { status } => out.push(Effect::Completion { status: *status }),
+            Action::CompleteCourse { status } => {
+                out.push(Effect::Completion { status: *status });
+                if self.preview_subset.is_some() {
+                    self.preview_boundary_hit = true;
+                }
+            }
             Action::ExitCourse => {
+                if self.preview_subset.is_some() {
+                    self.preview_boundary_hit = true;
+                    q.clear();
+                    return;
+                }
                 if self.st.background.playing || self.st.background.paused_by_author {
                     self.st.background.playing = false;
                     self.st.background.paused_by_author = false;
@@ -793,20 +803,23 @@ impl<'c> Player<'c> {
     }
 
     fn jump(&mut self, target: &SlideTarget, q: &mut Queue, out: &mut Vec<Effect>) {
-        if self.st.lightbox.is_some() {
-            // A jump from inside the box closes it and moves the base slide.
-            self.close_lightbox(false, out);
-        }
         let cur = self.st.slide;
         if matches!(target, SlideTarget::LastVisited) {
             let prev_idx = self
                 .st
                 .visit_history
-                .pop()
-                .and_then(|id| self.slide_position(&id))
+                .iter()
+                .rev()
+                .find_map(|id| self.slide_position(id))
                 .or_else(|| cur.checked_sub(1));
             if let Some(idx) = prev_idx {
+                self.st.visit_history.pop();
+                if self.st.lightbox.is_some() {
+                    self.close_lightbox(false, out);
+                }
                 self.enter_slide_inner(idx, false, q, out);
+            } else if self.preview_subset.is_some() {
+                self.preview_boundary_hit = true;
             }
             return;
         }
@@ -816,7 +829,7 @@ impl<'c> Player<'c> {
             SlideTarget::LastVisited => None,
             SlideTarget::Id(id) => {
                 let found = self.slide_position(id);
-                if found.is_none() {
+                if found.is_none() && self.preview_subset.is_none() {
                     warn(out, format!("slide {id:?} does not exist"));
                 }
                 found
@@ -829,15 +842,22 @@ impl<'c> Player<'c> {
                     .find(|s| s.id == *id)
                     .and_then(|s| s.slides.first())
                     .and_then(|first| self.slide_position(&first.id));
-                if found.is_none() {
+                if found.is_none() && self.preview_subset.is_none() {
                     warn(out, format!("scene {id:?} does not exist"));
                 }
                 found
             }
         };
-        // Next on the last slide / Previous on the first: nothing happens.
+        // Next on the last slide / Previous on the first: nothing happens in full playback,
+        // or signals the boundary popup in a partial preview.
         if let Some(idx) = idx {
+            if self.st.lightbox.is_some() {
+                // A jump from inside the box closes it and moves the base slide.
+                self.close_lightbox(false, out);
+            }
             self.enter_slide(idx, q, out);
+        } else if self.preview_subset.is_some() {
+            self.preview_boundary_hit = true;
         }
     }
 
@@ -2212,7 +2232,11 @@ impl<'c> Player<'c> {
     /// lightbox while keeping the same base slide paused underneath.
     fn open_lightbox(&mut self, slide_id: &str, q: &mut Queue, out: &mut Vec<Effect>) {
         let Some(idx) = self.slide_position(slide_id) else {
-            warn(out, format!("slide {slide_id:?} does not exist"));
+            if self.preview_subset.is_some() {
+                self.preview_boundary_hit = true;
+            } else {
+                warn(out, format!("slide {slide_id:?} does not exist"));
+            }
             return;
         };
         if self.st.lightbox.is_none() {
@@ -3879,9 +3903,13 @@ impl<'c> Player<'c> {
     }
 
     fn retry_quiz(&mut self, q: &mut Queue, out: &mut Vec<Effect>) {
-        // Check first: with no question anywhere, warn and do nothing.
+        // Check first: with no question anywhere, warn and do nothing (or hit preview boundary).
         if !self.slides.iter().any(|s| s.question.is_some()) {
-            warn(out, "retry_quiz on a course without any question");
+            if self.preview_subset.is_some() {
+                self.preview_boundary_hit = true;
+            } else {
+                warn(out, "retry_quiz on a course without any question");
+            }
             return;
         }
         self.close_lightbox(false, out);
@@ -3922,7 +3950,13 @@ impl<'c> Player<'c> {
         if !self.course.banks.is_empty() {
             let new_seed = seed_for(&self.st.draw_seed.to_string(), self.st.quiz_attempts) as u32;
             self.st.draw_seed = new_seed;
-            self.slides = crate::draw::play_order(self.course, new_seed);
+            let mut new_slides = crate::draw::play_order(self.course, new_seed);
+            if let Some(ref subset) = self.preview_subset {
+                new_slides.retain(|s| subset.iter().any(|id| id == &s.id));
+            }
+            if !new_slides.is_empty() {
+                self.slides = new_slides;
+            }
         }
         if was_reviewing {
             out.push(Effect::ReviewChanged { reviewing: false });
@@ -3939,6 +3973,8 @@ impl<'c> Player<'c> {
             } else {
                 self.enter_slide(idx, q, out);
             }
+        } else if self.preview_subset.is_some() {
+            self.preview_boundary_hit = true;
         } else {
             warn(out, "retry_quiz on a course without any question");
         }
@@ -3950,7 +3986,11 @@ impl<'c> Player<'c> {
             return;
         }
         let Some(idx) = self.first_answered_question() else {
-            warn(out, "review_quiz with nothing answered");
+            if self.preview_subset.is_some() {
+                self.preview_boundary_hit = true;
+            } else {
+                warn(out, "review_quiz with nothing answered");
+            }
             return;
         };
         self.close_lightbox(false, out);
@@ -3973,6 +4013,9 @@ impl<'c> Player<'c> {
         out.push(Effect::ReviewChanged { reviewing: false });
         match idx {
             Some(idx) => self.enter_slide(idx, q, out),
+            None if self.preview_subset.is_some() => {
+                self.preview_boundary_hit = true;
+            }
             None => warn(out, format!("review return slide {from:?} does not exist")),
         }
     }
@@ -4002,6 +4045,9 @@ impl<'c> Player<'c> {
             }
             None if forward => {
                 self.exit_review(q, out);
+            }
+            None if self.preview_subset.is_some() => {
+                self.preview_boundary_hit = true;
             }
             None => {}
         }

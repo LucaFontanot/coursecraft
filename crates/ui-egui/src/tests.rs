@@ -3555,7 +3555,7 @@ fn preview_on_intro_slide() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let preview = Preview::new(&course, Some("s-intro"));
     assert!(preview.is_valid());
-    assert_eq!(preview.course.start_slide.as_deref(), Some("s-intro"));
+    assert!(preview.is_partial_preview());
     assert!(preview.errors.is_empty());
     assert!(preview.state.is_some());
     assert!(preview.log.iter().any(|l| l.contains("s-intro")));
@@ -11909,7 +11909,7 @@ fn ungroup_is_disabled_for_an_ungrouped_object_in_the_canvas_menu() {
 }
 
 #[test]
-fn restart_preview_opened_on_a_later_slide_goes_to_the_course_start() {
+fn restart_preview_opened_on_a_later_slide_restarts_that_slide_subset() {
     let mut session = coursecraft_engine::Session::blank("Restart from the start");
     let scene = session.course.scenes[0].id.clone();
     session
@@ -11921,9 +11921,12 @@ fn restart_preview_opened_on_a_later_slide_goes_to_the_course_start() {
     let last = session.course.scenes[0].slides[1].id.clone();
 
     let mut preview = Preview::new(&session.course, Some(&last));
-    assert_eq!(preview.state.as_ref().map(|s| s.slide), Some(1));
+    assert!(preview.is_partial_preview());
+    assert_eq!(preview.state.as_ref().map(|s| s.slide), Some(0));
+    assert!(preview.log.iter().any(|l| l.contains(&last)));
     preview.restart();
     assert_eq!(preview.state.as_ref().map(|s| s.slide), Some(0));
+    assert!(preview.log.iter().any(|l| l.contains(&last)));
 }
 
 #[test]
