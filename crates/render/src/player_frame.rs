@@ -696,6 +696,7 @@ impl PlayerFrame {
             draw_drawer(
                 ui,
                 player,
+                full,
                 drawer,
                 self.drawer_progress,
                 show_nav,
@@ -719,7 +720,8 @@ impl PlayerFrame {
                 }
                 self.last_drawer_rect = Some(settled);
             } else {
-                self.last_drawer_rect = Some(drawer);
+                let visible = drawer.intersect(full);
+                self.last_drawer_rect = valid_rect(visible).then_some(visible);
             }
         } else {
             self.last_drawer_rect = None;
@@ -2568,6 +2570,7 @@ fn ease_out(t: f32) -> f32 {
 fn draw_drawer(
     ui: &mut Ui,
     player: &Player<'_>,
+    full: Rect,
     rect: Rect,
     progress: f32,
     show_nav: bool,
@@ -2580,11 +2583,15 @@ fn draw_drawer(
     view: &mut DrawerView,
     focus_search: &mut bool,
 ) {
-    let painter = ui.painter().with_clip_rect(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, DRAWER_BG);
+    let clip = ui.clip_rect().intersect(full).intersect(rect);
+    if !valid_rect(clip) {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(clip);
+    painter.rect_filled(clip, CornerRadius::ZERO, DRAWER_BG);
     painter.vline(
         rect.right(),
-        rect.y_range(),
+        clip.y_range(),
         Stroke::new(1.0, Color32::from_white_alpha(0x18)),
     );
     let area = rect.shrink2(vec2(DRAWER_PAD, DRAWER_PAD));
@@ -2594,7 +2601,7 @@ fn draw_drawer(
             .id_salt("coursecraft-player-drawer"),
     );
     child.multiply_opacity(progress.clamp(0.0, 1.0));
-    child.set_clip_rect(rect);
+    child.set_clip_rect(clip);
     let title_font = FontId::new(SIZE_TITLE, FontFamily::Name("inter-bold".into()));
     let (header, _) =
         child.allocate_exact_size(vec2(child.available_width(), DRAWER_CLOSE), Sense::hover());
@@ -2737,13 +2744,19 @@ fn draw_drawer(
                     };
                     let (row, resp) =
                         ui.allocate_exact_size(vec2(ui.available_width(), 30.0), sense);
-                    // Report only the visible part; a row scrolled out of
-                    // view gets an empty rect instead of one over the header.
-                    let shown = row.intersect(ui.clip_rect());
-                    let shown = if shown.height() > 0.0 && shown.width() > 0.0 {
-                        shown
+                    // Report only the vertically visible part; a row scrolled out of
+                    // view gets an empty rect instead of one over the header, while
+                    // horizontal bounds keep their full width during the slide-in so
+                    // `PlayerFrame::show` can translate them to the settled position.
+                    let clip = ui.clip_rect();
+                    let top = row.top().max(clip.top());
+                    let bottom = row.bottom().min(clip.bottom());
+                    let shown = if bottom > top {
+                        Rect::from_min_max(
+                            Pos2::new(row.left(), top),
+                            Pos2::new(row.right(), bottom),
+                        )
                     } else {
-                        let clip = ui.clip_rect();
                         let y = row.top().clamp(clip.top(), clip.bottom());
                         Rect::from_min_size(Pos2::new(row.left(), y), egui::Vec2::ZERO)
                     };

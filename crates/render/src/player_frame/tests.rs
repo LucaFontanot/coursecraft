@@ -1920,3 +1920,194 @@ fn a15_separate_replay_button_still_works_at_end() {
     assert_eq!(player.state().slide, initial_slide);
     assert_eq!(player.seek_info().elapsed_ms, 0);
 }
+
+struct AreaHarness {
+    ctx: egui::Context,
+    frame: PlayerFrame,
+    view: SlideView,
+    screen_size: Vec2,
+    player_area: Rect,
+    time: f64,
+}
+
+impl AreaHarness {
+    fn new(screen_size: Vec2, player_area: Rect) -> Self {
+        Self {
+            ctx: egui::Context::default(),
+            frame: PlayerFrame::new(),
+            view: SlideView::new(),
+            screen_size,
+            player_area,
+            time: 0.1,
+        }
+    }
+
+    fn run(
+        &mut self,
+        player: &Player<'_>,
+        dt: f64,
+        events: Vec<Event>,
+    ) -> (FrameOutput, Vec<egui::epaint::ClippedShape>) {
+        self.time += dt;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), self.screen_size)),
+            time: Some(self.time),
+            events,
+            ..Default::default()
+        };
+        let mut output = FrameOutput::default();
+        let frame = &mut self.frame;
+        let view = &mut self.view;
+        let area = self.player_area;
+        let full = self.ctx.run_ui(raw, |ui| {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
+            child.set_clip_rect(area);
+            output = frame.show(&mut child, player, view, None);
+        });
+        let shapes = full.shapes.clone();
+        full.drop_without_applying_deltas();
+        (output, shapes)
+    }
+}
+
+fn assert_shapes_within(shapes: &[egui::epaint::ClippedShape], bounds: Rect, phase: &str) {
+    let drawer_bg = egui::Color32::from_rgb(0x2F, 0x2F, 0x33);
+    let mut saw_drawer_bg = false;
+    for clipped in shapes {
+        assert!(
+            clipped.clip_rect.left() >= bounds.left() - 0.5
+                && clipped.clip_rect.right() <= bounds.right() + 0.5
+                && clipped.clip_rect.top() >= bounds.top() - 0.5
+                && clipped.clip_rect.bottom() <= bounds.bottom() + 0.5,
+            "{phase}: shape clip_rect {:?} escaped player area {:?}",
+            clipped.clip_rect,
+            bounds
+        );
+        if let egui::epaint::Shape::Rect(rect_shape) = &clipped.shape
+            && rect_shape.fill == drawer_bg
+        {
+            saw_drawer_bg = true;
+            assert!(
+                rect_shape.rect.left() >= bounds.left() - 0.5
+                    && rect_shape.rect.right() <= bounds.right() + 0.5,
+                "{phase}: drawer background rect {:?} escaped player area {:?}",
+                rect_shape.rect,
+                bounds
+            );
+        }
+    }
+    assert!(
+        saw_drawer_bg,
+        "{phase}: expected drawer background to be painted"
+    );
+}
+
+#[test]
+fn drawer_clips_to_player_area_at_offset_rect_during_entire_animation() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    course.resources.push(coursecraft_course::Resource {
+        id: "res-1".to_owned(),
+        title: "Course Guide".to_owned(),
+        target: coursecraft_course::ResourceTarget::Url {
+            url: "https://example.com".to_owned(),
+        },
+    });
+    course.glossary.push(coursecraft_course::GlossaryEntry {
+        id: "gl-1".to_owned(),
+        term: "SCORM".to_owned(),
+        definition: "Sharable Content Object Reference Model".to_owned(),
+    });
+    course.player.show_transcript = true;
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    for (screen, area) in [
+        (
+            vec2(1280.0, 900.0),
+            Rect::from_min_size(pos2(180.0, 60.0), vec2(920.0, 580.0)),
+        ),
+        (
+            vec2(1600.0, 1000.0),
+            Rect::from_min_size(pos2(320.0, 120.0), vec2(960.0, 640.0)),
+        ),
+        (
+            vec2(1000.0, 700.0),
+            Rect::from_min_size(pos2(240.0, 40.0), vec2(520.0, 420.0)),
+        ),
+    ] {
+        for tab in [
+            crate::drawer::DrawerTab::Menu,
+            crate::drawer::DrawerTab::Resources,
+            crate::drawer::DrawerTab::Glossary,
+            crate::drawer::DrawerTab::Transcript,
+        ] {
+            let mut area_harness = AreaHarness::new(screen, area);
+
+            // Initialize frame.
+            area_harness.run(&player, 0.0, Vec::new());
+
+            // First animation frame (dt = 0.02s -> progress ~ 0.077).
+            area_harness.run(&player, 0.02, vec![key(egui::Key::M)]);
+            let (_, shapes_first) = area_harness.run(&player, 0.02, Vec::new());
+            assert_shapes_within(
+                &shapes_first,
+                area,
+                &format!("first frame {tab:?} {area:?}"),
+            );
+
+            // Middle of animation (dt = 0.09s -> progress ~ 0.50).
+            let (_, shapes_mid) = area_harness.run(&player, 0.09, Vec::new());
+            assert_shapes_within(&shapes_mid, area, &format!("mid frame {tab:?} {area:?}"));
+
+            // End of animation (settled).
+            let (_, shapes_end) = area_harness.run(&player, 0.25, Vec::new());
+            assert_shapes_within(&shapes_end, area, &format!("end frame {tab:?} {area:?}"));
+            let settled = area_harness
+                .frame
+                .drawer_rect()
+                .expect("drawer rect at end");
+            assert!(
+                (settled.left() - area.left()).abs() < 0.5,
+                "settled drawer left {} should equal area left {}",
+                settled.left(),
+                area.left()
+            );
+
+            // Switch tab while open and verify it stays clipped.
+            if tab != crate::drawer::DrawerTab::Menu {
+                let tab_rect = area_harness
+                    .frame
+                    .chrome_rect(&ChromeButton::DrawerTab(tab))
+                    .expect("tab rect");
+                let (_, shapes_tab) = area_harness.run(&player, 0.05, click(tab_rect.center()));
+                assert_shapes_within(&shapes_tab, area, &format!("tab {tab:?} {area:?}"));
+            }
+        }
+    }
+}
+
+#[test]
+fn drawer_clips_to_player_area_at_letterboxed_and_fullscreen_sizes() {
+    let (_course, player) = hello();
+    for size in [
+        vec2(1600.0, 720.0), // wider than 16:9 slide aspect
+        vec2(800.0, 900.0),  // taller than 16:9 slide aspect
+        vec2(1280.0, 720.0), // fullscreen 16:9
+    ] {
+        let area = Rect::from_min_size(pos2(0.0, 0.0), size);
+        let mut area_harness = AreaHarness::new(size, area);
+
+        area_harness.run(&player, 0.0, Vec::new());
+        let (_, shapes_first) = area_harness.run(&player, 0.02, vec![key(egui::Key::M)]);
+        assert_shapes_within(&shapes_first, area, &format!("first frame {size:?}"));
+
+        let (_, shapes_mid) = area_harness.run(&player, 0.10, Vec::new());
+        assert_shapes_within(&shapes_mid, area, &format!("mid frame {size:?}"));
+
+        let (_, shapes_end) = area_harness.run(&player, 0.25, Vec::new());
+        assert_shapes_within(&shapes_end, area, &format!("end frame {size:?}"));
+        let settled = area_harness.frame.drawer_rect().expect("drawer rect");
+        assert!((settled.left() - area.left()).abs() < 0.5);
+    }
+}

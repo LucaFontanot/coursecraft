@@ -522,3 +522,86 @@ fn debug_logging_from_query_matches_exact_flag() {
     assert!(!crate::load::debug_logging_from_query("?debug=0"));
     assert!(!crate::load::debug_logging_from_query("?debugger=1"));
 }
+
+#[test]
+fn player_drawer_clips_to_player_area_at_letterboxed_and_fullscreen_sizes() {
+    let raw_course = include_str!("../../../examples/hello-course/course.json");
+    for size in [
+        egui::vec2(1600.0, 720.0), // wider than 16:9 slide aspect
+        egui::vec2(800.0, 900.0),  // taller than 16:9 slide aspect
+        egui::vec2(1280.0, 720.0), // fullscreen 16:9
+    ] {
+        let course = Course::from_json(raw_course).expect("valid hello course");
+        let mut playing = Playing::from_course(course, false).expect("valid playing");
+        playing.handle_input(&Input::Start, None);
+
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
+        let mut time = 0.1;
+
+        let mut run_frame = |dt: f64, events: Vec<egui::Event>| {
+            time += dt;
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let full = ctx.run_ui(raw, |ui| {
+                playing.show_ui(ui);
+            });
+            let shapes = full.shapes.clone();
+            full.drop_without_applying_deltas();
+            shapes
+        };
+
+        let check_shapes = |shapes: &[egui::epaint::ClippedShape], phase: &str| {
+            let drawer_bg = egui::Color32::from_rgb(0x2F, 0x2F, 0x33);
+            let mut saw_drawer_bg = false;
+            for clipped in shapes {
+                assert!(
+                    clipped.clip_rect.left() >= screen.left() - 0.5
+                        && clipped.clip_rect.right() <= screen.right() + 0.5
+                        && clipped.clip_rect.top() >= screen.top() - 0.5
+                        && clipped.clip_rect.bottom() <= screen.bottom() + 0.5,
+                    "{phase} ({size:?}): clip_rect {:?} escaped screen {:?}",
+                    clipped.clip_rect,
+                    screen
+                );
+                if let egui::epaint::Shape::Rect(r) = &clipped.shape
+                    && r.fill == drawer_bg
+                    && r.rect.height() > 100.0
+                {
+                    saw_drawer_bg = true;
+                    assert!(
+                        r.rect.left() >= screen.left() - 0.5
+                            && r.rect.right() <= screen.right() + 0.5,
+                        "{phase} ({size:?}): drawer bg rect {:?} escaped screen {:?}",
+                        r.rect,
+                        screen
+                    );
+                }
+            }
+            assert!(saw_drawer_bg, "{phase} ({size:?}): expected drawer bg");
+        };
+
+        run_frame(0.0, Vec::new());
+        let shapes_first = run_frame(
+            0.02,
+            vec![egui::Event::Key {
+                key: egui::Key::M,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        check_shapes(&shapes_first, "first frame");
+
+        let shapes_mid = run_frame(0.10, Vec::new());
+        check_shapes(&shapes_mid, "mid frame");
+
+        let shapes_end = run_frame(0.25, Vec::new());
+        check_shapes(&shapes_end, "end frame");
+    }
+}
