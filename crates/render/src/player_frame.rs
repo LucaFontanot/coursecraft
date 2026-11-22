@@ -1707,6 +1707,64 @@ fn logo_texture(
     }
 }
 
+fn contrasting_fg(bg: Color32) -> Color32 {
+    let dark = Color32::from_rgb(0x1D, 0x1D, 0x1F);
+    if crate::design::contrast_ratio(Color32::WHITE, bg) >= crate::design::contrast_ratio(dark, bg)
+    {
+        Color32::WHITE
+    } else {
+        dark
+    }
+}
+
+fn dim_text_color(text: Color32, bar: Color32) -> Color32 {
+    let [tr, tg, tb, _] = text.to_srgba_unmultiplied();
+    let [br, bg, bb, _] = bar.to_srgba_unmultiplied();
+    let bar_opaque = Color32::from_rgb(br, bg, bb);
+    for alpha in [0x88u8, 0xA8, 0xC8, 0xFF] {
+        let a = f32::from(alpha) / 255.0;
+        let blended = Color32::from_rgb(
+            (f32::from(tr) * a + f32::from(br) * (1.0 - a)).round() as u8,
+            (f32::from(tg) * a + f32::from(bg) * (1.0 - a)).round() as u8,
+            (f32::from(tb) * a + f32::from(bb) * (1.0 - a)).round() as u8,
+        );
+        if crate::design::contrast_ratio(blended, bar_opaque) >= 3.2 {
+            return Color32::from_rgba_unmultiplied(tr, tg, tb, alpha);
+        }
+    }
+    text
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_truncated_text(
+    painter: &egui::Painter,
+    pos: Pos2,
+    align: Align2,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    max_width: f32,
+    resp: Option<&egui::Response>,
+) {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_owned(),
+        egui::TextFormat::simple(font, color),
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
+    let galley = painter.layout_job(job);
+    let truncated = galley.text() != text;
+    let size = galley.size();
+    let top_left = match align {
+        Align2::LEFT_CENTER => Pos2::new(pos.x, pos.y - size.y * 0.5),
+        Align2::CENTER_CENTER => Pos2::new(pos.x - size.x * 0.5, pos.y - size.y * 0.5),
+        _ => pos,
+    };
+    painter.galley(top_left, galley, color);
+    if truncated && let Some(resp) = resp {
+        resp.clone().on_hover_text(text);
+    }
+}
+
 fn bar_colors(player: &Player<'_>) -> (Color32, Color32, Color32) {
     let theme = &player.course().theme;
     let bar = parse_color(&theme.player.bar).unwrap_or(DEFAULT_BAR_COLOR);
@@ -1769,7 +1827,7 @@ fn draw_strip(
         }
         let paused = player.player_paused();
         let secondary = Color32::from_rgba_unmultiplied(text.r(), text.g(), text.b(), 0x99);
-        let dim = Color32::from_rgba_unmultiplied(text.r(), text.g(), text.b(), 0x55);
+        let dim = dim_text_color(text, bar);
 
         if let Some(rect) = layout.play {
             let (icon, tooltip) = if layout.at_end || paused {
@@ -2041,7 +2099,11 @@ fn draw_speed_popup(
             Align2::CENTER_CENTER,
             format_rate(*rate),
             FontId::new(SIZE_BODY, FontFamily::Name("inter".into())),
-            if selected { Color32::WHITE } else { text },
+            if selected {
+                contrasting_fg(accent)
+            } else {
+                text
+            },
         );
         if resp.clicked() {
             chosen = Some(*rate);
@@ -2093,7 +2155,11 @@ fn draw_secondary_controls(
 
     if let Some(rect) = layout.captions {
         let fill = (*captions_on).then_some(accent);
-        let icon_color = if *captions_on { Color32::WHITE } else { text };
+        let icon_color = if *captions_on {
+            contrasting_fg(accent)
+        } else {
+            text
+        };
         if button(
             ui,
             rect,
@@ -2114,7 +2180,11 @@ fn draw_secondary_controls(
             rect,
             "outline",
             Icon::List,
-            text,
+            if *drawer_open {
+                contrasting_fg(accent)
+            } else {
+                text
+            },
             can_menu,
             (*drawer_open).then_some(accent),
             player.course().chrome_string("outlineTooltip"),
@@ -2153,7 +2223,7 @@ fn draw_secondary_controls(
         let unlocked = player.can_next();
         let accent_fill = (complete && unlocked).then_some(accent);
         let icon_color = if complete && unlocked {
-            Color32::WHITE
+            contrasting_fg(accent)
         } else {
             text
         };
@@ -2859,10 +2929,12 @@ fn draw_drawer(
                         );
                     }
                     let title = player.display_text(&slide.title);
-                    painter.text(
+                    let max_title_w = (row.right() - (row.left() + 30.0) - 8.0).max(0.0);
+                    paint_truncated_text(
+                        &painter,
                         Pos2::new(row.left() + 30.0, row.center().y),
                         Align2::LEFT_CENTER,
-                        title,
+                        &title,
                         body_font.clone(),
                         if current {
                             DRAWER_TEXT
@@ -2871,6 +2943,8 @@ fn draw_drawer(
                         } else {
                             DRAWER_TERTIARY
                         },
+                        max_title_w,
+                        Some(&resp),
                     );
                     if resp.clicked() && !current && reachable {
                         go_to = Some(slide.id.clone());
@@ -2959,16 +3033,19 @@ fn draw_tab_row(
                 );
             }
             focus.paint_chrome(ui, rect, &kind, accent, DRAWER_BG);
-            ui.painter().text(
+            paint_truncated_text(
+                ui.painter(),
                 rect.center(),
                 Align2::CENTER_CENTER,
                 player.course().chrome_string(tab.label_key()),
                 font.clone(),
                 if selected {
-                    Color32::WHITE
+                    contrasting_fg(accent)
                 } else {
                     DRAWER_SECONDARY
                 },
+                (each - 8.0).max(0.0),
+                Some(&resp),
             );
             if resp.clicked() {
                 view.tab = *tab;
@@ -3036,12 +3113,16 @@ fn draw_content_tab(
                         let kind = crate::focus::ChromeButton::ResourceRow(resource.id.clone());
                         let (row, resp) =
                             drawer_item(ui, &kind, 34.0, false, focus, chrome, accent);
-                        ui.painter().text(
+                        let max_res_w = (row.right() - 28.0 - (row.left() + 8.0)).max(0.0);
+                        paint_truncated_text(
+                            ui.painter(),
                             Pos2::new(row.left() + 8.0, row.center().y),
                             Align2::LEFT_CENTER,
                             &resource.title,
                             body_font.clone(),
                             DRAWER_TEXT,
+                            max_res_w,
+                            Some(&resp),
                         );
                         ui.painter().text(
                             Pos2::new(row.right() - 12.0, row.center().y),
@@ -3087,12 +3168,16 @@ fn draw_content_tab(
                         let kind = crate::focus::ChromeButton::GlossaryTerm(entry.id.clone());
                         let open = view.selected.as_deref() == Some(entry.id.as_str());
                         let (row, resp) = drawer_item(ui, &kind, 30.0, open, focus, chrome, accent);
-                        ui.painter().text(
+                        let max_term_w = (row.right() - (row.left() + 8.0) - 8.0).max(0.0);
+                        paint_truncated_text(
+                            ui.painter(),
                             Pos2::new(row.left() + 8.0, row.center().y),
                             Align2::LEFT_CENTER,
                             &entry.term,
                             body_font.clone(),
                             DRAWER_TEXT,
+                            max_term_w,
+                            Some(&resp),
                         );
                         if resp.clicked() {
                             view.selected = Some(entry.id.clone());

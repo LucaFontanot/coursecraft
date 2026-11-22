@@ -258,6 +258,8 @@ mod u14_ai_dialogs_tests;
 #[cfg(test)]
 mod u15_status_welcome_tests;
 #[cfg(test)]
+mod u16_preview_tests;
+#[cfg(test)]
 mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;

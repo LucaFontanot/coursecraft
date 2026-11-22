@@ -916,3 +916,55 @@ fn player_click_and_keyboard_on_video_plays_pauses_and_fires_cues_without_placeh
     .drop_without_applying_deltas();
     assert!(playing.player.is_media_playing("vid"));
 }
+
+#[test]
+fn t14_8_failed_screen_uses_player_ground_raised_card_and_wraps() {
+    let long_err = "Failed to load course package: ".to_string()
+        + &"missing_manifest_or_corrupted_archive_".repeat(8);
+    for (w, h) in [(390.0_f32, 844.0_f32), (1280.0, 720.0)] {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(w, h));
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(1.0),
+                ..Default::default()
+            },
+            |ui| {
+                crate::app::show_failed_screen(ui, &long_err);
+            },
+        );
+        // Must paint PLAYER_GROUND over full screen
+        let has_ground = out.shapes.iter().any(|c| match &c.shape {
+            egui::epaint::Shape::Rect(r) => {
+                r.fill == coursecraft_render::PLAYER_GROUND && r.rect.width() >= w - 2.0
+            }
+            _ => false,
+        });
+        assert!(
+            has_ground,
+            "State::Failed must paint PLAYER_GROUND at {w}x{h}"
+        );
+
+        // Must wrap text within <= 480 pt and stay inside screen
+        let mut found_text = false;
+        for c in &out.shapes {
+            if let egui::epaint::Shape::Text(t) = &c.shape {
+                let r = t.visual_bounding_rect();
+                if r.is_positive() {
+                    found_text = true;
+                    assert!(
+                        r.width() <= 480.0 && screen.expand(1.0).contains_rect(r),
+                        "State::Failed text {:?} overflows or exceeds 480pt at {w}x{h}: {r:?}",
+                        t.galley.text()
+                    );
+                }
+            }
+        }
+        assert!(
+            found_text,
+            "State::Failed must render error text at {w}x{h}"
+        );
+        out.drop_without_applying_deltas();
+    }
+}

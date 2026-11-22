@@ -977,6 +977,54 @@ impl PlayerApp {
     }
 }
 
+/// Render the course load failure screen on `PLAYER_GROUND` inside a raised card.
+pub(crate) fn show_failed_screen(ui: &mut egui::Ui, message: &str) {
+    let full = ui.available_rect_before_wrap();
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE.fill(coursecraft_render::PLAYER_GROUND))
+        .show(ui, |ui| {
+            let max_card_w = (full.width() - 32.0).clamp(200.0, 480.0);
+            ui.centered_and_justified(|ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(0x23, 0x23, 0x26))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(0x1E)))
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .inner_margin(egui::Margin::same(24))
+                    .show(ui, |ui| {
+                        ui.set_max_width(max_card_w - 48.0);
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Unable to load course")
+                                    .size(16.0)
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(0xF2, 0xF2, 0xF5)),
+                            );
+                            ui.add_space(8.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(message)
+                                        .size(13.0)
+                                        .color(egui::Color32::from_rgb(0xD1, 0xD1, 0xD6)),
+                                )
+                                .wrap(),
+                            );
+                            ui.add_space(12.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(
+                                        "Check that the course package is complete and reload the page.",
+                                    )
+                                    .size(12.0)
+                                    .color(egui::Color32::from_rgb(0xA8, 0xA8, 0xB0)),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    });
+            });
+        });
+}
+
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         #[cfg(target_arch = "wasm32")]
@@ -1015,11 +1063,7 @@ impl eframe::App for PlayerApp {
                     });
             }
             State::Failed(ref message) => {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    ui.centered_and_justified(|ui| {
-                        ui.add(egui::Label::new(message).wrap());
-                    });
-                });
+                show_failed_screen(ui, message);
             }
             State::Playing(ref mut playing) => {
                 playing.show_ui(ui);

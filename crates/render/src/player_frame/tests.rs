@@ -2020,6 +2020,7 @@ fn drawer_clips_to_player_area_at_offset_rect_during_entire_animation() {
         term: "SCORM".to_owned(),
         definition: "Sharable Content Object Reference Model".to_owned(),
     });
+    course.player.show_menu = true;
     course.player.show_transcript = true;
     let boxed: &'static Course = Box::leak(Box::new(course));
     let mut player = Player::new(boxed).expect("valid player");
@@ -2482,4 +2483,339 @@ fn fullscreen_button_tooltip_reflects_fullscreen_state() {
         has_painted_text(&harness.last_shapes, "Exit full screen"),
         "expected 'Exit full screen' tooltip when fullscreen"
     );
+}
+
+fn collect_text_shapes_in_rect(
+    shapes: &[egui::epaint::ClippedShape],
+    container: Rect,
+) -> Vec<(String, Rect, egui::Color32)> {
+    fn walk(
+        shape: &egui::epaint::Shape,
+        clip: Rect,
+        container: Rect,
+        out: &mut Vec<(String, Rect, egui::Color32)>,
+    ) {
+        match shape {
+            egui::epaint::Shape::Text(t) => {
+                let r = t.visual_bounding_rect();
+                if r.is_positive()
+                    && clip.intersects(container)
+                    && container.intersects(r)
+                    && clip.right() <= container.right() + 2.0
+                {
+                    let color = if t.override_text_color.is_some() {
+                        t.override_text_color.unwrap_or(egui::Color32::WHITE)
+                    } else if let Some(sec) = t.galley.job.sections.first() {
+                        sec.format.color
+                    } else {
+                        egui::Color32::WHITE
+                    };
+                    out.push((t.galley.text().to_string(), r, color));
+                }
+            }
+            egui::epaint::Shape::Vec(v) => {
+                for s in v {
+                    walk(s, clip, container, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, clipped.clip_rect, container, &mut out);
+    }
+    out
+}
+
+#[test]
+fn t14_1_responsive_player_strip_across_six_browser_sizes() {
+    let (_course, player) = hello();
+    let sizes = [
+        (320.0, 568.0),
+        (390.0, 844.0),
+        (844.0, 390.0),
+        (768.0, 1024.0),
+        (1280.0, 720.0),
+        (1920.0, 1080.0),
+    ];
+    for (w, h) in sizes {
+        let mut harness = Harness::new(w, h);
+        harness.frame.can_fullscreen = true;
+        harness.frame.can_speed = true;
+        harness.run(&player, Vec::new());
+
+        let strip = harness
+            .frame
+            .strip_rect()
+            .unwrap_or_else(|| panic!("strip rect missing at {w}x{h}"));
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, h));
+        assert!(
+            screen.expand(1.5).contains_rect(strip),
+            "strip {strip:?} overflows viewport {w}x{h}"
+        );
+
+        let play = harness
+            .frame
+            .chrome_rect(&ChromeButton::PlayPause)
+            .unwrap_or_else(|| panic!("play button missing at {w}x{h}"));
+        assert!(
+            play.width() >= 36.0 && play.height() >= 36.0,
+            "play button {play:?} < 36x36 at {w}x{h}"
+        );
+        let next = harness
+            .frame
+            .chrome_rect(&ChromeButton::Next)
+            .unwrap_or_else(|| panic!("next button missing at {w}x{h}"));
+        assert!(
+            next.width() >= 36.0 && next.height() >= 36.0,
+            "next button {next:?} < 36x36 at {w}x{h}"
+        );
+
+        // No chrome buttons on the strip may overlap each other.
+        let strip_buttons = controls(&harness.frame);
+        let strip_buttons: Vec<(ChromeButton, Rect)> = strip_buttons
+            .into_iter()
+            .filter(|(_, r)| strip.intersects(*r) && r.width() > 0.0 && r.height() > 0.0)
+            .collect();
+        for i in 0..strip_buttons.len() {
+            for j in (i + 1)..strip_buttons.len() {
+                let inter = strip_buttons[i].1.intersect(strip_buttons[j].1);
+                assert!(
+                    !inter.is_positive() || (inter.width() <= 1.0 && inter.height() <= 1.0),
+                    "strip controls {:?} and {:?} overlap at {w}x{h}: {inter:?}",
+                    strip_buttons[i].0,
+                    strip_buttons[j].0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn t14_3_drawer_long_titles_tabs_resources_and_glossary_truncate() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid hello course");
+    let long_100 = "VeryLongTitleForTestingDrawerTruncationAndNoOverlapWithIconsInThe320pxDrawerPanel_0123456789_012345";
+    course.title = long_100.to_string();
+    course.scenes[0].title = long_100.to_string();
+    course.scenes[0].slides[0].title = long_100.to_string();
+    course.resources.push(coursecraft_course::Resource {
+        id: "res1".into(),
+        title: long_100.to_string(),
+        target: coursecraft_course::ResourceTarget::Url {
+            url: "https://example.com".into(),
+        },
+    });
+    course.glossary.push(coursecraft_course::GlossaryEntry {
+        id: "gl1".into(),
+        term: long_100.to_string(),
+        definition: "Definition of long glossary term.".into(),
+    });
+    course.player.show_menu = true;
+    course.player.show_transcript = true;
+    course.scenes[0].slides[0].notes = "Speaker transcript text.".into();
+
+    let mut player = Player::new(&course).expect("valid player");
+    player.handle(&Input::Start);
+    let mut harness = Harness::new(1280.0, 720.0);
+    open_drawer(&mut harness, &player);
+
+    let drawer = harness.frame.drawer_rect().expect("drawer rect");
+
+    // 1. Menu tab: slide title must fit within drawer bounds (must not overflow right edge)
+    let texts = collect_text_shapes_in_rect(&harness.last_shapes, drawer);
+    for (text, rect, _) in &texts {
+        assert!(
+            rect.right() <= drawer.right() + 1.0,
+            "drawer text '{text}' overflows drawer right edge: rect={rect:?} drawer={drawer:?}"
+        );
+    }
+
+    // 2. Resources tab: resource title must not overlap ArrowSquareOut icon (drawer.right() - 28)
+    let res_tab = harness
+        .frame
+        .chrome_rect(&ChromeButton::DrawerTab(super::DrawerTab::Resources))
+        .expect("resources tab");
+    harness.run(
+        &player,
+        vec![
+            Event::PointerButton {
+                pos: res_tab.center(),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            Event::PointerButton {
+                pos: res_tab.center(),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    harness.run(&player, Vec::new());
+    let res_texts = collect_text_shapes_in_rect(&harness.last_shapes, drawer);
+    for (text, rect, _) in &res_texts {
+        if text.starts_with("VeryLong") {
+            assert!(
+                rect.right() <= drawer.right() - 32.0,
+                "resource title '{text}' overlaps external icon: rect={rect:?} drawer={drawer:?}"
+            );
+        }
+    }
+
+    // 3. Glossary tab: glossary term must fit within drawer bounds
+    let gl_tab = harness
+        .frame
+        .chrome_rect(&ChromeButton::DrawerTab(super::DrawerTab::Glossary))
+        .expect("glossary tab");
+    harness.run(
+        &player,
+        vec![
+            Event::PointerButton {
+                pos: gl_tab.center(),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            Event::PointerButton {
+                pos: gl_tab.center(),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    harness.run(&player, Vec::new());
+    let gl_texts = collect_text_shapes_in_rect(&harness.last_shapes, drawer);
+    for (text, rect, _) in &gl_texts {
+        assert!(
+            rect.right() <= drawer.right() + 1.0,
+            "glossary text '{text}' overflows drawer right edge: rect={rect:?} drawer={drawer:?}"
+        );
+    }
+}
+
+#[test]
+fn t14_6_player_chrome_contrast_under_bright_pastel_and_dark_themes() {
+    let themes = [
+        ("default", "#1B1B1B", "#F2F2F5", "#0A6CFF"),
+        ("light", "#FFFFFF", "#1D1D1F", "#0A6CFF"),
+        ("bright_yellow", "#1B1B1B", "#F2F2F5", "#FFD60A"),
+    ];
+
+    for (name, bar_hex, text_hex, accent_hex) in themes {
+        let mut course = Course::from_json(HELLO_JSON).expect("valid hello course");
+        course.theme.player.bar = coursecraft_course::Color(bar_hex.into());
+        course.theme.player.bar_text = coursecraft_course::Color(text_hex.into());
+        course.theme.accent = coursecraft_course::Color(accent_hex.into());
+        course.player.show_menu = true;
+        course.scenes[0].slides[0].duration_ms = 0; // triggers disabled seekbar time label
+        course.resources.push(coursecraft_course::Resource {
+            id: "r1".into(),
+            title: "Guide".into(),
+            target: coursecraft_course::ResourceTarget::Url {
+                url: "https://example.com".into(),
+            },
+        });
+
+        let mut player = Player::new(&course).expect("valid player");
+        player.handle(&Input::Start);
+        let mut harness = Harness::new(1280.0, 720.0);
+        harness.frame.captions_on = true;
+        open_drawer(&mut harness, &player);
+
+        let accent = super::parse_color(&course.theme.accent).unwrap();
+        let bar = super::parse_color(&course.theme.player.bar).unwrap();
+
+        // 1. Selected drawer tab text contrast against `accent`
+        let menu_tab = harness
+            .frame
+            .chrome_rect(&ChromeButton::DrawerTab(super::DrawerTab::Menu))
+            .expect("menu tab");
+        let tab_texts = collect_text_shapes_in_rect(&harness.last_shapes, menu_tab);
+        for (label, _, fg) in &tab_texts {
+            let cr = crate::design::contrast_ratio(*fg, accent);
+            assert!(
+                cr >= 4.5,
+                "[{name}] selected drawer tab '{label}' fg={fg:?} on accent={accent:?} has contrast {cr:.2} < 4.5"
+            );
+        }
+
+        // 2. Captions active icon contrast against `accent` (when present)
+        if let Some(cap_rect) = harness.frame.chrome_rect(&ChromeButton::Captions) {
+            let cap_texts = collect_text_shapes_in_rect(&harness.last_shapes, cap_rect);
+            for (_, _, fg) in &cap_texts {
+                let cr = crate::design::contrast_ratio(*fg, accent);
+                assert!(
+                    cr >= 3.0,
+                    "[{name}] active captions icon fg={fg:?} on accent={accent:?} has contrast {cr:.2} < 3.0"
+                );
+            }
+        }
+
+        // 3. Disabled seekbar time label contrast against `bar`
+        let strip = harness.frame.strip_rect().expect("strip");
+        let strip_texts = collect_text_shapes_in_rect(&harness.last_shapes, strip);
+        for (label, _, fg) in &strip_texts {
+            if label.contains(':') {
+                let [fr, fg_c, fb, fa] = fg.to_srgba_unmultiplied();
+                let a = f32::from(fa) / 255.0;
+                let blended = egui::Color32::from_rgb(
+                    (f32::from(fr) * a + f32::from(bar.r()) * (1.0 - a)).round() as u8,
+                    (f32::from(fg_c) * a + f32::from(bar.g()) * (1.0 - a)).round() as u8,
+                    (f32::from(fb) * a + f32::from(bar.b()) * (1.0 - a)).round() as u8,
+                );
+                let cr = crate::design::contrast_ratio(blended, bar);
+                assert!(
+                    cr >= 3.0,
+                    "[{name}] disabled time '{label}' blended={blended:?} on bar={bar:?} has contrast {cr:.2} < 3.0"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn t14_7_banners_captions_and_lightbox_close_never_collide() {
+    let (_course, player) = hello();
+    for (w, h) in [(390.0, 844.0), (1280.0, 720.0)] {
+        let mut harness = Harness::new(w, h);
+        harness.frame.captions_on = true;
+        harness
+            .frame
+            .set_caption_frame(Some(crate::media_driver::CaptionFrame {
+                object: "vid-1".to_owned(),
+                kind: coursecraft_playback::MediaKind::Audio,
+                text: "Sample audio caption text for overlap testing.".into(),
+                rect: None,
+            }));
+        harness.frame.notice = Some("Session notice message".into());
+        harness.run(&player, Vec::new());
+
+        let strip = harness.frame.strip_rect().expect("strip");
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, h));
+        // Captions and notice must stay inside screen and above strip
+        let texts = collect_text_shapes_in_rect(&harness.last_shapes, screen);
+        let caption_rect = texts
+            .iter()
+            .find(|(t, _, _)| t.contains("Sample audio caption"))
+            .map(|(_, r, _)| *r);
+        let notice_rect = texts
+            .iter()
+            .find(|(t, _, _)| t.contains("Session notice"))
+            .map(|(_, r, _)| *r);
+        if let Some(cr) = caption_rect {
+            assert!(
+                cr.bottom() <= strip.top() + 1.0,
+                "caption {cr:?} overlaps strip {strip:?} at {w}x{h}"
+            );
+        }
+        if let (Some(cr), Some(nr)) = (caption_rect, notice_rect) {
+            assert!(
+                !cr.intersects(nr),
+                "caption {cr:?} overlaps notice {nr:?} at {w}x{h}"
+            );
+        }
+    }
 }
