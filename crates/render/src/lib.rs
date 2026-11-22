@@ -43,6 +43,8 @@ mod bughunt_m26_render;
 #[cfg(test)]
 mod justify_tests;
 #[cfg(test)]
+mod m29_state_resolver_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod review_tests;
