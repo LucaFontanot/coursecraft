@@ -345,9 +345,10 @@ pub use welcome::{
     template_course,
 };
 pub use widgets::{
-    IconTone, icon_button, icon_button_danger, icon_button_enabled, icon_toggle, toolbar_button,
-    toolbar_button_active, toolbar_button_enabled, toolbar_caret_button, toolbar_primary_button,
-    toolbar_toggle,
+    COMBO_MIN_POPUP_HEIGHT, COMBO_MIN_WIDTH, IconTone, icon_button, icon_button_danger,
+    icon_button_enabled, icon_toggle, mixed_toggle, modal_backdrop_color, styled_combo,
+    toolbar_button, toolbar_button_active, toolbar_button_enabled, toolbar_caret_button,
+    toolbar_primary_button, toolbar_toggle,
 };
 
 use coursecraft_course::{Course, FontStyle, ShapeKind, shape_label};
