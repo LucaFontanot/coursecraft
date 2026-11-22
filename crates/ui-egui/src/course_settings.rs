@@ -1,7 +1,7 @@
 //! Course settings window dialog: title, id, player chrome toggles, quiz passing percent.
 
 use crate::dialog::{Dialog, Form};
-use coursecraft_course::{Course, NavMode, NextRequirement, ValueKind};
+use coursecraft_course::{Course, NavMode, NextRequirement, SeekbarBehaviour, ValueKind};
 use egui::{DragValue, TextEdit};
 
 /// Names of the true/false variables a "Next unlocks" rule can watch.
@@ -142,6 +142,24 @@ fn nav_mode_label(mode: NavMode) -> &'static str {
     }
 }
 
+fn seekbar_label(mode: SeekbarBehaviour) -> &'static str {
+    match mode {
+        SeekbarBehaviour::Free => "Free",
+        SeekbarBehaviour::Locked => "Locked",
+        SeekbarBehaviour::UntilTimelineEnds => "Locked until timeline ends",
+    }
+}
+
+fn seekbar_hint(mode: SeekbarBehaviour) -> &'static str {
+    match mode {
+        SeekbarBehaviour::Free => "Learners can drag the seekbar at any time.",
+        SeekbarBehaviour::Locked => "The seekbar shows progress, but learners can't move it.",
+        SeekbarBehaviour::UntilTimelineEnds => {
+            "Learners can move the seekbar once the slide's timeline has played to the end."
+        }
+    }
+}
+
 /// Local buffers for editing Course Settings.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CourseSettingsState {
@@ -163,6 +181,7 @@ pub struct CourseSettingsState {
     pub resources: crate::resources_ui::ResourceBuffers,
     pub navigation: NavMode,
     pub next_requires: NextRequirement,
+    pub seekbar: SeekbarBehaviour,
     pub quiz_enabled: bool,
     pub passing_percent: u8,
     pub background_audio_src: Option<String>,
@@ -195,6 +214,7 @@ impl CourseSettingsState {
         self.resources.sync(course);
         self.navigation = course.player.navigation;
         self.next_requires = course.player.next_requires.clone();
+        self.seekbar = course.player.seekbar;
         if let Some(ref q) = course.quiz {
             self.quiz_enabled = true;
             self.passing_percent = q.passing_percent;
@@ -257,6 +277,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                         "Language",
                         "Logo",
                         "Navigation",
+                        "Seekbar",
                         "Next unlocks",
                         "Passing score",
                         "Volume",
@@ -447,6 +468,31 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                         update_player = true;
                     }
                 });
+                form.row(ui, "Seekbar", |ui, _| {
+                    let mut mode = editor.ui.course_settings.seekbar;
+                    crate::widgets::styled_combo(
+                        ui,
+                        "course_seekbar_behaviour",
+                        crate::widgets::COMBO_MIN_WIDTH,
+                    )
+                    .selected_text(seekbar_label(mode))
+                    .show_ui(ui, |ui| {
+                        for choice in [
+                            SeekbarBehaviour::Free,
+                            SeekbarBehaviour::Locked,
+                            SeekbarBehaviour::UntilTimelineEnds,
+                        ] {
+                            ui.selectable_value(&mut mode, choice, seekbar_label(choice))
+                                .on_hover_text(seekbar_hint(choice));
+                        }
+                    })
+                    .response
+                    .on_hover_text(seekbar_hint(mode));
+                    if mode != editor.ui.course_settings.seekbar {
+                        editor.ui.course_settings.seekbar = mode;
+                        update_player = true;
+                    }
+                });
                 form.row(ui, "Next unlocks", |ui, _| {
                     let current = editor.ui.course_settings.next_requires.clone();
                     if let Some(Some(rule)) = next_rule_editor(
@@ -618,6 +664,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                 "show_captions": editor.ui.course_settings.show_captions,
                 "navigation": editor.ui.course_settings.navigation,
                 "next_requires": editor.ui.course_settings.next_requires,
+                "seekbar": editor.ui.course_settings.seekbar,
             }),
         );
     }
