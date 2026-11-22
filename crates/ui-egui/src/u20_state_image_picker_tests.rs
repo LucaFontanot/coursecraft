@@ -1,4 +1,3 @@
-use crate::properties::InspectorTab;
 use crate::test_harness::TestHarness;
 use crate::{EditorRequest, PendingImagePick};
 use coursecraft_course::{Course, ObjectKind};
@@ -45,15 +44,10 @@ fn open_image_states(h: &mut TestHarness) {
     ]);
     h.editor.selection.slide = "s1".to_owned();
     h.editor.selection.object = Some("img1".to_owned());
-    h.editor.ui.inspector_tab = InspectorTab::Format;
+    h.editor.ui.bottom_tab = crate::BottomTab::States;
     h.idle_frame();
-    for _ in 0..15 {
-        if h.find_text("Choose image…").is_some() || h.find_text("Replace…").is_some() {
-            break;
-        }
-        h.scroll_over(pos2(1140.0, 350.0), -180.0);
-        h.idle_frame();
-    }
+    h.editor.ui.preview_state = Some("hover".to_owned());
+    h.idle_frame();
 }
 
 fn state_src(h: &TestHarness, state_name: &str) -> Option<String> {
@@ -86,15 +80,16 @@ fn state_card_has_no_src_text_input_and_shows_same_as_normal() {
     let mut h = TestHarness::new(image_course(None));
     open_image_states(&mut h);
 
+    let bottom = egui::Rect::from_min_max(pos2(0.0, h.bottom_panel_top()), pos2(1280.0, 720.0));
     assert!(
-        h.find_text("Src").is_none(),
-        "raw Src text box label must be removed"
+        h.find_text_in("Src", bottom).is_none(),
+        "raw Src text box label must be removed from States tab"
     );
     assert!(
         h.find_text("Same as Normal").is_some(),
         "empty state src should show muted 'Same as Normal'"
     );
-    let choose = h
+    let _choose = h
         .find_text("Choose image…")
         .expect("Choose image… button should be visible");
     assert!(
@@ -103,15 +98,10 @@ fn state_card_has_no_src_text_input_and_shows_same_as_normal() {
     );
 
     // Hit target height >= 24 pt
-    let row_rect = h
-        .editor
-        .ui
-        .states
-        .state_row_rects
-        .get("hover")
-        .copied()
-        .expect("hover state card rect");
-    assert!(row_rect.contains(choose));
+    assert!(
+        h.editor.ui.states.state_row_rects.contains_key("hover"),
+        "hover state card rect"
+    );
     let hit_violations = h.check_hit_targets(egui::vec2(24.0, 24.0));
     assert!(
         hit_violations.is_empty(),

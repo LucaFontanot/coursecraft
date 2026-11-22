@@ -17,13 +17,14 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::thread::LocalKey;
 
-use coursecraft_course::Slide;
+use coursecraft_course::{Object, Slide};
 
 thread_local! {
     static COURSE_COPIES: Cell<u64> = const { Cell::new(0) };
     static SPELLER_RUNS: Cell<u64> = const { Cell::new(0) };
     static SUGGESTION_LOOKUPS: Cell<u64> = const { Cell::new(0) };
     static THUMBNAIL_REDRAWS: Cell<u64> = const { Cell::new(0) };
+    static STATE_THUMBNAIL_REDRAWS: Cell<u64> = const { Cell::new(0) };
     static VALIDATION_RUNS: Cell<u64> = const { Cell::new(0) };
     static AUDIT_RUNS: Cell<u64> = const { Cell::new(0) };
     static SLIDE_CLONES: Cell<u64> = const { Cell::new(0) };
@@ -31,6 +32,9 @@ thread_local! {
     static FRAME: Cell<u64> = const { Cell::new(0) };
     /// Last slide drawn in each row, and the frame it was drawn on.
     static LAST_THUMB_SLIDES: RefCell<HashMap<String, (Slide, u64)>> =
+        RefCell::new(HashMap::new());
+    /// Last object drawn in each state thumbnail card, and the frame it was drawn on.
+    static LAST_STATE_THUMBS: RefCell<HashMap<(String, String), (Object, u64)>> =
         RefCell::new(HashMap::new());
 }
 
@@ -50,6 +54,7 @@ pub(crate) fn reset() {
     SPELLER_RUNS.set(0);
     SUGGESTION_LOOKUPS.set(0);
     THUMBNAIL_REDRAWS.set(0);
+    STATE_THUMBNAIL_REDRAWS.set(0);
     VALIDATION_RUNS.set(0);
     AUDIT_RUNS.set(0);
     SLIDE_CLONES.set(0);
@@ -60,6 +65,7 @@ pub(crate) fn reset() {
 /// it draws. Used by the scroll guard to measure one viewport in isolation.
 pub(crate) fn reset_thumb_signatures() {
     LAST_THUMB_SLIDES.with(|slot| slot.borrow_mut().clear());
+    LAST_STATE_THUMBS.with(|slot| slot.borrow_mut().clear());
 }
 
 pub(crate) fn note_course_copy() {
@@ -116,6 +122,25 @@ pub(crate) fn speller_runs() -> u64 {
 
 pub(crate) fn suggestion_lookups() -> u64 {
     SUGGESTION_LOOKUPS.get()
+}
+
+pub(crate) fn note_state_thumbnail_paint(obj_id: &str, state_name: &str, obj: &Object) {
+    let frame = FRAME.get();
+    LAST_STATE_THUMBS.with(|slot| {
+        let mut last = slot.borrow_mut();
+        let key = (obj_id.to_owned(), state_name.to_owned());
+        let redraw = last
+            .get(&key)
+            .is_none_or(|(old, drawn_on)| old != obj || drawn_on.saturating_add(1) != frame);
+        last.insert(key, (obj.clone(), frame));
+        if redraw {
+            bump(&STATE_THUMBNAIL_REDRAWS);
+        }
+    });
+}
+
+pub(crate) fn state_thumbnail_redraws() -> u64 {
+    STATE_THUMBNAIL_REDRAWS.get()
 }
 
 pub(crate) fn thumbnail_redraws() -> u64 {

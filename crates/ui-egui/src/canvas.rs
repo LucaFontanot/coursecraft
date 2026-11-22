@@ -5,7 +5,7 @@ use coursecraft_course::{
     ConnectorStyle, Course, Glue, HotspotShape, LineEnd, Object, ObjectKind, Path, PathStyle,
     Point, QuestionKind, ShapeKind, shape_info, shape_label,
 };
-use coursecraft_render::{DrawItem, Highlight, Hit, SlideTransform, Visual, compose_object, paint};
+use coursecraft_render::{DrawItem, Highlight, Hit, SlideTransform, Visual, paint};
 use egui::{
     Align2, Area, Color32, CornerRadius, CursorIcon, FontId, Id, Painter, Pos2, Rect, RichText,
     ScrollArea, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
@@ -4483,7 +4483,7 @@ pub(crate) fn inline_edit_visuals(
 
 /// Replace missing images with a neutral authoring placeholder, so a course that
 /// has not chosen its image yet reads as "no image yet" rather than an error.
-fn missing_images_as_placeholders(
+pub(crate) fn missing_images_as_placeholders(
     items: &mut [DrawItem],
     media: &[(String, std::sync::Arc<[u8]>)],
 ) {
@@ -6000,7 +6000,12 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         if let (Some(sel_obj_id), Some(preview_state)) =
             (&editor.selection.object, &editor.ui.preview_state)
             && let Some((obj, _)) = slide.object(sel_obj_id)
-            && let Some(preview_item) = compose_object(obj, preview_state)
+            && let Some(preview_item) = coursecraft_render::compose_object_with_value(
+                obj,
+                preview_state,
+                Some(&editor.session.course.theme),
+                crate::states::course_input_value(&editor.session.course, obj),
+            )
         {
             if let Some(pos) = items
                 .iter()

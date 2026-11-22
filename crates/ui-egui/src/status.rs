@@ -164,6 +164,7 @@ fn finish_slide_navigation(editor: &mut Editor, previous: String) {
         if !editor.ui.master_view {
             editor.ui.master_view_return_slide = Some(previous);
             editor.ui.master_view = true;
+            editor.ui.bottom_tab = crate::BottomTab::Timeline;
         }
     } else {
         editor.ui.master_view = false;

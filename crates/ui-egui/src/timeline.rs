@@ -28,6 +28,7 @@ pub const OBJECT_ROW_HEIGHT: f32 = 28.0;
 pub enum BottomTab {
     #[default]
     Timeline,
+    States,
     Triggers,
     Variables,
     Question,
@@ -38,6 +39,7 @@ impl BottomTab {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Timeline => "Timeline",
+            Self::States => "States",
             Self::Triggers => "Triggers",
             Self::Variables => "Variables",
             Self::Question => "Question",
@@ -428,7 +430,7 @@ fn render_timeline_header(
                 let mut selected_rect = None;
                 let mut tabs = vec![BottomTab::Timeline];
                 if !editor.ui.master_view {
-                    tabs.extend([BottomTab::Triggers, BottomTab::Variables]);
+                    tabs.extend([BottomTab::States, BottomTab::Triggers, BottomTab::Variables]);
                     // A draw slide has no question panel.
                     let slide_is_draw = editor
                         .session
@@ -438,6 +440,8 @@ fn render_timeline_header(
                     if !slide_is_draw {
                         tabs.push(BottomTab::Question);
                     }
+                } else if editor.ui.bottom_tab == BottomTab::States {
+                    editor.ui.bottom_tab = BottomTab::Timeline;
                 }
                 for tab in tabs {
                     let is_sel = editor.ui.bottom_tab == tab;
@@ -2300,6 +2304,9 @@ fn show_timeline_content(
     ui: &mut Ui,
     actions: &mut Vec<(&'static str, Json)>,
 ) {
+    if editor.ui.master_view && editor.ui.bottom_tab == BottomTab::States {
+        editor.ui.bottom_tab = BottomTab::Timeline;
+    }
     editor.ui.timeline.sync(
         &editor.session.course,
         &editor.selection,
@@ -2351,6 +2358,9 @@ fn show_timeline_content(
     if editor.ui.bottom_tab != BottomTab::Timeline {
         match editor.ui.bottom_tab {
             BottomTab::Timeline => {}
+            BottomTab::States => {
+                crate::states::show_states_tab(editor, ui, actions);
+            }
             BottomTab::Triggers => {
                 crate::triggers::show_triggers_tab(editor, ui, actions);
             }

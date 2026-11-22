@@ -195,25 +195,16 @@ fn add_button_with_visited(
     harness.set_field(label_pos, label);
     set_object_frame(harness, x, y, w, h);
 
-    // Add state "visited"
-    // Scroll down properties panel to ensure States section is in view
-    harness.scroll_over(pos2(1100.0, 300.0), -900.0);
+    // Add state "visited" in BottomTab::States
+    let prev_bottom_tab = harness.editor.ui.bottom_tab;
+    harness.editor.ui.bottom_tab = crate::BottomTab::States;
+    harness.editor.ui.states.show_new_state_input = true;
     harness.idle_frame();
 
-    let state_name_rect = harness
-        .editor
-        .ui
-        .states
-        .new_state_name_rect
-        .expect("new state name rect");
-    harness.set_field(state_name_rect.center(), "visited");
-
-    // Edit fill to #2E8B57
-    // Scroll down properties panel to ensure States fill is in view
-    harness.scroll_over(pos2(1100.0, 300.0), -200.0);
-    for _ in 0..5 {
-        harness.idle_frame();
-    }
+    let vis_chip = harness.find_text("+ Visited").expect("+ Visited");
+    harness.click_at(vis_chip);
+    harness.editor.ui.preview_state = Some("visited".to_owned());
+    harness.idle_frame();
 
     let buf = harness
         .editor
@@ -242,6 +233,7 @@ fn add_button_with_visited(
         },
     ]);
     harness.idle_frame();
+    harness.editor.ui.bottom_tab = prev_bottom_tab;
 }
 
 fn deselect_object_via_thumbnail(harness: &mut TestHarness, slide_id: &str) {
@@ -568,30 +560,31 @@ fn build_tabs_slide(harness: &mut TestHarness) {
     harness.set_field(label_pos, "Next");
     set_object_frame(harness, 1000.0, 600.0, 200.0, 60.0);
 
-    harness.scroll_over(pos2(1100.0, 300.0), -900.0);
+    let prev_bottom_tab = harness.editor.ui.bottom_tab;
+    harness.editor.ui.bottom_tab = crate::BottomTab::States;
+    harness.editor.ui.states.show_new_state_input = true;
+    harness.idle_frame();
 
-    let state_name_rect = harness
+    let dis_chip = harness.find_text("+ Disabled").expect("+ Disabled");
+    harness.click_at(dis_chip);
+    harness.editor.ui.preview_state = Some("disabled".to_owned());
+    harness.idle_frame();
+
+    let disabled_card = harness
         .editor
         .ui
         .states
-        .new_state_name_rect
-        .expect("new state name rect");
-    harness.set_field(state_name_rect.center(), "disabled");
-
-    harness.scroll_over(pos2(1100.0, 300.0), -200.0);
-    for _ in 0..5 {
-        harness.idle_frame();
-    }
-
-    let buf = harness
-        .editor
-        .ui
-        .states
-        .edit_buffers
+        .state_row_rects
         .get("disabled")
-        .expect("disabled buffer");
-    let set_init_btn = buf.set_initial_rect.expect("set initial button rect");
-    harness.click_at(set_init_btn.center());
+        .copied()
+        .expect("disabled card rect");
+    let menu_pos = harness
+        .find_text_in("⋯", disabled_card)
+        .expect("disabled ⋯ menu");
+    harness.click_at(menu_pos);
+    harness.idle_frame();
+    let set_init = harness.find_text("Set as initial").expect("Set as initial");
+    harness.click_at(set_init);
     harness.idle_frame();
 
     let buf = harness
@@ -621,6 +614,7 @@ fn build_tabs_slide(harness: &mut TestHarness) {
         },
     ]);
     harness.idle_frame();
+    harness.editor.ui.bottom_tab = prev_bottom_tab;
 
     // Deselect object so Layers section is open
     deselect_object_via_thumbnail(harness, &slide2_id);

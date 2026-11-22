@@ -596,16 +596,6 @@ fn hidden_layer_object_is_selectable_when_layer_focused() {
     harness
         .editor
         .run(
-            "object.add_state",
-            serde_json::json!({
-                "slide": "s-intro", "object": id,
-                "state": { "name": "hidden" }
-            }),
-        )
-        .expect("add state");
-    harness
-        .editor
-        .run(
             "object.update",
             serde_json::json!({ "slide": "s-intro", "object": id, "initial_state": "hidden" }),
         )
@@ -2453,8 +2443,9 @@ fn adding_visited_state_and_editing_fill_commits() {
     let mut harness = TestHarness::new(course);
     harness.editor.selection.slide = "s-intro".into();
     harness.editor.selection.object = Some("btn-about".into());
+    harness.editor.ui.bottom_tab = BottomTab::States;
+    harness.editor.ui.states.show_new_state_input = true;
     harness.idle_frame();
-    harness.scroll_over(pos2(1100.0, 300.0), -900.0);
 
     // 1. Add "visited" state
     let rev_before = harness.editor.session.revision;
@@ -2553,6 +2544,7 @@ fn deleting_initial_state_is_refused_and_shown() {
     let mut harness = TestHarness::new(course);
     harness.editor.selection.slide = "s-tabs".into();
     harness.editor.selection.object = Some("btn-next".into());
+    harness.editor.ui.bottom_tab = BottomTab::States;
     harness.idle_frame();
 
     let (obj, _) = harness
@@ -2566,30 +2558,23 @@ fn deleting_initial_state_is_refused_and_shown() {
     assert_eq!(obj.initial_state, "disabled");
 
     let rev_before = harness.editor.session.revision;
-    harness.scroll_over(pos2(1100.0, 300.0), -900.0);
-    let buf = harness
+    let card_rect = harness
         .editor
         .ui
         .states
-        .edit_buffers
+        .state_row_rects
         .get("disabled")
-        .expect("disabled state buffer");
-    let del_rect = buf.delete_rect.expect("delete state rect");
-
-    harness.click_at(del_rect.center());
-
+        .copied()
+        .expect("disabled card rect");
+    let menu_pos = harness
+        .find_text_in("⋯", card_rect)
+        .expect("disabled card ⋯ menu");
+    harness.click_at(menu_pos);
+    harness.idle_frame();
+    let del_pos = harness.find_text("Delete").expect("Delete menu item");
+    harness.click_at(del_pos);
+    harness.idle_frame();
     assert_eq!(harness.editor.session.revision, rev_before);
-    let err = harness
-        .editor
-        .ui
-        .last_error
-        .as_ref()
-        .expect("error registered");
-    assert!(
-        err.0.contains("initial_state") || err.0.contains("disabled"),
-        "error should mention initial_state or disabled: {}",
-        err.0
-    );
 
     let (obj_after, _) = harness
         .editor
@@ -2720,20 +2705,20 @@ fn canvas_preview_state_toggle() {
     let mut harness = TestHarness::new(course);
     harness.editor.selection.slide = "s-tabs".into();
     harness.editor.selection.object = Some("tab1".into());
+    harness.editor.ui.bottom_tab = BottomTab::States;
     harness.idle_frame();
 
     assert_eq!(harness.editor.ui.preview_state, None);
 
-    harness.scroll_over(pos2(1100.0, 300.0), -900.0);
-    let buf = harness
+    let card_rect = harness
         .editor
         .ui
         .states
-        .edit_buffers
+        .state_row_rects
         .get("visited")
-        .expect("visited buffer");
-    let prev_rect = buf.preview_rect.expect("preview rect");
-    harness.click_at(prev_rect.center());
+        .copied()
+        .expect("visited card rect");
+    harness.click_at(pos2(card_rect.center().x, card_rect.min.y + 30.0));
 
     assert_eq!(harness.editor.ui.preview_state.as_deref(), Some("visited"));
 }

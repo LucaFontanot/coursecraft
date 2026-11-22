@@ -192,6 +192,8 @@ mod m27_triggers_states_tests;
 #[cfg(test)]
 mod m27_undo_clipboard_tests;
 #[cfg(test)]
+mod m29_states_tab_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -3052,6 +3054,7 @@ impl Editor {
             self.selection.layer = None;
             self.selection.clear_objects();
             self.ui.inspector_tab = InspectorTab::Slide;
+            self.ui.bottom_tab = BottomTab::Timeline;
         }
     }
 
@@ -4187,6 +4190,9 @@ impl Editor {
             self.ui.preview_state = None;
         }
 
+        if self.ui.master_view && self.ui.bottom_tab == BottomTab::States {
+            self.ui.bottom_tab = BottomTab::Timeline;
+        }
         let mut requests = Vec::new();
         // F12 previews this slide and Shift+F12 the course from the start,
         // like the toolbar's Preview button and its menu.

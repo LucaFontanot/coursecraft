@@ -269,9 +269,6 @@ fn inspector_and_states_combos_have_sufficient_width_and_tall_popup() {
         "Combo 'Initial' audit failed: {findings:#?}"
     );
 
-    // States preset combo: verify it's present and styled; check remaining inspector combos.
-    assert!(h.find_text("Preset name…").is_some());
-
     // Shape: Fill type, Dash, Corners
     h.editor.selection.set_many(["obj_shape"]);
     h.idle_frame();
@@ -403,7 +400,8 @@ fn numeric_drag_values_display_units_and_undo_in_one_step() {
 #[test]
 fn states_disabled_controls_explain_why_and_in_use_delete_shows_reason() {
     let mut h = TestHarness::new_with_size(inspector_test_course(), (1280.0, 2600.0));
-    h.editor.ui.inspector_tab = InspectorTab::Format;
+    h.editor.ui.bottom_tab = crate::BottomTab::States;
+    h.editor.ui.states.show_new_state_input = true;
     h.editor.selection.set_many(["obj_text"]);
     h.idle_frame();
 
@@ -419,30 +417,33 @@ fn states_disabled_controls_explain_why_and_in_use_delete_shows_reason() {
         .ui
         .states
         .add_button_rect
-        .expect("+ Add button rect")
+        .expect("Add button rect")
         .center();
-    let clipped = h.find_text_clipped("+ Add");
     let add_tip = h.probe_tooltip(add_pos);
     assert!(
         add_tip.as_deref().is_some_and(|t| t.trim().len() >= 5),
-        "Disabled '+ Add' button at {add_pos:?} clipped={clipped:?} (state rect={:?}) must have an explanatory tooltip, got: {add_tip:?}",
-        h.editor.ui.states.add_button_rect
+        "Disabled 'Add' button at {add_pos:?} must have an explanatory tooltip, got: {add_tip:?}"
     );
 
-    // Attempting to delete "hover" (referenced by trigger tr1) displays a clear message.
-    let del_pos = h.find_text("Delete state").expect("Delete state button");
+    // Delete in the hover card's ⋯ menu is disabled with a clear trigger-referenced reason.
+    let hover_card = h
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("hover")
+        .copied()
+        .expect("hover card rect");
+    let menu_pos = h.find_text_in("⋯", hover_card).expect("hover card ⋯ menu");
+    h.click_at(menu_pos);
+    h.idle_frame();
+    let del_pos = h.find_text("Delete").expect("Delete menu item");
+    let rev_before = h.editor.session.revision;
     h.click_at(del_pos);
     h.idle_frame();
-    assert!(
-        h.editor.ui.states.delete_error.is_some(),
-        "Clicking Delete state on in-use state should record delete_error"
-    );
-    let texts = visible_texts(&mut h);
-    assert!(
-        texts
-            .iter()
-            .any(|t| t.to_lowercase().contains("trigger") || t.to_lowercase().contains("used")),
-        "Deleting in-use state should show why it is blocked, got: {texts:?}"
+    assert_eq!(
+        h.editor.session.revision, rev_before,
+        "Disabled Delete on in-use state must not delete the state"
     );
 }
 

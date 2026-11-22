@@ -2,8 +2,8 @@
 
 use crate::Editor;
 use coursecraft_course::{
-    Align, AnimEffect, Autofit, BUILTIN_STATES, Color, Course, Direction, Easing, Glow, ListKind,
-    ObjectKind, Paragraph, RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing,
+    Align, AnimEffect, Autofit, Color, Course, Direction, Easing, Glow, ListKind, ObjectKind,
+    Paragraph, RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing,
     TransitionEffect, Trim, VAlign, paragraphs_for,
 };
 use coursecraft_render::parse_color;
@@ -2408,9 +2408,11 @@ fn show_format_tab(
         crate::question::show_question_section(editor, ui, actions_to_run);
     }
 
-    inspector_separator(ui);
-    inspector_section_header(ui, "States");
-    crate::states::show_states_section(editor, ui, actions_to_run);
+    if !editor.ui.master_view {
+        inspector_separator(ui);
+        inspector_section_header(ui, "States");
+        crate::states::show_compact_states_section(editor, ui, actions_to_run);
+    }
 
     inspector_separator(ui);
     show_accessibility_section(editor, ui, actions_to_run);
@@ -8090,41 +8092,6 @@ fn show_object_properties(
     show_effect_controls(ui, props, &slide.id, &obj.id, actions_to_run);
 
     show_drag_controls(ui, props, slide, obj, actions_to_run);
-
-    inspector_separator(ui);
-
-    // 7. Initial state
-    inspector_section_header(ui, "State");
-    let mut available_states: Vec<&str> = BUILTIN_STATES.to_vec();
-    for s in &obj.states {
-        if !available_states.contains(&s.name.as_str()) {
-            available_states.push(&s.name);
-        }
-    }
-
-    inspector_row(ui, "Initial", |ui| {
-        let rem_w = ui.available_width().max(30.0);
-        crate::widgets::styled_combo(ui, "prop_initial_state", rem_w)
-            .selected_text(&props.initial_state)
-            .show_ui(ui, |ui| {
-                for state in available_states {
-                    if ui
-                        .selectable_value(&mut props.initial_state, state.to_owned(), state)
-                        .clicked()
-                        && props.initial_state != obj.initial_state
-                    {
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "initial_state": state,
-                            }),
-                        ));
-                    }
-                }
-            });
-    });
 
     inspector_separator(ui);
     match &obj.kind {

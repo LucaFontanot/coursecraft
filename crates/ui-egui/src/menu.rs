@@ -1192,6 +1192,23 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
         ui.close();
     }
 
+    let single_non_master = has_selection && !editor.selection.is_multi() && !master_view;
+    let edit_states = Button::new("Edit states…");
+    if ui
+        .add_enabled(single_non_master, edit_states)
+        .on_disabled_hover_text(if master_view {
+            "Master objects don't have states"
+        } else if editor.selection.is_multi() {
+            "Select a single object"
+        } else {
+            "Select an object first"
+        })
+        .clicked()
+    {
+        editor.ui.bottom_tab = crate::BottomTab::States;
+        ui.close();
+    }
+
     ui.separator();
     render_group_ungroup_items(editor, ui, true);
     ui.separator();

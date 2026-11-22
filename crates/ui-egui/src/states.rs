@@ -3,17 +3,26 @@
 use crate::Editor;
 use crate::properties::{color_swatch_picker, is_committed, mark_color_picked};
 use coursecraft_course::{
-    Action, Color, Condition, Course, Event, ObjectKind, Slide, StateDef, Trigger,
+    Action, Color, Condition, Course, Event, Object, ObjectKind, Size, Slide, StateDef, Trigger,
+    Value,
 };
-use coursecraft_render::parse_color;
-use egui::{Rect, Response, RichText, TextEdit, Ui};
+use coursecraft_render::{
+    Highlight, SlideTransform, compose_object_with_value, icon, paint, parse_color,
+};
+use egui::{
+    Align2, Color32, CornerRadius, FontId, Rect, Response, RichText, Sense, Stroke, StrokeKind,
+    TextEdit, Ui, pos2, vec2,
+};
 use serde_json::Value as Json;
 use std::collections::HashMap;
 
-pub const SUGGESTED_STATE_NAMES: &[&str] =
-    &["visited", "selected", "disabled", "hover", "down", "hidden"];
+pub const SUGGESTED_STATE_NAMES: &[&str] = &["visited", "selected", "disabled", "hover", "down"];
 
 const MAX_STATE_NAME_LEN: usize = 64;
+const CARD_WIDTH: f32 = 140.0;
+const CARD_HEIGHT: f32 = 128.0;
+const THUMB_WIDTH: f32 = 120.0;
+const THUMB_HEIGHT: f32 = 72.0;
 
 /// Edit buffers for a single custom state.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -36,6 +45,8 @@ pub struct StatesState {
     pub last_synced_selection: crate::Selection,
 
     pub new_state_name: String,
+    pub show_new_state_input: bool,
+    pub focus_override_bar: bool,
     pub edit_buffers: HashMap<String, StateEditBuffer>,
     pub delete_error: Option<(String, String)>,
 
@@ -696,4 +707,913 @@ pub fn show_states_section(
             editor.request(crate::EditorRequest::PickImage);
         }
     }
+}
+
+/// The value an input object reads on the authoring canvas: the variable's
+/// default, or `None` when the course has no such variable yet.
+pub(crate) fn course_input_value<'a>(course: &'a Course, obj: &Object) -> Option<&'a Value> {
+    obj.kind
+        .input_variable()
+        .and_then(|(name, _)| course.variable(name).map(|def| &def.value))
+}
+
+/// Compact "States" section in the Format inspector: `Initial` combo + `Open States tab (N)` link.
+pub fn show_compact_states_section(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    actions: &mut Vec<(&'static str, Json)>,
+) {
+    let Some(slide) = editor.session.course.slide(&editor.selection.slide) else {
+        return;
+    };
+    let Some(ref obj_id) = editor.selection.object else {
+        return;
+    };
+    let Some((obj, _)) = slide.object(obj_id) else {
+        return;
+    };
+
+    let slide_id = slide.id.clone();
+    let obj_id_str = obj.id.clone();
+    let mut initial_state = obj.initial_state.clone();
+    let mut available_states: Vec<String> = vec!["normal".to_owned(), "hidden".to_owned()];
+    for s in &obj.states {
+        if !available_states.iter().any(|existing| existing == &s.name) {
+            available_states.push(s.name.clone());
+        }
+    }
+
+    crate::properties::inspector_row(ui, "Initial", |ui| {
+        let rem_w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, "prop_initial_state", rem_w)
+            .selected_text(&initial_state)
+            .show_ui(ui, |ui| {
+                for state in &available_states {
+                    if ui
+                        .selectable_value(&mut initial_state, state.clone(), state)
+                        .clicked()
+                        && initial_state != obj.initial_state
+                    {
+                        actions.push((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide_id,
+                                "object": obj_id_str,
+                                "initial_state": state,
+                            }),
+                        ));
+                    }
+                }
+            });
+    });
+
+    let custom_count = obj.states.len();
+    let open_label = if custom_count == 0 {
+        "Open States tab".to_owned()
+    } else {
+        format!("Open States tab ({custom_count})")
+    };
+    crate::properties::inspector_row(ui, "States", |ui| {
+        if ui
+            .add(egui::Button::new(open_label).min_size(vec2(0.0, 24.0)))
+            .clicked()
+        {
+            editor.ui.bottom_tab = crate::BottomTab::States;
+        }
+    });
+}
+
+fn paint_checkerboard(painter: &egui::Painter, rect: Rect, is_dark: bool) {
+    let cell = 6.0;
+    let a = if is_dark {
+        Color32::from_gray(46)
+    } else {
+        Color32::from_gray(236)
+    };
+    let b = if is_dark {
+        Color32::from_gray(58)
+    } else {
+        Color32::from_gray(220)
+    };
+    let cols = (rect.width() / cell).ceil() as i32;
+    let rows = (rect.height() / cell).ceil() as i32;
+    for r in 0..rows {
+        for c in 0..cols {
+            let x0 = rect.min.x + c as f32 * cell;
+            let y0 = rect.min.y + r as f32 * cell;
+            let cell_rect = Rect::from_min_max(
+                pos2(x0, y0),
+                pos2((x0 + cell).min(rect.max.x), (y0 + cell).min(rect.max.y)),
+            );
+            let fill = if (r + c) % 2 == 0 { a } else { b };
+            painter.rect_filled(cell_rect, CornerRadius::ZERO, fill);
+        }
+    }
+}
+
+fn object_needs_checkerboard(obj: &Object, state_name: &str) -> bool {
+    if matches!(obj.kind, ObjectKind::Image { .. }) {
+        return true;
+    }
+    if state_name != "normal"
+        && let Some(st) = obj.states.iter().find(|s| s.name == state_name)
+        && let Some(ref fill) = st.fill
+        && let Some(c) = parse_color(fill)
+    {
+        return c.a() < 255;
+    }
+    match &obj.kind {
+        ObjectKind::Button { fill, .. } | ObjectKind::Shape { fill, .. } => {
+            parse_color(fill).is_some_and(|c| c.a() < 255)
+        }
+        ObjectKind::Path { path } => path
+            .fill
+            .as_ref()
+            .and_then(parse_color)
+            .is_some_and(|c| c.a() < 255),
+        _ => false,
+    }
+}
+
+fn paint_state_thumbnail(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    slide: &Slide,
+    obj: &Object,
+    state_name: &str,
+    thumb_rect: Rect,
+) {
+    let p = coursecraft_render::palette(ui.ctx());
+    let is_dark = ui.style().visuals.dark_mode;
+    let clipped_rect = thumb_rect.intersect(ui.clip_rect());
+    if !clipped_rect.is_positive() {
+        return;
+    }
+    let painter = ui.painter_at(clipped_rect);
+    crate::content_region::mark_content_region(ui.ctx(), ui.layer_id(), clipped_rect);
+    let bg_color =
+        parse_color(editor.session.course.slide_background(slide)).unwrap_or(Color32::WHITE);
+    painter.rect_filled(
+        thumb_rect,
+        CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+        bg_color,
+    );
+
+    if object_needs_checkerboard(obj, state_name) {
+        paint_checkerboard(&painter, thumb_rect, is_dark);
+    }
+
+    #[cfg(test)]
+    crate::guard_counters::note_state_thumbnail_paint(&obj.id, state_name, obj);
+
+    if let ObjectKind::Audio { src, .. } = &obj.kind {
+        painter.text(
+            pos2(thumb_rect.center().x, thumb_rect.center().y - 8.0),
+            Align2::CENTER_CENTER,
+            icon(coursecraft_render::Icon::SpeakerHigh, 20.0).text(),
+            FontId::new(20.0, egui::FontFamily::Name("phosphor".into())),
+            p.text_secondary,
+        );
+        let file_name = src.rsplit('/').next().unwrap_or(src);
+        painter.text(
+            pos2(thumb_rect.center().x, thumb_rect.center().y + 14.0),
+            Align2::CENTER_CENTER,
+            file_name,
+            FontId::proportional(10.0),
+            p.text_secondary,
+        );
+        return;
+    }
+
+    let Some(item) = compose_object_with_value(
+        obj,
+        state_name,
+        Some(&editor.session.course.theme),
+        course_input_value(&editor.session.course, obj),
+    ) else {
+        return;
+    };
+    let mut items = vec![item];
+    crate::canvas::missing_images_as_placeholders(&mut items, &editor.media);
+
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for it in &items {
+        min_x = min_x.min(it.rect.min.x);
+        min_y = min_y.min(it.rect.min.y);
+        max_x = max_x.max(it.rect.max.x);
+        max_y = max_y.max(it.rect.max.y);
+    }
+    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
+        return;
+    }
+    let raw_w = (max_x - min_x).max(1.0);
+    let raw_h = (max_y - min_y).max(1.0);
+    let pad = (raw_w.max(raw_h) * 0.10).max(2.0);
+    let origin_x = min_x - pad;
+    let origin_y = min_y - pad;
+    let bounds_w = (raw_w + pad * 2.0).max(1.0);
+    let bounds_h = (raw_h + pad * 2.0).max(1.0);
+    for it in &mut items {
+        it.rect = it.rect.translate(vec2(-origin_x, -origin_y));
+    }
+
+    let Some(t) = SlideTransform::fit(
+        thumb_rect,
+        Size {
+            w: bounds_w.round().max(1.0) as u32,
+            h: bounds_h.round().max(1.0) as u32,
+        },
+    ) else {
+        return;
+    };
+    let source = crate::MemoryMediaSource {
+        media: &editor.media,
+    };
+    paint(
+        &painter,
+        &t,
+        &items,
+        Highlight::default(),
+        Some((&mut editor.media_cache, &source)),
+        Some(&editor.session.course.theme),
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn show_state_card(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    slide: &Slide,
+    obj: &Object,
+    state_name: &str,
+    display_name: &str,
+    is_initial: bool,
+    is_active: bool,
+    is_custom: bool,
+    actions: &mut Vec<(&'static str, Json)>,
+) -> Rect {
+    let p = coursecraft_render::palette(ui.ctx());
+    let (card_rect, card_resp) =
+        ui.allocate_exact_size(vec2(CARD_WIDTH, CARD_HEIGHT), Sense::click());
+
+    let fill = if is_active { p.hover } else { p.raised };
+    let stroke = if is_active {
+        Stroke::new(2.0, p.accent)
+    } else {
+        Stroke::new(1.0, p.border)
+    };
+    ui.painter().rect(
+        card_rect,
+        CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
+        fill,
+        stroke,
+        StrokeKind::Inside,
+    );
+
+    let thumb_rect = Rect::from_min_size(
+        pos2(card_rect.min.x + 10.0, card_rect.min.y + 8.0),
+        vec2(THUMB_WIDTH, THUMB_HEIGHT),
+    );
+    if thumb_rect.intersects(ui.clip_rect()) {
+        paint_state_thumbnail(editor, ui, slide, obj, state_name, thumb_rect);
+    }
+
+    let footer_rect = Rect::from_min_max(
+        pos2(card_rect.min.x + 8.0, thumb_rect.max.y + 6.0),
+        pos2(card_rect.max.x - 8.0, card_rect.max.y - 6.0),
+    );
+    let mut menu_clicked = false;
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(footer_rect));
+    child.horizontal(|ui| {
+        let label_w = if is_initial { 48.0 } else { 88.0 };
+        ui.add_sized(
+            vec2(label_w, 24.0),
+            egui::Label::new(RichText::new(display_name).strong()).truncate(),
+        )
+        .on_hover_text(display_name);
+
+        if is_initial {
+            egui::Frame::new()
+                .fill(p.hover)
+                .corner_radius(CornerRadius::same(4))
+                .inner_margin(egui::Margin::symmetric(4, 1))
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Initial").size(10.0).color(p.text_secondary));
+                });
+        }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let menu_btn = ui.menu_button(
+                RichText::new("⋯").size(coursecraft_render::SIZE_BODY),
+                |ui| {
+                    menu_clicked = true;
+                    if ui
+                        .add_enabled(!is_initial, egui::Button::new("Set as initial"))
+                        .on_disabled_hover_text("Already the initial state")
+                        .clicked()
+                    {
+                        actions.push((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "initial_state": state_name,
+                            }),
+                        ));
+                        ui.close();
+                    }
+                    if is_custom && ui.button("Edit state").clicked() {
+                        editor.ui.preview_state = Some(state_name.to_owned());
+                        editor.ui.states.focus_override_bar = true;
+                        ui.close();
+                    }
+                    if is_custom {
+                        ui.separator();
+                        let blocker =
+                            state_delete_blocker(slide, &obj.id, state_name, &obj.initial_state);
+                        let del_btn = ui
+                            .add_enabled(blocker.is_none(), egui::Button::new("Delete"))
+                            .on_disabled_hover_text(
+                                blocker.as_deref().unwrap_or("Cannot delete state"),
+                            );
+                        if del_btn.clicked() {
+                            actions.push((
+                                "object.delete_state",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": obj.id,
+                                    "name": state_name,
+                                }),
+                            ));
+                            ui.close();
+                        }
+                    }
+                },
+            );
+            menu_btn.response.on_hover_text("State actions");
+        });
+    });
+
+    if card_resp.clicked() && !menu_clicked {
+        if state_name == "normal" {
+            editor.ui.preview_state = if obj.initial_state != "normal" {
+                Some("normal".to_owned())
+            } else {
+                None
+            };
+        } else {
+            editor.ui.preview_state = Some(state_name.to_owned());
+        }
+    }
+
+    card_rect
+}
+
+/// Render the `BottomTab::States` panel.
+pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'static str, Json)>) {
+    if editor.ui.states.last_synced_selection.object.is_some()
+        && editor.ui.states.last_synced_selection != editor.selection
+    {
+        editor.ui.preview_state = None;
+        editor.ui.states.show_new_state_input = false;
+    }
+    editor.ui.states.sync(
+        &editor.session.course,
+        &editor.selection,
+        editor.session.revision,
+    );
+
+    let p = coursecraft_render::palette(ui.ctx());
+
+    if editor.selection.is_multi() {
+        let count = 1 + editor.selection.also.len();
+        ui.centered_and_justified(|ui| {
+            ui.label(
+                RichText::new(format!(
+                    "Select a single object to edit its states ({count} selected)."
+                ))
+                .color(p.text_secondary),
+            );
+        });
+        return;
+    }
+
+    let Some(slide) = editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .cloned()
+    else {
+        ui.centered_and_justified(|ui| {
+            ui.label(
+                RichText::new("Select an object on the slide to view and edit its states.")
+                    .color(p.text_secondary),
+            );
+        });
+        return;
+    };
+    let Some(ref obj_id) = editor.selection.object else {
+        ui.centered_and_justified(|ui| {
+            ui.label(
+                RichText::new("Select an object on the slide to view and edit its states.")
+                    .color(p.text_secondary),
+            );
+        });
+        return;
+    };
+    let Some((obj_ref, _)) = slide.object(obj_id) else {
+        ui.centered_and_justified(|ui| {
+            ui.label(
+                RichText::new("Select an object on the slide to view and edit its states.")
+                    .color(p.text_secondary),
+            );
+        });
+        return;
+    };
+    let obj = obj_ref.clone();
+
+    if let Some(ref preview) = editor.ui.preview_state
+        && !obj.has_state(preview)
+    {
+        editor.ui.preview_state = None;
+    }
+
+    let obj_display_name = if obj.name.trim().is_empty() {
+        obj.id.as_str()
+    } else {
+        obj.name.as_str()
+    };
+    let total_states = 1 + obj.states.len();
+    let count_label = if total_states == 1 {
+        "1 state".to_owned()
+    } else {
+        format!("{total_states} states")
+    };
+
+    // Header strip (32 pt height, PANEL_MARGIN horizontal padding)
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(
+            coursecraft_render::PANEL_MARGIN as i8,
+            4,
+        ))
+        .show(ui, |ui| {
+            ui.set_min_height(32.0);
+            ui.horizontal(|ui| {
+                ui.add(egui::Label::new(RichText::new(obj_display_name).strong()).truncate())
+                    .on_hover_text(obj_display_name);
+                ui.label(RichText::new(count_label).color(p.text_secondary));
+
+                ui.separator();
+                ui.label("Initial");
+                let mut initial = obj.initial_state.clone();
+                let mut initial_choices = vec!["normal".to_owned(), "hidden".to_owned()];
+                for s in &obj.states {
+                    if !initial_choices.iter().any(|c| c == &s.name) {
+                        initial_choices.push(s.name.clone());
+                    }
+                }
+                crate::widgets::styled_combo(ui, "states_tab_initial_combo", 104.0)
+                    .selected_text(&initial)
+                    .show_ui(ui, |ui| {
+                        for choice in &initial_choices {
+                            if ui
+                                .selectable_value(&mut initial, choice.clone(), choice)
+                                .clicked()
+                                && initial != obj.initial_state
+                            {
+                                actions.push((
+                                    "object.update",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "initial_state": choice,
+                                    }),
+                                ));
+                            }
+                        }
+                    });
+                if obj.initial_state == "hidden" {
+                    egui::Frame::new()
+                        .fill(p.hover)
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(egui::Margin::symmetric(6, 2))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("Starts hidden")
+                                    .size(coursecraft_render::SIZE_BODY)
+                                    .color(p.text_secondary),
+                            );
+                        });
+                }
+
+                ui.separator();
+                for (state_name, button_label) in [
+                    ("hover", "+ Hover"),
+                    ("down", "+ Down"),
+                    ("selected", "+ Selected"),
+                    ("visited", "+ Visited"),
+                    ("disabled", "+ Disabled"),
+                ] {
+                    let already_added = obj.states.iter().any(|s| s.name == state_name);
+                    if ui
+                        .add_enabled(
+                            !already_added,
+                            egui::Button::new(button_label).min_size(vec2(0.0, 24.0)),
+                        )
+                        .on_disabled_hover_text("Already added")
+                        .clicked()
+                    {
+                        push_add_state(actions, &slide.id, &obj.id, &obj.kind, state_name);
+                        editor.ui.preview_state = Some(state_name.to_owned());
+                    }
+                }
+
+                if ui
+                    .add(egui::Button::new("+ New state").min_size(vec2(0.0, 24.0)))
+                    .clicked()
+                {
+                    editor.ui.states.show_new_state_input = !editor.ui.states.show_new_state_input;
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let custom_active = editor
+                        .ui
+                        .preview_state
+                        .as_deref()
+                        .is_some_and(|s| s != "normal");
+                    if ui
+                        .add_enabled(
+                            custom_active,
+                            egui::Button::new("Edit state").min_size(vec2(0.0, 32.0)),
+                        )
+                        .on_disabled_hover_text("Select a custom state to edit its overrides")
+                        .clicked()
+                    {
+                        editor.ui.states.focus_override_bar = true;
+                    }
+                });
+            });
+
+            if editor.ui.states.show_new_state_input {
+                ui.horizontal(|ui| {
+                    let r_name = ui.add(
+                        TextEdit::singleline(&mut editor.ui.states.new_state_name)
+                            .id_salt("states_tab_new_name_edit")
+                            .desired_width(140.0)
+                            .hint_text("state name"),
+                    );
+                    editor.ui.states.new_state_name_rect = Some(r_name.rect);
+                    let trimmed = editor.ui.states.new_state_name.trim().to_owned();
+                    let is_hidden = trimmed.eq_ignore_ascii_case("hidden");
+                    let validation = if is_hidden {
+                        Err("Hidden is built in — choose it in Initial or a trigger".to_owned())
+                    } else {
+                        validate_new_state_name(&trimmed, &obj.states)
+                    };
+                    let is_valid = validation.is_ok();
+                    let add_btn = ui
+                        .add_enabled(is_valid, egui::Button::new("Add").min_size(vec2(0.0, 24.0)))
+                        .on_disabled_hover_text(
+                            validation
+                                .as_ref()
+                                .err()
+                                .map_or("Enter a state name", String::as_str),
+                        );
+                    editor.ui.states.add_button_rect = Some(add_btn.rect);
+                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        && (r_name.has_focus() || r_name.lost_focus());
+                    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape)) && r_name.has_focus();
+                    if esc {
+                        editor.ui.states.show_new_state_input = false;
+                    } else if (add_btn.clicked() || enter) && is_valid {
+                        push_add_state(actions, &slide.id, &obj.id, &obj.kind, &trimmed);
+                        editor.ui.preview_state = Some(trimmed);
+                        editor.ui.states.new_state_name.clear();
+                        editor.ui.states.show_new_state_input = false;
+                    } else if enter && let Err(err) = validation {
+                        editor.ui.last_error = Some((err, editor.ui.current_time));
+                    } else if is_hidden {
+                        ui.label(
+                            RichText::new("Hidden is built in — choose it in Initial or a trigger")
+                                .color(p.text_secondary),
+                        );
+                    }
+                });
+            }
+        });
+
+    ui.separator();
+
+    let active_custom_state = editor
+        .ui
+        .preview_state
+        .as_deref()
+        .and_then(|name| obj.states.iter().find(|s| s.name == name))
+        .cloned();
+
+    let avail_w = ui.available_width();
+    let override_w = if active_custom_state.is_some() {
+        (avail_w * 0.34).clamp(220.0, 320.0)
+    } else {
+        0.0
+    };
+    let strip_w = (avail_w
+        - override_w
+        - if active_custom_state.is_some() {
+            12.0
+        } else {
+            0.0
+        })
+    .max(160.0);
+
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            vec2(strip_w, CARD_HEIGHT + 14.0),
+            egui::Layout::left_to_right(egui::Align::TOP),
+            |ui| {
+                egui::ScrollArea::horizontal()
+                    .id_salt("states_card_strip")
+                    .auto_shrink([false, true])
+                    .max_height(CARD_HEIGHT + 14.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_space(coursecraft_render::PANEL_MARGIN);
+                            let normal_active = match editor.ui.preview_state.as_deref() {
+                                Some("normal") => true,
+                                Some(_) => false,
+                                None => obj.initial_state == "normal",
+                            };
+                            let normal_rect = show_state_card(
+                                editor,
+                                ui,
+                                &slide,
+                                &obj,
+                                "normal",
+                                "Normal",
+                                obj.initial_state == "normal",
+                                normal_active,
+                                false,
+                                actions,
+                            );
+                            editor
+                                .ui
+                                .states
+                                .state_row_rects
+                                .insert("normal".to_owned(), normal_rect);
+
+                            for state in &obj.states {
+                                let is_active =
+                                    editor.ui.preview_state.as_deref() == Some(&state.name);
+                                let rect = show_state_card(
+                                    editor,
+                                    ui,
+                                    &slide,
+                                    &obj,
+                                    &state.name,
+                                    &state.name,
+                                    obj.initial_state == state.name,
+                                    is_active,
+                                    true,
+                                    actions,
+                                );
+                                editor
+                                    .ui
+                                    .states
+                                    .state_row_rects
+                                    .insert(state.name.clone(), rect);
+                            }
+
+                            if obj.states.is_empty() {
+                                let (add_rect, add_resp) = ui.allocate_exact_size(
+                                    vec2(CARD_WIDTH, CARD_HEIGHT),
+                                    Sense::click(),
+                                );
+                                ui.painter().rect_stroke(
+                                    add_rect,
+                                    CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
+                                    Stroke::new(1.0, p.border),
+                                    StrokeKind::Inside,
+                                );
+                                ui.painter().text(
+                                    add_rect.center(),
+                                    Align2::CENTER_CENTER,
+                                    "+ Add state",
+                                    FontId::proportional(coursecraft_render::SIZE_BODY),
+                                    p.text_secondary,
+                                );
+                                if add_resp.clicked() {
+                                    editor.ui.states.show_new_state_input = true;
+                                }
+                            }
+                            ui.add_space(coursecraft_render::PANEL_MARGIN);
+                        });
+                    });
+            },
+        );
+
+        // Slice 1 inline override bar beside the card strip when a custom state is selected
+        if let Some(state) = active_custom_state {
+            let active_name = state.name.clone();
+            ui.separator();
+            ui.vertical(|ui| {
+                ui.set_max_width(override_w);
+                let buf = editor
+                    .ui
+                    .states
+                    .edit_buffers
+                    .entry(state.name.clone())
+                    .or_default();
+                let mut pick_state_image = false;
+
+                let state_fill_allowed = match &obj.kind {
+                    ObjectKind::Button { .. } | ObjectKind::Shape { .. } => true,
+                    ObjectKind::Path { path } => path.closed,
+                    _ => false,
+                };
+                if state_fill_allowed {
+                    let id_salt = format!("state_tab_fill_{active_name}");
+                    let (r_color, is_valid_hex) =
+                        show_state_color_field(ui, "Fill", &mut buf.fill_hex, &id_salt);
+                    buf.fill_rect = Some(r_color.rect);
+                    if editor.ui.states.focus_override_bar {
+                        r_color.request_focus();
+                        editor.ui.states.focus_override_bar = false;
+                    }
+                    if is_committed(&r_color, ui) && is_valid_hex {
+                        let new_fill = if buf.fill_hex.trim().is_empty() {
+                            None
+                        } else {
+                            Some(Color(buf.fill_hex.trim().to_owned()))
+                        };
+                        if new_fill != state.fill {
+                            let mut updated = state.clone();
+                            updated.fill = new_fill;
+                            if let Ok(state_val) = serde_json::to_value(&updated) {
+                                actions.push((
+                                    "object.update_state",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "state": state_val,
+                                    }),
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                let allows_state_text = match &obj.kind {
+                    ObjectKind::Text { .. } | ObjectKind::Button { .. } => true,
+                    ObjectKind::Shape { shape, .. } => {
+                        coursecraft_course::shape_allows_text(*shape)
+                    }
+                    _ => false,
+                };
+                if allows_state_text {
+                    ui.horizontal(|ui| {
+                        ui.label("Text");
+                        let r_text = ui.add(
+                            TextEdit::singleline(&mut buf.text_override)
+                                .id_salt(format!("state_tab_text_{active_name}"))
+                                .desired_width(140.0),
+                        );
+                        buf.text_rect = Some(r_text.rect);
+                        if editor.ui.states.focus_override_bar {
+                            r_text.request_focus();
+                            editor.ui.states.focus_override_bar = false;
+                        }
+                        let enter =
+                            r_text.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if r_text.lost_focus() || enter {
+                            let new_text = if buf.text_override.trim().is_empty() {
+                                None
+                            } else {
+                                Some(buf.text_override.clone())
+                            };
+                            if new_text != state.text {
+                                let mut updated = state.clone();
+                                updated.text = new_text;
+                                if let Ok(state_val) = serde_json::to_value(&updated) {
+                                    actions.push((
+                                        "object.update_state",
+                                        serde_json::json!({
+                                            "slide": slide.id,
+                                            "object": obj.id,
+                                            "state": state_val,
+                                        }),
+                                    ));
+                                }
+                            }
+                        }
+                    });
+                }
+
+                if matches!(obj.kind, ObjectKind::Image { .. }) {
+                    let current_src = state.src.as_deref().filter(|s| !s.trim().is_empty());
+                    let is_unsafe =
+                        current_src.is_some_and(|s| !coursecraft_format::is_safe_relative_path(s));
+                    if let Some(src) = current_src {
+                        if is_unsafe {
+                            ui.add(egui::Label::new(RichText::new(src).color(p.danger)).truncate())
+                                .on_hover_text(src);
+                            ui.label(
+                                RichText::new("File not in the course. Choose image…")
+                                    .color(p.danger)
+                                    .size(coursecraft_render::SIZE_BODY),
+                            );
+                        } else {
+                            let file_name = src.rsplit('/').next().unwrap_or(src);
+                            ui.add(egui::Label::new(file_name).truncate())
+                                .on_hover_text(src);
+                        }
+                    } else {
+                        ui.label(
+                            RichText::new("Same as Normal")
+                                .color(p.text_secondary)
+                                .size(coursecraft_render::SIZE_BODY),
+                        );
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        let choose_label = if current_src.is_some() && !is_unsafe {
+                            "Replace…"
+                        } else {
+                            "Choose image…"
+                        };
+                        if ui
+                            .add(egui::Button::new(choose_label).min_size(vec2(0.0, 24.0)))
+                            .clicked()
+                        {
+                            pick_state_image = true;
+                        }
+                        ui.menu_button("From project…", |ui| {
+                            let images: Vec<String> = editor
+                                .media
+                                .iter()
+                                .map(|(name, _)| name)
+                                .filter(|name| coursecraft_course::is_image_src(name))
+                                .cloned()
+                                .collect();
+                            if images.is_empty() {
+                                ui.label(
+                                    RichText::new("No images in project")
+                                        .color(p.text_secondary)
+                                        .size(coursecraft_render::SIZE_BODY),
+                                );
+                            } else {
+                                for name in images {
+                                    let selected = current_src == Some(name.as_str());
+                                    if ui.selectable_label(selected, &name).clicked() {
+                                        let mut updated = state.clone();
+                                        updated.src = Some(name);
+                                        if let Ok(state_val) = serde_json::to_value(&updated) {
+                                            actions.push((
+                                                "object.update_state",
+                                                serde_json::json!({
+                                                    "slide": slide.id,
+                                                    "object": obj.id,
+                                                    "state": state_val,
+                                                }),
+                                            ));
+                                        }
+                                        ui.close();
+                                    }
+                                }
+                            }
+                        });
+                        if state.src.is_some()
+                            && crate::quiet_button(ui, "Clear", crate::QuietTone::Secondary, true)
+                                .clicked()
+                        {
+                            let mut updated = state.clone();
+                            updated.src = None;
+                            if let Ok(state_val) = serde_json::to_value(&updated) {
+                                actions.push((
+                                    "object.update_state",
+                                    serde_json::json!({
+                                        "slide": slide.id,
+                                        "object": obj.id,
+                                        "state": state_val,
+                                    }),
+                                ));
+                            }
+                        }
+                    });
+                }
+
+                editor.ui.states.focus_override_bar = false;
+                if pick_state_image {
+                    editor.pending_image_pick = Some(crate::PendingImagePick::StateImage {
+                        slide: slide.id.clone(),
+                        object: obj.id.clone(),
+                        state: active_name,
+                    });
+                    editor.request(crate::EditorRequest::PickImage);
+                }
+            });
+        }
+    });
 }
