@@ -3901,6 +3901,9 @@ pub const MAX_STATES_PER_OBJECT: usize = 32;
 /// Maximum number of Unicode scalar values in a state name.
 pub const MAX_STATE_NAME_CHARS: usize = 64;
 
+/// Maximum number of extra visual items inside a single `StateDef`.
+pub const MAX_STATE_EXTRAS: usize = 16;
+
 /// Property overrides applied while an object is in a named state.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3960,6 +3963,88 @@ pub struct StateDef {
     pub flip_h: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_v: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extras: Vec<StateExtra>,
+}
+
+/// Visual-only child item rendered relative to the parent object while a state is active.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateExtra {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    pub kind: StateExtraKind,
+    /// Relative to parent object's unrotated top-left `(0, 0)` in slide pixels.
+    /// Negative x/y or extents overhanging parent's w/h are allowed (e.g. corner badges).
+    pub frame: Rect,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_rotation",
+        skip_serializing_if = "is_zero_rotation"
+    )]
+    pub rotation: f32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip_h: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip_v: bool,
+    #[serde(
+        default = "default_opacity",
+        deserialize_with = "deserialize_opacity",
+        skip_serializing_if = "is_default_opacity"
+    )]
+    pub opacity: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glow: Option<Glow>,
+}
+
+/// Visual-only content kind for a [`StateExtra`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StateExtraKind {
+    Shape {
+        shape: ShapeKind,
+        fill: Color,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fill_style: Option<FillStyle>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outline: Option<Outline>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<ShapeText>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        adjust: Vec<f32>,
+    },
+    Image {
+        src: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        alt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        crop: Option<CropRect>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outline: Option<Outline>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shape: Option<ShapeKind>,
+    },
+    Text {
+        text: String,
+        #[serde(default)]
+        style: TextStyle,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        runs: Vec<TextRun>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        paragraphs: Vec<Paragraph>,
+        #[serde(default, skip_serializing_if = "is_default_autofit")]
+        autofit: Autofit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outline: Option<Outline>,
+    },
+    Path {
+        #[serde(flatten)]
+        path: Path,
+    },
 }
 
 // ---------------------------------------------------------------- triggers

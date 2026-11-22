@@ -1063,6 +1063,42 @@ static REGISTRY: &[Command] = &[
         run: object_reorder_state,
     },
     Command {
+        id: "object.state_add_extra",
+        label: "Add State Item",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object": id, "state": string, "extra": StateExtra}"#,
+        mutates: true,
+        run: object_state_add_extra,
+    },
+    Command {
+        id: "object.state_update_extra",
+        label: "Update State Item",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object": id, "state": string, "extra": id, "patch": object}"#,
+        mutates: true,
+        run: object_state_update_extra,
+    },
+    Command {
+        id: "object.state_delete_extra",
+        label: "Delete State Item",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object": id, "state": string, "extra": id}"#,
+        mutates: true,
+        run: object_state_delete_extra,
+    },
+    Command {
+        id: "object.state_reorder_extra",
+        label: "Reorder State Item",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object": id, "state": string, "extra": id, "index": usize}"#,
+        mutates: true,
+        run: object_state_reorder_extra,
+    },
+    Command {
         id: "object.delete",
         label: "Delete Object",
         menu: "Edit/Delete",
@@ -7853,6 +7889,202 @@ fn object_reorder_state(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let item = obj.states.remove(pos);
     obj.states.insert(index, item);
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+fn next_extra_id(existing: &[coursecraft_course::StateExtra]) -> String {
+    let taken: BTreeSet<&str> = existing.iter().map(|e| e.id.as_str()).collect();
+    for n in 1usize.. {
+        let candidate = format!("extra_{n}");
+        if !taken.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    "extra_1".to_owned()
+}
+
+fn patch_req<T: serde::de::DeserializeOwned>(
+    cmd: &str,
+    map: &serde_json::Map<String, Json>,
+    key: &str,
+    dst: &mut T,
+) -> Result<()> {
+    let Some(val) = map.get(key) else {
+        return Ok(());
+    };
+    *dst = serde_json::from_value(val.clone())
+        .map_err(|e| EngineError::Invalid(format!("{cmd}: invalid {key}: {e}")))?;
+    Ok(())
+}
+
+fn object_state_add_extra(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.state_add_extra";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let state_name: String = req(C, p, "state")?;
+    let mut extra: coursecraft_course::StateExtra = req(C, p, "extra")?;
+    refuse_master_states(C, s, &sid)?;
+
+    let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+    let st = obj
+        .states
+        .iter_mut()
+        .find(|st| st.name == state_name)
+        .ok_or_else(|| {
+            EngineError::NotFound(format!("state {state_name:?} not found on object {oid:?}"))
+        })?;
+    if st.extras.len() >= coursecraft_course::MAX_STATE_EXTRAS {
+        return Err(bad(
+            C,
+            format!(
+                "a state may have at most {} extras",
+                coursecraft_course::MAX_STATE_EXTRAS
+            ),
+        ));
+    }
+    if extra.id.trim().is_empty() {
+        extra.id = next_extra_id(&st.extras);
+    }
+    let id = extra.id.clone();
+    st.extras.push(extra);
+    keep_valid(s, was_valid)?;
+    Ok(serde_json::json!({ "id": id }))
+}
+
+fn object_state_update_extra(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.state_update_extra";
+    const ALLOWED_KEYS: &[&str] = &[
+        "name", "frame", "kind", "rotation", "flip_h", "flip_v", "opacity", "shadow", "glow",
+    ];
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let state_name: String = req(C, p, "state")?;
+    let extra_id: String = req(C, p, "extra")?;
+    let patch_val: Json = req(C, p, "patch")?;
+    let patch_map = patch_val
+        .as_object()
+        .ok_or_else(|| EngineError::Invalid(format!("{C}: patch must be a JSON object")))?;
+    for k in patch_map.keys() {
+        if !ALLOWED_KEYS.contains(&k.as_str()) {
+            return Err(EngineError::Invalid(format!(
+                "{C}: unknown patch field {k:?}"
+            )));
+        }
+    }
+    refuse_master_states(C, s, &sid)?;
+
+    let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+    let st = obj
+        .states
+        .iter_mut()
+        .find(|st| st.name == state_name)
+        .ok_or_else(|| {
+            EngineError::NotFound(format!("state {state_name:?} not found on object {oid:?}"))
+        })?;
+    let target = st
+        .extras
+        .iter_mut()
+        .find(|e| e.id == extra_id)
+        .ok_or_else(|| {
+            EngineError::NotFound(format!(
+                "extra {extra_id:?} not found in state {state_name:?}"
+            ))
+        })?;
+
+    patch_req(C, patch_map, "name", &mut target.name)?;
+    patch_req(C, patch_map, "frame", &mut target.frame)?;
+    patch_req(C, patch_map, "kind", &mut target.kind)?;
+    if patch_map.contains_key("rotation") {
+        patch_req(C, patch_map, "rotation", &mut target.rotation)?;
+        if !target.rotation.is_finite() {
+            return Err(EngineError::Invalid(format!(
+                "{C}: rotation must be finite"
+            )));
+        }
+        target.rotation = coursecraft_course::normalize_rotation(target.rotation);
+    }
+    patch_req(C, patch_map, "flip_h", &mut target.flip_h)?;
+    patch_req(C, patch_map, "flip_v", &mut target.flip_v)?;
+    if patch_map.contains_key("opacity") {
+        patch_req(C, patch_map, "opacity", &mut target.opacity)?;
+        if !target.opacity.is_finite() {
+            return Err(EngineError::Invalid(format!("{C}: opacity must be finite")));
+        }
+        target.opacity = coursecraft_course::clamp_opacity(target.opacity);
+    }
+    patch_opt(C, patch_map, "shadow", &mut target.shadow)?;
+    patch_opt(C, patch_map, "glow", &mut target.glow)?;
+
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+fn object_state_delete_extra(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.state_delete_extra";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let state_name: String = req(C, p, "state")?;
+    let extra_id: String = req(C, p, "extra")?;
+    refuse_master_states(C, s, &sid)?;
+
+    let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+    let st = obj
+        .states
+        .iter_mut()
+        .find(|st| st.name == state_name)
+        .ok_or_else(|| {
+            EngineError::NotFound(format!("state {state_name:?} not found on object {oid:?}"))
+        })?;
+    let before = st.extras.len();
+    st.extras.retain(|e| e.id != extra_id);
+    if st.extras.len() == before {
+        return Err(EngineError::NotFound(format!(
+            "extra {extra_id:?} not found in state {state_name:?}"
+        )));
+    }
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+fn object_state_reorder_extra(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.state_reorder_extra";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let state_name: String = req(C, p, "state")?;
+    let extra_id: String = req(C, p, "extra")?;
+    let index: usize = req(C, p, "index")?;
+    refuse_master_states(C, s, &sid)?;
+
+    let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+    let st = obj
+        .states
+        .iter_mut()
+        .find(|st| st.name == state_name)
+        .ok_or_else(|| {
+            EngineError::NotFound(format!("state {state_name:?} not found on object {oid:?}"))
+        })?;
+    let pos = st
+        .extras
+        .iter()
+        .position(|e| e.id == extra_id)
+        .ok_or_else(|| {
+            EngineError::NotFound(format!(
+                "extra {extra_id:?} not found in state {state_name:?}"
+            ))
+        })?;
+    if index >= st.extras.len() {
+        return Err(bad(
+            C,
+            format!("index {index} out of range (0..{})", st.extras.len()),
+        ));
+    }
+    let item = st.extras.remove(pos);
+    st.extras.insert(index, item);
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
 }

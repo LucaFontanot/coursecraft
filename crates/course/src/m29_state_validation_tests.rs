@@ -651,3 +651,320 @@ fn unsafe_paths_in_state_src_and_fill_style_are_flagged_by_validate() {
         );
     }
 }
+
+#[test]
+fn state_extra_serde_roundtrip_and_pre_m29_compatibility() {
+    let legacy_state = crate::StateDef {
+        name: "hover".into(),
+        fill: Some(crate::Color("#112233".into())),
+        ..Default::default()
+    };
+    let legacy_val = serde_json::to_value(&legacy_state).unwrap();
+    assert!(
+        legacy_val.get("extras").is_none(),
+        "empty extras must be omitted on serialize: {legacy_val}"
+    );
+
+    let full_json = serde_json::json!({
+        "name": "visited",
+        "extras": [
+            {
+                "id": "badge",
+                "name": "Check badge",
+                "kind": { "type": "shape", "shape": "ellipse", "fill": "#22AA44" },
+                "frame": { "x": -8.0, "y": -8.0, "w": 24.0, "h": 24.0 }
+            },
+            {
+                "id": "icon",
+                "kind": { "type": "image", "src": "check.png", "alt": "Completed" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 16.0, "h": 16.0 },
+                "opacity": 0.9,
+                "rotation": 45.0,
+                "flip_h": true
+            },
+            {
+                "id": "lbl",
+                "kind": { "type": "text", "text": "Done" },
+                "frame": { "x": 0.0, "y": 40.0, "w": 60.0, "h": 20.0 }
+            },
+            {
+                "id": "stroke",
+                "kind": {
+                    "type": "path",
+                    "points": [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}],
+                    "outline": { "color": "#000000", "width": 2.0 }
+                },
+                "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+            }
+        ]
+    });
+    let state: crate::StateDef = serde_json::from_value(full_json).unwrap();
+    assert_eq!(state.extras.len(), 4);
+    let back: crate::StateDef =
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+    assert_eq!(state, back);
+}
+
+#[test]
+fn state_extra_over_16_limit_produces_validation_error() {
+    let extras: Vec<serde_json::Value> = (0..=crate::MAX_STATE_EXTRAS)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("e{i}"),
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+            })
+        })
+        .collect();
+    let course = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{ "name": "hover", "extras": extras }]
+    }));
+    let issues = course.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/states/0/extras")),
+        "expected error for > MAX_STATE_EXTRAS: {issues:?}"
+    );
+}
+
+#[test]
+fn state_extra_duplicate_or_invalid_id_produces_validation_error() {
+    let course = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "bad id!",
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+                },
+                {
+                    "id": "dup",
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+                },
+                {
+                    "id": "dup",
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+                }
+            ]
+        }]
+    }));
+    let issues = course.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/extras/0/id")),
+        "expected invalid id error: {issues:?}"
+    );
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/extras/2/id")),
+        "expected duplicate id error: {issues:?}"
+    );
+}
+
+#[test]
+fn state_extra_unsafe_image_src_or_picture_fill_produces_validation_error() {
+    for bad in ["../secret.png", "C:\\a.png", ""] {
+        let course = course_with_slide_object(serde_json::json!({
+            "id": "btn-1",
+            "name": "Button 1",
+            "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+            "kind": { "type": "button", "label": "Next" },
+            "states": [{
+                "name": "hover",
+                "extras": [{
+                    "id": "img1",
+                    "kind": { "type": "image", "src": bad },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                }]
+            }]
+        }));
+        let issues = course.validate();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.severity == Severity::Error && i.path.ends_with("/extras/0/kind/src")),
+            "expected error for image extra src {bad:?}: {issues:?}"
+        );
+    }
+
+    let course_pic = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [{
+                "id": "shp1",
+                "kind": {
+                    "type": "shape",
+                    "shape": "rectangle",
+                    "fill": "#112233",
+                    "fill_style": { "type": "picture", "src": "../evil.png" }
+                },
+                "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+            }]
+        }]
+    }));
+    let issues = course_pic.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/extras/0/fill_style/src")),
+        "expected error for unsafe picture fill_style in shape extra: {issues:?}"
+    );
+}
+
+#[test]
+fn state_extra_frame_allows_overhang_but_rejects_non_positive_or_non_finite() {
+    let valid_overhang = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [{
+                "id": "badge",
+                "kind": { "type": "shape", "shape": "ellipse", "fill": "#FF0000" },
+                "frame": { "x": -12.0, "y": -12.0, "w": 24.0, "h": 24.0 }
+            }]
+        }]
+    }));
+    let issues = valid_overhang.validate();
+    assert!(
+        issues.iter().all(|i| i.severity != Severity::Error),
+        "overhanging negative x/y on extra frame must be allowed: {issues:?}"
+    );
+
+    let mut invalid_frame = valid_overhang.clone();
+    invalid_frame.scenes[0].slides[0].objects[0].states[0].extras[0]
+        .frame
+        .w = -5.0;
+    let issues = invalid_frame.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/extras/0/frame")),
+        "expected error for negative extra frame width: {issues:?}"
+    );
+
+    let mut nan_frame = valid_overhang;
+    nan_frame.scenes[0].slides[0].objects[0].states[0].extras[0]
+        .frame
+        .x = f32::NAN;
+    let issues = nan_frame.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/extras/0/frame")),
+        "expected error for NaN extra frame x: {issues:?}"
+    );
+}
+
+#[test]
+fn state_extra_path_with_connector_or_glue_produces_validation_error() {
+    let course = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [{
+                "id": "p1",
+                "kind": {
+                    "type": "path",
+                    "points": [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}],
+                    "outline": { "color": "#000000", "width": 2.0 },
+                    "connector": "straight",
+                    "start_glue": { "object": "btn-1", "site": 0 }
+                },
+                "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 40.0 }
+            }]
+        }]
+    }));
+    let issues = course.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/kind/path/connector")),
+        "expected connector error on path extra: {issues:?}"
+    );
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/kind/path/glue")),
+        "expected glue error on path extra: {issues:?}"
+    );
+}
+
+#[test]
+fn fuzz_500_extras_and_5000_point_path_extra_return_bounded_validation_errors() {
+    let extras: Vec<serde_json::Value> = (0..500)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("e{i}"),
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+            })
+        })
+        .collect();
+    let course_500 = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{ "name": "hover", "extras": extras }]
+    }));
+    let issues_500 = course_500.validate();
+    assert!(
+        issues_500
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/states/0/extras")),
+        "expected bounded-count error for 500 extras: {issues_500:?}"
+    );
+
+    let pts: Vec<serde_json::Value> = (0..5000)
+        .map(|i| serde_json::json!({ "x": (i as f32) / 5000.0, "y": 0.5 }))
+        .collect();
+    let course_path = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [{
+                "id": "bigpath",
+                "kind": {
+                    "type": "path",
+                    "points": pts,
+                    "outline": { "color": "#000000", "width": 2.0 }
+                },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }]
+        }]
+    }));
+    let issues_path = course_path.validate();
+    assert!(
+        issues_path
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/kind/path/points")),
+        "expected bounded-count error for 5000-point path extra: {issues_path:?}"
+    );
+}

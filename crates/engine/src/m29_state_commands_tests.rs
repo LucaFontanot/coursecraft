@@ -595,3 +595,364 @@ fn patch_state_rejects_unknown_key_and_mutual_exclusion_without_mutating_course(
     );
     assert_eq!(s.course, before);
 }
+
+#[test]
+fn state_add_extra_adds_all_four_kinds_with_auto_id_and_undoes_redoes() {
+    let mut s = Session::blank("Add Extra");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": { "name": "hover" }
+        }),
+    );
+
+    let before = s.course.clone();
+    let r1 = ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": "hover",
+            "extra": {
+                "kind": { "type": "shape", "shape": "ellipse", "fill": "#22AA44" },
+                "frame": { "x": -8.0, "y": -8.0, "w": 24.0, "h": 24.0 }
+            }
+        }),
+    );
+    assert_eq!(r1["id"], "extra_1");
+
+    let r2 = ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": "hover",
+            "extra": {
+                "kind": { "type": "image", "src": "check.png", "alt": "Done" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 16.0, "h": 16.0 }
+            }
+        }),
+    );
+    assert_eq!(r2["id"], "extra_2");
+
+    let r3 = ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": "hover",
+            "extra": {
+                "id": "custom_txt",
+                "kind": { "type": "text", "text": "New!" },
+                "frame": { "x": 0.0, "y": 30.0, "w": 50.0, "h": 20.0 }
+            }
+        }),
+    );
+    assert_eq!(r3["id"], "custom_txt");
+
+    let r4 = ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": "hover",
+            "extra": {
+                "kind": {
+                    "type": "path",
+                    "points": [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}],
+                    "outline": { "color": "#000000", "width": 2.0 }
+                },
+                "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 40.0 }
+            }
+        }),
+    );
+    assert_eq!(r4["id"], "extra_3");
+
+    let after = s.course.clone();
+    let (obj, _) = s.course.slide("slide1").unwrap().object("btn").unwrap();
+    assert_eq!(obj.states[0].extras.len(), 4);
+
+    for _ in 0..4 {
+        s.undo().unwrap();
+    }
+    assert_eq!(s.course, before);
+
+    for _ in 0..4 {
+        s.redo().unwrap();
+    }
+    assert_eq!(s.course, after);
+}
+
+#[test]
+fn state_add_extra_rejects_over_limit_and_unsafe_image_src() {
+    let mut s = Session::blank("Add Extra Refusal");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": { "name": "hover" }
+        }),
+    );
+
+    let before_unsafe = s.course.clone();
+    assert!(
+        s.execute(
+            "object.state_add_extra",
+            &json!({
+                "slide": "slide1",
+                "object": "btn",
+                "state": "hover",
+                "extra": {
+                    "kind": { "type": "image", "src": "../secret.png" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                }
+            })
+        )
+        .is_err()
+    );
+    assert_eq!(s.course, before_unsafe);
+
+    for _ in 0..coursecraft_course::MAX_STATE_EXTRAS {
+        ok(
+            &mut s,
+            "object.state_add_extra",
+            json!({
+                "slide": "slide1",
+                "object": "btn",
+                "state": "hover",
+                "extra": {
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+                }
+            }),
+        );
+    }
+
+    let before_17th = s.course.clone();
+    assert!(
+        s.execute(
+            "object.state_add_extra",
+            &json!({
+                "slide": "slide1",
+                "object": "btn",
+                "state": "hover",
+                "extra": {
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+                }
+            })
+        )
+        .is_err()
+    );
+    assert_eq!(s.course, before_17th);
+}
+
+#[test]
+fn state_update_extra_patches_fields_clears_shadow_and_undoes_redoes() {
+    let mut s = Session::blank("Update Extra");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({ "slide": "slide1", "object": "btn", "state": { "name": "hover" } }),
+    );
+    ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": "hover",
+            "extra": {
+                "id": "badge",
+                "kind": { "type": "shape", "shape": "ellipse", "fill": "#22AA44" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 },
+                "shadow": { "color": "#000000", "blur": 4.0, "offset_x": 1.0, "offset_y": 1.0 }
+            }
+        }),
+    );
+
+    let before = s.course.clone();
+    ok(
+        &mut s,
+        "object.state_update_extra",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": "hover",
+            "extra": "badge",
+            "patch": {
+                "name": "Star",
+                "frame": { "x": -4.0, "y": -4.0, "w": 30.0, "h": 30.0 },
+                "rotation": 30.0,
+                "opacity": 0.75,
+                "flip_h": true,
+                "kind": { "type": "shape", "shape": "star_5", "fill": "#FFCC00" },
+                "shadow": null
+            }
+        }),
+    );
+    let after = s.course.clone();
+    let (obj, _) = s.course.slide("slide1").unwrap().object("btn").unwrap();
+    let ex = &obj.states[0].extras[0];
+    assert_eq!(ex.name, "Star");
+    assert_eq!(ex.frame.x, -4.0);
+    assert_eq!(ex.frame.w, 30.0);
+    assert_eq!(ex.rotation, 30.0);
+    assert_eq!(ex.opacity, 0.75);
+    assert!(ex.flip_h);
+    assert!(ex.shadow.is_none());
+
+    s.undo().unwrap();
+    assert_eq!(s.course, before);
+
+    s.redo().unwrap();
+    assert_eq!(s.course, after);
+}
+
+#[test]
+fn state_update_extra_rejects_unknown_key_and_invalid_frame_without_mutating() {
+    let mut s = Session::blank("Update Extra Refusal");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({ "slide": "slide1", "object": "btn", "state": { "name": "hover" } }),
+    );
+    ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": "hover",
+            "extra": {
+                "id": "badge",
+                "kind": { "type": "shape", "shape": "ellipse", "fill": "#22AA44" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+            }
+        }),
+    );
+
+    let before = s.course.clone();
+    let err_unknown = s
+        .execute(
+            "object.state_update_extra",
+            &json!({
+                "slide": "slide1",
+                "object": "btn",
+                "state": "hover",
+                "extra": "badge",
+                "patch": { "bogus": 1 }
+            }),
+        )
+        .unwrap_err();
+    assert!(err_unknown.to_string().contains("unknown"), "{err_unknown}");
+    assert_eq!(s.course, before);
+
+    assert!(
+        s.execute(
+            "object.state_update_extra",
+            &json!({
+                "slide": "slide1",
+                "object": "btn",
+                "state": "hover",
+                "extra": "badge",
+                "patch": { "frame": { "x": 0.0, "y": 0.0, "w": -10.0, "h": 20.0 } }
+            })
+        )
+        .is_err()
+    );
+    assert_eq!(s.course, before);
+}
+
+#[test]
+fn state_delete_extra_and_reorder_extra_mutate_error_and_undo_redo() {
+    let mut s = Session::blank("Delete & Reorder Extra");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({ "slide": "slide1", "object": "btn", "state": { "name": "hover" } }),
+    );
+    for id in ["e0", "e1", "e2"] {
+        ok(
+            &mut s,
+            "object.state_add_extra",
+            json!({
+                "slide": "slide1",
+                "object": "btn",
+                "state": "hover",
+                "extra": {
+                    "id": id,
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0 }
+                }
+            }),
+        );
+    }
+
+    // Reorder 0 -> 2
+    let before_reorder = s.course.clone();
+    ok(
+        &mut s,
+        "object.state_reorder_extra",
+        json!({ "slide": "slide1", "object": "btn", "state": "hover", "extra": "e0", "index": 2 }),
+    );
+    let after_reorder = s.course.clone();
+    let (obj, _) = s.course.slide("slide1").unwrap().object("btn").unwrap();
+    let ids: Vec<&str> = obj.states[0].extras.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, vec!["e1", "e2", "e0"]);
+
+    // Out-of-bounds index errors without mutating
+    assert!(
+        s.execute(
+            "object.state_reorder_extra",
+            &json!({ "slide": "slide1", "object": "btn", "state": "hover", "extra": "e1", "index": 3 })
+        )
+        .is_err()
+    );
+    assert_eq!(s.course, after_reorder);
+
+    s.undo().unwrap();
+    assert_eq!(s.course, before_reorder);
+    s.redo().unwrap();
+    assert_eq!(s.course, after_reorder);
+
+    // Delete missing ID errors without mutating
+    assert!(
+        s.execute(
+            "object.state_delete_extra",
+            &json!({ "slide": "slide1", "object": "btn", "state": "hover", "extra": "missing" })
+        )
+        .is_err()
+    );
+    assert_eq!(s.course, after_reorder);
+
+    // Delete e2 and undo/redo
+    ok(
+        &mut s,
+        "object.state_delete_extra",
+        json!({ "slide": "slide1", "object": "btn", "state": "hover", "extra": "e2" }),
+    );
+    let after_delete = s.course.clone();
+    let (obj, _) = s.course.slide("slide1").unwrap().object("btn").unwrap();
+    let ids: Vec<&str> = obj.states[0].extras.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, vec!["e1", "e0"]);
+
+    s.undo().unwrap();
+    assert_eq!(s.course, after_reorder);
+    s.redo().unwrap();
+    assert_eq!(s.course, after_delete);
+}

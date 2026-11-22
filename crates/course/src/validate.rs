@@ -2159,6 +2159,7 @@ fn check_object_states(cx: &mut Ctx<'_>, o: &Object, p: &str) {
         }
         let sp = format!("{p}/states/{i}");
         check_state_widened_overrides(cx, s, &sp);
+        check_state_extras(cx, &s.extras, &sp);
     }
     if !o.has_state(&o.initial_state) {
         cx.err(
@@ -2236,6 +2237,150 @@ fn check_state_widened_overrides(cx: &mut Ctx<'_>, s: &crate::StateDef, sp: &str
             format!("{sp}/rotation"),
             "rotation must be a finite number of degrees in 0..360",
         );
+    }
+}
+
+fn check_state_extras(cx: &mut Ctx<'_>, extras: &[crate::StateExtra], sp: &str) {
+    if extras.len() > crate::MAX_STATE_EXTRAS {
+        cx.err(
+            format!("{sp}/extras"),
+            format!(
+                "a state may have at most {} extras (found {})",
+                crate::MAX_STATE_EXTRAS,
+                extras.len()
+            ),
+        );
+    }
+    let mut seen_ids = BTreeSet::new();
+    for (ei, extra) in extras.iter().enumerate() {
+        let ep = format!("{sp}/extras/{ei}");
+        if !valid_name(&extra.id) {
+            cx.err(
+                format!("{ep}/id"),
+                format!(
+                    "extra id {:?} must be 1-128 chars of [A-Za-z0-9_-]",
+                    extra.id
+                ),
+            );
+        }
+        if !seen_ids.insert(extra.id.as_str()) {
+            cx.err(
+                format!("{ep}/id"),
+                format!("duplicate extra id {:?}", extra.id),
+            );
+        }
+        if !coord_ok(extra.frame.x)
+            || !coord_ok(extra.frame.y)
+            || !extent_ok(extra.frame.w)
+            || !extent_ok(extra.frame.h)
+        {
+            cx.err(
+                format!("{ep}/frame"),
+                "extra frame coordinates must be finite, x and y within ±100000, and w and h greater than 0 and at most 100000",
+            );
+        }
+        if !extra.opacity.is_finite() || !(0.0..=1.0).contains(&extra.opacity) {
+            cx.err(
+                format!("{ep}/opacity"),
+                "opacity must be a finite number in 0..=1",
+            );
+        }
+        if !extra.rotation.is_finite() || !(0.0..360.0).contains(&extra.rotation) {
+            cx.err(
+                format!("{ep}/rotation"),
+                "rotation must be a finite number of degrees in 0..360",
+            );
+        }
+        if let Some(shadow) = &extra.shadow {
+            check_shadow(cx, shadow, &format!("{ep}/shadow"));
+        }
+        if let Some(glow) = &extra.glow {
+            check_glow(cx, glow, &format!("{ep}/glow"));
+        }
+        match &extra.kind {
+            crate::StateExtraKind::Shape {
+                shape,
+                fill,
+                fill_style,
+                outline,
+                text,
+                adjust: _,
+            } => {
+                if !fill.is_valid() {
+                    cx.err(
+                        format!("{ep}/kind/fill"),
+                        format!("color {:?} is not #RRGGBB or #RRGGBBAA", fill.0),
+                    );
+                }
+                if let Some(fs) = fill_style {
+                    check_fill_style(cx, fs, &ep);
+                }
+                check_shape_outline_and_text(cx, *shape, outline.as_ref(), text.as_ref(), &ep);
+            }
+            crate::StateExtraKind::Image {
+                src,
+                alt: _,
+                crop,
+                outline,
+                shape: _,
+            } => {
+                if src.trim().is_empty() {
+                    cx.err(format!("{ep}/kind/src"), "media src is empty");
+                } else if !is_safe_relative_path(src) {
+                    cx.err(
+                        format!("{ep}/kind/src"),
+                        format!("media src {src:?} must be a safe relative path"),
+                    );
+                }
+                if let Some(crop) = crop
+                    && let Some(message) = check_crop_values(*crop)
+                {
+                    cx.err(format!("{ep}/kind/crop"), message);
+                }
+                if let Some(outline) = outline {
+                    check_outline(cx, outline, &format!("{ep}/kind/outline"));
+                }
+            }
+            crate::StateExtraKind::Text {
+                text,
+                style,
+                runs,
+                paragraphs,
+                autofit: _,
+                outline,
+            } => {
+                if !style.color.is_valid() {
+                    cx.err(
+                        format!("{ep}/kind/style/color"),
+                        format!("color {:?} is not #RRGGBB or #RRGGBBAA", style.color.0),
+                    );
+                }
+                check_font_style(cx, style, &format!("{ep}/kind/style"));
+                check_text_runs(cx, text, runs, &format!("{ep}/kind"));
+                check_paragraphs(cx, paragraphs, &format!("{ep}/kind"));
+                if let Some(outline) = outline {
+                    check_outline(cx, outline, &format!("{ep}/kind/outline"));
+                }
+            }
+            crate::StateExtraKind::Path { path } => {
+                check_path(cx, path, &ep);
+                if path.connector.is_some() {
+                    cx.err(
+                        format!("{ep}/kind/path/connector"),
+                        "state extra paths cannot be connectors",
+                    );
+                }
+                if path.start_glue.is_some() || path.end_glue.is_some() {
+                    cx.err(
+                        format!("{ep}/kind/path/glue"),
+                        "state extra paths cannot have connector glue",
+                    );
+                }
+                if let Some(fs) = &path.fill_style {
+                    check_fill_style(cx, fs, &ep);
+                }
+            }
+        }
     }
 }
 
