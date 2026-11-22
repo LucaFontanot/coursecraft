@@ -371,7 +371,7 @@ enum Cmd {
         /// Scale factor (pixels per point, default 2.0).
         #[arg(long, default_value = "2.0")]
         scale: f32,
-        /// Player state: playing, paused, hidden, drawer, ended, or loading.
+        /// Player state: playing, paused, hidden, drawer, ended, loading, or start.
         #[arg(long, default_value = "playing")]
         state: String,
         /// Output PNG path.
@@ -1089,9 +1089,10 @@ fn run_snapshot_player(
         "drawer" => coursecraft_render::PlayerSnapshotSelect::Drawer,
         "ended" => coursecraft_render::PlayerSnapshotSelect::Ended,
         "loading" => coursecraft_render::PlayerSnapshotSelect::Loading,
+        "start" => coursecraft_render::PlayerSnapshotSelect::Start,
         other => {
             return Err(format!(
-                "unknown player state '{other}'; expected playing, paused, hidden, drawer, ended, or loading"
+                "unknown player state '{other}'; expected playing, paused, hidden, drawer, ended, loading, or start"
             ));
         }
     };
