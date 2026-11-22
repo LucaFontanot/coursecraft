@@ -110,7 +110,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use coursecraft_course::{
     CompletionStatus, Course, Issue, Link, MotionPath, NavMode, NextRequirement, ObjectKind,
-    QuestionKind, Severity, Slide, Value,
+    QuestionKind, SeekbarBehaviour, Severity, Slide, Value,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1690,10 +1690,24 @@ impl<'c> Player<'c> {
         self.current_slide().map_or(0, |slide| slide.duration_ms)
     }
 
+    /// Whether `player.seekbar` keeps the learner from seeking right now.
+    #[must_use]
+    pub fn seekbar_locked(&self) -> bool {
+        match self.course.player.seekbar {
+            SeekbarBehaviour::Free => false,
+            SeekbarBehaviour::Locked => true,
+            SeekbarBehaviour::UntilTimelineEnds => self.current_slide().is_some_and(|slide| {
+                !self.st.timeline_completed.contains(&slide.id)
+                    && self.st.base.ms < slide.duration_ms
+            }),
+        }
+    }
+
     /// Whether a seek is allowed right now.
     #[must_use]
     pub fn seek_allowed(&self) -> bool {
         self.current_slide().is_some()
+            && !self.seekbar_locked()
             && match self.seek_target() {
                 SeekTarget::Base => !self.base_held_by_layer(),
                 SeekTarget::Layer(_) => true,
@@ -1713,6 +1727,7 @@ impl<'c> Player<'c> {
                 seek_allowed: false,
             };
         };
+        let unlocked = !self.seekbar_locked();
         match self.seek_target() {
             SeekTarget::Layer(id) => {
                 let elapsed_ms = self.st.layer_clocks.get(&id).map_or(0, |c| c.ms);
@@ -1721,14 +1736,14 @@ impl<'c> Player<'c> {
                     elapsed_ms,
                     duration_ms,
                     paused,
-                    seek_allowed: true,
+                    seek_allowed: unlocked,
                 }
             }
             SeekTarget::Base => SeekInfo {
                 elapsed_ms: self.st.base.ms,
                 duration_ms: slide.duration_ms,
                 paused,
-                seek_allowed: !self.base_held_by_layer(),
+                seek_allowed: unlocked && !self.base_held_by_layer(),
             },
             SeekTarget::Refused => SeekInfo {
                 elapsed_ms: self.st.base.ms,

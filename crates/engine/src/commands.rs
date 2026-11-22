@@ -104,7 +104,7 @@ static REGISTRY: &[Command] = &[
         label: "Player Settings",
         menu: "Project/Player Settings",
         shortcut: None,
-        params: r#"{"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}}"#,
+        params: r#"{"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}, "seekbar"?: "free"|"locked"|"until_timeline_ends"}"#,
         mutates: true,
         run: course_set_player,
     },
@@ -1891,6 +1891,9 @@ fn course_set_player(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(v) = opt::<coursecraft_course::NextRequirement>(C, p, "next_requires")? {
         check_next_requirement(s, C, &v)?;
         s.course.player.next_requires = v;
+    }
+    if let Some(v) = opt::<coursecraft_course::SeekbarBehaviour>(C, p, "seekbar")? {
+        s.course.player.seekbar = v;
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)

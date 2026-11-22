@@ -1664,7 +1664,7 @@ fn unpack_then_pack_then_unpack_is_byte_identical() {
     .expect("unpack");
     assert_eq!(code, ExitCode::SUCCESS);
     let packed = dir.join("b.ccraft");
-    run(Cli {
+    let _ = run(Cli {
         cmd: Cmd::Pack {
             folder: first.clone(),
             out: packed.clone(),
@@ -1672,7 +1672,7 @@ fn unpack_then_pack_then_unpack_is_byte_identical() {
     })
     .expect("pack");
     let second = dir.join("second.ccraft-folder");
-    run(Cli {
+    let _ = run(Cli {
         cmd: Cmd::Unpack {
             archive: packed,
             out: second.clone(),
@@ -1770,7 +1770,7 @@ fn import_questions_adds_a_bank_from_the_template() {
             bank: Some("Imported".to_owned()),
         },
     };
-    run(cli).expect("import");
+    let _ = run(cli).expect("import");
     let imported = Course::from_json(&std::fs::read_to_string(&out).unwrap()).unwrap();
     let bank = imported
         .banks

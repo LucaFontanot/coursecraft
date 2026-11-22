@@ -693,6 +693,9 @@ pub struct PlayerSettings {
     /// The course-wide rule for when Next becomes available.
     #[serde(default, skip_serializing_if = "is_default_next_requirement")]
     pub next_requires: NextRequirement,
+    /// Whether the learner may move the seekbar.
+    #[serde(default, skip_serializing_if = "is_default_seekbar")]
+    pub seekbar: SeekbarBehaviour,
 }
 
 impl Default for PlayerSettings {
@@ -711,8 +714,22 @@ impl Default for PlayerSettings {
             show_captions: true,
             navigation: NavMode::Free,
             next_requires: NextRequirement::Nothing,
+            seekbar: SeekbarBehaviour::Free,
         }
     }
+}
+
+/// Whether the learner may drag the seekbar to change the slide position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeekbarBehaviour {
+    /// The learner may seek at any time.
+    #[default]
+    Free,
+    /// The learner can never seek; the seekbar only shows progress.
+    Locked,
+    /// Seeking unlocks once the slide's base timeline has reached its end.
+    UntilTimelineEnds,
 }
 
 /// How the slide menu lets the learner move around the course.
@@ -772,6 +789,10 @@ fn is_default_nav_mode(mode: &NavMode) -> bool {
 
 fn is_default_next_requirement(rule: &NextRequirement) -> bool {
     *rule == NextRequirement::Nothing
+}
+
+fn is_default_seekbar(mode: &SeekbarBehaviour) -> bool {
+    *mode == SeekbarBehaviour::Free
 }
 
 fn yes() -> bool {

@@ -3056,6 +3056,10 @@ impl<'c> Player<'c> {
         let Some(slide) = self.slides.get(self.st.slide).copied() else {
             return;
         };
+        if self.seekbar_locked() {
+            warn(out, "the seekbar is locked on this slide; seek refused");
+            return;
+        }
         match self.seek_target() {
             SeekTarget::Refused => {
                 warn(out, "the slide timeline is held by a layer; seek refused");
