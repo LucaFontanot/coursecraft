@@ -241,13 +241,27 @@ pub fn toolbar_button_enabled(
     toolbar_button_impl(ui, icon, label, active, enabled, tooltip)
 }
 
+const TOOLBAR_SHOW_LABELS_ID: &str = "coursecraft_toolbar_show_labels";
+
+/// Record whether the current frame's toolbar buttons should render text labels.
+pub fn set_toolbar_show_labels(ctx: &egui::Context, show: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(TOOLBAR_SHOW_LABELS_ID), show));
+}
+
+/// Whether toolbar buttons should render text labels on the current frame.
+#[must_use]
+pub fn toolbar_show_labels(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::unique(TOOLBAR_SHOW_LABELS_ID)))
+        .unwrap_or_else(|| ctx.content_rect().width() >= 1100.0)
+}
+
 /// A Keynote-style toolbar button with an accent fill and white icon/label.
 ///
-/// Used for the primary toolbar action (Publish). Below ≈1100 px window width it
+/// Used for the primary toolbar action (Publish). Below the responsive width threshold it
 /// drops the label and shows the icon alone, like the other toolbar buttons.
 pub fn toolbar_primary_button(ui: &mut Ui, icon: Icon, label: &str, tooltip: &str) -> Response {
     let p = palette(ui.ctx());
-    let show_label = ui.ctx().content_rect().width() >= 1100.0;
+    let show_label = toolbar_show_labels(ui.ctx());
     let label_galley = if show_label {
         Some(ui.painter().layout_no_wrap(
             label.to_owned(),
@@ -318,7 +332,7 @@ pub fn toolbar_primary_button(ui: &mut Ui, icon: Icon, label: &str, tooltip: &st
 /// A small caret button companion for toolbar dropdowns (e.g. next to Add Slide).
 pub fn toolbar_caret_button(ui: &mut Ui, tooltip: &str) -> Response {
     let p = palette(ui.ctx());
-    let size = vec2(16.0, 44.0);
+    let size = vec2(20.0, 44.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip.to_owned()));
 
@@ -365,8 +379,8 @@ fn toolbar_button_impl(
     tooltip: &str,
 ) -> Response {
     let p = palette(ui.ctx());
-    // Drop labels and show icons only below ≈1100 px so nothing clips or overlaps at 1024.
-    let show_label = ui.ctx().content_rect().width() >= 1100.0;
+    // Drop labels and show icons only when narrow so nothing clips or overlaps.
+    let show_label = toolbar_show_labels(ui.ctx());
 
     let height = 44.0;
     let label_font = FontId::proportional(SIZE_SMALL);

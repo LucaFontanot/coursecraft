@@ -236,6 +236,8 @@ mod timeline_f23_tests;
 #[cfg(test)]
 mod timeline_scrub_tests;
 #[cfg(test)]
+mod toolbar_menu_tests;
+#[cfg(test)]
 mod translate_tests;
 #[cfg(test)]
 mod trigger_problems_tests;

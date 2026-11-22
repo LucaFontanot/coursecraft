@@ -9,7 +9,7 @@
 
 use coursecraft_course::ShapeKind;
 use coursecraft_render::Icon;
-use egui::{Align, Layout, Rect, Sense, Ui, UiBuilder, pos2, vec2};
+use egui::{Align, Layout, Rect, Ui, UiBuilder, pos2, vec2};
 
 use crate::{DrawTool, Editor, EditorRequest, InspectorTab, PlacementTool, widgets};
 
@@ -348,7 +348,13 @@ pub fn preview_slide(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
 pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>) {
     let max_rect = ui.max_rect();
     let center_x = max_rect.center().x;
-    let show_label = ui.ctx().content_rect().width() >= 1100.0;
+    let label_threshold = if editor.file_ops_available {
+        1220.0
+    } else {
+        1100.0
+    };
+    let show_label = ui.ctx().content_rect().width() >= label_threshold;
+    widgets::set_toolbar_show_labels(ui.ctx(), show_label);
 
     // Center group width calculation
     let center_w = if show_label {
@@ -495,16 +501,20 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     // Course map toggle: the course map replaces the slide editor.
     left_ui.add_space(coursecraft_render::SPACE_MD);
     let story_sc = crate::menu::shortcut_label(left_ui.ctx(), "Ctrl+Shift+M");
-    let story_tooltip = format!("Course map ({story_sc})");
-    if widgets::toolbar_toggle(
+    let map_tooltip = if master_view {
+        "Not available in Master View".to_owned()
+    } else {
+        format!("Course map ({story_sc})")
+    };
+    if widgets::toolbar_button_enabled(
         &mut left_ui,
         Icon::SquaresFour,
-        "Story",
+        "Map",
         editor.ui.story_view,
-        &story_tooltip,
+        !master_view,
+        &map_tooltip,
     )
     .clicked()
-        && !editor.ui.master_view
     {
         editor.ui.story_view = !editor.ui.story_view;
     }
@@ -512,13 +522,21 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     // Format Painter: click arms once, double click keeps it armed.
     left_ui.add_space(coursecraft_render::SPACE_MD);
     let painter_armed = editor.ui.format_painter.is_some();
+    let painter_enabled = !master_view && (painter_armed || editor.can_arm_format_painter());
+    let painter_tooltip = if master_view {
+        "Not available in Master View"
+    } else if !painter_enabled {
+        "Select an object to copy its format"
+    } else {
+        "Format Painter"
+    };
     let painter_resp = widgets::toolbar_button_enabled(
         &mut left_ui,
         Icon::PaintBrush,
         "Paint",
         painter_armed,
-        !master_view && (painter_armed || editor.can_arm_format_painter()),
-        "Format Painter",
+        painter_enabled,
+        painter_tooltip,
     );
     if painter_resp.double_clicked() {
         editor.arm_format_painter(true);
@@ -810,6 +828,6 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         insert_trigger(editor);
     }
 
-    // Allocate the full toolbar rectangle so following panels don't overlap
-    ui.allocate_exact_size(max_rect.size(), Sense::hover());
+    // Reserve the full toolbar rectangle so following panels don't overlap
+    ui.advance_cursor_after_rect(max_rect);
 }

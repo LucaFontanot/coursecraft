@@ -147,9 +147,7 @@ fn picking_blocks_toolbar_clicks_and_still_applies_the_colour() {
     harness.idle_frame();
 
     // A labelled toolbar toggle with an observable effect.
-    let story = harness
-        .find_text("Story")
-        .expect("the Story toolbar toggle");
+    let story = harness.find_text("Map").expect("the Map toolbar toggle");
     let story_before = harness.editor.ui.story_view;
 
     // Start a pick and give the full-window blocker a frame to register.

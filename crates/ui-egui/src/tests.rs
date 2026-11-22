@@ -14808,7 +14808,7 @@ fn story_view_toggle_toolbar_and_shortcut() {
     harness.idle_frame();
     assert!(!harness.editor.ui.story_view);
     // Toolbar toggle.
-    let story = harness.find_text("Story").expect("Story toolbar toggle");
+    let story = harness.find_text("Map").expect("Map toolbar toggle");
     harness.click_at(story);
     harness.idle_frame();
     assert!(harness.editor.ui.story_view, "toolbar toggle opens the map");
@@ -15059,7 +15059,7 @@ fn story_view_toggle_does_nothing_in_master_view() {
     );
     assert!(harness.editor.ui.master_view);
     // Toolbar toggle does nothing.
-    let story = harness.find_text("Story").expect("Story toolbar toggle");
+    let story = harness.find_text("Map").expect("Map toolbar toggle");
     harness.click_at(story);
     harness.idle_frame();
     assert!(
