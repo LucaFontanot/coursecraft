@@ -1,14 +1,14 @@
 # Storyline 360 UI as observed
 
-> Reference for [the ribbon plan](README.md). Source: a public YouTube beginner course,
-> "Articulate Storyline 360 Tutorial 2026 Full Course for Beginners" (78 min, 1920×1080, Windows,
-> Storyline 360 x64, free trial, English UI). Timestamps are `mm:ss` into that video. Behaviour and
-> layout only; no assets were copied (see README › Clean-room).
+> Reference for [the ribbon plan](README.md). Sources: public beginner tutorials for Storyline 360
+> on Windows (English UI), from a 2021-era build to a 2026 build; the list is in README › Sources.
+> Where builds differ, the newer one wins and the difference is noted. Behaviour and layout only; no
+> assets were copied (see README › Clean-room).
 >
-> **Seen** = visible in the video. **Not shown** = the tutorial never opens it; the entry comes from
-> the tab strip only and must be checked against the app before anyone builds it.
+> **Seen** = visible in at least one tutorial. **Not shown** = no tutorial opens it yet; the entry
+> comes from the tab strip only and must be checked against the app before anyone builds it.
 
-## 1. Window at a glance (07:55, 08:20)
+## 1. Window at a glance
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -34,29 +34,40 @@
 - Tab strip order is fixed: FILE (blue, opens the file menu), HOME, INSERT, SLIDES, DESIGN,
   TRANSITIONS, ANIMATIONS, VIEW, HELP. Contextual tabs appear at the right end under a coloured
   caption ("DRAWING TOOLS" › FORMAT, "PICTURE TOOLS" › FORMAT, "AUDIO TOOLS" › OPTIONS,
-  "QUESTION TOOLS" › DESIGN). Two captions can show at once (QUESTION TOOLS + DRAWING TOOLS, 71:30).
+  "QUESTION TOOLS" › DESIGN). Two captions can show at once (QUESTION TOOLS + DRAWING TOOLS).
 - Each ribbon group has a caption under it; some have a dialog launcher (↘) at the bottom right
   (Font, Paragraph, Drawing, Background, Size and Position, Audio Options, Picture Styles).
 - Controls: large buttons (icon over a one- or two-line label), large split buttons (lower half
   with ▾ opens a menu), small buttons in columns of three (icon + label), small split buttons,
   combo boxes (font, size), galleries with scroll arrows and a "more" chevron, spinners
   (Duration, X, Y, Width, Height) and checkboxes (Title, Hide Background Graphics).
-- Hovering a split button's top half explains it (09:05: Preview's top half previews the entire
+- Every control has a tooltip: bold name with its shortcut, then one sentence ("Preview Project
+  (F12) — Preview the entire project from the beginning"; "Input — Insert a control that can
+  accept input from the learner"). Preview is in the Publish group of every tab.
+- Hovering a split button's top half explains it (Preview's top half previews the entire
   project; ▾ offers smaller scopes).
-- Every panel can be collapsed (▾), undocked (⧉) into a floating window (36:30) and docked back.
-  The Timeline panel collapses to a one-line bar "Timeline, States, Notes" at the bottom (19:10).
-- The ribbon shows a **Story view** variant of HOME (07:55) and a **Slide view** variant (08:20):
+- Every panel can be collapsed (▾), undocked (⧉) into a floating window and docked back.
+  The Timeline panel collapses to a one-line bar "Timeline, States, Notes" at the bottom.
+- The ribbon shows a **Story view** variant of HOME and a **Slide view** variant:
   same tab, different groups.
 
 ## 2. Main tabs
 
-### FILE (not shown)
+### FILE and the start screen
 
-A blue button at the left of the tab strip. The tutorial saves with the QAT Save button (13:20)
-and never opens FILE. Expected entries to confirm: New, Open, Recent, Save, Save As, Import,
-Translation, Publish, Project Info, Options, Help, Close, Exit.
+FILE is the accent-coloured first entry of the tab strip. It opens a full-window page, the same
+page Storyline shows on launch before any project is open (the start screen):
 
-### HOME, Story view (07:55, 14:45)
+- **Left column** (accent background, about a sixth of the width): product name as a heading, then
+  **New Project**, **Record Screen**, **Import** ▾ (PowerPoint, Quizmaker, Storyline, Rise…),
+  **Team Slides**; a rule; **Recent** with one row per project (thumbnail + file name, newest
+  first); **Browse for more…** at the bottom.
+- **Right area**: a news card about the current release (heading, bullets, "what's new" link),
+  footer links (Product Support, Discussion Forums).
+- Once a project is open, FILE also offers the project commands. Not shown yet, to confirm: Open,
+  Save, Save As, Publish, Translation, Project Info, Options, Help, Close, Exit.
+
+### HOME, Story view
 
 | Group | Controls (left to right; a column is listed top to bottom) |
 |---|---|
@@ -66,21 +77,28 @@ Translation, Publish, Project Info, Options, Help, Close, Exit.
 | Slide | **New Slide** ▾ · column: Apply Layout ▾, Reset, Duplicate · **Record Screen** ▾ |
 | Publish | **Player** · **Preview** ▾ · **Publish** |
 
-### HOME, Slide view (08:20, 24:35, 34:15)
+Older builds have no AI Assistant group and no Index button; the rest is the same.
+
+**New Slide ▾** (same on every tab): Content Library 360…, My Templates…, Team Slides…,
+**Basic Layouts…** ▸ (a gallery headed by the theme name, e.g. "Clean": Title and Content, Title
+Only, Question, Question with Media, Blank), Import… ▸, Graded Question…, Survey Question…,
+Freeform Question…, Results…, Record Screen….
+
+### HOME, Slide view
 
 | Group | Controls |
 |---|---|
-| Clipboard | **Paste** ▾ (paste options: Use Destination Theme, Keep Source Formatting, Keep Text Only, Paste Special…; 24:30) · column: Cut, Copy ▾, Format Painter |
+| Clipboard | **Paste** ▾ (paste options: Use Destination Theme, Keep Source Formatting, Keep Text Only, Paste Special…) · column: Cut, Copy ▾, Format Painter |
 | Slide | **New Slide** ▾ · column: Apply Layout ▾, Focus Order, Duplicate |
 | AI Assistant `New` | **Insert Text** · **Edit Text** · **Insert Image** · **Insert Audio** ▾ · column: Quiz, Question, Summary |
-| Font (↘) | **Text Styles** ▾ (Normal Text, headings…) · font family combo, size combo, Grow Font, Shrink Font, Clear Formatting · Bold, Italic, Underline, Shadow, Strikethrough, Character Spacing ▾, Change Case ▾, Highlight ▾, Font Color ▾ (theme colours, eyedropper; 25:20), Spelling |
-| Paragraph (↘) | Bullets ▾ (symbol choice; 26:00), Numbering ▾, Decrease Indent, Increase Indent, Line Spacing ▾ · Align Left, Center, Align Right, Justify · column: Text Direction ▾, Align Text ▾, Find / Replace ▾ |
+| Font (↘) | **Text Styles** ▾ (Normal Text, headings…) · font family combo, size combo, Grow Font, Shrink Font, Clear Formatting · Bold, Italic, Underline, Shadow, Strikethrough, Character Spacing ▾, Change Case ▾, Highlight ▾, Font Color ▾ (theme colours, eyedropper), Spelling |
+| Paragraph (↘) | Bullets ▾ (symbol choice), Numbering ▾, Decrease Indent, Increase Indent, Line Spacing ▾ · Align Left, Center, Align Right, Justify · column: Text Direction ▾, Align Text ▾, Find / Replace ▾ |
 | Drawing (↘) | **Arrange** ▾ · **Quick Styles** ▾ · column: Shape Fill ▾, Shape Outline ▾, Shape Effect ▾ |
 | Publish | **Player** · **Preview** ▾ · **Publish** |
 
-Preview ▾ (09:40): This Slide, This Scene, Selected Slides, Entire Project, Publish….
+Preview ▾: This Slide, This Scene, Selected Slides, Entire Project, Publish….
 
-### INSERT (08:45)
+### INSERT
 
 | Group | Controls |
 |---|---|
@@ -92,18 +110,18 @@ Preview ▾ (09:40): This Slide, This Scene, Selected Slides, Entire Project, Pu
 | Interactive Objects | **Button** ▾ · **Slider** ▾ · **Dial** ▾ · **Hotspot** ▾ · **Input** ▾ · **Marker** ▾ · column: Trigger, Scrolling Panel, Mouse ▾ |
 | Publish | **Preview** ▾ |
 
-Audio ▾ (09:15): Audio from File…, Media Library…, Record Mic…, Text-to-Speech…, AI Audio ▸,
+Audio ▾: Audio from File…, Media Library…, Record Mic…, Text-to-Speech…, AI Audio ▸,
 Background Audio ▸, Options….
 
-Marker gallery picks up theme accent 1 automatically (44:05). Characters opens a dialog (§5).
-Photos opens "Search Photos" (27:35).
+Marker gallery picks up theme accent 1 automatically. Characters opens a dialog (§5).
+Photos opens "Search Photos".
 
 ### SLIDES (not shown)
 
 Present in the strip from the start; never opened. To confirm: New Slide, Import (PowerPoint,
 Quizmaker, Storyline, Rise), Duplicate, New Scene, Question Banks, Feedback Master, Slide Master.
 
-### DESIGN (12:35, 20:20, 41:30)
+### DESIGN
 
 | Group | Controls |
 |---|---|
@@ -117,7 +135,7 @@ Quizmaker, Storyline, Rise), Duplicate, New Scene, Question Banks, Feedback Mast
 
 To confirm: transition gallery, Effect Options ▾, Duration, Preview.
 
-### ANIMATIONS (35:05, 35:30)
+### ANIMATIONS
 
 | Group | Controls |
 |---|---|
@@ -129,14 +147,14 @@ To confirm: transition gallery, Effect Options ▾, Duration, Preview.
 | Size and Position (↘) | X, Y, Width, Height spinners |
 | Publish | **Preview** ▾ |
 
-Entrance gallery (35:10): None, Fade, Grow, Fly In, Float In, Split, Wipe, Shape, Wheel,
+Entrance gallery: None, Fade, Grow, Fly In, Float In, Split, Wipe, Shape, Wheel,
 Random Bars, Spin, Spin & Grow, Grow & Spin, Zoom, Swivel, Bounce. Effect Options holds the
 direction (From Left…) and **Sequence** (As One Object / By Paragraph); By Paragraph adds a ▸ on the
-timeline row that expands one bar per paragraph (35:30).
+timeline row that expands one bar per paragraph.
 
 ### VIEW (not shown except Slide Master)
 
-The tutorial opens View › Slide Master (14:45 → master view at 15:00). To confirm: Story View,
+The tutorial opens View › Slide Master. To confirm: Story View,
 Normal View, Slide Master, Feedback Master, Zoom, Fit in Window, Ruler, Gridlines, Guides,
 Grid and Guides…, panel toggles, Reset panel layout.
 
@@ -146,7 +164,7 @@ To confirm: Help, Tutorials, Community, Check for Updates, About.
 
 ## 3. Contextual tabs
 
-### DRAWING TOOLS › FORMAT (54:30)
+### DRAWING TOOLS › FORMAT
 
 | Group | Controls |
 |---|---|
@@ -156,17 +174,17 @@ To confirm: Help, Tutorials, Community, Check for Updates, About.
 | Size and Position (↘) | X, Y, Width, Height |
 | Publish | **Preview** ▾ |
 
-### PICTURE TOOLS › FORMAT (29:15, 44:05)
+### PICTURE TOOLS › FORMAT
 
 | Group | Controls |
 |---|---|
 | Adjust | column: Brightness ▾, Contrast ▾, Recolor ▾ · column: Replace Picture ▾, Reset Picture ▾ |
 | Picture Styles (↘) | style gallery (Moderate Frame, Bevel Matte…) · column: Picture Shape ▾, Picture Border ▾, Picture Effects ▾ |
 | Arrange and Align | Arrange ▾, Group ▾, Rotate ▾ · align grid |
-| Size and Position (↘) | **Zoom Picture** · **Crop** (handles, live px read-out; 29:30) · X, Y, Width, Height |
+| Size and Position (↘) | **Zoom Picture** · **Crop** (handles, live px read-out) · X, Y, Width, Height |
 | Publish | **Preview** ▾ |
 
-### AUDIO TOOLS › OPTIONS (33:55)
+### AUDIO TOOLS › OPTIONS
 
 | Group | Controls |
 |---|---|
@@ -175,7 +193,20 @@ To confirm: Help, Tutorials, Community, Check for Updates, About.
 | Closed Captions | **Add Captions** · column: Import, Export, Delete |
 | Publish | **Preview** ▾ |
 
-### QUESTION TOOLS › DESIGN (71:30)
+### BUTTON TOOLS › FORMAT
+
+Replaces Drawing Tools when a button is selected.
+
+| Group | Controls |
+|---|---|
+| Action | **When Clicked Action** (large; set what the button does) |
+| Button Icons | icon gallery (arrows; scroll and more) · column: Align Icon ▾, Icon Color ▾, Remove Icon |
+| Button Styles (↘) | style gallery "Abc" (theme colours) · column: Button Fill ▾, Button Border ▾, Button Effects ▾ |
+| Arrange and Align | Arrange ▾, Group ▾, Rotate ▾ · align grid |
+| Size and Position (↘) | X, Y, Width, Height |
+| Publish | **Preview** ▾ |
+
+### QUESTION TOOLS › DESIGN
 
 | Group | Controls |
 |---|---|
@@ -185,7 +216,7 @@ To confirm: Help, Tutorials, Community, Check for Updates, About.
 | AI Assistant `New` | **Edit Question** · **Insert Question** |
 | Publish | **Player** · **Preview** ▾ · **Publish** |
 
-### Slide master mode: SLIDE MASTER tab (15:00, 16:35)
+### Slide master mode: SLIDE MASTER tab
 
 Strip becomes FILE, **SLIDE MASTER**, HOME, INSERT, TRANSITIONS, ANIMATIONS, VIEW, HELP
 (SLIDES and DESIGN leave).
@@ -200,7 +231,7 @@ Strip becomes FILE, **SLIDE MASTER**, HOME, INSERT, TRANSITIONS, ANIMATIONS, VIE
 
 Left panel: master thumbnail with its layouts indented beneath, joined by a dotted line.
 
-### Question form view (69:15, 69:55)
+### Question form view
 
 Strip: FILE, **QUESTION**, SLIDES, HELP.
 
@@ -220,15 +251,14 @@ click "Click to enter a choice"); "Set feedback and branching" grid (Correct / I
 Post-quiz review; Feedback text; MORE… button; Points 10 / 0). Right panel "Question" with a
 **Form View | Slide View** toggle and a live thumbnail.
 
-### Preview mode: PREVIEW tab (47:25)
+### Preview mode: PREVIEW tab
 
 Strip: FILE, **PREVIEW**. Groups: Close (**Close Preview**), Preview (**Select** ▾, **Replay** ▾,
 **Edit Slide**, **Inspect**). Right side: device buttons Desktop, Tablet landscape, Tablet portrait,
 Phone landscape, Phone portrait, and a settings gear. The player shows MENU sidebar, title,
-RESOURCES, the slide, and the control bar. "The player frame is responsive; the slide is not"
-(47:40).
+RESOURCES, the slide, and the control bar. "The player frame is responsive; the slide is not".
 
-### 360° image editor (50:20, 52:00) — 🚫 not planned in CourseCraft
+### 360° image editor — 🚫 not planned in CourseCraft
 
 Strip: FILE, MARKER, LABEL, INTERACTION. LABEL: Insert (Picture, Video, Audio, Button),
 Play (Preview), Edit (Volume, Crop, Accent), Accessibility (Alt Text, Add Captions, Import, Export,
@@ -238,84 +268,102 @@ navigation / Guided tour, Show progress indicator, marker list. A breadcrumb tab
 
 ## 4. Panels
 
-### Scenes panel (left, slide view; 08:20)
+### Scenes panel (left, slide view)
 
-Title "Scenes" with undock. Scene combo ("1 Basics ▾"); the mouse wheel over it switches scenes
-(10:40). Thumbnails numbered "1.1 Course Title", arrows between them show the navigation flow,
+Title "Scenes" with undock. Scene combo ("1 Basics ▾"); the mouse wheel over it switches scenes. Thumbnails numbered "1.1 Course Title", arrows between them show the navigation flow,
 a link icon after the last. Right-click: New Slide ▸ Basic Layouts ▸ (Title Only, Title and
-Content, Blank…), Apply Layout ▸, Delete… (23:30, 71:30).
+Content, Blank…), Apply Layout ▸, Delete….
 
-### Story view (07:55, 66:30)
+### Story view
 
 Each scene is a card: "1 Basics ▾" header (red flag on the starting scene), thumbnails with
-titles, arrows. Ctrl+wheel zooms. Double-click a slide opens it in a new view tab. Double-click a
-scene or slide title renames it; slide titles feed the player menu (67:30).
+titles, arrows. Ctrl+wheel or the status-bar zoom slider zooms; Fit to Window (far right of the
+status bar) fits the whole course. The ▾ in a scene header collapses the card to its header.
+Lines with arrowheads join scene cards when a slide jumps to another scene (branching from a main
+menu shows as a tree). Double-click a slide opens it in a new view tab named "number title";
+clicking the tabs moves between Story view and the slide. Double-click a scene or slide title
+renames it; slide titles feed the player menu. New projects start with "Untitled Scene" holding
+"Untitled Slide". The right panel shows Triggers and Slide Properties for the selected slide
+("No selection" otherwise).
 
-### Timeline / States / Notes (bottom; 34:15, 36:30, 37:40)
+### Timeline / States / Notes (bottom)
 
 - Tabs: Timeline, States, Notes. Header icons right: cue/adjust (⊕), menu ▾, undock (⧉).
 - Columns: eye (show/hide in editor) and lock, then the object name (double-click to rename;
   the tutor names `txt_title`, `pic_outsiders`), then the bar with its start, a fade in/out wedge
   for entrance/exit animations, and the "End" marker of the slide.
 - Ruler `00:01…`; playhead (blue triangle); **cue points** added with **C** while audio plays,
-  objects snap to them (37:40).
+  objects snap to them.
 - Footer: Play, Stop, zoom out / slider / zoom in, slide duration `00:05.00`.
+- Rows follow the stacking order, front-most on top; dragging a row up or down restacks the
+  object. Groups show as a row with ▸ that expands to their members (indented).
+- The timeline shows the objects of the current layer only.
 - Default slide duration 5 s; adding a longer audio stretches the slide and objects that have
-  "Show Until End" (33:30).
+  "Show Until End".
 
-Row right-click (34:10): Cut, Copy, Paste, Paste Special…, Rename "<name>", Show in Media
+Row right-click: Cut, Copy, Paste, Paste Special…, Rename "<name>", Show in Media
 Library…, Bring to Front ▸, Send to Back ▸, Create Cue Point at Playhead, Fit Timeline to Longest
 Object, Reset Timeline to Default, Alignment ▸, ✓ Show Until End, Show Always, Timing…,
 Accessibility….
 
-States tab (64:40): **EDIT STATES** button, "Initial state: [Normal ▾]", caption "States for
-<object>", one thumbnail per state (Normal with a flag = initial; Hover, Visited with a lightning
-mark = built-in). Built-in states work automatically; custom states need triggers (65:10).
+Notes tab: a plain text area per slide (paste or type; bullets allowed). Its background follows
+the player's colour scheme (dark player, dark notes). Notes can be published for learners as a
+player tab (transcript) or kept as an author script.
 
-### Right panel (08:20, 58:45)
+The splitter between the canvas and this area drags to resize; the canvas refits (or use Fit to
+Window). The collapse triangle at the top right hides the whole area; the same triangle is on
+every panel. An undocked panel can be dragged by its title anywhere (second monitor); its dock
+button puts it back where it was.
+
+States tab: **EDIT STATES** button, "Initial state: [Normal ▾]", caption "States for
+<object>", one thumbnail per state (Normal with a flag = initial; built-in states carry a
+lightning mark). A shape starts with Normal only; a button starts with five built-in states:
+Normal, Hover, Down, Visited, Disabled. Built-in states work automatically; custom states need triggers.
+
+### Right panel
 
 - Tabs: **Slide**, **Comments**, **AI Assistant** `New`.
 - **Triggers**: toolbar New Trigger, Edit, Copy, Paste, Delete, Move Up/Down; Group checkbox;
   Manage project variables. Sections **Object Triggers**, **Slide Triggers**, **Player Triggers**
   (collapsible); each trigger reads as a sentence: "Show layer **Intro** / When the timeline
   starts on **this slide**", links in blue to edit inline.
-- **Slide Properties** (Story view; 07:55): Properties for "1.1 Course Title"; Slide advances
+- **Slide Properties** (Story view): Properties for "1.1 Course Title"; Slide advances
   [By user ▾]; When revisiting [Automatically decide ▾]; Slide navigation and gestures: Buttons
   ☑Prev ☑Next ☐Submit; Swipe ☑Prev ☑Next; Player features [Player defaults ▾].
 - **Slide Layers**: list with the base layer last "(Base Layer)" and an eye per layer; footer New
-  Layer, Duplicate, Delete, ☑ Dim, Layer properties ⚙. Double-click renames (53:20).
+  Layer, Duplicate, Delete, ☑ Dim, Layer properties ⚙. Double-click renames.
 
-### Status bar (08:20)
+### Status bar
 
 Left: "Slide 1 of 5" (Scene 1 of 1 in Story view, "Slide Master" in master mode), "960 × 540",
 theme name "Clean". Right: three view buttons, zoom %, − slider +, fit to window.
 
 ## 5. Context menus and dialogs
 
-**Object right-click** (16:35): Cut, Copy, Paste Options (three icons), Paste Special…, Group ▸,
+**Object right-click**: Cut, Copy, Paste Options (three icons), Paste Special…, Group ▸,
 Bring to Front ▸, Send to Back ▸, Button Set ▸, Drag and Drop ▸, Add new horizontal guide line,
 Add new vertical guide line, Replace Picture ▸, Export Picture ▸, Show in Media Library…,
 Rename "Picture 1", Size and Position…, Accessibility…, Format Picture….
 
-| Dialog | Seen at | Contents |
-|---|---|---|
-| Slide Size | 12:35 | Preset ▾ (4:3 720×540, 16:9 …), Width, Height (px spinners), ☑ Lock aspect ratio, CURRENT DEFAULT SIZE, ☑ Scale existing content to fit, Learn more, OK, Cancel |
-| Create New Theme Fonts | 20:20 | Heading font, Body font (font lists show each face in its own font), sample, Name, Save, Cancel |
-| Create New Theme Colors | 41:30 | Name; swatches Text/Background Light 1, Dark 1, Light 2, Dark 2, Accent 1–6, Hyperlink, Control 1, Quiz Correct, Quiz Incorrect, Custom 1, Custom 2 (each ▾ with hex input); light and dark preview; OK, Cancel |
-| Trigger Wizard | 58:45 | Action [verb ▾] + target (Layer [▾]); When [event] + Object [▾]; Conditions (optional) "+ if"; Learn more; OK, Cancel. Clicking an object first pre-fills "When the user clicks Button 1" |
-| Insert Slide | 60:30, 68:50 | Title per category (Content Library 360, Graded Questions…); search; Sort by [Newest ▾]; filters (In Use, Type: Openings, Titles and Sections, Content, Charts and Graphs, Scenarios, Interactions, Closings, Graded, Survey, Freeform, Blank; Theme: Light, Dark); tile grid with zoom slider; preview pane with description; INSERT SLIDE. Built-in graded questions: True/False, Multiple Choice, Multiple Response, Fill-in-the-Blank, Word Bank, Matching Drag-and-Drop, Matching Drop-down, Sequence Drag-and-Drop, Sequence Drop-down, Numeric, Hotspot. Ctrl/Shift-click inserts several (61:10) |
-| Search Photos | 27:35 | search box, type ▾, result grid with source on hover, Insert |
-| Characters | 72:10 | tabs Character / Expression / Pose; filters Emotion (Positive, Neutral, Negative), Style (Neutral, Talking, Listening, Reacting, Thinking, Gesturing, Presenting, Holding Item, Holding Sign); Sort by; preview; INSERT |
-| Player Properties | 74:35 | its own ribbon PROPERTIES: Layout (Features), Data (Menu, Resources, Glossary), Appearance (Player Style [Modern ▾], Menus & Controls [On ▾], Colors & Effects), Custom (Text Labels, Other), Player (Current Player ▾). Body: Player Tabs (Sidebar: Menu, Glossary, Notes; Topbar: Resources…) with add/edit/delete/up/down; Player Features (Title, Sidebar [On Left ▾], Sidebar starts collapsed, Logo, Cover Photo, Fill player frame); Player Controls (Search, Seekbar with Allow drag / Read-only / Drag after completion, Play/Pause, Volume, Captions, Playback speed, Accessibility controls…); live preview; Learn more; OK, Cancel. Colors & Effects offers a light theme and takes Accent 1 (75:30) |
-| Publish | 76:15 | left list: Review 360, Web, Video, Word, LMS / LRS, Reach 360. LMS page: Title (…), Description, Folder (…); Properties: Player, Quality, Publish (Entire Project), Tracking (Slides viewed 6 of 6) as blue links; Reporting and Tracking: ☑ Report to an LMS [SCORM 1.2 ▾], ☐ Report to an external LRS, REPORTING AND TRACKING…; Learn more about publishing; PUBLISH, CANCEL |
-| Save As / Image from file | 13:20, 75:00 | system file dialogs |
+| Dialog | Contents |
+|---|---|
+| Slide Size | Preset ▾ (4:3 720×540, 16:9 …), Width, Height (px spinners), ☑ Lock aspect ratio, CURRENT DEFAULT SIZE, ☑ Scale existing content to fit, Learn more, OK, Cancel |
+| Create New Theme Fonts | Heading font, Body font (font lists show each face in its own font), sample, Name, Save, Cancel |
+| Create New Theme Colors | Name; swatches Text/Background Light 1, Dark 1, Light 2, Dark 2, Accent 1–6, Hyperlink, Control 1, Quiz Correct, Quiz Incorrect, Custom 1, Custom 2 (each ▾ with hex input); light and dark preview; OK, Cancel |
+| Trigger Wizard | Action [verb ▾] + target (Layer [▾]); When [event] + Object [▾]; Conditions (optional) "+ if"; Learn more; OK, Cancel. Clicking an object first pre-fills "When the user clicks Button 1" |
+| Insert Slide | Title per category (Content Library 360, Graded Questions…); search; Sort by [Newest ▾]; filters (In Use, Type: Openings, Titles and Sections, Content, Charts and Graphs, Scenarios, Interactions, Closings, Graded, Survey, Freeform, Blank; Theme: Light, Dark); tile grid with zoom slider; preview pane with description; INSERT SLIDE. Built-in graded questions: True/False, Multiple Choice, Multiple Response, Fill-in-the-Blank, Word Bank, Matching Drag-and-Drop, Matching Drop-down, Sequence Drag-and-Drop, Sequence Drop-down, Numeric, Hotspot. Ctrl/Shift-click inserts several |
+| Search Photos | search box, type ▾, result grid with source on hover, Insert |
+| Characters | tabs Character / Expression / Pose; filters Emotion (Positive, Neutral, Negative), Style (Neutral, Talking, Listening, Reacting, Thinking, Gesturing, Presenting, Holding Item, Holding Sign); Sort by; preview; INSERT |
+| Player Properties | its own ribbon PROPERTIES: Layout (Features), Data (Menu, Resources, Glossary), Appearance (Player Style [Modern ▾], Menus & Controls [On ▾], Colors & Effects), Custom (Text Labels, Other), Player (Current Player ▾). Body: Player Tabs (Sidebar: Menu, Glossary, Notes; Topbar: Resources…) with add/edit/delete/up/down; Player Features (Title, Sidebar [On Left ▾], Sidebar starts collapsed, Logo, Cover Photo, Fill player frame); Player Controls (Search, Seekbar with Allow drag / Read-only / Drag after completion, Play/Pause, Volume, Captions, Playback speed, Accessibility controls…); live preview; Learn more; OK, Cancel. Colors & Effects offers a light theme and takes Accent 1 |
+| Publish | left list: Review 360, Web, Video, Word, LMS / LRS, Reach 360. LMS page: Title (…), Description, Folder (…); Properties: Player, Quality, Publish (Entire Project), Tracking (Slides viewed 6 of 6) as blue links; Reporting and Tracking: ☑ Report to an LMS [SCORM 1.2 ▾], ☐ Report to an external LRS, REPORTING AND TRACKING…; Learn more about publishing; PUBLISH, CANCEL |
+| Save As / Image from file | system file dialogs |
 
 ## 6. Interaction details worth keeping
 
-- Selecting a text box frame (solid border) applies formatting to all its text (16:50).
-- Pink smart guides while dragging (17:00); Shift keeps proportions (56:10).
-- Shift+wheel zooms the canvas (45:30); the slide can be zoomed out to work off-slide.
-- Empty text boxes delete themselves on deselect (21:10).
-- Locking an object on the timeline prevents selecting it on the canvas (44:30).
-- New objects of a type take the theme colour (markers, buttons; 44:05).
-- The ribbon's Font combo accepts typing a letter to jump (17:40).
+- Selecting a text box frame (solid border) applies formatting to all its text.
+- Pink smart guides while dragging; Shift keeps proportions.
+- Shift+wheel zooms the canvas; the slide can be zoomed out to work off-slide.
+- Empty text boxes delete themselves on deselect.
+- Locking an object on the timeline prevents selecting it on the canvas.
+- New objects of a type take the theme colour (markers, buttons).
+- The ribbon's Font combo accepts typing a letter to jump.

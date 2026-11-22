@@ -36,8 +36,23 @@ everywhere and are specified once, under Home.
 
 ## File
 
-A menu, not a ribbon tab. It replaces today's File menu (`crates/ui-egui/src/menu.rs`
-`show_menu_bar`) and keeps all of it.
+Not a ribbon tab: a full-window **File page**, the same page CourseCraft shows on launch
+(today's welcome screen, `crates/ui-egui/src/welcome.rs`). Layout per storyline-observed.md ›
+FILE: an accent-coloured left column with the start actions, Recent and Browse for more…, and a
+right area with CourseCraft news (release notes from the app, no network call) and links. Esc or
+the Back entry returns to the editor. It replaces today's File menu (`menu.rs` `show_menu_bar`)
+and keeps all of it:
+
+| Start action (left column, top) | Action | Status | Existing UI |
+|---|---|---|---|
+| New Project | `ui:file.new` | ✅ | welcome screen, File › New |
+| Record Screen | — | 🚫 | Not planned (patent watch list) |
+| Import ▾ (PowerPoint…, Questions from CSV…, Course from Document…) | `ui:file.import.*` | ✅ | File › Import |
+| Team Slides | — | — | shared cloud library; not drawn |
+| Recent (thumbnail + name) | `ui:file.openRecent` | 🟡 | names only today; add thumbnails |
+| Browse for more… | `ui:file.open` | ✅ | File › Open… |
+
+Project commands (below the start actions once a course is open):
 
 | Item | Action | Status | Existing UI |
 |---|---|---|---|
@@ -73,7 +88,7 @@ Shown when the Course Map view tab is active.
 | AI | Quiz | L | `ui:ai.quiz` (new) | ⛔ | draft a quiz from the course text through the user's agent |
 | | Question | L | `ui:ai.question` (new) | ⛔ | |
 | | Summary | L | `ui:ai.summary` (new) | ⛔ | |
-| Slide | New Slide | LS | `slide.add`, `slide.add_from_layout`, `template.add_slide` | ✅ | ▾ = `slides::show_new_slide_popup` |
+| Slide | New Slide | LS | `slide.add`, `slide.add_from_layout`, `template.add_slide` | 🟡 | ▾ menu below |
 | | Apply Layout | SS | `slide.set_master` | ✅ | |
 | | Reset | S | `slide.set_master` (reapply) | ⛔ | reset placeholders to the layout |
 | | Duplicate | S | `slide.duplicate` | ✅ | |
@@ -81,6 +96,20 @@ Shown when the Course Map view tab is active.
 | Publish | Player | L | `ui:player.properties` | ✅ | Course settings › Player |
 | | Preview | LS | `ui:preview.*` | ✅ | ▾ This Slide, This Scene, Selected Slides, Entire Course, Publish… (`toolbar` preview popup) |
 | | Publish | L | `ui:publish` | ✅ | |
+
+**New Slide ▾** (shared by every tab that has New Slide):
+
+| Item | Action | Status |
+|---|---|---|
+| Library… | — | 🚫 Not planned: content library |
+| My Templates… | `template.add_slide` | ✅ (`slides::show_new_slide_popup`) |
+| Team Slides… | — | — not drawn |
+| Basic Layouts ▸ (gallery of the course's slide layouts, headed by the theme name) | `slide.add_from_layout` | ✅ |
+| Import ▸ PowerPoint…, Questions from CSV… | `ui:file.import.*` | ✅ |
+| Graded Question… / Survey Question… / Custom Question… | `question.insert` | ✅ |
+| Interaction… | `interaction.insert` | ✅ (CourseCraft extra) |
+| Results… | `results.insert` | ✅ |
+| Record Screen… | — | 🚫 |
 
 ## Home (Slide variant)
 

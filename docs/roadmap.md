@@ -318,7 +318,7 @@ From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Sugges
 ## M30 Ribbon UI parity (planned)
 
 A Storyline 360 author should find every command where they look for it. Plan and full inventory:
-`docs/ui/` (start at `docs/ui/README.md`), taken from a public beginner tutorial. Clean-room: same
+`docs/ui/` (start at `docs/ui/README.md`), taken from public beginner tutorials. Clean-room: same
 tabs, groups and order; our own look and coined names.
 
 1. Ribbon drawn from one declarative spec (`crates/ui-egui/src/ribbon/spec.rs`), widgets ported

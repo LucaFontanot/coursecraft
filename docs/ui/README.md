@@ -1,7 +1,7 @@
 # UI parity: the ribbon editor
 
-> **Status:** planned (M30). **Written:** 2026-11-23. **Source:** a public 78-minute beginner
-> tutorial for Storyline 360 (2026 build), watched frame by frame. Observations are of layout and
+> **Status:** planned (M30). **Written:** 2026-11-23. **Sources:** public beginner tutorials for
+> Storyline 360, watched frame by frame (see [Sources](#sources)). Observations are of layout and
 > behaviour only (see [Clean-room](#clean-room)).
 
 CourseCraft's editor today is a menu bar (File, Edit, Insert, Arrange, Project, View, Help) over a
@@ -19,7 +19,7 @@ feature lands, the button is switched on; nothing moves.
 
 | File | What it holds |
 |---|---|
-| [storyline-observed.md](storyline-observed.md) | What the tutorial shows, tab by tab and panel by panel, with timestamps. The reference. |
+| [storyline-observed.md](storyline-observed.md) | What the tutorials show, tab by tab and panel by panel. The reference. |
 | [ribbon.md](ribbon.md) | CourseCraft's main tabs: every group and control, its CourseCraft label, kind, command id and status. |
 | [contextual-tabs.md](contextual-tabs.md) | Tabs that appear for a selection or a mode: Drawing Tools, Picture Tools, Audio/Video Tools, Question Tools, Table Tools, Slide Master, Feedback Master, Preview, question form view. |
 | [shell-panels-dialogs.md](shell-panels-dialogs.md) | Window layout around the ribbon: title bar, quick access toolbar, view tabs, panels (Scenes, Timeline/States/Notes, Triggers, Slide Layers, Slide Properties), status bar, context menus and dialogs. |
@@ -47,7 +47,7 @@ Read `docs/contributing.md` › Clean-room rules first. For this work it means:
 - **Same structure, our own look.** Tab names, group names, button order and what each button does
   follow the tutorial. Icons, colours, spacing and fonts come from `DESIGN.md`. No icon, screenshot
   or asset from Storyline goes into the repository, and no frame of the tutorial is committed.
-  Timestamps in `storyline-observed.md` point at the public video instead.
+  `storyline-observed.md` names the public tutorials instead (README › Sources).
 - **Generic labels stay; coined names change.** Home, Insert, Design, Animations, Trigger, Layer,
   State, Question Bank, Slide Master, Text Styles, Format Painter are generic and stay. Product names
   and coined terms get CourseCraft names:
@@ -66,6 +66,18 @@ Read `docs/contributing.md` › Clean-room rules first. For this work it means:
 
   If the owner wants an exact label where this table differs, that is a decision for
   `docs/contributing.md`, not for a single commit.
+
+## Sources
+
+Public YouTube tutorials, Windows, English UI. No frames or timestamps are kept: a claim in these
+docs is checked by watching the tutorial or, better, the app itself. When a new tutorial is
+analysed, add it here and merge what it shows into the files above (newer build wins; note
+differences).
+
+| Tutorial | Build | What it adds |
+|---|---|---|
+| Articulate Storyline 360 Tutorial 2026 Full Course for Beginners | 2026 (AI Assistant present) | every main tab except Slides, Transitions, View, Help; Drawing, Picture, Audio and Question tools; Slide Master, Preview, 360° editor, question form view; most dialogs |
+| Articulate Storyline 360 Beginner Tutorial 01 User Interface | about 2021 | start screen / File page, New Slide ▾ menu, Button Tools › Format, Story view zoom and scene branching, five built-in button states, Notes panel, panel collapse and undock |
 
 ## How to add or wire a button
 

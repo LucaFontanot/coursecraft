@@ -11,7 +11,8 @@ when the object is just inserted.
 
 | Caption | Tab | Shown when the selection contains… |
 |---|---|---|
-| Drawing Tools | **Format** | a shape, text box, button, hotspot, marker, slider, dial, input, or text being edited |
+| Drawing Tools | **Format** | a shape, text box, hotspot, marker, slider, dial, input, or text being edited |
+| Button Tools | **Format** | a button (instead of Drawing Tools) |
 | Picture Tools | **Format** | an image (also for a state image being edited) |
 | Video Tools | **Options** | a video |
 | Audio Tools | **Options** | an audio object |
@@ -49,6 +50,24 @@ Modes replace the tab strip:
 | | align grid (9) | S | `object.align`, `object.distribute`, `object.match_size` | ✅ | Align to Slide toggle |
 | Size and Position ↘ | X, Y, Width, Height | N | `object.update` | ✅ | ↘ opens Size and Position dialog ⛔ (inspector today) |
 | Publish | Preview | LS | | ✅ | |
+
+## Button Tools › Format
+
+| Group | Control | Kind | Action | Status | Notes |
+|---|---|---|---|---|---|
+| Action | When Clicked Action | L | `trigger.add` (on click) | 🟡 | opens the trigger editor pre-filled with "when the user clicks" this button |
+| Button Icons | icon gallery | G | `object.update` `{icon}` | ⛔ | built-in arrow / check / play icons inside the button |
+| | Align Icon | SS | `object.update` `{icon_align}` | ⛔ | left, right, top, bottom, centre |
+| | Icon Color | SS | `object.update` `{icon_color}` | ⛔ | |
+| | Remove Icon | S | `object.update` `{icon: null}` | ⛔ | |
+| Button Styles ↘ | style gallery | G | `object.apply_style` | ✅ | |
+| | Button Fill / Border / Effects | SS | as Shape Fill / Outline / Effect | ✅ / 🟡 | |
+| Arrange and Align | as Drawing Tools | | | ✅ | |
+| Size and Position ↘ | X, Y, Width, Height | N | `object.update` | ✅ | |
+| Publish | Preview | LS | | ✅ | |
+
+A new button gets five built-in states (Normal, Hover, Down, Visited, Disabled); CourseCraft
+already creates them (M29), check the set matches.
 
 ## Picture Tools › Format
 

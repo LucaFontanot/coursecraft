@@ -24,6 +24,8 @@ Top to bottom:
 | Menu bar | none | File, Edit, Insert, Arrange, Project, View, Help | — | **remove** once every item has a ribbon home (ribbon.md › File, Help) |
 | Flat toolbar | none | `toolbar.rs` | — | **remove**; its buttons move to Home/Insert |
 | Collapse ribbon (Ctrl+F1, double-click a tab) | yes | — | ⛔ | |
+| File page = start screen (left action column, Recent with thumbnails, news) | yes | `welcome.rs` | 🟡 | restyle as the File page; reachable from the File tab |
+| Tooltips: name, shortcut, one sentence | yes | partial | 🟡 | every ribbon control, from the registry |
 | View tabs row with open slides | yes | single canvas | ⛔ | open slides as tabs; Course Map is the first tab |
 | Device toggles in view row | yes | — | ⛔ | they set the preview device |
 | Panels undock / float / dock back | yes | fixed panels | ⛔ | egui windows; remember layout in UI state |
@@ -70,6 +72,10 @@ CourseCraft has Timeline (`timeline.rs`), States (`states.rs`, M29) and Notes. P
 | Cue points: **C** while playing, snap, Create Cue Point at Playhead | ✅ (`slide.add_cue`) verify the C key |
 | Footer: Play, Stop, zoom, duration | ✅ |
 | Row right-click menu (below) | 🟡 |
+
+Notes tab: per-slide text, background follows the player colours, optional learner-facing tab
+(Player Properties › Notes) 🟡 — notes exist; check the player tab and the background.
+Rows restack by drag and groups expand with ▸ ✅ (verify group rows).
 
 States tab: Edit States button, Initial state combo, one thumbnail per state, built-in markers ✅
 (M29).
