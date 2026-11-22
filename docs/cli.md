@@ -346,7 +346,15 @@ video.remove_cue     -                        -          {"slide": id, "object":
 video.add_question_cue -                      -          {"slide": id, "object": id, "at_ms"?: number, "name"?: string}
 object.add_state     -                        -          {"slide": id, "object": id, "state": StateDef}
 object.update_state  -                        -          {"slide": id, "object": id, "state": StateDef}
+object.patch_state   -                        -          {"slide": id, "object": id, "name": string, "reset_all"?: bool, "patch"?: object}
 object.delete_state  -                        -          {"slide": id, "object": id, "name": string}
+object.duplicate_state -                      -          {"slide": id, "object": id, "name": string, "new_name"?: string}
+object.rename_state  -                        -          {"slide": id, "object": id, "from": string, "to": string}
+object.reorder_state -                        -          {"slide": id, "object": id, "name": string, "index": usize}
+object.state_add_extra -                      -          {"slide": id, "object": id, "state": string, "extra": StateExtra}
+object.state_update_extra -                   -          {"slide": id, "object": id, "state": string, "extra": id, "patch": object}
+object.state_delete_extra -                   -          {"slide": id, "object": id, "state": string, "extra": id}
+object.state_reorder_extra -                  -          {"slide": id, "object": id, "state": string, "extra": id, "index": usize}
 object.delete        Edit/Delete              Delete     {"slide": id, "object": id}
 object.set_animation -                        -          {"slide": id, "object": id, "which": "entrance"|"exit", "animation": Animation|null}
 interaction.insert   -                        -          {"slide": id, "kind": "tabs"|"accordion"}

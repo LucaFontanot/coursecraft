@@ -4338,9 +4338,7 @@ fn object_paste_rewrites_every_object_reference() {
             .expect("object");
         object.states.push(coursecraft_course::StateDef {
             name: "selected".into(),
-            fill: None,
-            text: None,
-            src: None,
+            ..Default::default()
         });
         object.motion_paths.push(coursecraft_course::MotionPath {
             id: "p1".into(),
@@ -4497,9 +4495,7 @@ fn object_paste_skips_triggers_that_refer_outside_the_copied_objects() {
         .states
         .push(coursecraft_course::StateDef {
             name: "selected".into(),
-            fill: None,
-            text: None,
-            src: None,
+            ..Default::default()
         });
     let object = s
         .course

@@ -9,9 +9,9 @@ use coursecraft_course::{
     Action, BackgroundAudio, BankDraw, Choice, Color, Course, Cue, DragItem, Event, FontFace,
     FontStyle, GlossaryEntry, Guide, HotspotRegion, HotspotShape, Layer, MatchPair, MotionPath,
     NamedTextStyle, Object, ObjectKind, Outline, PaletteColor, Path, PathPoint, Point, Question,
-    QuestionBank, QuestionKind, Rect, Resource, ResourceTarget, Scene, Scoring, Severity, Slide,
-    SlideCue, StateDef, TableBorders, TableCell, TableRow, TextStyle, Timing, Trigger, Value,
-    VariableDef,
+    QuestionBank, QuestionKind, Rect, Resource, ResourceTarget, Scene, Scoring, Severity,
+    ShapeKind, Slide, SlideCue, StateDef, StateExtra, StateExtraKind, TableBorders, TableCell,
+    TableRow, TextStyle, Timing, Trigger, Value, VariableDef,
 };
 use serde_json::{Value as Json, json};
 
@@ -317,12 +317,68 @@ fn fixture_session() -> Session {
 
     // Populate slide1 with all object kinds, layers, cues, triggers, states, motion paths.
     let mut obj_shape = make_shape_obj("obj_shape", 40.0, 40.0, 120.0, 80.0, "#112233");
-    obj_shape.states = vec![StateDef {
-        name: "custom1".into(),
-        fill: Some(Color("#223344".into())),
-        text: None,
-        src: None,
-    }];
+    obj_shape.states = vec![
+        StateDef {
+            name: "custom1".into(),
+            fill: Some(Color("#223344".into())),
+            extras: vec![
+                StateExtra {
+                    id: "extra1".into(),
+                    name: "Badge".into(),
+                    kind: StateExtraKind::Shape {
+                        shape: ShapeKind::Ellipse,
+                        fill: Color("#22AA44".into()),
+                        fill_style: None,
+                        outline: None,
+                        text: None,
+                        adjust: vec![],
+                    },
+                    frame: Rect {
+                        x: -6.0,
+                        y: -6.0,
+                        w: 16.0,
+                        h: 16.0,
+                    },
+                    rotation: 0.0,
+                    flip_h: false,
+                    flip_v: false,
+                    opacity: 1.0,
+                    shadow: None,
+                    glow: None,
+                },
+                StateExtra {
+                    id: "extra2".into(),
+                    name: "Tag".into(),
+                    kind: StateExtraKind::Text {
+                        text: "New".into(),
+                        style: Default::default(),
+                        runs: vec![],
+                        paragraphs: vec![],
+                        autofit: Default::default(),
+                        outline: None,
+                    },
+                    frame: Rect {
+                        x: 0.0,
+                        y: 12.0,
+                        w: 40.0,
+                        h: 18.0,
+                    },
+                    rotation: 0.0,
+                    flip_h: false,
+                    flip_v: false,
+                    opacity: 1.0,
+                    shadow: None,
+                    glow: None,
+                },
+            ],
+            ..Default::default()
+        },
+        StateDef {
+            name: "custom2".into(),
+            fill: Some(Color("#334455".into())),
+            ..Default::default()
+        },
+    ];
     obj_shape.motion_paths = vec![MotionPath {
         id: "mpath1".into(),
         points: vec![Point { x: 0.0, y: 0.0 }, Point { x: 100.0, y: 0.0 }],
@@ -1153,8 +1209,65 @@ fn command_cases() -> Vec<(&'static str, Json)> {
             json!({ "slide": "slide1", "object": "obj_shape", "state": { "name": "custom1", "fill": "#00AAFF" } }),
         ),
         (
+            "object.patch_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "name": "custom1", "patch": { "glow": { "color": "#2F6FEB", "size": 8.0 }, "opacity": 0.85 } }),
+        ),
+        (
             "object.delete_state",
             json!({ "slide": "slide1", "object": "obj_shape", "name": "custom1" }),
+        ),
+        (
+            "object.duplicate_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "name": "custom1" }),
+        ),
+        (
+            "object.rename_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "from": "custom1", "to": "custom1_renamed" }),
+        ),
+        (
+            "object.reorder_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "name": "custom2", "index": 0 }),
+        ),
+        (
+            "object.state_add_extra",
+            json!({
+                "slide": "slide1",
+                "object": "obj_shape",
+                "state": "custom1",
+                "extra": {
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#FFAA00" },
+                    "frame": { "x": 4.0, "y": 4.0, "w": 20.0, "h": 20.0 }
+                }
+            }),
+        ),
+        (
+            "object.state_update_extra",
+            json!({
+                "slide": "slide1",
+                "object": "obj_shape",
+                "state": "custom1",
+                "extra": "extra1",
+                "patch": { "name": "Renamed Badge", "opacity": 0.5 }
+            }),
+        ),
+        (
+            "object.state_delete_extra",
+            json!({
+                "slide": "slide1",
+                "object": "obj_shape",
+                "state": "custom1",
+                "extra": "extra1"
+            }),
+        ),
+        (
+            "object.state_reorder_extra",
+            json!({
+                "slide": "slide1",
+                "object": "obj_shape",
+                "state": "custom1",
+                "extra": "extra2",
+                "index": 0
+            }),
         ),
         (
             "object.delete",

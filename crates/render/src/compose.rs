@@ -447,6 +447,8 @@ pub struct DrawItem {
     pub clip_rect: Option<egui::Rect>,
     /// Answer review mark for a drag item, or `None`.
     pub mark: Option<ReviewMark>,
+    /// True when this item is a visual-only extra from an active object state.
+    pub is_state_extra: bool,
 }
 
 /// A stored crop as source fractions, or `None` when it would draw wrongly or
@@ -850,7 +852,7 @@ fn resolve_table(
 /// most the limit, and a fill only when closed.
 fn resolve_path(
     path: &coursecraft_course::Path,
-    state_fill: Option<&coursecraft_course::Color>,
+    state_overrides: &ResolvedStateOverrides<'_>,
     default_txt_color: egui::Color32,
     default_btn_color: egui::Color32,
     theme_font: Option<&str>,
@@ -886,36 +888,48 @@ fn resolve_path(
         .connector
         .filter(|_| points.len() == coursecraft_course::PATH_MIN_POINTS && subpaths.is_empty());
     let fill = if path.closed {
-        state_fill
+        state_overrides
+            .fill
             .and_then(parse_color)
             .or_else(|| path.fill.as_ref().and_then(parse_color))
     } else {
         None
     };
-    let fill_style = if path.closed && state_fill.is_none() {
-        path.fill_style.as_ref().and_then(resolve_fill_style)
+    let fill_style = if path.closed {
+        match state_overrides.fill_style {
+            NullableOverride::Set(fs) => resolve_fill_style(fs),
+            NullableOverride::Clear => None,
+            NullableOverride::Inherit => path.fill_style.as_ref().and_then(resolve_fill_style),
+        }
     } else {
         None
     };
+    let outline = match state_overrides.outline {
+        NullableOverride::Set(o) => resolve_outline(o),
+        NullableOverride::Clear => None,
+        NullableOverride::Inherit => resolve_outline(&path.outline),
+    };
     let text = path.text.as_ref().map(|text| {
-        let style_color = parse_color(&text.style.color).unwrap_or(default_txt_color);
+        let style = state_overrides.text_style.unwrap_or(&text.style);
         ResolvedShapeText {
-            runs: resolve_text_runs(
+            runs: resolve_state_text_runs(
                 &text.text,
                 &text.style,
                 &text.runs,
+                state_overrides,
                 None,
-                style_color,
-                default_btn_color,
-                theme_font,
+                (default_txt_color, default_btn_color, theme_font),
             ),
-            align: text.style.align,
-            valign: text.style.valign,
-            paragraphs: text.paragraphs.clone(),
-            autofit: text.autofit,
-            wrap: text.style.wrap,
-            insets: text.style.insets,
-            direction: text.style.direction,
+            align: style.align,
+            valign: style.valign,
+            paragraphs: state_overrides
+                .paragraphs
+                .map(<[coursecraft_course::Paragraph]>::to_vec)
+                .unwrap_or_else(|| text.paragraphs.clone()),
+            autofit: state_overrides.autofit.unwrap_or(text.autofit),
+            wrap: style.wrap,
+            insets: style.insets,
+            direction: style.direction,
         }
     });
     Some(ResolvedPath {
@@ -925,7 +939,7 @@ fn resolve_path(
         subpaths,
         fill,
         fill_style,
-        outline: resolve_outline(&path.outline),
+        outline,
         start_end,
         end_end,
         connector,
@@ -1151,10 +1165,138 @@ fn pointer_state_for(
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+enum NullableOverride<T> {
+    #[default]
+    Inherit,
+    Set(T),
+    Clear,
+}
+
+fn apply_nullable<'a, T>(dst: &mut NullableOverride<&'a T>, val: Option<&'a T>, clear: bool) {
+    if let Some(v) = val {
+        *dst = NullableOverride::Set(v);
+    } else if clear {
+        *dst = NullableOverride::Clear;
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 struct ResolvedStateOverrides<'a> {
     fill: Option<&'a coursecraft_course::Color>,
     text: Option<&'a str>,
     src: Option<&'a str>,
+    fill_style: NullableOverride<&'a coursecraft_course::FillStyle>,
+    outline: NullableOverride<&'a coursecraft_course::Outline>,
+    text_style: Option<&'a TextStyle>,
+    runs: Option<&'a [coursecraft_course::TextRun]>,
+    paragraphs: Option<&'a [coursecraft_course::Paragraph]>,
+    autofit: Option<Autofit>,
+    opacity: Option<f32>,
+    shadow: NullableOverride<&'a coursecraft_course::Shadow>,
+    glow: NullableOverride<&'a coursecraft_course::Glow>,
+    crop: NullableOverride<&'a coursecraft_course::CropRect>,
+    image_shape: NullableOverride<coursecraft_course::ShapeKind>,
+    rotation: Option<f32>,
+    flip_h: Option<bool>,
+    flip_v: Option<bool>,
+}
+
+fn resolve_state_text_runs(
+    base_text: &str,
+    base_style: &TextStyle,
+    base_runs: &[coursecraft_course::TextRun],
+    state_overrides: &ResolvedStateOverrides<'_>,
+    override_fill_color: Option<egui::Color32>,
+    (default_txt_color, link_color, theme_font): (egui::Color32, egui::Color32, Option<&str>),
+) -> Vec<ResolvedTextRun> {
+    let style = state_overrides.text_style.unwrap_or(base_style);
+    let style_color = override_fill_color
+        .unwrap_or_else(|| parse_color(&style.color).unwrap_or(default_txt_color));
+    let (runs, override_text) = match state_overrides.runs {
+        Some(r) if !r.is_empty() => (r, None),
+        Some(_) => (&[][..], state_overrides.text),
+        None => (base_runs, state_overrides.text),
+    };
+    resolve_text_runs(
+        base_text,
+        style,
+        runs,
+        override_text,
+        style_color,
+        link_color,
+        theme_font,
+    )
+}
+
+fn resolve_shape_text(
+    shape: coursecraft_course::ShapeKind,
+    text: Option<&coursecraft_course::ShapeText>,
+    state_overrides: &ResolvedStateOverrides<'_>,
+    theme: Option<&coursecraft_course::Theme>,
+    (default_txt_color, default_btn_color): (egui::Color32, egui::Color32),
+) -> Option<ResolvedShapeText> {
+    if !shape_allows_text(shape) {
+        return None;
+    }
+    let theme_font = theme.map(|t| t.font.as_str());
+    if let Some(text) = text {
+        let resolved_style = state_overrides.text_style.unwrap_or(&text.style);
+        return Some(ResolvedShapeText {
+            runs: resolve_state_text_runs(
+                &text.text,
+                &text.style,
+                &text.runs,
+                state_overrides,
+                None,
+                (default_txt_color, default_btn_color, theme_font),
+            ),
+            align: resolved_style.align,
+            valign: resolved_style.valign,
+            paragraphs: state_overrides
+                .paragraphs
+                .map(<[coursecraft_course::Paragraph]>::to_vec)
+                .unwrap_or_else(|| text.paragraphs.clone()),
+            autofit: state_overrides.autofit.unwrap_or(text.autofit),
+            wrap: resolved_style.wrap,
+            insets: resolved_style.insets,
+            direction: resolved_style.direction,
+        });
+    }
+    if state_overrides.text.is_none() && !state_overrides.runs.is_some_and(|r| !r.is_empty()) {
+        return None;
+    }
+    let base_style = TextStyle {
+        color: theme.map_or_else(
+            || coursecraft_course::Color(String::from("#1E293B")),
+            |t| t.text.clone(),
+        ),
+        ..TextStyle::default()
+    };
+    let resolved_style = state_overrides.text_style.unwrap_or(&base_style);
+    Some(ResolvedShapeText {
+        runs: resolve_state_text_runs(
+            "",
+            &base_style,
+            &[],
+            state_overrides,
+            None,
+            (default_txt_color, default_btn_color, theme_font),
+        ),
+        align: state_overrides
+            .text_style
+            .map_or(coursecraft_course::Align::Center, |s| s.align),
+        valign: state_overrides
+            .text_style
+            .map_or(coursecraft_course::VAlign::Middle, |s| s.valign),
+        paragraphs: state_overrides
+            .paragraphs
+            .map(<[coursecraft_course::Paragraph]>::to_vec)
+            .unwrap_or_default(),
+        autofit: state_overrides.autofit.unwrap_or(Autofit::None),
+        wrap: resolved_style.wrap,
+        insets: resolved_style.insets,
+        direction: resolved_style.direction,
+    })
 }
 
 /// Resolve an object's effective state overrides in layers:
@@ -1175,6 +1317,51 @@ fn resolve_state_overrides<'a>(
         }
         if let Some(src) = state.src.as_deref().filter(|s| !s.is_empty()) {
             out.src = Some(src);
+        }
+        if let Some(fs) = state.fill_style.as_ref() {
+            out.fill_style = NullableOverride::Set(fs);
+        } else if state.clear_fill_style || state.fill.is_some() {
+            // ST-05: solid `fill` without `fill_style` suppresses lower layers' `fill_style`.
+            out.fill_style = NullableOverride::Clear;
+        }
+        apply_nullable(
+            &mut out.outline,
+            state.outline.as_ref(),
+            state.clear_outline,
+        );
+        if let Some(ts) = state.text_style.as_ref() {
+            out.text_style = Some(ts);
+        }
+        if let Some(runs) = state.runs.as_deref() {
+            out.runs = Some(runs);
+        } else if state.text.is_some() {
+            out.runs = None;
+        }
+        if let Some(paragraphs) = state.paragraphs.as_deref() {
+            out.paragraphs = Some(paragraphs);
+        }
+        if let Some(autofit) = state.autofit {
+            out.autofit = Some(autofit);
+        }
+        if let Some(opacity) = state.opacity {
+            out.opacity = Some(opacity);
+        }
+        apply_nullable(&mut out.shadow, state.shadow.as_ref(), state.clear_shadow);
+        apply_nullable(&mut out.glow, state.glow.as_ref(), state.clear_glow);
+        apply_nullable(&mut out.crop, state.crop.as_ref(), state.clear_crop);
+        if let Some(shape) = state.image_shape {
+            out.image_shape = NullableOverride::Set(shape);
+        } else if state.clear_image_shape {
+            out.image_shape = NullableOverride::Clear;
+        }
+        if let Some(rotation) = state.rotation {
+            out.rotation = Some(rotation);
+        }
+        if let Some(flip_h) = state.flip_h {
+            out.flip_h = Some(flip_h);
+        }
+        if let Some(flip_v) = state.flip_v {
+            out.flip_v = Some(flip_v);
         }
     };
     if current_state != "normal"
@@ -1280,14 +1467,14 @@ fn compose_object_opts(
     let hover_fill = object
         .states
         .iter()
-        .find(|s| s.name == "hover")
+        .find(|s| s.name == "hover" && s.fill_style.is_none())
         .and_then(|s| s.fill.as_ref())
         .and_then(parse_color);
 
     let down_fill = object
         .states
         .iter()
-        .find(|s| s.name == "down")
+        .find(|s| s.name == "down" && s.fill_style.is_none())
         .and_then(|s| s.fill.as_ref())
         .and_then(parse_color);
 
@@ -1301,31 +1488,37 @@ fn compose_object_opts(
             outline,
             ..
         } => {
-            let style_color = state_overrides
-                .fill
-                .and_then(parse_color)
-                .unwrap_or_else(|| parse_color(&style.color).unwrap_or(default_txt_color));
-            let override_text = state_overrides.text;
-            let resolved_runs = resolve_text_runs(
+            let resolved_style = state_overrides.text_style.unwrap_or(style);
+            let resolved_runs = resolve_state_text_runs(
                 text,
                 style,
                 runs,
-                override_text,
-                style_color,
-                default_btn_color,
-                theme.map(|t| t.font.as_str()),
+                &state_overrides,
+                state_overrides.fill.and_then(parse_color),
+                (
+                    default_txt_color,
+                    default_btn_color,
+                    theme.map(|t| t.font.as_str()),
+                ),
             );
 
             Visual::Text {
                 runs: resolved_runs,
-                align: style.align,
-                valign: style.valign,
-                paragraphs: paragraphs.clone(),
-                autofit: *autofit,
-                outline: outline.as_ref().and_then(resolve_outline),
-                wrap: style.wrap,
-                insets: style.insets,
-                direction: style.direction,
+                align: resolved_style.align,
+                valign: resolved_style.valign,
+                paragraphs: state_overrides
+                    .paragraphs
+                    .map(<[coursecraft_course::Paragraph]>::to_vec)
+                    .unwrap_or_else(|| paragraphs.clone()),
+                autofit: state_overrides.autofit.unwrap_or(*autofit),
+                outline: match state_overrides.outline {
+                    NullableOverride::Set(o) => resolve_outline(o),
+                    NullableOverride::Clear => None,
+                    NullableOverride::Inherit => outline.as_ref().and_then(resolve_outline),
+                },
+                wrap: resolved_style.wrap,
+                insets: resolved_style.insets,
+                direction: resolved_style.direction,
             }
         }
         ObjectKind::Button {
@@ -1343,10 +1536,10 @@ fn compose_object_opts(
             Visual::Button {
                 label: resolved_label,
                 fill: resolved_fill,
-                fill_style: if state_fill.is_some() {
-                    None
-                } else {
-                    fill_style.as_ref().and_then(resolve_fill_style)
+                fill_style: match state_overrides.fill_style {
+                    NullableOverride::Set(fs) => resolve_fill_style(fs),
+                    NullableOverride::Clear => None,
+                    NullableOverride::Inherit => fill_style.as_ref().and_then(resolve_fill_style),
                 },
                 hover_fill,
                 down_fill,
@@ -1364,66 +1557,31 @@ fn compose_object_opts(
             let state_fill = state_overrides.fill.and_then(parse_color);
             let resolved_fill =
                 state_fill.unwrap_or_else(|| parse_color(fill).unwrap_or(FALLBACK_GREY));
-            let override_text = state_overrides.text.map(str::to_owned);
-            let text = if !shape_allows_text(*shape) {
-                None
-            } else if let Some(text) = text {
-                let style_color = parse_color(&text.style.color).unwrap_or(default_txt_color);
-                Some(ResolvedShapeText {
-                    runs: resolve_text_runs(
-                        &text.text,
-                        &text.style,
-                        &text.runs,
-                        override_text.as_deref(),
-                        style_color,
-                        default_btn_color,
-                        theme.map(|t| t.font.as_str()),
-                    ),
-                    align: text.style.align,
-                    valign: text.style.valign,
-                    paragraphs: text.paragraphs.clone(),
-                    autofit: text.autofit,
-                    wrap: text.style.wrap,
-                    insets: text.style.insets,
-                    direction: text.style.direction,
-                })
-            } else {
-                override_text.map(|override_text| ResolvedShapeText {
-                    runs: vec![ResolvedTextRun {
-                        text: override_text,
-                        size: 20.0,
-                        color: default_txt_color,
-                        bold: false,
-                        italic: false,
-                        underline: false,
-                        font: None,
-                        link: None,
-                        strikethrough: false,
-                        baseline: coursecraft_course::Baseline::Normal,
-                        letter_spacing: 0.0,
-                    }],
-                    align: coursecraft_course::Align::Center,
-                    valign: coursecraft_course::VAlign::Middle,
-                    paragraphs: Vec::new(),
-                    autofit: Autofit::None,
-                    wrap: true,
-                    insets: None,
-                    direction: coursecraft_course::TextDirection::Horizontal,
-                })
-            };
+            let text = resolve_shape_text(
+                *shape,
+                text.as_ref(),
+                &state_overrides,
+                theme,
+                (default_txt_color, default_btn_color),
+            );
             Visual::Shape {
                 shape: *shape,
                 adjust: adjust.clone(),
                 fill: resolved_fill,
-                fill_style: if state_fill.is_some() {
+                fill_style: match state_overrides.fill_style {
+                    NullableOverride::Set(fs) => resolve_fill_style(fs),
+                    NullableOverride::Clear => None,
+                    NullableOverride::Inherit => fill_style.as_ref().and_then(resolve_fill_style),
+                },
+                outline: if !shape_allows_text(*shape) {
                     None
                 } else {
-                    fill_style.as_ref().and_then(resolve_fill_style)
+                    match state_overrides.outline {
+                        NullableOverride::Set(o) => resolve_outline(o),
+                        NullableOverride::Clear => None,
+                        NullableOverride::Inherit => outline.as_ref().and_then(resolve_outline),
+                    }
                 },
-                outline: outline
-                    .as_ref()
-                    .filter(|_| shape_allows_text(*shape))
-                    .and_then(resolve_outline),
                 text,
                 hover_fill,
                 down_fill,
@@ -1433,7 +1591,7 @@ fn compose_object_opts(
         ObjectKind::Path { path } => {
             let resolved = resolve_path(
                 path,
-                state_overrides.fill,
+                &state_overrides,
                 default_txt_color,
                 default_btn_color,
                 theme.map(|t| t.font.as_str()),
@@ -1462,9 +1620,21 @@ fn compose_object_opts(
         } => Visual::Image {
             src: state_overrides.src.unwrap_or(src).to_string(),
             alt: alt.clone(),
-            crop: crop.as_ref().and_then(valid_crop_rect),
-            outline: outline.as_ref().and_then(resolve_outline),
-            shape: *shape,
+            crop: match state_overrides.crop {
+                NullableOverride::Set(c) => valid_crop_rect(c),
+                NullableOverride::Clear => None,
+                NullableOverride::Inherit => crop.as_ref().and_then(valid_crop_rect),
+            },
+            outline: match state_overrides.outline {
+                NullableOverride::Set(o) => resolve_outline(o),
+                NullableOverride::Clear => None,
+                NullableOverride::Inherit => outline.as_ref().and_then(resolve_outline),
+            },
+            shape: match state_overrides.image_shape {
+                NullableOverride::Set(s) => Some(s),
+                NullableOverride::Clear => None,
+                NullableOverride::Inherit => *shape,
+            },
         },
         ObjectKind::Video { src, poster, .. } => Visual::Video {
             src: state_overrides.src.unwrap_or(src).to_string(),
@@ -1667,25 +1837,35 @@ fn compose_object_opts(
         // A disabled input ignores input and is drawn dimmed everywhere.
         dimmed: disabled && object.kind.input_kind().is_some(),
         opacity: if visible {
-            coursecraft_course::clamp_opacity(object.opacity)
+            coursecraft_course::clamp_opacity(state_overrides.opacity.unwrap_or(object.opacity))
         } else {
             1.0
         },
         clip: None,
         rotation: if visible {
-            coursecraft_course::normalize_rotation(object.rotation)
+            coursecraft_course::normalize_rotation(
+                state_overrides.rotation.unwrap_or(object.rotation),
+            )
         } else {
             0.0
         },
-        flip_h: visible && object.flip_h,
-        flip_v: visible && object.flip_v,
+        flip_h: visible && state_overrides.flip_h.unwrap_or(object.flip_h),
+        flip_v: visible && state_overrides.flip_v.unwrap_or(object.flip_v),
         shadow: if visible {
-            object.shadow.as_ref().and_then(resolve_shadow)
+            match state_overrides.shadow {
+                NullableOverride::Set(s) => resolve_shadow(s),
+                NullableOverride::Clear => None,
+                NullableOverride::Inherit => object.shadow.as_ref().and_then(resolve_shadow),
+            }
         } else {
             None
         },
         glow: if visible {
-            object.glow.as_ref().and_then(resolve_glow)
+            match state_overrides.glow {
+                NullableOverride::Set(g) => resolve_glow(g),
+                NullableOverride::Clear => None,
+                NullableOverride::Inherit => object.glow.as_ref().and_then(resolve_glow),
+            }
         } else {
             None
         },
@@ -1694,6 +1874,247 @@ fn compose_object_opts(
         show_table_overflow: false,
         clip_rect: None,
         mark: None,
+        is_state_extra: false,
+    })
+}
+
+/// Compose an object and any active-state visual extras in draw order
+/// (parent first, then state extras).
+///
+/// Returns an empty `Vec` if the object frame is invalid.
+#[must_use]
+pub fn compose_object_items(
+    object: &Object,
+    current_state: &str,
+    theme: Option<&coursecraft_course::Theme>,
+    value: Option<&Value>,
+) -> Vec<DrawItem> {
+    compose_object_items_opts(
+        object,
+        current_state,
+        theme,
+        value,
+        ComposeOpts {
+            authoring: true,
+            ..ComposeOpts::default()
+        },
+    )
+}
+
+fn compose_object_items_opts(
+    object: &Object,
+    current_state: &str,
+    theme: Option<&coursecraft_course::Theme>,
+    value: Option<&Value>,
+    opts: ComposeOpts,
+) -> Vec<DrawItem> {
+    let Some(parent) = compose_object_opts(object, current_state, theme, value, opts) else {
+        return Vec::new();
+    };
+    if matches!(parent.visual, Visual::Audio { .. }) {
+        return vec![parent];
+    }
+    let parent_rect = parent.rect;
+    let parent_rot = parent.rotation;
+    let parent_flip_h = parent.flip_h;
+    let parent_flip_v = parent.flip_v;
+    let parent_opacity = parent.opacity;
+    let parent_dimmed = parent.dimmed;
+    let disabled = current_state == "disabled";
+
+    let mut items = vec![parent];
+    if current_state == "hidden" {
+        return items;
+    }
+
+    let mut push_extras = |extras: &[coursecraft_course::StateExtra]| {
+        for extra in extras {
+            if let Some(item) = compose_state_extra(
+                object,
+                extra,
+                parent_rect,
+                (parent_rot, parent_flip_h, parent_flip_v),
+                parent_opacity,
+                parent_dimmed,
+                disabled,
+                theme,
+            ) {
+                items.push(item);
+            }
+        }
+    };
+
+    if current_state != "normal"
+        && let Some(state) = object.states.iter().find(|s| s.name == current_state)
+    {
+        push_extras(&state.extras);
+    }
+
+    if !disabled {
+        let pointer_name = match opts.pointer {
+            PointerState::Pressed => Some("down"),
+            PointerState::Hovered => Some("hover"),
+            PointerState::None => None,
+        };
+        if let Some(name) = pointer_name
+            && name != current_state
+            && let Some(state) = object.states.iter().find(|s| s.name == name)
+        {
+            push_extras(&state.extras);
+        }
+    }
+
+    items
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compose_state_extra(
+    object: &Object,
+    extra: &coursecraft_course::StateExtra,
+    parent_rect: egui::Rect,
+    (parent_rot, parent_flip_h, parent_flip_v): (f32, bool, bool),
+    parent_opacity: f32,
+    parent_dimmed: bool,
+    disabled: bool,
+    theme: Option<&coursecraft_course::Theme>,
+) -> Option<DrawItem> {
+    let rel_rect = validate_frame(&extra.frame)?;
+    let unrotated =
+        egui::Rect::from_min_size(parent_rect.min + rel_rect.min.to_vec2(), rel_rect.size());
+    let parent_center = parent_rect.center();
+    let extra_center = flip_point(
+        rotate_point(unrotated.center(), parent_center, parent_rot),
+        parent_center,
+        parent_flip_h,
+        parent_flip_v,
+    );
+    let rect = egui::Rect::from_center_size(extra_center, unrotated.size());
+
+    let flip_sign = if parent_flip_h ^ parent_flip_v {
+        -1.0
+    } else {
+        1.0
+    };
+    let extra_rot = coursecraft_course::normalize_rotation(extra.rotation);
+    let rotation = coursecraft_course::normalize_rotation(parent_rot + flip_sign * extra_rot);
+    let flip_h = parent_flip_h ^ extra.flip_h;
+    let flip_v = parent_flip_v ^ extra.flip_v;
+    let opacity =
+        (parent_opacity * coursecraft_course::clamp_opacity(extra.opacity)).clamp(0.0, 1.0);
+
+    let default_btn_color = theme
+        .and_then(|t| parse_color(&t.accent))
+        .unwrap_or(DEFAULT_BUTTON_COLOR);
+    let default_txt_color = theme
+        .and_then(|t| parse_color(&t.text))
+        .unwrap_or(DEFAULT_TEXT_COLOR);
+    let theme_font = theme.map(|t| t.font.as_str());
+    let no_overrides = ResolvedStateOverrides::default();
+
+    let visual = match &extra.kind {
+        coursecraft_course::StateExtraKind::Shape {
+            shape,
+            fill,
+            fill_style,
+            outline,
+            text,
+            adjust,
+        } => {
+            let resolved_fill = parse_color(fill).unwrap_or(FALLBACK_GREY);
+            let resolved_text = resolve_shape_text(
+                *shape,
+                text.as_ref(),
+                &no_overrides,
+                theme,
+                (default_txt_color, default_btn_color),
+            );
+            Visual::Shape {
+                shape: *shape,
+                adjust: adjust.clone(),
+                fill: resolved_fill,
+                fill_style: fill_style.as_ref().and_then(resolve_fill_style),
+                outline: if !shape_allows_text(*shape) {
+                    None
+                } else {
+                    outline.as_ref().and_then(resolve_outline)
+                },
+                text: resolved_text,
+                hover_fill: None,
+                down_fill: None,
+                disabled,
+            }
+        }
+        coursecraft_course::StateExtraKind::Image {
+            src,
+            alt,
+            crop,
+            outline,
+            shape,
+        } => Visual::Image {
+            src: src.clone(),
+            alt: alt.clone(),
+            crop: crop.as_ref().and_then(valid_crop_rect),
+            outline: outline.as_ref().and_then(resolve_outline),
+            shape: *shape,
+        },
+        coursecraft_course::StateExtraKind::Text {
+            text,
+            style,
+            runs,
+            paragraphs,
+            autofit,
+            outline,
+        } => {
+            let resolved_runs = resolve_state_text_runs(
+                text,
+                style,
+                runs,
+                &no_overrides,
+                None,
+                (default_txt_color, default_btn_color, theme_font),
+            );
+            Visual::Text {
+                runs: resolved_runs,
+                align: style.align,
+                valign: style.valign,
+                paragraphs: paragraphs.clone(),
+                autofit: *autofit,
+                outline: outline.as_ref().and_then(resolve_outline),
+                wrap: style.wrap,
+                insets: style.insets,
+                direction: style.direction,
+            }
+        }
+        coursecraft_course::StateExtraKind::Path { path } => {
+            let resolved = resolve_path(
+                path,
+                &no_overrides,
+                default_txt_color,
+                default_btn_color,
+                theme_font,
+            )?;
+            Visual::Path(resolved)
+        }
+    };
+
+    Some(DrawItem {
+        hit: Hit::Object(object.id.clone()),
+        rect,
+        visual,
+        dimmed: parent_dimmed,
+        opacity,
+        clip: None,
+        rotation,
+        flip_h,
+        flip_v,
+        shadow: extra.shadow.as_ref().and_then(resolve_shadow),
+        glow: extra.glow.as_ref().and_then(resolve_glow),
+        media_time_ms: None,
+        links: Vec::new(),
+        show_table_overflow: false,
+        clip_rect: None,
+        mark: None,
+        is_state_extra: true,
     })
 }
 
@@ -1795,6 +2216,7 @@ fn push_item(items: &mut Vec<DrawItem>, hit: Hit, rect: egui::Rect, visual: Visu
         show_table_overflow: false,
         clip_rect: None,
         mark: None,
+        is_state_extra: false,
     });
 }
 
@@ -2081,7 +2503,7 @@ fn mark_drag_items(view: &QuestionCompose<'_>, items: &mut [DrawItem]) {
             ReviewMark::Incorrect
         };
         for item in items.iter_mut() {
-            if matches!(&item.hit, Hit::Object(id) if id == &drag.item) {
+            if !item.is_state_extra && matches!(&item.hit, Hit::Object(id) if id == &drag.item) {
                 item.mark = Some(mark);
             }
         }
@@ -2197,27 +2619,55 @@ fn push_base_items(
         if sample.opacity <= 0.0 {
             continue;
         }
-        if let Some(mut item) = compose_object_with_runtime_and_timer(
+        let mut obj_items = compose_object_items_opts(
             obj,
             current_state,
             theme,
             player_input_value(player, obj),
-            player.marker_open() == Some(obj.id.as_str()),
-            player.timer_remaining_ms(&obj.id),
-            pointer_state_for(hovered, pressed, &obj.id),
-        ) && !matches!(item.visual, Visual::Audio { .. })
+            ComposeOpts {
+                marker_open: player.marker_open() == Some(obj.id.as_str()),
+                marker_pulse: true,
+                authoring: false,
+                timer_remaining_ms: player.timer_remaining_ms(&obj.id),
+                pointer: pointer_state_for(hovered, pressed, &obj.id),
+            },
+        );
+        if obj_items
+            .first()
+            .is_some_and(|item| !matches!(item.visual, Visual::Audio { .. }))
         {
-            item.rect = item
-                .rect
-                .translate(egui::vec2(sample.offset.0, sample.offset.1));
-            let center = item.rect.center();
-            let half = item.rect.size() * 0.5 * sample.scale;
-            item.rect = egui::Rect::from_min_max(center - half, center + half);
-            item.opacity = (item.opacity * sample.opacity).clamp(0.0, 1.0);
-            item.clip = sample.clip;
-            apply_runtime_media_state(&mut item, player, &obj.id);
-            items.push(item);
+            apply_sample_to_items(&mut obj_items, &sample);
+            if let Some(parent) = obj_items.first_mut() {
+                apply_runtime_media_state(parent, player, &obj.id);
+            }
+            items.extend(obj_items);
         }
+    }
+}
+
+fn apply_sample_to_items(items: &mut [DrawItem], sample: &coursecraft_logic::ObjectSample) {
+    let Some((first, rest)) = items.split_first_mut() else {
+        return;
+    };
+    first.rect = first
+        .rect
+        .translate(egui::vec2(sample.offset.0, sample.offset.1));
+    let parent_center = first.rect.center();
+    let parent_half = first.rect.size() * 0.5 * sample.scale;
+    first.rect = egui::Rect::from_min_max(parent_center - parent_half, parent_center + parent_half);
+    first.opacity = (first.opacity * sample.opacity).clamp(0.0, 1.0);
+    first.clip = sample.clip;
+
+    for extra in rest {
+        extra.rect = extra
+            .rect
+            .translate(egui::vec2(sample.offset.0, sample.offset.1));
+        let rel_center = extra.rect.center() - parent_center;
+        let new_center = parent_center + rel_center * sample.scale;
+        let new_half = extra.rect.size() * 0.5 * sample.scale;
+        extra.rect = egui::Rect::from_min_max(new_center - new_half, new_center + new_half);
+        extra.opacity = (extra.opacity * sample.opacity).clamp(0.0, 1.0);
+        extra.clip = sample.clip;
     }
 }
 
@@ -2323,7 +2773,8 @@ pub fn compose_with_pointer(
             .map(|item| item.rect)
             .collect();
         let is_target_label = |item: &DrawItem| {
-            matches!(item.hit, Hit::Object(_))
+            !item.is_state_extra
+                && matches!(item.hit, Hit::Object(_))
                 && matches!(item.visual, Visual::Text { .. })
                 && target_rects
                     .iter()
@@ -2377,6 +2828,7 @@ pub fn compose_with_pointer(
                 show_table_overflow: false,
                 clip_rect: None,
                 mark: None,
+                is_state_extra: false,
             };
             items.push(pill);
             items.push(label);
@@ -2409,26 +2861,28 @@ pub fn compose_with_pointer(
                 if sample.opacity <= 0.0 {
                     continue;
                 }
-                if let Some(mut item) = compose_object_with_runtime_and_timer(
+                let mut obj_items = compose_object_items_opts(
                     obj,
                     current_state,
                     theme,
                     player_input_value(player, obj),
-                    player.marker_open() == Some(obj.id.as_str()),
-                    player.timer_remaining_ms(&obj.id),
-                    pointer_state_for(hovered, pressed, &obj.id),
-                ) && !matches!(item.visual, Visual::Audio { .. })
+                    ComposeOpts {
+                        marker_open: player.marker_open() == Some(obj.id.as_str()),
+                        marker_pulse: true,
+                        authoring: false,
+                        timer_remaining_ms: player.timer_remaining_ms(&obj.id),
+                        pointer: pointer_state_for(hovered, pressed, &obj.id),
+                    },
+                );
+                if obj_items
+                    .first()
+                    .is_some_and(|item| !matches!(item.visual, Visual::Audio { .. }))
                 {
-                    item.rect = item
-                        .rect
-                        .translate(egui::vec2(sample.offset.0, sample.offset.1));
-                    let center = item.rect.center();
-                    let half = item.rect.size() * 0.5 * sample.scale;
-                    item.rect = egui::Rect::from_min_max(center - half, center + half);
-                    item.opacity = (item.opacity * sample.opacity).clamp(0.0, 1.0);
-                    item.clip = sample.clip;
-                    apply_runtime_media_state(&mut item, player, &obj.id);
-                    items.push(item);
+                    apply_sample_to_items(&mut obj_items, &sample);
+                    if let Some(parent) = obj_items.first_mut() {
+                        apply_runtime_media_state(parent, player, &obj.id);
+                    }
+                    items.extend(obj_items);
                 }
             }
         }
@@ -2769,15 +3223,16 @@ pub fn compose_authoring_layers_opts(
     // 2. Base objects
     if !hide_base {
         for obj in &slide.objects {
-            if let Some(mut item) = compose_object_with_value(
+            let mut obj_items = compose_object_items(
                 obj,
                 &obj.initial_state,
                 theme,
                 course_input_value(course, obj),
-            ) {
+            );
+            for item in &mut obj_items {
                 item.dimmed = item.dimmed || dim_base || obj.initial_state == "hidden";
-                items.push(item);
             }
+            items.extend(obj_items);
         }
     }
 
@@ -2849,20 +3304,21 @@ pub fn compose_authoring_layers_opts(
             continue;
         }
         for obj in &layer.objects {
-            if let Some(mut item) = compose_object_with_value(
+            let mut obj_items = compose_object_items(
                 obj,
                 &obj.initial_state,
                 theme,
                 course_input_value(course, obj),
-            ) {
+            );
+            for item in &mut obj_items {
                 if is_extra {
                     item.hit = Hit::None;
                     item.dimmed = true;
                 } else {
                     item.dimmed = item.dimmed || obj.initial_state == "hidden";
                 }
-                items.push(item);
             }
+            items.extend(obj_items);
         }
     }
 

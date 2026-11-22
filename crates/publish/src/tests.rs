@@ -737,6 +737,7 @@ fn dedupes_identical_media_sources() {
             fill: None,
             text: None,
             src: Some("media/logo.png".into()),
+            ..Default::default()
         }],
         initial_state: "normal".into(),
         entrance: None,
@@ -2131,4 +2132,364 @@ fn published_packages_pass_strict_manifest_validation_and_include_poster_and_pat
             "{std:?} manifest violations: {violations:?}"
         );
     }
+}
+
+#[test]
+fn publish_bundles_state_src_and_state_fill_style_picture_media() {
+    let mut course = Course::from_json(include_str!("../../../examples/hello-course/course.json"))
+        .expect("valid course");
+    let img_obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "img-state",
+        "name": "Image State",
+        "kind": { "type": "image", "src": "base.png", "alt": "Base" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 },
+        "states": [{
+            "name": "hover",
+            "src": "hover-only.png"
+        }]
+    }))
+    .expect("img obj");
+    let shp_obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "shp-state",
+        "name": "Shape State",
+        "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+        "frame": { "x": 60.0, "y": 0.0, "w": 50.0, "h": 50.0 },
+        "states": [{
+            "name": "hover",
+            "fill_style": { "type": "picture", "src": "state-fill-only.png" }
+        }]
+    }))
+    .expect("shp obj");
+    course.scenes[0].slides[0].objects.push(img_obj);
+    course.scenes[0].slides[0].objects.push(shp_obj);
+
+    let media = |src: &str| -> Option<Vec<u8>> {
+        match src {
+            "base.png" => Some(b"BASE".to_vec()),
+            "hover-only.png" => Some(b"HOVER".to_vec()),
+            "state-fill-only.png" => Some(b"FILL".to_vec()),
+            _ => None,
+        }
+    };
+    let course_json = serde_json::to_string(&course).expect("serialize");
+    let player_files = fake_player();
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &media,
+    };
+    let files = build_package_standard(&input, PackageStandard::Web).expect("publish");
+    assert!(files.iter().any(|f| f.path == "media/hover-only.png"));
+    assert!(files.iter().any(|f| f.path == "media/state-fill-only.png"));
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|f| (f.path.as_str(), f.bytes.as_slice()))
+        .collect();
+    let violations = coursecraft_strict_lms::validate_package(
+        coursecraft_strict_lms::PackageStandardKind::Web,
+        &refs,
+    );
+    assert!(violations.is_empty(), "violations: {violations:?}");
+}
+
+#[test]
+fn publish_rejects_missing_or_unsafe_state_fill_style_media() {
+    let mut course = Course::from_json(include_str!("../../../examples/hello-course/course.json"))
+        .expect("valid course");
+    let shp_obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "shp-missing",
+        "name": "Shape Missing",
+        "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+        "frame": { "x": 60.0, "y": 0.0, "w": 50.0, "h": 50.0 },
+        "states": [{
+            "name": "hover",
+            "fill_style": { "type": "picture", "src": "missing-state.png" }
+        }]
+    }))
+    .expect("shp obj");
+    course.scenes[0].slides[0].objects.push(shp_obj);
+
+    let media = |_: &str| -> Option<Vec<u8>> { None };
+    let course_json = serde_json::to_string(&course).expect("serialize");
+    let player_files = fake_player();
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &media,
+    };
+    let err = build_package_standard(&input, PackageStandard::Web).expect_err("missing media");
+    assert!(
+        matches!(
+            &err,
+            PublishError::MissingMedia { object, src }
+                if object == "shp-missing" && src == "missing-state.png"
+        ),
+        "expected MissingMedia, got {err:?}"
+    );
+
+    // Unsafe path
+    course.scenes[0].slides[0]
+        .objects
+        .last_mut()
+        .expect("obj")
+        .states[0]
+        .fill_style = Some(coursecraft_course::FillStyle::Picture {
+        src: "../secret.png".into(),
+        mode: Default::default(),
+        tile_scale: [1.0, 1.0],
+    });
+    let course_json = serde_json::to_string(&course).expect("serialize");
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &media,
+    };
+    let err = build_package_standard(&input, PackageStandard::Web).expect_err("unsafe path");
+    assert!(
+        matches!(err, PublishError::UnsafePath { .. }),
+        "expected UnsafePath, got {err:?}"
+    );
+}
+
+#[test]
+fn collect_used_font_faces_includes_fonts_used_only_in_state_text_style_and_runs() {
+    let mut course = Course::from_json(include_str!("../../../examples/hello-course/course.json"))
+        .expect("valid course");
+    let obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-font",
+        "name": "Button Font",
+        "kind": { "type": "button", "label": "Next" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "text_style": { "font": "Lora", "size": 16.0, "color": "#111111", "bold": true },
+            "runs": [
+                { "text": "A", "font": "JetBrains Mono", "italic": true }
+            ]
+        }]
+    }))
+    .expect("btn obj");
+    course.scenes[0].slides[0].objects.push(obj);
+
+    let faces = collect_used_font_faces(&course);
+    assert!(
+        faces.contains(&("Lora".to_string(), coursecraft_course::FontStyle::Bold)),
+        "expected Lora Bold in {faces:?}"
+    );
+    assert!(
+        faces.contains(&(
+            "JetBrains Mono".to_string(),
+            coursecraft_course::FontStyle::BoldItalic
+        )),
+        "expected JetBrains Mono BoldItalic in {faces:?}"
+    );
+}
+
+#[test]
+fn publish_bundles_state_extra_image_shape_and_path_media() {
+    let mut course = Course::from_json(include_str!("../../../examples/hello-course/course.json"))
+        .expect("valid course");
+    let obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-extra-media",
+        "name": "Button Extra Media",
+        "kind": { "type": "button", "label": "Next" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "ex-img",
+                    "kind": { "type": "image", "src": "ex-img.png" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-shp",
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#112233",
+                        "fill_style": { "type": "picture", "src": "ex-shp.png" }
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-path",
+                    "kind": {
+                        "type": "path",
+                        "points": [{ "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 1.0, "y": 1.0 }],
+                        "closed": true,
+                        "outline": { "color": "#000000", "width": 1.0 },
+                        "fill_style": { "type": "picture", "src": "ex-path.png" }
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                }
+            ]
+        }]
+    }))
+    .expect("btn obj");
+    course.scenes[0].slides[0].objects.push(obj);
+
+    let media = |src: &str| -> Option<Vec<u8>> {
+        if matches!(src, "ex-img.png" | "ex-shp.png" | "ex-path.png") {
+            Some(vec![1, 2, 3, 4])
+        } else {
+            None
+        }
+    };
+    let course_json = serde_json::to_string(&course).expect("serialize");
+    let player_files = fake_player();
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &media,
+    };
+    let files = build_package_standard(&input, PackageStandard::Web).expect("build package");
+    for expected in ["media/ex-img.png", "media/ex-shp.png", "media/ex-path.png"] {
+        assert!(
+            files.iter().any(|f| f.path == expected),
+            "missing {expected} in published package"
+        );
+    }
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|f| (f.path.as_str(), f.bytes.as_slice()))
+        .collect();
+    let violations = coursecraft_strict_lms::validate_package(
+        coursecraft_strict_lms::PackageStandardKind::Web,
+        &refs,
+    );
+    assert!(violations.is_empty(), "violations: {violations:?}");
+}
+
+#[test]
+fn publish_rejects_missing_or_unsafe_state_extra_media() {
+    let mut course = Course::from_json(include_str!("../../../examples/hello-course/course.json"))
+        .expect("valid course");
+    let obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-missing-extra",
+        "name": "Button Missing Extra",
+        "kind": { "type": "button", "label": "Next" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "extras": [{
+                "id": "ex-img",
+                "kind": { "type": "image", "src": "missing-extra.png" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+            }]
+        }]
+    }))
+    .expect("btn obj");
+    course.scenes[0].slides[0].objects.push(obj);
+
+    let media = |_: &str| -> Option<Vec<u8>> { None };
+    let course_json = serde_json::to_string(&course).expect("serialize");
+    let player_files = fake_player();
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &media,
+    };
+    let err = build_package_standard(&input, PackageStandard::Web).expect_err("missing media");
+    assert!(
+        matches!(
+            &err,
+            PublishError::MissingMedia { object, src }
+                if object == "btn-missing-extra" && src == "missing-extra.png"
+        ),
+        "expected MissingMedia, got {err:?}"
+    );
+
+    course.scenes[0].slides[0]
+        .objects
+        .last_mut()
+        .expect("obj")
+        .states[0]
+        .extras[0]
+        .kind = coursecraft_course::StateExtraKind::Image {
+        src: "../secret.png".into(),
+        alt: String::new(),
+        crop: None,
+        outline: None,
+        shape: None,
+    };
+    let course_json = serde_json::to_string(&course).expect("serialize");
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &media,
+    };
+    let err = build_package_standard(&input, PackageStandard::Web).expect_err("unsafe path");
+    assert!(
+        matches!(err, PublishError::UnsafePath { .. }),
+        "expected UnsafePath, got {err:?}"
+    );
+}
+
+#[test]
+fn collect_used_font_faces_includes_fonts_used_only_in_state_extra_text() {
+    let mut course = Course::from_json(include_str!("../../../examples/hello-course/course.json"))
+        .expect("valid course");
+    let obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-extra-font",
+        "name": "Button Extra Font",
+        "kind": { "type": "button", "label": "Next" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "ex-txt",
+                    "kind": {
+                        "type": "text",
+                        "text": "Hi",
+                        "style": { "font": "Merriweather", "size": 14.0, "color": "#111111", "bold": true },
+                        "runs": [{ "text": "Hi", "font": "IBM Plex Mono", "italic": true }]
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-shp",
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#112233",
+                        "text": {
+                            "text": "Yo",
+                            "style": { "font": "Rubik", "size": 14.0, "color": "#111111" }
+                        }
+                    },
+                    "frame": { "x": 0.0, "y": 24.0, "w": 40.0, "h": 20.0 }
+                }
+            ]
+        }]
+    }))
+    .expect("btn obj");
+    course.scenes[0].slides[0].objects.push(obj);
+
+    let faces = collect_used_font_faces(&course);
+    assert!(
+        faces.contains(&(
+            "Merriweather".to_string(),
+            coursecraft_course::FontStyle::Bold
+        )),
+        "expected Merriweather Bold in {faces:?}"
+    );
+    assert!(
+        faces.contains(&(
+            "IBM Plex Mono".to_string(),
+            coursecraft_course::FontStyle::BoldItalic
+        )),
+        "expected IBM Plex Mono BoldItalic in {faces:?}"
+    );
+    assert!(
+        faces.contains(&("Rubik".to_string(), coursecraft_course::FontStyle::Regular)),
+        "expected Rubik Regular in {faces:?}"
+    );
 }

@@ -171,6 +171,38 @@ fn collect_object_media<'a>(obj: &'a Object, out: &mut Vec<MediaRef<'a>>) {
                 src,
             });
         }
+        if let Some(src) = state
+            .fill_style
+            .as_ref()
+            .and_then(coursecraft_course::FillStyle::picture_src)
+            && !src.is_empty()
+        {
+            out.push(MediaRef {
+                object_id: &obj.id,
+                src,
+            });
+        }
+        for extra in &state.extras {
+            let extra_src = match &extra.kind {
+                coursecraft_course::StateExtraKind::Image { src, .. } => Some(src.as_str()),
+                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => fill_style
+                    .as_ref()
+                    .and_then(coursecraft_course::FillStyle::picture_src),
+                coursecraft_course::StateExtraKind::Path { path } => path
+                    .fill_style
+                    .as_ref()
+                    .and_then(coursecraft_course::FillStyle::picture_src),
+                coursecraft_course::StateExtraKind::Text { .. } => None,
+            };
+            if let Some(src) = extra_src
+                && !src.is_empty()
+            {
+                out.push(MediaRef {
+                    object_id: &obj.id,
+                    src,
+                });
+            }
+        }
     }
 }
 
@@ -720,6 +752,48 @@ fn collect_object_faces(out: &mut Vec<(String, FontStyle)>, obj: &Object) {
             push_used_face(out, &style.font, font_style_for(style.bold, style.italic));
         }
         _ => {}
+    }
+    let base_style = match &obj.kind {
+        ObjectKind::Text { style, .. } => Some(style),
+        ObjectKind::Shape { text: Some(t), .. } => Some(&t.style),
+        _ => None,
+    };
+    for state in &obj.states {
+        match (&state.text_style, &state.runs) {
+            (Some(ts), Some(runs)) => collect_runs_faces(out, ts, runs),
+            (Some(ts), None) => {
+                push_used_face(out, &ts.font, font_style_for(ts.bold, ts.italic));
+            }
+            (None, Some(runs)) => {
+                if let Some(bs) = base_style {
+                    collect_runs_faces(out, bs, runs);
+                } else {
+                    for run in runs {
+                        if let Some(font) = &run.font {
+                            let bold = run.bold.unwrap_or(false);
+                            let italic = run.italic.unwrap_or(false);
+                            push_used_face(out, font, font_style_for(bold, italic));
+                        }
+                    }
+                }
+            }
+            (None, None) => {}
+        }
+        for extra in &state.extras {
+            match &extra.kind {
+                coursecraft_course::StateExtraKind::Text { style, runs, .. } => {
+                    collect_runs_faces(out, style, runs);
+                }
+                coursecraft_course::StateExtraKind::Shape {
+                    text: Some(text), ..
+                } => {
+                    collect_runs_faces(out, &text.style, &text.runs);
+                }
+                coursecraft_course::StateExtraKind::Shape { text: None, .. }
+                | coursecraft_course::StateExtraKind::Image { .. }
+                | coursecraft_course::StateExtraKind::Path { .. } => {}
+            }
+        }
     }
 }
 

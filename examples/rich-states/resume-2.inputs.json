@@ -1,0 +1,9 @@
+[
+  { "input": "click", "object": "s03-btn-next" },
+  { "input": "click", "object": "s03b-card-a" },
+  { "input": "click", "object": "s03b-btn-next" },
+  { "input": "click", "object": "s04-ans-1" },
+  { "input": "click", "object": "s04-ans-2" },
+  { "input": "click", "object": "s04-btn-submit" },
+  { "input": "click", "object": "s04-btn-finish" }
+]

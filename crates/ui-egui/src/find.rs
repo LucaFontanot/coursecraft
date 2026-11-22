@@ -444,7 +444,17 @@ pub(crate) fn go_to(editor: &mut Editor, hit: &Hit) {
 
     if hit.field.starts_with("question/") {
         editor.ui.bottom_tab = BottomTab::Question;
+    } else if !editor.ui.master_view
+        && let Some(state_name) = state_name_from_find_field(&hit.field)
+    {
+        editor.preview_navigated_state(state_name.to_owned());
     }
+}
+
+fn state_name_from_find_field(field: &str) -> Option<&str> {
+    let rest = field.strip_prefix("state/")?;
+    let name = rest.split('/').next().unwrap_or(rest);
+    (!name.is_empty()).then_some(name)
 }
 
 fn scene_title_id(field: &str) -> Option<&str> {

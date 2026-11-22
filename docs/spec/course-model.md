@@ -579,7 +579,14 @@ Applying a style copies it into the object's base style and sets the link; per-r
 
 ## States
 
-`normal` is the object itself; never redefine it. Every other state is a `StateDef {name, fill?, text?, src?}` of property overrides. For an `image` object, a non-empty state `src` replaces the picture while that state is current (the base `alt` is kept); an empty or absent `src` keeps the base picture. Built-in names have player meaning:
+`normal` is the object itself; never redefine it. Every other state is a `StateDef` of property overrides:
+
+- `name` (required), `fill?`, `text?`, `src?` (for `image` / `video`; empty or absent keeps the base picture, base `alt` is kept).
+- Widened visual overrides (omitted when `null` / inherit): `fill_style?`, `outline?`, `text_style?`, `runs?`, `paragraphs?`, `autofit?`, `opacity?` (clamped `0..=1` on load), `shadow?`, `glow?`, `crop?`, `image_shape?`, `rotation?` (normalised `0..360` on load), `flip_h?`, `flip_v?`.
+- Tri-state clear flags for nullable properties (`clear_fill_style`, `clear_outline`, `clear_shadow`, `clear_glow`, `clear_crop`, `clear_image_shape`, omitted when `false`): `None` + `false` inherits from lower layers; `Some(v)` + `false` overrides; `None` + `true` explicitly clears Normal's property. Setting both a field and its `clear_*` flag is a validation error. All new fields have `#[serde(default)]` and `skip_serializing_if` so pre-M29 files round-trip unchanged, while 0.3.x refuses unknown M29 fields loudly (`deny_unknown_fields`).
+- `extras` (omitted when empty): up to 16 (`MAX_STATE_EXTRAS`) visual-only `StateExtra` items rendered relative to the parent object's unrotated top-left `(0, 0)` while the state is active. Each `StateExtra` has `id` (`1..=128` `[A-Za-z0-9_-]`, unique within the state), optional `name`, `kind: StateExtraKind` (`shape`, `image`, `text`, or `path` without `connector`/`start_glue`/`end_glue`), `frame` (negative `x`/`y` or overhanging extents allowed; positive finite `w`/`h`), `rotation` (`0..360`), `flip_h`, `flip_v`, `opacity` (`0..=1`), `shadow?`, and `glow?`.
+
+Built-in names have player meaning:
 
 | state | meaning |
 |---|---|
@@ -589,6 +596,8 @@ Applying a style copies it into the object's base style and sets the link; per-r
 | `hover` / `down` | applied by the renderer while hovered or pressed, layered over the current runtime state (`down` wins over `hover`; skipped in `disabled` or `hidden`) |
 
 Any other name is a custom state you change with `change_state`.
+
+Validation limits and warnings: an object may have at most 32 custom states (`MAX_STATES_PER_OBJECT`), and state names are trimmed, non-empty, and at most 64 characters (`MAX_STATE_NAME_CHARS`). Redefining `normal` is an error; defining `hidden` as a `StateDef`, exceeding 32 states, exceeding 64 characters, or placing states on a master slide object produces a validation warning (so older courses still open), while authoring commands refuse to create them.
 
 ## Questions
 

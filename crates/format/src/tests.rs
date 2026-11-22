@@ -789,3 +789,184 @@ fn open_project_with_limits_rejects_inflated_declared_sizes_before_reading() {
     let err = open_project_with_limits(&bytes, limits).expect_err("inflated zip should fail");
     assert_eq!(err, FormatError::TooLarge);
 }
+
+#[test]
+fn safe_relative_path_rejects_quotes_and_traversal() {
+    for p in [
+        "../secret.png",
+        "C:\\Users\\a.png",
+        "\"a.png\"",
+        "\0bad.png",
+        "https://evil/a.png",
+    ] {
+        assert!(!is_safe_relative_path(p), "should reject {p:?}");
+    }
+}
+
+#[test]
+fn xliff_round_trip_keeps_state_text_and_runs_synced() {
+    let course: Course = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "id": "xliff-state-runs",
+        "title": "XLIFF State Runs",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "scene-1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide 1",
+                "objects": [{
+                    "id": "btn-1",
+                    "name": "Button 1",
+                    "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+                    "kind": { "type": "button", "label": "Next" },
+                    "states": [{
+                        "name": "hover",
+                        "text": "Go forward",
+                        "runs": [
+                            { "text": "Go ", "bold": true },
+                            { "text": "forward", "italic": true }
+                        ]
+                    }]
+                }]
+            }]
+        }]
+    }))
+    .expect("valid course");
+
+    let doc = crate::xliff::export_xliff(&course, "fr").expect("export xliff");
+    assert!(
+        doc.contains("<g id=\"r0\">Go </g>") && doc.contains("<g id=\"r1\">forward</g>"),
+        "expected <g> run tags for state.runs in xliff:\n{doc}"
+    );
+
+    let translated = doc.replace(
+        "<g id=\"r0\">Go </g>\n          <g id=\"r1\">forward</g>\n        </source>",
+        "<g id=\"r0\">Go </g>\n          <g id=\"r1\">forward</g>\n        </source><target><g id=\"r0\">Aller </g><g id=\"r1\">avant</g></target>",
+    );
+    let parsed = crate::xliff::parse_xliff(translated.as_bytes()).expect("parse xliff");
+    let (course, report) = crate::xliff::apply_xliff(&course, &parsed);
+    assert!(report.applied >= 1, "expected applied unit: {report:?}");
+
+    let st = &course.scenes[0].slides[0].objects[0].states[0];
+    assert_eq!(st.text.as_deref(), Some("Aller avant"));
+    let runs = st.runs.as_ref().expect("runs synced");
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].text, "Aller ");
+    assert_eq!(runs[0].bold, Some(true));
+    assert_eq!(runs[1].text, "avant");
+    assert_eq!(runs[1].italic, Some(true));
+}
+
+#[test]
+fn xliff_round_trip_covers_state_extra_text_runs_and_alt() {
+    let course: Course = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "id": "xliff-state-extras",
+        "title": "XLIFF State Extras",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "scene-1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide 1",
+                "objects": [{
+                    "id": "btn-1",
+                    "name": "Button 1",
+                    "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+                    "kind": { "type": "button", "label": "Next" },
+                    "states": [{
+                        "name": "hover",
+                        "extras": [
+                            {
+                                "id": "ex-txt",
+                                "kind": {
+                                    "type": "text",
+                                    "text": "Go forward",
+                                    "runs": [
+                                        { "text": "Go ", "bold": true },
+                                        { "text": "forward", "italic": true }
+                                    ]
+                                },
+                                "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 24.0 }
+                            },
+                            {
+                                "id": "ex-shp",
+                                "kind": {
+                                    "type": "shape",
+                                    "shape": "rectangle",
+                                    "fill": "#112233",
+                                    "text": { "text": "Badge" }
+                                },
+                                "frame": { "x": 0.0, "y": 28.0, "w": 80.0, "h": 24.0 }
+                            },
+                            {
+                                "id": "ex-img",
+                                "kind": { "type": "image", "src": "icon.png", "alt": "Arrow" },
+                                "frame": { "x": 84.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                            }
+                        ]
+                    }]
+                }]
+            }]
+        }]
+    }))
+    .expect("valid course");
+
+    let doc = crate::xliff::export_xliff(&course, "fr").expect("export xliff");
+    assert!(
+        doc.contains("state/hover/extra/ex-txt/text")
+            && doc.contains("state/hover/extra/ex-shp/text")
+            && doc.contains("state/hover/extra/ex-img/alt"),
+        "expected state extra units in xliff:\n{doc}"
+    );
+    assert!(
+        doc.contains("<g id=\"r0\">Go </g>") && doc.contains("<g id=\"r1\">forward</g>"),
+        "expected <g> run tags for state extra text in xliff:\n{doc}"
+    );
+
+    let translated = doc
+        .replace(
+            "<g id=\"r0\">Go </g>\n          <g id=\"r1\">forward</g>\n        </source>",
+            "<g id=\"r0\">Go </g>\n          <g id=\"r1\">forward</g>\n        </source><target><g id=\"r0\">Aller </g><g id=\"r1\">avant</g></target>",
+        )
+        .replace(
+            "<source>Badge</source>",
+            "<source>Badge</source><target>Insigne</target>",
+        )
+        .replace(
+            "<source>Arrow</source>",
+            "<source>Arrow</source><target>Flèche</target>",
+        );
+
+    let parsed = crate::xliff::parse_xliff(translated.as_bytes()).expect("parse xliff");
+    let (course, report) = crate::xliff::apply_xliff(&course, &parsed);
+    assert_eq!(report.applied, 3, "expected 3 applied units: {report:?}");
+
+    let extras = &course.scenes[0].slides[0].objects[0].states[0].extras;
+    let coursecraft_course::StateExtraKind::Text { text, runs, .. } = &extras[0].kind else {
+        panic!("expected text extra");
+    };
+    assert_eq!(text, "Aller avant");
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].text, "Aller ");
+    assert_eq!(runs[0].bold, Some(true));
+    assert_eq!(runs[1].text, "avant");
+    assert_eq!(runs[1].italic, Some(true));
+
+    let coursecraft_course::StateExtraKind::Shape {
+        text: Some(shp_text),
+        ..
+    } = &extras[1].kind
+    else {
+        panic!("expected shape extra");
+    };
+    assert_eq!(shp_text.text, "Insigne");
+
+    let coursecraft_course::StateExtraKind::Image { alt, .. } = &extras[2].kind else {
+        panic!("expected image extra");
+    };
+    assert_eq!(alt, "Flèche");
+}

@@ -84,7 +84,28 @@ These run **after** the click's triggers, and only if those triggers left the ob
 
 Built-in changes fire `state_changes` like any other state change.
 
-`hover` and `down` are presentational. The renderer applies them, and they are not stored in runtime state. When an object is hovered or pressed, the renderer resolves its look in layers: first the object's own (`normal`) properties, then its current runtime state's overrides (`selected`, `visited`, custom…), then `hover` (or `down` while pressed; `down` wins over `hover`). Each layer applies only the fields it sets (`fill`, `text`, `src`), and `hover`/`down` are skipped when the runtime state is `disabled` or `hidden`.
+`hover` and `down` are presentational. The renderer applies them, and they are not stored in runtime state. When an object is hovered or pressed, the renderer resolves its look in two override layers on top of the base (`normal`) object:
+
+1. **Base (`normal`)**: the object's own properties.
+2. **Runtime state**: the active state (`selected`, `visited`, custom…), if not `normal`.
+3. **Pointer state**: `down` while pressed, or `hover` while hovered (`down` wins over `hover`). Skipped completely when the runtime state is `disabled` or `hidden`.
+
+Each layer resolves independently per property:
+
+| Property | Precedence & clearing rule |
+|---|---|
+| `fill` | Highest layer with `fill: Some(c)` wins; falls back to base `fill`. On `Text`, overrides `text_style.color`. |
+| `fill_style` | Highest layer with `fill_style: Some(fs)` wins. Setting `clear_fill_style: true` **or** setting solid `fill: Some(c)` without `fill_style` suppresses lower layers' `fill_style` (preserving legacy solid-fill precedence). |
+| `outline` | Highest layer with `outline: Some(o)` wins; `clear_outline: true` clears any lower layer's outline to `None`. |
+| `text`, `runs` | Highest layer with non-empty `runs` wins over plain `text`; a higher layer setting `text: Some(s)` without `runs` replaces any lower layer's `runs`. |
+| `text_style`, `paragraphs`, `autofit` | Highest layer with `Some(...)` wins per field. |
+| `src` | Highest layer with non-empty `src: Some(s)` wins. |
+| `crop`, `image_shape` | Highest layer with `Some(...)` wins; `clear_crop: true` / `clear_image_shape: true` clears lower layers back to `None`. |
+| `opacity` | Highest layer with `Some(o)` replaces base `opacity` (then multiplied by any active animation sample). |
+| `shadow`, `glow` | Highest layer with `Some(...)` wins; `clear_shadow: true` / `clear_glow: true` clears lower layers to `None`. |
+
+Visual extras (`StateDef.extras`) draw immediately after their parent in list order (runtime state extras first, then pointer state extras when not `disabled` or `hidden`). Extras use parent-relative coordinates, inherit the parent's resolved rotation, flip, entrance/exit animation (`offset`, `scale`, `opacity`, `clip`), motion paths, scroll-panel clipping/offset, and drag-and-drop lifting, and substitute `%var%` tokens. All extra `DrawItem`s carry `is_state_extra: true` and the parent's `Hit` (`Hit::Object(parent_id)` or `Hit::DragItem(parent_id)`), so pointer hovers, presses, clicks, and drags on overhanging extras drive the parent without replacing the parent's primary item or drag-target label pills. State extras never create standalone accessibility nodes or keyboard focus stops (`ST-13`); instead, any non-empty extra text or image `alt` (after `%var%` substitution) is appended to the parent's accessible label (comma-separated), unless the parent is `decorative`.
+| `rotation`, `flip_h`, `flip_v` | Highest layer with `Some(...)` replaces the base transform value (not additive). |
 
 ## Text links
 

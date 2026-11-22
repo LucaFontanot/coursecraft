@@ -1,7 +1,6 @@
 //! Bug hunt (2026-11-20, M24, second pass): States preset buttons, the History limit
 //! note, and the Find & Replace status after Undo.
 
-use crate::properties::InspectorTab;
 use crate::test_harness::TestHarness;
 use coursecraft_course::Course;
 
@@ -29,21 +28,11 @@ fn plus_hover_clicked_twice_adds_one_state_and_one_undo_step() {
     let mut h = TestHarness::new_with_size(hello(), (1280.0, 1400.0));
     h.editor.selection.slide = "s-intro".into();
     h.editor.selection.object = Some("btn-start".into());
-    h.editor.ui.inspector_tab = InspectorTab::Format;
+    h.editor.ui.bottom_tab = crate::BottomTab::States;
     h.idle_frame();
     h.idle_frame();
-    let panel = h.right_panel_rect().center();
-    for _ in 0..8 {
-        if h.find_text_in("+ Hover", h.right_panel_rect()).is_some() {
-            break;
-        }
-        h.scroll_over(panel, -200.0);
-        h.idle_frame();
-    }
     let undo_before = h.editor.session.undo_len();
-    let pos = h
-        .find_text_in("+ Hover", h.right_panel_rect())
-        .expect("+ Hover");
+    let pos = h.find_text("+ Hover").expect("+ Hover");
     h.click_at(pos);
     h.idle_frame();
     let names_after_one: Vec<String> = h

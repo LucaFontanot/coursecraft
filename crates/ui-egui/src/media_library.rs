@@ -595,6 +595,11 @@ fn go_to_place(editor: &mut Editor, reference: &MediaReference) {
         Some(slide),
         reference.object.as_deref(),
     );
+    if !editor.ui.master_view
+        && let Some(state_name) = crate::status::state_name_from_place(&reference.place)
+    {
+        editor.preview_navigated_state(state_name);
+    }
 }
 
 fn paint_thumbnail(

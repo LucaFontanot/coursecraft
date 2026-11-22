@@ -5920,9 +5920,7 @@ fn input_course(kind: coursecraft_course::ObjectKind) -> Course {
         timing: Default::default(),
         states: vec![coursecraft_course::StateDef {
             name: "disabled".into(),
-            fill: None,
-            text: None,
-            src: None,
+            ..Default::default()
         }],
         initial_state: "normal".into(),
         entrance: None,

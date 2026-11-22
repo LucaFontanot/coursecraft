@@ -173,7 +173,7 @@ pub fn is_safe_relative_path(path: &str) -> bool {
     if path.is_empty() {
         return false;
     }
-    if path.starts_with('/') || path.contains('\\') || path.contains(':') {
+    if path.starts_with('/') || path.contains('\\') || path.contains(':') || path.contains('"') {
         return false;
     }
     if path.chars().any(char::is_control) {

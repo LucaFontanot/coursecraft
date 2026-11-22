@@ -2,6 +2,20 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.4.0
+
+**New: rich object states.** States grow from a colour swap into a full second look for an object. Thanks to Noe for the feedback that shaped this.
+- **States tab** at the bottom, next to Timeline and Triggers: every state of the selected object as a live thumbnail, side by side. Duplicate, rename and reorder states; renaming a state updates every trigger and question that uses it. Right-click an object → **Edit states…** opens the tab, and the Format panel keeps one compact Initial row.
+- **Edit a state right on the canvas.** Pick a state and the normal toolbar and Format panel edit that state instead of the object. A dot marks each property the state changes, with a reset next to it, and Esc steps back out.
+- **States can change much more:** fill style and gradients, outline, text style and formatted text, opacity, shadow, glow, crop, picture shape, rotation and flips, as well as the picture and text.
+- **Items inside a state:** a state can add its own shapes, pictures, text and paths, such as a speech bubble on hover or a tick mark once visited. Insert, move, resize and edit them on the canvas, or from the **Items in this state** list.
+- Find, Check Course and the Media Library now see everything inside states, and states come along when you translate (XLIFF), recolour or publish.
+- New example course: `examples/rich-states`.
+
+**New, from contributors** (thanks to Luca):
+- **Seekbar behaviour** in Player Settings: Free (as before), Locked, or Locked until the slide's timeline has played once.
+- **Play button before a web course starts.** Browsers keep sound off until the learner clicks, so a published web course now opens on its first slide behind a Play button and the first narration is never silent. It works with the mouse, the keyboard and screen readers.
+
 ## 0.3.6
 
 **New: a calmer, more consistent editor.** Every dialog, menu, panel and player control was checked against the same 22 rules (readable contrast in light and dark, comfortable click targets, tooltips on every icon and on every greyed-out button, one scroll area per dialog, Esc closes one thing at a time) and fixed until an automated sweep of 61 editor screens and the player found nothing left to fix.

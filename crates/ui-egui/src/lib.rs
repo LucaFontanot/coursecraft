@@ -192,6 +192,16 @@ mod m27_triggers_states_tests;
 #[cfg(test)]
 mod m27_undo_clipboard_tests;
 #[cfg(test)]
+mod m29_edit_state_mode_tests;
+#[cfg(test)]
+mod m29_format_state_routing_tests;
+#[cfg(test)]
+mod m29_slice2_interactions_tests;
+#[cfg(test)]
+mod m29_state_extras_ui_tests;
+#[cfg(test)]
+mod m29_states_tab_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -933,6 +943,8 @@ pub struct UiState {
     /// Open the Text styles window on the next frame (it keeps its open flag in the context).
     pub open_text_styles_window: bool,
     pub preview_state: Option<String>,
+    /// Active canvas edit-state session (`M29` Slice 2).
+    pub editing_state: Option<StateEditSession>,
     /// Remembered non-fullscreen preview window size for the current session.
     pub preview_size: Option<egui::Vec2>,
     pub bottom_tab: BottomTab,
@@ -1234,6 +1246,19 @@ pub enum PendingImagePick {
         object: String,
         state: String,
     },
+    /// Insert a new `StateExtraKind::Image` into an object's state.
+    StateExtraImage {
+        slide: String,
+        object: String,
+        state: String,
+    },
+    /// Replace the image `src` of an existing `StateExtraKind::Image`.
+    StateExtraReplace {
+        slide: String,
+        object: String,
+        state: String,
+        extra: String,
+    },
 }
 
 /// A quiet button with `accent_text` color used for primary list actions.
@@ -1257,6 +1282,18 @@ pub fn destructive_action_button(ui: &mut Ui, text: &str) -> egui::Response {
     ui.data_mut(|d| d.insert_temp(id, resp.rect));
     resp
 }
+
+/// Active canvas state-editing session (`M29` Slice 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateEditSession {
+    pub slide_id: String,
+    pub object_id: String,
+    pub state_name: String,
+    pub selected_extra: Option<String>,
+}
+
+/// Shared tooltip for object-level controls locked during Edit-State Mode.
+pub const STATE_LOCK_TOOLTIP: &str = "Shared across all states — exit state editing to change";
 
 impl Editor {
     /// Create a new editor for the given course.
@@ -1371,6 +1408,7 @@ impl Editor {
                 show_theme_window: false,
                 open_text_styles_window: false,
                 preview_state: None,
+                editing_state: None,
                 preview_size: None,
                 bottom_tab: BottomTab::Timeline,
                 inspector_tab: InspectorTab::Slide,
@@ -1680,6 +1718,7 @@ impl Editor {
             self.ui.translate = TranslateState::default();
         }
         self.ui.preview_state = None;
+        self.ui.editing_state = None;
         self.ui.inspector_tab = InspectorTab::Slide;
         self.ui.last_selected_object = None;
         self.ui.zoom = ZoomLevel::Fit;
@@ -2183,6 +2222,34 @@ impl Editor {
                 "h": crop.h,
             })
         };
+        if let Some(state_session) = self.ui.editing_state.clone()
+            && state_session.slide_id == session.slide
+            && state_session.object_id == session.object
+        {
+            let base_has_crop = matches!(
+                object.kind,
+                coursecraft_course::ObjectKind::Image { crop: Some(_), .. }
+            );
+            let patch = if full {
+                if base_has_crop {
+                    serde_json::json!({ "clear_crop": true })
+                } else {
+                    serde_json::json!({ "crop": Json::Null })
+                }
+            } else {
+                serde_json::json!({ "crop": crop_json })
+            };
+            self.run(
+                "object.patch_state",
+                serde_json::json!({
+                    "slide": state_session.slide_id,
+                    "object": state_session.object_id,
+                    "name": state_session.state_name,
+                    "patch": patch,
+                }),
+            );
+            return;
+        }
         let params = serde_json::json!({
             "slide": session.slide,
             "object": session.object,
@@ -2205,6 +2272,37 @@ impl Editor {
         else {
             return;
         };
+        if let Some(state_session) = self.ui.editing_state.clone()
+            && state_session.slide_id == slide_id
+            && state_session.object_id == object_id
+        {
+            let base_has_crop = self
+                .session
+                .course
+                .slide(&slide_id)
+                .and_then(|slide| slide.object(&object_id))
+                .is_some_and(|(object, _)| {
+                    matches!(
+                        object.kind,
+                        coursecraft_course::ObjectKind::Image { crop: Some(_), .. }
+                    )
+                });
+            let patch = if base_has_crop {
+                serde_json::json!({ "clear_crop": true })
+            } else {
+                serde_json::json!({ "crop": Json::Null })
+            };
+            self.run(
+                "object.patch_state",
+                serde_json::json!({
+                    "slide": state_session.slide_id,
+                    "object": state_session.object_id,
+                    "name": state_session.state_name,
+                    "patch": patch,
+                }),
+            );
+            return;
+        }
         let found = self
             .session
             .course
@@ -2462,35 +2560,109 @@ impl Editor {
             state: state_name,
         }) = pending_pick
         {
-            let existing_state = self
+            let state_exists = self
                 .session
                 .course
                 .slide(&slide_id)
                 .and_then(|s| s.object(&object_id))
-                .and_then(|(o, _)| o.states.iter().find(|st| st.name == state_name))
-                .cloned();
-            let mut updated = existing_state?;
+                .is_some_and(|(o, _)| o.states.iter().any(|st| st.name == state_name));
+            if !state_exists {
+                return None;
+            }
             let src = sanitize_media_src(file_name, &self.media);
             let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
             self.media.push((src.clone(), arc_bytes));
-            updated.src = Some(src.clone());
-            let Ok(state_val) = serde_json::to_value(&updated) else {
-                self.media.retain(|(name, _)| name != &src);
-                return None;
-            };
             if self
                 .run(
-                    "object.update_state",
+                    "object.patch_state",
                     serde_json::json!({
                         "slide": slide_id,
                         "object": object_id,
-                        "state": state_val,
+                        "name": state_name,
+                        "patch": { "src": src },
                     }),
                 )
                 .is_none()
             {
                 self.media.retain(|(name, _)| name != &src);
                 return None;
+            }
+            if is_svg && bytes.windows(5).any(|w| w.eq_ignore_ascii_case(b"<text")) {
+                self.set_status(
+                    "This SVG has text, which CourseCraft draws only as shapes. Convert text to outlines in your drawing app.",
+                );
+            }
+            return Some(src);
+        }
+        if let Some(PendingImagePick::StateExtraImage {
+            slide: slide_id,
+            object: object_id,
+            state: state_name,
+        }) = pending_pick
+        {
+            let parent_frame = self
+                .session
+                .course
+                .slide(&slide_id)
+                .and_then(|s| s.object(&object_id))
+                .and_then(|(o, _)| {
+                    o.states
+                        .iter()
+                        .any(|st| st.name == state_name)
+                        .then_some(o.frame)
+                });
+            let parent_frame = parent_frame?;
+            let src = sanitize_media_src(file_name, &self.media);
+            let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
+            self.media.push((src.clone(), arc_bytes));
+
+            let (mut w, mut h) = (natural_width, natural_height);
+            if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+                w = 120.0;
+                h = 90.0;
+            }
+            let max_w = parent_frame.w.clamp(48.0, 240.0);
+            let max_h = parent_frame.h.clamp(48.0, 240.0);
+            if w > max_w || h > max_h {
+                let scale = (max_w / w).min(max_h / h);
+                w = (w * scale).round().max(16.0);
+                h = (h * scale).round().max(16.0);
+            }
+            let rel_x = ((parent_frame.w - w) * 0.5).round();
+            let rel_y = ((parent_frame.h - h) * 0.5).round();
+            let res = self.run(
+                "object.state_add_extra",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": object_id,
+                    "state": state_name,
+                    "extra": {
+                        "name": file_name,
+                        "kind": {
+                            "type": "image",
+                            "src": src,
+                            "alt": ""
+                        },
+                        "frame": {
+                            "x": rel_x,
+                            "y": rel_y,
+                            "w": w.round().max(1.0),
+                            "h": h.round().max(1.0)
+                        }
+                    }
+                }),
+            );
+            let Some(res) = res else {
+                self.media.retain(|(name, _)| name != &src);
+                return None;
+            };
+            if let Some(id) = res.get("id").and_then(serde_json::Value::as_str)
+                && let Some(session) = self.ui.editing_state.as_mut()
+                && session.slide_id == slide_id
+                && session.object_id == object_id
+                && session.state_name == state_name
+            {
+                session.selected_extra = Some(id.to_owned());
             }
             if is_svg && bytes.windows(5).any(|w| w.eq_ignore_ascii_case(b"<text")) {
                 self.set_status(
@@ -2537,6 +2709,35 @@ impl Editor {
                         }
                     }),
                 );
+            }
+            Some(PendingImagePick::StateExtraReplace {
+                slide: slide_id,
+                object: object_id,
+                state: state_name,
+                extra: extra_id,
+            }) => {
+                if let Some(mut kind) = self
+                    .session
+                    .course
+                    .slide(&slide_id)
+                    .and_then(|s| s.object(&object_id))
+                    .and_then(|(o, _)| o.states.iter().find(|st| st.name == state_name))
+                    .and_then(|st| st.extras.iter().find(|e| e.id == extra_id))
+                    .map(|e| e.kind.clone())
+                    && let coursecraft_course::StateExtraKind::Image { src: ref mut s, .. } = kind
+                {
+                    *s = src.clone();
+                    self.run(
+                        "object.state_update_extra",
+                        serde_json::json!({
+                            "slide": slide_id,
+                            "object": object_id,
+                            "state": state_name,
+                            "extra": extra_id,
+                            "patch": { "kind": kind },
+                        }),
+                    );
+                }
             }
             _ => {
                 self.ui.placement_tool = Some(PlacementTool::Image {
@@ -2993,11 +3194,65 @@ impl Editor {
         }
     }
 
+    pub(crate) fn preview_navigated_state(&mut self, state_name: String) {
+        if !self.ui.master_view {
+            self.ui.bottom_tab = BottomTab::States;
+            self.ui.preview_state = Some(state_name);
+            self.ui.last_selected_object = self.selection.object.clone();
+        }
+    }
+
+    /// Enter Canvas Edit-State Mode for `state_name` on `object_id` (`slide_id`).
+    pub fn enter_edit_state(&mut self, slide_id: &str, object_id: &str, state_name: &str) {
+        if self.ui.master_view || state_name == "normal" {
+            return;
+        }
+        let exists = self
+            .session
+            .course
+            .slide(slide_id)
+            .and_then(|s| s.object(object_id))
+            .is_some_and(|(o, _)| o.states.iter().any(|st| st.name == state_name));
+        if !exists {
+            return;
+        }
+        self.selection.slide = slide_id.to_owned();
+        self.selection.set_many([object_id.to_owned()]);
+        self.ui.last_selected_object = Some(object_id.to_owned());
+        self.ui.editing_state = Some(StateEditSession {
+            slide_id: slide_id.to_owned(),
+            object_id: object_id.to_owned(),
+            state_name: state_name.to_owned(),
+            selected_extra: None,
+        });
+        self.ui.preview_state = Some(state_name.to_owned());
+        self.ui.inspector_tab = InspectorTab::Format;
+        self.ui.format_painter = None;
+        self.ui.placement_tool = None;
+        self.ui.placement_drag = None;
+        self.ui.draw = None;
+        self.ui.path_edit = None;
+        self.ui.canvas_drag = None;
+        self.ui.group_focus = None;
+        self.ui.states.card_strip_focused = false;
+    }
+
+    /// Exit Canvas Edit-State Mode without clearing the selected object.
+    pub fn exit_edit_state(&mut self) {
+        if self.ui.editing_state.take().is_some() {
+            self.ui.canvas_drag = None;
+            self.ui.inline_edit = None;
+            self.ui.crop_edit = None;
+            self.ui.crop_drag = None;
+        }
+    }
+
     /// Enter Master View, remembering the slide to return to.
     pub fn enter_master_view(&mut self) {
         if self.ui.master_view {
             return;
         }
+        self.exit_edit_state();
         self.ui.master_view = true;
         // The Course map shows play slides: it cannot stay open here.
         self.ui.story_view = false;
@@ -3052,6 +3307,7 @@ impl Editor {
             self.selection.layer = None;
             self.selection.clear_objects();
             self.ui.inspector_tab = InspectorTab::Slide;
+            self.ui.bottom_tab = BottomTab::Timeline;
         }
     }
 
@@ -3070,6 +3326,7 @@ impl Editor {
     /// Bank slides live outside play order, so starting a preview at one
     /// falls back to the whole course from its start slide.
     pub fn open_preview_at(&mut self, slide: Option<&str>) {
+        self.exit_edit_state();
         let slide = slide.filter(|id| self.session.course.bank_slide(id).is_none());
         let mut preview = Preview::new(&self.session.course, slide);
         preview.set_initial_size(self.ui.preview_size);
@@ -3080,6 +3337,7 @@ impl Editor {
     ///
     /// Bank slides are ignored; if no scene slides remain, opens the whole course.
     pub fn open_preview_subset(&mut self, slides: &[String]) {
+        self.exit_edit_state();
         let filtered: Vec<String> = slides
             .iter()
             .filter(|id| !id.is_empty() && self.session.course.bank_slide(id).is_none())
@@ -3118,6 +3376,25 @@ impl Editor {
     /// In point-edit mode, Delete removes the selected point instead, refusing
     /// to leave a path with fewer than two.
     pub fn delete_selection(&mut self) {
+        if let Some(session) = self.ui.editing_state.clone() {
+            if let Some(extra_id) = session.selected_extra
+                && self
+                    .run(
+                        "object.state_delete_extra",
+                        serde_json::json!({
+                            "slide": session.slide_id,
+                            "object": session.object_id,
+                            "state": session.state_name,
+                            "extra": extra_id,
+                        }),
+                    )
+                    .is_some()
+                && let Some(active) = self.ui.editing_state.as_mut()
+            {
+                active.selected_extra = None;
+            }
+            return;
+        }
         if crate::canvas::delete_selected_path_point(self) {
             return;
         }
@@ -3479,6 +3756,41 @@ impl Editor {
 
     /// Nudge every selected object by `(dx, dy)` as one undo step.
     pub fn nudge_selection(&mut self, dx: f32, dy: f32) {
+        if let Some(session) = self.ui.editing_state.clone() {
+            if let Some(extra_id) = session.selected_extra
+                && let Some(frame) = self
+                    .session
+                    .course
+                    .slide(&session.slide_id)
+                    .and_then(|s| s.object(&session.object_id))
+                    .and_then(|(o, _)| o.states.iter().find(|st| st.name == session.state_name))
+                    .and_then(|st| st.extras.iter().find(|ex| ex.id == extra_id))
+                    .map(|ex| ex.frame)
+            {
+                let nx = frame.x + dx;
+                let ny = frame.y + dy;
+                if nx.is_finite() && ny.is_finite() {
+                    self.run(
+                        "object.state_update_extra",
+                        serde_json::json!({
+                            "slide": session.slide_id,
+                            "object": session.object_id,
+                            "state": session.state_name,
+                            "extra": extra_id,
+                            "patch": {
+                                "frame": {
+                                    "x": nx,
+                                    "y": ny,
+                                    "w": frame.w,
+                                    "h": frame.h,
+                                }
+                            }
+                        }),
+                    );
+                }
+            }
+            return;
+        }
         let Some(slide) = self.session.course.slide(&self.selection.slide) else {
             return;
         };
@@ -3667,6 +3979,20 @@ impl Editor {
             );
             self.ui.last_known_slides = selection::slide_layout(&self.session.course);
             self.ui.pending_undo_redo = false;
+            if let Some(session) = self.ui.editing_state.clone()
+                && let Some(ref extra_id) = session.selected_extra
+            {
+                let extra_exists = self
+                    .session
+                    .course
+                    .slide(&session.slide_id)
+                    .and_then(|slide| slide.object(&session.object_id))
+                    .and_then(|(obj, _)| obj.states.iter().find(|st| st.name == session.state_name))
+                    .is_some_and(|st| st.extras.iter().any(|e| e.id == *extra_id));
+                if !extra_exists && let Some(active) = self.ui.editing_state.as_mut() {
+                    active.selected_extra = None;
+                }
+            }
             if self.ui.master_view {
                 if self.session.course.master(&self.selection.slide).is_none() {
                     let first = self
@@ -3728,6 +4054,28 @@ impl Editor {
             });
             if stale {
                 self.cancel_crop();
+            }
+        }
+        if let Some(session) = self.ui.editing_state.clone() {
+            let state_def = self
+                .session
+                .course
+                .slide(&session.slide_id)
+                .and_then(|slide| slide.object(&session.object_id))
+                .and_then(|(obj, _)| obj.states.iter().find(|st| st.name == session.state_name));
+            let context_invalid = self.ui.master_view
+                || self.ui.story_view
+                || self.preview.is_some()
+                || session.slide_id != self.selection.slide
+                || self.selection.is_multi()
+                || self.selection.object.as_deref() != Some(session.object_id.as_str());
+            if let Some(_st) = state_def {
+                if context_invalid {
+                    self.exit_edit_state();
+                }
+            } else {
+                self.ui.preview_state = None;
+                self.exit_edit_state();
             }
         }
         if self
@@ -4002,6 +4350,12 @@ impl Editor {
             .collect();
         shortcuts.sort_by_key(|(_, shortcut)| std::cmp::Reverse(shortcut.matches('+').count()));
         for (cmd, sc_str) in shortcuts {
+            if cmd.id == "object.delete"
+                && self.ui.bottom_tab == BottomTab::States
+                && self.ui.states.card_strip_focused
+            {
+                continue;
+            }
             if let Some(sc) = menu::parse_shortcut(sc_str)
                 && ui.input_mut(|i| i.consume_shortcut(&sc))
             {
@@ -4065,6 +4419,7 @@ impl Editor {
             && !self.ui.translate.open
             && !ui.ctx().egui_wants_keyboard_input()
             && !ui.memory(|m| m.focused().is_some())
+            && !(self.ui.bottom_tab == BottomTab::States && self.ui.states.card_strip_focused)
         {
             let del_pressed = ui.input_mut(|i| {
                 i.consume_key(Modifiers::NONE, Key::Delete)
@@ -4187,6 +4542,9 @@ impl Editor {
             self.ui.preview_state = None;
         }
 
+        if self.ui.master_view && self.ui.bottom_tab == BottomTab::States {
+            self.ui.bottom_tab = BottomTab::Timeline;
+        }
         let mut requests = Vec::new();
         // F12 previews this slide and Shift+F12 the course from the start,
         // like the toolbar's Preview button and its menu.
@@ -4658,8 +5016,7 @@ fn collect_object_media_srcs(
         {
             set.insert(src.clone());
         }
-        coursecraft_course::ObjectKind::Audio { src, captions, .. }
-        | coursecraft_course::ObjectKind::Video { src, captions, .. } => {
+        coursecraft_course::ObjectKind::Audio { src, captions, .. } => {
             if !src.is_empty() {
                 set.insert(src.clone());
             }
@@ -4669,9 +5026,39 @@ fn collect_object_media_srcs(
                 set.insert(captions.clone());
             }
         }
+        coursecraft_course::ObjectKind::Video {
+            src,
+            captions,
+            poster,
+            ..
+        } => {
+            if !src.is_empty() {
+                set.insert(src.clone());
+            }
+            if let Some(captions) = captions
+                && !captions.is_empty()
+            {
+                set.insert(captions.clone());
+            }
+            if let Some(poster) = poster
+                && !poster.is_empty()
+            {
+                set.insert(poster.clone());
+            }
+        }
         coursecraft_course::ObjectKind::Shape { fill_style, .. }
         | coursecraft_course::ObjectKind::Button { fill_style, .. } => {
             if let Some(src) = fill_style
+                .as_ref()
+                .and_then(coursecraft_course::FillStyle::picture_src)
+                && !src.is_empty()
+            {
+                set.insert(src.to_owned());
+            }
+        }
+        coursecraft_course::ObjectKind::Path { path } => {
+            if let Some(src) = path
+                .fill_style
                 .as_ref()
                 .and_then(coursecraft_course::FillStyle::picture_src)
                 && !src.is_empty()
@@ -4691,6 +5078,32 @@ fn collect_object_media_srcs(
             && !src.is_empty()
         {
             set.insert(src.clone());
+        }
+        if let Some(src) = state
+            .fill_style
+            .as_ref()
+            .and_then(coursecraft_course::FillStyle::picture_src)
+            && !src.is_empty()
+        {
+            set.insert(src.to_owned());
+        }
+        for extra in &state.extras {
+            let extra_src = match &extra.kind {
+                coursecraft_course::StateExtraKind::Image { src, .. } => Some(src.as_str()),
+                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => fill_style
+                    .as_ref()
+                    .and_then(coursecraft_course::FillStyle::picture_src),
+                coursecraft_course::StateExtraKind::Path { path } => path
+                    .fill_style
+                    .as_ref()
+                    .and_then(coursecraft_course::FillStyle::picture_src),
+                coursecraft_course::StateExtraKind::Text { .. } => None,
+            };
+            if let Some(src) = extra_src
+                && !src.is_empty()
+            {
+                set.insert(src.to_owned());
+            }
         }
     }
 }
@@ -4721,11 +5134,24 @@ fn rewrite_object_media_srcs(
     match &mut obj.kind {
         coursecraft_course::ObjectKind::Image { src, .. }
         | coursecraft_course::ObjectKind::Lottie { src, .. } => remap(src),
-        coursecraft_course::ObjectKind::Audio { src, captions, .. }
-        | coursecraft_course::ObjectKind::Video { src, captions, .. } => {
+        coursecraft_course::ObjectKind::Audio { src, captions, .. } => {
             remap(src);
             if let Some(captions) = captions {
                 remap(captions);
+            }
+        }
+        coursecraft_course::ObjectKind::Video {
+            src,
+            captions,
+            poster,
+            ..
+        } => {
+            remap(src);
+            if let Some(captions) = captions {
+                remap(captions);
+            }
+            if let Some(poster) = poster {
+                remap(poster);
             }
         }
         coursecraft_course::ObjectKind::Shape { fill_style, .. }
@@ -4734,11 +5160,37 @@ fn rewrite_object_media_srcs(
                 remap(src);
             }
         }
+        coursecraft_course::ObjectKind::Path { path } => {
+            if let Some(coursecraft_course::FillStyle::Picture { src, .. }) = &mut path.fill_style {
+                remap(src);
+            }
+        }
         _ => {}
     }
     for state in &mut obj.states {
         if let Some(src) = &mut state.src {
             remap(src);
+        }
+        if let Some(coursecraft_course::FillStyle::Picture { src, .. }) = &mut state.fill_style {
+            remap(src);
+        }
+        for extra in &mut state.extras {
+            match &mut extra.kind {
+                coursecraft_course::StateExtraKind::Image { src, .. } => remap(src),
+                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => {
+                    if let Some(coursecraft_course::FillStyle::Picture { src, .. }) = fill_style {
+                        remap(src);
+                    }
+                }
+                coursecraft_course::StateExtraKind::Path { path } => {
+                    if let Some(coursecraft_course::FillStyle::Picture { src, .. }) =
+                        &mut path.fill_style
+                    {
+                        remap(src);
+                    }
+                }
+                coursecraft_course::StateExtraKind::Text { .. } => {}
+            }
         }
     }
 }
@@ -4754,13 +5206,35 @@ fn object_uses_font(object: &coursecraft_course::Object, matches: &impl Fn(&str)
                 .iter()
                 .any(|run| run.font.as_deref().is_some_and(matches))
     };
-    match &object.kind {
+    let base_uses = match &object.kind {
         coursecraft_course::ObjectKind::Text { style, runs, .. } => text_uses(style, runs),
         coursecraft_course::ObjectKind::Shape { text, .. } => text
             .as_ref()
             .is_some_and(|text| text_uses(&text.style, &text.runs)),
         _ => false,
-    }
+    };
+    base_uses
+        || object.states.iter().any(|state| {
+            state
+                .text_style
+                .as_ref()
+                .is_some_and(|style| matches(&style.font))
+                || state.runs.as_deref().is_some_and(|runs| {
+                    runs.iter()
+                        .any(|run| run.font.as_deref().is_some_and(matches))
+                })
+                || state.extras.iter().any(|extra| match &extra.kind {
+                    coursecraft_course::StateExtraKind::Text { style, runs, .. } => {
+                        text_uses(style, runs)
+                    }
+                    coursecraft_course::StateExtraKind::Shape {
+                        text: Some(text), ..
+                    } => text_uses(&text.style, &text.runs),
+                    coursecraft_course::StateExtraKind::Shape { text: None, .. }
+                    | coursecraft_course::StateExtraKind::Image { .. }
+                    | coursecraft_course::StateExtraKind::Path { .. } => false,
+                })
+        })
 }
 
 /// Sanitize a font file name into a unique `fonts/<stem>.<ext>` media path.

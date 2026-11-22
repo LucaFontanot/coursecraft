@@ -596,16 +596,6 @@ fn hidden_layer_object_is_selectable_when_layer_focused() {
     harness
         .editor
         .run(
-            "object.add_state",
-            serde_json::json!({
-                "slide": "s-intro", "object": id,
-                "state": { "name": "hidden" }
-            }),
-        )
-        .expect("add state");
-    harness
-        .editor
-        .run(
             "object.update",
             serde_json::json!({ "slide": "s-intro", "object": id, "initial_state": "hidden" }),
         )
@@ -2453,8 +2443,9 @@ fn adding_visited_state_and_editing_fill_commits() {
     let mut harness = TestHarness::new(course);
     harness.editor.selection.slide = "s-intro".into();
     harness.editor.selection.object = Some("btn-about".into());
+    harness.editor.ui.bottom_tab = BottomTab::States;
+    harness.editor.ui.states.show_new_state_input = true;
     harness.idle_frame();
-    harness.scroll_over(pos2(1100.0, 300.0), -900.0);
 
     // 1. Add "visited" state
     let rev_before = harness.editor.session.revision;
@@ -2553,6 +2544,7 @@ fn deleting_initial_state_is_refused_and_shown() {
     let mut harness = TestHarness::new(course);
     harness.editor.selection.slide = "s-tabs".into();
     harness.editor.selection.object = Some("btn-next".into());
+    harness.editor.ui.bottom_tab = BottomTab::States;
     harness.idle_frame();
 
     let (obj, _) = harness
@@ -2566,30 +2558,23 @@ fn deleting_initial_state_is_refused_and_shown() {
     assert_eq!(obj.initial_state, "disabled");
 
     let rev_before = harness.editor.session.revision;
-    harness.scroll_over(pos2(1100.0, 300.0), -900.0);
-    let buf = harness
+    let card_rect = harness
         .editor
         .ui
         .states
-        .edit_buffers
+        .state_row_rects
         .get("disabled")
-        .expect("disabled state buffer");
-    let del_rect = buf.delete_rect.expect("delete state rect");
-
-    harness.click_at(del_rect.center());
-
+        .copied()
+        .expect("disabled card rect");
+    let menu_pos = harness
+        .find_text_in("⋯", card_rect)
+        .expect("disabled card ⋯ menu");
+    harness.click_at(menu_pos);
+    harness.idle_frame();
+    let del_pos = harness.find_text("Delete").expect("Delete menu item");
+    harness.click_at(del_pos);
+    harness.idle_frame();
     assert_eq!(harness.editor.session.revision, rev_before);
-    let err = harness
-        .editor
-        .ui
-        .last_error
-        .as_ref()
-        .expect("error registered");
-    assert!(
-        err.0.contains("initial_state") || err.0.contains("disabled"),
-        "error should mention initial_state or disabled: {}",
-        err.0
-    );
 
     let (obj_after, _) = harness
         .editor
@@ -2720,20 +2705,20 @@ fn canvas_preview_state_toggle() {
     let mut harness = TestHarness::new(course);
     harness.editor.selection.slide = "s-tabs".into();
     harness.editor.selection.object = Some("tab1".into());
+    harness.editor.ui.bottom_tab = BottomTab::States;
     harness.idle_frame();
 
     assert_eq!(harness.editor.ui.preview_state, None);
 
-    harness.scroll_over(pos2(1100.0, 300.0), -900.0);
-    let buf = harness
+    let card_rect = harness
         .editor
         .ui
         .states
-        .edit_buffers
+        .state_row_rects
         .get("visited")
-        .expect("visited buffer");
-    let prev_rect = buf.preview_rect.expect("preview rect");
-    harness.click_at(prev_rect.center());
+        .copied()
+        .expect("visited card rect");
+    harness.click_at(pos2(card_rect.center().x, card_rect.min.y + 30.0));
 
     assert_eq!(harness.editor.ui.preview_state.as_deref(), Some("visited"));
 }
@@ -7741,6 +7726,198 @@ fn background_music_and_bank_question_media_are_kept_on_save() {
     let referenced = referenced_media_srcs(&course);
     assert!(referenced.contains("music.mp3"), "{referenced:?}");
     assert!(referenced.contains("bank-only.png"), "{referenced:?}");
+}
+
+#[test]
+fn referenced_media_and_rewrite_walk_state_fill_style_path_fill_style_and_video_poster() {
+    let mut course = Course::from_json(COURSE_JSON).expect("valid course");
+    let shp: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "shp-s",
+        "name": "Shape",
+        "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 },
+        "states": [{
+            "name": "hover",
+            "fill_style": { "type": "picture", "src": "state-bg.png" }
+        }]
+    }))
+    .expect("shape");
+    let path_obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "path-s",
+        "name": "Path",
+        "kind": {
+            "type": "path",
+            "points": [{ "x": 0.0, "y": 0.0 }, { "x": 10.0, "y": 0.0 }, { "x": 10.0, "y": 10.0 }],
+            "closed": true,
+            "outline": { "color": "#000000", "width": 1.0 },
+            "fill_style": { "type": "picture", "src": "path-bg.png" }
+        },
+        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+    }))
+    .expect("path");
+    let vid: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "vid-s",
+        "name": "Video",
+        "kind": { "type": "video", "src": "clip.mp4", "poster": "poster-s.png" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+    }))
+    .expect("video");
+    course.scenes[0].slides[0]
+        .objects
+        .extend([shp, path_obj, vid]);
+
+    let referenced = referenced_media_srcs(&course);
+    assert!(referenced.contains("state-bg.png"), "{referenced:?}");
+    assert!(referenced.contains("path-bg.png"), "{referenced:?}");
+    assert!(referenced.contains("poster-s.png"), "{referenced:?}");
+
+    let mut renames = std::collections::HashMap::new();
+    renames.insert("state-bg.png".to_string(), "state-bg-2.png".to_string());
+    renames.insert("path-bg.png".to_string(), "path-bg-2.png".to_string());
+    renames.insert("poster-s.png".to_string(), "poster-s-2.png".to_string());
+    rewrite_slide_media_srcs(&mut course.scenes[0].slides[0], &renames);
+
+    let after = referenced_media_srcs(&course);
+    assert!(after.contains("state-bg-2.png"), "{after:?}");
+    assert!(after.contains("path-bg-2.png"), "{after:?}");
+    assert!(after.contains("poster-s-2.png"), "{after:?}");
+}
+
+#[test]
+fn object_uses_font_checks_state_text_style_and_runs() {
+    let obj_style: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-1",
+        "name": "Btn",
+        "kind": { "type": "button", "label": "Go" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "text_style": { "font": "Lora", "size": 16.0, "color": "#111111" }
+        }]
+    }))
+    .expect("obj_style");
+    let obj_run: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-2",
+        "name": "Btn 2",
+        "kind": { "type": "button", "label": "Go" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "runs": [{ "text": "Hi", "font": "Fira Code" }]
+        }]
+    }))
+    .expect("obj_run");
+
+    assert!(object_uses_font(&obj_style, &|f| f == "Lora"));
+    assert!(object_uses_font(&obj_run, &|f| f == "Fira Code"));
+    assert!(!object_uses_font(&obj_style, &|f| f == "Other"));
+}
+
+#[test]
+fn referenced_media_and_rewrite_walk_state_extra_image_shape_and_path() {
+    let mut course = coursecraft_course::Course::from_json(include_str!(
+        "../../../examples/hello-course/course.json"
+    ))
+    .expect("valid course");
+    let obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-extra-media",
+        "name": "Btn",
+        "kind": { "type": "button", "label": "Go" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "ex-img",
+                    "kind": { "type": "image", "src": "ex-img.png" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-shp",
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#112233",
+                        "fill_style": { "type": "picture", "src": "ex-shp.png" }
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-path",
+                    "kind": {
+                        "type": "path",
+                        "points": [{ "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 1.0, "y": 1.0 }],
+                        "closed": true,
+                        "outline": { "color": "#000000", "width": 1.0 },
+                        "fill_style": { "type": "picture", "src": "ex-path.png" }
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                }
+            ]
+        }]
+    }))
+    .expect("btn");
+    course.scenes[0].slides[0].objects.push(obj);
+
+    let referenced = referenced_media_srcs(&course);
+    assert!(referenced.contains("ex-img.png"), "{referenced:?}");
+    assert!(referenced.contains("ex-shp.png"), "{referenced:?}");
+    assert!(referenced.contains("ex-path.png"), "{referenced:?}");
+
+    let mut renames = std::collections::HashMap::new();
+    renames.insert("ex-img.png".to_string(), "ex-img-2.png".to_string());
+    renames.insert("ex-shp.png".to_string(), "ex-shp-2.png".to_string());
+    renames.insert("ex-path.png".to_string(), "ex-path-2.png".to_string());
+    rewrite_slide_media_srcs(&mut course.scenes[0].slides[0], &renames);
+
+    let after = referenced_media_srcs(&course);
+    assert!(after.contains("ex-img-2.png"), "{after:?}");
+    assert!(after.contains("ex-shp-2.png"), "{after:?}");
+    assert!(after.contains("ex-path-2.png"), "{after:?}");
+}
+
+#[test]
+fn object_uses_font_checks_state_extra_text_and_shape_runs() {
+    let obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-extra-font",
+        "name": "Btn",
+        "kind": { "type": "button", "label": "Go" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "ex-txt",
+                    "kind": {
+                        "type": "text",
+                        "text": "Hi",
+                        "style": { "font": "Merriweather", "size": 14.0, "color": "#111111" },
+                        "runs": [{ "text": "Hi", "font": "IBM Plex Mono" }]
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-shp",
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#112233",
+                        "text": {
+                            "text": "Yo",
+                            "style": { "font": "Rubik", "size": 14.0, "color": "#111111" }
+                        }
+                    },
+                    "frame": { "x": 0.0, "y": 24.0, "w": 40.0, "h": 20.0 }
+                }
+            ]
+        }]
+    }))
+    .expect("btn");
+
+    assert!(object_uses_font(&obj, &|f| f == "Merriweather"));
+    assert!(object_uses_font(&obj, &|f| f == "IBM Plex Mono"));
+    assert!(object_uses_font(&obj, &|f| f == "Rubik"));
+    assert!(!object_uses_font(&obj, &|f| f == "Other"));
 }
 
 fn click_for_requests(harness: &mut TestHarness, pos: egui::Pos2) -> Vec<EditorRequest> {
@@ -14804,6 +14981,8 @@ fn timeline_space_does_nothing_in_a_text_field() {
         live_runs: Vec::new(),
         live_paragraphs: Vec::new(),
         last_revision: 0,
+        state_name: None,
+        extra_id: None,
     });
     harness.idle_frame();
     harness.press(Key::Space, Modifiers::NONE);

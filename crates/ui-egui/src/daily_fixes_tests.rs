@@ -20,40 +20,16 @@ fn states_panel_shortcut_buttons_add_and_hide() {
     let mut harness = TestHarness::new_with_size(hello(), (1280.0, 1400.0));
     harness.editor.selection.slide = "s-intro".into();
     harness.editor.selection.object = Some("btn-start".into());
-    harness.editor.ui.inspector_tab = InspectorTab::Format;
+    harness.editor.ui.bottom_tab = BottomTab::States;
     harness.idle_frame();
     harness.idle_frame();
-
-    let panel_center = harness.right_panel_rect().center();
-    for _ in 0..8 {
-        if harness
-            .find_text_in("+ Hover", harness.right_panel_rect())
-            .is_some()
-        {
-            break;
-        }
-        harness.scroll_over(panel_center, -200.0);
-        harness.idle_frame();
-    }
 
     let hover_pos = harness
-        .find_text_in("+ Hover", harness.right_panel_rect())
+        .find_text("+ Hover")
         .expect("+ Hover button should be visible");
-    assert!(
-        harness
-            .find_text_in("+ Selected", harness.right_panel_rect())
-            .is_some()
-    );
-    assert!(
-        harness
-            .find_text_in("+ Visited", harness.right_panel_rect())
-            .is_some()
-    );
-    assert!(
-        harness
-            .find_text_in("+ Disabled", harness.right_panel_rect())
-            .is_some()
-    );
+    assert!(harness.find_text("+ Selected").is_some());
+    assert!(harness.find_text("+ Visited").is_some());
+    assert!(harness.find_text("+ Disabled").is_some());
 
     harness.click_at(hover_pos);
     harness.idle_frame();
@@ -71,9 +47,7 @@ fn states_panel_shortcut_buttons_add_and_hide() {
         "clicking + Hover should add the hover state"
     );
     assert!(
-        harness
-            .find_text_in("+ Hover", harness.right_panel_rect())
-            .is_some(),
+        harness.find_text("+ Hover").is_some(),
         "+ Hover should stay in place (disabled) once the object has a hover state"
     );
     harness.click_at(hover_pos);

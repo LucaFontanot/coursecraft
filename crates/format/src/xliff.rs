@@ -9,7 +9,10 @@
 //! String variables are deliberately not exported: triggers can compare them,
 //! so translating one would change play-time behaviour.
 
-use coursecraft_course::{CHROME_STRINGS, Course, Object, ObjectKind, TextRun, align_paragraphs};
+use coursecraft_course::{
+    CHROME_STRINGS, Course, Object, ObjectKind, Paragraph, StateExtraKind, TextRun,
+    align_paragraphs,
+};
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesDecl, BytesStart, BytesText, Event};
 use quick_xml::reader::Reader;
@@ -776,15 +779,86 @@ fn collect_object_units<'a>(
         });
     }
     for state in &object.states {
-        if let Some(text) = &state.text
-            && !text.is_empty()
-        {
+        push_state_units(units, &prefix, state);
+    }
+}
+
+fn push_state_units<'a>(
+    units: &mut Vec<ExportUnit<'a>>,
+    prefix: &str,
+    state: &'a coursecraft_course::StateDef,
+) {
+    let id = format!("{prefix}/state/{}/text", state.name);
+    if let Some(runs) = &state.runs
+        && !runs.is_empty()
+    {
+        let joined: String = runs.iter().map(|run| run.text.as_str()).collect();
+        if !joined.is_empty() {
             units.push(ExportUnit {
-                id: format!("{prefix}/state/{}/text", state.name),
-                text,
-                runs: None,
+                id,
+                text: state.text.as_deref().unwrap_or(""),
+                runs: Some(runs.as_slice()),
             });
         }
+    } else if let Some(text) = &state.text
+        && !text.is_empty()
+    {
+        units.push(ExportUnit {
+            id,
+            text,
+            runs: None,
+        });
+    }
+    for extra in &state.extras {
+        match &extra.kind {
+            StateExtraKind::Text { text, runs, .. } => push_runs_or_plain_unit(
+                units,
+                format!("{prefix}/state/{}/extra/{}/text", state.name, extra.id),
+                text,
+                runs,
+            ),
+            StateExtraKind::Shape {
+                text: Some(shape_text),
+                ..
+            } => push_runs_or_plain_unit(
+                units,
+                format!("{prefix}/state/{}/extra/{}/text", state.name, extra.id),
+                &shape_text.text,
+                &shape_text.runs,
+            ),
+            StateExtraKind::Image { alt, .. } if !alt.is_empty() => units.push(ExportUnit {
+                id: format!("{prefix}/state/{}/extra/{}/alt", state.name, extra.id),
+                text: alt,
+                runs: None,
+            }),
+            StateExtraKind::Shape { text: None, .. }
+            | StateExtraKind::Image { .. }
+            | StateExtraKind::Path { .. } => {}
+        }
+    }
+}
+
+fn push_runs_or_plain_unit<'a>(
+    units: &mut Vec<ExportUnit<'a>>,
+    id: String,
+    text: &'a str,
+    runs: &'a [TextRun],
+) {
+    if !runs.is_empty() {
+        let joined: String = runs.iter().map(|run| run.text.as_str()).collect();
+        if !joined.is_empty() {
+            units.push(ExportUnit {
+                id,
+                text,
+                runs: Some(runs),
+            });
+        }
+    } else if !text.is_empty() {
+        units.push(ExportUnit {
+            id,
+            text,
+            runs: None,
+        });
     }
 }
 
@@ -1348,16 +1422,60 @@ fn object_text(object: &Object, field: &str) -> Option<String> {
     if field == "description" {
         return object.description.clone();
     }
-    if let Some(rest) = field.strip_prefix("state/")
-        && let Some(name) = rest.strip_suffix("/text")
-    {
-        return object
-            .states
-            .iter()
-            .find(|state| state.name == name)
-            .and_then(|state| state.text.clone());
+    if let Some(rest) = field.strip_prefix("state/") {
+        if let Some(before_text) = rest.strip_suffix("/text") {
+            if let Some((state_name, extra_id)) = before_text.rsplit_once("/extra/") {
+                let extra = object
+                    .states
+                    .iter()
+                    .find(|state| state.name == state_name)?
+                    .extras
+                    .iter()
+                    .find(|extra| extra.id == extra_id)?;
+                return match &extra.kind {
+                    StateExtraKind::Text { text, runs, .. } => Some(runs_or_plain_text(text, runs)),
+                    StateExtraKind::Shape {
+                        text: Some(shape_text),
+                        ..
+                    } => Some(runs_or_plain_text(&shape_text.text, &shape_text.runs)),
+                    _ => None,
+                };
+            }
+            return object
+                .states
+                .iter()
+                .find(|state| state.name == before_text)
+                .and_then(|state| match &state.runs {
+                    Some(runs) if !runs.is_empty() => {
+                        Some(runs.iter().map(|run| run.text.as_str()).collect())
+                    }
+                    _ => state.text.clone(),
+                });
+        }
+        if let Some(before_alt) = rest.strip_suffix("/alt")
+            && let Some((state_name, extra_id)) = before_alt.rsplit_once("/extra/")
+        {
+            let extra = object
+                .states
+                .iter()
+                .find(|state| state.name == state_name)?
+                .extras
+                .iter()
+                .find(|extra| extra.id == extra_id)?;
+            if let StateExtraKind::Image { alt, .. } = &extra.kind {
+                return Some(alt.clone());
+            }
+        }
     }
     None
+}
+
+fn runs_or_plain_text(text: &str, runs: &[TextRun]) -> String {
+    if runs.is_empty() {
+        text.to_owned()
+    } else {
+        runs.iter().map(|run| run.text.as_str()).collect()
+    }
 }
 
 fn set_text(course: &mut Course, id: &str, target: &ParsedText) -> bool {
@@ -1686,17 +1804,129 @@ fn set_object_text(object: &mut Object, field: &str, target: &ParsedText) -> boo
         }
         return false;
     }
-    if let Some(rest) = field.strip_prefix("state/")
-        && let Some(name) = rest.strip_suffix("/text")
-        && let Some(state) = object.states.iter_mut().find(|state| state.name == name)
-    {
-        if state.text.is_some() {
-            state.text = Some(target.text());
+    if let Some(rest) = field.strip_prefix("state/") {
+        if let Some(before_text) = rest.strip_suffix("/text") {
+            if let Some((state_name, extra_id)) = before_text.rsplit_once("/extra/")
+                && let Some(state) = object
+                    .states
+                    .iter_mut()
+                    .find(|state| state.name == state_name)
+                && let Some(extra) = state.extras.iter_mut().find(|e| e.id == extra_id)
+            {
+                return match &mut extra.kind {
+                    StateExtraKind::Text {
+                        text,
+                        runs,
+                        paragraphs,
+                        ..
+                    } => {
+                        apply_parsed_text_to_runs(text, runs, paragraphs, target);
+                        true
+                    }
+                    StateExtraKind::Shape {
+                        text: Some(shape_text),
+                        ..
+                    } => {
+                        apply_parsed_text_to_runs(
+                            &mut shape_text.text,
+                            &mut shape_text.runs,
+                            &mut shape_text.paragraphs,
+                            target,
+                        );
+                        true
+                    }
+                    _ => false,
+                };
+            }
+            if let Some(state) = object
+                .states
+                .iter_mut()
+                .find(|state| state.name == before_text)
+            {
+                let has_runs = state.runs.as_ref().is_some_and(|r| !r.is_empty());
+                if state.text.is_none() && !has_runs {
+                    return false;
+                }
+                let target_has_groups = target.segments.iter().any(|segment| segment.run.is_some());
+                let old_text = state.text.clone().unwrap_or_else(|| {
+                    state
+                        .runs
+                        .as_deref()
+                        .unwrap_or(&[])
+                        .iter()
+                        .map(|r| r.text.as_str())
+                        .collect()
+                });
+                let new_text = target.text();
+                if let Some(paragraphs) = &mut state.paragraphs {
+                    *paragraphs = align_paragraphs(&old_text, paragraphs, &new_text);
+                }
+                state.text = Some(new_text);
+                if target_has_groups || has_runs {
+                    let formatting = state.runs.clone().unwrap_or_default();
+                    state.runs = Some(rebuild_runs(&formatting, target));
+                }
+                return true;
+            }
+        }
+        if let Some(before_alt) = rest.strip_suffix("/alt")
+            && let Some((state_name, extra_id)) = before_alt.rsplit_once("/extra/")
+            && let Some(state) = object
+                .states
+                .iter_mut()
+                .find(|state| state.name == state_name)
+            && let Some(extra) = state.extras.iter_mut().find(|e| e.id == extra_id)
+            && let StateExtraKind::Image { alt, .. } = &mut extra.kind
+        {
+            *alt = target.text();
             return true;
         }
-        return false;
     }
     false
+}
+
+fn apply_parsed_text_to_runs(
+    text: &mut String,
+    runs: &mut Vec<TextRun>,
+    paragraphs: &mut Vec<Paragraph>,
+    target: &ParsedText,
+) {
+    let has_runs = !runs.is_empty();
+    let target_has_groups = target.segments.iter().any(|segment| segment.run.is_some());
+    let formatting: Vec<TextRun> = runs.clone();
+    let old_text = text.clone();
+    let new_text = target.text();
+    *paragraphs = align_paragraphs(&old_text, paragraphs, &new_text);
+    *text = new_text;
+    if target_has_groups || has_runs {
+        *runs = rebuild_runs(&formatting, target);
+    }
+}
+
+fn rebuild_runs(formatting: &[TextRun], target: &ParsedText) -> Vec<TextRun> {
+    let mut new_runs = Vec::with_capacity(target.segments.len());
+    for segment in &target.segments {
+        let mut run = segment
+            .run
+            .and_then(|index| formatting.get(index))
+            .cloned()
+            .unwrap_or_else(|| TextRun {
+                text: String::new(),
+                bold: None,
+                italic: None,
+                underline: None,
+                size: None,
+                color: None,
+                link: None,
+                font: None,
+                strikethrough: None,
+                baseline: None,
+                letter_spacing: None,
+            });
+        run.text = segment.text.clone();
+        new_runs.push(run);
+    }
+    new_runs
 }
 
 fn placeholders_match(source: &str, target: &str, braces: bool) -> bool {

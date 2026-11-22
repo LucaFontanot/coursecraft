@@ -118,3 +118,68 @@ fn every_walked_location_is_unique() {
         );
     }
 }
+
+#[test]
+fn walker_and_xliff_agree_on_a_rich_states_course_with_extras() {
+    let course: Course = serde_json::from_value(json!({
+        "schema_version": 1,
+        "id": "rich-states-parity",
+        "title": "Rich States Parity",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "scene-1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide 1",
+                "objects": [{
+                    "id": "btn-1",
+                    "name": "Button 1",
+                    "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+                    "kind": { "type": "button", "label": "Next" },
+                    "states": [{
+                        "name": "hover",
+                        "text": "Hover label",
+                        "extras": [
+                            {
+                                "id": "ex-txt",
+                                "kind": {
+                                    "type": "text",
+                                    "text": "Extra rich",
+                                    "runs": [
+                                        { "text": "Extra ", "bold": true },
+                                        { "text": "rich", "italic": true }
+                                    ]
+                                },
+                                "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 24.0 }
+                            },
+                            {
+                                "id": "ex-shp",
+                                "kind": {
+                                    "type": "shape",
+                                    "shape": "rectangle",
+                                    "fill": "#112233",
+                                    "text": { "text": "Extra shape" }
+                                },
+                                "frame": { "x": 0.0, "y": 28.0, "w": 80.0, "h": 24.0 }
+                            },
+                            {
+                                "id": "ex-img",
+                                "kind": { "type": "image", "src": "icon.png", "alt": "Extra alt" },
+                                "frame": { "x": 84.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                            }
+                        ]
+                    }]
+                }]
+            }]
+        }]
+    }))
+    .expect("valid course");
+
+    let xliff = xliff_texts(&course);
+    let walked = walker_texts(&course);
+    assert!(xliff.iter().any(|t| t == "Extra rich"));
+    assert!(xliff.iter().any(|t| t == "Extra shape"));
+    assert!(xliff.iter().any(|t| t == "Extra alt"));
+    assert_eq!(walked, xliff, "walker and XLIFF disagree on state extras");
+}

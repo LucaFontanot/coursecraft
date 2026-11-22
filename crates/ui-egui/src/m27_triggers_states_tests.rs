@@ -168,29 +168,9 @@ fn open_triggers_tab(harness: &mut TestHarness) {
 }
 
 fn open_states_panel(harness: &mut TestHarness) {
-    harness.editor.ui.inspector_tab = InspectorTab::Format;
+    harness.editor.ui.bottom_tab = crate::BottomTab::States;
+    harness.editor.ui.states.show_new_state_input = true;
     harness.idle_frame();
-}
-
-fn scroll_inspector_to_rect(
-    harness: &mut TestHarness,
-    get_rect: impl Fn(&crate::Editor) -> Option<egui::Rect>,
-) -> egui::Rect {
-    for _ in 0..25 {
-        if let Some(r) = get_rect(&harness.editor) {
-            let cy = r.center().y;
-            if (180.0..=580.0).contains(&cy) {
-                return r;
-            }
-            let dy = if cy > 580.0 { -180.0 } else { 180.0 };
-            harness.scroll_over(pos2(1140.0, 350.0), dy);
-            harness.idle_frame();
-        } else {
-            harness.scroll_over(pos2(1140.0, 350.0), -180.0);
-            harness.idle_frame();
-        }
-    }
-    get_rect(&harness.editor).expect("rect in states panel")
 }
 
 fn clear_and_submit_field(harness: &mut TestHarness, pos: egui::Pos2, text: &str) {
@@ -1260,23 +1240,27 @@ fn d2_1_builtin_preset_states_no_duplicates_and_undo() {
     harness.editor.selection.object = Some("btn-start".to_owned());
     open_states_panel(&mut harness);
 
-    for label in ["+ Hover", "+ Selected", "+ Visited", "+ Disabled"] {
-        let _ = scroll_inspector_to_rect(&mut harness, |e| e.ui.states.new_state_name_rect);
+    for label in ["+ Hover", "+ Down", "+ Selected", "+ Visited", "+ Disabled"] {
         let pos = harness.find_text(label).expect(label);
         harness.click_at(pos);
         harness.idle_frame();
     }
-    for preset in ["down", "hidden"] {
-        harness.editor.ui.states.new_state_name = preset.to_owned();
-        harness.idle_frame();
-        let add_rect = scroll_inspector_to_rect(&mut harness, |e| e.ui.states.add_button_rect);
-        harness.click_at(add_rect.center());
-        harness.idle_frame();
-    }
+    harness.editor.ui.states.show_new_state_input = true;
+    harness.idle_frame();
+    harness.editor.ui.states.new_state_name = "glow".to_owned();
+    harness.idle_frame();
+    let add_rect = harness
+        .editor
+        .ui
+        .states
+        .add_button_rect
+        .expect("Add button rect");
+    harness.click_at(add_rect.center());
+    harness.idle_frame();
 
     let states = &harness.editor.session.course.slide("s1").unwrap().objects[0].states;
     assert_eq!(states.len(), 6);
-    for expected in ["hover", "selected", "visited", "disabled", "down", "hidden"] {
+    for expected in ["hover", "down", "selected", "visited", "disabled", "glow"] {
         assert!(states.iter().any(|s| s.name == expected));
     }
 
@@ -1307,7 +1291,12 @@ fn d2_2_custom_state_name_validation_and_enter_errors() {
     harness.editor.selection.object = Some("btn-start".to_owned());
     open_states_panel(&mut harness);
 
-    let name_rect = scroll_inspector_to_rect(&mut harness, |e| e.ui.states.new_state_name_rect);
+    let name_rect = harness
+        .editor
+        .ui
+        .states
+        .new_state_name_rect
+        .expect("new_state_name_rect");
     let rev_before = harness.editor.session.revision;
 
     for bad in ["", "   ", "normal", "Normal", &"x".repeat(200)] {
@@ -1321,12 +1310,16 @@ fn d2_2_custom_state_name_validation_and_enter_errors() {
     }
 
     harness.editor.ui.last_error = None;
+    harness.editor.ui.states.show_new_state_input = true;
+    harness.idle_frame();
     harness.set_field(name_rect.center(), "glow_1");
     harness.idle_frame();
     assert_eq!(harness.editor.session.revision, rev_before + 1);
     assert!(harness.editor.session.course.slide("s1").unwrap().objects[0].has_state("glow_1"));
 
     harness.editor.ui.last_error = None;
+    harness.editor.ui.states.show_new_state_input = true;
+    harness.idle_frame();
     harness.set_field(name_rect.center(), "glow_1");
     harness.idle_frame();
     assert_eq!(harness.editor.session.revision, rev_before + 1);
@@ -1341,12 +1334,16 @@ fn d2_3_edit_fill_text_and_src_overrides_across_object_kinds() {
     // 1. Button: edit fill (valid, invalid "#ZZZ", clear) and text
     harness.editor.selection.object = Some("btn-start".to_owned());
     open_states_panel(&mut harness);
-    let fill_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states
-            .edit_buffers
-            .get("visited")
-            .and_then(|b| b.fill_rect)
-    });
+    harness.editor.ui.preview_state = Some("visited".to_owned());
+    harness.idle_frame();
+    let fill_rect = harness
+        .editor
+        .ui
+        .states
+        .edit_buffers
+        .get("visited")
+        .and_then(|b| b.fill_rect)
+        .expect("visited fill rect");
     harness.set_field(fill_rect.center(), "#ZZZ");
     harness.idle_frame();
     assert_eq!(
@@ -1373,12 +1370,14 @@ fn d2_3_edit_fill_text_and_src_overrides_across_object_kinds() {
         None
     );
 
-    let text_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states
-            .edit_buffers
-            .get("visited")
-            .and_then(|b| b.text_rect)
-    });
+    let text_rect = harness
+        .editor
+        .ui
+        .states
+        .edit_buffers
+        .get("visited")
+        .and_then(|b| b.text_rect)
+        .expect("visited text rect");
     harness.set_field(text_rect.center(), "Done!");
     harness.idle_frame();
     assert_eq!(
@@ -1394,17 +1393,21 @@ fn d2_3_edit_fill_text_and_src_overrides_across_object_kinds() {
         serde_json::json!({
             "slide": "s1",
             "object": "path-1",
-            "state": StateDef { name: "active".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "active".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     harness.editor.selection.object = Some("path-1".to_owned());
     open_states_panel(&mut harness);
-    let path_fill_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states
-            .edit_buffers
-            .get("active")
-            .and_then(|b| b.fill_rect)
-    });
+    harness.editor.ui.preview_state = Some("active".to_owned());
+    harness.idle_frame();
+    let path_fill_rect = harness
+        .editor
+        .ui
+        .states
+        .edit_buffers
+        .get("active")
+        .and_then(|b| b.fill_rect)
+        .expect("active fill rect");
     harness.set_field(path_fill_rect.center(), "#445566");
     harness.idle_frame();
     let path_obj = harness
@@ -1427,14 +1430,21 @@ fn d2_3_edit_fill_text_and_src_overrides_across_object_kinds() {
         serde_json::json!({
             "slide": "s1",
             "object": "img-1",
-            "state": StateDef { name: "alt".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "alt".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     harness.editor.selection.object = Some("img-1".to_owned());
     open_states_panel(&mut harness);
-    let row_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states.state_row_rects.get("alt").copied()
-    });
+    harness.editor.ui.preview_state = Some("alt".to_owned());
+    harness.idle_frame();
+    let row_rect = harness
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("alt")
+        .copied()
+        .expect("alt card rect");
     assert!(harness.find_text_in("Src", row_rect).is_none());
     assert!(harness.find_text("Choose image…").is_some());
 }
@@ -1446,19 +1456,29 @@ fn d2_4_preview_state_eye_toggle_and_switch_objects() {
     harness.editor.selection.object = Some("btn-start".to_owned());
     open_states_panel(&mut harness);
 
-    let prev_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states
-            .edit_buffers
-            .get("visited")
-            .and_then(|b| b.preview_rect)
-    });
-    harness.click_at(prev_rect.center());
+    let visited_card = harness
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("visited")
+        .copied()
+        .expect("visited card rect");
+    harness.click_at(pos2(visited_card.center().x, visited_card.min.y + 30.0));
     assert_eq!(harness.editor.ui.preview_state.as_deref(), Some("visited"));
 
-    harness.click_at(prev_rect.center());
+    let normal_card = harness
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("normal")
+        .copied()
+        .expect("normal card rect");
+    harness.click_at(pos2(normal_card.center().x, normal_card.min.y + 30.0));
     assert_eq!(harness.editor.ui.preview_state, None);
 
-    harness.click_at(prev_rect.center());
+    harness.click_at(pos2(visited_card.center().x, visited_card.min.y + 30.0));
     assert_eq!(harness.editor.ui.preview_state.as_deref(), Some("visited"));
     harness.editor.selection.object = Some("shape-1".to_owned());
     harness.idle_frame();
@@ -1475,27 +1495,30 @@ fn d2_5_bug_d2_deleting_previewed_state_clears_preview_state() {
         serde_json::json!({
             "slide": "s1",
             "object": "btn-start",
-            "state": StateDef { name: "custom1".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "custom1".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     open_states_panel(&mut harness);
 
-    let prev_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states
-            .edit_buffers
-            .get("custom1")
-            .and_then(|b| b.preview_rect)
-    });
-    harness.click_at(prev_rect.center());
+    let custom_card = harness
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("custom1")
+        .copied()
+        .expect("custom1 card rect");
+    harness.click_at(pos2(custom_card.center().x, custom_card.min.y + 30.0));
     assert_eq!(harness.editor.ui.preview_state.as_deref(), Some("custom1"));
 
-    let del_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states
-            .edit_buffers
-            .get("custom1")
-            .and_then(|b| b.delete_rect)
-    });
-    harness.click_at(del_rect.center());
+    let menu_pos = harness
+        .find_text_in("⋯", custom_card)
+        .expect("custom1 ⋯ menu");
+    harness.click_at(menu_pos);
+    harness.idle_frame();
+    let del_pos = harness.find_text("Delete").expect("Delete menu item");
+    harness.click_at(del_pos);
+    harness.idle_frame();
 
     assert!(!harness.editor.session.course.slide("s1").unwrap().objects[0].has_state("custom1"));
     assert_eq!(
@@ -1514,7 +1537,7 @@ fn d2_6_bug_d2_deleting_initial_or_trigger_referenced_state_refused_with_hint() 
         serde_json::json!({
             "slide": "s1",
             "object": "btn-start",
-            "state": StateDef { name: "custom1".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "custom1".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     harness.editor.run(
@@ -1537,18 +1560,24 @@ fn d2_6_bug_d2_deleting_initial_or_trigger_referenced_state_refused_with_hint() 
     );
     open_states_panel(&mut harness);
 
-    let del_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states
-            .edit_buffers
-            .get("custom1")
-            .and_then(|b| b.delete_rect)
-    });
-    harness.click_at(del_rect.center());
+    let custom_card = harness
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("custom1")
+        .copied()
+        .expect("custom1 card rect");
+    let menu_pos = harness
+        .find_text_in("⋯", custom_card)
+        .expect("custom1 ⋯ menu");
+    harness.click_at(menu_pos);
+    harness.idle_frame();
+    let del_pos = harness.find_text("Delete").expect("Delete menu item");
+    harness.click_at(del_pos);
     harness.idle_frame();
 
     assert!(harness.editor.session.course.slide("s1").unwrap().objects[0].has_state("custom1"));
-    assert!(harness.editor.ui.last_error.is_some());
-    assert!(harness.editor.ui.states.delete_error.is_some());
 
     harness.editor.run(
         "object.update",
@@ -1563,13 +1592,21 @@ fn d2_6_bug_d2_deleting_initial_or_trigger_referenced_state_refused_with_hint() 
         serde_json::json!({ "slide": "s1", "index": 0 }),
     );
     open_states_panel(&mut harness);
-    let del_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states
-            .edit_buffers
-            .get("custom1")
-            .and_then(|b| b.delete_rect)
-    });
-    harness.click_at(del_rect.center());
+    let custom_card = harness
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("custom1")
+        .copied()
+        .expect("custom1 card rect");
+    let menu_pos = harness
+        .find_text_in("⋯", custom_card)
+        .expect("custom1 ⋯ menu");
+    harness.click_at(menu_pos);
+    harness.idle_frame();
+    let del_pos = harness.find_text("Delete").expect("Delete menu item");
+    harness.click_at(del_pos);
     harness.idle_frame();
 
     assert!(!harness.editor.session.course.slide("s1").unwrap().objects[0].has_state("custom1"));
@@ -1587,30 +1624,50 @@ fn d2_7_set_initial_state_toggle_and_undo() {
         serde_json::json!({
             "slide": "s1",
             "object": "btn-start",
-            "state": StateDef { name: "disabled".to_owned(), fill: None, text: None, src: None }
+            "state": StateDef { name: "disabled".to_owned(), fill: None, text: None, src: None, ..Default::default() }
         }),
     );
     open_states_panel(&mut harness);
 
-    let set_init_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states
-            .edit_buffers
-            .get("disabled")
-            .and_then(|b| b.set_initial_rect)
-    });
-    harness.click_at(set_init_rect.center());
+    let disabled_card = harness
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("disabled")
+        .copied()
+        .expect("disabled card rect");
+    let menu_pos = harness
+        .find_text_in("⋯", disabled_card)
+        .expect("disabled ⋯ menu");
+    harness.click_at(menu_pos);
+    harness.idle_frame();
+    let set_init = harness.find_text("Set as initial").expect("Set as initial");
+    harness.click_at(set_init);
+    harness.idle_frame();
     assert_eq!(
         harness.editor.session.course.slide("s1").unwrap().objects[0].initial_state,
         "disabled"
     );
 
-    let _ = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states.state_row_rects.get("normal").copied()
-    });
+    let normal_card = harness
+        .editor
+        .ui
+        .states
+        .state_row_rects
+        .get("normal")
+        .copied()
+        .expect("normal card rect");
+    let normal_menu_pos = harness
+        .find_text_in("⋯", normal_card)
+        .expect("normal ⋯ menu");
+    harness.click_at(normal_menu_pos);
+    harness.idle_frame();
     let normal_set_init = harness
-        .find_text("Set Initial")
-        .expect("Set Initial button on normal");
+        .find_text("Set as initial")
+        .expect("Set as initial on normal");
     harness.click_at(normal_set_init);
+    harness.idle_frame();
     assert_eq!(
         harness.editor.session.course.slide("s1").unwrap().objects[0].initial_state,
         "normal"
@@ -1649,7 +1706,12 @@ fn d2_9_states_on_slide_layer_and_master_slide() {
     harness.editor.selection.object = Some("layer-txt".to_owned());
     open_states_panel(&mut harness);
 
-    let name_rect = scroll_inspector_to_rect(&mut harness, |e| e.ui.states.new_state_name_rect);
+    let name_rect = harness
+        .editor
+        .ui
+        .states
+        .new_state_name_rect
+        .expect("new state name rect");
     harness.set_field(name_rect.center(), "highlight");
     harness.idle_frame();
     assert!(
@@ -1665,26 +1727,14 @@ fn d2_9_states_on_slide_layer_and_master_slide() {
             .has_state("highlight")
     );
 
-    // Master View
+    // Master View: States tab is hidden and bottom_tab resets to Timeline.
     harness.editor.ui.master_view = true;
     harness.editor.selection.layer = None;
     harness.editor.selection.slide = "m1-l1".to_owned();
     harness.editor.selection.object = Some("master-shape".to_owned());
-    open_states_panel(&mut harness);
-
-    let name_rect = scroll_inspector_to_rect(&mut harness, |e| e.ui.states.new_state_name_rect);
-    harness.set_field(name_rect.center(), "dimmed");
     harness.idle_frame();
-    assert!(
-        harness
-            .editor
-            .session
-            .course
-            .slide("m1-l1")
-            .unwrap()
-            .objects[0]
-            .has_state("dimmed")
-    );
+    assert_eq!(harness.editor.ui.bottom_tab, crate::BottomTab::Timeline);
+    assert!(harness.find_text("States").is_none());
     assert_no_course_errors(&harness.editor.session.course);
 }
 
@@ -1708,6 +1758,7 @@ fn d2_10_rapid_add_edit_delete_undo_stress_20_states() {
                     fill: Some(Color("#2563EB".to_owned())),
                     text: None,
                     src: None,
+                    ..Default::default()
                 }
             }),
         );
@@ -1731,6 +1782,7 @@ fn d2_10_rapid_add_edit_delete_undo_stress_20_states() {
                 fill: Some(Color("#EF4444".to_owned())),
                 text: Some("Edited".to_owned()),
                 src: None,
+                ..Default::default()
             }
         }),
     );

@@ -639,6 +639,7 @@ fn make_dummy_item(hit: Hit, rect: Rect) -> DrawItem {
         show_table_overflow: false,
         clip_rect: None,
         mark: None,
+        is_state_extra: false,
     }
 }
 
@@ -1218,6 +1219,7 @@ fn paint_button_hover_down_and_disabled_fills() {
         show_table_overflow: false,
         clip_rect: None,
         mark: None,
+        is_state_extra: false,
     };
     let item_btn_disabled = DrawItem {
         hit: Hit::Object("btn-dis".to_owned()),
@@ -1243,6 +1245,7 @@ fn paint_button_hover_down_and_disabled_fills() {
         show_table_overflow: false,
         clip_rect: None,
         mark: None,
+        is_state_extra: false,
     };
 
     let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 720.0));
@@ -1728,6 +1731,7 @@ fn paint_smoke_dimmed_item_does_not_panic() {
         show_table_overflow: false,
         clip_rect: None,
         mark: None,
+        is_state_extra: false,
     };
     let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 720.0));
     let t = SlideTransform::fit(screen, Size { w: 1280, h: 720 }).expect("fit");
@@ -2118,6 +2122,7 @@ fn painting_registers_texture_caches_failure_and_retain_drops() {
             show_table_overflow: false,
             clip_rect: None,
             mark: None,
+            is_state_extra: false,
         },
         DrawItem {
             hit: Hit::Object("img-missing".to_string()),
@@ -2142,6 +2147,7 @@ fn painting_registers_texture_caches_failure_and_retain_drops() {
             show_table_overflow: false,
             clip_rect: None,
             mark: None,
+            is_state_extra: false,
         },
     ];
 
@@ -2885,6 +2891,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
             show_table_overflow: false,
             clip_rect: None,
             mark: None,
+            is_state_extra: false,
         },
         DrawItem {
             hit: Hit::None,
@@ -2910,6 +2917,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
             show_table_overflow: false,
             clip_rect: None,
             mark: None,
+            is_state_extra: false,
         },
         DrawItem {
             hit: Hit::None,
@@ -2930,6 +2938,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
             show_table_overflow: false,
             clip_rect: None,
             mark: None,
+            is_state_extra: false,
         },
         DrawItem {
             hit: Hit::None,
@@ -2953,6 +2962,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
             show_table_overflow: false,
             clip_rect: None,
             mark: None,
+            is_state_extra: false,
         },
     ];
 
@@ -7012,6 +7022,7 @@ fn paint_slider_checkbox_and_radio_use_the_accent() {
         show_table_overflow: false,
         clip_rect: None,
         mark: None,
+        is_state_extra: false,
     };
     let slider = make(
         Visual::Slider {
@@ -7918,6 +7929,7 @@ fn video_frame_draws_as_texture_instead_of_poster() {
             show_table_overflow: false,
             clip_rect: None,
             mark: None,
+            is_state_extra: false,
         }
     }
 

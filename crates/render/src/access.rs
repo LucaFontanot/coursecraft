@@ -782,6 +782,8 @@ fn content_node(
         }
         _ => (None, Vec::new()),
     };
+    let mut label = label;
+    append_extra_labels(player, items, object, &mut label);
     Some(AccessNode {
         key,
         role,
@@ -969,6 +971,7 @@ fn input_access_node(
         rect,
         screen: false,
     };
+    append_extra_labels(player, items, object, &mut node.label);
     match &object.kind {
         ObjectKind::TextEntry {
             variable,
@@ -1124,13 +1127,14 @@ fn target_node(
                 return input_access_node(player, slide, items, object, target);
             }
             if matches!(object.kind, ObjectKind::Marker { .. }) {
-                let label = object
+                let mut label = object
                     .description
                     .as_deref()
                     .filter(|text| !text.trim().is_empty())
                     .map(|text| player.display_text(text))
                     .or_else(|| object_label(player, slide, id).filter(|label| !label.is_empty()))
                     .unwrap_or_else(|| "Marker".to_owned());
+                append_extra_labels(player, items, object, &mut label);
                 let item = object_item(items, object);
                 return Some(AccessNode {
                     key: format!("object:{}:{}", slide.id, object.id),
@@ -1165,6 +1169,7 @@ fn target_node(
                 })
                 .or_else(|| (!object.name.is_empty()).then(|| player.display_text(&object.name)))
                 .unwrap_or_else(|| object.id.clone());
+            append_extra_labels(player, items, object, &mut label);
             let checked =
                 object.states.iter().any(|s| s.name == "selected").then(|| {
                     player.object_state(id).unwrap_or(&object.initial_state) == "selected"
@@ -1781,18 +1786,63 @@ fn mark_value(player: &Player<'_>, mark: Option<ReviewMark>) -> Option<String> {
 }
 
 fn object_item<'a>(items: &'a [DrawItem], object: &Object) -> Option<&'a DrawItem> {
-    items.iter().rev().find(|item| match &item.hit {
-        Hit::Object(id) | Hit::DragItem(id) | Hit::QuestionChrome(id) => id == &object.id,
-        _ => false,
+    items.iter().rev().find(|item| {
+        !item.is_state_extra
+            && match &item.hit {
+                Hit::Object(id) | Hit::DragItem(id) | Hit::QuestionChrome(id) => id == &object.id,
+                _ => false,
+            }
     })
 }
 
+fn append_extra_labels(
+    player: &Player<'_>,
+    items: &[DrawItem],
+    object: &Object,
+    label: &mut String,
+) {
+    if object.decorative {
+        return;
+    }
+    for item in items {
+        if !item.is_state_extra {
+            continue;
+        }
+        let matches = match &item.hit {
+            Hit::Object(id) | Hit::DragItem(id) | Hit::QuestionChrome(id) => id == &object.id,
+            _ => false,
+        };
+        if !matches {
+            continue;
+        }
+        let extra_text = item_text(item)
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                item_alt(item)
+                    .map(|s| player.display_text(s.trim()))
+                    .filter(|s| !s.trim().is_empty())
+            });
+        if let Some(extra) = extra_text {
+            if label.is_empty() {
+                *label = extra;
+            } else {
+                label.push_str(", ");
+                label.push_str(&extra);
+            }
+        }
+    }
+}
+
 fn hotspot_item<'a>(items: &'a [DrawItem], id: &str) -> Option<&'a DrawItem> {
-    items.iter().rev().find(|item| match &item.hit {
-        Hit::HotspotImage => true,
-        Hit::QuestionChrome(hit) => hit == "hotspot" || hit == id,
-        Hit::Object(hit) | Hit::DragItem(hit) => hit == id,
-        _ => false,
+    items.iter().rev().find(|item| {
+        !item.is_state_extra
+            && match &item.hit {
+                Hit::HotspotImage => true,
+                Hit::QuestionChrome(hit) => hit == "hotspot" || hit == id,
+                Hit::Object(hit) | Hit::DragItem(hit) => hit == id,
+                _ => false,
+            }
     })
 }
 

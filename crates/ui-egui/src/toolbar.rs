@@ -201,7 +201,16 @@ pub fn insert_ellipse(editor: &mut Editor) {
 
 /// Request image file picker for insertion.
 pub fn insert_image(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
-    editor.pending_image_pick = None;
+    editor.pending_image_pick =
+        editor
+            .ui
+            .editing_state
+            .as_ref()
+            .map(|session| crate::PendingImagePick::StateExtraImage {
+                slide: session.slide_id.clone(),
+                object: session.object_id.clone(),
+                state: session.state_name.clone(),
+            });
     requests.push(EditorRequest::PickImage);
 }
 
@@ -521,8 +530,12 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     // Format Painter: click arms once, double click keeps it armed.
     left_ui.add_space(coursecraft_render::SPACE_MD);
     let painter_armed = editor.ui.format_painter.is_some();
-    let painter_enabled = !master_view && (painter_armed || editor.can_arm_format_painter());
-    let painter_tooltip = if master_view {
+    let state_edit_locked = editor.ui.editing_state.is_some();
+    let painter_enabled =
+        !master_view && !state_edit_locked && (painter_armed || editor.can_arm_format_painter());
+    let painter_tooltip = if state_edit_locked {
+        crate::STATE_LOCK_TOOLTIP
+    } else if master_view {
         "Not available in Master View"
     } else if !painter_enabled {
         "Select an object to copy its format"
@@ -712,21 +725,25 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     }
 
     // Media dropdown (Video…, Audio…)
+    let non_visual_enabled = !master_view && !state_edit_locked;
+    let media_tooltip = if state_edit_locked {
+        "Not available inside a state"
+    } else if master_view {
+        "Not available in Master View"
+    } else {
+        "Insert Media"
+    };
     let media_resp = widgets::toolbar_button_enabled(
         &mut center_ui,
         Icon::FilmStrip,
         "Media",
         false,
-        !master_view,
-        if master_view {
-            "Not available in Master View"
-        } else {
-            "Insert Media"
-        },
+        non_visual_enabled,
+        media_tooltip,
     );
     egui::Popup::menu(&media_resp).show(|ui| {
-        if master_view {
-            ui.add_enabled(false, egui::Button::new("Not available in Master View"));
+        if !non_visual_enabled {
+            ui.add_enabled(false, egui::Button::new(media_tooltip));
             return;
         }
         if ui.button("Video…").clicked() {
@@ -749,12 +766,18 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     // Button placement tool
     let btn_active = editor.ui.placement_tool == Some(PlacementTool::Button);
-    if widgets::toolbar_toggle(
+    let btn_tooltip = if state_edit_locked {
+        "Not available inside a state"
+    } else {
+        "Insert Button"
+    };
+    if widgets::toolbar_button_enabled(
         &mut center_ui,
         Icon::CursorClick,
         "Button",
         btn_active,
-        "Insert Button",
+        !state_edit_locked,
+        btn_tooltip,
     )
     .clicked()
     {
@@ -779,49 +802,57 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
             .course
             .slide(&editor.selection.slide)
             .is_some_and(|slide| slide.question.is_some());
+        let question_tooltip = if state_edit_locked {
+            "Not available inside a state"
+        } else if master_view {
+            "Not available in Master View"
+        } else {
+            "Insert Question"
+        };
         let question_resp = widgets::toolbar_button_enabled(
             &mut center_ui,
             Icon::Question,
             "Question",
             false,
-            !master_view,
-            if master_view {
-                "Not available in Master View"
-            } else {
-                "Insert Question"
-            },
+            non_visual_enabled,
+            question_tooltip,
         );
-        if slide_has_question {
-            if question_resp.clicked() {
-                editor.ui.bottom_tab = crate::BottomTab::Question;
-            }
-        } else {
-            egui::Popup::menu(&question_resp).show(|ui| {
-                for kind in crate::question::ALL_QUESTION_KINDS {
-                    if ui
-                        .button(crate::question::question_kind_name(kind))
-                        .clicked()
-                    {
-                        insert_question(editor, kind);
-                        ui.close();
-                    }
+        if non_visual_enabled {
+            if slide_has_question {
+                if question_resp.clicked() {
+                    editor.ui.bottom_tab = crate::BottomTab::Question;
                 }
-            });
+            } else {
+                egui::Popup::menu(&question_resp).show(|ui| {
+                    for kind in crate::question::ALL_QUESTION_KINDS {
+                        if ui
+                            .button(crate::question::question_kind_name(kind))
+                            .clicked()
+                        {
+                            insert_question(editor, kind);
+                            ui.close();
+                        }
+                    }
+                });
+            }
         }
     }
 
     // Trigger button
+    let trigger_tooltip = if state_edit_locked {
+        "Not available inside a state"
+    } else if master_view {
+        "Not available in Master View"
+    } else {
+        "Insert Trigger"
+    };
     let trigger_resp = widgets::toolbar_button_enabled(
         &mut center_ui,
         Icon::Lightning,
         "Trigger",
         false,
-        !master_view,
-        if master_view {
-            "Not available in Master View"
-        } else {
-            "Insert Trigger"
-        },
+        non_visual_enabled,
+        trigger_tooltip,
     );
     if trigger_resp.clicked() {
         insert_trigger(editor);

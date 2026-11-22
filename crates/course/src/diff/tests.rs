@@ -222,9 +222,7 @@ fn object_changes_name_the_part() {
         o.name = "Start".into();
         o.states.push(crate::StateDef {
             name: "hover".into(),
-            fill: None,
-            text: None,
-            src: None,
+            ..Default::default()
         });
         o.timing.start_ms = 2000;
         if let ObjectKind::Button { fill, .. } = &mut o.kind {

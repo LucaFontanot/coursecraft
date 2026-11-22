@@ -1192,21 +1192,49 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
         ui.close();
     }
 
-    ui.separator();
-    render_group_ungroup_items(editor, ui, true);
-    ui.separator();
-    ui.menu_button("Order", |ui| {
-        render_reorder_menu_item(editor, ui);
-    });
-    ui.menu_button("Align", |ui| {
-        let mut action_to_run: Option<(&'static str, Json)> = None;
-        render_align_actions(editor, ui, &mut action_to_run);
-        ui.separator();
-        ui.checkbox(&mut editor.ui.align_to_slide, "Align to Slide");
-        if let Some((cmd, params)) = action_to_run {
-            editor.run(cmd, params);
+    let single_non_master = has_selection && !editor.selection.is_multi() && !master_view;
+    let edit_states = Button::new("Edit states…");
+    if ui
+        .add_enabled(single_non_master, edit_states)
+        .on_disabled_hover_text(if master_view {
+            "Master objects don't have states"
+        } else if editor.selection.is_multi() {
+            "Select a single object"
+        } else {
+            "Select an object first"
+        })
+        .clicked()
+    {
+        if let Some(state_name) = editor.ui.preview_state.clone().filter(|s| s != "normal")
+            && let Some(obj_id) = editor.selection.object.clone()
+        {
+            let slide_id = editor.selection.slide.clone();
+            editor.enter_edit_state(&slide_id, &obj_id, &state_name);
         }
-    });
+        editor.ui.bottom_tab = crate::BottomTab::States;
+        ui.close();
+    }
+
+    ui.separator();
+    let state_edit_locked = editor.ui.editing_state.is_some();
+    ui.add_enabled_ui(!state_edit_locked, |ui| {
+        render_group_ungroup_items(editor, ui, true);
+        ui.separator();
+        ui.menu_button("Order", |ui| {
+            render_reorder_menu_item(editor, ui);
+        });
+        ui.menu_button("Align", |ui| {
+            let mut action_to_run: Option<(&'static str, Json)> = None;
+            render_align_actions(editor, ui, &mut action_to_run);
+            ui.separator();
+            ui.checkbox(&mut editor.ui.align_to_slide, "Align to Slide");
+            if let Some((cmd, params)) = action_to_run {
+                editor.run(cmd, params);
+            }
+        });
+    })
+    .response
+    .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
     ui.separator();
 
     let select_all = Button::new("Select all").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+A"));
@@ -1248,6 +1276,97 @@ fn render_group_ungroup_items(editor: &mut Editor, ui: &mut Ui, shortcuts: bool)
         if let Some(params) = ungroup_params {
             editor.run("object.ungroup", params);
         }
+        ui.close();
+    }
+}
+
+/// Context menu for a selected `StateExtra` inside Canvas Edit-State Mode.
+pub(crate) fn show_state_extra_menu(editor: &mut Editor, ui: &mut Ui) {
+    let Some(session) = editor.ui.editing_state.clone() else {
+        return;
+    };
+    let Some(extra_id) = session.selected_extra.clone() else {
+        return;
+    };
+    let info = editor
+        .session
+        .course
+        .slide(&session.slide_id)
+        .and_then(|slide| slide.object(&session.object_id))
+        .and_then(|(obj, _)| obj.states.iter().find(|st| st.name == session.state_name))
+        .and_then(|st| {
+            st.extras
+                .iter()
+                .position(|e| e.id == extra_id)
+                .map(|idx| (st.extras[idx].clone(), idx, st.extras.len()))
+        });
+    let Some((extra, idx, count)) = info else {
+        return;
+    };
+
+    if ui.button("Duplicate extra").clicked() {
+        let mut cloned = extra;
+        cloned.id.clear();
+        cloned.frame.x += 16.0;
+        cloned.frame.y += 16.0;
+        if let Some(res) = editor.run(
+            "object.state_add_extra",
+            serde_json::json!({
+                "slide": session.slide_id,
+                "object": session.object_id,
+                "state": session.state_name,
+                "extra": cloned,
+            }),
+        ) && let Some(new_id) = res.get("id").and_then(Json::as_str)
+            && let Some(active) = editor.ui.editing_state.as_mut()
+        {
+            active.selected_extra = Some(new_id.to_owned());
+        }
+        ui.close();
+    }
+
+    let can_forward = idx + 1 < count;
+    if ui
+        .add_enabled(can_forward, Button::new("Bring forward"))
+        .on_disabled_hover_text("Already in front")
+        .clicked()
+    {
+        editor.run(
+            "object.state_reorder_extra",
+            serde_json::json!({
+                "slide": session.slide_id,
+                "object": session.object_id,
+                "state": session.state_name,
+                "extra": extra_id,
+                "index": idx + 1,
+            }),
+        );
+        ui.close();
+    }
+
+    let can_backward = idx > 0;
+    if ui
+        .add_enabled(can_backward, Button::new("Send backward"))
+        .on_disabled_hover_text("Already at back")
+        .clicked()
+    {
+        editor.run(
+            "object.state_reorder_extra",
+            serde_json::json!({
+                "slide": session.slide_id,
+                "object": session.object_id,
+                "state": session.state_name,
+                "extra": extra_id,
+                "index": idx - 1,
+            }),
+        );
+        ui.close();
+    }
+
+    ui.separator();
+    let delete = Button::new("Delete extra").shortcut_text(shortcut_label(ui.ctx(), "Delete"));
+    if ui.add(delete).clicked() {
+        editor.delete_selection();
         ui.close();
     }
 }
@@ -1709,16 +1828,26 @@ fn render_extra_category_items(
     }
 
     if category == "Insert" {
+        let state_locked = editor.ui.editing_state.is_some();
+        let state_tip = "Not available inside a state";
         ui.separator();
         if ui.button("Text Box").clicked() {
             crate::toolbar::insert_text_box(editor);
             ui.close();
         }
-        if ui.button("Table").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Table"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_table(editor);
             ui.close();
         }
-        if ui.button("Button").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Button"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_button(editor);
             ui.close();
         }
@@ -1730,45 +1859,69 @@ fn render_extra_category_items(
             crate::toolbar::insert_image(editor, requests);
             ui.close();
         }
-        if ui.button("Audio").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Audio"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_audio(editor, requests);
             ui.close();
         }
-        if ui.button("Video").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Video"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_video(editor, requests);
             ui.close();
         }
-        if ui.button("Lottie…").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Lottie…"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_lottie(editor, requests);
             ui.close();
         }
-        ui.menu_button("Input", |ui| {
-            if ui.button("Text entry").clicked() {
-                crate::input_insert::insert_text_entry(editor);
-                ui.close();
-            }
-            if ui.button("Slider").clicked() {
-                crate::input_insert::insert_slider(editor);
-                ui.close();
-            }
-            if ui.button("Dial").clicked() {
-                crate::input_insert::insert_dial(editor);
-                ui.close();
-            }
-            if ui.button("Checkbox").clicked() {
-                crate::input_insert::insert_checkbox(editor);
-                ui.close();
-            }
-            if ui.button("Radio buttons").clicked() {
-                crate::input_insert::insert_radio_group(editor);
-                ui.close();
-            }
+        ui.add_enabled_ui(!state_locked, |ui| {
+            ui.menu_button("Input", |ui| {
+                if ui.button("Text entry").clicked() {
+                    crate::input_insert::insert_text_entry(editor);
+                    ui.close();
+                }
+                if ui.button("Slider").clicked() {
+                    crate::input_insert::insert_slider(editor);
+                    ui.close();
+                }
+                if ui.button("Dial").clicked() {
+                    crate::input_insert::insert_dial(editor);
+                    ui.close();
+                }
+                if ui.button("Checkbox").clicked() {
+                    crate::input_insert::insert_checkbox(editor);
+                    ui.close();
+                }
+                if ui.button("Radio buttons").clicked() {
+                    crate::input_insert::insert_radio_group(editor);
+                    ui.close();
+                }
+            })
+            .response
+            .on_disabled_hover_text(state_tip);
         });
-        if ui.button("Interaction…").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Interaction…"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             editor.ui.show_interaction_gallery = true;
             ui.close();
         }
-        if ui.button("Web object…").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Web object…"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             editor.ui.web_error = None;
             editor.ui.show_web_window = true;
             ui.close();

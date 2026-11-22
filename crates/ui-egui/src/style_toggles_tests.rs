@@ -125,6 +125,8 @@ fn enter_inline_with_selection(harness: &mut TestHarness, start: usize, end: usi
         live_runs: runs,
         live_paragraphs: paragraphs,
         last_revision: harness.editor.session.revision,
+        state_name: None,
+        extra_id: None,
     });
     harness.idle_frame();
     let edit_id = egui::Id::unique(("canvas_inline_edit", "s1", "t1"));
