@@ -1931,6 +1931,129 @@ pub(crate) fn style_for_range(
     )
 }
 
+fn tri_bool(all_true: bool, any_true: bool) -> Option<bool> {
+    if all_true {
+        Some(true)
+    } else if any_true {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+/// Tri-state `(bold, italic, underline)` for a character range `[start, end)`.
+/// Returns `Some(true)` if all selected chars have the style, `Some(false)` if
+/// none do, and `None` (Mixed) when runs disagree.
+fn style_tri_for_range(
+    runs: &[TextRun],
+    style: &TextStyle,
+    range: (usize, usize),
+) -> (Option<bool>, Option<bool>, Option<bool>) {
+    let (start, end) = (range.0.min(range.1), range.0.max(range.1));
+    if start == end {
+        let (b, i, u, _, _) = style_at_cursor(runs, style, start);
+        return (Some(b), Some(i), Some(u));
+    }
+    if runs.is_empty() {
+        return (Some(style.bold), Some(style.italic), Some(style.underline));
+    }
+    let mut offset = 0usize;
+    let mut any = false;
+    let (mut all_b, mut any_b) = (true, false);
+    let (mut all_i, mut any_i) = (true, false);
+    let (mut all_u, mut any_u) = (true, false);
+    for run in runs {
+        let len = run.text.chars().count();
+        let run_start = offset;
+        let run_end = offset.saturating_add(len);
+        offset = run_end;
+        if run_end <= start || run_start >= end {
+            continue;
+        }
+        any = true;
+        let b = run.bold.unwrap_or(style.bold);
+        let i = run.italic.unwrap_or(style.italic);
+        let u = run.underline.unwrap_or(style.underline);
+        all_b &= b;
+        any_b |= b;
+        all_i &= i;
+        any_i |= i;
+        all_u &= u;
+        any_u |= u;
+    }
+    if !any {
+        let (b, i, u, _, _) = style_at_cursor(runs, style, start);
+        return (Some(b), Some(i), Some(u));
+    }
+    (
+        tri_bool(all_b, any_b),
+        tri_bool(all_i, any_i),
+        tri_bool(all_u, any_u),
+    )
+}
+
+/// Tri-state `(strikethrough, superscript, subscript)` for `[start, end)`.
+fn effects_tri_for_range(
+    runs: &[TextRun],
+    style: &TextStyle,
+    range: (usize, usize),
+) -> (Option<bool>, Option<bool>, Option<bool>) {
+    let (start, end) = (range.0.min(range.1), range.0.max(range.1));
+    if start == end {
+        let (st, base, _) = effects_at_cursor(runs, style, start);
+        return (
+            Some(st),
+            Some(base == coursecraft_course::Baseline::Superscript),
+            Some(base == coursecraft_course::Baseline::Subscript),
+        );
+    }
+    if runs.is_empty() {
+        return (
+            Some(style.strikethrough),
+            Some(style.baseline == coursecraft_course::Baseline::Superscript),
+            Some(style.baseline == coursecraft_course::Baseline::Subscript),
+        );
+    }
+    let mut offset = 0usize;
+    let mut any = false;
+    let (mut all_s, mut any_s) = (true, false);
+    let (mut all_sup, mut any_sup) = (true, false);
+    let (mut all_sub, mut any_sub) = (true, false);
+    for run in runs {
+        let len = run.text.chars().count();
+        let run_start = offset;
+        let run_end = offset.saturating_add(len);
+        offset = run_end;
+        if run_end <= start || run_start >= end {
+            continue;
+        }
+        any = true;
+        let s = run.strikethrough.unwrap_or(style.strikethrough);
+        let b = run.baseline.unwrap_or(style.baseline);
+        let is_sup = b == coursecraft_course::Baseline::Superscript;
+        let is_sub = b == coursecraft_course::Baseline::Subscript;
+        all_s &= s;
+        any_s |= s;
+        all_sup &= is_sup;
+        any_sup |= is_sup;
+        all_sub &= is_sub;
+        any_sub |= is_sub;
+    }
+    if !any {
+        let (st, base, _) = effects_at_cursor(runs, style, start);
+        return (
+            Some(st),
+            Some(base == coursecraft_course::Baseline::Superscript),
+            Some(base == coursecraft_course::Baseline::Subscript),
+        );
+    }
+    (
+        tri_bool(all_s, any_s),
+        tri_bool(all_sup, any_sup),
+        tri_bool(all_sub, any_sub),
+    )
+}
+
 /// Effective `(strikethrough, common_baseline, letter_spacing)` for `[start, end)`.
 /// `common_baseline` is `Some(b)` only when every selected character has `b`.
 fn effects_for_range(
@@ -2315,6 +2438,8 @@ fn show_multi_properties(
     let is_one_group = editor.selection.is_one_group(&editor.session.course);
     let group_ids: Vec<String> = objects.iter().map(|object| object.id.clone()).collect();
     let font_families = editor.ui.properties_lists.font_families.clone();
+    let system_fonts = editor.ui.system_fonts.as_deref();
+    let mut font_requests: Vec<crate::EditorRequest> = Vec::new();
     let props = &mut editor.ui.properties;
     let header = if is_one_group {
         format!("Group of {} objects", objects.len())
@@ -2456,35 +2581,25 @@ fn show_multi_properties(
         inspector_row(ui, "Font", |ui| {
             let label = if props.multi_font_mixed {
                 "Mixed"
+            } else if props.multi_font.is_empty() {
+                "Inter"
             } else {
                 props.multi_font.as_str()
             };
-            let selected_font = coursecraft_render::slide_font_named(
-                ui.ctx(),
-                (!props.multi_font_mixed && !props.multi_font.is_empty())
-                    .then_some(props.multi_font.as_str()),
-                false,
-                false,
-                coursecraft_render::SIZE_BODY,
-            );
-            egui::ComboBox::from_id_salt("prop_multi_font")
-                .selected_text(RichText::new(label).font(selected_font))
-                .show_ui(ui, |ui| {
-                    for name in
-                        std::iter::once("Inter".to_owned()).chain(font_families.iter().cloned())
-                    {
-                        let font = coursecraft_render::slide_font_named(
-                            ui.ctx(),
-                            Some(&name),
-                            false,
-                            false,
-                            coursecraft_render::SIZE_BODY,
-                        );
-                        let is_selected = !props.multi_font_mixed && props.multi_font == name;
-                        if ui
-                            .selectable_label(is_selected, RichText::new(&name).font(font))
-                            .clicked()
-                        {
+            if let Some(picked) = crate::font_picker::show_font_picker(
+                ui,
+                "multi_text",
+                label,
+                &font_families,
+                &mut props.recent_fonts,
+                system_fonts,
+                &mut props.system_fonts_list_requested,
+                &mut props.system_font_search,
+                &mut font_requests,
+            ) {
+                match picked {
+                    crate::font_picker::FontPickerAction::PickCourseOrRecent(name) => {
+                        if props.multi_font_mixed || props.multi_font != name {
                             props.multi_font = name.clone();
                             props.multi_font_mixed = false;
                             for object in &objects {
@@ -2499,19 +2614,41 @@ fn show_multi_properties(
                                     }),
                                 ));
                             }
-                            ui.close();
                         }
                     }
-                });
+                    crate::font_picker::FontPickerAction::PickSystem(name) => {
+                        props.multi_font = name.clone();
+                        props.multi_font_mixed = false;
+                        font_requests.push(crate::EditorRequest::AddSystemFont {
+                            family: name.clone(),
+                            apply: None,
+                        });
+                        for object in &objects {
+                            actions_to_run.push((
+                                "text.style_range",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": object.id,
+                                    "start": 0,
+                                    "end": 0,
+                                    "font": name,
+                                }),
+                            ));
+                        }
+                    }
+                    crate::font_picker::FontPickerAction::AddFont => {
+                        props.add_font_requested = true;
+                    }
+                }
+            }
         });
 
         inspector_row(ui, "Style", |ui| {
             let bold = props.multi_bold;
-            if ui
-                .selectable_label(bold == Some(true), RichText::new("B").strong())
+            if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), bold, "Bold (Ctrl+B)")
                 .clicked()
             {
-                let value = bold.is_none_or(|value| !value);
+                let value = bold != Some(true);
                 for object in &objects {
                     let needs = matches!(
                         &object.kind,
@@ -2532,11 +2669,15 @@ fn show_multi_properties(
                 }
             }
             let italic = props.multi_italic;
-            if ui
-                .selectable_label(italic == Some(true), RichText::new("I").italics())
-                .clicked()
+            if crate::widgets::mixed_toggle(
+                ui,
+                RichText::new("I").italics(),
+                italic,
+                "Italic (Ctrl+I)",
+            )
+            .clicked()
             {
-                let value = italic.is_none_or(|value| !value);
+                let value = italic != Some(true);
                 for object in &objects {
                     let needs = matches!(
                         &object.kind,
@@ -2557,11 +2698,15 @@ fn show_multi_properties(
                 }
             }
             let underline = props.multi_underline;
-            if ui
-                .selectable_label(underline == Some(true), RichText::new("U").underline())
-                .clicked()
+            if crate::widgets::mixed_toggle(
+                ui,
+                RichText::new("U").underline(),
+                underline,
+                "Underline (Ctrl+U)",
+            )
+            .clicked()
             {
-                let value = underline.is_none_or(|value| !value);
+                let value = underline != Some(true);
                 for object in &objects {
                     let needs = matches!(
                         &object.kind,
@@ -2584,30 +2729,36 @@ fn show_multi_properties(
         });
 
         inspector_row(ui, "Size", |ui| {
-            let r = ui.add_sized(
-                [
-                    ui.available_width().max(30.0),
-                    coursecraft_render::CONTROL_COMPACT,
-                ],
-                TextEdit::singleline(&mut props.multi_text_size)
-                    .id_salt("prop_multi_text_size")
-                    .hint_text(if props.multi_text_size_mixed {
-                        "Mixed"
-                    } else {
-                        ""
+            let mixed = props.multi_text_size_mixed;
+            let mut size_val = if mixed {
+                16.0
+            } else {
+                parse_finite(&props.multi_text_size).unwrap_or(16.0)
+            };
+            let r = ui.add(
+                DragValue::new(&mut size_val)
+                    .speed(0.5)
+                    .range(1.0..=400.0)
+                    .custom_formatter(move |v, _| {
+                        if mixed {
+                            "Mixed".to_owned()
+                        } else {
+                            format!("{v:.0} pt")
+                        }
                     }),
             );
+            if r.changed() {
+                props.multi_text_size = format!("{size_val}");
+                props.multi_text_size_mixed = false;
+            }
             let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (r.lost_focus() || enter)
-                && let Some(size) = parse_finite(&props.multi_text_size)
-                && size > 0.0
-            {
+            if (r.drag_stopped() || r.lost_focus() || enter) && !props.multi_text_size_mixed {
                 for object in &objects {
                     let needs = matches!(
                         &object.kind,
                         ObjectKind::Text { style, runs, .. }
-                            if (style.size - size).abs() >= 0.001
-                                || runs.iter().any(|run| run.size.is_some_and(|s| (s - size).abs() >= 0.001))
+                            if (style.size - size_val).abs() >= 0.001
+                                || runs.iter().any(|run| run.size.is_some_and(|s| (s - size_val).abs() >= 0.001))
                     );
                     if needs {
                         actions_to_run.push((
@@ -2617,7 +2768,7 @@ fn show_multi_properties(
                                 "object": object.id,
                                 "start": 0,
                                 "end": 0,
-                                "size": size,
+                                "size": size_val,
                             }),
                         ));
                     }
@@ -2970,6 +3121,7 @@ fn show_multi_properties(
             }
         }
     });
+    editor.pending_requests.append(&mut font_requests);
 }
 
 /// Object accessibility fields: text alternative, decorative flag and focus order.
@@ -3428,18 +3580,32 @@ fn show_text_controls(
     };
 
     let total_chars = current_text.chars().count();
-    let (mut eff_bold, mut eff_italic, mut eff_underline, eff_size, eff_color) = match target {
+    let (eff_bold, eff_italic, eff_underline, eff_size, eff_color) = match target {
         TextStyleTarget::Selection(s, e) => style_for_range(runs, style, (s, e)),
         TextStyleTarget::Caret(pos) => style_at_cursor(runs, style, pos),
         TextStyleTarget::WholeObject => style_for_range(runs, style, (0, total_chars)),
     };
-    let (mut eff_strike, mut eff_baseline, eff_spacing) = match target {
+    let (eff_strike, eff_baseline, eff_spacing) = match target {
         TextStyleTarget::Selection(s, e) => effects_for_range(runs, style, (s, e)),
         TextStyleTarget::Caret(pos) => {
             let (st, base, sp) = effects_at_cursor(runs, style, pos);
             (st, Some(base), sp)
         }
         TextStyleTarget::WholeObject => effects_for_range(runs, style, (0, total_chars)),
+    };
+    let (mut tri_bold, mut tri_italic, mut tri_underline) = match target {
+        TextStyleTarget::Selection(s, e) => style_tri_for_range(runs, style, (s, e)),
+        TextStyleTarget::Caret(_) => (Some(eff_bold), Some(eff_italic), Some(eff_underline)),
+        TextStyleTarget::WholeObject => style_tri_for_range(runs, style, (0, total_chars)),
+    };
+    let (mut tri_strike, mut tri_super, mut tri_sub) = match target {
+        TextStyleTarget::Selection(s, e) => effects_tri_for_range(runs, style, (s, e)),
+        TextStyleTarget::Caret(_) => (
+            Some(eff_strike),
+            Some(eff_baseline == Some(coursecraft_course::Baseline::Superscript)),
+            Some(eff_baseline == Some(coursecraft_course::Baseline::Subscript)),
+        ),
+        TextStyleTarget::WholeObject => effects_tri_for_range(runs, style, (0, total_chars)),
     };
 
     if let TextStyleTarget::Caret(pos) = target {
@@ -3449,19 +3615,20 @@ fn show_text_controls(
         if matches_pending {
             if let Some(pending) = &props.pending_caret_style {
                 if let Some(b) = pending.patch.bold {
-                    eff_bold = b;
+                    tri_bold = Some(b);
                 }
                 if let Some(it) = pending.patch.italic {
-                    eff_italic = it;
+                    tri_italic = Some(it);
                 }
                 if let Some(u) = pending.patch.underline {
-                    eff_underline = u;
+                    tri_underline = Some(u);
                 }
                 if let Some(st) = pending.patch.strikethrough {
-                    eff_strike = st;
+                    tri_strike = Some(st);
                 }
                 if let Some(base) = pending.patch.baseline {
-                    eff_baseline = Some(base);
+                    tri_super = Some(base == coursecraft_course::Baseline::Superscript);
+                    tri_sub = Some(base == coursecraft_course::Baseline::Subscript);
                 }
             }
         } else if props
@@ -3596,12 +3763,13 @@ fn show_text_controls(
             apply(&mut entry.patch);
         };
     inspector_row(ui, "Style", |ui| {
-        if ui
-            .selectable_label(eff_bold, RichText::new("B").strong())
+        ui.spacing_mut().item_spacing.x = 2.0;
+        if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), tri_bold, "Bold (Ctrl+B)")
             .clicked()
         {
+            let next = tri_bold != Some(true);
             if let TextStyleTarget::Caret(pos) = target {
-                set_pending(props, pos, &|p| p.bold = Some(!eff_bold));
+                set_pending(props, pos, &|p| p.bold = Some(next));
             } else {
                 action_to_run = Some((
                     "text.style_range",
@@ -3610,17 +3778,22 @@ fn show_text_controls(
                         "object": obj_id,
                         "start": char_range.0,
                         "end": char_range.1,
-                        "bold": !eff_bold,
+                        "bold": next,
                     }),
                 ));
             }
         }
-        if ui
-            .selectable_label(eff_italic, RichText::new("I").italics())
-            .clicked()
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("I").italics(),
+            tri_italic,
+            "Italic (Ctrl+I)",
+        )
+        .clicked()
         {
+            let next = tri_italic != Some(true);
             if let TextStyleTarget::Caret(pos) = target {
-                set_pending(props, pos, &|p| p.italic = Some(!eff_italic));
+                set_pending(props, pos, &|p| p.italic = Some(next));
             } else {
                 action_to_run = Some((
                     "text.style_range",
@@ -3629,17 +3802,22 @@ fn show_text_controls(
                         "object": obj_id,
                         "start": char_range.0,
                         "end": char_range.1,
-                        "italic": !eff_italic,
+                        "italic": next,
                     }),
                 ));
             }
         }
-        if ui
-            .selectable_label(eff_underline, RichText::new("U").underline())
-            .clicked()
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("U").underline(),
+            tri_underline,
+            "Underline (Ctrl+U)",
+        )
+        .clicked()
         {
+            let next = tri_underline != Some(true);
             if let TextStyleTarget::Caret(pos) = target {
-                set_pending(props, pos, &|p| p.underline = Some(!eff_underline));
+                set_pending(props, pos, &|p| p.underline = Some(next));
             } else {
                 action_to_run = Some((
                     "text.style_range",
@@ -3648,19 +3826,23 @@ fn show_text_controls(
                         "object": obj_id,
                         "start": char_range.0,
                         "end": char_range.1,
-                        "underline": !eff_underline,
+                        "underline": next,
                     }),
                 ));
             }
         }
 
-        if ui
-            .selectable_label(eff_strike, RichText::new("S").strikethrough())
-            .on_hover_text("Strikethrough")
-            .clicked()
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("S").strikethrough(),
+            tri_strike,
+            "Strikethrough",
+        )
+        .clicked()
         {
+            let next = tri_strike != Some(true);
             if let TextStyleTarget::Caret(pos) = target {
-                set_pending(props, pos, &|p| p.strikethrough = Some(!eff_strike));
+                set_pending(props, pos, &|p| p.strikethrough = Some(next));
             } else {
                 action_to_run = Some((
                     "text.style_range",
@@ -3669,29 +3851,27 @@ fn show_text_controls(
                         "object": obj_id,
                         "start": char_range.0,
                         "end": char_range.1,
-                        "strikethrough": !eff_strike,
+                        "strikethrough": next,
                     }),
                 ));
             }
         }
-        for (label, tip, target_base) in [
+        for (label, tip, tri_val, target_base) in [
             (
                 "x\u{b2}",
                 "Superscript",
+                tri_super,
                 coursecraft_course::Baseline::Superscript,
             ),
             (
                 "x\u{2082}",
                 "Subscript",
+                tri_sub,
                 coursecraft_course::Baseline::Subscript,
             ),
         ] {
-            if ui
-                .selectable_label(eff_baseline == Some(target_base), label)
-                .on_hover_text(tip)
-                .clicked()
-            {
-                let next = if eff_baseline == Some(target_base) {
+            if crate::widgets::mixed_toggle(ui, label, tri_val, tip).clicked() {
+                let next = if tri_val == Some(true) {
                     coursecraft_course::Baseline::Normal
                 } else {
                     target_base
@@ -5667,6 +5847,7 @@ pub(crate) fn timer_patch(props: &PropertiesState) -> Json {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_timer_controls(
     ui: &mut Ui,
     props: &mut PropertiesState,
@@ -5674,6 +5855,8 @@ fn show_timer_controls(
     slide_id: &str,
     object_id: &str,
     font_families: &[String],
+    system_fonts: Option<&[crate::SystemFontChoice]>,
+    font_requests: &mut Vec<crate::EditorRequest>,
     actions: &mut Vec<(&'static str, Json)>,
 ) {
     let mut action_to_run: Option<(&'static str, Json)> = None;
@@ -5733,37 +5916,69 @@ fn show_timer_controls(
         } else {
             props.timer_font.clone()
         };
-        egui::ComboBox::from_id_salt("prop_timer_font")
-            .selected_text(shown.clone())
-            .show_ui(ui, |ui| {
-                for name in std::iter::once("Inter".to_owned()).chain(font_families.iter().cloned())
-                {
-                    if ui.selectable_label(shown == name, name.clone()).clicked() && shown != name {
+        if let Some(picked) = crate::font_picker::show_font_picker(
+            ui,
+            "timer",
+            &shown,
+            font_families,
+            &mut props.recent_fonts,
+            system_fonts,
+            &mut props.system_fonts_list_requested,
+            &mut props.system_font_search,
+            font_requests,
+        ) {
+            match picked {
+                crate::font_picker::FontPickerAction::PickCourseOrRecent(name) => {
+                    if shown != name {
                         props.timer_font = name;
                         action_to_run = Some(commit(props));
-                        ui.close();
                     }
                 }
-            });
+                crate::font_picker::FontPickerAction::PickSystem(name) => {
+                    props.timer_font = name.clone();
+                    action_to_run = Some(commit(props));
+                    font_requests.push(crate::EditorRequest::AddSystemFont {
+                        family: name,
+                        apply: None,
+                    });
+                }
+                crate::font_picker::FontPickerAction::AddFont => {
+                    props.add_font_requested = true;
+                }
+            }
+        }
     });
     inspector_row(ui, "Style", |ui| {
-        if ui
-            .selectable_label(props.text_bold, RichText::new("B").strong())
-            .clicked()
+        ui.spacing_mut().item_spacing.x = 2.0;
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("B").strong(),
+            Some(props.text_bold),
+            "Bold (Ctrl+B)",
+        )
+        .clicked()
         {
             props.text_bold = !props.text_bold;
             action_to_run = Some(commit(props));
         }
-        if ui
-            .selectable_label(props.text_italic, RichText::new("I").italics())
-            .clicked()
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("I").italics(),
+            Some(props.text_italic),
+            "Italic (Ctrl+I)",
+        )
+        .clicked()
         {
             props.text_italic = !props.text_italic;
             action_to_run = Some(commit(props));
         }
-        if ui
-            .selectable_label(props.text_underline, RichText::new("U").underline())
-            .clicked()
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("U").underline(),
+            Some(props.text_underline),
+            "Underline (Ctrl+U)",
+        )
+        .clicked()
         {
             props.text_underline = !props.text_underline;
             action_to_run = Some(commit(props));
@@ -7493,6 +7708,8 @@ fn show_object_properties(
                 &slide.id,
                 &obj.id,
                 &lists.font_families,
+                system_fonts,
+                &mut font_requests,
                 actions_to_run,
             );
         }

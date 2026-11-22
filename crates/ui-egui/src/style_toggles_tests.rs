@@ -89,10 +89,10 @@ fn is_button_active(harness: &mut TestHarness, label: &str) -> bool {
     let pos = harness
         .find_text_in(label, panel)
         .unwrap_or_else(|| panic!("button {label:?} not found in inspector"));
-    let selection_bg = harness.ctx.global_style().visuals.selection.bg_fill;
+    let active_bg = coursecraft_render::palette(&harness.ctx).accent_subtle;
     harness.frame_shapes(vec![]).iter().any(|clipped| {
         if let egui::epaint::Shape::Rect(rect_shape) = &clipped.shape {
-            rect_shape.rect.contains(pos) && rect_shape.fill == selection_bg
+            rect_shape.rect.contains(pos) && rect_shape.fill == active_bg
         } else {
             false
         }
@@ -312,4 +312,231 @@ fn caret_pending_style_applies_to_next_typed_characters() {
     assert_eq!(ita_run.underline, None);
     // Baseline check: not superscript.
     assert_ne!(xy_run.baseline, Some(Baseline::Superscript));
+}
+
+fn widget_toggled(
+    harness: &TestHarness,
+    accessible_label: &str,
+) -> Option<egui::accesskit::Toggled> {
+    harness
+        .last_widgets
+        .iter()
+        .find(|w| w.label.as_deref() == Some(accessible_label))
+        .and_then(|w| w.toggled)
+}
+
+#[test]
+fn multi_run_mixed_selection_shows_mixed_state_and_applies_on_click() {
+    let course = Course::from_json(BASE_COURSE).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    // Run 0 "bold+ " (0..6): bold=true, italic=true
+    // Run 1 "italic" (6..12): bold=true, italic=false
+    // Run 2 " + " (12..15): bold=false, italic=true
+    setup_mixed_runs(&mut harness);
+
+    // Select 6..15 ("italic + "), which has bold mixed (true in 6..12, false in 12..15)
+    // and italic mixed (false in 6..12, true in 12..15).
+    enter_inline_with_selection(&mut harness, 6, 15);
+    assert_eq!(
+        widget_toggled(&harness, "Bold (Ctrl+B)"),
+        Some(egui::accesskit::Toggled::Mixed),
+        "B must report Toggled::Mixed when runs disagree"
+    );
+    assert_eq!(
+        widget_toggled(&harness, "Italic (Ctrl+I)"),
+        Some(egui::accesskit::Toggled::Mixed),
+        "I must report Toggled::Mixed when runs disagree"
+    );
+
+    // Clicking B sets the whole range bold in one undoable command.
+    let panel = harness.right_panel_rect();
+    let b_pos = harness.find_text_in("B", panel).expect("B button");
+    harness.click_at(b_pos);
+    harness.idle_frame();
+    assert_eq!(
+        widget_toggled(&harness, "Bold (Ctrl+B)"),
+        Some(egui::accesskit::Toggled::True),
+        "clicking Mixed B must set all selected runs bold"
+    );
+}
+
+#[test]
+fn multi_object_mixed_selection_shows_mixed_toggles_font_picker_and_drag_size() {
+    let json = r##"{
+      "schema_version": 1,
+      "id": "c-multi",
+      "title": "Multi Text",
+      "slide_size": { "w": 1280, "h": 720 },
+      "scenes": [{
+        "id": "scene1",
+        "title": "Main",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide 1",
+          "objects": [
+            {
+              "id": "t1",
+              "kind": {
+                "type": "text",
+                "text": "One",
+                "style": { "font": "Inter", "size": 18, "color": "#1F1F1F", "italic": true }
+              },
+              "frame": { "x": 80, "y": 80, "w": 200, "h": 60 }
+            },
+            {
+              "id": "t2",
+              "kind": {
+                "type": "text",
+                "text": "Two",
+                "style": { "font": "Lora", "size": 24, "color": "#1F1F1F", "italic": false }
+              },
+              "frame": { "x": 80, "y": 180, "w": 200, "h": 60 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.editor.selection.slide = "s1".into();
+    harness.editor.selection.set_many(["t1", "t2"]);
+    harness.idle_frame();
+
+    // Mixed italic must report Toggled::Mixed (not False).
+    assert_eq!(
+        widget_toggled(&harness, "Italic (Ctrl+I)"),
+        Some(egui::accesskit::Toggled::Mixed),
+        "multi-select Italic must report Toggled::Mixed"
+    );
+
+    // Size must be a DragValue showing "Mixed" (role SpinButton) that supports dragging/typing.
+    let panel = harness.right_panel_rect();
+    let mixed_positions = harness.find_texts("Mixed");
+    assert!(
+        mixed_positions
+            .iter()
+            .filter(|p| panel.contains(**p))
+            .count()
+            >= 2,
+        "multi-select Font and Size must both show Mixed"
+    );
+    assert!(
+        harness
+            .last_widgets
+            .iter()
+            .any(|w| panel.contains(w.bounds.center())
+                && w.role == egui::accesskit::Role::SpinButton),
+        "multi-select Size must be a DragValue (SpinButton)"
+    );
+
+    // Font control must show "Mixed" and open the unified FontPicker popup.
+    let font_pos = harness
+        .find_text_in("Mixed", panel)
+        .expect("Mixed font button in multi-select");
+    harness.click_at(font_pos);
+    harness.idle_frame();
+    assert!(
+        harness.find_text("In this course").is_some() || harness.find_text("Add font").is_some(),
+        "multi-select Font must open unified FontPicker popup"
+    );
+}
+
+#[test]
+fn style_buttons_have_tooltips_and_accessible_names_everywhere() {
+    let json = r##"{
+      "schema_version": 1,
+      "id": "c-tips",
+      "title": "Tips",
+      "slide_size": { "w": 1280, "h": 720 },
+      "scenes": [{
+        "id": "scene1",
+        "title": "Main",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide 1",
+          "objects": [
+            {
+              "id": "t1",
+              "kind": {
+                "type": "text",
+                "text": "Hello",
+                "style": { "font": "Inter", "size": 24, "color": "#1F1F1F" }
+              },
+              "frame": { "x": 80, "y": 80, "w": 200, "h": 60 }
+            },
+            {
+              "id": "timer1",
+              "kind": {
+                "type": "timer",
+                "duration_ms": 10000,
+                "format": "mm_ss",
+                "autostart": true,
+                "style": { "font": "Inter", "size": 24, "color": "#1F1F1F" }
+              },
+              "frame": { "x": 80, "y": 180, "w": 200, "h": 60 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let mut harness = TestHarness::new(course);
+
+    // 1. Single-select text: all 6 style buttons have tooltips and accesskit labels.
+    harness.editor.selection.slide = "s1".into();
+    harness.editor.selection.object = Some("t1".into());
+    harness.idle_frame();
+    let panel = harness.right_panel_rect();
+    for (btn_text, expected_tip) in [
+        ("B", "Bold (Ctrl+B)"),
+        ("I", "Italic (Ctrl+I)"),
+        ("U", "Underline (Ctrl+U)"),
+        ("S", "Strikethrough"),
+        ("x\u{b2}", "Superscript"),
+        ("x\u{2082}", "Subscript"),
+    ] {
+        let pos = harness
+            .find_text_in(btn_text, panel)
+            .unwrap_or_else(|| panic!("missing button {btn_text}"));
+        let tip = harness.probe_tooltip(pos).unwrap_or_default();
+        assert!(
+            tip.contains(expected_tip),
+            "single-select {btn_text} tooltip {tip:?} must contain {expected_tip:?}"
+        );
+        assert!(
+            widget_toggled(&harness, expected_tip).is_some(),
+            "single-select {btn_text} must have accesskit label {expected_tip:?}"
+        );
+    }
+
+    // 2. Timer: B/I/U have tooltips & accesskit labels, and Font opens FontPicker.
+    harness.editor.selection.object = Some("timer1".into());
+    harness.idle_frame();
+    for (btn_text, expected_tip) in [
+        ("B", "Bold (Ctrl+B)"),
+        ("I", "Italic (Ctrl+I)"),
+        ("U", "Underline (Ctrl+U)"),
+    ] {
+        let pos = harness
+            .find_text_in(btn_text, panel)
+            .unwrap_or_else(|| panic!("missing timer button {btn_text}"));
+        let tip = harness.probe_tooltip(pos).unwrap_or_default();
+        assert!(
+            tip.contains(expected_tip),
+            "timer {btn_text} tooltip {tip:?} must contain {expected_tip:?}"
+        );
+        assert!(
+            widget_toggled(&harness, expected_tip).is_some(),
+            "timer {btn_text} must have accesskit label {expected_tip:?}"
+        );
+    }
+    let timer_font_pos = harness
+        .find_text_in("Inter", panel)
+        .expect("timer font picker button");
+    harness.click_at(timer_font_pos);
+    harness.idle_frame();
+    assert!(
+        harness.find_text("In this course").is_some() || harness.find_text("Add font").is_some(),
+        "timer Font must open unified FontPicker popup"
+    );
 }
