@@ -16,11 +16,24 @@ pub(crate) fn text_center(t: &egui::epaint::TextShape) -> Pos2 {
     }
 }
 
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) struct WidgetNode {
+    pub id: egui::accesskit::NodeId,
+    pub role: egui::accesskit::Role,
+    pub label: Option<String>,
+    pub bounds: Rect,
+    pub disabled: bool,
+    pub toggled: Option<egui::accesskit::Toggled>,
+    pub layer: Option<LayerId>,
+}
+
 pub struct TestHarness {
     pub ctx: Context,
     pub editor: Editor,
     pub screen_rect: Rect,
     pub time: f64,
+    pub(crate) last_widgets: Vec<WidgetNode>,
 }
 
 #[allow(dead_code)]
@@ -38,20 +51,39 @@ impl TestHarness {
         (w, h): (f32, f32),
         mode: coursecraft_render::ThemeMode,
     ) -> Self {
+        Self::new_with_config(course, (w, h), mode, 1.0, true)
+    }
+
+    pub fn new_with_config(
+        course: Course,
+        (w, h): (f32, f32),
+        mode: coursecraft_render::ThemeMode,
+        zoom_factor: f32,
+        file_ops: bool,
+    ) -> Self {
         let ctx = Context::default();
+        ctx.enable_accesskit();
+        let zoom = if zoom_factor.is_finite() && zoom_factor > 0.0 {
+            zoom_factor
+        } else {
+            1.0
+        };
+        ctx.set_zoom_factor(zoom);
         coursecraft_render::apply_style(&ctx, mode);
         // Like the snapshot renderer: no animation, so a window is at its final size and
         // position after the warm-up frames.
         let mut style = (*ctx.global_style()).clone();
         style.animation_time = 0.0;
         ctx.set_global_style(style);
-        let screen_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, h));
-        let editor = Editor::new(course);
+        let screen_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(w / zoom, h / zoom));
+        let mut editor = Editor::new(course);
+        editor.set_file_ops_available(file_ops);
         Self {
             ctx,
             editor,
             screen_rect,
             time: 0.0,
+            last_widgets: Vec::new(),
         }
     }
 
@@ -81,6 +113,7 @@ impl TestHarness {
         let output = self.ctx.run_ui(raw_input, |ui| {
             requests = self.editor.show(ui);
         });
+        self.last_widgets = extract_widget_nodes(output.platform_output.accesskit_update.as_ref());
         output.drop_without_applying_deltas();
         requests
     }
@@ -91,6 +124,7 @@ impl TestHarness {
         let output = self.ctx.run_ui(raw_input, |ui| {
             let _ = self.editor.show(ui);
         });
+        self.last_widgets = extract_widget_nodes(output.platform_output.accesskit_update.as_ref());
         let shapes = output.shapes.clone();
         output.drop_without_applying_deltas();
         shapes
@@ -108,6 +142,7 @@ impl TestHarness {
         let output = self.ctx.run_ui(raw_input, |ui| {
             requests = self.editor.show(ui);
         });
+        self.last_widgets = extract_widget_nodes(output.platform_output.accesskit_update.as_ref());
         output.drop_without_applying_deltas();
         requests
     }
@@ -532,6 +567,7 @@ impl LayoutReport {
     }
 }
 
+#[allow(dead_code)]
 impl TestHarness {
     /// Run `warmup` idle frames, then one more frame whose painted shapes are checked for
     /// clipped, overlapping and off-window text. See [`check_layout`].
@@ -567,8 +603,50 @@ impl TestHarness {
                 "internal: layer walk saw {from_layers} texts, final output has {from_output}"
             ));
         }
+        self.last_widgets = extract_widget_nodes(output.platform_output.accesskit_update.as_ref());
         output.drop_without_applying_deltas();
         report
+    }
+
+    /// Check hit target sizes on the most recently captured `WidgetNode`s.
+    pub fn check_hit_targets(&self, min_size: egui::Vec2) -> Vec<String> {
+        check_hit_targets(&self.last_widgets, min_size)
+    }
+
+    /// Hover at `pos` for 1.0s and return any `Order::Tooltip` text painted.
+    pub fn probe_tooltip(&mut self, pos: Pos2) -> Option<String> {
+        self.hover_at(pos);
+        self.advance_time(1.0);
+        self.idle_frame();
+        let raw_input = self.next_raw_input(Vec::new());
+        let mut layers = Vec::new();
+        let output = self.ctx.run_ui(raw_input, |ui| {
+            let _ = self.editor.show(ui);
+            layers = capture_layers(ui.ctx());
+        });
+        output.drop_without_applying_deltas();
+        let mut texts = Vec::new();
+        for (layer, shapes) in &layers {
+            if layer.order == Order::Tooltip {
+                let mut items = Vec::new();
+                for c in shapes {
+                    collect_texts(&c.shape, c.clip_rect, &mut items);
+                }
+                texts.extend(items.into_iter().map(|i| i.text));
+            }
+        }
+        let joined = texts.join(" ").trim().to_owned();
+        if joined.is_empty() {
+            None
+        } else {
+            Some(joined)
+        }
+    }
+
+    /// Check icon/short-label tooltips + accessible names and disabled control tooltips.
+    pub fn check_tooltips_and_disabled(&mut self) -> Vec<String> {
+        let widgets = self.last_widgets.clone();
+        check_tooltips_and_disabled_with(&widgets, |pos| self.probe_tooltip(pos))
     }
 }
 
@@ -895,6 +973,137 @@ pub(crate) fn check_layout(
     }
 }
 
+#[allow(dead_code)]
+pub(crate) fn extract_widget_nodes(
+    update: Option<&egui::accesskit::TreeUpdate>,
+) -> Vec<WidgetNode> {
+    let Some(update) = update else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(id, node)| {
+            let b = node.bounds()?;
+            let bounds = Rect::from_min_max(
+                pos2(b.x0 as f32, b.y0 as f32),
+                pos2(b.x1 as f32, b.y1 as f32),
+            );
+            Some(WidgetNode {
+                id: *id,
+                role: node.role(),
+                label: node.label().map(ToOwned::to_owned),
+                bounds,
+                disabled: node.is_disabled(),
+                toggled: node.toggled(),
+                layer: None,
+            })
+        })
+        .collect()
+}
+
+fn is_interactive_role(role: egui::accesskit::Role) -> bool {
+    use egui::accesskit::Role;
+    matches!(
+        role,
+        Role::Button
+            | Role::CheckBox
+            | Role::RadioButton
+            | Role::Tab
+            | Role::ComboBox
+            | Role::MenuItem
+            | Role::MenuItemCheckBox
+            | Role::MenuItemRadio
+            | Role::Switch
+    )
+}
+
+fn is_icon_or_short_symbol(label: Option<&str>) -> bool {
+    let Some(raw) = label else {
+        return true;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if matches!(trimmed, "OK" | "No" | "On") {
+        return false;
+    }
+    if trimmed.chars().count() <= 2 {
+        return true;
+    }
+    trimmed
+        .chars()
+        .all(|c| c.is_whitespace() || ('\u{E000}'..='\u{F8FF}').contains(&c))
+}
+
+#[allow(dead_code)]
+pub(crate) fn check_hit_targets(nodes: &[WidgetNode], min_size: egui::Vec2) -> Vec<String> {
+    const EPS: f32 = 0.05;
+    let mut findings = Vec::new();
+    for node in nodes {
+        if !is_interactive_role(node.role) || !node.bounds.is_positive() {
+            continue;
+        }
+        if node.bounds.width() + EPS < min_size.x || node.bounds.height() + EPS < min_size.y {
+            findings.push(format!(
+                "hit-target-too-small: {:?} \"{}\" {} is smaller than {}x{}",
+                node.role,
+                shorten(node.label.as_deref().unwrap_or("")),
+                fmt_rect(node.bounds),
+                min_size.x,
+                min_size.y
+            ));
+        }
+    }
+    findings
+}
+
+#[allow(dead_code)]
+pub(crate) fn check_tooltips_and_disabled_with(
+    nodes: &[WidgetNode],
+    mut probe_tooltip: impl FnMut(Pos2) -> Option<String>,
+) -> Vec<String> {
+    let mut findings = Vec::new();
+    for node in nodes {
+        if !is_interactive_role(node.role) || !node.bounds.is_positive() {
+            continue;
+        }
+        let icon_or_short = is_icon_or_short_symbol(node.label.as_deref());
+        let name = shorten(node.label.as_deref().unwrap_or(""));
+        if icon_or_short {
+            findings.push(format!(
+                "missing-accessible-name: {:?} \"{}\" {}",
+                node.role,
+                name,
+                fmt_rect(node.bounds)
+            ));
+        }
+        if icon_or_short || node.disabled {
+            let tip = probe_tooltip(node.bounds.center());
+            let has_tip = tip
+                .as_deref()
+                .is_some_and(|t| t.trim().chars().count() >= 3);
+            if node.disabled && !has_tip {
+                findings.push(format!(
+                    "missing-disabled-tooltip: {:?} \"{}\" {}",
+                    node.role,
+                    name,
+                    fmt_rect(node.bounds)
+                ));
+            } else if icon_or_short && !has_tip {
+                findings.push(format!(
+                    "missing-tooltip: {:?} \"{}\" {}",
+                    node.role,
+                    name,
+                    fmt_rect(node.bounds)
+                ));
+            }
+        }
+    }
+    findings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -992,5 +1201,212 @@ mod tests {
         h.double_click_at(row_pos);
         h.idle_frame();
         assert!(h.editor.ui.trigger_form.is_some());
+    }
+
+    fn run_synthetic_scene(
+        size: (f32, f32),
+        zoom_factor: f32,
+        mut ui_fn: impl FnMut(&mut egui::Ui),
+    ) -> (Vec<WidgetNode>, LayoutReport, Vec<String>) {
+        let ctx = Context::default();
+        ctx.enable_accesskit();
+        ctx.set_zoom_factor(zoom_factor);
+        let mut style = (*ctx.global_style()).clone();
+        style.animation_time = 0.0;
+        ctx.set_global_style(style);
+        let screen = Rect::from_min_size(
+            pos2(0.0, 0.0),
+            vec2(size.0 / zoom_factor, size.1 / zoom_factor),
+        );
+        let mut time = 0.0;
+        let mut layers = Vec::new();
+        let mut nodes = Vec::new();
+        for _ in 0..2 {
+            let raw = RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                ..Default::default()
+            };
+            time += 1.0 / 60.0;
+            let out = ctx.run_ui(raw, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui_fn(ui);
+                });
+                layers = capture_layers(ui.ctx());
+            });
+            nodes = extract_widget_nodes(out.platform_output.accesskit_update.as_ref());
+            out.drop_without_applying_deltas();
+        }
+        let report = check_layout(&layers, screen, &[], &[]);
+        let tooltip_findings = check_tooltips_and_disabled_with(&nodes, |pos| {
+            let mut tip_layers = Vec::new();
+            let raw_move = RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                events: vec![Event::PointerMoved(pos)],
+                ..Default::default()
+            };
+            time += 1.0;
+            let out1 = ctx.run_ui(raw_move, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui_fn(ui);
+                });
+            });
+            out1.drop_without_applying_deltas();
+            for _ in 0..2 {
+                let raw_hover = RawInput {
+                    screen_rect: Some(screen),
+                    time: Some(time),
+                    ..Default::default()
+                };
+                time += 1.0 / 60.0;
+                let out2 = ctx.run_ui(raw_hover, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui_fn(ui);
+                    });
+                    tip_layers = capture_layers(ui.ctx());
+                });
+                out2.drop_without_applying_deltas();
+            }
+            let mut texts = Vec::new();
+            for (layer, shapes) in &tip_layers {
+                if layer.order == Order::Tooltip {
+                    let mut items = Vec::new();
+                    for c in shapes {
+                        collect_texts(&c.shape, c.clip_rect, &mut items);
+                    }
+                    texts.extend(items.into_iter().map(|i| i.text));
+                }
+            }
+            let joined = texts.join(" ").trim().to_owned();
+            if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            }
+        });
+        (nodes, report, tooltip_findings)
+    }
+
+    #[test]
+    fn harness_catches_small_hit_target_button() {
+        let (nodes, _, _) = run_synthetic_scene((400.0, 200.0), 1.0, |ui| {
+            let _ = ui.add_sized(vec2(18.0, 18.0), egui::Button::new("Tiny"));
+        });
+        let findings = check_hit_targets(&nodes, vec2(24.0, 24.0));
+        assert!(
+            findings.iter().any(|f| f.contains("hit-target-too-small")),
+            "expected hit-target-too-small finding, got: {findings:?}"
+        );
+
+        let (ok_nodes, _, _) = run_synthetic_scene((400.0, 200.0), 1.0, |ui| {
+            let _ = ui.add_sized(vec2(28.0, 28.0), egui::Button::new("Good"));
+        });
+        let ok_findings = check_hit_targets(&ok_nodes, vec2(24.0, 24.0));
+        assert!(
+            ok_findings.is_empty(),
+            "expected no findings, got: {ok_findings:?}"
+        );
+    }
+
+    #[test]
+    fn harness_catches_icon_button_missing_tooltip_or_accessible_name() {
+        let (_, _, findings) = run_synthetic_scene((400.0, 200.0), 1.0, |ui| {
+            let _ = ui.add_sized(
+                vec2(28.0, 28.0),
+                egui::Button::new(coursecraft_render::Icon::Trash.codepoint().to_string()),
+            );
+        });
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("missing-tooltip") || f.contains("missing-accessible-name")),
+            "expected missing-tooltip or missing-accessible-name, got: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn harness_catches_disabled_button_missing_disabled_tooltip() {
+        let (_, _, findings) = run_synthetic_scene((400.0, 200.0), 1.0, |ui| {
+            let _ = ui.add_enabled(false, egui::Button::new("Publish Course"));
+        });
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("missing-disabled-tooltip")),
+            "expected missing-disabled-tooltip, got: {findings:?}"
+        );
+
+        let (_, _, ok_findings) = run_synthetic_scene((400.0, 200.0), 1.0, |ui| {
+            let _ = ui
+                .add_enabled(false, egui::Button::new("Publish Course"))
+                .on_disabled_hover_text("Save the course before publishing.");
+        });
+        assert!(
+            ok_findings.is_empty(),
+            "expected no findings when disabled tooltip is present, got: {ok_findings:?}"
+        );
+    }
+
+    #[test]
+    fn harness_catches_clipped_control_at_scale_1_5() {
+        let label = "Button label that fits at 1.0x";
+        let (_, report_1x, _) = run_synthetic_scene((260.0, 200.0), 1.0, |ui| {
+            ui.horizontal(|ui| {
+                let _ = ui.button(label);
+            });
+        });
+        assert!(
+            !report_1x.findings.iter().any(|f| f.contains("clipped")),
+            "expected no clipped finding at 1.0x scale, got: {:?}",
+            report_1x.findings
+        );
+
+        let (_, report_15x, _) = run_synthetic_scene((260.0, 200.0), 1.5, |ui| {
+            ui.horizontal(|ui| {
+                let _ = ui.button(label);
+            });
+        });
+        assert!(
+            report_15x.findings.iter().any(|f| f.contains("clipped")),
+            "expected clipped finding at 1.5x scale, got: {:?}",
+            report_15x.findings
+        );
+    }
+
+    #[test]
+    fn new_with_config_applies_zoom_factor_and_file_ops() {
+        let mut h_web = TestHarness::new_with_config(
+            hello_course(),
+            (1200.0, 900.0),
+            coursecraft_render::ThemeMode::Dark,
+            1.5,
+            false,
+        );
+        h_web.idle_frame();
+        assert!((h_web.ctx.zoom_factor() - 1.5).abs() < 1e-4);
+        assert!((h_web.screen_rect.width() - 800.0).abs() < 1e-2);
+        assert!((h_web.screen_rect.height() - 600.0).abs() < 1e-2);
+        assert!(!h_web.editor.file_ops_available);
+        assert!(!h_web.last_widgets.is_empty());
+        assert!(
+            h_web.find_text("Publish").is_none(),
+            "Publish button should not appear when file_ops=false"
+        );
+
+        let mut h_desktop = TestHarness::new_with_config(
+            hello_course(),
+            (1280.0, 800.0),
+            coursecraft_render::ThemeMode::Light,
+            1.0,
+            true,
+        );
+        h_desktop.idle_frame();
+        assert!(h_desktop.editor.file_ops_available);
+        assert!(
+            h_desktop.find_text("Publish").is_some(),
+            "Publish button should appear when file_ops=true"
+        );
+        let _ = h_desktop.check_hit_targets(vec2(24.0, 24.0));
     }
 }
