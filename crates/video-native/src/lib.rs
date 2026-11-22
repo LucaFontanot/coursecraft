@@ -1627,12 +1627,10 @@ mod windows_impl {
             if stream_flags & tick != 0 && sample.is_none() {
                 continue;
             }
-            if stream_flags & eof != 0 || stream_flags & err_flag != 0 {
-                if sample.is_none() {
-                    break;
-                }
-                // A final sample with EOF/error still carries data; read it
-                // below then stop.
+            // A final sample with EOF/error still carries data; read it below
+            // then stop.
+            if (stream_flags & eof != 0 || stream_flags & err_flag != 0) && sample.is_none() {
+                break;
             }
             let Some(sample) = sample else {
                 continue;

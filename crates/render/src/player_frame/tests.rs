@@ -2902,3 +2902,72 @@ fn slide_show_bar_override_wins_both_ways() {
     harness2.run(&player2, Vec::new());
     assert!(harness2.frame.strip_rect().is_none());
 }
+
+fn unstarted() -> Player<'static> {
+    let course = Course::from_json(HELLO_JSON).expect("valid course");
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    Player::new(boxed).expect("valid player")
+}
+
+#[test]
+fn start_gate_hides_the_strip_and_centres_its_button() {
+    let player = unstarted();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.awaiting_start = true;
+    let output = harness.run(&player, Vec::new());
+    assert!(!output.start);
+    assert!(output.inputs.is_empty());
+    assert!(
+        harness.frame.strip_rect().is_none(),
+        "the start gate hides the control strip"
+    );
+    let button = harness.frame.start_button_rect().expect("start button");
+    let slide = harness.frame.slide_rect().expect("slide rect");
+    assert!(slide.contains_rect(button));
+    assert!((button.center().x - slide.center().x).abs() < 1.0);
+}
+
+#[test]
+fn clicking_the_start_button_reports_start() {
+    let player = unstarted();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.awaiting_start = true;
+    harness.run(&player, Vec::new());
+    let button = harness.frame.start_button_rect().expect("start button");
+    let output = harness.run(&player, click(button.center()));
+    assert!(output.start, "a click on Play starts the course");
+    assert!(output.inputs.is_empty());
+}
+
+#[test]
+fn enter_or_space_on_the_gate_reports_start() {
+    for k in [egui::Key::Enter, egui::Key::Space] {
+        let player = unstarted();
+        let mut harness = Harness::new(1280.0, 720.0);
+        harness.frame.awaiting_start = true;
+        harness.run(&player, Vec::new());
+        let output = harness.run(&player, vec![key(k)]);
+        assert!(output.start, "{k:?} starts the course");
+    }
+}
+
+#[test]
+fn clicks_outside_the_start_button_do_nothing() {
+    let player = unstarted();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.awaiting_start = true;
+    harness.run(&player, Vec::new());
+    let slide = harness.frame.slide_rect().expect("slide rect");
+    let output = harness.run(&player, click(slide.min + vec2(20.0, 20.0)));
+    assert!(!output.start);
+    assert!(output.inputs.is_empty());
+}
+
+#[test]
+fn no_gate_means_no_start_button() {
+    let (_course, player) = hello();
+    let mut harness = Harness::new(1280.0, 720.0);
+    let output = harness.run(&player, vec![key(egui::Key::Enter)]);
+    assert!(!output.start);
+    assert!(harness.frame.start_button_rect().is_none());
+}

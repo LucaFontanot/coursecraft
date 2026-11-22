@@ -812,7 +812,7 @@ impl PlayerApp {
         ) {
             Ok(mut playing) => {
                 playing.frame.reduced_motion = prefers_reduced_motion();
-                playing.handle_input(&Input::Start, None);
+                playing.frame.awaiting_start = true;
                 self.state = State::Playing(Box::new(playing));
             }
             Err(err) => {
@@ -827,7 +827,7 @@ impl PlayerApp {
         match Playing::web(course, self.ctx.clone(), self.log_effects) {
             Ok(mut playing) => {
                 playing.frame.reduced_motion = prefers_reduced_motion();
-                playing.handle_input(&Input::Start, None);
+                playing.frame.awaiting_start = true;
                 self.state = State::Playing(Box::new(playing));
             }
             Err(err) => {
@@ -851,7 +851,7 @@ impl PlayerApp {
                     self.log_effects,
                 );
                 playing.frame.reduced_motion = prefers_reduced_motion();
-                playing.handle_input(&Input::Start, None);
+                playing.frame.awaiting_start = true;
                 self.state = State::Playing(Box::new(playing));
             }
             Err(err) => {
@@ -874,7 +874,7 @@ impl PlayerApp {
                 match Playing::standalone(course, self.ctx.clone(), self.log_effects) {
                     Ok(mut playing) => {
                         playing.frame.reduced_motion = prefers_reduced_motion();
-                        playing.handle_input(&Input::Start, None);
+                        playing.frame.awaiting_start = true;
                         self.state = State::Playing(Box::new(playing));
                     }
                     Err(err) => {
@@ -972,7 +972,7 @@ impl PlayerApp {
             self.log_effects,
         );
         playing.frame.reduced_motion = reduced_motion;
-        playing.handle_input(&Input::Start, None);
+        playing.frame.awaiting_start = true;
         self.state = State::Playing(Box::new(playing));
     }
 }
@@ -1122,9 +1122,12 @@ impl Playing {
             layer.before_frame(playing.frame.focus_mut());
         }
 
-        // 1. Advance ticker and handle tick input if emitted
+        // 1. Advance ticker and handle tick input if emitted. Nothing runs
+        // until the learner presses Play on the start gate.
         let dt = ui.input(|i| i.stable_dt);
-        if let Some(tick) = playing.ticker.advance(dt) {
+        if !playing.frame.awaiting_start
+            && let Some(tick) = playing.ticker.advance(dt)
+        {
             playing.handle_input(&tick, Some(ui.ctx()));
         }
 
@@ -1183,6 +1186,20 @@ impl Playing {
 
         #[cfg(target_arch = "wasm32")]
         playing.sync_web_media_prefetch();
+
+        #[cfg(target_arch = "wasm32")]
+        let start_from_dom = playing
+            .a11y
+            .as_ref()
+            .is_some_and(crate::a11y::AccessLayer::take_start_request);
+        #[cfg(not(target_arch = "wasm32"))]
+        let start_from_dom = false;
+        if playing.frame.awaiting_start && (frame_output.start || start_from_dom) {
+            // Start inside the learner's gesture, so the browser lets the
+            // first slide's audio play.
+            playing.frame.awaiting_start = false;
+            playing.handle_input(&Input::Start, Some(ui.ctx()));
+        }
 
         if let Some(volume) = frame_output.volume {
             playing.media.set_volume(volume);

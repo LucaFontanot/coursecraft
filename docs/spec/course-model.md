@@ -26,7 +26,8 @@ Course
 │                    show_title, show_volume, show_captions (default true),
 │                    logo? (project-relative image src, shown in the strip, max 28 pt high),
 │                    navigation=free (free|restricted|locked),
-│                    next_requires={"kind":"nothing"} (nothing|timeline_ends|variable{name})}
+│                    next_requires={"kind":"nothing"} (nothing|timeline_ends|variable{name}),
+│                    seekbar=free (free|locked|until_timeline_ends; omitted when free)}
 ├─ resources[]?     {id, title, target: {kind:"url", url (http|https|mailto)} | {kind:"file", src}}
 │                   (omitted when empty; a file is a project-relative path packaged under media/)
 ├─ glossary[]?      {id, term, definition} (omitted when empty; shown A to Z, stored in author order)

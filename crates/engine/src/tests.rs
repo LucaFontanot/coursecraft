@@ -776,6 +776,27 @@ fn course_set_player_toggles_nav_menu_and_seekbar() {
 }
 
 #[test]
+fn course_set_player_sets_seekbar_behaviour_and_undoes() {
+    use coursecraft_course::SeekbarBehaviour;
+    let mut s = Session::blank("Title");
+    ok(
+        &mut s,
+        "course.set_player",
+        json!({ "seekbar": "until_timeline_ends" }),
+    );
+    assert_eq!(s.course.player.seekbar, SeekbarBehaviour::UntilTimelineEnds);
+    ok(&mut s, "course.set_player", json!({ "seekbar": "locked" }));
+    assert_eq!(s.course.player.seekbar, SeekbarBehaviour::Locked);
+    assert!(
+        s.execute("course.set_player", &json!({ "seekbar": "sideways" }))
+            .is_err()
+    );
+    assert_eq!(s.course.player.seekbar, SeekbarBehaviour::Locked);
+    s.undo().unwrap();
+    assert_eq!(s.course.player.seekbar, SeekbarBehaviour::UntilTimelineEnds);
+}
+
+#[test]
 fn course_set_quiz_sets_the_passing_percent() {
     let mut s = Session::blank("Title");
     ok(&mut s, "course.set_quiz", json!({ "passing_percent": 80 }));

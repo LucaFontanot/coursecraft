@@ -9263,6 +9263,75 @@ fn resume_treats_earlier_visited_slides_as_completed() {
     assert!(resumed.can_next());
 }
 
+#[test]
+fn free_seekbar_moves_the_clock() {
+    let course = nav_course(serde_json::json!({}));
+    let mut p = Player::new(&course).unwrap();
+    p.handle(&Input::Start);
+    assert!(p.seek_allowed());
+    assert!(p.seek_info().seek_allowed);
+    let fx = p.handle(&Input::PlayerSeek { ms: 1500 });
+    assert!(!warned(&fx));
+    assert_eq!(p.slide_elapsed_ms(), 1500);
+}
+
+#[test]
+fn locked_seekbar_refuses_every_seek() {
+    let course = nav_course(serde_json::json!({ "seekbar": "locked" }));
+    let mut p = Player::new(&course).unwrap();
+    p.handle(&Input::Start);
+    assert!(p.seekbar_locked());
+    assert!(!p.seek_allowed());
+    assert!(!p.seek_info().seek_allowed);
+    assert!(warned(&p.handle(&Input::PlayerSeek { ms: 1500 })));
+    assert_eq!(p.slide_elapsed_ms(), 0);
+    // Still locked after the timeline has played through.
+    p.handle(&Input::Tick { ms: 2000 });
+    assert!(!p.seek_allowed());
+    assert!(warned(&p.handle(&Input::PlayerSeek { ms: 0 })));
+    assert_eq!(p.slide_elapsed_ms(), 2000);
+}
+
+#[test]
+fn seekbar_unlocks_when_the_timeline_ends_and_stays_unlocked_on_return() {
+    let course = nav_course(serde_json::json!({ "seekbar": "until_timeline_ends" }));
+    let mut p = Player::new(&course).unwrap();
+    p.handle(&Input::Start);
+    assert!(!p.seek_allowed());
+    assert!(warned(&p.handle(&Input::PlayerSeek { ms: 1999 })));
+    assert_eq!(p.slide_elapsed_ms(), 0);
+    p.handle(&Input::Tick { ms: 1999 });
+    assert!(!p.seek_info().seek_allowed);
+    p.handle(&Input::Tick { ms: 1 });
+    assert!(p.seek_info().seek_allowed);
+    // Seeking back keeps it unlocked: the slide is completed.
+    assert!(!warned(&p.handle(&Input::PlayerSeek { ms: 500 })));
+    assert_eq!(p.slide_elapsed_ms(), 500);
+    assert!(p.seek_allowed());
+    // A new slide starts locked; the completed one is unlocked on return.
+    p.handle(&Input::Next);
+    assert!(!p.seek_allowed());
+    p.handle(&Input::Previous);
+    assert_eq!(p.current_slide().unwrap().id, "s1");
+    assert!(p.seek_allowed());
+}
+
+#[test]
+fn seekbar_setting_round_trips_and_defaults_to_free() {
+    let course = nav_course(serde_json::json!({}));
+    assert_eq!(
+        course.player.seekbar,
+        coursecraft_course::SeekbarBehaviour::Free
+    );
+    assert!(!course.to_json().unwrap().contains("\"seekbar\""));
+    let locked = nav_course(serde_json::json!({ "seekbar": "until_timeline_ends" }));
+    let again = Course::from_json(&locked.to_json().unwrap()).unwrap();
+    assert_eq!(
+        again.player.seekbar,
+        coursecraft_course::SeekbarBehaviour::UntilTimelineEnds
+    );
+}
+
 fn speed_course(show_speed: bool) -> Course {
     let mut course = nav_course(serde_json::json!({}));
     course.player.show_speed = show_speed;

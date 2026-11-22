@@ -26,6 +26,8 @@ pub enum PlayerSnapshotSelect {
     Ended,
     /// The loading screen shown while a course is being fetched.
     Loading,
+    /// The web player's start gate: the first slide dimmed under a Play button.
+    Start,
 }
 
 fn playable_error(issues: Vec<Issue>) -> RenderError {
@@ -105,6 +107,7 @@ pub fn snapshot_player(
         }
         PlayerSnapshotSelect::Drawer => frame.open_drawer(),
         PlayerSnapshotSelect::Ended => frame.ended = true,
+        PlayerSnapshotSelect::Start => frame.awaiting_start = true,
         PlayerSnapshotSelect::Playing
         | PlayerSnapshotSelect::Paused
         | PlayerSnapshotSelect::Loading => {}
@@ -114,6 +117,12 @@ pub fn snapshot_player(
 
     let (player, _) = if select == PlayerSnapshotSelect::Loading {
         (None, String::new())
+    } else if select == PlayerSnapshotSelect::Start {
+        // Not started: the first slide as it looks before entry.
+        (
+            Some(Player::new(&course).map_err(playable_error)?),
+            String::new(),
+        )
     } else {
         let paused = select == PlayerSnapshotSelect::Paused;
         let (player, id) = snapshot_player_state(&course, slide, paused)?;

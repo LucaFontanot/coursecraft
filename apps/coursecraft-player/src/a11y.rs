@@ -52,6 +52,10 @@ pub struct AccessLayer {
     reconciling: Rc<Cell<bool>>,
     last_transform: Option<SlideTransform>,
     listeners: Vec<Closure<dyn FnMut(Event)>>,
+    /// The start gate's real Play button, while the gate is showing.
+    start_button: Option<HtmlElement>,
+    /// Set by the Play button's click handler, read by the app each frame.
+    start_requested: Rc<Cell<bool>>,
 }
 
 impl AccessLayer {
@@ -141,6 +145,8 @@ impl AccessLayer {
             reconciling: Rc::new(Cell::new(false)),
             last_transform: None,
             listeners: Vec::new(),
+            start_button: None,
+            start_requested: Rc::new(Cell::new(false)),
         };
         layer.install_listeners();
         layer.keep_eframe_text_agent_out();
@@ -162,6 +168,69 @@ impl AccessLayer {
         self.ctx.request_repaint();
     }
 
+    /// True once since the learner activated the start gate's Play button
+    /// through the DOM (keyboard or screen reader).
+    pub fn take_start_request(&self) -> bool {
+        self.start_requested.replace(false)
+    }
+
+    /// Show the start gate's Play button as a real, focused `<button>` over
+    /// `rect` while `gate` is set, and hide the slide's items behind it, so a
+    /// keyboard or screen-reader learner lands on it first. Remove it after.
+    fn sync_start_gate(&mut self, gate: Option<(egui::Rect, &str)>) {
+        let Some((rect, label)) = gate else {
+            if let Some(button) = self.start_button.take() {
+                button.remove();
+                let _ = self.items.remove_attribute("aria-hidden");
+                let _ = self.items.remove_attribute("inert");
+            }
+            return;
+        };
+        if self.start_button.is_none() {
+            let Some(button) = self
+                .document
+                .create_element("button")
+                .ok()
+                .and_then(|element| element.dyn_into::<HtmlElement>().ok())
+            else {
+                return;
+            };
+            let _ = button.set_attribute("type", "button");
+            let requested = Rc::clone(&self.start_requested);
+            let ctx = self.ctx.clone();
+            let click = Closure::<dyn FnMut(Event)>::new(move |_event: Event| {
+                requested.set(true);
+                ctx.request_repaint();
+            });
+            add(
+                button.unchecked_ref::<web_sys::EventTarget>(),
+                "click",
+                click,
+                &mut self.listeners,
+            );
+            if self.root.append_child(&button).is_err() {
+                return;
+            }
+            let _ = self.items.set_attribute("aria-hidden", "true");
+            let _ = self.items.set_attribute("inert", "");
+            focus_without_scroll(&button);
+            self.start_button = Some(button);
+        }
+        if let Some(button) = &self.start_button {
+            if button.text_content().as_deref() != Some(label) {
+                button.set_text_content(Some(label));
+            }
+            if let Some(style) = element_style(button) {
+                let _ = style.set_property("position", "absolute");
+                let _ = style.set_property("margin", "0");
+                let _ = style.set_property("left", &format!("{}px", rect.min.x));
+                let _ = style.set_property("top", &format!("{}px", rect.min.y));
+                let _ = style.set_property("width", &format!("{}px", rect.width()));
+                let _ = style.set_property("height", &format!("{}px", rect.height()));
+            }
+        }
+    }
+
     /// Announce a message that is not derived from a tree change.
     pub fn announce(&self, text: &str) {
         self.set_live(text);
@@ -178,6 +247,11 @@ impl AccessLayer {
         show_menu: bool,
     ) {
         self.keep_eframe_text_agent_out();
+        let gate = frame
+            .start_button_rect()
+            .filter(|_| frame.awaiting_start)
+            .map(|rect| (rect, player.course().chrome_string("startCourse")));
+        self.sync_start_gate(gate);
         if let Some(html) = self.document.document_element() {
             let lang = player.course().language.as_deref().unwrap_or("en");
             if html.get_attribute("lang").as_deref() != Some(lang) {

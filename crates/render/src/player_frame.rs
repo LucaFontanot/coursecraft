@@ -62,6 +62,12 @@ const ENDED_ICON: f32 = 32.0;
 const ENDED_PAD: f32 = 24.0;
 const ENDED_CARD_MIN_W: f32 = 280.0;
 const ENDED_CARD_FILL: Color32 = Color32::from_rgb(0x23, 0x23, 0x26);
+/// Diameter of the round Play button on the start gate.
+const START_BUTTON: f32 = 88.0;
+/// Size of the play glyph inside the start button.
+const START_ICON: f32 = 40.0;
+/// Gap between the start button and its label.
+const START_GAP: f32 = 12.0;
 
 const DRAWER_BG: Color32 = Color32::from_rgb(0x2F, 0x2F, 0x33);
 const DRAWER_TEXT: Color32 = Color32::from_rgb(0xF2, 0xF2, 0xF5);
@@ -87,6 +93,9 @@ pub struct FrameOutput {
     pub fullscreen_toggle: bool,
     /// The learner asked to start the course over. The host clears saved progress and restarts.
     pub restart: bool,
+    /// The learner pressed Play on the start gate. The host sends `Input::Start`
+    /// and clears [`PlayerFrame::awaiting_start`].
+    pub start: bool,
 }
 
 impl Default for FrameOutput {
@@ -97,6 +106,7 @@ impl Default for FrameOutput {
             volume: None,
             fullscreen_toggle: false,
             restart: false,
+            start: false,
         }
     }
 }
@@ -112,6 +122,11 @@ pub struct PlayerFrame {
     /// The course has ended: dim the slide, show the completion message and
     /// hide the control strip.
     pub ended: bool,
+    /// The course has not started yet: dim the first slide, hide the strip and
+    /// show a Play button. Pressing it (pointer, Enter or Space) reports
+    /// [`FrameOutput::start`]. The web player sets this so the first slide's
+    /// audio starts from the learner's gesture, which browsers require.
+    pub awaiting_start: bool,
     /// Show captions. A chrome preference, not runtime state; it persists across
     /// slides for the session and defaults to off.
     pub captions_on: bool,
@@ -159,6 +174,7 @@ pub struct PlayerFrame {
     last_ended_card: Option<Rect>,
     last_ended_heading: Option<Rect>,
     last_ended_small: Option<Rect>,
+    last_start_button: Option<Rect>,
     last_notice_rect: Option<Rect>,
     last_review_rect: Option<Rect>,
     last_slide_rect: Option<Rect>,
@@ -180,6 +196,7 @@ impl Default for PlayerFrame {
             reduced_motion: false,
             overlay_strip: false,
             ended: false,
+            awaiting_start: false,
             captions_on: false,
             volume: 1.0,
             last_volume: 1.0,
@@ -209,6 +226,7 @@ impl Default for PlayerFrame {
             last_ended_card: None,
             last_ended_heading: None,
             last_ended_small: None,
+            last_start_button: None,
             last_notice_rect: None,
             last_review_rect: None,
             last_slide_rect: None,
@@ -256,6 +274,13 @@ impl PlayerFrame {
     #[must_use]
     pub fn ended_text_rects(&self) -> Option<(Rect, Rect)> {
         Some((self.last_ended_heading?, self.last_ended_small?))
+    }
+
+    /// Return the start gate's Play button rect from the most recent frame,
+    /// if the gate was painted.
+    #[must_use]
+    pub fn start_button_rect(&self) -> Option<Rect> {
+        self.last_start_button
     }
 
     /// Where the player logo was drawn on the most recent frame.
@@ -407,6 +432,7 @@ impl PlayerFrame {
         self.last_ended_card = None;
         self.last_ended_heading = None;
         self.last_ended_small = None;
+        self.last_start_button = None;
         self.last_notice_rect = None;
         self.last_review_rect = None;
         self.drawer_view = DrawerView::default();
@@ -475,12 +501,20 @@ impl PlayerFrame {
         self.focus.set_notice_visible(notice_showing);
 
         let mut media = media;
-        let logo = if self.ended || !show_bar {
+        let gated = self.awaiting_start && !self.ended;
+        // Enter or Space on the gate starts the course; take the keys before
+        // anything else can read them.
+        let start_key = gated
+            && ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                    || i.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+            });
+        let logo = if self.ended || gated || !show_bar {
             None
         } else {
             logo_texture(ui, player, media.as_mut())
         };
-        let layout = if self.ended || !show_bar {
+        let layout = if self.ended || gated || !show_bar {
             None
         } else {
             strip_layout(
@@ -533,7 +567,7 @@ impl PlayerFrame {
         let mut inputs = self.handle_keyboard(ui, player, show_menu, show_nav);
         // Once the course has ended the card covers the slide and the strip is
         // hidden, so there is nothing left to focus.
-        if !self.ended {
+        if !self.ended && !gated {
             inputs.extend(self.focus.update_with_captions(
                 ui,
                 player,
@@ -610,6 +644,10 @@ impl PlayerFrame {
             // The scrim covers the whole frame, so nothing reaches the slide.
             covered.push(full);
         }
+        if gated {
+            // The gate covers everything, so nothing reaches the slide.
+            covered.push(full);
+        }
         let (notice_text, notice_banner) = self.notice_area(ui, player, full, &mut covered);
         let review_text = review_banner_text(player);
         let review_base = match &notice_banner {
@@ -672,7 +710,7 @@ impl PlayerFrame {
         } else {
             self.last_lightbox_close = None;
         }
-        if !self.ended {
+        if !self.ended && !gated {
             self.focus
                 .paint(ui, player, view.last_items(), focus_transform.as_ref());
         }
@@ -690,6 +728,23 @@ impl PlayerFrame {
                 self.last_ended_heading = None;
                 self.last_ended_small = None;
             }
+        }
+        let mut start = start_key;
+        if gated {
+            let accent = parse_color(&player.course().theme.accent)
+                .unwrap_or(Color32::from_rgb(0x2F, 0x6F, 0xEB));
+            let dim_rect = if valid_rect(slide_rect) {
+                slide_rect
+            } else {
+                full
+            };
+            let (button, clicked) = draw_start_gate(ui, dim_rect, accent, player.course());
+            self.last_start_button = button;
+            start |= clicked;
+            // Nothing on the slide or in the chrome runs before the start.
+            inputs.clear();
+        } else {
+            self.last_start_button = None;
         }
         if self.drawer_progress > 0.01 && show_menu {
             draw_scrim(ui, full, drawer, self.drawer_progress);
@@ -793,6 +848,7 @@ impl PlayerFrame {
             volume,
             fullscreen_toggle,
             restart,
+            start,
         }
     }
 
@@ -2595,6 +2651,77 @@ fn draw_scrim(ui: &Ui, full: Rect, drawer: Rect, progress: f32) {
         CornerRadius::ZERO,
         Color32::from_rgba_unmultiplied(0, 0, 0, alpha),
     );
+}
+
+/// Dim `rect` and paint a round Play button with its label at the centre.
+/// Returns the button's clickable rect and whether it was clicked this frame.
+fn draw_start_gate(
+    ui: &mut Ui,
+    rect: Rect,
+    accent: Color32,
+    course: &coursecraft_course::Course,
+) -> (Option<Rect>, bool) {
+    if !valid_rect(rect) {
+        return (None, false);
+    }
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(
+        rect,
+        CornerRadius::ZERO,
+        Color32::from_rgba_unmultiplied(0, 0, 0, 150),
+    );
+    let label_color = Color32::from_rgb(0xF2, 0xF2, 0xF5);
+    let label_galley = painter.layout_no_wrap(
+        course.chrome_string("startCourse").to_owned(),
+        FontId::new(SIZE_TITLE, FontFamily::Name("inter-bold".into())),
+        label_color,
+    );
+    let diameter = START_BUTTON
+        .min(rect.width() * 0.5)
+        .min(rect.height() * 0.4);
+    if !diameter.is_finite() || diameter <= 1.0 {
+        return (None, false);
+    }
+    let total_h = diameter + START_GAP + label_galley.size().y;
+    let top = rect.center().y - total_h * 0.5;
+    let circle = Rect::from_center_size(
+        Pos2::new(rect.center().x, top + diameter * 0.5),
+        vec2(diameter, diameter),
+    );
+    let label_pos = Pos2::new(
+        rect.center().x - label_galley.size().x * 0.5,
+        circle.bottom() + START_GAP,
+    );
+    let label_rect = Rect::from_min_size(label_pos, label_galley.size());
+    let hit = circle.union(label_rect).intersect(rect);
+    let response = ui.interact(hit, Id::unique("coursecraft_start_gate"), Sense::click());
+    let hovered = response.hovered();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let fill = if hovered {
+        accent.gamma_multiply(1.15)
+    } else {
+        accent
+    };
+    let radius = diameter * 0.5;
+    painter.circle_filled(
+        circle.center(),
+        radius + 6.0,
+        Color32::from_white_alpha(0x22),
+    );
+    painter.circle_filled(circle.center(), radius, fill);
+    let icon_size = START_ICON * (diameter / START_BUTTON);
+    painter.text(
+        // A triangle looks centred a little right of its box centre.
+        circle.center() + vec2(icon_size * 0.06, 0.0),
+        Align2::CENTER_CENTER,
+        Icon::Play.codepoint().to_string(),
+        FontId::new(icon_size, FontFamily::Name("phosphor-fill".into())),
+        Color32::WHITE,
+    );
+    painter.galley(label_pos, label_galley, label_color);
+    (Some(hit), response.clicked())
 }
 
 struct EndedLayout {
