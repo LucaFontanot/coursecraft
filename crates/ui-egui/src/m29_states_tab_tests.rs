@@ -257,6 +257,74 @@ fn sus03_canvas_preview_state_uses_course_theme() {
 }
 
 #[test]
+fn sus03_canvas_preview_state_emits_extras_and_placeholders() {
+    let mut course = course_with_states(0);
+    let btn: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn_extra",
+        "name": "Button Extra",
+        "frame": { "x": 100.0, "y": 100.0, "w": 160.0, "h": 48.0 },
+        "kind": { "type": "button", "label": "Next", "fill": "#2E6F9E" },
+        "states": [{
+            "name": "visited",
+            "extras": [
+                {
+                    "id": "ex-badge",
+                    "frame": { "x": 140.0, "y": -6.0, "w": 24.0, "h": 24.0 },
+                    "kind": { "type": "shape", "shape": "ellipse", "fill": "#16A34A" }
+                },
+                {
+                    "id": "ex-img",
+                    "frame": { "x": 170.0, "y": -6.0, "w": 24.0, "h": 24.0 },
+                    "kind": { "type": "image", "src": "media/missing.png", "alt": "Missing" }
+                }
+            ]
+        }]
+    }))
+    .expect("valid button");
+    course.slide_mut("s1").expect("slide").objects.push(btn);
+
+    let h = TestHarness::new(course);
+    let slide = h.editor.session.course.slide("s1").expect("slide").clone();
+    let (obj, _) = slide.object("btn_extra").expect("btn_extra");
+
+    let mut items = coursecraft_render::compose_authoring_layers(
+        &h.editor.session.course,
+        &slide,
+        None,
+        &[],
+        false,
+    );
+    crate::canvas::apply_canvas_state_preview(
+        &mut items,
+        obj,
+        "visited",
+        Some(&h.editor.session.course.theme),
+        crate::states::course_input_value(&h.editor.session.course, obj),
+    );
+    crate::canvas::missing_images_as_placeholders(&mut items, &h.editor.media);
+
+    let btn_items: Vec<_> = items
+        .iter()
+        .filter(|it| matches!(&it.hit, coursecraft_render::Hit::Object(id) if id == "btn_extra"))
+        .collect();
+    assert_eq!(
+        btn_items.len(),
+        3,
+        "expected parent + 2 extras, got {btn_items:?}"
+    );
+    assert!(!btn_items[0].is_state_extra);
+    assert!(btn_items[1].is_state_extra);
+    assert!(btn_items[2].is_state_extra);
+    assert!(
+        matches!(
+            btn_items[2].visual,
+            coursecraft_render::Visual::ImagePlaceholder { .. }
+        ),
+        "missing extra image must become ImagePlaceholder"
+    );
+}
+
+#[test]
 fn u04_quick_add_chips_and_custom_name_validation_no_hidden_chip() {
     let mut h = TestHarness::new(course_with_states(0));
     h.editor.selection.object = Some("btn1".to_owned());

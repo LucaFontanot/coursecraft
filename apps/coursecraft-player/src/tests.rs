@@ -1068,3 +1068,96 @@ fn desktop_and_web_media_sources_reject_unsafe_state_paths() {
         );
     }
 }
+
+#[test]
+fn pub04_slide_image_and_media_srcs_collect_state_extras() {
+    let raw = r##"{
+      "schema_version": 1,
+      "id": "c-pub04-extras",
+      "title": "PUB-04 Extras",
+      "slide_size": { "w": 1280, "h": 720 },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide",
+          "objects": [{
+            "id": "btn-1",
+            "name": "Button",
+            "frame": { "x": 100, "y": 100, "w": 160, "h": 48 },
+            "kind": { "type": "button", "label": "Go", "fill": "#2E6F9E" },
+            "states": [{
+              "name": "visited",
+              "extras": [
+                {
+                  "id": "ex-img",
+                  "frame": { "x": 140, "y": -8, "w": 24, "h": 24 },
+                  "kind": { "type": "image", "src": "media/extra-badge.png", "alt": "Done" }
+                },
+                {
+                  "id": "ex-shp",
+                  "frame": { "x": 0, "y": 52, "w": 40, "h": 20 },
+                  "kind": {
+                    "type": "shape",
+                    "shape": "rectangle",
+                    "fill": "#CCCCCC",
+                    "fill_style": { "type": "picture", "src": "media/extra-shape-fill.png" }
+                  }
+                },
+                {
+                  "id": "ex-path",
+                  "frame": { "x": 50, "y": 52, "w": 40, "h": 20 },
+                  "kind": {
+                    "type": "path",
+                    "points": [{ "x": 0, "y": 0 }, { "x": 1, "y": 0 }, { "x": 0.5, "y": 1 }],
+                    "closed": true,
+                    "outline": { "color": "#000000", "width": 2.0, "dash": "solid" },
+                    "fill": "#CCCCCC",
+                    "fill_style": { "type": "picture", "src": "media/extra-path-fill.png" }
+                  }
+                }
+              ]
+            }]
+          }],
+          "layers": [{
+            "id": "l1",
+            "name": "Layer",
+            "objects": [{
+              "id": "l-shp",
+              "name": "Layer Shape",
+              "frame": { "x": 200, "y": 200, "w": 100, "h": 100 },
+              "kind": { "type": "shape", "shape": "rectangle", "fill": "#EEEEEE" },
+              "states": [{
+                "name": "hover",
+                "extras": [{
+                  "id": "ex-layer-img",
+                  "frame": { "x": 0, "y": 0, "w": 20, "h": 20 },
+                  "kind": { "type": "image", "src": "media/extra-layer.png", "alt": "" }
+                }]
+              }]
+            }]
+          }]
+        }]
+      }]
+    }"##;
+    let course: Course = serde_json::from_str(raw).expect("valid course");
+    let slide = &course.scenes[0].slides[0];
+    let img_srcs = crate::media::slide_image_srcs(&course, slide);
+    let media_srcs = crate::media::slide_media_srcs(&course, slide);
+    for expected in [
+        "media/extra-badge.png",
+        "media/extra-shape-fill.png",
+        "media/extra-path-fill.png",
+        "media/extra-layer.png",
+    ] {
+        assert!(
+            img_srcs.contains(&expected.to_string()),
+            "slide_image_srcs missing {expected}: {img_srcs:?}"
+        );
+        assert!(
+            media_srcs.contains(&expected.to_string()),
+            "slide_media_srcs missing {expected}: {media_srcs:?}"
+        );
+    }
+}

@@ -4639,6 +4639,36 @@ pub(crate) fn inline_edit_visuals(
 
 /// Replace missing images with a neutral authoring placeholder, so a course that
 /// has not chosen its image yet reads as "no image yet" rather than an error.
+pub(crate) fn apply_canvas_state_preview(
+    items: &mut Vec<DrawItem>,
+    obj: &coursecraft_course::Object,
+    preview_state: &str,
+    theme: Option<&coursecraft_course::Theme>,
+    value: Option<&coursecraft_course::Value>,
+) {
+    let preview_items = coursecraft_render::compose_object_items(obj, preview_state, theme, value);
+    if preview_items.is_empty() {
+        return;
+    }
+    let matches_obj =
+        |it: &DrawItem| matches!(&it.hit, Hit::Object(id) | Hit::DragItem(id) if id == &obj.id);
+    if let Some(pos) = items.iter().position(matches_obj) {
+        let mut insert_at = pos;
+        let mut idx = 0usize;
+        items.retain(|it| {
+            let keep = !matches_obj(it);
+            if !keep && idx < pos {
+                insert_at = insert_at.saturating_sub(1);
+            }
+            idx += 1;
+            keep
+        });
+        items.splice(insert_at..insert_at, preview_items);
+    } else {
+        items.extend(preview_items);
+    }
+}
+
 pub(crate) fn missing_images_as_placeholders(
     items: &mut [DrawItem],
     media: &[(String, std::sync::Arc<[u8]>)],
@@ -4658,7 +4688,7 @@ pub(crate) fn missing_images_as_placeholders(
 /// doesn't show through the transparent editor.
 fn hide_edited_text(items: &mut [DrawItem], edit: &InlineEdit) {
     for item in items {
-        if !matches!(&item.hit, Hit::Object(id) if id == &edit.object) {
+        if item.is_state_extra || !matches!(&item.hit, Hit::Object(id) if id == &edit.object) {
             continue;
         }
         match (&mut item.visual, edit.cell) {
@@ -6288,28 +6318,20 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 item.show_table_overflow = true;
             }
         }
-        if let Some(edit) = &editor.ui.inline_edit {
-            hide_edited_text(&mut items, edit);
-        }
-
         if let (Some(sel_obj_id), Some(preview_state)) =
             (&editor.selection.object, &editor.ui.preview_state)
             && let Some((obj, _)) = slide.object(sel_obj_id)
-            && let Some(preview_item) = coursecraft_render::compose_object_with_value(
+        {
+            apply_canvas_state_preview(
+                &mut items,
                 obj,
                 preview_state,
                 Some(&editor.session.course.theme),
                 crate::states::course_input_value(&editor.session.course, obj),
-            )
-        {
-            if let Some(pos) = items
-                .iter()
-                .position(|it| it.hit == Hit::Object(sel_obj_id.clone()))
-            {
-                items[pos] = preview_item;
-            } else {
-                items.push(preview_item);
-            }
+            );
+        }
+        if let Some(edit) = &editor.ui.inline_edit {
+            hide_edited_text(&mut items, edit);
         }
         missing_images_as_placeholders(&mut items, &editor.media);
         if let Some(ref session) = editor.ui.editing_state {

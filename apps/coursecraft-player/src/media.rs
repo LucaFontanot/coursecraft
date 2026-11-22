@@ -130,7 +130,7 @@ fn collect_object_srcs(
     include_non_image: bool,
     out: &mut Vec<String>,
 ) {
-    use coursecraft_course::{FillStyle, ObjectKind};
+    use coursecraft_course::{FillStyle, ObjectKind, StateExtraKind};
     match &object.kind {
         ObjectKind::Image { src, .. } => {
             if !src.is_empty() {
@@ -191,6 +191,30 @@ fn collect_object_srcs(
             && !src.is_empty()
         {
             out.push(src.to_owned());
+        }
+        for extra in &state.extras {
+            match &extra.kind {
+                StateExtraKind::Image { src, .. } => {
+                    if !src.is_empty() {
+                        out.push(src.clone());
+                    }
+                }
+                StateExtraKind::Shape { fill_style, .. } => {
+                    if let Some(src) = fill_style.as_ref().and_then(FillStyle::picture_src)
+                        && !src.is_empty()
+                    {
+                        out.push(src.to_owned());
+                    }
+                }
+                StateExtraKind::Path { path } => {
+                    if let Some(src) = path.fill_style.as_ref().and_then(FillStyle::picture_src)
+                        && !src.is_empty()
+                    {
+                        out.push(src.to_owned());
+                    }
+                }
+                StateExtraKind::Text { .. } => {}
+            }
         }
     }
 }

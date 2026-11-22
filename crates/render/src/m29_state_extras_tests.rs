@@ -747,3 +747,295 @@ fn r16_offscreen_pixel_render_all_four_state_extra_kinds() {
 
     let _ = (ShapeKind::Rectangle, EmptyMedia);
 }
+
+// ---------------------------------------------------------------------------
+// P-05: access_tree uses parent rect & appends extra text/alt without tab bloat (SUS-01, ST-13)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn p05_access_node_uses_parent_rect_and_appends_extra_text_and_alt_without_tab_bloat() {
+    let course = single_object_course(serde_json::json!({
+        "id": "btn-1",
+        "name": "Topic 1",
+        "frame": { "x": 100, "y": 100, "w": 160, "h": 48 },
+        "initial_state": "visited",
+        "kind": { "type": "button", "label": "Topic 1", "fill": "#2E6F9E" },
+        "states": [{
+            "name": "visited",
+            "extras": [
+                {
+                    "id": "ex-chk",
+                    "frame": { "x": 144, "y": -8, "w": 24, "h": 24 },
+                    "kind": { "type": "image", "src": "media/badge.png", "alt": "Completed" }
+                },
+                {
+                    "id": "ex-ring",
+                    "frame": { "x": -4, "y": -4, "w": 168, "h": 56 },
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#00000000" }
+                }
+            ]
+        }]
+    }));
+    let mut player = Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+    let mut frame = crate::player_frame::PlayerFrame::new();
+    frame.focus_mut().rebuild(&player, false, false, false);
+    let items = compose(&player);
+    let tree = crate::access::build_access_tree(&player, &frame, &items, false, false);
+    let order = frame.focus().list();
+
+    // Zero extra focus stops: only the parent button is in focus_order.
+    let obj_targets: Vec<_> = order
+        .iter()
+        .filter(|t| matches!(t, crate::focus::FocusTarget::Object(id) if id == "btn-1"))
+        .collect();
+    assert_eq!(
+        obj_targets.len(),
+        1,
+        "expected 1 focus target, got {order:?}"
+    );
+
+    // Exactly 1 AccessNode for btn-1, with parent rect (100, 100, 160, 48) and appended alt.
+    let btn_nodes: Vec<_> = tree
+        .nodes
+        .iter()
+        .filter(|n| n.key == "object:s1:btn-1")
+        .collect();
+    assert_eq!(
+        btn_nodes.len(),
+        1,
+        "expected 1 AccessNode, got {btn_nodes:?}"
+    );
+    let node = btn_nodes[0];
+    assert_eq!(node.label, "Topic 1, Completed");
+    assert_eq!(
+        node.rect,
+        Rect::from_min_size(Pos2::new(100.0, 100.0), vec2(160.0, 48.0)),
+        "AccessNode must use parent rect, not extra rect"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P-06: Decorative parent emits 0 nodes & empty-alt extra keeps label unchanged
+// ---------------------------------------------------------------------------
+
+#[test]
+fn p06_access_decorative_parent_emits_zero_nodes_and_empty_alt_keeps_label() {
+    let raw = serde_json::json!({
+        "schema_version": 1,
+        "id": "c-p06",
+        "title": "P06",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide",
+                "objects": [
+                    {
+                        "id": "btn-dec",
+                        "name": "Dec Button",
+                        "decorative": true,
+                        "frame": { "x": 100, "y": 100, "w": 160, "h": 48 },
+                        "initial_state": "visited",
+                        "kind": { "type": "button", "label": "Hidden Label", "fill": "#2E6F9E" },
+                        "states": [{
+                            "name": "visited",
+                            "extras": [{
+                                "id": "ex-txt",
+                                "frame": { "x": 0, "y": 0, "w": 80, "h": 20 },
+                                "kind": { "type": "text", "text": "Extra Text" }
+                            }]
+                        }]
+                    },
+                    {
+                        "id": "btn-empty-alt",
+                        "name": "Topic 1",
+                        "frame": { "x": 100, "y": 200, "w": 160, "h": 48 },
+                        "initial_state": "visited",
+                        "kind": { "type": "button", "label": "Topic 1", "fill": "#2E6F9E" },
+                        "states": [{
+                            "name": "visited",
+                            "extras": [{
+                                "id": "ex-img",
+                                "frame": { "x": 144, "y": -8, "w": 24, "h": 24 },
+                                "kind": { "type": "image", "src": "media/badge.png", "alt": "" }
+                            }]
+                        }]
+                    }
+                ]
+            }]
+        }]
+    });
+    let course: Course = serde_json::from_value(raw).expect("course");
+    let mut player = Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+    let mut frame = crate::player_frame::PlayerFrame::new();
+    frame.focus_mut().rebuild(&player, false, false, false);
+    let items = compose(&player);
+    let tree = crate::access::build_access_tree(&player, &frame, &items, false, false);
+
+    assert!(
+        !tree.nodes.iter().any(|n| n.key.contains("btn-dec")),
+        "decorative parent must emit 0 AccessNodes even with text extras: {:?}",
+        tree.nodes
+    );
+    let btn = tree
+        .nodes
+        .iter()
+        .find(|n| n.key == "object:s1:btn-empty-alt")
+        .expect("btn-empty-alt AccessNode");
+    assert_eq!(btn.label, "Topic 1");
+}
+
+// ---------------------------------------------------------------------------
+// P-02 (Slice 3): Canvas compose_object_items vs Preview vs snapshot_player parity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn p02_slice3_canvas_preview_vs_snapshot_player_pixel_parity() {
+    let course = single_object_course(serde_json::json!({
+        "id": "shp-1",
+        "name": "Card",
+        "frame": { "x": 200, "y": 150, "w": 300, "h": 160 },
+        "initial_state": "visited",
+        "kind": { "type": "shape", "shape": "rounded_rectangle", "fill": "#336699" },
+        "states": [{
+            "name": "visited",
+            "fill": "#1D4ED8",
+            "outline": { "color": "#111111", "width": 3.0, "dash": "solid" },
+            "extras": [
+                {
+                    "id": "ex-badge",
+                    "frame": { "x": 280, "y": -10, "w": 40, "h": 40 },
+                    "kind": { "type": "shape", "shape": "ellipse", "fill": "#16A34A" }
+                },
+                {
+                    "id": "ex-img",
+                    "frame": { "x": 340, "y": 10, "w": 40, "h": 40 },
+                    "kind": { "type": "image", "src": "media/badge.png", "alt": "Badge" }
+                }
+            ]
+        }]
+    }));
+    let slide_img =
+        render_slide_rgba(&course, "s1", &RenderOptions::default(), &SolidPngMedia).expect("slide");
+    let snap_img = crate::snapshot::snapshot_player(
+        course.clone(),
+        Some("s1"),
+        &SolidPngMedia,
+        (1280, 720),
+        1.0,
+        crate::snapshot::PlayerSnapshotSelect::Hidden,
+    )
+    .expect("snapshot");
+    assert_eq!(slide_img.width, snap_img.width);
+    assert_eq!(slide_img.height, snap_img.height);
+
+    // Canvas compose_object_items must emit parent + 2 extras with theme.
+    let obj = &course.scenes[0].slides[0].objects[0];
+    let canvas_items = compose_object_items(obj, "visited", Some(&course.theme), None);
+    assert_eq!(canvas_items.len(), 3);
+
+    // Paint canvas_items at 1280x720 and verify <= 1% pixel diff against render_slide_rgba.
+    let mut cache = crate::media::MediaCache::new();
+    let canvas_img = crate::offscreen::render_ui(
+        1280,
+        720,
+        1.0,
+        |_| {},
+        |ctx| {
+            ctx.root_ui(|ui| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 720.0));
+                ui.painter().rect_filled(rect, 0.0, egui::Color32::WHITE);
+                let t = crate::SlideTransform::fit(rect, course.slide_size).expect("transform");
+                crate::paint::paint(
+                    &ui.painter_at(rect),
+                    &t,
+                    &canvas_items,
+                    crate::paint::Highlight::default(),
+                    Some((&mut cache, &SolidPngMedia)),
+                    Some(&course.theme),
+                    None,
+                );
+            });
+        },
+    )
+    .expect("canvas render");
+
+    let mut diff_pixels = 0usize;
+    let total = (slide_img.width * slide_img.height) as usize;
+    for (a, b) in slide_img
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(canvas_img.pixels.as_chunks::<4>().0.iter())
+    {
+        if a[0].abs_diff(b[0]) > 4 || a[1].abs_diff(b[1]) > 4 || a[2].abs_diff(b[2]) > 4 {
+            diff_pixels += 1;
+        }
+    }
+    assert!(
+        diff_pixels * 100 <= total,
+        "canvas vs slide pixel diff {diff_pixels}/{total} exceeded 1%"
+    );
+    // Verify snapshot_player rendered the green badge extra inside the slide area.
+    let has_green_badge = snap_img
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|px| px[1] > 120 && px[0] < 80 && px[2] < 100);
+    assert!(has_green_badge, "snapshot_player missing green badge extra");
+}
+
+// ---------------------------------------------------------------------------
+// FZ-05: Missing media bytes in state.src, state.fill_style, and state.extras
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fz05_missing_media_bytes_in_state_src_fill_and_extras_render_without_panic() {
+    let course = single_object_course(serde_json::json!({
+        "id": "img-1",
+        "name": "Missing Media",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 150 },
+        "initial_state": "hover",
+        "kind": { "type": "image", "src": "media/missing-base.png", "alt": "Base" },
+        "states": [{
+            "name": "hover",
+            "src": "media/missing-state.png",
+            "extras": [
+                {
+                    "id": "ex-img",
+                    "frame": { "x": 10, "y": 10, "w": 40, "h": 40 },
+                    "kind": { "type": "image", "src": "media/missing-extra.png", "alt": "" }
+                },
+                {
+                    "id": "ex-shp",
+                    "frame": { "x": 60, "y": 10, "w": 40, "h": 40 },
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#CCCCCC",
+                        "fill_style": { "type": "picture", "src": "media/missing-fill.png" }
+                    }
+                }
+            ]
+        }]
+    }));
+    let img =
+        render_slide_rgba(&course, "s1", &RenderOptions::default(), &EmptyMedia).expect("render");
+    assert_eq!(img.width, 1280);
+    let snap = crate::snapshot::snapshot_player(
+        course,
+        Some("s1"),
+        &EmptyMedia,
+        (1280, 720),
+        1.0,
+        crate::snapshot::PlayerSnapshotSelect::Hidden,
+    )
+    .expect("snapshot");
+    assert_eq!(snap.width, 1280);
+}
