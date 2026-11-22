@@ -59,6 +59,16 @@ pub struct PropertiesState {
     pub last_synced_revision: u64,
     pub last_synced_selection: crate::Selection,
     pub last_synced_editing_state: Option<String>,
+    pub extra_cache_key: (u64, String),
+    pub extra_name: String,
+    pub extra_text: String,
+    pub extra_alt: String,
+    pub extra_x: f32,
+    pub extra_y: f32,
+    pub extra_w: f32,
+    pub extra_h: f32,
+    pub extra_rotation: f32,
+    pub extra_opacity: f32,
 
     // Tracked rects for test interaction
     pub frame_x_rect: Option<Rect>,
@@ -330,6 +340,16 @@ impl Default for PropertiesState {
             last_synced_revision: u64::MAX,
             last_synced_selection: crate::Selection::default(),
             last_synced_editing_state: None,
+            extra_cache_key: (u64::MAX, String::new()),
+            extra_name: String::new(),
+            extra_text: String::new(),
+            extra_alt: String::new(),
+            extra_x: 0.0,
+            extra_y: 0.0,
+            extra_w: 100.0,
+            extra_h: 100.0,
+            extra_rotation: 0.0,
+            extra_opacity: 1.0,
             frame_x_rect: None,
             btn_label_rect: None,
             color_rect: None,
@@ -2559,6 +2579,501 @@ fn show_arrange_icons(
     });
 }
 
+/// Compact list of `StateExtra`s inside the active state, allowing select, reorder, and delete.
+fn show_state_extras_list(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    session: &crate::StateEditSession,
+    state: &coursecraft_course::StateDef,
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+) {
+    let p = coursecraft_render::palette(ui.ctx());
+    let len = state.extras.len();
+    for (idx, extra) in state.extras.iter().enumerate() {
+        let is_selected = session.selected_extra.as_deref() == Some(extra.id.as_str());
+        let kind_tag = match &extra.kind {
+            coursecraft_course::StateExtraKind::Shape { .. } => "Shape",
+            coursecraft_course::StateExtraKind::Image { .. } => "Image",
+            coursecraft_course::StateExtraKind::Text { .. } => "Text",
+            coursecraft_course::StateExtraKind::Path { .. } => "Path",
+        };
+        let label = if extra.name.trim().is_empty() {
+            format!("{} ({kind_tag})", extra.id)
+        } else {
+            format!("{} ({kind_tag})", extra.name)
+        };
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let del_resp = ui
+                    .add(
+                        egui::Button::new(RichText::new("×").color(p.danger))
+                            .min_size(egui::vec2(24.0, 24.0)),
+                    )
+                    .on_hover_text("Delete extra");
+                if del_resp.clicked() {
+                    actions_to_run.push((
+                        "object.state_delete_extra",
+                        serde_json::json!({
+                            "slide": session.slide_id,
+                            "object": session.object_id,
+                            "state": session.state_name,
+                            "extra": extra.id,
+                        }),
+                    ));
+                    if is_selected && let Some(active) = editor.ui.editing_state.as_mut() {
+                        active.selected_extra = None;
+                    }
+                }
+
+                let down_resp = ui
+                    .add_enabled(
+                        idx + 1 < len,
+                        egui::Button::new("↓").min_size(egui::vec2(24.0, 24.0)),
+                    )
+                    .on_hover_text("Move forward")
+                    .on_disabled_hover_text("Already last");
+                if down_resp.clicked() {
+                    actions_to_run.push((
+                        "object.state_reorder_extra",
+                        serde_json::json!({
+                            "slide": session.slide_id,
+                            "object": session.object_id,
+                            "state": session.state_name,
+                            "extra": extra.id,
+                            "index": idx + 1,
+                        }),
+                    ));
+                }
+
+                let up_resp = ui
+                    .add_enabled(
+                        idx > 0,
+                        egui::Button::new("↑").min_size(egui::vec2(24.0, 24.0)),
+                    )
+                    .on_hover_text("Move backward")
+                    .on_disabled_hover_text("Already first");
+                if up_resp.clicked() {
+                    actions_to_run.push((
+                        "object.state_reorder_extra",
+                        serde_json::json!({
+                            "slide": session.slide_id,
+                            "object": session.object_id,
+                            "state": session.state_name,
+                            "extra": extra.id,
+                            "index": idx - 1,
+                        }),
+                    ));
+                }
+
+                let row_w = ui.available_width().max(32.0);
+                let sel_resp = ui.add_sized(
+                    [row_w, coursecraft_render::CONTROL_COMPACT],
+                    egui::Button::selectable(is_selected, label),
+                );
+                if sel_resp.clicked()
+                    && let Some(active) = editor.ui.editing_state.as_mut()
+                {
+                    active.selected_extra = Some(extra.id.clone());
+                }
+            });
+        });
+    }
+    if session.selected_extra.is_some() {
+        ui.add_space(4.0);
+        if ui
+            .add(
+                egui::Button::new(RichText::new("Edit parent").color(p.accent_text))
+                    .frame(false)
+                    .min_size(egui::vec2(24.0, 24.0)),
+            )
+            .clicked()
+            && let Some(active) = editor.ui.editing_state.as_mut()
+        {
+            active.selected_extra = None;
+        }
+    }
+}
+
+/// Format inspector routed to a selected `StateExtra` via `object.state_update_extra`.
+#[allow(clippy::too_many_arguments)]
+fn show_state_extra_properties(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    slide_id: &str,
+    object_id: &str,
+    state_name: &str,
+    extra: &coursecraft_course::StateExtra,
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+) {
+    let mut replace_image_requested = false;
+    let props = &mut editor.ui.properties;
+    let rev = editor.session.revision;
+    if props.extra_cache_key.0 != rev || props.extra_cache_key.1 != extra.id {
+        props.extra_cache_key = (rev, extra.id.clone());
+        props.extra_name = extra.name.clone();
+        props.extra_x = extra.frame.x;
+        props.extra_y = extra.frame.y;
+        props.extra_w = extra.frame.w;
+        props.extra_h = extra.frame.h;
+        props.extra_rotation = extra.rotation;
+        props.extra_opacity = extra.opacity;
+        props.extra_text = match &extra.kind {
+            coursecraft_course::StateExtraKind::Text { text, .. } => text.clone(),
+            coursecraft_course::StateExtraKind::Shape { text: Some(t), .. } => t.text.clone(),
+            _ => String::new(),
+        };
+        props.extra_alt = match &extra.kind {
+            coursecraft_course::StateExtraKind::Image { alt, .. } => alt.clone(),
+            _ => String::new(),
+        };
+    }
+
+    let push_patch = |patch: Json, actions_to_run: &mut Vec<(&'static str, Json)>| {
+        actions_to_run.push((
+            "object.state_update_extra",
+            serde_json::json!({
+                "slide": slide_id,
+                "object": object_id,
+                "state": state_name,
+                "extra": extra.id,
+                "patch": patch,
+            }),
+        ));
+    };
+
+    inspector_row(ui, "ID", |ui| {
+        ui.label(RichText::new(&extra.id).monospace().strong());
+    });
+
+    inspector_row(ui, "Name", |ui| {
+        let rem_w = ui.available_width().max(30.0);
+        let r = ui.add_sized(
+            [rem_w, coursecraft_render::CONTROL_COMPACT],
+            TextEdit::singleline(&mut props.extra_name).id_salt("prop_extra_name"),
+        );
+        if is_committed(&r, ui) && props.extra_name != extra.name {
+            push_patch(
+                serde_json::json!({ "name": props.extra_name.trim() }),
+                actions_to_run,
+            );
+        }
+    });
+
+    inspector_row(ui, "Opacity", |ui| {
+        let rem_w = ui.available_width().max(30.0);
+        let r = ui.add_sized(
+            [rem_w, coursecraft_render::CONTROL_COMPACT],
+            egui::Slider::new(&mut props.extra_opacity, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+        );
+        let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if r.drag_stopped() || r.lost_focus() || enter {
+            let op = coursecraft_course::clamp_opacity(props.extra_opacity);
+            props.extra_opacity = op;
+            if (op - extra.opacity).abs() > 1e-4 {
+                push_patch(serde_json::json!({ "opacity": op }), actions_to_run);
+            }
+        }
+    });
+
+    inspector_separator(ui);
+    inspector_section_header(ui, "Position & Size");
+
+    let mut frame_changed = false;
+    inspector_row(ui, "X / Y", |ui| {
+        let w = ((ui.available_width() - 8.0) * 0.5).max(30.0);
+        let rx = ui.add_sized(
+            [w, coursecraft_render::CONTROL_COMPACT],
+            egui::DragValue::new(&mut props.extra_x)
+                .speed(1.0)
+                .prefix("X "),
+        );
+        let ry = ui.add_sized(
+            [w, coursecraft_render::CONTROL_COMPACT],
+            egui::DragValue::new(&mut props.extra_y)
+                .speed(1.0)
+                .prefix("Y "),
+        );
+        if rx.drag_stopped() || rx.lost_focus() || ry.drag_stopped() || ry.lost_focus() {
+            frame_changed = true;
+        }
+    });
+    inspector_row(ui, "W / H", |ui| {
+        let w = ((ui.available_width() - 8.0) * 0.5).max(30.0);
+        let rw = ui.add_sized(
+            [w, coursecraft_render::CONTROL_COMPACT],
+            egui::DragValue::new(&mut props.extra_w)
+                .speed(1.0)
+                .range(1.0..=10000.0)
+                .prefix("W "),
+        );
+        let rh = ui.add_sized(
+            [w, coursecraft_render::CONTROL_COMPACT],
+            egui::DragValue::new(&mut props.extra_h)
+                .speed(1.0)
+                .range(1.0..=10000.0)
+                .prefix("H "),
+        );
+        if rw.drag_stopped() || rw.lost_focus() || rh.drag_stopped() || rh.lost_focus() {
+            frame_changed = true;
+        }
+    });
+    if frame_changed {
+        let new_frame = coursecraft_course::Rect {
+            x: props.extra_x,
+            y: props.extra_y,
+            w: props.extra_w.max(1.0),
+            h: props.extra_h.max(1.0),
+        };
+        if new_frame != extra.frame {
+            push_patch(serde_json::json!({ "frame": new_frame }), actions_to_run);
+        }
+    }
+
+    inspector_row(ui, "Rotation", |ui| {
+        let r = ui.add_sized(
+            [72.0, coursecraft_render::CONTROL_COMPACT],
+            egui::DragValue::new(&mut props.extra_rotation)
+                .speed(1.0)
+                .suffix("°"),
+        );
+        if (r.drag_stopped() || r.lost_focus())
+            && (props.extra_rotation - extra.rotation).abs() > 1e-3
+        {
+            push_patch(
+                serde_json::json!({ "rotation": props.extra_rotation }),
+                actions_to_run,
+            );
+        }
+        let mut fh = extra.flip_h;
+        if ui
+            .selectable_label(fh, "Flip H")
+            .on_hover_text("Flip horizontally")
+            .clicked()
+        {
+            fh = !fh;
+            push_patch(serde_json::json!({ "flip_h": fh }), actions_to_run);
+        }
+        let mut fv = extra.flip_v;
+        if ui
+            .selectable_label(fv, "Flip V")
+            .on_hover_text("Flip vertically")
+            .clicked()
+        {
+            fv = !fv;
+            push_patch(serde_json::json!({ "flip_v": fv }), actions_to_run);
+        }
+    });
+
+    inspector_separator(ui);
+    match &extra.kind {
+        coursecraft_course::StateExtraKind::Shape {
+            shape,
+            fill,
+            outline,
+            text,
+            ..
+        } => {
+            inspector_section_header(ui, "Shape");
+            inspector_row(ui, "Fill", |ui| {
+                let mut c = fill.0.clone();
+                if color_swatch_picker(ui, &mut c, "extra_shape_fill", 20.0, 4) {
+                    let mut new_kind = extra.kind.clone();
+                    if let coursecraft_course::StateExtraKind::Shape {
+                        fill: ref mut f, ..
+                    } = new_kind
+                    {
+                        *f = Color(c);
+                    }
+                    push_patch(serde_json::json!({ "kind": new_kind }), actions_to_run);
+                }
+            });
+            let mut has_outline = outline.is_some();
+            inspector_row(ui, "Outline", |ui| {
+                if ui.checkbox(&mut has_outline, "Enabled").changed() {
+                    let mut new_kind = extra.kind.clone();
+                    if let coursecraft_course::StateExtraKind::Shape {
+                        outline: ref mut out,
+                        ..
+                    } = new_kind
+                    {
+                        *out = if has_outline {
+                            Some(coursecraft_course::Outline {
+                                color: Color("#222222".to_owned()),
+                                width: 2.0,
+                                dash: coursecraft_course::DashStyle::Solid,
+                                dash_pattern: None,
+                                join: coursecraft_course::LineJoin::Miter,
+                                miter_limit: None,
+                            })
+                        } else {
+                            None
+                        };
+                    }
+                    push_patch(serde_json::json!({ "kind": new_kind }), actions_to_run);
+                }
+                if let Some(out) = outline {
+                    let mut c = out.color.0.clone();
+                    if color_swatch_picker(ui, &mut c, "extra_shape_outline", 20.0, 4) {
+                        let mut new_kind = extra.kind.clone();
+                        if let coursecraft_course::StateExtraKind::Shape {
+                            outline: Some(ref mut o),
+                            ..
+                        } = new_kind
+                        {
+                            o.color = Color(c);
+                        }
+                        push_patch(serde_json::json!({ "kind": new_kind }), actions_to_run);
+                    }
+                }
+            });
+            if coursecraft_course::shape_allows_text(*shape) {
+                inspector_row(ui, "Text", |ui| {
+                    let rem_w = ui.available_width().max(30.0);
+                    let r = ui.add_sized(
+                        [rem_w, coursecraft_render::CONTROL_COMPACT],
+                        TextEdit::singleline(&mut props.extra_text)
+                            .id_salt("prop_extra_shape_text"),
+                    );
+                    let cur = text.as_ref().map_or("", |t| t.text.as_str());
+                    if is_committed(&r, ui) && props.extra_text != cur {
+                        let fill_color = fill.clone();
+                        let mut new_kind = extra.kind.clone();
+                        if let coursecraft_course::StateExtraKind::Shape {
+                            text: ref mut st, ..
+                        } = new_kind
+                        {
+                            let entry = st.get_or_insert_with(|| coursecraft_course::ShapeText {
+                                text: String::new(),
+                                style: default_shape_text_style(&fill_color),
+                                runs: Vec::new(),
+                                paragraphs: Vec::new(),
+                                autofit: coursecraft_course::Autofit::None,
+                            });
+                            entry.text = props.extra_text.clone();
+                            entry.runs.clear();
+                        }
+                        push_patch(serde_json::json!({ "kind": new_kind }), actions_to_run);
+                    }
+                });
+            }
+        }
+        coursecraft_course::StateExtraKind::Text { text, style, .. } => {
+            inspector_section_header(ui, "Text");
+            inspector_row(ui, "Text", |ui| {
+                let rem_w = ui.available_width().max(30.0);
+                let r = ui.add_sized(
+                    [rem_w, 56.0],
+                    TextEdit::multiline(&mut props.extra_text).id_salt("prop_extra_text_body"),
+                );
+                if is_committed(&r, ui) && props.extra_text != *text {
+                    let mut new_kind = extra.kind.clone();
+                    if let coursecraft_course::StateExtraKind::Text {
+                        text: ref mut t,
+                        runs: ref mut rns,
+                        ..
+                    } = new_kind
+                    {
+                        *t = props.extra_text.clone();
+                        rns.clear();
+                    }
+                    push_patch(serde_json::json!({ "kind": new_kind }), actions_to_run);
+                }
+            });
+            inspector_row(ui, "Color", |ui| {
+                let mut c = style.color.0.clone();
+                if color_swatch_picker(ui, &mut c, "extra_text_color", 20.0, 4) {
+                    let mut new_kind = extra.kind.clone();
+                    if let coursecraft_course::StateExtraKind::Text {
+                        style: ref mut st, ..
+                    } = new_kind
+                    {
+                        st.color = Color(c);
+                    }
+                    push_patch(serde_json::json!({ "kind": new_kind }), actions_to_run);
+                }
+            });
+        }
+        coursecraft_course::StateExtraKind::Image { src, alt, .. } => {
+            inspector_section_header(ui, "Image");
+            inspector_row(ui, "File", |ui| {
+                let name = src.rsplit('/').next().unwrap_or(src);
+                ui.label(name).on_hover_text(src);
+                if ui
+                    .add(egui::Button::new("Replace…").min_size(egui::vec2(24.0, 24.0)))
+                    .clicked()
+                {
+                    replace_image_requested = true;
+                }
+            });
+            inspector_row(ui, "Alt text", |ui| {
+                let rem_w = ui.available_width().max(30.0);
+                let r = ui.add_sized(
+                    [rem_w, coursecraft_render::CONTROL_COMPACT],
+                    TextEdit::singleline(&mut props.extra_alt).id_salt("prop_extra_alt"),
+                );
+                if is_committed(&r, ui) && props.extra_alt != *alt {
+                    let mut new_kind = extra.kind.clone();
+                    if let coursecraft_course::StateExtraKind::Image { alt: ref mut a, .. } =
+                        new_kind
+                    {
+                        *a = props.extra_alt.clone();
+                    }
+                    push_patch(serde_json::json!({ "kind": new_kind }), actions_to_run);
+                }
+            });
+        }
+        coursecraft_course::StateExtraKind::Path { path } => {
+            inspector_section_header(ui, "Path");
+            inspector_row(ui, "Stroke", |ui| {
+                let mut c = path.outline.color.0.clone();
+                if color_swatch_picker(ui, &mut c, "extra_path_stroke", 20.0, 4) {
+                    let mut new_kind = extra.kind.clone();
+                    if let coursecraft_course::StateExtraKind::Path { path: ref mut pt } = new_kind
+                    {
+                        pt.outline.color = Color(c);
+                    }
+                    push_patch(serde_json::json!({ "kind": new_kind }), actions_to_run);
+                }
+            });
+        }
+    }
+
+    inspector_separator(ui);
+    inspector_section_header(ui, "Effects");
+    let mut has_shadow = extra.shadow.is_some();
+    inspector_row(ui, "Shadow", |ui| {
+        if ui.checkbox(&mut has_shadow, "Enabled").changed() {
+            let val = if has_shadow {
+                serde_json::json!({ "color": "#00000044", "offset_x": 0.0, "offset_y": 4.0, "blur": 8.0 })
+            } else {
+                Json::Null
+            };
+            push_patch(serde_json::json!({ "shadow": val }), actions_to_run);
+        }
+    });
+    let mut has_glow = extra.glow.is_some();
+    inspector_row(ui, "Glow", |ui| {
+        if ui.checkbox(&mut has_glow, "Enabled").changed() {
+            let val = if has_glow {
+                serde_json::json!({ "color": "#1166CC88", "size": 8.0 })
+            } else {
+                Json::Null
+            };
+            push_patch(serde_json::json!({ "glow": val }), actions_to_run);
+        }
+    });
+    if replace_image_requested {
+        editor.pending_image_pick = Some(crate::PendingImagePick::StateExtraReplace {
+            slide: slide_id.to_owned(),
+            object: object_id.to_owned(),
+            state: state_name.to_owned(),
+            extra: extra.id.clone(),
+        });
+        editor.request(crate::EditorRequest::PickImage);
+    }
+}
+
 fn show_format_tab(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -2594,7 +3109,49 @@ fn show_format_tab(
         return;
     }
 
-    show_object_properties(editor, ui, actions_to_run);
+    let active_state_extra = editor
+        .ui
+        .editing_state
+        .clone()
+        .filter(|s| {
+            s.slide_id == editor.selection.slide
+                && editor.selection.object.as_deref() == Some(s.object_id.as_str())
+        })
+        .and_then(|session| {
+            let slide = editor.session.course.slide(&session.slide_id)?;
+            let (obj, _) = slide.object(&session.object_id)?;
+            let state = obj
+                .states
+                .iter()
+                .find(|st| st.name == session.state_name)?
+                .clone();
+            Some((session, state))
+        });
+
+    if let Some((ref session, ref state)) = active_state_extra
+        && !state.extras.is_empty()
+    {
+        inspector_section_header(ui, "Items in this state");
+        show_state_extras_list(editor, ui, session, state, actions_to_run);
+        inspector_separator(ui);
+    }
+
+    if let Some((ref session, ref state)) = active_state_extra
+        && let Some(ref extra_id) = session.selected_extra
+        && let Some(extra) = state.extras.iter().find(|e| e.id == *extra_id)
+    {
+        show_state_extra_properties(
+            editor,
+            ui,
+            &session.slide_id,
+            &session.object_id,
+            &session.state_name,
+            extra,
+            actions_to_run,
+        );
+    } else {
+        show_object_properties(editor, ui, actions_to_run);
+    }
 
     if crate::question::selected_object_is_question_related(
         &editor.session.course,

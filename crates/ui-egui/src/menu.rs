@@ -1280,6 +1280,97 @@ fn render_group_ungroup_items(editor: &mut Editor, ui: &mut Ui, shortcuts: bool)
     }
 }
 
+/// Context menu for a selected `StateExtra` inside Canvas Edit-State Mode.
+pub(crate) fn show_state_extra_menu(editor: &mut Editor, ui: &mut Ui) {
+    let Some(session) = editor.ui.editing_state.clone() else {
+        return;
+    };
+    let Some(extra_id) = session.selected_extra.clone() else {
+        return;
+    };
+    let info = editor
+        .session
+        .course
+        .slide(&session.slide_id)
+        .and_then(|slide| slide.object(&session.object_id))
+        .and_then(|(obj, _)| obj.states.iter().find(|st| st.name == session.state_name))
+        .and_then(|st| {
+            st.extras
+                .iter()
+                .position(|e| e.id == extra_id)
+                .map(|idx| (st.extras[idx].clone(), idx, st.extras.len()))
+        });
+    let Some((extra, idx, count)) = info else {
+        return;
+    };
+
+    if ui.button("Duplicate extra").clicked() {
+        let mut cloned = extra;
+        cloned.id.clear();
+        cloned.frame.x += 16.0;
+        cloned.frame.y += 16.0;
+        if let Some(res) = editor.run(
+            "object.state_add_extra",
+            serde_json::json!({
+                "slide": session.slide_id,
+                "object": session.object_id,
+                "state": session.state_name,
+                "extra": cloned,
+            }),
+        ) && let Some(new_id) = res.get("id").and_then(Json::as_str)
+            && let Some(active) = editor.ui.editing_state.as_mut()
+        {
+            active.selected_extra = Some(new_id.to_owned());
+        }
+        ui.close();
+    }
+
+    let can_forward = idx + 1 < count;
+    if ui
+        .add_enabled(can_forward, Button::new("Bring forward"))
+        .on_disabled_hover_text("Already in front")
+        .clicked()
+    {
+        editor.run(
+            "object.state_reorder_extra",
+            serde_json::json!({
+                "slide": session.slide_id,
+                "object": session.object_id,
+                "state": session.state_name,
+                "extra": extra_id,
+                "index": idx + 1,
+            }),
+        );
+        ui.close();
+    }
+
+    let can_backward = idx > 0;
+    if ui
+        .add_enabled(can_backward, Button::new("Send backward"))
+        .on_disabled_hover_text("Already at back")
+        .clicked()
+    {
+        editor.run(
+            "object.state_reorder_extra",
+            serde_json::json!({
+                "slide": session.slide_id,
+                "object": session.object_id,
+                "state": session.state_name,
+                "extra": extra_id,
+                "index": idx - 1,
+            }),
+        );
+        ui.close();
+    }
+
+    ui.separator();
+    let delete = Button::new("Delete extra").shortcut_text(shortcut_label(ui.ctx(), "Delete"));
+    if ui.add(delete).clicked() {
+        editor.delete_selection();
+        ui.close();
+    }
+}
+
 /// The canvas context menu used while a placement tool, crop or inline text
 /// editing owns the canvas. It keeps the menu that existed before the fuller
 /// object menu: group/ungroup, then stacking and duplicate/delete when an object

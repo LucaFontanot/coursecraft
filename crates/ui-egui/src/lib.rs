@@ -1252,6 +1252,13 @@ pub enum PendingImagePick {
         object: String,
         state: String,
     },
+    /// Replace the image `src` of an existing `StateExtraKind::Image`.
+    StateExtraReplace {
+        slide: String,
+        object: String,
+        state: String,
+        extra: String,
+    },
 }
 
 /// A quiet button with `accent_text` color used for primary list actions.
@@ -2703,6 +2710,35 @@ impl Editor {
                     }),
                 );
             }
+            Some(PendingImagePick::StateExtraReplace {
+                slide: slide_id,
+                object: object_id,
+                state: state_name,
+                extra: extra_id,
+            }) => {
+                if let Some(mut kind) = self
+                    .session
+                    .course
+                    .slide(&slide_id)
+                    .and_then(|s| s.object(&object_id))
+                    .and_then(|(o, _)| o.states.iter().find(|st| st.name == state_name))
+                    .and_then(|st| st.extras.iter().find(|e| e.id == extra_id))
+                    .map(|e| e.kind.clone())
+                    && let coursecraft_course::StateExtraKind::Image { src: ref mut s, .. } = kind
+                {
+                    *s = src.clone();
+                    self.run(
+                        "object.state_update_extra",
+                        serde_json::json!({
+                            "slide": slide_id,
+                            "object": object_id,
+                            "state": state_name,
+                            "extra": extra_id,
+                            "patch": { "kind": kind },
+                        }),
+                    );
+                }
+            }
             _ => {
                 self.ui.placement_tool = Some(PlacementTool::Image {
                     src: src.clone(),
@@ -3943,6 +3979,20 @@ impl Editor {
             );
             self.ui.last_known_slides = selection::slide_layout(&self.session.course);
             self.ui.pending_undo_redo = false;
+            if let Some(session) = self.ui.editing_state.clone()
+                && let Some(ref extra_id) = session.selected_extra
+            {
+                let extra_exists = self
+                    .session
+                    .course
+                    .slide(&session.slide_id)
+                    .and_then(|slide| slide.object(&session.object_id))
+                    .and_then(|(obj, _)| obj.states.iter().find(|st| st.name == session.state_name))
+                    .is_some_and(|st| st.extras.iter().any(|e| e.id == *extra_id));
+                if !extra_exists && let Some(active) = self.ui.editing_state.as_mut() {
+                    active.selected_extra = None;
+                }
+            }
             if self.ui.master_view {
                 if self.session.course.master(&self.selection.slide).is_none() {
                     let first = self
@@ -4007,22 +4057,24 @@ impl Editor {
             }
         }
         if let Some(session) = self.ui.editing_state.clone() {
-            let state_exists = self
+            let state_def = self
                 .session
                 .course
                 .slide(&session.slide_id)
                 .and_then(|slide| slide.object(&session.object_id))
-                .is_some_and(|(obj, _)| obj.states.iter().any(|st| st.name == session.state_name));
+                .and_then(|(obj, _)| obj.states.iter().find(|st| st.name == session.state_name));
             let context_invalid = self.ui.master_view
                 || self.ui.story_view
                 || self.preview.is_some()
                 || session.slide_id != self.selection.slide
                 || self.selection.is_multi()
                 || self.selection.object.as_deref() != Some(session.object_id.as_str());
-            if !state_exists {
+            if let Some(_st) = state_def {
+                if context_invalid {
+                    self.exit_edit_state();
+                }
+            } else {
                 self.ui.preview_state = None;
-                self.exit_edit_state();
-            } else if context_invalid {
                 self.exit_edit_state();
             }
         }

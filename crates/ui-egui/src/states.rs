@@ -7,7 +7,7 @@ use coursecraft_course::{
     Value,
 };
 use coursecraft_render::{
-    Highlight, SlideTransform, compose_object_with_value, icon, paint, parse_color,
+    DrawItem, Highlight, SlideTransform, compose_object_items, icon, paint, parse_color,
 };
 use egui::{
     Align2, Color32, CornerRadius, FontId, Rect, Response, RichText, Sense, Stroke, StrokeKind,
@@ -853,6 +853,20 @@ fn object_needs_checkerboard(obj: &Object, state_name: &str) -> bool {
     }
 }
 
+/// Compose the parent object + any `StateExtra` items for a state thumbnail card.
+pub(crate) fn compose_thumbnail_items(
+    course: &Course,
+    obj: &Object,
+    state_name: &str,
+) -> Vec<DrawItem> {
+    compose_object_items(
+        obj,
+        state_name,
+        Some(&course.theme),
+        course_input_value(course, obj),
+    )
+}
+
 fn paint_state_thumbnail(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -903,15 +917,10 @@ fn paint_state_thumbnail(
         return;
     }
 
-    let Some(item) = compose_object_with_value(
-        obj,
-        state_name,
-        Some(&editor.session.course.theme),
-        course_input_value(&editor.session.course, obj),
-    ) else {
+    let mut items = compose_thumbnail_items(&editor.session.course, obj, state_name);
+    if items.is_empty() {
         return;
-    };
-    let mut items = vec![item];
+    }
     crate::canvas::missing_images_as_placeholders(&mut items, &editor.media);
 
     let mut min_x = f32::INFINITY;

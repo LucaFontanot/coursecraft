@@ -434,3 +434,327 @@ fn u15_arrow_nudge_and_delete_extra_with_undo_safety() {
         .expect("btn1");
     assert_eq!(btn.states[0].extras.len(), 1, "undo must restore extra_1");
 }
+
+#[test]
+fn u16_items_in_this_state_list_selects_reorders_and_deletes_extras() {
+    let mut course = course_with_hover_shape_extra();
+    let second_extra: coursecraft_course::StateExtra = serde_json::from_value(serde_json::json!({
+        "id": "extra_2",
+        "name": "Caption",
+        "kind": { "type": "text", "text": "Info" },
+        "frame": { "x": 70.0, "y": 10.0, "w": 60.0, "h": 24.0 }
+    }))
+    .expect("valid extra_2");
+    course.slide_mut("s1").expect("s1").objects[0].states[0]
+        .extras
+        .push(second_extra);
+
+    let mut h = TestHarness::new(course);
+    h.editor.enter_edit_state("s1", "btn1", "hover");
+    h.editor.ui.inspector_tab = crate::InspectorTab::Format;
+    h.idle_frame();
+
+    assert!(
+        h.find_text("Items in this state").is_some(),
+        "Format inspector must show 'Items in this state' when extras exist"
+    );
+    let caption_pos = h
+        .find_text_containing("Caption")
+        .expect("Caption row in Items in this state");
+    h.click_at(caption_pos);
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .ui
+            .editing_state
+            .as_ref()
+            .and_then(|s| s.selected_extra.as_deref()),
+        Some("extra_2"),
+        "clicking item in list must select extra_2"
+    );
+
+    let up_pos = h.find_text_last("↑").expect("move up button for extra_2");
+    h.click_at(up_pos);
+    h.idle_frame();
+    let extras = &h.editor.session.course.slide("s1").expect("s1").objects[0].states[0].extras;
+    assert_eq!(extras[0].id, "extra_2", "↑ must reorder extra_2 to index 0");
+
+    let badge_pos = h
+        .find_text_containing("Badge")
+        .expect("Badge row in Items in this state");
+    let row_rect = egui::Rect::from_min_max(
+        pos2(badge_pos.x, badge_pos.y - 16.0),
+        pos2(badge_pos.x + 300.0, badge_pos.y + 16.0),
+    );
+    let del_pos = h
+        .find_text_in("×", row_rect)
+        .expect("delete button for extra_1");
+    h.click_at(del_pos);
+    h.idle_frame();
+    let extras = &h.editor.session.course.slide("s1").expect("s1").objects[0].states[0].extras;
+    assert_eq!(extras.len(), 1);
+    assert_eq!(extras[0].id, "extra_2");
+    assert_eq!(
+        h.editor
+            .ui
+            .editing_state
+            .as_ref()
+            .and_then(|s| s.selected_extra.as_deref()),
+        Some("extra_2")
+    );
+}
+
+#[test]
+fn u16_inspector_routes_selected_extra_to_state_update_extra() {
+    let mut h = TestHarness::new(course_with_hover_shape_extra());
+    h.editor.enter_edit_state("s1", "btn1", "hover");
+    if let Some(session) = h.editor.ui.editing_state.as_mut() {
+        session.selected_extra = Some("extra_1".to_owned());
+    }
+    h.editor.ui.inspector_tab = crate::InspectorTab::Format;
+    h.idle_frame();
+
+    assert!(
+        h.find_text("extra_1").is_some(),
+        "Format inspector must show selected extra ID"
+    );
+    assert!(
+        h.find_text("Edit parent").is_some(),
+        "Format inspector must offer 'Edit parent' when an extra is selected"
+    );
+    // Editing extra name in inspector routes to object.state_update_extra, leaving parent name untouched.
+    let name_pos = h.find_text("Badge").expect("extra name TextEdit");
+    h.click_at(name_pos);
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("Star Badge");
+    h.press(Key::Enter, Modifiers::NONE);
+    h.idle_frame();
+
+    let obj = &h.editor.session.course.slide("s1").expect("s1").objects[0];
+    assert_eq!(
+        obj.name, "Primary Button",
+        "parent name must stay untouched"
+    );
+    assert_eq!(obj.states[0].extras[0].name, "Star Badge");
+}
+
+#[test]
+fn u16_double_click_extra_inline_text_edit_commits_to_state_update_extra() {
+    let mut course = course_with_button_and_hover_state();
+    let text_extra: coursecraft_course::StateExtra = serde_json::from_value(serde_json::json!({
+        "id": "extra_1",
+        "name": "Status Label",
+        "kind": { "type": "text", "text": "Old Badge" },
+        "frame": { "x": 20.0, "y": 10.0, "w": 120.0, "h": 30.0 }
+    }))
+    .expect("valid text extra");
+    course.slide_mut("s1").expect("s1").objects[0].states[0]
+        .extras
+        .push(text_extra);
+
+    let mut h = TestHarness::new(course);
+    h.editor.enter_edit_state("s1", "btn1", "hover");
+    h.idle_frame();
+
+    let extra_center = slide_to_screen(&h, pos2(100.0 + 20.0 + 60.0, 100.0 + 10.0 + 15.0));
+    h.double_click_at(extra_center);
+    h.idle_frame();
+
+    let edit = h
+        .editor
+        .ui
+        .inline_edit
+        .as_mut()
+        .expect("double-clicking text extra must open InlineEdit");
+    assert_eq!(edit.state_name.as_deref(), Some("hover"));
+    assert_eq!(edit.extra_id.as_deref(), Some("extra_1"));
+    assert_eq!(edit.buffer, "Old Badge");
+
+    edit.buffer = "New Badge".to_owned();
+    crate::canvas::commit_inline_edit(&mut h.editor);
+    h.idle_frame();
+
+    let obj = &h.editor.session.course.slide("s1").expect("s1").objects[0];
+    match &obj.kind {
+        coursecraft_course::ObjectKind::Button { label, .. } => {
+            assert_eq!(label, "Click Me", "parent button label must stay untouched");
+        }
+        other => panic!("expected button, got {other:?}"),
+    }
+    match &obj.states[0].extras[0].kind {
+        StateExtraKind::Text { text, .. } => assert_eq!(text, "New Badge"),
+        other => panic!("expected text extra, got {other:?}"),
+    }
+
+    h.editor.run("edit.undo", serde_json::json!({}));
+    let obj = &h.editor.session.course.slide("s1").expect("s1").objects[0];
+    match &obj.states[0].extras[0].kind {
+        StateExtraKind::Text { text, .. } => assert_eq!(text, "Old Badge"),
+        other => panic!("expected text extra, got {other:?}"),
+    }
+}
+
+#[test]
+fn u16_extra_context_menu_duplicate_reorder_and_delete() {
+    let mut h = TestHarness::new(course_with_hover_shape_extra());
+    h.editor.enter_edit_state("s1", "btn1", "hover");
+    h.idle_frame();
+
+    let extra_center = slide_to_screen(&h, pos2(100.0 + 20.0 + 20.0, 100.0 + 10.0 + 15.0));
+    h.right_click_at(extra_center);
+    h.idle_frame();
+
+    let dup_pos = h
+        .find_text("Duplicate extra")
+        .expect("Duplicate extra in extra context menu");
+    assert!(h.find_text("Bring forward").is_some());
+    assert!(h.find_text("Send backward").is_some());
+    assert!(h.find_text("Delete extra").is_some());
+
+    h.click_at(dup_pos);
+    h.idle_frame();
+
+    let extras = &h.editor.session.course.slide("s1").expect("s1").objects[0].states[0].extras;
+    assert_eq!(extras.len(), 2, "Duplicate extra must add a second extra");
+    assert_eq!(
+        h.editor
+            .ui
+            .editing_state
+            .as_ref()
+            .and_then(|s| s.selected_extra.as_deref()),
+        Some(extras[1].id.as_str())
+    );
+}
+
+#[test]
+fn u16_live_state_thumbnail_composes_state_extras() {
+    let mut course = course_with_hover_shape_extra();
+    // Make extra overhang outside parent bounds so composed bounds differ if extras are included.
+    course.slide_mut("s1").expect("s1").objects[0].states[0].extras[0].frame =
+        coursecraft_course::Rect {
+            x: 240.0,
+            y: -20.0,
+            w: 40.0,
+            h: 40.0,
+        };
+    let obj = &course.slide("s1").expect("s1").objects[0];
+    let items = crate::states::compose_thumbnail_items(&course, obj, "hover");
+    assert_eq!(
+        items.len(),
+        2,
+        "state thumbnail composition must include parent + StateExtra items"
+    );
+}
+
+#[test]
+fn u17_find_hit_in_state_extra_text_opens_states_tab_and_previews_state() {
+    let mut course = course_with_button_and_hover_state();
+    course.slide_mut("s1").expect("s1").objects[0].states.push(
+        serde_json::from_value(serde_json::json!({
+            "name": "visited",
+            "extras": [{
+                "id": "e1",
+                "kind": { "type": "text", "text": "Checkmark Done" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 24.0 }
+            }]
+        }))
+        .expect("visited state"),
+    );
+
+    let mut h = TestHarness::new(course);
+    h.editor.ui.bottom_tab = crate::BottomTab::Timeline;
+    h.editor.ui.preview_state = None;
+    h.editor.ui.find.open = true;
+    h.editor.ui.find.query = "Checkmark Done".to_owned();
+    h.idle_frame();
+
+    let hit_pos = h
+        .find_text_last("Checkmark Done")
+        .expect("Find result row for Checkmark Done");
+    h.click_at(hit_pos);
+    h.idle_frame();
+
+    assert_eq!(h.editor.selection.slide, "s1");
+    assert_eq!(h.editor.selection.object.as_deref(), Some("btn1"));
+    assert_eq!(h.editor.ui.bottom_tab, crate::BottomTab::States);
+    assert_eq!(h.editor.ui.preview_state.as_deref(), Some("visited"));
+}
+
+#[test]
+fn u18_undo_past_state_add_extra_clears_selected_extra_without_panic() {
+    let mut h = TestHarness::new(course_with_button_and_hover_state());
+    h.editor.enter_edit_state("s1", "btn1", "hover");
+    let res = h
+        .editor
+        .run(
+            "object.state_add_extra",
+            serde_json::json!({
+                "slide": "s1",
+                "object": "btn1",
+                "state": "hover",
+                "extra": {
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#FF0000" },
+                    "frame": { "x": 10.0, "y": 10.0, "w": 30.0, "h": 30.0 }
+                }
+            }),
+        )
+        .expect("add extra");
+    let new_id = res["id"].as_str().expect("id").to_owned();
+    if let Some(session) = h.editor.ui.editing_state.as_mut() {
+        session.selected_extra = Some(new_id);
+    }
+    h.idle_frame();
+
+    h.editor.run("edit.undo", serde_json::json!({}));
+    h.idle_frame();
+
+    let session = h
+        .editor
+        .ui
+        .editing_state
+        .as_ref()
+        .expect("editing_state must remain active after undoing extra add");
+    assert_eq!(
+        session.selected_extra, None,
+        "undoing past object.state_add_extra must clear selected_extra"
+    );
+}
+
+#[test]
+fn u19_used_media_and_media_library_places_include_state_extra_image() {
+    let mut course = course_with_button_and_hover_state();
+    course.slide_mut("s1").expect("s1").objects[0].states.push(
+        serde_json::from_value(serde_json::json!({
+            "name": "visited",
+            "extras": [{
+                "id": "e_img",
+                "kind": { "type": "image", "src": "media/badge.png", "alt": "Done" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 24.0, "h": 24.0 }
+            }]
+        }))
+        .expect("visited state"),
+    );
+
+    let mut h = TestHarness::new(course);
+    let pixels = vec![42u8; 4 * 4 * 4];
+    let bytes = coursecraft_media::encode_png_rgba(4, 4, &pixels).expect("png");
+    h.editor.set_media(vec![(
+        "media/badge.png".to_owned(),
+        std::sync::Arc::from(bytes.as_slice()),
+    )]);
+
+    let used = h.editor.used_media();
+    assert!(
+        used.iter().any(|(src, _)| src == "media/badge.png"),
+        "used_media() must keep media/badge.png referenced only by state.extras"
+    );
+
+    h.editor.ui.show_media_library = true;
+    h.editor.ui.media_library.selected = Some("media/badge.png".to_owned());
+    h.idle_frame();
+
+    assert!(
+        h.find_text("Places using this file").is_some(),
+        "Media Library must show Places using this file for state extra image"
+    );
+}
