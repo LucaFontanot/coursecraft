@@ -294,13 +294,15 @@ Test plan by Gemini 4 Neon (`docs/testing/m27-plan.md`, reviewed by Opus); 25 st
 - Editor sweep: triggers, states, timeline, media, undo/redo (every editing command), clipboard, layers, questions, masters, scenes, find, accessibility, save/open/autosave/versions.
 - 48 bugs found and fixed: all 27 suspected by the plan, plus 21 more found by the tests.
 
-## M28 Owner feedback and the UI/UX pass
+## M28 Owner feedback and the UI/UX pass ✅
 
 Owner feedback (h1–h7), then the UI/UX plan by Gemini 4 Neon (`docs/testing/m28-uiux-plan.md`, reviewed by Opus); steps by Gemini 4 Hydrogen (agy CLI). Log: `docs/bug-hunt/2026-11-22-m28.md`.
 
 - Player outline drawer inside the player, even shape outlines (corners and miter limit from PowerPoint), resizable full-screen preview with a darker backdrop, preview of one slide or selected slides, true text-style buttons, a control bar that never covers the slide, clickable video, revisit warning.
 - UI/UX pass over every surface (u1–u18): hit targets, tooltips, contrast, dialogs, menus, inspector, panels, player chrome.
 - Tester feedback on states (Noe, `docs/testing/m28-noe-states-analysis.md`): hover and down states change images and text on every object (u19), and a state's image is picked, not typed, and checked (u20). The States layout change waits for M29.
+- Tester requests (PhilOB): SCORM 1.2 status choice (u21), player bar off for the course or a slide (u22), hand pointer over clickable objects and shadow/glow opacity (u23).
+- Released as 0.3.6.
 
 ## M29 Rich object states (planned)
 
