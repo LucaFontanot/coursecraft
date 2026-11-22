@@ -321,14 +321,12 @@ fn fixture_session() -> Session {
         StateDef {
             name: "custom1".into(),
             fill: Some(Color("#223344".into())),
-            text: None,
-            src: None,
+            ..Default::default()
         },
         StateDef {
             name: "custom2".into(),
             fill: Some(Color("#334455".into())),
-            text: None,
-            src: None,
+            ..Default::default()
         },
     ];
     obj_shape.motion_paths = vec![MotionPath {
@@ -1159,6 +1157,10 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         (
             "object.update_state",
             json!({ "slide": "slide1", "object": "obj_shape", "state": { "name": "custom1", "fill": "#00AAFF" } }),
+        ),
+        (
+            "object.patch_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "name": "custom1", "patch": { "glow": { "color": "#2F6FEB", "size": 8.0 }, "opacity": 0.85 } }),
         ),
         (
             "object.delete_state",

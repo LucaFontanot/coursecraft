@@ -346,6 +346,7 @@ video.remove_cue     -                        -          {"slide": id, "object":
 video.add_question_cue -                      -          {"slide": id, "object": id, "at_ms"?: number, "name"?: string}
 object.add_state     -                        -          {"slide": id, "object": id, "state": StateDef}
 object.update_state  -                        -          {"slide": id, "object": id, "state": StateDef}
+object.patch_state   -                        -          {"slide": id, "object": id, "name": string, "reset_all"?: bool, "patch"?: object}
 object.delete_state  -                        -          {"slide": id, "object": id, "name": string}
 object.duplicate_state -                      -          {"slide": id, "object": id, "name": string, "new_name"?: string}
 object.rename_state  -                        -          {"slide": id, "object": id, "from": string, "to": string}

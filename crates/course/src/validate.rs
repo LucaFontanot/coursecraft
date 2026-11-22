@@ -1154,6 +1154,11 @@ fn check_fill_style(cx: &mut Ctx<'_>, style: &crate::FillStyle, p: &str) {
                     format!("{p}/fill_style/src"),
                     "picture fill has no image; the solid fill is drawn instead",
                 );
+            } else if !is_safe_relative_path(src) {
+                cx.err(
+                    format!("{p}/fill_style/src"),
+                    format!("picture fill path {src:?} must be a safe relative path"),
+                );
             }
         }
         crate::FillStyle::Pattern { preset, fg, bg } => {
@@ -1206,6 +1211,23 @@ fn check_gradient_stops(cx: &mut Ctx<'_>, stops: &[crate::GradientStop], p: &str
     }
 }
 
+fn check_outline(cx: &mut Ctx<'_>, outline: &crate::Outline, p: &str) {
+    if !outline.color.is_valid() {
+        cx.err(
+            format!("{p}/color"),
+            format!("color {:?} is not #RRGGBB or #RRGGBBAA", outline.color.0),
+        );
+    }
+    if !outline.width.is_finite() || !(0.0..=50.0).contains(&outline.width) {
+        cx.err(
+            format!("{p}/width"),
+            "outline width must be finite and within 0..=50",
+        );
+    }
+    check_dash_pattern(cx, outline.dash_pattern.as_deref(), p);
+    check_miter_limit(cx, outline.miter_limit, p);
+}
+
 fn check_shape_outline_and_text(
     cx: &mut Ctx<'_>,
     shape: crate::ShapeKind,
@@ -1220,24 +1242,7 @@ fn check_shape_outline_and_text(
                 "line shapes cannot carry an outline",
             );
         }
-        if !outline.color.is_valid() {
-            cx.err(
-                format!("{p}/kind/outline/color"),
-                format!("color {:?} is not #RRGGBB or #RRGGBBAA", outline.color.0),
-            );
-        }
-        if !outline.width.is_finite() || !(0.0..=50.0).contains(&outline.width) {
-            cx.err(
-                format!("{p}/kind/outline/width"),
-                "outline width must be finite and within 0..=50",
-            );
-        }
-        check_dash_pattern(
-            cx,
-            outline.dash_pattern.as_deref(),
-            &format!("{p}/kind/outline"),
-        );
-        check_miter_limit(cx, outline.miter_limit, &format!("{p}/kind/outline"));
+        check_outline(cx, outline, &format!("{p}/kind/outline"));
     }
     if let Some(text) = text {
         if !crate::shape_allows_text(shape) {
@@ -1510,6 +1515,47 @@ fn row_heights_sum(rows: &[crate::TableRow]) -> bool {
             .all(|row| row.height.is_finite() && row.height > 0.0)
 }
 
+fn check_shadow(cx: &mut Ctx<'_>, shadow: &crate::Shadow, p: &str) {
+    if !shadow.color.is_valid() {
+        cx.err(
+            format!("{p}/color"),
+            format!("color {:?} is not #RRGGBB or #RRGGBBAA", shadow.color.0),
+        );
+    }
+    if ![shadow.offset_x, shadow.offset_y]
+        .iter()
+        .all(|v| v.is_finite())
+        || !(-200.0..=200.0).contains(&shadow.offset_x)
+        || !(-200.0..=200.0).contains(&shadow.offset_y)
+    {
+        cx.err(
+            p.to_owned(),
+            "shadow offsets must be finite and within -200..=200",
+        );
+    }
+    if !shadow.blur.is_finite() || !(0.0..=100.0).contains(&shadow.blur) {
+        cx.err(
+            format!("{p}/blur"),
+            "shadow blur must be finite and within 0..=100",
+        );
+    }
+}
+
+fn check_glow(cx: &mut Ctx<'_>, glow: &crate::Glow, p: &str) {
+    if !glow.color.is_valid() {
+        cx.err(
+            format!("{p}/color"),
+            format!("color {:?} is not #RRGGBB or #RRGGBBAA", glow.color.0),
+        );
+    }
+    if !glow.size.is_finite() || !(0.0..=100.0).contains(&glow.size) {
+        cx.err(
+            format!("{p}/size"),
+            "glow size must be finite and within 0..=100",
+        );
+    }
+}
+
 fn check_object_effects(cx: &mut Ctx<'_>, o: &Object, p: &str) {
     if !o.opacity.is_finite() || !(0.0..=1.0).contains(&o.opacity) {
         cx.err(
@@ -1518,43 +1564,10 @@ fn check_object_effects(cx: &mut Ctx<'_>, o: &Object, p: &str) {
         );
     }
     if let Some(shadow) = &o.shadow {
-        if !shadow.color.is_valid() {
-            cx.err(
-                format!("{p}/shadow/color"),
-                format!("color {:?} is not #RRGGBB or #RRGGBBAA", shadow.color.0),
-            );
-        }
-        if ![shadow.offset_x, shadow.offset_y]
-            .iter()
-            .all(|v| v.is_finite())
-            || !(-200.0..=200.0).contains(&shadow.offset_x)
-            || !(-200.0..=200.0).contains(&shadow.offset_y)
-        {
-            cx.err(
-                format!("{p}/shadow"),
-                "shadow offsets must be finite and within -200..=200",
-            );
-        }
-        if !shadow.blur.is_finite() || !(0.0..=100.0).contains(&shadow.blur) {
-            cx.err(
-                format!("{p}/shadow/blur"),
-                "shadow blur must be finite and within 0..=100",
-            );
-        }
+        check_shadow(cx, shadow, &format!("{p}/shadow"));
     }
     if let Some(glow) = &o.glow {
-        if !glow.color.is_valid() {
-            cx.err(
-                format!("{p}/glow/color"),
-                format!("color {:?} is not #RRGGBB or #RRGGBBAA", glow.color.0),
-            );
-        }
-        if !glow.size.is_finite() || !(0.0..=100.0).contains(&glow.size) {
-            cx.err(
-                format!("{p}/glow/size"),
-                "glow size must be finite and within 0..=100",
-            );
-        }
+        check_glow(cx, glow, &format!("{p}/glow"));
     }
 }
 
@@ -2144,11 +2157,84 @@ fn check_object_states(cx: &mut Ctx<'_>, o: &Object, p: &str) {
                 );
             }
         }
+        let sp = format!("{p}/states/{i}");
+        check_state_widened_overrides(cx, s, &sp);
     }
     if !o.has_state(&o.initial_state) {
         cx.err(
             format!("{p}/initial_state"),
             format!("state {:?} is not defined on this object", o.initial_state),
+        );
+    }
+}
+
+fn check_state_widened_overrides(cx: &mut Ctx<'_>, s: &crate::StateDef, sp: &str) {
+    for (field, is_set, is_clear) in [
+        ("fill_style", s.fill_style.is_some(), s.clear_fill_style),
+        ("outline", s.outline.is_some(), s.clear_outline),
+        ("shadow", s.shadow.is_some(), s.clear_shadow),
+        ("glow", s.glow.is_some(), s.clear_glow),
+        ("crop", s.crop.is_some(), s.clear_crop),
+        ("image_shape", s.image_shape.is_some(), s.clear_image_shape),
+    ] {
+        if is_set && is_clear {
+            cx.err(
+                format!("{sp}/{field}"),
+                format!("state cannot both set {field} and clear_{field}"),
+            );
+        }
+    }
+    if let Some(fill_style) = &s.fill_style {
+        check_fill_style(cx, fill_style, sp);
+    }
+    if let Some(outline) = &s.outline {
+        check_outline(cx, outline, &format!("{sp}/outline"));
+    }
+    if let Some(ts) = &s.text_style {
+        if !ts.color.is_valid() {
+            cx.err(
+                format!("{sp}/text_style/color"),
+                format!("color {:?} is not #RRGGBB or #RRGGBBAA", ts.color.0),
+            );
+        }
+        check_font_style(cx, ts, &format!("{sp}/text_style"));
+    }
+    if let Some(runs) = &s.runs {
+        if let Some(text) = &s.text {
+            check_text_runs(cx, text, runs, sp);
+        } else {
+            let concat: String = runs.iter().map(|r| r.text.as_str()).collect();
+            check_text_runs(cx, &concat, runs, sp);
+        }
+    }
+    if let Some(paragraphs) = &s.paragraphs {
+        check_paragraphs(cx, paragraphs, sp);
+    }
+    if let Some(opacity) = s.opacity
+        && (!opacity.is_finite() || !(0.0..=1.0).contains(&opacity))
+    {
+        cx.err(
+            format!("{sp}/opacity"),
+            "opacity must be a finite number in 0..=1",
+        );
+    }
+    if let Some(shadow) = &s.shadow {
+        check_shadow(cx, shadow, &format!("{sp}/shadow"));
+    }
+    if let Some(glow) = &s.glow {
+        check_glow(cx, glow, &format!("{sp}/glow"));
+    }
+    if let Some(crop) = s.crop
+        && let Some(msg) = check_crop_values(crop)
+    {
+        cx.err(format!("{sp}/crop"), msg);
+    }
+    if let Some(rotation) = s.rotation
+        && (!rotation.is_finite() || !(0.0..360.0).contains(&rotation))
+    {
+        cx.err(
+            format!("{sp}/rotation"),
+            "rotation must be a finite number of degrees in 0..360",
         );
     }
 }

@@ -136,3 +136,350 @@ fn state_name_over_64_chars_produces_validation_warning() {
         "expected warning on /states/0 for > 64 char state name: {issues:?}"
     );
 }
+
+#[test]
+fn legacy_03x_showcase_and_reference_course_round_trip_states_unchanged() {
+    for rel in [
+        "../../examples/showcase/course.json",
+        "../../examples/reference-course/course.json",
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        let raw = std::fs::read_to_string(&path).expect("read example course");
+        let v_before: serde_json::Value = serde_json::from_str(&raw).expect("parse raw json");
+        let course: Course = serde_json::from_str(&raw).expect("deserialize course");
+        let reserialized = serde_json::to_value(&course).expect("reserialize course");
+
+        for (si, (sb, sa)) in v_before["scenes"][0]["slides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(reserialized["scenes"][0]["slides"].as_array().unwrap())
+            .enumerate()
+        {
+            for (oi, (ob, oa)) in sb["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(sa["objects"].as_array().unwrap())
+                .enumerate()
+            {
+                assert_eq!(
+                    ob.get("states"),
+                    oa.get("states"),
+                    "{rel} slide {si} object {oi} states changed on round-trip"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn legacy_state_def_refuses_new_m29_fields_loudly_and_accepts_legacy_only() {
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct LegacyStateDef {
+        name: String,
+        #[serde(default)]
+        fill: Option<crate::Color>,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        src: Option<String>,
+    }
+
+    let legacy_only = crate::StateDef {
+        name: "hover".into(),
+        fill: Some(crate::Color("#112233".into())),
+        text: Some("Hi".into()),
+        src: None,
+        ..Default::default()
+    };
+    let legacy_json = serde_json::to_string(&legacy_only).unwrap();
+    assert!(
+        serde_json::from_str::<LegacyStateDef>(&legacy_json).is_ok(),
+        "M29 StateDef using only legacy fields must still deserialize in 0.3.x"
+    );
+
+    let with_glow = crate::StateDef {
+        name: "hover".into(),
+        glow: Some(crate::Glow {
+            color: crate::Color("#2F6FEB".into()),
+            size: 12.0,
+        }),
+        ..Default::default()
+    };
+    let err_glow =
+        serde_json::from_str::<LegacyStateDef>(&serde_json::to_string(&with_glow).unwrap())
+            .unwrap_err()
+            .to_string();
+    assert!(
+        err_glow.contains("unknown field"),
+        "expected unknown field error for glow, got: {err_glow}"
+    );
+
+    let with_clear = crate::StateDef {
+        name: "disabled".into(),
+        clear_shadow: true,
+        ..Default::default()
+    };
+    let err_clear =
+        serde_json::from_str::<LegacyStateDef>(&serde_json::to_string(&with_clear).unwrap())
+            .unwrap_err()
+            .to_string();
+    assert!(
+        err_clear.contains("unknown field"),
+        "expected unknown field error for clear_shadow, got: {err_clear}"
+    );
+}
+
+#[test]
+fn tri_state_overrides_and_clear_flags_round_trip_json() {
+    let inherit = crate::StateDef {
+        name: "s_inherit".into(),
+        ..Default::default()
+    };
+    let inherit_val = serde_json::to_value(&inherit).unwrap();
+    assert_eq!(inherit_val, serde_json::json!({ "name": "s_inherit" }));
+
+    let full = crate::StateDef {
+        name: "s_set".into(),
+        fill: Some(crate::Color("#112233".into())),
+        text: Some("Label".into()),
+        src: Some("media/a.png".into()),
+        fill_style: Some(crate::FillStyle::Linear {
+            angle: 90.0,
+            stops: vec![
+                crate::GradientStop {
+                    color: crate::Color("#112233".into()),
+                    position: 0.0,
+                },
+                crate::GradientStop {
+                    color: crate::Color("#445566".into()),
+                    position: 1.0,
+                },
+            ],
+        }),
+        outline: Some(crate::Outline {
+            color: crate::Color("#FFFFFF".into()),
+            width: 2.0,
+            dash: crate::DashStyle::Dash,
+            dash_pattern: None,
+            join: crate::LineJoin::Round,
+            miter_limit: None,
+        }),
+        text_style: Some(crate::TextStyle::default()),
+        runs: Some(vec![crate::TextRun {
+            text: "Label".into(),
+            bold: Some(true),
+            italic: None,
+            underline: None,
+            strikethrough: None,
+            baseline: None,
+            size: None,
+            color: None,
+            font: None,
+            letter_spacing: None,
+            link: None,
+        }]),
+        paragraphs: Some(vec![crate::Paragraph::default()]),
+        autofit: Some(crate::Autofit::Shrink),
+        opacity: Some(0.5),
+        shadow: Some(crate::Shadow {
+            color: crate::Color("#00000080".into()),
+            offset_x: 2.0,
+            offset_y: 4.0,
+            blur: 8.0,
+        }),
+        glow: Some(crate::Glow {
+            color: crate::Color("#2F6FEB".into()),
+            size: 10.0,
+        }),
+        crop: Some(crate::CropRect {
+            x: 0.1,
+            y: 0.1,
+            w: 0.8,
+            h: 0.8,
+        }),
+        image_shape: Some(crate::ShapeKind::Ellipse),
+        rotation: Some(45.0),
+        flip_h: Some(true),
+        flip_v: Some(false),
+        ..Default::default()
+    };
+    let full_json = serde_json::to_string(&full).unwrap();
+    let full_back: crate::StateDef = serde_json::from_str(&full_json).unwrap();
+    assert_eq!(full, full_back);
+
+    let cleared = crate::StateDef {
+        name: "s_clear".into(),
+        clear_fill_style: true,
+        clear_outline: true,
+        clear_shadow: true,
+        clear_glow: true,
+        clear_crop: true,
+        clear_image_shape: true,
+        ..Default::default()
+    };
+    let cleared_val = serde_json::to_value(&cleared).unwrap();
+    assert_eq!(cleared_val["clear_fill_style"], true);
+    assert_eq!(cleared_val["clear_outline"], true);
+    assert_eq!(cleared_val["clear_shadow"], true);
+    assert_eq!(cleared_val["clear_glow"], true);
+    assert_eq!(cleared_val["clear_crop"], true);
+    assert_eq!(cleared_val["clear_image_shape"], true);
+    assert!(cleared_val.get("fill_style").is_none());
+    let cleared_back: crate::StateDef = serde_json::from_value(cleared_val).unwrap();
+    assert_eq!(cleared, cleared_back);
+}
+
+#[test]
+fn mutual_exclusion_between_nullable_field_and_clear_flag_errors() {
+    let cases = [
+        serde_json::json!({
+            "name": "s1",
+            "fill_style": { "type": "pattern", "preset": "dots", "fg": "#000000", "bg": "#FFFFFF" },
+            "clear_fill_style": true
+        }),
+        serde_json::json!({
+            "name": "s2",
+            "outline": { "color": "#000000", "width": 2.0 },
+            "clear_outline": true
+        }),
+        serde_json::json!({
+            "name": "s3",
+            "shadow": { "color": "#000000", "offset_x": 1.0, "offset_y": 1.0, "blur": 2.0 },
+            "clear_shadow": true
+        }),
+        serde_json::json!({
+            "name": "s4",
+            "glow": { "color": "#2F6FEB", "size": 6.0 },
+            "clear_glow": true
+        }),
+        serde_json::json!({
+            "name": "s5",
+            "crop": { "x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5 },
+            "clear_crop": true
+        }),
+        serde_json::json!({
+            "name": "s6",
+            "image_shape": "ellipse",
+            "clear_image_shape": true
+        }),
+    ];
+    for state_json in cases {
+        let course = course_with_slide_object(serde_json::json!({
+            "id": "btn-1",
+            "name": "Button 1",
+            "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+            "kind": { "type": "button", "label": "Next" },
+            "states": [state_json]
+        }));
+        let issues = course.validate();
+        assert!(
+            issues.iter().any(|i| i.severity == Severity::Error),
+            "expected error for mutual exclusion: {issues:?}"
+        );
+    }
+}
+
+#[test]
+fn state_def_rejects_invalid_widened_fields() {
+    let bad_states = [
+        serde_json::json!({ "name": "s_bad_outline", "outline": { "color": "not-hex", "width": 2.0 } }),
+        serde_json::json!({ "name": "s_bad_outline_w", "outline": { "color": "#000000", "width": 99.0 } }),
+        serde_json::json!({ "name": "s_bad_glow", "glow": { "color": "bad", "size": 10.0 } }),
+        serde_json::json!({ "name": "s_bad_shadow", "shadow": { "color": "#000000", "offset_x": 0.0, "offset_y": 0.0, "blur": 2.0 } }),
+        serde_json::json!({ "name": "s_bad_crop", "crop": { "x": 0.5, "y": 0.5, "w": 0.8, "h": 0.8 } }),
+        serde_json::json!({ "name": "s_bad_fill_path", "fill_style": { "type": "picture", "src": "../secret.png" } }),
+        serde_json::json!({ "name": "s_bad_ts_color", "text_style": { "font": "Inter", "size": 16.0, "color": "bad" } }),
+    ];
+    for state_json in bad_states {
+        let mut course = course_with_slide_object(serde_json::json!({
+            "id": "btn-1",
+            "name": "Button 1",
+            "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+            "kind": { "type": "button", "label": "Next" },
+            "states": [state_json.clone()]
+        }));
+        if state_json["name"] == "s_bad_shadow" {
+            course.scenes[0].slides[0].objects[0].states[0]
+                .shadow
+                .as_mut()
+                .unwrap()
+                .offset_x = 999.0;
+        }
+        let issues = course.validate();
+        assert!(
+            issues.iter().any(|i| i.severity == Severity::Error),
+            "expected validation error for {state_json}: {issues:?}"
+        );
+    }
+
+    // In-memory out-of-range glow size is also caught by validate().
+    let mut course = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{ "name": "hover", "glow": { "color": "#000000", "size": 10.0 } }]
+    }));
+    course.scenes[0].slides[0].objects[0].states[0]
+        .glow
+        .as_mut()
+        .unwrap()
+        .size = 500.0;
+    let issues = course.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/glow/size")),
+        "expected glow size error: {issues:?}"
+    );
+}
+
+#[test]
+fn state_def_deser_clamps_opacity_and_normalizes_rotation_and_validate_rejects_non_finite_floats() {
+    let deser: crate::StateDef = serde_json::from_value(serde_json::json!({
+        "name": "hover",
+        "opacity": 1.5,
+        "rotation": -45.0
+    }))
+    .unwrap();
+    assert_eq!(deser.opacity, Some(1.0));
+    assert_eq!(deser.rotation, Some(315.0));
+
+    let mut course = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{ "name": "hover" }]
+    }));
+    course.scenes[0].slides[0].objects[0].states[0].opacity = Some(f32::NAN);
+    course.scenes[0].slides[0].objects[0].states[0].rotation = Some(f32::INFINITY);
+    let issues = course.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/opacity")),
+        "expected opacity error: {issues:?}"
+    );
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Error && i.path.ends_with("/rotation")),
+        "expected rotation error: {issues:?}"
+    );
+}
+
+#[test]
+fn state_def_rejects_unknown_json_fields() {
+    let err = serde_json::from_value::<crate::StateDef>(serde_json::json!({
+        "name": "hover",
+        "bogus_key": 123
+    }))
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("unknown field"), "got: {err}");
+}

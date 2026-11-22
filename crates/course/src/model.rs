@@ -1122,6 +1122,13 @@ where
     Ok(clamp_opacity(f32::deserialize(deserializer)?))
 }
 
+fn deserialize_opt_opacity<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<f32>::deserialize(deserializer)?.map(clamp_opacity))
+}
+
 fn is_default_opacity(value: &f32) -> bool {
     !value.is_finite() || (*value - 1.0).abs() <= f32::EPSILON
 }
@@ -1370,6 +1377,13 @@ where
 {
     let value = f32::deserialize(deserializer)?;
     Ok(normalize_rotation(value))
+}
+
+fn deserialize_opt_rotation<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<f32>::deserialize(deserializer)?.map(normalize_rotation))
 }
 
 fn is_zero_rotation(degrees: &f32) -> bool {
@@ -3888,7 +3902,7 @@ pub const MAX_STATES_PER_OBJECT: usize = 32;
 pub const MAX_STATE_NAME_CHARS: usize = 64;
 
 /// Property overrides applied while an object is in a named state.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateDef {
     pub name: String,
@@ -3898,6 +3912,54 @@ pub struct StateDef {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub src: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_style: Option<FillStyle>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clear_fill_style: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<Outline>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clear_outline: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_style: Option<TextStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs: Option<Vec<TextRun>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraphs: Option<Vec<Paragraph>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autofit: Option<Autofit>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_opt_opacity",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub opacity: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<Shadow>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clear_shadow: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glow: Option<Glow>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clear_glow: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<CropRect>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clear_crop: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_shape: Option<ShapeKind>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub clear_image_shape: bool,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_opt_rotation",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rotation: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_h: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flip_v: Option<bool>,
 }
 
 // ---------------------------------------------------------------- triggers

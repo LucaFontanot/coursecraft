@@ -1018,6 +1018,15 @@ static REGISTRY: &[Command] = &[
         run: object_update_state,
     },
     Command {
+        id: "object.patch_state",
+        label: "Edit state",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object": id, "name": string, "reset_all"?: bool, "patch"?: object}"#,
+        mutates: true,
+        run: object_patch_state,
+    },
+    Command {
         id: "object.delete_state",
         label: "Delete State",
         menu: "",
@@ -7509,6 +7518,212 @@ fn object_update_state(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(Json::Null)
 }
 
+fn patch_opt<T: serde::de::DeserializeOwned>(
+    cmd: &str,
+    map: &serde_json::Map<String, Json>,
+    key: &str,
+    dst: &mut Option<T>,
+) -> Result<()> {
+    let Some(val) = map.get(key) else {
+        return Ok(());
+    };
+    if val.is_null() {
+        *dst = None;
+    } else {
+        *dst = Some(
+            serde_json::from_value(val.clone())
+                .map_err(|e| EngineError::Invalid(format!("{cmd}: invalid {key}: {e}")))?,
+        );
+    }
+    Ok(())
+}
+
+fn patch_nullable<T: serde::de::DeserializeOwned>(
+    cmd: &str,
+    map: &serde_json::Map<String, Json>,
+    key: &str,
+    clear_key: &str,
+    dst: &mut Option<T>,
+    clear_dst: &mut bool,
+) -> Result<()> {
+    if let Some(val) = map.get(key) {
+        if val.is_null() {
+            *dst = None;
+            *clear_dst = false;
+        } else {
+            *dst = Some(
+                serde_json::from_value(val.clone())
+                    .map_err(|e| EngineError::Invalid(format!("{cmd}: invalid {key}: {e}")))?,
+            );
+            *clear_dst = false;
+        }
+    }
+    if let Some(clear_val) = map.get(clear_key) {
+        let flag = clear_val
+            .as_bool()
+            .ok_or_else(|| EngineError::Invalid(format!("{cmd}: {clear_key} must be a boolean")))?;
+        *clear_dst = flag;
+        if flag {
+            *dst = None;
+        }
+    }
+    Ok(())
+}
+
+fn object_patch_state(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.patch_state";
+    const ALLOWED_KEYS: &[&str] = &[
+        "fill",
+        "text",
+        "src",
+        "fill_style",
+        "clear_fill_style",
+        "outline",
+        "clear_outline",
+        "text_style",
+        "runs",
+        "paragraphs",
+        "autofit",
+        "opacity",
+        "shadow",
+        "clear_shadow",
+        "glow",
+        "clear_glow",
+        "crop",
+        "clear_crop",
+        "image_shape",
+        "clear_image_shape",
+        "rotation",
+        "flip_h",
+        "flip_v",
+    ];
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let name: String = req(C, p, "name")?;
+    let reset_all: bool = opt(C, p, "reset_all")?.unwrap_or(false);
+    let patch_val: Option<Json> = opt(C, p, "patch")?;
+    let empty_map = serde_json::Map::new();
+    let patch_map = match &patch_val {
+        Some(v) => v
+            .as_object()
+            .ok_or_else(|| EngineError::Invalid(format!("{C}: patch must be a JSON object")))?,
+        None => &empty_map,
+    };
+
+    for k in patch_map.keys() {
+        if !ALLOWED_KEYS.contains(&k.as_str()) {
+            return Err(EngineError::Invalid(format!(
+                "{C}: unknown patch field {k:?}"
+            )));
+        }
+    }
+    for (field_key, clear_key) in [
+        ("fill_style", "clear_fill_style"),
+        ("outline", "clear_outline"),
+        ("shadow", "clear_shadow"),
+        ("glow", "clear_glow"),
+        ("crop", "clear_crop"),
+        ("image_shape", "clear_image_shape"),
+    ] {
+        let sets_val = patch_map.get(field_key).is_some_and(|v| !v.is_null());
+        let sets_clear = patch_map.get(clear_key).and_then(Json::as_bool) == Some(true);
+        if sets_val && sets_clear {
+            return Err(EngineError::Invalid(format!(
+                "{C}: cannot set both {field_key} and {clear_key}: true"
+            )));
+        }
+    }
+
+    refuse_master_states(C, s, &sid)?;
+
+    let slide = slide_mut(s, &sid)?;
+    let obj = find_object_mut(slide, &oid)?;
+    let target = obj
+        .states
+        .iter_mut()
+        .find(|st| st.name == name)
+        .ok_or_else(|| {
+            EngineError::NotFound(format!("state {name:?} not found on object {oid:?}"))
+        })?;
+
+    if reset_all {
+        *target = StateDef {
+            name: target.name.clone(),
+            ..Default::default()
+        };
+    }
+
+    patch_opt(C, patch_map, "fill", &mut target.fill)?;
+    patch_opt(C, patch_map, "text", &mut target.text)?;
+    patch_opt(C, patch_map, "src", &mut target.src)?;
+    patch_nullable(
+        C,
+        patch_map,
+        "fill_style",
+        "clear_fill_style",
+        &mut target.fill_style,
+        &mut target.clear_fill_style,
+    )?;
+    patch_nullable(
+        C,
+        patch_map,
+        "outline",
+        "clear_outline",
+        &mut target.outline,
+        &mut target.clear_outline,
+    )?;
+    patch_opt(C, patch_map, "text_style", &mut target.text_style)?;
+    patch_opt(C, patch_map, "runs", &mut target.runs)?;
+    patch_opt(C, patch_map, "paragraphs", &mut target.paragraphs)?;
+    patch_opt(C, patch_map, "autofit", &mut target.autofit)?;
+    patch_opt(C, patch_map, "opacity", &mut target.opacity)?;
+    if let Some(op) = target.opacity {
+        target.opacity = Some(coursecraft_course::clamp_opacity(op));
+    }
+    patch_nullable(
+        C,
+        patch_map,
+        "shadow",
+        "clear_shadow",
+        &mut target.shadow,
+        &mut target.clear_shadow,
+    )?;
+    patch_nullable(
+        C,
+        patch_map,
+        "glow",
+        "clear_glow",
+        &mut target.glow,
+        &mut target.clear_glow,
+    )?;
+    patch_nullable(
+        C,
+        patch_map,
+        "crop",
+        "clear_crop",
+        &mut target.crop,
+        &mut target.clear_crop,
+    )?;
+    patch_nullable(
+        C,
+        patch_map,
+        "image_shape",
+        "clear_image_shape",
+        &mut target.image_shape,
+        &mut target.clear_image_shape,
+    )?;
+    patch_opt(C, patch_map, "rotation", &mut target.rotation)?;
+    if let Some(rot) = target.rotation {
+        target.rotation = Some(coursecraft_course::normalize_rotation(rot));
+    }
+    patch_opt(C, patch_map, "flip_h", &mut target.flip_h)?;
+    patch_opt(C, patch_map, "flip_v", &mut target.flip_v)?;
+
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
 fn object_delete_state(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.delete_state";
     let was_valid = s.is_playable();
@@ -10101,8 +10316,7 @@ fn interaction_button(
         states: vec![StateDef {
             name: "selected".into(),
             fill: Some(theme.accent.clone()),
-            text: None,
-            src: None,
+            ..Default::default()
         }],
         initial_state: if selected {
             "selected".into()
@@ -10666,7 +10880,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                         name: "Back".to_owned(),
                         fill: Some(tint(theme.accent.clone(), 0x55)),
                         text: Some("Add the detail here.".to_owned()),
-                        src: None,
+                        ..Default::default()
                     }],
                     Rect {
                         x: margin + (card_w + gap) * i as f32,
@@ -10762,8 +10976,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     vec![StateDef {
                         name: "Visited".to_owned(),
                         fill: Some(tint(theme.accent.clone(), 0x99)),
-                        text: None,
-                        src: None,
+                        ..Default::default()
                     }],
                     Rect {
                         x: picture.x + picture.w * px - marker_d * 0.5,
@@ -10873,8 +11086,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     vec![StateDef {
                         name: "Selected".to_owned(),
                         fill: Some(theme.accent.clone()),
-                        text: None,
-                        src: None,
+                        ..Default::default()
                     }],
                     Rect {
                         x: centre - circle_d * 0.5,
@@ -11106,8 +11318,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     vec![StateDef {
                         name: "Visited".to_owned(),
                         fill: Some(theme.accent.clone()),
-                        text: None,
-                        src: None,
+                        ..Default::default()
                     }],
                     Rect {
                         x: centre - point_d * 0.5,
@@ -11241,7 +11452,7 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                         name: "Revealed".to_owned(),
                         fill: Some(tint(theme.accent.clone(), 0x77)),
                         text: Some(format!("Detail {}", i + 1)),
-                        src: None,
+                        ..Default::default()
                     }],
                     Rect {
                         x: margin + (tile_w + gap) * (i % cols) as f32,

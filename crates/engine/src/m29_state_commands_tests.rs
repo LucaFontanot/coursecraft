@@ -407,3 +407,191 @@ fn paste_onto_master_strips_states_and_resets_initial_state() {
     assert!(obj.states.is_empty());
     assert_eq!(obj.initial_state, "normal");
 }
+
+#[test]
+fn patch_state_partial_set_preserves_other_fields() {
+    let mut s = Session::blank("Patch State");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": { "name": "hover", "text": "Keep me" }
+        }),
+    );
+
+    ok(
+        &mut s,
+        "object.patch_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "name": "hover",
+            "patch": {
+                "fill_style": {
+                    "type": "linear",
+                    "angle": 90.0,
+                    "stops": [
+                        { "color": "#112233", "position": 0.0 },
+                        { "color": "#445566", "position": 1.0 }
+                    ]
+                },
+                "glow": { "color": "#2F6FEB", "size": 12.0 }
+            }
+        }),
+    );
+
+    let (obj, _) = s.course.slide("slide1").unwrap().object("btn").unwrap();
+    let st = &obj.states[0];
+    assert_eq!(st.text.as_deref(), Some("Keep me"));
+    assert!(st.fill_style.is_some());
+    assert_eq!(st.glow.as_ref().unwrap().size, 12.0);
+}
+
+#[test]
+fn patch_state_clear_flag_and_null_reset_to_inherit() {
+    let mut s = Session::blank("Patch Clear");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": {
+                "name": "hover",
+                "outline": { "color": "#000000", "width": 2.0 },
+                "glow": { "color": "#2F6FEB", "size": 8.0 }
+            }
+        }),
+    );
+
+    ok(
+        &mut s,
+        "object.patch_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "name": "hover",
+            "patch": {
+                "clear_outline": true,
+                "glow": null
+            }
+        }),
+    );
+
+    let (obj, _) = s.course.slide("slide1").unwrap().object("btn").unwrap();
+    let st = &obj.states[0];
+    assert!(st.outline.is_none());
+    assert!(st.clear_outline);
+    assert!(st.glow.is_none());
+
+    // Setting outline: null clears clear_outline back to Inherit.
+    ok(
+        &mut s,
+        "object.patch_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "name": "hover",
+            "patch": { "outline": null }
+        }),
+    );
+    let (obj, _) = s.course.slide("slide1").unwrap().object("btn").unwrap();
+    assert!(!obj.states[0].clear_outline);
+    assert!(obj.states[0].outline.is_none());
+}
+
+#[test]
+fn patch_state_reset_all_clears_overrides_and_undoes_in_one_step() {
+    let mut s = Session::blank("Patch Reset All");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": {
+                "name": "hover",
+                "fill": "#112233",
+                "text": "Hover",
+                "opacity": 0.5,
+                "clear_shadow": true
+            }
+        }),
+    );
+    let before = s.course.clone();
+    ok(
+        &mut s,
+        "object.patch_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "name": "hover",
+            "reset_all": true,
+            "patch": {}
+        }),
+    );
+    let (obj, _) = s.course.slide("slide1").unwrap().object("btn").unwrap();
+    assert_eq!(obj.states[0].name, "hover");
+    assert!(obj.states[0].fill.is_none());
+    assert!(obj.states[0].text.is_none());
+    assert!(obj.states[0].opacity.is_none());
+    assert!(!obj.states[0].clear_shadow);
+
+    s.undo().unwrap();
+    assert_eq!(s.course, before);
+}
+
+#[test]
+fn patch_state_rejects_unknown_key_and_mutual_exclusion_without_mutating_course() {
+    let mut s = Session::blank("Patch Refusal");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": { "name": "hover", "fill": "#112233" }
+        }),
+    );
+    let before = s.course.clone();
+
+    let err_unknown = s
+        .execute(
+            "object.patch_state",
+            &json!({
+                "slide": "slide1",
+                "object": "btn",
+                "name": "hover",
+                "patch": { "unknown_field": 42 }
+            }),
+        )
+        .unwrap_err();
+    assert!(err_unknown.to_string().contains("unknown"), "{err_unknown}");
+    assert_eq!(s.course, before);
+
+    let err_mutex = s
+        .execute(
+            "object.patch_state",
+            &json!({
+                "slide": "slide1",
+                "object": "btn",
+                "name": "hover",
+                "patch": {
+                    "outline": { "color": "#000000", "width": 2.0 },
+                    "clear_outline": true
+                }
+            }),
+        )
+        .unwrap_err();
+    assert!(
+        err_mutex.to_string().contains("clear_outline"),
+        "{err_mutex}"
+    );
+    assert_eq!(s.course, before);
+}
