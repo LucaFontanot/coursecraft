@@ -2605,10 +2605,7 @@ fn show_state_extras_list(
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let del_resp = ui
-                    .add(
-                        egui::Button::new(RichText::new("×").color(p.danger))
-                            .min_size(egui::vec2(24.0, 24.0)),
-                    )
+                    .add(egui::Button::new("×").min_size(egui::vec2(24.0, 24.0)))
                     .on_hover_text("Delete extra");
                 if del_resp.clicked() {
                     actions_to_run.push((

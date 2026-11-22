@@ -162,14 +162,16 @@ fn all_surfaces() -> Vec<SurfaceCase> {
         },
         shows: None,
         extra_setup: Some(|e| {
-            let _ = e.run(
-                "object.add_state",
-                serde_json::json!({
-                    "slide": "s-layers",
-                    "object": "obj-layers-title",
-                    "state": { "name": "hover", "opacity": 0.8 }
-                }),
-            );
+            if e.session.course.slide("s-layers").is_some() {
+                let _ = e.run(
+                    "object.add_state",
+                    serde_json::json!({
+                        "slide": "s-layers",
+                        "object": "obj-layers-title",
+                        "state": { "name": "hover", "opacity": 0.8 }
+                    }),
+                );
+            }
         }),
     });
     cases.push(SurfaceCase {
@@ -196,6 +198,25 @@ fn all_surfaces() -> Vec<SurfaceCase> {
         }),
     });
     cases.push(SurfaceCase {
+        label: "bottom-states-long".to_owned(),
+        select: SnapshotSelect {
+            bottom_tab: Some(BottomTab::States),
+            ..base_select()
+        },
+        shows: None,
+        extra_setup: Some(|e| {
+            let long_state = "state_with_very_long_name_for_ui_stress_testing_1234567890abcdef";
+            let _ = e.run(
+                "object.add_state",
+                serde_json::json!({
+                    "slide": "s-layers",
+                    "object": "obj-layers-title",
+                    "state": { "name": long_state, "opacity": 0.85 }
+                }),
+            );
+        }),
+    });
+    cases.push(SurfaceCase {
         label: "edit-state-mode".to_owned(),
         select: SnapshotSelect {
             inspector_tab: Some(InspectorTab::Format),
@@ -204,15 +225,63 @@ fn all_surfaces() -> Vec<SurfaceCase> {
         },
         shows: None,
         extra_setup: Some(|e| {
-            let _ = e.run(
-                "object.add_state",
-                serde_json::json!({
-                    "slide": "s-layers",
-                    "object": "obj-layers-title",
-                    "state": { "name": "hover", "opacity": 0.8 }
-                }),
-            );
-            e.enter_edit_state("s-layers", "obj-layers-title", "hover");
+            if e.session.course.slide("s-layers").is_some() {
+                let _ = e.run(
+                    "object.add_state",
+                    serde_json::json!({
+                        "slide": "s-layers",
+                        "object": "obj-layers-title",
+                        "state": { "name": "hover", "opacity": 0.8 }
+                    }),
+                );
+                e.enter_edit_state("s-layers", "obj-layers-title", "hover");
+            }
+        }),
+    });
+    cases.push(SurfaceCase {
+        label: "edit-state-mode-extra".to_owned(),
+        select: SnapshotSelect {
+            inspector_tab: Some(InspectorTab::Format),
+            bottom_tab: Some(BottomTab::States),
+            ..base_select()
+        },
+        shows: None,
+        extra_setup: Some(|e| {
+            if e.session.course.slide("s-layers").is_some() {
+                let _ = e.run(
+                    "object.add_state",
+                    serde_json::json!({
+                        "slide": "s-layers",
+                        "object": "obj-layers-title",
+                        "state": { "name": "hover", "opacity": 0.8 }
+                    }),
+                );
+                if let Some(res) = e.run(
+                    "object.state_add_extra",
+                    serde_json::json!({
+                        "slide": "s-layers",
+                        "object": "obj-layers-title",
+                        "state": "hover",
+                        "extra": {
+                            "name": "Badge",
+                            "kind": {
+                                "type": "shape",
+                                "shape": "rectangle",
+                                "fill": "#22C55E"
+                            },
+                            "frame": { "x": 12.0, "y": -8.0, "w": 64.0, "h": 28.0 }
+                        }
+                    }),
+                ) {
+                    let extra_id = res["id"].as_str().map(str::to_owned);
+                    e.enter_edit_state("s-layers", "obj-layers-title", "hover");
+                    if let (Some(session), Some(id)) = (e.ui.editing_state.as_mut(), extra_id) {
+                        session.selected_extra = Some(id);
+                    }
+                } else {
+                    e.enter_edit_state("s-layers", "obj-layers-title", "hover");
+                }
+            }
         }),
     });
     for slide in [
@@ -429,6 +498,9 @@ fn uiux_sweep_scale_2_and_fixtures() {
         "inspector-format",
         "inspector-slide",
         "bottom-timeline",
+        "bottom-states-1",
+        "edit-state-mode",
+        "edit-state-mode-extra",
         "bottom-triggers",
         "bottom-variables",
         "course-map",

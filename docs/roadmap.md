@@ -304,9 +304,9 @@ Owner feedback (h1–h7), then the UI/UX plan by Gemini 4 Neon (`docs/testing/m2
 - Tester requests (PhilOB): SCORM 1.2 status choice (u21), player bar off for the course or a slide (u22), hand pointer over clickable objects and shadow/glow opacity (u23).
 - Released as 0.3.6.
 
-## M29 Rich object states (planned)
+## M29 Rich object states ✅
 
-From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Suggestions 1 and 3, Phase B). About 10–12 steps. Clean-room: match the capability, our own look and wording.
+From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Suggestions 1 and 3, Phase B). Plan: `docs/testing/m29-plan.md`; log: `docs/bug-hunt/2026-11-22-m29.md`; report: `docs/testing/m29-report.md`. Clean-room: match the capability, our own look and wording.
 
 1. **States tab** at the bottom, next to Timeline and Triggers: every state of the selected object as a live thumbnail, side by side; duplicate and rename states (renaming rewrites the triggers that use them). The two Format panel sections ("State" and "States") shrink to one compact Initial row with a link to the tab; right-click → Edit states… opens the tab; the "Hidden" quick-add chip goes. (2 steps)
 2. **Wider states and canvas state editing:** a state can change fill style, outline, text style, opacity, shadow, glow, crop, rotation and flips, not only fill, text and image (backward-compatible fields, one undoable `object.patch_state`). An edit-state mode on the canvas sends normal toolbar and inspector edits into the active state, shows which properties the state overrides and lets each be reset. (4–5 steps)

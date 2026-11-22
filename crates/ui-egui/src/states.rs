@@ -1370,7 +1370,7 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
         ))
         .show(ui, |ui| {
             ui.set_min_height(32.0);
-            let wide_header = ui.available_width() >= 780.0;
+            let wide_header = ui.available_width() >= 900.0;
             let show_edit_btn = |ui: &mut Ui, editor: &mut Editor| {
                 let custom_active = editor
                     .ui
@@ -1391,8 +1391,11 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
                 }
             };
             let show_identity = |ui: &mut Ui, actions: &mut Vec<(&'static str, Json)>| {
-                ui.add(egui::Label::new(RichText::new(obj_display_name).strong()).truncate())
-                    .on_hover_text(obj_display_name);
+                ui.scope(|ui| {
+                    ui.set_max_width(140.0);
+                    ui.add(egui::Label::new(RichText::new(obj_display_name).strong()).truncate())
+                        .on_hover_text(obj_display_name);
+                });
                 ui.label(RichText::new(&count_label).color(p.text_secondary));
 
                 ui.separator();
