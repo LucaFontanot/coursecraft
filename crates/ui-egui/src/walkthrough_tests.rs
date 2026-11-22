@@ -263,7 +263,7 @@ fn configure_course_settings(harness: &mut TestHarness) {
     harness.click_at(proj);
     harness.idle_frame();
     let settings = harness
-        .find_text("Course Settings")
+        .find_text("Course settings")
         .expect("Course Settings menu item");
     harness.click_at(settings);
     // The window sizes itself over a few frames now that it holds more options.
@@ -272,9 +272,9 @@ fn configure_course_settings(harness: &mut TestHarness) {
     }
 
     let title_pos = harness
-        .find_text("Course Title")
+        .find_text("Course title")
         .map(|p| p + vec2(130.0, 0.0))
-        .expect("Course Title field");
+        .expect("Course title field");
     harness.set_field(title_pos, "Workplace Safety Basics");
 
     let id_pos = harness

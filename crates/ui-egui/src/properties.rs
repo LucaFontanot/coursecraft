@@ -4146,7 +4146,7 @@ fn show_text_controls(
                 output.galley_pos,
                 &props.text_body,
                 &props.spell_words,
-                crate::spell_check::SQUIGGLE_COLOR,
+                crate::spell_check::squiggle_color(ui.ctx()),
             );
             let secondary = ui.input(|i| {
                 i.pointer.secondary_pressed()

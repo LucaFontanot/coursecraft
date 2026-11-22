@@ -142,7 +142,7 @@ fn d11_2_replace_single_vs_replace_all_and_undo_clears_status() {
     assert_eq!(text_of("t3"), "old three");
 
     // Click Replace All for remaining 2.
-    let replace_all_pos = h.find_text("Replace All").expect("Replace All button");
+    let replace_all_pos = h.find_text("Replace all").expect("Replace all button");
     h.click_at(replace_all_pos);
     h.idle_frame();
     assert_eq!(h.editor.session.undo_len(), undo_before + 2);
@@ -183,7 +183,7 @@ fn d11_3_variable_reference_protection() {
     h.editor.ui.find.replacement = "points".into();
     h.idle_frame();
 
-    let replace_all_pos = h.find_text("Replace All").expect("Replace All button");
+    let replace_all_pos = h.find_text("Replace all").expect("Replace all button");
     h.click_at(replace_all_pos);
     h.idle_frame();
 
@@ -424,7 +424,7 @@ fn d11_5_clicking_hits_across_all_10_target_scopes() {
     };
 
     let list_pos = h
-        .find_text("Find and Replace")
+        .find_text("Find and replace")
         .map(|p| egui::pos2(p.x, p.y + 220.0))
         .expect("Find and Replace window");
     for (idx, (snippet, expected_slide, expected_obj, field)) in snippets.iter().enumerate() {
@@ -505,7 +505,7 @@ fn d11_7_empty_replacement_and_max_text_bytes_guard() {
     h.idle_frame();
 
     // (a) Empty replacement deletes cleanly.
-    let replace_all_pos = h.find_text("Replace All").expect("Replace All");
+    let replace_all_pos = h.find_text("Replace all").expect("Replace all");
     h.click_at(replace_all_pos);
     h.idle_frame();
     let s1 = h.editor.session.course.slide("s1").expect("s1");
@@ -521,7 +521,7 @@ fn d11_7_empty_replacement_and_max_text_bytes_guard() {
 
     let err_count_before = h.editor.ui.error_history.len();
     let rev_before = h.editor.session.revision;
-    if let Some(pos) = h.find_text("Replace All") {
+    if let Some(pos) = h.find_text("Replace all") {
         h.click_at(pos);
         h.idle_frame();
     }
@@ -546,7 +546,7 @@ fn d11_8_self_containing_replacement_terminates() {
     h.editor.ui.find.replacement = "aa".into();
     h.idle_frame();
 
-    let pos = h.find_text("Replace All").expect("Replace All");
+    let pos = h.find_text("Replace all").expect("Replace all");
     h.click_at(pos);
     h.idle_frame();
 

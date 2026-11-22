@@ -5165,7 +5165,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             output.galley_pos,
             &buffer,
             &misspellings,
-            crate::spell_check::SQUIGGLE_COLOR,
+            crate::spell_check::squiggle_color(child.ctx()),
         );
         let menu_open = output.response.context_menu_opened();
         let secondary = ui.input(|i| {

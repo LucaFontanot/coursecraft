@@ -258,7 +258,7 @@ fn f7_opens_the_check_spelling_window() {
     harness.press(egui::Key::F7, egui::Modifiers::NONE);
     harness.idle_frame();
     assert!(harness.editor.ui.spell_check.open);
-    assert!(harness.find_text("Check Spelling").is_some());
+    assert!(harness.find_text("Check spelling").is_some());
 }
 
 #[test]

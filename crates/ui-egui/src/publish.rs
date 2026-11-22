@@ -241,7 +241,7 @@ pub fn show_publish_dialog(
     let mut open = true;
     let mut close_after = false;
 
-    let mut dialog = Dialog::new("Publish course").width(430.0);
+    let mut dialog = Dialog::new("Publish course").width(430.0).resizable(true);
     if !busy {
         dialog = dialog.open(&mut open);
     }
@@ -354,7 +354,15 @@ pub fn show_publish_dialog(
                 ui.horizontal(|ui| {
                     let blocked = validation_errors > 0 || !available || !missing_media.is_empty();
                     if blocked {
-                        ui.add_enabled(false, egui::Button::new("Publish"));
+                        let reason = if validation_errors > 0 {
+                            "Fix validation problems before publishing"
+                        } else if !missing_media.is_empty() {
+                            "Restore missing media files before publishing"
+                        } else {
+                            "Player bundle is not available in this build"
+                        };
+                        ui.add_enabled(false, egui::Button::new("Publish"))
+                            .on_disabled_hover_text(reason);
                     } else if publish_button(ui, "Publish").clicked() {
                         editor.ui.publish.phase = PublishPhase::Idle;
                         editor.ui.publish.status = None;

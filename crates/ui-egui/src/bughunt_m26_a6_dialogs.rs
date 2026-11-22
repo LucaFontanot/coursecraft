@@ -179,9 +179,9 @@ fn a6_3_shapes_gallery_filtered_close_reopens_full_size() {
 fn a6_4_sweep_other_dialogs_reopen_full_size() {
     let cases: [(&str, &str, &str); 6] = [
         ("Insert", "Web object…", "Insert web object"),
-        ("File", "Slide Size…", "Slide Size"),
+        ("File", "Slide Size…", "Slide size"),
         ("Project", "Theme…", "Theme"),
-        ("Project", "Course Settings", "Course Settings"),
+        ("Project", "Course settings", "Course settings"),
         ("File", "Publish…", "Publish course"),
         ("Edit", "Find and Replace…", "Find and Replace"),
     ];
@@ -226,7 +226,7 @@ fn a6_4_sweep_other_dialogs_reopen_full_size() {
 fn a6_9_fixed_footer_dialogs_on_short_screen_reopen_unclipped() {
     let cases: [(&str, &str, &str); 2] = [
         ("Project", "Theme…", "Theme"),
-        ("Project", "Course Settings", "Course Settings"),
+        ("Project", "Course settings", "Course settings"),
     ];
     for (menu, item, title) in cases {
         let mut h = TestHarness::new_with_size(hello(), (1024.0, 620.0));

@@ -1673,7 +1673,7 @@ fn render_extra_category_items(
 
     if category == "Project" {
         ui.separator();
-        if ui.button("Course Settings").clicked() {
+        if ui.button("Course settings").clicked() {
             editor.ui.show_course_settings_window = true;
             ui.close();
         }

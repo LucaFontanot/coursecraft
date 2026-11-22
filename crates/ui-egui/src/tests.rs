@@ -15969,7 +15969,7 @@ fn export_video_opens_from_the_file_menu() {
         "Export Video dialog opened"
     );
     assert!(
-        harness.find_text("Export Video").is_some(),
+        harness.find_text("Export video").is_some(),
         "dialog title is painted"
     );
 }
@@ -16074,7 +16074,7 @@ fn export_review_menu_items_open_the_dialog_with_the_right_format() {
     assert!(harness.editor.ui.show_export_review, "the dialog opened");
     assert_eq!(harness.editor.ui.review_format, ReviewFormat::Pdf);
     assert!(
-        harness.find_text("Export for Review").is_some(),
+        harness.find_text("Export for review").is_some(),
         "dialog title is painted"
     );
 
@@ -16672,8 +16672,8 @@ fn find_replace_message_clears_after_undo() {
     harness.idle_frame();
 
     let button = harness
-        .find_text("Replace All")
-        .expect("Replace All button");
+        .find_text("Replace all")
+        .expect("Replace all button");
     harness.click_at(button);
     harness.idle_frame();
     assert!(harness.editor.ui.find.message.is_some());
@@ -17216,15 +17216,15 @@ fn version_history_menu_item_is_disabled_without_a_file_and_opens_with_one() {
     assert!(h.find_text("2026-11-11 15:30:45 UTC").is_some());
     assert!(h.find_text("12 slides").is_some());
     assert!(h.find_text("Damaged").is_some());
-    let open = h.find_text("Open as Copy").expect("Open as Copy button");
+    let open = h.find_text("Open as copy").expect("Open as copy button");
     let requests = click_collect(&mut h, open);
     assert!(requests.iter().any(|r| matches!(
         r,
         EditorRequest::OpenVersionCopy { id } if id == "20261111-153045"
     )));
-    // The damaged row can only be deleted: one Open as Copy button in all.
+    // The damaged row can only be deleted: one Open as copy button in all.
     h.idle_frame();
-    assert_eq!(h.find_texts("Open as Copy").len(), 1);
+    assert_eq!(h.find_texts("Open as copy").len(), 1);
     assert_eq!(h.find_texts("Delete").len(), 2);
 }
 

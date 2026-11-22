@@ -131,7 +131,7 @@ fn open_layer_settings_first(editor: &mut Editor) {
 
 /// Every window and dialog the editor can open, by `--window` name.
 pub const WINDOWS: &[WindowSpec] = &[
-    window!("course-settings", "Course Settings", |e| {
+    window!("course-settings", "Course settings", |e| {
         e.ui.show_course_settings_window = true;
     }),
     window!("theme", "Theme", |e| e.ui.show_theme_window = true),
@@ -172,7 +172,7 @@ pub const WINDOWS: &[WindowSpec] = &[
     window!("crash", "CourseCraft closed unexpectedly", |e| {
         e.set_crash_note(Some("The editor closed while saving.".to_owned()));
     }),
-    window!("version-history", "Version History", |e| {
+    window!("version-history", "Version history", |e| {
         e.set_project_has_file(true);
         e.show_version_history(Vec::new());
     }),
@@ -181,8 +181,8 @@ pub const WINDOWS: &[WindowSpec] = &[
         e.file_ops_available = true;
         e.open_publish_dialog();
     }),
-    window!("export-video", "Export Video", |e| e.open_export_dialog()),
-    window!("export-review", "Export for Review", |e| {
+    window!("export-video", "Export video", |e| e.open_export_dialog()),
+    window!("export-review", "Export for review", |e| {
         e.open_export_review(crate::ReviewFormat::Pdf);
     }),
     window!("export-translation", "Export Translation", |e| {
@@ -204,8 +204,8 @@ pub const WINDOWS: &[WindowSpec] = &[
     window!("web", "Insert web object", |e| e.ui.show_web_window = true),
     window!("outline", "Slides from Outline", |e| e
         .open_outline_dialog()),
-    window!("find", "Find and Replace", crate::find::open),
-    window!("slide-size", "Slide Size", |e| e.open_slide_size_dialog()),
+    window!("find", "Find and replace", crate::find::open),
+    window!("slide-size", "Slide size", |e| e.open_slide_size_dialog()),
     window!("alt-text", "Suggest Alt Text", |e| e.open_alt_text_dialog()),
     window!("translate", "Translate with AI", |e| {
         e.open_translate_dialog();

@@ -19,8 +19,11 @@ use serde_json::{Value as Json, json};
 use crate::dialog::{Dialog, Form};
 use crate::{Editor, EditorRequest};
 
-/// Colour of the wavy line drawn under a misspelled word.
-pub const SQUIGGLE_COLOR: Color32 = Color32::from_rgb(224, 74, 74);
+/// Theme-aware colour of the wavy line drawn under a misspelled word.
+#[must_use]
+pub fn squiggle_color(ctx: &egui::Context) -> Color32 {
+    coursecraft_render::palette(ctx).danger
+}
 
 /// One misspelling with the screen rects of its underline. A word that wraps
 /// onto two rows has one rect per row.
@@ -478,6 +481,7 @@ pub fn open(editor: &mut Editor) {
 /// Escape closes the window before the canvas can act on it.
 pub fn consume_escape(editor: &mut Editor, ctx: &egui::Context) {
     if editor.ui.spell_check.open
+        && !egui::Popup::is_any_open(ctx)
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
         editor.ui.spell_check.open = false;
@@ -632,7 +636,7 @@ pub fn show_spelling_window(editor: &mut Editor, ctx: &egui::Context) {
     let mut open = true;
     let mut action = WindowAction::None;
     let mut change_to = editor.ui.spell_check.change_to.clone();
-    Dialog::new("Check Spelling")
+    Dialog::new("Check spelling")
         .width(520.0)
         .open(&mut open)
         .show(ctx, |ui| {
@@ -705,7 +709,7 @@ fn window_body(
     job.append(
         snippet.get(highlight.clone()).unwrap_or(""),
         0.0,
-        TextFormat::simple(font.clone(), SQUIGGLE_COLOR),
+        TextFormat::simple(font.clone(), squiggle_color(ui.ctx())),
     );
     job.append(
         snippet.get(highlight.end..).unwrap_or(""),
@@ -740,16 +744,16 @@ fn window_body(
         if ui.button("Change").clicked() {
             *action = WindowAction::Change;
         }
-        if ui.button("Change All").clicked() {
+        if ui.button("Change all").clicked() {
             *action = WindowAction::ChangeAll;
         }
         if ui.button("Ignore").clicked() {
             *action = WindowAction::Ignore;
         }
-        if ui.button("Ignore All").clicked() {
+        if ui.button("Ignore all").clicked() {
             *action = WindowAction::IgnoreAll;
         }
-        if ui.button("Add to Dictionary").clicked() {
+        if ui.button("Add to dictionary").clicked() {
             *action = WindowAction::Add;
         }
         if ui.button("Close").clicked() {
