@@ -54,3 +54,15 @@ pub(crate) fn recorded_scrolls(ctx: &Context) -> Vec<ScrollRecord> {
             .unwrap_or_default()
     })
 }
+
+/// The scroll viewports recorded during the current or just-completed pass.
+#[cfg(test)]
+pub(crate) fn last_recorded_scrolls(ctx: &Context) -> Vec<ScrollRecord> {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data(|d| {
+        d.get_temp::<(u64, Vec<ScrollRecord>)>(scrolls_id())
+            .filter(|(p, _)| *p == pass || p.saturating_add(1) == pass)
+            .map(|(_, v)| v)
+            .unwrap_or_default()
+    })
+}

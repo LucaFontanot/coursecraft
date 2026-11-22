@@ -273,7 +273,9 @@ impl DialogUi<'_> {
         let height = (self.max_body_height - above).max(60.0);
         self.ui
             .scope(|ui| {
-                ui.set_max_height(height);
+                if ui.available_height() > height {
+                    ui.set_max_height(height);
+                }
                 if fixed_width {
                     ui.set_min_width(ui.available_width());
                 }

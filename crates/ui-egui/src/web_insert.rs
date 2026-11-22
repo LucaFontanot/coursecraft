@@ -59,7 +59,7 @@ pub fn show_web_insert_window(
     }
     let mut open = true;
     let mut close = false;
-    Dialog::new("Insert Web Object")
+    Dialog::new("Insert web object")
         .open(&mut open)
         .show(ctx, |ui| {
             ui.heading("Web address");
@@ -71,13 +71,26 @@ pub fn show_web_insert_window(
                     .id_salt("web_insert_url")
                     .hint_text("https://example.com"),
             );
+            let is_empty = editor.ui.web_url.trim().is_empty();
+            let url_valid = coursecraft_course::is_valid_web_url(editor.ui.web_url.trim());
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 close = try_insert_url(editor);
             }
-            if let Some(error) = &editor.ui.web_error {
+            if !is_empty && !url_valid {
+                ui.colored_label(
+                    coursecraft_render::palette(ui.ctx()).danger,
+                    "Enter an https:// address with a host, or choose a folder below.",
+                );
+            } else if let Some(error) = &editor.ui.web_error {
                 ui.colored_label(coursecraft_render::palette(ui.ctx()).danger, error);
             }
-            if ui.button("Insert address").clicked() {
+            if ui
+                .add_enabled(url_valid, egui::Button::new("Insert address"))
+                .on_disabled_hover_text(
+                    "Enter a valid https:// address (for example, https://example.com)",
+                )
+                .clicked()
+            {
                 close = try_insert_url(editor);
             }
 
@@ -86,7 +99,7 @@ pub fn show_web_insert_window(
             #[cfg(not(target_arch = "wasm32"))]
             {
                 ui.label("Copy HTML, CSS, JavaScript and media from a folder into this project.");
-                if ui.button("Choose Folder…").clicked() {
+                if ui.button("Choose folder…").clicked() {
                     _requests.push(EditorRequest::PickWebFolder);
                     close = true;
                 }

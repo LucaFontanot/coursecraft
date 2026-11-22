@@ -250,6 +250,8 @@ mod u10_timeline_layers_tests;
 #[cfg(test)]
 mod u11_triggers_vars_question_tests;
 #[cfg(test)]
+mod u12_media_fonts_styles_galleries_tests;
+#[cfg(test)]
 mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;

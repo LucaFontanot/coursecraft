@@ -7,8 +7,8 @@ use crate::dialog::Dialog;
 use coursecraft_course::{MediaReference, media_references};
 use coursecraft_render::{Icon, MediaView, RADIUS_SM, SIZE_SMALL, icon, palette};
 use egui::{
-    Align, Align2, Button, Color32, ComboBox, Context, FontFamily, FontId, Grid, Label, Layout,
-    Rect, RichText, ScrollArea, Sense, TextEdit, Ui, pos2, vec2,
+    Align, Align2, Button, Color32, Context, FontFamily, FontId, Grid, Label, Layout, Rect,
+    RichText, ScrollArea, Sense, TextEdit, Ui, pos2, vec2,
 };
 
 use crate::{Editor, EditorRequest, MemoryMediaSource};
@@ -106,13 +106,17 @@ pub fn show_media_library(editor: &mut Editor, ctx: &Context) {
     }
     let mut open = true;
     let mut action = None;
-    Dialog::new("Media Library")
+    let has_confirm = editor.ui.media_library.confirm.is_some();
+    Dialog::new("Media library")
         .id(egui::Id::unique("media_library_window"))
         .open(&mut open)
-        .default_size(vec2(720.0, 480.0))
+        .close_on_escape(!has_confirm)
+        .default_size(vec2(720.0, 560.0))
         .resizable(true)
-        .show(ctx, |ui| {
-            action = window_body(editor, ui);
+        .show_with_footer(ctx, |dialog| {
+            dialog.body_unscrolled(|ui| {
+                action = window_body(editor, ui);
+            });
         });
     editor.ui.show_media_library = open;
     if !open {
@@ -158,6 +162,8 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
         let insert = ui.add_enabled(insertable && has_slide, Button::new("Insert on slide"));
         let insert = if editor.ui.master_view {
             insert.on_disabled_hover_text("Not available in Master View")
+        } else if !has_slide {
+            insert.on_disabled_hover_text("Select a slide first")
         } else if !insertable {
             insert.on_disabled_hover_text("Select an image, audio, video or Lottie file")
         } else {
@@ -173,10 +179,12 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
             selected.is_some() && desktop_file_ops,
             Button::new("Replace file…"),
         );
-        let replace = if desktop_file_ops {
-            replace
-        } else {
+        let replace = if !desktop_file_ops {
             replace.on_disabled_hover_text("Available in the desktop app")
+        } else if selected.is_none() {
+            replace.on_disabled_hover_text("Select a file to replace")
+        } else {
+            replace
         };
         if replace.clicked()
             && let Some(src) = selected.clone()
@@ -188,7 +196,9 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
             editor.media.iter().any(|(name, _)| name == src) && used_count(&references, src) == 0
         });
         let delete = ui.add_enabled(selected_unused, Button::new("Delete"));
-        let delete = if selected.is_some() && !selected_unused {
+        let delete = if selected.is_none() {
+            delete.on_disabled_hover_text("Select an unused file to delete")
+        } else if !selected_unused {
             delete.on_disabled_hover_text("Delete is only available for files nothing uses")
         } else {
             delete
@@ -205,6 +215,7 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
             .any(|(src, _)| used_count(&references, src) == 0);
         if ui
             .add_enabled(has_unused, Button::new("Delete unused"))
+            .on_disabled_hover_text("Every file is used")
             .clicked()
         {
             action = Some(Action::DeleteUnused);
@@ -219,7 +230,7 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
                 .desired_width(240.0),
         );
         ui.label("Kind");
-        ComboBox::from_id_salt("media_library_kind")
+        crate::widgets::styled_combo(ui, "media_library_kind", 120.0)
             .selected_text(editor.ui.media_library.kind.label())
             .show_ui(ui, |ui| {
                 for kind in MediaKindFilter::ALL {
@@ -237,74 +248,115 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
         .map(|(src, bytes)| (src.clone(), bytes.len(), kind_for(src)))
         .collect();
 
-    ui.add_space(4.0);
-    ScrollArea::vertical()
-        .id_salt("media_library_table")
-        .auto_shrink([false, false])
-        .max_height(260.0)
-        .show(ui, |ui| {
-            Grid::new("media_library_rows")
-                .num_columns(5)
-                .striped(true)
-                .spacing([12.0, 6.0])
-                .show(ui, |ui| {
-                    ui.label("");
-                    ui.strong("Name");
-                    ui.strong("Kind");
-                    ui.strong("Size");
-                    ui.strong("Used by");
-                    ui.end_row();
-                    for (src, size, kind) in &rows {
-                        if kind_filter != MediaKindFilter::All && *kind != kind_filter {
-                            continue;
-                        }
-                        if !filter.is_empty() && !src.to_ascii_lowercase().contains(&filter) {
-                            continue;
-                        }
-                        let thumb_resp = paint_thumbnail(editor, ui, src, *kind);
-                        let name_resp = ui.selectable_label(
-                            selected.as_deref() == Some(src.as_str()),
-                            src.as_str(),
-                        );
-                        let kind_resp = ui.add(Label::new(kind.label()).sense(Sense::click()));
-                        let size_resp =
-                            ui.add(Label::new(format_size(*size)).sense(Sense::click()));
-                        let used_resp = ui.add(
-                            Label::new(format!("Used by {}", used_count(&references, src)))
-                                .sense(Sense::click()),
-                        );
-                        let row_clicked = thumb_resp.clicked()
-                            || name_resp.clicked()
-                            || kind_resp.clicked()
-                            || size_resp.clicked()
-                            || used_resp.clicked();
-                        let row_double_clicked = thumb_resp.double_clicked()
-                            || name_resp.double_clicked()
-                            || kind_resp.double_clicked()
-                            || size_resp.double_clicked()
-                            || used_resp.double_clicked();
-                        if row_clicked {
-                            editor.ui.media_library.selected = Some(src.clone());
-                            selected = Some(src.clone());
-                        }
-                        if row_double_clicked && insert_kind(*kind) && has_slide {
-                            editor.ui.media_library.selected = Some(src.clone());
-                            selected = Some(src.clone());
-                            action = Some(Action::Insert(src.clone()));
-                        }
-                        ui.end_row();
-                    }
-                });
-        });
+    let selected_places: Vec<MediaReference> = editor
+        .ui
+        .media_library
+        .selected
+        .as_deref()
+        .map(|src| {
+            references
+                .iter()
+                .filter(|reference| reference_matches(&reference.src, src))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let places_reserve = if editor.media.is_empty() { 0.0 } else { 148.0 };
+    let footer_reserve = 58.0;
+    let table_height = (ui.available_height() - places_reserve - footer_reserve).max(120.0);
 
     ui.add_space(4.0);
-    if let Some(src) = editor.ui.media_library.selected.clone() {
-        let places: Vec<MediaReference> = references
-            .iter()
-            .filter(|reference| reference_matches(&reference.src, &src))
-            .cloned()
-            .collect();
-        if places.is_empty() {
+    if rows.is_empty() {
+        let empty_msg = if desktop_file_ops {
+            "No media files in this course yet. Use Import… to add images, audio, video, or fonts."
+        } else {
+            "No media files in this course yet. Insert images, audio, or video on a slide to add them here."
+        };
+        ui.label(RichText::new(empty_msg).color(p.text_secondary));
+        ui.add_space(4.0);
+    } else {
+        ScrollArea::vertical()
+            .id_salt("media_library_table")
+            .auto_shrink([false, false])
+            .min_scrolled_height(table_height)
+            .max_height(table_height)
+            .show(ui, |ui| {
+                #[cfg(test)]
+                crate::scroll_audit::record_scroll(
+                    ui.ctx(),
+                    ui.layer_id(),
+                    ui.clip_rect(),
+                    true,
+                    false,
+                );
+                let name_max_w = (ui.available_width() - 260.0).max(160.0);
+                Grid::new("media_library_rows")
+                    .num_columns(5)
+                    .striped(true)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("");
+                        ui.strong("Name");
+                        ui.strong("Kind");
+                        ui.strong("Size");
+                        ui.strong("Used by");
+                        ui.end_row();
+                        for (src, size, kind) in &rows {
+                            if kind_filter != MediaKindFilter::All && *kind != kind_filter {
+                                continue;
+                            }
+                            if !filter.is_empty() && !src.to_ascii_lowercase().contains(&filter) {
+                                continue;
+                            }
+                            let thumb_resp = paint_thumbnail(editor, ui, src, *kind);
+                            let name_resp = ui
+                                .scope(|ui| {
+                                    ui.set_max_width(name_max_w);
+                                    ui.add(
+                                        Button::selectable(
+                                            selected.as_deref() == Some(src.as_str()),
+                                            src.as_str(),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text(src.as_str())
+                                })
+                                .inner;
+                            let kind_resp = ui.add(Label::new(kind.label()).sense(Sense::click()));
+                            let size_resp =
+                                ui.add(Label::new(format_size(*size)).sense(Sense::click()));
+                            let used_resp = ui.add(
+                                Label::new(format!("Used by {}", used_count(&references, src)))
+                                    .sense(Sense::click()),
+                            );
+                            let row_clicked = thumb_resp.clicked()
+                                || name_resp.clicked()
+                                || kind_resp.clicked()
+                                || size_resp.clicked()
+                                || used_resp.clicked();
+                            let row_double_clicked = thumb_resp.double_clicked()
+                                || name_resp.double_clicked()
+                                || kind_resp.double_clicked()
+                                || size_resp.double_clicked()
+                                || used_resp.double_clicked();
+                            if row_clicked {
+                                editor.ui.media_library.selected = Some(src.clone());
+                                selected = Some(src.clone());
+                            }
+                            if row_double_clicked && insert_kind(*kind) && has_slide {
+                                editor.ui.media_library.selected = Some(src.clone());
+                                selected = Some(src.clone());
+                                action = Some(Action::Insert(src.clone()));
+                            }
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+
+    ui.add_space(4.0);
+    if editor.ui.media_library.selected.is_some() {
+        if selected_places.is_empty() {
             ui.label(RichText::new("Nothing uses this file yet.").color(p.text_secondary));
         } else {
             ui.label(RichText::new("Places using this file").strong());
@@ -312,7 +364,15 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
                 .id_salt("media_library_places")
                 .max_height(120.0)
                 .show(ui, |ui| {
-                    for reference in places {
+                    #[cfg(test)]
+                    crate::scroll_audit::record_scroll(
+                        ui.ctx(),
+                        ui.layer_id(),
+                        ui.clip_rect(),
+                        true,
+                        false,
+                    );
+                    for reference in selected_places {
                         if ui.button(&reference.place).clicked() {
                             go_to_place(editor, &reference);
                         }

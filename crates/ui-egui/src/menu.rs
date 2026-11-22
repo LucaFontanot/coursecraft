@@ -786,7 +786,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 editor.toggle_master_view();
                 ui.close();
             }
-            ui.checkbox(&mut editor.ui.show_media_library, "Media Library");
+            ui.checkbox(&mut editor.ui.show_media_library, "Media library");
             ui.separator();
             ui.menu_button("Theme", |ui| {
                 let current = editor.theme_pref;

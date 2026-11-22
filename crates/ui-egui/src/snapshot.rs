@@ -191,17 +191,17 @@ pub const WINDOWS: &[WindowSpec] = &[
     window!("translation-report", "Translation Import Report", |e| {
         e.set_translation_report("Applied 3 unit(s).\nMissing target: s-intro.title");
     }),
-    window!("media-library", "Media Library", |e| {
+    window!("media-library", "Media library", |e| {
         e.ui.show_media_library = true;
     }),
     window!("fonts", "Fonts", |e| e.ui.show_fonts_window = true),
     window!("shape-gallery", "Shapes", |e| {
         e.ui.show_shape_gallery_window = true;
     }),
-    window!("interaction-gallery", "Insert Interaction", |e| {
+    window!("interaction-gallery", "Insert interaction", |e| {
         e.ui.show_interaction_gallery = true;
     }),
-    window!("web", "Insert Web Object", |e| e.ui.show_web_window = true),
+    window!("web", "Insert web object", |e| e.ui.show_web_window = true),
     window!("outline", "Slides from Outline", |e| e
         .open_outline_dialog()),
     window!("find", "Find and Replace", crate::find::open),

@@ -189,18 +189,22 @@ pub fn show_manage_styles_window(editor: &mut crate::Editor, ctx: &Context) {
     if !manage_open(ctx) {
         return;
     }
+    let mut open = true;
     let mut close = false;
     let mut actions: Vec<Action> = Vec::new();
-    Dialog::new("Text styles").width(340.0).show(ctx, |ui| {
-        let styles = &editor.session.course.text_styles;
-        if styles.is_empty() {
-            ui.label(
-                "No text styles yet. Select a text box and choose \"New style from selection\".",
-            );
-        }
-        egui::ScrollArea::vertical()
-            .max_height(320.0)
-            .show(ui, |ui| {
+    Dialog::new("Text styles")
+        .open(&mut open)
+        .width(360.0)
+        .default_size(egui::vec2(360.0, 360.0))
+        .resizable(true)
+        .show_with_footer(ctx, |dialog| {
+            dialog.body(|ui| {
+                let styles = &editor.session.course.text_styles;
+                if styles.is_empty() {
+                    ui.label(
+                        "No text styles yet. Select a text box and choose \"New style from selection\".",
+                    );
+                }
                 for named in styles {
                     ui.horizontal(|ui| {
                         let key = Id::unique(("text_style_name", &named.id));
@@ -217,15 +221,16 @@ pub fn show_manage_styles_window(editor: &mut crate::Editor, ctx: &Context) {
                     });
                 }
             });
-        ui.add_space(8.0);
-        if crate::primary_button(ui, "Close").clicked() {
-            close = true;
-        }
-    });
+            dialog.footer(|ui| {
+                if crate::primary_button(ui, "Close").clicked() {
+                    close = true;
+                }
+            });
+        });
     for (id, params) in actions {
         editor.run(id, params);
     }
-    if close {
+    if close || !open {
         set_manage_open(ctx, false);
     }
 }

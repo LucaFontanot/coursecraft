@@ -34,7 +34,7 @@ fn insert_interaction_reopens_full_size_after_picking_an_item() {
     let mut h = TestHarness::new(hello());
     h.idle_frame();
     open_insert_interaction(&mut h);
-    let first_rect = dialog_rect(&h, "Insert Interaction");
+    let first_rect = dialog_rect(&h, "Insert interaction");
     assert!(
         first_rect.width() >= 700.0 && first_rect.height() >= 300.0,
         "first open should be full size, got {first_rect:?}"
@@ -46,7 +46,7 @@ fn insert_interaction_reopens_full_size_after_picking_an_item() {
     assert!(!h.editor.ui.show_interaction_gallery);
 
     open_insert_interaction(&mut h);
-    let second_rect = dialog_rect(&h, "Insert Interaction");
+    let second_rect = dialog_rect(&h, "Insert interaction");
     assert!(
         second_rect.width() >= 700.0 && second_rect.height() >= 300.0,
         "second open should be full size (first={first_rect:?}, second={second_rect:?})"
@@ -58,7 +58,7 @@ fn insert_interaction_reopens_full_size_after_picking_an_item() {
     assert!(!h.editor.ui.show_interaction_gallery);
 
     open_insert_interaction(&mut h);
-    let third_rect = dialog_rect(&h, "Insert Interaction");
+    let third_rect = dialog_rect(&h, "Insert interaction");
     assert!(
         third_rect.width() >= 700.0 && third_rect.height() >= 300.0,
         "third open should be full size (third={third_rect:?})"

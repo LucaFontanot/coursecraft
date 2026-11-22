@@ -7454,7 +7454,7 @@ fn showcase_media_library_harness() -> TestHarness {
 #[test]
 fn media_library_lists_showcase_files_and_usage_counts() {
     let mut harness = showcase_media_library_harness();
-    assert!(harness.find_text("Media Library").is_some());
+    assert!(harness.find_text("Media library").is_some());
     for name in ["banner.png", "chime.wav", "floorplan.png", "intro.mp4"] {
         assert!(
             harness.find_text(name).is_some(),
@@ -7614,8 +7614,8 @@ fn view_menu_toggles_the_media_library_window() {
     harness.click_at(view);
     harness.idle_frame();
     let media_library = harness
-        .find_text("Media Library")
-        .expect("Media Library item");
+        .find_text("Media library")
+        .expect("Media library item");
     harness.click_at(media_library);
     assert!(harness.editor.ui.show_media_library);
 }
