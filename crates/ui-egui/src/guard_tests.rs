@@ -431,3 +431,115 @@ fn timeline_idle_frames_reuse_cached_lists() {
         "timeline must reuse cached object and cue lists on idle repaints"
     );
 }
+
+/// PERF-02: Slide with 50 objects × 6 states × 4 extras (all visible) completes
+/// compose + paint on SlideView without panics, and idle editor frames perform
+/// zero course copies, zero thumbnail redraws, zero slide clones, and zero decodes.
+#[test]
+fn perf02_fifty_object_stateful_slide_bounded_work() {
+    let mut objects = Vec::with_capacity(50);
+    let state_names = ["hover", "down", "selected", "visited", "custom1"];
+    for i in 0..50 {
+        let col = i % 10;
+        let row = i / 10;
+        let x = 20.0 + (col as f32) * 120.0;
+        let y = 20.0 + (row as f32) * 130.0;
+        let mut states = Vec::with_capacity(state_names.len());
+        for sname in state_names {
+            let mut extras = Vec::with_capacity(4);
+            for e in 0..4 {
+                extras.push(serde_json::json!({
+                    "id": format!("ex-{i}-{sname}-{e}"),
+                    "name": format!("Extra {e}"),
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rounded_rectangle",
+                        "fill": "#2563EB",
+                        "text": { "text": format!("E{e}") }
+                    },
+                    "frame": { "x": (e as f32) * 12.0, "y": -10.0, "w": 24.0, "h": 20.0 }
+                }));
+            }
+            states.push(serde_json::json!({
+                "name": sname,
+                "fill": "#1D4ED8",
+                "extras": extras
+            }));
+        }
+        objects.push(serde_json::json!({
+            "id": format!("obj-{i}"),
+            "kind": {
+                "type": "shape",
+                "shape": "rounded_rectangle",
+                "fill": "#E2E8F0",
+                "text": { "text": format!("Card {i}") }
+            },
+            "frame": { "x": x, "y": y, "w": 100.0, "h": 90.0 },
+            "states": states
+        }));
+    }
+    let course_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "perf02-stateful",
+        "title": "Perf02 Stateful",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [{
+                "id": "s0",
+                "title": "50 Stateful Objects",
+                "objects": objects
+            }]
+        }]
+    });
+    let course = Course::from_json(&course_json.to_string()).expect("perf02 course parses");
+
+    // 1. Editor idle frames must do zero counted work even on a 50-object stateful slide.
+    let mut h = TestHarness::new(course.clone());
+    h.editor.selection.slide = "s0".into();
+    for _ in 0..10 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    for _ in 0..10 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(gc::course_copies(), 0, "idle frames copy no course");
+    assert_eq!(
+        gc::thumbnail_redraws(),
+        0,
+        "settled thumbnails are not redrawn"
+    );
+    assert_eq!(gc::slide_clones(), 0, "idle frames clone no slide");
+    assert_eq!(picture_decodes(), 0, "idle frames decode no pictures");
+
+    // 2. Player SlideView compose + paint over 5 frames with hover transitions completes
+    // cleanly with zero picture decodes and zero panics.
+    let mut player = coursecraft_logic::Player::new(&course).expect("player starts");
+    player.handle(&coursecraft_logic::Input::Start);
+    let mut view = coursecraft_render::SlideView::new();
+    let ctx = egui::Context::default();
+    reset_counts();
+    for step in 0..5 {
+        let px = 70.0 + (step as f32) * 120.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            events: vec![Event::PointerMoved(pos2(px, 65.0))],
+            time: Some((step as f64) * 0.016),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            let _ = view.show(ui, &player, None);
+        });
+        out.textures_delta.clear();
+    }
+    assert_eq!(
+        picture_decodes(),
+        0,
+        "vector/text stateful objects decode zero pictures"
+    );
+}

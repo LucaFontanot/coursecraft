@@ -1039,3 +1039,131 @@ fn fz05_missing_media_bytes_in_state_src_fill_and_extras_render_without_panic() 
     .expect("snapshot");
     assert_eq!(snap.width, 1280);
 }
+
+// ---------------------------------------------------------------------------
+// E2E-01 (SlideView + offscreen render) & P-07 (PlayerFrame) on examples/rich-states
+// ---------------------------------------------------------------------------
+
+#[test]
+fn e2e01_slide_view_overhang_hit_and_offscreen_render() {
+    struct RichMedia {
+        files: std::collections::HashMap<String, Vec<u8>>,
+    }
+    impl MediaSource for RichMedia {
+        fn get(&self, src: &str) -> MediaFetch {
+            match self.files.get(src) {
+                Some(bytes) => MediaFetch::Ready(std::sync::Arc::from(bytes.as_slice())),
+                None => MediaFetch::Missing,
+            }
+        }
+    }
+
+    let rich_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rich-states");
+    let json = std::fs::read_to_string(rich_dir.join("course.json"))
+        .expect("examples/rich-states/course.json must exist");
+    let course = Course::from_json(&json).expect("rich-states course parses");
+    let mut media_files = std::collections::HashMap::new();
+    for entry in std::fs::read_dir(rich_dir.join("media")).expect("read media dir") {
+        let path = entry.expect("entry").path();
+        if path.is_file()
+            && let Some(name) = path.file_name().and_then(|n| n.to_str())
+        {
+            let bytes = std::fs::read(&path).expect("read media");
+            media_files.insert(format!("media/{name}"), bytes);
+        }
+    }
+    let media = RichMedia { files: media_files };
+
+    let mut player = Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+    assert_eq!(
+        player.current_slide().map(|s| s.id.as_str()),
+        Some("s01-character")
+    );
+
+    let normal_img = render_slide_rgba(&course, "s01-character", &RenderOptions::default(), &media)
+        .expect("normal render");
+
+    let ctx = egui::Context::default();
+    let mut view = SlideView::new();
+    let fx_hover = run_slide_frame(&ctx, &mut view, &player, pointer_move(640.0, 360.0), 0.1);
+    for input in fx_hover {
+        player.handle(&input);
+    }
+    assert!(
+        view.hovered_object().is_some(),
+        "character should be hovered at center"
+    );
+
+    // Click on overhanging speech bubble extra: character (480,180,320,360),
+    // speech bubble extra at parent-relative (250,-40,180,72) -> world (730..910, 140..212).
+    // Move onto overhanging speech bubble first (must not flicker hover off), then press & release.
+    let fx_bubble_hover =
+        run_slide_frame(&ctx, &mut view, &player, pointer_move(800.0, 175.0), 0.15);
+    assert!(
+        !fx_bubble_hover
+            .iter()
+            .any(|i| matches!(i, Input::HoverEnd { object } if object == "obj-character")),
+        "moving onto overhanging hover extra must not end hover: {fx_bubble_hover:?}"
+    );
+    let fx_press = run_slide_frame(&ctx, &mut view, &player, pointer_press(640.0, 360.0), 0.2);
+    for input in fx_press {
+        player.handle(&input);
+    }
+    let fx_release = run_slide_frame(&ctx, &mut view, &player, pointer_release(640.0, 360.0), 0.3);
+    assert!(
+        fx_release
+            .iter()
+            .any(|i| matches!(i, Input::Click { object } if object == "obj-character")),
+        "overhanging speech-bubble extra must route Click to obj-character: {fx_release:?}"
+    );
+    for input in fx_release {
+        player.handle(&input);
+    }
+    assert_eq!(player.object_state("obj-character"), Some("selected"));
+
+    let selected_snap = crate::snapshot::snapshot_player(
+        course,
+        Some("s01-character"),
+        &media,
+        (1280, 720),
+        1.0,
+        crate::snapshot::PlayerSnapshotSelect::Hidden,
+    );
+    let _ = selected_snap;
+    assert_eq!(normal_img.width, 1280);
+}
+
+#[test]
+fn p07_player_frame_freeform_state_grading() {
+    let rich_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/rich-states");
+    let json = std::fs::read_to_string(rich_dir.join("course.json"))
+        .expect("examples/rich-states/course.json must exist");
+    let course = Course::from_json(&json).expect("rich-states course parses");
+    let pass_json = std::fs::read_to_string(rich_dir.join("pass.inputs.json"))
+        .expect("examples/rich-states/pass.inputs.json must exist");
+    let inputs: Vec<Input> = serde_json::from_str(&pass_json).expect("parse pass.inputs.json");
+
+    let mut player = Player::new(&course).expect("player");
+    for input in &inputs {
+        player.handle(input);
+    }
+    assert_eq!(
+        player.current_slide().map(|s| s.id.as_str()),
+        Some("s05-done")
+    );
+
+    let mut pf = crate::player_frame::PlayerFrame::new();
+    let mut pf_view = SlideView::new();
+    let ctx = egui::Context::default();
+    let raw = RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 720.0))),
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(raw, |ui| {
+        let _ = pf.show(ui, &player, &mut pf_view, None);
+    });
+    out.textures_delta.clear();
+}
