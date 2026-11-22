@@ -312,6 +312,9 @@ From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Sugges
 2. **Wider states and canvas state editing:** a state can change fill style, outline, text style, opacity, shadow, glow, crop, rotation and flips, not only fill, text and image (backward-compatible fields, one undoable `object.patch_state`). An edit-state mode on the canvas sends normal toolbar and inspector edits into the active state, shows which properties the state overrides and lets each be reset. (4–5 steps)
 3. **Items inside a state:** a state can add its own shapes, images, text or icons (a check mark on a visited button, a new face on a character), positioned relative to the object, drawn and hit-tested as part of it, included in publish, the web player and translation export. (4–5 steps)
 
+- Contributions from Luca: seekbar behaviour and the web Play button.
+- Released as 0.4.0.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
