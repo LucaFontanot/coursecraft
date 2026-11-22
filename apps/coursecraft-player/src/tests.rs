@@ -605,3 +605,94 @@ fn player_drawer_clips_to_player_area_at_letterboxed_and_fullscreen_sizes() {
         check_shapes(&shapes_end, "end frame");
     }
 }
+
+#[test]
+fn player_scales_letterboxes_and_places_drawer_and_log_panel_across_window_sizes() {
+    let raw_course = include_str!("../../../examples/hello-course/course.json");
+    for size in [
+        egui::vec2(480.0, 800.0),   // narrow portrait
+        egui::vec2(1920.0, 720.0),  // ultrawide letterboxed horizontally
+        egui::vec2(1280.0, 720.0),  // exact 16:9
+        egui::vec2(2560.0, 1440.0), // large 16:9
+    ] {
+        let course = Course::from_json(raw_course).expect("valid hello course");
+        let mut playing = Playing::from_course(course, false).expect("valid playing");
+        playing.handle_input(&Input::Start, None);
+
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
+        let mut time = 0.1;
+
+        fn step(
+            ctx: &egui::Context,
+            playing: &mut Playing,
+            screen: egui::Rect,
+            time: &mut f64,
+            dt: f64,
+            events: Vec<egui::Event>,
+        ) {
+            *time += dt;
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(*time),
+                events,
+                ..Default::default()
+            };
+            let full = ctx.run_ui(raw, |ui| {
+                playing.show_ui(ui);
+            });
+            full.drop_without_applying_deltas();
+        }
+
+        step(&ctx, &mut playing, screen, &mut time, 0.0, Vec::new());
+        let slide_rect = playing.frame.slide_rect().expect("slide_rect");
+        assert!(
+            slide_rect.left() >= screen.left() - 0.5
+                && slide_rect.right() <= screen.right() + 0.5
+                && slide_rect.top() >= screen.top() - 0.5
+                && slide_rect.bottom() <= screen.bottom() + 0.5,
+            "{size:?}: slide_rect {slide_rect:?} escaped screen {screen:?}"
+        );
+        let aspect = slide_rect.width() / slide_rect.height();
+        assert!(
+            (aspect - 16.0 / 9.0).abs() < 0.02,
+            "{size:?}: slide_rect should preserve 16:9 aspect without cropping, got {aspect}"
+        );
+
+        // Open the log panel (F2) and outline drawer (M); slide and drawer must follow.
+        step(
+            &ctx,
+            &mut playing,
+            screen,
+            &mut time,
+            0.02,
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::F2,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::Key {
+                    key: egui::Key::M,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        step(&ctx, &mut playing, screen, &mut time, 0.25, Vec::new());
+        let slide_with_log = playing.frame.slide_rect().expect("slide_rect with log");
+        assert!(
+            slide_with_log.width() <= slide_rect.width() + 0.5,
+            "{size:?}: slide should shrink when log panel opens"
+        );
+        let drawer = playing.frame.drawer_rect().expect("drawer rect");
+        assert!(
+            drawer.left() >= screen.left() - 0.5 && drawer.right() <= screen.right() + 0.5,
+            "{size:?}: drawer {drawer:?} escaped screen {screen:?}"
+        );
+    }
+}

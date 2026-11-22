@@ -198,6 +198,8 @@ mod preview_drawer_tests;
 #[cfg(test)]
 mod preview_variables_tests;
 #[cfg(test)]
+mod preview_window_tests;
+#[cfg(test)]
 mod publish_tests;
 #[cfg(test)]
 mod question_panel_tests;
@@ -890,6 +892,8 @@ pub struct UiState {
     /// Open the Text styles window on the next frame (it keeps its open flag in the context).
     pub open_text_styles_window: bool,
     pub preview_state: Option<String>,
+    /// Remembered non-fullscreen preview window size for the current session.
+    pub preview_size: Option<egui::Vec2>,
     pub bottom_tab: BottomTab,
     pub inspector_tab: InspectorTab,
     pub last_selected_object: Option<String>,
@@ -1313,6 +1317,7 @@ impl Editor {
                 show_theme_window: false,
                 open_text_styles_window: false,
                 preview_state: None,
+                preview_size: None,
                 bottom_tab: BottomTab::Timeline,
                 inspector_tab: InspectorTab::Slide,
                 last_selected_object: None,
@@ -2961,7 +2966,9 @@ impl Editor {
     /// falls back to the course's own start slide.
     pub fn open_preview_at(&mut self, slide: Option<&str>) {
         let slide = slide.filter(|id| self.session.course.bank_slide(id).is_none());
-        self.preview = Some(Preview::new(&self.session.course, slide));
+        let mut preview = Preview::new(&self.session.course, slide);
+        preview.set_initial_size(self.ui.preview_size);
+        self.preview = Some(preview);
     }
 
     /// Show a neutral status message in the status bar.
@@ -4291,6 +4298,9 @@ impl Editor {
             if let Some(ref mut preview) = self.preview {
                 let source = MemoryMediaSource { media: &self.media };
                 preview.show(ui.ctx(), &mut open, Some((&mut self.media_cache, &source)));
+                if let Some(size) = preview.remembered_size() {
+                    self.ui.preview_size = Some(size);
+                }
                 requests.append(&mut preview.requests);
             }
             if !open {

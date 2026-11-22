@@ -156,6 +156,7 @@ pub struct PlayerFrame {
     last_ended_small: Option<Rect>,
     last_notice_rect: Option<Rect>,
     last_review_rect: Option<Rect>,
+    last_slide_rect: Option<Rect>,
     /// The learner dismissed the notice, so it stays hidden for the session.
     notice_dismissed: bool,
     /// Keyboard focus order, ring and keyboard-only gestures.
@@ -204,6 +205,7 @@ impl Default for PlayerFrame {
             last_ended_small: None,
             last_notice_rect: None,
             last_review_rect: None,
+            last_slide_rect: None,
             notice_dismissed: false,
             focus: crate::focus::FocusManager::new(),
             last_chrome: Vec::new(),
@@ -230,6 +232,12 @@ impl PlayerFrame {
     #[must_use]
     pub fn drawer_rect(&self) -> Option<Rect> {
         self.last_drawer_rect
+    }
+
+    /// Return the slide rect from the most recent frame, if it was painted.
+    #[must_use]
+    pub fn slide_rect(&self) -> Option<Rect> {
+        self.last_slide_rect
     }
 
     /// Return the completion card rect from the most recent ended frame, if painted.
@@ -604,6 +612,7 @@ impl PlayerFrame {
             covered.push(l.rect);
         }
         let slide_rect = slide_rect(full, player);
+        self.last_slide_rect = Some(slide_rect);
         let close_rect = if player.lightbox_open() {
             crate::view::lightbox_box_rect(slide_rect, player.course().slide_size)
                 .and_then(crate::view::lightbox_close_rect)

@@ -114,6 +114,36 @@ fn queue_prints(
 /// Gap between the slide area and the effect log.
 const LOG_GAP: f32 = 10.0;
 
+/// Backdrop color behind the desktop preview modal (~80% black in both light and dark themes).
+pub const PREVIEW_BACKDROP_COLOR: egui::Color32 = egui::Color32::from_black_alpha(204);
+
+/// Margin kept between the non-fullscreen preview window and the app window edges.
+pub const PREVIEW_MARGIN: f32 = 20.0;
+
+/// Minimum width of the non-fullscreen preview window.
+pub const PREVIEW_MIN_WIDTH: f32 = 480.0;
+
+/// Minimum height of the non-fullscreen preview window.
+pub const PREVIEW_MIN_HEIGHT: f32 = 320.0;
+
+/// Default initial width of the non-fullscreen preview window.
+const PREVIEW_DEFAULT_WIDTH: f32 = 960.0;
+
+/// Default initial height of the non-fullscreen preview window.
+const PREVIEW_DEFAULT_HEIGHT: f32 = 640.0;
+
+/// Inner padding of the preview window frame.
+const PREVIEW_FRAME_PAD: i8 = 10;
+
+/// Outer reach of edge/corner resize grips past the window border.
+const RESIZE_GRIP_OUT: f32 = 4.0;
+
+/// Inner reach of edge resize grips inside the window border.
+const RESIZE_GRIP_IN: f32 = 4.0;
+
+/// Corner grip size along each axis inside the window border.
+const RESIZE_CORNER_IN: f32 = 8.0;
+
 /// Maximum characters shown inline for a text variable in the live variables panel.
 const MAX_TEXT_PREVIEW_CHARS: usize = 24;
 
@@ -164,6 +194,12 @@ pub struct Preview {
     had_text_focus: bool,
     /// Outer rect of the preview window in the last frame (tracked for tests).
     pub window_rect: Option<Rect>,
+    /// Last non-fullscreen preview window rect (position + size).
+    non_fullscreen_rect: Option<Rect>,
+    /// Remembered non-fullscreen size for the current editor session.
+    remembered_size: Option<egui::Vec2>,
+    /// Whether the preview window is currently filling the app window.
+    pub fullscreen: bool,
     /// Cached play order for [`Player::resume_trusted`], updated on open/restart/retry.
     play_plan: Option<PlayPlan>,
 }
@@ -506,6 +542,9 @@ impl Preview {
                 has_focus: true,
                 had_text_focus: false,
                 window_rect: None,
+                non_fullscreen_rect: None,
+                remembered_size: None,
+                fullscreen: false,
                 play_plan: None,
             };
         }
@@ -554,6 +593,9 @@ impl Preview {
                     has_focus: true,
                     had_text_focus: false,
                     window_rect: None,
+                    non_fullscreen_rect: None,
+                    remembered_size: None,
+                    fullscreen: false,
                     play_plan: Some(plan),
                 }
             }
@@ -577,6 +619,9 @@ impl Preview {
                 has_focus: true,
                 had_text_focus: false,
                 window_rect: None,
+                non_fullscreen_rect: None,
+                remembered_size: None,
+                fullscreen: false,
                 play_plan: None,
             },
         }
@@ -587,6 +632,18 @@ impl Preview {
     pub fn with_backend(mut self, backend: Box<dyn MediaBackend>) -> Self {
         self.media.set_backend(backend);
         self
+    }
+
+    /// Seed the initial non-fullscreen size from the editor session.
+    pub fn set_initial_size(&mut self, size: Option<egui::Vec2>) {
+        self.remembered_size = size;
+        self.non_fullscreen_rect = None;
+    }
+
+    /// Last non-fullscreen size, to remember across preview openings in this session.
+    #[must_use]
+    pub fn remembered_size(&self) -> Option<egui::Vec2> {
+        self.remembered_size
     }
 
     /// Whether the preview initialized a valid player runtime.
@@ -708,285 +765,415 @@ impl Preview {
         let mut frame_effects = Vec::new();
         let drawer_was_open = self.frame.drawer_open();
         let text_edit_was_focused = self.had_text_focus || ctx.egui_wants_keyboard_input();
-        let max_width = (ctx.content_rect().width() - 40.0).clamp(320.0, 960.0);
-        let max_height = (ctx.content_rect().height() - 40.0).clamp(240.0, 640.0);
+        let screen_rect = ctx.content_rect();
+        let bounds = preview_bounds(screen_rect);
+        let (min_size, max_size) = preview_size_limits(bounds);
 
-        let modal = egui::Modal::new(Id::unique("preview_modal")).show(ctx, |ui| {
-            ui.set_max_width(max_width);
-            ui.set_max_height(max_height);
-            if !self.errors.is_empty() {
-                self.show_errors(ui);
-                return;
-            }
+        if self.non_fullscreen_rect.is_none() {
+            let initial = self.remembered_size.map_or_else(
+                || {
+                    egui::vec2(
+                        PREVIEW_DEFAULT_WIDTH.clamp(min_size.x, max_size.x),
+                        PREVIEW_DEFAULT_HEIGHT.clamp(min_size.y, max_size.y),
+                    )
+                },
+                |sz| clamp_preview_size(sz, min_size, max_size),
+            );
+            let rect = Rect::from_center_size(bounds.center(), initial);
+            self.non_fullscreen_rect = Some(rect);
+            self.remembered_size = Some(rect.size());
+        } else if let Some(rect) = self.non_fullscreen_rect {
+            let clamped = clamp_preview_rect(rect, bounds, min_size, max_size);
+            self.non_fullscreen_rect = Some(clamped);
+            self.remembered_size = Some(clamped.size());
+        }
 
-            let Some(state) = current_state else {
-                self.show_errors(ui);
-                return;
-            };
-
-            let course = &self.course;
-            let view = &mut self.view;
-            let frame = &mut self.frame;
-            let ticker = &mut self.ticker;
-            let media_driver = &mut self.media;
-            let log = &mut self.log;
-            let show_log = &mut self.show_log;
-            let show_variables = &mut self.show_variables;
-            let referenced_vars = &self.referenced_vars;
-            let last_var_values = &mut self.last_var_values;
-            let var_changed_at = &mut self.var_changed_at;
-            let ended = &mut self.ended;
-
-            let mut player = match resume_with_plan(course, state, self.play_plan.as_ref()) {
-                Ok(p) => p,
-                Err(issues) => {
-                    self.errors = issues;
-                    should_show_errors = true;
-                    return;
-                }
-            };
-
-            // Advance clock ticker
-            let dt = ctx.input(|i| i.stable_dt);
-            if let Some(tick) = ticker.advance(dt) {
-                let effects = player.handle(&tick);
-                record_effects(&effects, log, ended, Some(ctx));
-                frame_effects.extend(effects);
-            }
-
-            // Keyboard shortcut: F2 toggles effect log
-            if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
-                *show_log = !*show_log;
-            }
-            // Keyboard shortcut: F3 toggles live variables
-            if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
-                *show_variables = !*show_variables;
-            }
-
-            // Top controls bar
-            let mut should_restart = false;
-            ui.horizontal(|ui| {
-                if crate::widgets::icon_button(
-                    ui,
-                    coursecraft_render::Icon::ArrowClockwise,
-                    "Restart preview from the first slide",
-                )
-                .clicked()
-                {
-                    should_restart = true;
-                }
-                if crate::widgets::icon_toggle(
-                    ui,
-                    coursecraft_render::Icon::Notepad,
-                    *show_log,
-                    "Effect log (F2)",
-                )
-                .clicked()
-                {
-                    *show_log = !*show_log;
-                }
-                if crate::widgets::icon_toggle(
-                    ui,
-                    coursecraft_render::Icon::BracketsCurly,
-                    *show_variables,
-                    "Variables (F3)",
-                )
-                .clicked()
-                {
-                    *show_variables = !*show_variables;
-                }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if crate::widgets::icon_button(ui, coursecraft_render::Icon::X, "Close preview")
-                        .clicked()
-                    {
-                        close_requested = true;
-                    }
-                });
+        let toggle_fullscreen_key = self.has_focus
+            && !text_edit_was_focused
+            && ctx.input(|i| {
+                i.key_pressed(egui::Key::F11)
+                    || (i.key_pressed(egui::Key::F)
+                        && i.modifiers.ctrl
+                        && i.modifiers.mac_cmd
+                        && !i.modifiers.alt
+                        && !i.modifiers.shift)
             });
-            ui.separator();
+        if toggle_fullscreen_key {
+            self.fullscreen = !self.fullscreen;
+        }
 
-            if should_restart {
-                drop(player);
-                self.restart();
-                return;
-            }
+        let target_rect = if self.fullscreen {
+            screen_rect
+        } else {
+            self.non_fullscreen_rect.unwrap_or(bounds)
+        };
 
-            let is_log_visible = *show_log;
-            let is_vars_visible = *show_variables;
-            let avail = ui.available_size();
-            let (slide_width, side_width) = if is_log_visible || is_vars_visible {
-                let sw = (avail.x * 0.35).clamp(240.0, 400.0);
-                (avail.x - sw - LOG_GAP, Some(sw))
-            } else {
-                (avail.x, None)
-            };
+        let backdrop = egui::Area::new(Id::unique("preview_backdrop"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen_rect.min)
+            .interactable(true)
+            .show(ctx, |ui| {
+                let (rect, response) =
+                    ui.allocate_exact_size(screen_rect.size(), egui::Sense::click());
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::ZERO, PREVIEW_BACKDROP_COLOR);
+                response
+            });
 
-            // The content must take exactly `avail`: any extra pixel (item spacing between
-            // the slide and the log, the separator, row padding) makes the window
-            // auto-grow a little on every frame. Zero the spacing and lay the gaps out
-            // explicitly so the sums are exact.
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-                // Left area: the shared player frame (slide, strip, rule, drawer)
-                ui.allocate_ui_with_layout(
-                    egui::vec2(slide_width, avail.y),
-                    Layout::top_down(Align::Min),
-                    |ui| {
-                        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-                        frame.ended = *ended;
-                        frame.can_speed = media_driver.supports_rate();
-                        let caption = media_driver.caption_frame(
-                            &player,
-                            media.as_ref().map(|(_, source)| *source),
-                            view,
-                        );
-                        media_driver.present_captions(caption.as_ref(), frame.captions_on);
-                        frame.set_caption_frame(if frame.captions_on { caption } else { None });
-                        let combined_holder;
-                        let media_arg = match media.as_mut() {
-                            Some((c, s)) => {
-                                combined_holder = media_driver.as_media_source(*s);
-                                Some((&mut **c, &combined_holder as &dyn MediaSource))
-                            }
-                            None => None,
-                        };
-                        let out: FrameOutput = frame.show(ui, &player, view, media_arg);
-                        crate::content_region::mark_content_region(
-                            ctx,
-                            ui.layer_id(),
-                            out.slide_rect,
-                        );
-                        if let Some(volume) = out.volume {
-                            media_driver.set_volume(volume);
+        let window_area = egui::Area::new(Id::unique("preview_window"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(target_rect.min)
+            .interactable(true)
+            .show(ctx, |ui| {
+                let mut frame = if self.fullscreen {
+                    egui::Frame::central_panel(ui.style())
+                        .inner_margin(egui::Margin::same(PREVIEW_FRAME_PAD))
+                } else {
+                    egui::Frame::window(ui.style())
+                        .inner_margin(egui::Margin::same(PREVIEW_FRAME_PAD))
+                };
+                if self.fullscreen {
+                    frame = frame.corner_radius(egui::CornerRadius::ZERO);
+                }
+                let margin_sum = frame.total_margin().sum();
+                let inner_size = egui::vec2(
+                    (target_rect.width() - margin_sum.x).max(1.0),
+                    (target_rect.height() - margin_sum.y).max(1.0),
+                );
+                frame.show(ui, |ui| {
+                    ui.set_min_size(inner_size);
+                    ui.set_max_size(inner_size);
+                    ui.allocate_ui_with_layout(inner_size, Layout::top_down(Align::Min), |ui| {
+                        if !self.errors.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if crate::widgets::icon_button(
+                                        ui,
+                                        coursecraft_render::Icon::X,
+                                        "Close preview",
+                                    )
+                                    .clicked()
+                                    {
+                                        close_requested = true;
+                                    }
+                                });
+                            });
+                            ui.separator();
+                            self.show_errors(ui);
+                            return;
                         }
-                        for input in out.inputs {
-                            let effects = player.handle(&input);
-                            if matches!(input, Input::SetSpeed { .. }) {
-                                media_driver.set_rate(player.speed());
-                            }
+
+                        let Some(state) = current_state else {
+                            self.show_errors(ui);
+                            return;
+                        };
+
+                        let course = &self.course;
+                        let view = &mut self.view;
+                        let frame = &mut self.frame;
+                        let ticker = &mut self.ticker;
+                        let media_driver = &mut self.media;
+                        let log = &mut self.log;
+                        let show_log = &mut self.show_log;
+                        let show_variables = &mut self.show_variables;
+                        let fullscreen = &mut self.fullscreen;
+                        let referenced_vars = &self.referenced_vars;
+                        let last_var_values = &mut self.last_var_values;
+                        let var_changed_at = &mut self.var_changed_at;
+                        let ended = &mut self.ended;
+
+                        let mut player =
+                            match resume_with_plan(course, state, self.play_plan.as_ref()) {
+                                Ok(p) => p,
+                                Err(issues) => {
+                                    self.errors = issues;
+                                    should_show_errors = true;
+                                    return;
+                                }
+                            };
+
+                        // Advance clock ticker
+                        let dt = ctx.input(|i| i.stable_dt);
+                        if let Some(tick) = ticker.advance(dt) {
+                            let effects = player.handle(&tick);
                             record_effects(&effects, log, ended, Some(ctx));
                             frame_effects.extend(effects);
                         }
-                        if let Some((cache, _)) = media.as_mut() {
-                            for input in cache.lottie_ended(&player) {
-                                let effects = player.handle(&input);
-                                record_effects(&effects, log, ended, Some(ctx));
-                                frame_effects.extend(effects);
+
+                        // Keyboard shortcut: F2 toggles effect log
+                        if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
+                            *show_log = !*show_log;
+                        }
+                        // Keyboard shortcut: F3 toggles live variables
+                        if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
+                            *show_variables = !*show_variables;
+                        }
+
+                        // Top controls bar
+                        let mut should_restart = false;
+                        ui.horizontal(|ui| {
+                            if crate::widgets::icon_button(
+                                ui,
+                                coursecraft_render::Icon::ArrowClockwise,
+                                "Restart preview from the first slide",
+                            )
+                            .clicked()
+                            {
+                                should_restart = true;
                             }
-                        }
-                    },
-                );
+                            if crate::widgets::icon_toggle(
+                                ui,
+                                coursecraft_render::Icon::Notepad,
+                                *show_log,
+                                "Effect log (F2)",
+                            )
+                            .clicked()
+                            {
+                                *show_log = !*show_log;
+                            }
+                            if crate::widgets::icon_toggle(
+                                ui,
+                                coursecraft_render::Icon::BracketsCurly,
+                                *show_variables,
+                                "Variables (F3)",
+                            )
+                            .clicked()
+                            {
+                                *show_variables = !*show_variables;
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if crate::widgets::icon_button(
+                                    ui,
+                                    coursecraft_render::Icon::X,
+                                    "Close preview",
+                                )
+                                .clicked()
+                                {
+                                    close_requested = true;
+                                }
+                                let (fs_icon, fs_tip) = if *fullscreen {
+                                    (
+                                        coursecraft_render::Icon::CornersIn,
+                                        "Exit full screen (F11)",
+                                    )
+                                } else {
+                                    (coursecraft_render::Icon::CornersOut, "Full screen (F11)")
+                                };
+                                if crate::widgets::icon_toggle(ui, fs_icon, *fullscreen, fs_tip)
+                                    .clicked()
+                                {
+                                    *fullscreen = !*fullscreen;
+                                }
+                            });
+                        });
+                        ui.separator();
 
-                let now = ctx.input(|i| i.time);
-                for var in &course.variables {
-                    let current = player.variable(&var.name).unwrap_or(&var.value);
-                    match last_var_values.get(&var.name) {
-                        Some(prev) if prev != current => {
-                            last_var_values.insert(var.name.clone(), current.clone());
-                            var_changed_at.insert(var.name.clone(), now);
+                        if should_restart {
+                            drop(player);
+                            self.restart();
+                            return;
                         }
-                        None => {
-                            last_var_values.insert(var.name.clone(), current.clone());
-                        }
-                        _ => {}
-                    }
-                }
 
-                // Right area: Live variables and/or Effect log
-                if let Some(sw) = side_width {
-                    let gap = ui.allocate_space(egui::vec2(LOG_GAP, avail.y)).1;
-                    ui.painter().vline(
-                        gap.center().x,
-                        gap.y_range(),
-                        ui.visuals().widgets.noninteractive.bg_stroke,
-                    );
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(sw, avail.y),
-                        Layout::top_down(Align::Min),
-                        |ui| {
-                            if is_vars_visible && is_log_visible {
-                                let top_h = ((avail.y - LOG_GAP) * 0.5).max(80.0);
-                                let bot_h = (avail.y - LOG_GAP - top_h).max(80.0);
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(sw, top_h),
-                                    Layout::top_down(Align::Min),
-                                    |ui| {
-                                        show_variables_panel(
-                                            ui,
-                                            course,
-                                            &player,
-                                            referenced_vars,
-                                            var_changed_at,
-                                            now,
-                                        );
-                                    },
-                                );
-                                let hgap = ui.allocate_space(egui::vec2(sw, LOG_GAP)).1;
-                                ui.painter().hline(
-                                    hgap.x_range(),
-                                    hgap.center().y,
+                        let is_log_visible = *show_log;
+                        let is_vars_visible = *show_variables;
+                        let avail = ui.available_size();
+                        let (slide_width, side_width) = if is_log_visible || is_vars_visible {
+                            let max_side = (avail.x - LOG_GAP - 80.0).max(0.0);
+                            let min_side = 240.0_f32.min(max_side);
+                            let sw = (avail.x * 0.35).clamp(min_side, 400.0_f32.min(max_side));
+                            ((avail.x - sw - LOG_GAP).max(1.0), Some(sw))
+                        } else {
+                            (avail.x.max(1.0), None)
+                        };
+
+                        // The content must take exactly `avail`: any extra pixel (item spacing between
+                        // the slide and the log, the separator, row padding) makes the window
+                        // auto-grow a little on every frame. Zero the spacing and lay the gaps out
+                        // explicitly so the sums are exact.
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                            // Left area: the shared player frame (slide, strip, rule, drawer)
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(slide_width, avail.y),
+                                Layout::top_down(Align::Min),
+                                |ui| {
+                                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                                    frame.ended = *ended;
+                                    frame.can_speed = media_driver.supports_rate();
+                                    let caption = media_driver.caption_frame(
+                                        &player,
+                                        media.as_ref().map(|(_, source)| *source),
+                                        view,
+                                    );
+                                    media_driver
+                                        .present_captions(caption.as_ref(), frame.captions_on);
+                                    frame.set_caption_frame(if frame.captions_on {
+                                        caption
+                                    } else {
+                                        None
+                                    });
+                                    let combined_holder;
+                                    let media_arg = match media.as_mut() {
+                                        Some((c, s)) => {
+                                            combined_holder = media_driver.as_media_source(*s);
+                                            Some((&mut **c, &combined_holder as &dyn MediaSource))
+                                        }
+                                        None => None,
+                                    };
+                                    let out: FrameOutput = frame.show(ui, &player, view, media_arg);
+                                    crate::content_region::mark_content_region(
+                                        ctx,
+                                        ui.layer_id(),
+                                        out.slide_rect,
+                                    );
+                                    if let Some(volume) = out.volume {
+                                        media_driver.set_volume(volume);
+                                    }
+                                    for input in out.inputs {
+                                        let effects = player.handle(&input);
+                                        if matches!(input, Input::SetSpeed { .. }) {
+                                            media_driver.set_rate(player.speed());
+                                        }
+                                        record_effects(&effects, log, ended, Some(ctx));
+                                        frame_effects.extend(effects);
+                                    }
+                                    if let Some((cache, _)) = media.as_mut() {
+                                        for input in cache.lottie_ended(&player) {
+                                            let effects = player.handle(&input);
+                                            record_effects(&effects, log, ended, Some(ctx));
+                                            frame_effects.extend(effects);
+                                        }
+                                    }
+                                },
+                            );
+
+                            let now = ctx.input(|i| i.time);
+                            for var in &course.variables {
+                                let current = player.variable(&var.name).unwrap_or(&var.value);
+                                match last_var_values.get(&var.name) {
+                                    Some(prev) if prev != current => {
+                                        last_var_values.insert(var.name.clone(), current.clone());
+                                        var_changed_at.insert(var.name.clone(), now);
+                                    }
+                                    None => {
+                                        last_var_values.insert(var.name.clone(), current.clone());
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            // Right area: Live variables and/or Effect log
+                            if let Some(sw) = side_width {
+                                let gap = ui.allocate_space(egui::vec2(LOG_GAP, avail.y)).1;
+                                ui.painter().vline(
+                                    gap.center().x,
+                                    gap.y_range(),
                                     ui.visuals().widgets.noninteractive.bg_stroke,
                                 );
                                 ui.allocate_ui_with_layout(
-                                    egui::vec2(sw, bot_h),
+                                    egui::vec2(sw, avail.y),
                                     Layout::top_down(Align::Min),
                                     |ui| {
-                                        ui.label(egui::RichText::new("Effect Log").strong());
-                                        ScrollArea::vertical()
-                                            .auto_shrink([false, false])
-                                            .stick_to_bottom(true)
-                                            .show(ui, |ui| {
-                                                for line in &*log {
-                                                    ui.monospace(line);
-                                                }
-                                            });
+                                        if is_vars_visible && is_log_visible {
+                                            let top_h = ((avail.y - LOG_GAP) * 0.5).max(80.0);
+                                            let bot_h = (avail.y - LOG_GAP - top_h).max(80.0);
+                                            ui.allocate_ui_with_layout(
+                                                egui::vec2(sw, top_h),
+                                                Layout::top_down(Align::Min),
+                                                |ui| {
+                                                    show_variables_panel(
+                                                        ui,
+                                                        course,
+                                                        &player,
+                                                        referenced_vars,
+                                                        var_changed_at,
+                                                        now,
+                                                    );
+                                                },
+                                            );
+                                            let hgap = ui.allocate_space(egui::vec2(sw, LOG_GAP)).1;
+                                            ui.painter().hline(
+                                                hgap.x_range(),
+                                                hgap.center().y,
+                                                ui.visuals().widgets.noninteractive.bg_stroke,
+                                            );
+                                            ui.allocate_ui_with_layout(
+                                                egui::vec2(sw, bot_h),
+                                                Layout::top_down(Align::Min),
+                                                |ui| {
+                                                    ui.label(
+                                                        egui::RichText::new("Effect Log").strong(),
+                                                    );
+                                                    ScrollArea::vertical()
+                                                        .auto_shrink([false, false])
+                                                        .stick_to_bottom(true)
+                                                        .show(ui, |ui| {
+                                                            for line in &*log {
+                                                                ui.monospace(line);
+                                                            }
+                                                        });
+                                                },
+                                            );
+                                        } else if is_vars_visible {
+                                            show_variables_panel(
+                                                ui,
+                                                course,
+                                                &player,
+                                                referenced_vars,
+                                                var_changed_at,
+                                                now,
+                                            );
+                                        } else {
+                                            ui.label(egui::RichText::new("Effect Log").strong());
+                                            ScrollArea::vertical()
+                                                .auto_shrink([false, false])
+                                                .stick_to_bottom(true)
+                                                .show(ui, |ui| {
+                                                    for line in &*log {
+                                                        ui.monospace(line);
+                                                    }
+                                                });
+                                        }
                                     },
                                 );
-                            } else if is_vars_visible {
-                                show_variables_panel(
-                                    ui,
-                                    course,
-                                    &player,
-                                    referenced_vars,
-                                    var_changed_at,
-                                    now,
-                                );
-                            } else {
-                                ui.label(egui::RichText::new("Effect Log").strong());
-                                ScrollArea::vertical()
-                                    .auto_shrink([false, false])
-                                    .stick_to_bottom(true)
-                                    .show(ui, |ui| {
-                                        for line in &*log {
-                                            ui.monospace(line);
-                                        }
-                                    });
                             }
-                        },
-                    );
-                }
+                        });
+
+                        self.state = Some(player.state().clone());
+                    });
+                });
             });
 
-            self.state = Some(player.state().clone());
-        });
-
-        let rect = modal.response.rect;
+        let rect = window_area.response.rect;
+        ctx.move_to_top(window_area.response.layer_id);
+        if !self.fullscreen
+            && let Some(prev_rect) = self.non_fullscreen_rect
+        {
+            let resized = handle_resize_grips(ctx, prev_rect, bounds, min_size, max_size);
+            if resized != prev_rect {
+                self.non_fullscreen_rect = Some(resized);
+                self.remembered_size = Some(resized.size());
+            }
+        }
         let (pressed, pos) = ctx.input(|i| (i.pointer.any_pressed(), i.pointer.interact_pos()));
         let inside = pos.is_some_and(|p| rect.contains(p));
         self.has_focus = next_preview_focus(self.has_focus, pressed, inside);
         self.had_text_focus = ctx.egui_wants_keyboard_input();
         self.window_rect = Some(rect);
 
-        // Escape closes the preview unless the player or a focused text input
-        // used it first (e.g. the outline drawer or a course text-entry field).
-        // Clicking the dimmed backdrop outside the modal also closes it.
+        // Escape leaves full screen first, then closes the preview (unless the
+        // player drawer or a focused text input used it first).
+        // Clicking the dimmed backdrop outside the window closes it only when not full screen.
         let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        let backdrop_clicked = modal.backdrop_response.clicked();
-        if close_requested
-            || backdrop_clicked
-            || (escape && !drawer_was_open && !text_edit_was_focused)
-        {
+        let backdrop_clicked = !self.fullscreen && backdrop.inner.clicked();
+        if close_requested || backdrop_clicked {
             *open = false;
+        } else if escape && !drawer_was_open && !text_edit_was_focused {
+            if self.fullscreen {
+                self.fullscreen = false;
+            } else {
+                *open = false;
+            }
         }
 
         if !*open {
@@ -1045,4 +1232,200 @@ impl Preview {
             self.state = None;
         }
     }
+}
+
+fn preview_bounds(screen_rect: Rect) -> Rect {
+    let shrunk = screen_rect.shrink(PREVIEW_MARGIN);
+    if shrunk.is_positive() {
+        shrunk
+    } else {
+        screen_rect
+    }
+}
+
+fn preview_size_limits(bounds: Rect) -> (egui::Vec2, egui::Vec2) {
+    let max_size = egui::vec2(bounds.width().max(1.0), bounds.height().max(1.0));
+    let min_size = egui::vec2(
+        PREVIEW_MIN_WIDTH.min(max_size.x),
+        PREVIEW_MIN_HEIGHT.min(max_size.y),
+    );
+    (min_size, max_size)
+}
+
+fn clamp_preview_size(size: egui::Vec2, min_size: egui::Vec2, max_size: egui::Vec2) -> egui::Vec2 {
+    egui::vec2(
+        size.x.clamp(min_size.x, max_size.x),
+        size.y.clamp(min_size.y, max_size.y),
+    )
+}
+
+fn clamp_preview_rect(
+    rect: Rect,
+    bounds: Rect,
+    min_size: egui::Vec2,
+    max_size: egui::Vec2,
+) -> Rect {
+    let size = clamp_preview_size(rect.size(), min_size, max_size);
+    let max_left = (bounds.max.x - size.x).max(bounds.min.x);
+    let max_top = (bounds.max.y - size.y).max(bounds.min.y);
+    let min_x = rect.min.x.clamp(bounds.min.x, max_left);
+    let min_y = rect.min.y.clamp(bounds.min.y, max_top);
+    Rect::from_min_size(egui::pos2(min_x, min_y), size)
+}
+
+#[derive(Clone, Copy)]
+enum ResizeEdge {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl ResizeEdge {
+    const ALL: [Self; 8] = [
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+        Self::Top,
+        Self::Bottom,
+        Self::Left,
+        Self::Right,
+    ];
+
+    fn id_suffix(self) -> &'static str {
+        match self {
+            Self::TopLeft => "tl",
+            Self::TopRight => "tr",
+            Self::BottomLeft => "bl",
+            Self::BottomRight => "br",
+            Self::Top => "t",
+            Self::Bottom => "b",
+            Self::Left => "l",
+            Self::Right => "r",
+        }
+    }
+
+    fn cursor(self) -> egui::CursorIcon {
+        match self {
+            Self::TopLeft | Self::BottomRight => egui::CursorIcon::ResizeNwSe,
+            Self::TopRight | Self::BottomLeft => egui::CursorIcon::ResizeNeSw,
+            Self::Top | Self::Bottom => egui::CursorIcon::ResizeVertical,
+            Self::Left | Self::Right => egui::CursorIcon::ResizeHorizontal,
+        }
+    }
+
+    fn grip_rect(self, r: Rect) -> Rect {
+        match self {
+            Self::TopLeft => Rect::from_min_max(
+                egui::pos2(r.min.x - RESIZE_GRIP_OUT, r.min.y - RESIZE_GRIP_OUT),
+                egui::pos2(r.min.x + RESIZE_CORNER_IN, r.min.y + RESIZE_CORNER_IN),
+            ),
+            Self::TopRight => Rect::from_min_max(
+                egui::pos2(r.max.x - RESIZE_CORNER_IN, r.min.y - RESIZE_GRIP_OUT),
+                egui::pos2(r.max.x + RESIZE_GRIP_OUT, r.min.y + RESIZE_CORNER_IN),
+            ),
+            Self::BottomLeft => Rect::from_min_max(
+                egui::pos2(r.min.x - RESIZE_GRIP_OUT, r.max.y - RESIZE_CORNER_IN),
+                egui::pos2(r.min.x + RESIZE_CORNER_IN, r.max.y + RESIZE_GRIP_OUT),
+            ),
+            Self::BottomRight => Rect::from_min_max(
+                egui::pos2(r.max.x - RESIZE_CORNER_IN, r.max.y - RESIZE_CORNER_IN),
+                egui::pos2(r.max.x + RESIZE_GRIP_OUT, r.max.y + RESIZE_GRIP_OUT),
+            ),
+            Self::Top => Rect::from_min_max(
+                egui::pos2(r.min.x + RESIZE_CORNER_IN, r.min.y - RESIZE_GRIP_OUT),
+                egui::pos2(r.max.x - RESIZE_CORNER_IN, r.min.y + RESIZE_GRIP_IN),
+            ),
+            Self::Bottom => Rect::from_min_max(
+                egui::pos2(r.min.x + RESIZE_CORNER_IN, r.max.y - RESIZE_GRIP_IN),
+                egui::pos2(r.max.x - RESIZE_CORNER_IN, r.max.y + RESIZE_GRIP_OUT),
+            ),
+            Self::Left => Rect::from_min_max(
+                egui::pos2(r.min.x - RESIZE_GRIP_OUT, r.min.y + RESIZE_CORNER_IN),
+                egui::pos2(r.min.x + RESIZE_GRIP_IN, r.max.y - RESIZE_CORNER_IN),
+            ),
+            Self::Right => Rect::from_min_max(
+                egui::pos2(r.max.x - RESIZE_GRIP_IN, r.min.y + RESIZE_CORNER_IN),
+                egui::pos2(r.max.x + RESIZE_GRIP_OUT, r.max.y - RESIZE_CORNER_IN),
+            ),
+        }
+    }
+
+    fn moves_left(self) -> bool {
+        matches!(self, Self::Left | Self::TopLeft | Self::BottomLeft)
+    }
+
+    fn moves_right(self) -> bool {
+        matches!(self, Self::Right | Self::TopRight | Self::BottomRight)
+    }
+
+    fn moves_top(self) -> bool {
+        matches!(self, Self::Top | Self::TopLeft | Self::TopRight)
+    }
+
+    fn moves_bottom(self) -> bool {
+        matches!(self, Self::Bottom | Self::BottomLeft | Self::BottomRight)
+    }
+}
+
+fn handle_resize_grips(
+    ctx: &egui::Context,
+    rect: Rect,
+    bounds: Rect,
+    min_size: egui::Vec2,
+    max_size: egui::Vec2,
+) -> Rect {
+    let mut updated = rect;
+    let area_origin = rect.min - egui::vec2(RESIZE_GRIP_OUT, RESIZE_GRIP_OUT);
+    let grip_area = egui::Area::new(Id::unique("preview_resize_grips"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(area_origin)
+        .interactable(true)
+        .show(ctx, |ui| {
+            for edge in ResizeEdge::ALL {
+                let grip = edge.grip_rect(rect);
+                let resp = ui.interact(
+                    grip,
+                    Id::unique(("preview_resize", edge.id_suffix())),
+                    egui::Sense::drag(),
+                );
+                if resp.hovered() || resp.dragged() {
+                    ctx.set_cursor_icon(edge.cursor());
+                }
+                if resp.dragged() {
+                    let delta = resp.drag_delta();
+                    if edge.moves_left() {
+                        let min_bound = bounds.min.x.max(updated.max.x - max_size.x);
+                        let max_bound = updated.max.x - min_size.x;
+                        updated.min.x =
+                            (updated.min.x + delta.x).clamp(min_bound.min(max_bound), max_bound);
+                    }
+                    if edge.moves_right() {
+                        let min_bound = updated.min.x + min_size.x;
+                        let max_bound = bounds.max.x.min(updated.min.x + max_size.x);
+                        updated.max.x =
+                            (updated.max.x + delta.x).clamp(min_bound, max_bound.max(min_bound));
+                    }
+                    if edge.moves_top() {
+                        let min_bound = bounds.min.y.max(updated.max.y - max_size.y);
+                        let max_bound = updated.max.y - min_size.y;
+                        updated.min.y =
+                            (updated.min.y + delta.y).clamp(min_bound.min(max_bound), max_bound);
+                    }
+                    if edge.moves_bottom() {
+                        let min_bound = updated.min.y + min_size.y;
+                        let max_bound = bounds.max.y.min(updated.min.y + max_size.y);
+                        updated.max.y =
+                            (updated.max.y + delta.y).clamp(min_bound, max_bound.max(min_bound));
+                    }
+                }
+            }
+        });
+    ctx.move_to_top(grip_area.response.layer_id);
+    updated
 }
