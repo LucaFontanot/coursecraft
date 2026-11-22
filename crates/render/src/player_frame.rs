@@ -695,6 +695,7 @@ impl PlayerFrame {
                 draw_strip(
                     ui,
                     player,
+                    full,
                     l,
                     self.strip_opacity,
                     &mut self.drawer_open,
@@ -1720,6 +1721,7 @@ fn bar_colors(player: &Player<'_>) -> (Color32, Color32, Color32) {
 fn draw_strip(
     ui: &mut Ui,
     player: &Player<'_>,
+    full: Rect,
     layout: &StripLayout,
     opacity: f32,
     drawer_open: &mut bool,
@@ -1899,6 +1901,7 @@ fn draw_strip(
         draw_speed_and_fullscreen(
             &child,
             player,
+            full,
             layout,
             speed_open,
             fullscreen_toggle,
@@ -1917,6 +1920,7 @@ fn draw_strip(
 fn draw_speed_and_fullscreen(
     ui: &Ui,
     player: &Player<'_>,
+    full: Rect,
     layout: &StripLayout,
     speed_open: &mut bool,
     fullscreen_toggle: &mut bool,
@@ -1955,14 +1959,14 @@ fn draw_speed_and_fullscreen(
         }
         focus.paint_chrome(ui, rect, &crate::focus::ChromeButton::Speed, accent, bar);
         if *speed_open {
-            draw_speed_popup(ui, rect, rate, speed_open, inputs, text, accent, bar);
+            draw_speed_popup(ui, full, rect, rate, speed_open, inputs, text, accent, bar);
         }
     } else {
         *speed_open = false;
     }
     if let Some(rect) = layout.fullscreen {
         let (icon, tooltip) = if fullscreen_on {
-            (Icon::CornersIn, course.chrome_string("fullScreen"))
+            (Icon::CornersIn, "Exit full screen")
         } else {
             (Icon::CornersOut, course.chrome_string("fullScreen"))
         };
@@ -1987,6 +1991,7 @@ fn format_rate(rate: f32) -> String {
 #[allow(clippy::too_many_arguments)]
 fn draw_speed_popup(
     ui: &Ui,
+    full: Rect,
     anchor: Rect,
     current: f32,
     speed_open: &mut bool,
@@ -1998,13 +2003,13 @@ fn draw_speed_popup(
     let rates = coursecraft_logic::PLAYBACK_RATES;
     let height = SPEED_ROW * rates.len() as f32 + 8.0;
     let width = 72.0;
-    let popup = Rect::from_min_size(
-        Pos2::new(
-            anchor.center().x - width * 0.5,
-            (anchor.top() - 6.0 - height).max(0.0),
-        ),
-        vec2(width, height),
-    );
+    let pad = 4.0_f32.min(((full.width() - width) * 0.5).max(0.0));
+    let min_x = full.left() + pad;
+    let max_x = (full.right() - width - pad).max(min_x);
+    let x = (anchor.center().x - width * 0.5).clamp(min_x, max_x);
+    let y =
+        (anchor.top() - 6.0 - height).clamp(full.top(), (full.bottom() - height).max(full.top()));
+    let popup = Rect::from_min_size(Pos2::new(x, y), vec2(width, height));
     let painter = ui.ctx().layer_painter(egui::LayerId::new(
         egui::Order::Tooltip,
         Id::unique("coursecraft-speed-popup"),
@@ -2045,7 +2050,9 @@ fn draw_speed_popup(
     if let Some(rate) = chosen {
         inputs.push(Input::SetSpeed { rate });
         *speed_open = false;
-    } else if ui.input(|i| i.pointer.any_pressed() || i.key_pressed(egui::Key::Escape))
+    } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        *speed_open = false;
+    } else if ui.input(|i| i.pointer.any_pressed())
         && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
         && !popup.contains(pos)
         && !anchor.contains(pos)

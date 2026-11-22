@@ -2322,3 +2322,164 @@ fn overlay_strip_explicit_opt_in_auto_hides_and_uses_full_area() {
     harness.run(&player, Vec::new());
     assert!(harness.frame.strip_rect().is_none());
 }
+
+fn find_tooltip_popup_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<Rect> {
+    fn collect(shape: &egui::epaint::Shape, out: &mut Vec<Rect>) {
+        match shape {
+            egui::epaint::Shape::Rect(r) => {
+                if r.fill != egui::Color32::TRANSPARENT {
+                    out.push(r.rect);
+                }
+            }
+            egui::epaint::Shape::Vec(v) => {
+                for s in v {
+                    collect(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        collect(&clipped.shape, &mut out);
+    }
+    out
+}
+
+fn has_painted_text(shapes: &[egui::epaint::ClippedShape], needle: &str) -> bool {
+    fn walk(shape: &egui::epaint::Shape, needle: &str) -> bool {
+        match shape {
+            egui::epaint::Shape::Text(t) => t.galley.text().contains(needle),
+            egui::epaint::Shape::Vec(v) => v.iter().any(|s| walk(s, needle)),
+            _ => false,
+        }
+    }
+    shapes.iter().any(|c| walk(&c.shape, needle))
+}
+
+#[test]
+fn speed_popup_clamps_to_player_area_and_closes_on_escape_regardless_of_pointer() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    // Hide fullscreen and keep 1 slide so speed sits right at the right edge of the strip.
+    course.player.show_fullscreen = false;
+    course.scenes[0].slides.truncate(1);
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    // Narrow inset player area (520x600 at (100, 50)) so an unclamped centered
+    // 72pt speed popup would spill past the right edge of `full`.
+    let full = Rect::from_min_size(pos2(100.0, 50.0), vec2(520.0, 600.0));
+    let mut harness = Harness::new(800.0, 800.0);
+    harness.frame.can_speed = true;
+    let run_inset = |h: &mut Harness, events: Vec<Event>| {
+        h.time += 0.1;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), h.size)),
+            time: Some(h.time),
+            events,
+            ..Default::default()
+        };
+        let frame = &mut h.frame;
+        let view = &mut h.view;
+        let full_out = h.ctx.run_ui(raw, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(full), |ui| {
+                frame.show(ui, &player, view, None);
+            });
+        });
+        h.last_shapes = full_out.shapes.clone();
+        full_out.drop_without_applying_deltas();
+    };
+
+    run_inset(&mut harness, Vec::new());
+    run_inset(&mut harness, Vec::new());
+    let speed_rect = harness
+        .frame
+        .chrome_rect(&ChromeButton::Speed)
+        .expect("speed button");
+    run_inset(&mut harness, click(speed_rect.center()));
+    run_inset(&mut harness, Vec::new());
+    assert!(
+        has_painted_text(&harness.last_shapes, "2×"),
+        "speed popup should be open"
+    );
+
+    // Check every painted rect on the speed popup (the 72pt-wide popup background)
+    // stays completely inside `full`.
+    let popup_rects: Vec<Rect> = find_tooltip_popup_rects(&harness.last_shapes)
+        .into_iter()
+        .filter(|r| (r.width() - 72.0).abs() < 0.5 && r.height() > 100.0)
+        .collect();
+    assert!(!popup_rects.is_empty(), "expected speed popup rect");
+    for r in &popup_rects {
+        assert!(
+            full.contains_rect(*r),
+            "speed popup {r:?} must stay inside player area {full:?}"
+        );
+    }
+
+    // Hovering INSIDE the speed popup and pressing Escape must close it (SUS-23).
+    let inside_popup = popup_rects[0].center();
+    run_inset(
+        &mut harness,
+        vec![Event::PointerMoved(inside_popup), key(egui::Key::Escape)],
+    );
+    run_inset(&mut harness, Vec::new());
+    assert!(
+        !has_painted_text(&harness.last_shapes, "2×"),
+        "Escape while hovering speed popup must close it"
+    );
+
+    // Reopen and press Escape with NO pointer position (keyboard-only, SUS-23).
+    run_inset(&mut harness, click(speed_rect.center()));
+    run_inset(&mut harness, Vec::new());
+    assert!(has_painted_text(&harness.last_shapes, "2×"));
+    run_inset(
+        &mut harness,
+        vec![Event::PointerGone, key(egui::Key::Escape)],
+    );
+    run_inset(&mut harness, Vec::new());
+    assert!(
+        !has_painted_text(&harness.last_shapes, "2×"),
+        "Escape with no pointer position must close speed popup"
+    );
+}
+
+#[test]
+fn fullscreen_button_tooltip_reflects_fullscreen_state() {
+    let (_course, player) = hello();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness
+        .ctx
+        .all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    harness.frame.can_fullscreen = true;
+    harness.run(&player, Vec::new());
+
+    let fs_center = harness
+        .frame
+        .chrome_rect(&ChromeButton::Fullscreen)
+        .expect("fullscreen button")
+        .center();
+
+    // Windowed: tooltip should read "Full screen".
+    harness.run(&player, vec![Event::PointerMoved(fs_center)]);
+    harness.time += 1.0;
+    harness.run(&player, vec![Event::PointerMoved(fs_center)]);
+    assert!(
+        has_painted_text(&harness.last_shapes, "Full screen"),
+        "expected 'Full screen' tooltip when not fullscreen"
+    );
+    assert!(
+        !has_painted_text(&harness.last_shapes, "Exit full screen"),
+        "unexpected 'Exit full screen' tooltip when not fullscreen"
+    );
+
+    // Fullscreen: tooltip should read "Exit full screen".
+    harness.frame.fullscreen = true;
+    harness.time += 1.0;
+    harness.run(&player, vec![Event::PointerMoved(fs_center)]);
+    assert!(
+        has_painted_text(&harness.last_shapes, "Exit full screen"),
+        "expected 'Exit full screen' tooltip when fullscreen"
+    );
+}

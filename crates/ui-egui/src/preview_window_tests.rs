@@ -439,3 +439,175 @@ fn preview_slide_scales_and_variables_panel_fits_at_three_sizes() {
         );
     }
 }
+
+#[test]
+fn preview_player_strip_fullscreen_button_toggles_preview_fullscreen() {
+    let mut harness = TestHarness::new_with_size(test_course(), (1280.0, 800.0));
+    open_preview(&mut harness);
+    let fs_rect = harness
+        .editor
+        .preview
+        .as_ref()
+        .expect("preview")
+        .frame
+        .chrome_rect(&coursecraft_render::ChromeButton::Fullscreen)
+        .expect("player strip fullscreen button should be enabled in preview");
+
+    harness.click_at(fs_rect.center());
+    harness.idle_frame();
+    assert!(
+        harness
+            .editor
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.fullscreen),
+        "clicking player strip fullscreen button must enter fullscreen"
+    );
+
+    let fs_rect2 = harness
+        .editor
+        .preview
+        .as_ref()
+        .expect("preview")
+        .frame
+        .chrome_rect(&coursecraft_render::ChromeButton::Fullscreen)
+        .expect("player strip fullscreen button");
+    harness.click_at(fs_rect2.center());
+    harness.idle_frame();
+    assert!(
+        harness
+            .editor
+            .preview
+            .as_ref()
+            .is_some_and(|p| !p.fullscreen),
+        "clicking player strip fullscreen button again must exit fullscreen"
+    );
+}
+
+#[test]
+fn preview_escape_hierarchy_closes_speed_popup_drawer_lightbox_before_preview() {
+    let mut course = test_course();
+    // Add a second slide and a button on slide 1 that opens slide 2 as a lightbox.
+    let mut slide2 = course.scenes[0].slides[0].clone();
+    slide2.id = "s2".into();
+    slide2.title = "Lightbox Slide".into();
+    course.scenes[0].slides.push(slide2);
+    course.scenes[0].slides[0]
+        .triggers
+        .push(coursecraft_course::Trigger {
+            when: coursecraft_course::Event::Click {
+                object: "txt-1".into(),
+            },
+            action: coursecraft_course::Action::LightboxSlide { slide: "s2".into() },
+            condition: None,
+            disabled: false,
+        });
+
+    let mut harness = TestHarness::new_with_size(course, (1280.0, 800.0));
+    harness.editor.open_preview_at(None);
+    for _ in 0..3 {
+        harness.idle_frame();
+    }
+
+    // 1. Speed popup open -> Esc closes speed popup, preview stays open.
+    let speed_rect = harness
+        .editor
+        .preview
+        .as_ref()
+        .expect("preview")
+        .frame
+        .chrome_rect(&coursecraft_render::ChromeButton::Speed)
+        .expect("speed button");
+    harness.click_at(speed_rect.center());
+    harness.idle_frame();
+    assert!(harness.find_text("2×").is_some(), "speed popup should open");
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(
+        harness.editor.preview.is_some(),
+        "Esc must close speed popup without closing preview"
+    );
+    assert!(
+        harness.find_text("2×").is_none(),
+        "speed popup should close"
+    );
+
+    // 2. Drawer open -> Esc closes drawer, preview stays open.
+    let outline_rect = harness
+        .editor
+        .preview
+        .as_ref()
+        .expect("preview")
+        .frame
+        .chrome_rect(&coursecraft_render::ChromeButton::Outline)
+        .expect("outline button");
+    harness.click_at(outline_rect.center());
+    harness.idle_frame();
+    assert!(
+        harness
+            .editor
+            .preview
+            .as_ref()
+            .is_some_and(|p| p.frame.drawer_open())
+    );
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(
+        harness.editor.preview.is_some(),
+        "Esc must close drawer without closing preview"
+    );
+    assert!(
+        harness
+            .editor
+            .preview
+            .as_ref()
+            .is_some_and(|p| !p.frame.drawer_open())
+    );
+    // Let the drawer close animation finish so the scrim no longer covers the slide.
+    for _ in 0..20 {
+        harness.idle_frame();
+    }
+
+    // 3. Lightbox open -> Esc closes lightbox, preview stays open.
+    let s_rect = harness
+        .editor
+        .preview
+        .as_ref()
+        .and_then(|p| p.frame.slide_rect())
+        .expect("slide_rect");
+    let txt_pos = s_rect.min
+        + egui::vec2(
+            s_rect.width() * (280.0 / 1280.0),
+            s_rect.height() * (110.0 / 720.0),
+        );
+    harness.click_at(txt_pos);
+    harness.idle_frame();
+    assert!(
+        harness.editor.preview.as_ref().is_some_and(|p| p
+            .frame
+            .chrome_rect(&coursecraft_render::ChromeButton::CloseLightbox)
+            .is_some()),
+        "lightbox should be open"
+    );
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(
+        harness.editor.preview.is_some(),
+        "Esc must close lightbox without closing preview"
+    );
+    assert!(
+        harness.editor.preview.as_ref().is_some_and(|p| p
+            .frame
+            .chrome_rect(&coursecraft_render::ChromeButton::CloseLightbox)
+            .is_none()),
+        "lightbox should close on Esc"
+    );
+
+    // 4. Clean slide -> Esc closes preview.
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(
+        harness.editor.preview.is_none(),
+        "Esc on clean slide closes preview"
+    );
+}

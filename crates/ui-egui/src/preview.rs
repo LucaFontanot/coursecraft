@@ -1082,6 +1082,8 @@ impl Preview {
                                     ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
                                     frame.ended = *ended;
                                     frame.can_speed = media_driver.supports_rate();
+                                    frame.can_fullscreen = true;
+                                    frame.fullscreen = *fullscreen;
                                     let caption = media_driver.caption_frame(
                                         &player,
                                         media.as_ref().map(|(_, source)| *source),
@@ -1103,6 +1105,9 @@ impl Preview {
                                         None => None,
                                     };
                                     let out: FrameOutput = frame.show(ui, &player, view, media_arg);
+                                    if out.fullscreen_toggle {
+                                        *fullscreen = !*fullscreen;
+                                    }
                                     crate::content_region::mark_content_region(
                                         ctx,
                                         ui.layer_id(),
