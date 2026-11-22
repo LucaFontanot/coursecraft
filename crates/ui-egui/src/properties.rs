@@ -123,6 +123,8 @@ pub struct PropertiesState {
     pub line_spacing_editing: bool,
     /// Snapshot of active canvas inline-edit `(slide, object, selection_range, cursor_pos)`.
     pub inline_selection: Option<crate::InlineEditSelection>,
+    /// Pending style overrides toggled at a caret (no selection), applied to the next typed chars.
+    pub pending_caret_style: Option<PendingCaretStyle>,
     /// The font picker's "Add font…" entry was clicked.
     pub add_font_requested: bool,
     /// Search text for the "On this computer" font list.
@@ -381,6 +383,7 @@ impl Default for PropertiesState {
             line_spacing_seen: f32::NAN,
             line_spacing_editing: false,
             inline_selection: None,
+            pending_caret_style: None,
             add_font_requested: false,
             system_font_search: String::new(),
             system_fonts_list_requested: false,
@@ -1791,25 +1794,51 @@ pub(crate) fn animation_command(
     )
 }
 
+/// Pending style overrides toggled while a caret (with no selection) is active.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingCaretStyle {
+    pub slide: String,
+    pub object: String,
+    pub cell: Option<(usize, usize)>,
+    pub cursor: usize,
+    pub patch: coursecraft_course::TextRunPatch,
+}
+
+/// The run that typing at `cursor_char` would inherit: at `0`, the first
+/// non-empty run; otherwise the run containing the character before the caret.
+fn run_at_caret(runs: &[TextRun], cursor_char: usize) -> Option<&TextRun> {
+    if cursor_char == 0 {
+        return runs.iter().find(|r| !r.text.is_empty());
+    }
+    let target = cursor_char - 1;
+    let mut offset = 0usize;
+    let mut last = None;
+    for run in runs.iter().filter(|r| !r.text.is_empty()) {
+        let len = run.text.chars().count();
+        let next = offset.saturating_add(len);
+        if target < next {
+            return Some(run);
+        }
+        offset = next;
+        last = Some(run);
+    }
+    last
+}
+
 /// Strikethrough, baseline and letter spacing in effect at the cursor.
 fn effects_at_cursor(
     runs: &[TextRun],
     style: &TextStyle,
     cursor_char: usize,
 ) -> (bool, coursecraft_course::Baseline, f32) {
-    let mut offset = 0;
-    for run in runs {
-        let len = run.text.chars().count();
-        if cursor_char >= offset && cursor_char <= offset + len {
-            return (
-                run.strikethrough.unwrap_or(style.strikethrough),
-                run.baseline.unwrap_or(style.baseline),
-                run.letter_spacing.unwrap_or(style.letter_spacing),
-            );
-        }
-        offset += len;
-    }
-    (style.strikethrough, style.baseline, style.letter_spacing)
+    let Some(run) = run_at_caret(runs, cursor_char) else {
+        return (style.strikethrough, style.baseline, style.letter_spacing);
+    };
+    (
+        run.strikethrough.unwrap_or(style.strikethrough),
+        run.baseline.unwrap_or(style.baseline),
+        run.letter_spacing.unwrap_or(style.letter_spacing),
+    )
 }
 
 pub(crate) fn style_at_cursor(
@@ -1817,18 +1846,7 @@ pub(crate) fn style_at_cursor(
     style: &TextStyle,
     cursor_char: usize,
 ) -> (bool, bool, bool, f32, String) {
-    let mut current_offset = 0;
-    let mut found_run = None;
-    for run in runs {
-        let len = run.text.chars().count();
-        if cursor_char >= current_offset && cursor_char <= current_offset + len {
-            found_run = Some(run);
-            break;
-        }
-        current_offset += len;
-    }
-
-    let Some(found_run) = found_run else {
+    let Some(found_run) = run_at_caret(runs, cursor_char) else {
         return (
             style.bold,
             style.italic,
@@ -1850,30 +1868,136 @@ pub(crate) fn style_at_cursor(
     )
 }
 
-/// The font named by the run at `cursor_char`, if any.
-fn font_at_cursor(runs: &[TextRun], cursor_char: usize) -> Option<String> {
-    let mut offset = 0;
+/// Effective `(bold, italic, underline, size, color)` for a character range
+/// `[start, end)`. A boolean style is `true` only if every selected character
+/// has it; neighbours outside `[start, end)` never count.
+pub(crate) fn style_for_range(
+    runs: &[TextRun],
+    style: &TextStyle,
+    range: (usize, usize),
+) -> (bool, bool, bool, f32, String) {
+    let (start, end) = (range.0.min(range.1), range.0.max(range.1));
+    if start == end {
+        return style_at_cursor(runs, style, start);
+    }
+    if runs.is_empty() {
+        return (
+            style.bold,
+            style.italic,
+            style.underline,
+            style.size,
+            style.color.0.clone(),
+        );
+    }
+    let mut offset = 0usize;
+    let mut any = false;
+    let mut all_bold = true;
+    let mut all_italic = true;
+    let mut all_underline = true;
+    let mut first_size = None;
+    let mut first_color = None;
     for run in runs {
         let len = run.text.chars().count();
-        if cursor_char >= offset && cursor_char < offset.saturating_add(len) {
-            return run.font.clone();
+        let run_start = offset;
+        let run_end = offset.saturating_add(len);
+        offset = run_end;
+        if run_end <= start || run_start >= end {
+            continue;
         }
-        offset = offset.saturating_add(len);
+        any = true;
+        all_bold &= run.bold.unwrap_or(style.bold);
+        all_italic &= run.italic.unwrap_or(style.italic);
+        all_underline &= run.underline.unwrap_or(style.underline);
+        if first_size.is_none() {
+            first_size = Some(run.size.unwrap_or(style.size));
+        }
+        if first_color.is_none() {
+            first_color = Some(
+                run.color
+                    .as_ref()
+                    .map_or_else(|| style.color.0.clone(), |c| c.0.clone()),
+            );
+        }
     }
-    runs.iter().rev().find_map(|run| run.font.clone())
+    if !any {
+        return style_at_cursor(runs, style, start);
+    }
+    (
+        all_bold,
+        all_italic,
+        all_underline,
+        first_size.unwrap_or(style.size),
+        first_color.unwrap_or_else(|| style.color.0.clone()),
+    )
+}
+
+/// Effective `(strikethrough, common_baseline, letter_spacing)` for `[start, end)`.
+/// `common_baseline` is `Some(b)` only when every selected character has `b`.
+fn effects_for_range(
+    runs: &[TextRun],
+    style: &TextStyle,
+    range: (usize, usize),
+) -> (bool, Option<coursecraft_course::Baseline>, f32) {
+    let (start, end) = (range.0.min(range.1), range.0.max(range.1));
+    if start == end {
+        let (strike, base, spacing) = effects_at_cursor(runs, style, start);
+        return (strike, Some(base), spacing);
+    }
+    if runs.is_empty() {
+        return (
+            style.strikethrough,
+            Some(style.baseline),
+            style.letter_spacing,
+        );
+    }
+    let mut offset = 0usize;
+    let mut any = false;
+    let mut all_strike = true;
+    let mut common_baseline: Option<Option<coursecraft_course::Baseline>> = None;
+    let mut first_spacing = None;
+    for run in runs {
+        let len = run.text.chars().count();
+        let run_start = offset;
+        let run_end = offset.saturating_add(len);
+        offset = run_end;
+        if run_end <= start || run_start >= end {
+            continue;
+        }
+        any = true;
+        all_strike &= run.strikethrough.unwrap_or(style.strikethrough);
+        let b = run.baseline.unwrap_or(style.baseline);
+        common_baseline = match common_baseline {
+            None => Some(Some(b)),
+            Some(Some(prev)) if prev == b => Some(Some(prev)),
+            _ => Some(None),
+        };
+        if first_spacing.is_none() {
+            first_spacing = Some(run.letter_spacing.unwrap_or(style.letter_spacing));
+        }
+    }
+    if !any {
+        let (strike, base, spacing) = effects_at_cursor(runs, style, start);
+        return (strike, Some(base), spacing);
+    }
+    (
+        all_strike,
+        common_baseline.flatten(),
+        first_spacing.unwrap_or(style.letter_spacing),
+    )
+}
+
+/// The font named by the run at `cursor_char`, if any.
+fn font_at_cursor(runs: &[TextRun], cursor_char: usize) -> Option<String> {
+    run_at_caret(runs, cursor_char)
+        .and_then(|run| run.font.clone())
+        .or_else(|| runs.iter().rev().find_map(|run| run.font.clone()))
 }
 
 /// The link on the run at `cursor_char`, if any.
 fn link_at_char(runs: &[TextRun], cursor_char: usize) -> Option<coursecraft_course::Link> {
-    let mut offset = 0;
-    for run in runs {
-        let len = run.text.chars().count();
-        if cursor_char >= offset && cursor_char < offset.saturating_add(len) {
-            return run.link.clone();
-        }
-        offset = offset.saturating_add(len);
-    }
-    runs.iter().rev().find_map(|run| run.link.clone())
+    run_at_caret(runs, cursor_char)
+        .and_then(|run| run.link.clone())
+        .or_else(|| runs.iter().rev().find_map(|run| run.link.clone()))
 }
 
 /// Render the segmented inspector panel (Format · Animate · Slide · Course).
@@ -3266,26 +3390,94 @@ fn show_text_controls(
     let text_edit_id = egui::Id::unique(("prop_text_body", id_prefix));
     let text_edit_state = egui::TextEdit::load_state(ui.ctx(), text_edit_id);
     let cursor_range = text_edit_state.as_ref().and_then(|s| s.cursor.char_range());
-    let (char_range, cursor_pos): ((usize, usize), usize) = if let Some(cr) = cursor_range
+    let text_edit_has_focus = ui.ctx().memory(|m| m.has_focus(text_edit_id));
+    enum TextStyleTarget {
+        Selection(usize, usize),
+        Caret(usize),
+        WholeObject,
+    }
+    let target = if let Some(cr) = cursor_range
         && !cr.is_empty()
     {
         let sorted = cr.as_sorted_char_range();
-        ((sorted.start.0, sorted.end.0), sorted.start.0)
+        TextStyleTarget::Selection(sorted.start.0, sorted.end.0)
     } else if let Some((_, _, inline_range, inline_cursor)) = props
         .inline_selection
         .as_ref()
         .filter(|(s, o, _, _)| s == slide_id && o == obj_id)
     {
-        (inline_range.unwrap_or((0, 0)), *inline_cursor)
-    } else if let Some(cr) = cursor_range {
-        ((0, 0), cr.primary.index.0)
+        if let Some((s, e)) = inline_range
+            && s != e
+        {
+            TextStyleTarget::Selection((*s).min(*e), (*s).max(*e))
+        } else {
+            TextStyleTarget::Caret(*inline_cursor)
+        }
+    } else if let Some(cr) = cursor_range
+        && text_edit_has_focus
+    {
+        TextStyleTarget::Caret(cr.primary.index.0)
     } else {
-        ((0, 0), 0)
+        TextStyleTarget::WholeObject
     };
 
-    let (eff_bold, eff_italic, eff_underline, eff_size, eff_color) =
-        style_at_cursor(runs, style, cursor_pos);
-    let (eff_strike, eff_baseline, eff_spacing) = effects_at_cursor(runs, style, cursor_pos);
+    let (char_range, cursor_pos): ((usize, usize), usize) = match target {
+        TextStyleTarget::Selection(s, e) => ((s, e), s),
+        TextStyleTarget::Caret(pos) => ((0, 0), pos),
+        TextStyleTarget::WholeObject => ((0, 0), 0),
+    };
+
+    let total_chars = current_text.chars().count();
+    let (mut eff_bold, mut eff_italic, mut eff_underline, eff_size, eff_color) = match target {
+        TextStyleTarget::Selection(s, e) => style_for_range(runs, style, (s, e)),
+        TextStyleTarget::Caret(pos) => style_at_cursor(runs, style, pos),
+        TextStyleTarget::WholeObject => style_for_range(runs, style, (0, total_chars)),
+    };
+    let (mut eff_strike, mut eff_baseline, eff_spacing) = match target {
+        TextStyleTarget::Selection(s, e) => effects_for_range(runs, style, (s, e)),
+        TextStyleTarget::Caret(pos) => {
+            let (st, base, sp) = effects_at_cursor(runs, style, pos);
+            (st, Some(base), sp)
+        }
+        TextStyleTarget::WholeObject => effects_for_range(runs, style, (0, total_chars)),
+    };
+
+    if let TextStyleTarget::Caret(pos) = target {
+        let matches_pending = props.pending_caret_style.as_ref().is_some_and(|p| {
+            p.slide == slide_id && p.object == obj_id && p.cell == cell && p.cursor == pos
+        });
+        if matches_pending {
+            if let Some(pending) = &props.pending_caret_style {
+                if let Some(b) = pending.patch.bold {
+                    eff_bold = b;
+                }
+                if let Some(it) = pending.patch.italic {
+                    eff_italic = it;
+                }
+                if let Some(u) = pending.patch.underline {
+                    eff_underline = u;
+                }
+                if let Some(st) = pending.patch.strikethrough {
+                    eff_strike = st;
+                }
+                if let Some(base) = pending.patch.baseline {
+                    eff_baseline = Some(base);
+                }
+            }
+        } else if props
+            .pending_caret_style
+            .as_ref()
+            .is_some_and(|p| p.slide == slide_id && p.object == obj_id && p.cell == cell)
+        {
+            props.pending_caret_style = None;
+        }
+    } else if props
+        .pending_caret_style
+        .as_ref()
+        .is_some_and(|p| p.slide == slide_id && p.object == obj_id && p.cell == cell)
+    {
+        props.pending_caret_style = None;
+    }
 
     // Font picker: Inter plus every course family, each name drawn in its own
     // face. "Add font…" opens the same picker the File menu uses.
@@ -3384,51 +3576,82 @@ fn show_text_controls(
     }
 
     // Formatting toolbar
+    let set_pending =
+        |props: &mut PropertiesState,
+         pos: usize,
+         apply: &dyn Fn(&mut coursecraft_course::TextRunPatch)| {
+            let entry = props
+                .pending_caret_style
+                .get_or_insert_with(|| PendingCaretStyle {
+                    slide: slide_id.to_owned(),
+                    object: obj_id.to_owned(),
+                    cell,
+                    cursor: pos,
+                    patch: coursecraft_course::TextRunPatch::default(),
+                });
+            entry.slide = slide_id.to_owned();
+            entry.object = obj_id.to_owned();
+            entry.cell = cell;
+            entry.cursor = pos;
+            apply(&mut entry.patch);
+        };
     inspector_row(ui, "Style", |ui| {
         if ui
             .selectable_label(eff_bold, RichText::new("B").strong())
             .clicked()
         {
-            action_to_run = Some((
-                "text.style_range",
-                serde_json::json!({
-                    "slide": slide_id,
-                    "object": obj_id,
-                    "start": char_range.0,
-                    "end": char_range.1,
-                    "bold": !eff_bold,
-                }),
-            ));
+            if let TextStyleTarget::Caret(pos) = target {
+                set_pending(props, pos, &|p| p.bold = Some(!eff_bold));
+            } else {
+                action_to_run = Some((
+                    "text.style_range",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": obj_id,
+                        "start": char_range.0,
+                        "end": char_range.1,
+                        "bold": !eff_bold,
+                    }),
+                ));
+            }
         }
         if ui
             .selectable_label(eff_italic, RichText::new("I").italics())
             .clicked()
         {
-            action_to_run = Some((
-                "text.style_range",
-                serde_json::json!({
-                    "slide": slide_id,
-                    "object": obj_id,
-                    "start": char_range.0,
-                    "end": char_range.1,
-                    "italic": !eff_italic,
-                }),
-            ));
+            if let TextStyleTarget::Caret(pos) = target {
+                set_pending(props, pos, &|p| p.italic = Some(!eff_italic));
+            } else {
+                action_to_run = Some((
+                    "text.style_range",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": obj_id,
+                        "start": char_range.0,
+                        "end": char_range.1,
+                        "italic": !eff_italic,
+                    }),
+                ));
+            }
         }
         if ui
             .selectable_label(eff_underline, RichText::new("U").underline())
             .clicked()
         {
-            action_to_run = Some((
-                "text.style_range",
-                serde_json::json!({
-                    "slide": slide_id,
-                    "object": obj_id,
-                    "start": char_range.0,
-                    "end": char_range.1,
-                    "underline": !eff_underline,
-                }),
-            ));
+            if let TextStyleTarget::Caret(pos) = target {
+                set_pending(props, pos, &|p| p.underline = Some(!eff_underline));
+            } else {
+                action_to_run = Some((
+                    "text.style_range",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": obj_id,
+                        "start": char_range.0,
+                        "end": char_range.1,
+                        "underline": !eff_underline,
+                    }),
+                ));
+            }
         }
 
         if ui
@@ -3436,18 +3659,22 @@ fn show_text_controls(
             .on_hover_text("Strikethrough")
             .clicked()
         {
-            action_to_run = Some((
-                "text.style_range",
-                serde_json::json!({
-                    "slide": slide_id,
-                    "object": obj_id,
-                    "start": char_range.0,
-                    "end": char_range.1,
-                    "strikethrough": !eff_strike,
-                }),
-            ));
+            if let TextStyleTarget::Caret(pos) = target {
+                set_pending(props, pos, &|p| p.strikethrough = Some(!eff_strike));
+            } else {
+                action_to_run = Some((
+                    "text.style_range",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": obj_id,
+                        "start": char_range.0,
+                        "end": char_range.1,
+                        "strikethrough": !eff_strike,
+                    }),
+                ));
+            }
         }
-        for (label, tip, target) in [
+        for (label, tip, target_base) in [
             (
                 "x\u{b2}",
                 "Superscript",
@@ -3460,25 +3687,29 @@ fn show_text_controls(
             ),
         ] {
             if ui
-                .selectable_label(eff_baseline == target, label)
+                .selectable_label(eff_baseline == Some(target_base), label)
                 .on_hover_text(tip)
                 .clicked()
             {
-                let next = if eff_baseline == target {
+                let next = if eff_baseline == Some(target_base) {
                     coursecraft_course::Baseline::Normal
                 } else {
-                    target
+                    target_base
                 };
-                action_to_run = Some((
-                    "text.style_range",
-                    serde_json::json!({
-                        "slide": slide_id,
-                        "object": obj_id,
-                        "start": char_range.0,
-                        "end": char_range.1,
-                        "baseline": next,
-                    }),
-                ));
+                if let TextStyleTarget::Caret(pos) = target {
+                    set_pending(props, pos, &|p| p.baseline = Some(next));
+                } else {
+                    action_to_run = Some((
+                        "text.style_range",
+                        serde_json::json!({
+                            "slide": slide_id,
+                            "object": obj_id,
+                            "start": char_range.0,
+                            "end": char_range.1,
+                            "baseline": next,
+                        }),
+                    ));
+                }
             }
         }
     });

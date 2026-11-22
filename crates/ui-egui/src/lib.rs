@@ -216,6 +216,8 @@ mod spacing_tests;
 #[cfg(test)]
 mod spell_check_tests;
 #[cfg(test)]
+mod style_toggles_tests;
+#[cfg(test)]
 mod templates_tests;
 #[cfg(test)]
 pub(crate) mod test_harness;

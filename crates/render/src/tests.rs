@@ -8461,3 +8461,107 @@ fn text_layout_custom_bullets_numbering_schemes_start_at_and_nested_continuation
         vec!["1.", "2.", "3.", "a)", "b)", "4.", "i.", "ii.", "A.", "5)"]
     );
 }
+
+#[test]
+fn underline_segments_cover_only_underlined_chars_and_stay_continuous() {
+    use coursecraft_course::{Autofit, VAlign};
+    let ctx = egui::Context::default();
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 200.0));
+    let runs = vec![
+        crate::compose::ResolvedTextRun {
+            text: "bold+ ".into(),
+            size: 20.0,
+            color: Color32::BLACK,
+            bold: true,
+            italic: true,
+            underline: true,
+            link: None,
+            font: None,
+            strikethrough: false,
+            baseline: coursecraft_course::Baseline::Normal,
+            letter_spacing: 0.0,
+        },
+        crate::compose::ResolvedTextRun {
+            text: "italic".into(),
+            size: 20.0,
+            color: Color32::BLACK,
+            bold: true,
+            italic: false,
+            underline: false,
+            link: None,
+            font: None,
+            strikethrough: false,
+            baseline: coursecraft_course::Baseline::Normal,
+            letter_spacing: 0.0,
+        },
+        crate::compose::ResolvedTextRun {
+            text: " + underline\nnext ".into(),
+            size: 20.0,
+            color: Color32::BLACK,
+            bold: false,
+            italic: true,
+            underline: false,
+            link: None,
+            font: None,
+            strikethrough: false,
+            baseline: coursecraft_course::Baseline::Normal,
+            letter_spacing: 0.0,
+        },
+        crate::compose::ResolvedTextRun {
+            text: "part".into(),
+            size: 20.0,
+            color: Color32::BLACK,
+            bold: false,
+            italic: false,
+            underline: true,
+            link: None,
+            font: None,
+            strikethrough: false,
+            baseline: coursecraft_course::Baseline::Normal,
+            letter_spacing: 0.0,
+        },
+    ];
+    let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let laid = crate::text_layout::layout_text(
+            ui.ctx(),
+            rect,
+            1.0,
+            &runs,
+            &[],
+            coursecraft_course::Align::Left,
+            VAlign::Top,
+            Autofit::None,
+        );
+        assert_eq!(laid.paragraphs.len(), 2);
+
+        // Paragraph 0: only "bold+ " (chars 0..6) is underlined, as 1 continuous segment.
+        let p0 = &laid.paragraphs[0];
+        let segs0 = crate::text_layout::underline_segments(p0, p0.pos);
+        assert_eq!(
+            segs0.len(),
+            1,
+            "expected 1 underline segment in paragraph 0"
+        );
+        let g0_left = p0.pos.x + p0.galley.rows[0].pos.x + p0.galley.rows[0].glyphs[0].pos.x;
+        let g5 = &p0.galley.rows[0].glyphs[5];
+        let g5_right = p0.pos.x + p0.galley.rows[0].pos.x + g5.pos.x + g5.advance_width;
+        assert!((segs0[0].0[0].x - g0_left).abs() < 0.5);
+        assert!((segs0[0].0[1].x - g5_right).abs() < 0.5);
+
+        // Paragraph 1: only "part" (chars 5..9) is underlined, not "next ".
+        let p1 = &laid.paragraphs[1];
+        let segs1 = crate::text_layout::underline_segments(p1, p1.pos);
+        assert_eq!(
+            segs1.len(),
+            1,
+            "expected 1 underline segment in paragraph 1"
+        );
+        let g_p = &p1.galley.rows[0].glyphs[5];
+        let g_t = &p1.galley.rows[0].glyphs[8];
+        let expected_left = p1.pos.x + p1.galley.rows[0].pos.x + g_p.pos.x;
+        let expected_right = p1.pos.x + p1.galley.rows[0].pos.x + g_t.pos.x + g_t.advance_width;
+        assert!((segs1[0].0[0].x - expected_left).abs() < 0.5);
+        assert!((segs1[0].0[1].x - expected_right).abs() < 0.5);
+    });
+    out.textures_delta.clear();
+}

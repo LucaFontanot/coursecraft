@@ -4527,40 +4527,100 @@ fn apply_inline_edit_style_shortcut(
     toggle_italic: bool,
     toggle_underline: bool,
 ) {
-    let Some(cr) = cursor_range.filter(|cr| !cr.is_empty()) else {
+    let Some(cr) = cursor_range else {
         return;
     };
     let sorted = cr.as_sorted_char_range();
-    if sorted.start.0 == sorted.end.0 {
-        return;
-    }
+    let is_selection = !cr.is_empty() && sorted.start.0 != sorted.end.0;
     let char_range = (sorted.start.0, sorted.end.0);
-    let cursor_pos = sorted.start.0;
     let eff = editor
         .session
         .course
         .slide(&edit.slide)
         .and_then(|slide| slide.object(&edit.object))
         .and_then(|(obj, _)| match (&obj.kind, edit.cell) {
-            (coursecraft_course::ObjectKind::Text { style, runs, .. }, None) => {
-                Some(crate::properties::style_at_cursor(runs, style, cursor_pos))
-            }
+            (coursecraft_course::ObjectKind::Text { style, .. }, None) => Some(if is_selection {
+                crate::properties::style_for_range(&edit.live_runs, style, char_range)
+            } else {
+                crate::properties::style_at_cursor(&edit.live_runs, style, char_range.0)
+            }),
             (coursecraft_course::ObjectKind::Shape { fill, text, .. }, None) => {
                 let fallback = default_shape_text_style(fill);
                 let style = text.as_ref().map_or(&fallback, |t| &t.style);
-                let runs = text.as_ref().map_or(&[][..], |t| t.runs.as_slice());
-                Some(crate::properties::style_at_cursor(runs, style, cursor_pos))
+                Some(if is_selection {
+                    crate::properties::style_for_range(&edit.live_runs, style, char_range)
+                } else {
+                    crate::properties::style_at_cursor(&edit.live_runs, style, char_range.0)
+                })
             }
             (coursecraft_course::ObjectKind::Table { rows, .. }, Some((row, col))) => {
                 rows.get(row).and_then(|r| r.cells.get(col)).map(|cell| {
-                    crate::properties::style_at_cursor(&cell.runs, &cell.style, cursor_pos)
+                    if is_selection {
+                        crate::properties::style_for_range(&edit.live_runs, &cell.style, char_range)
+                    } else {
+                        crate::properties::style_at_cursor(
+                            &edit.live_runs,
+                            &cell.style,
+                            char_range.0,
+                        )
+                    }
                 })
             }
             _ => None,
         });
-    let Some((eff_bold, eff_italic, eff_underline, _, _)) = eff else {
+    let Some((mut eff_bold, mut eff_italic, mut eff_underline, _, _)) = eff else {
         return;
     };
+    if !is_selection {
+        let caret = char_range.0;
+        let matches_pending = editor
+            .ui
+            .properties
+            .pending_caret_style
+            .as_ref()
+            .is_some_and(|p| {
+                p.slide == edit.slide
+                    && p.object == edit.object
+                    && p.cell == edit.cell
+                    && p.cursor == caret
+            });
+        if matches_pending && let Some(pending) = &editor.ui.properties.pending_caret_style {
+            if let Some(b) = pending.patch.bold {
+                eff_bold = b;
+            }
+            if let Some(it) = pending.patch.italic {
+                eff_italic = it;
+            }
+            if let Some(u) = pending.patch.underline {
+                eff_underline = u;
+            }
+        }
+        let entry = editor
+            .ui
+            .properties
+            .pending_caret_style
+            .get_or_insert_with(|| crate::properties::PendingCaretStyle {
+                slide: edit.slide.clone(),
+                object: edit.object.clone(),
+                cell: edit.cell,
+                cursor: caret,
+                patch: coursecraft_course::TextRunPatch::default(),
+            });
+        entry.slide = edit.slide.clone();
+        entry.object = edit.object.clone();
+        entry.cell = edit.cell;
+        entry.cursor = caret;
+        if toggle_bold {
+            entry.patch.bold = Some(!eff_bold);
+        }
+        if toggle_italic {
+            entry.patch.italic = Some(!eff_italic);
+        }
+        if toggle_underline {
+            entry.patch.underline = Some(!eff_underline);
+        }
+        return;
+    }
     let mut params = serde_json::json!({
         "slide": edit.slide,
         "object": edit.object,
@@ -4811,6 +4871,75 @@ fn inline_edit_shrink(
         autofit,
     )
     .shrink
+}
+
+fn update_inline_edit_buffer(
+    editor: &mut Editor,
+    edit: &InlineEdit,
+    style: &coursecraft_course::TextStyle,
+    buffer: &str,
+) {
+    let Some(state) = editor.ui.inline_edit.as_mut() else {
+        return;
+    };
+    if buffer == state.buffer {
+        return;
+    }
+    let old_chars: Vec<char> = state.buffer.chars().collect();
+    let new_chars: Vec<char> = buffer.chars().collect();
+    let mut prefix = 0usize;
+    while prefix < old_chars.len()
+        && prefix < new_chars.len()
+        && old_chars.get(prefix) == new_chars.get(prefix)
+    {
+        prefix = prefix.saturating_add(1);
+    }
+    let max_suffix = old_chars
+        .len()
+        .saturating_sub(prefix)
+        .min(new_chars.len().saturating_sub(prefix));
+    let mut suffix = 0usize;
+    while suffix < max_suffix {
+        let old_idx = old_chars.len().saturating_sub(1).saturating_sub(suffix);
+        let new_idx = new_chars.len().saturating_sub(1).saturating_sub(suffix);
+        if old_chars.get(old_idx) == new_chars.get(new_idx) {
+            suffix = suffix.saturating_add(1);
+        } else {
+            break;
+        }
+    }
+    let inserted_end = new_chars.len().saturating_sub(suffix);
+    let mut next_runs =
+        coursecraft_course::apply_text_edit(&state.live_runs, &state.buffer, buffer);
+    if inserted_end > prefix
+        && let Some(pending) = editor.ui.properties.pending_caret_style.take()
+    {
+        if pending.slide == edit.slide
+            && pending.object == edit.object
+            && pending.cell == edit.cell
+            && pending.cursor == prefix
+        {
+            next_runs = coursecraft_course::apply_style_to_range_with_base(
+                &next_runs,
+                buffer,
+                (prefix, inserted_end),
+                &pending.patch,
+                Some(style),
+            );
+        }
+    } else if editor
+        .ui
+        .properties
+        .pending_caret_style
+        .as_ref()
+        .is_some_and(|p| p.slide == edit.slide && p.object == edit.object && p.cell == edit.cell)
+    {
+        editor.ui.properties.pending_caret_style = None;
+    }
+    state.live_runs = next_runs;
+    state.live_paragraphs =
+        coursecraft_course::align_paragraphs(&state.buffer, &state.live_paragraphs, buffer);
+    state.buffer = buffer.to_owned();
 }
 
 fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
@@ -5120,15 +5249,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         }
     }
 
-    if let Some(state) = editor.ui.inline_edit.as_mut()
-        && buffer != state.buffer
-    {
-        state.live_runs =
-            coursecraft_course::apply_text_edit(&state.live_runs, &state.buffer, &buffer);
-        state.live_paragraphs =
-            coursecraft_course::align_paragraphs(&state.buffer, &state.live_paragraphs, &buffer);
-        state.buffer = buffer.clone();
-    }
+    update_inline_edit_buffer(editor, &edit, &style, &buffer);
     if output.response.has_focus()
         && let Some(cr) = cursor_range
     {

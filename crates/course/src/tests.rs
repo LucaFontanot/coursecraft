@@ -5110,3 +5110,129 @@ fn course_string_locations_matches_course_strings() {
         .collect();
     assert_eq!(crate::course_string_locations(&c), expected);
 }
+
+#[test]
+fn apply_style_to_range_with_base_merges_cleanly_on_off_on() {
+    use crate::text::{TextRunPatch, apply_style_to_range_with_base};
+    use crate::{Baseline, TextStyle};
+
+    let base = TextStyle::default();
+    let plain = "bold+ italic + underline\nsecond line";
+    // Start with "bold+ " italic+bold, "italic" bold, " + underline" italic.
+    let initial = apply_style_to_range_with_base(
+        &[],
+        plain,
+        (0, 12),
+        &TextRunPatch {
+            bold: Some(true),
+            ..Default::default()
+        },
+        Some(&base),
+    );
+    let initial = apply_style_to_range_with_base(
+        &initial,
+        plain,
+        (0, 6),
+        &TextRunPatch {
+            italic: Some(true),
+            ..Default::default()
+        },
+        Some(&base),
+    );
+    let initial = apply_style_to_range_with_base(
+        &initial,
+        plain,
+        (12, 24),
+        &TextRunPatch {
+            italic: Some(true),
+            ..Default::default()
+        },
+        Some(&base),
+    );
+
+    // Toggle each style ON -> OFF -> ON on "italic" (6..12) and across two paragraphs (15..31).
+    for (range, patch_on, patch_off) in [
+        (
+            (6, 12),
+            TextRunPatch {
+                bold: Some(true),
+                ..Default::default()
+            },
+            TextRunPatch {
+                bold: Some(false),
+                ..Default::default()
+            },
+        ),
+        (
+            (6, 12),
+            TextRunPatch {
+                italic: Some(true),
+                ..Default::default()
+            },
+            TextRunPatch {
+                italic: Some(false),
+                ..Default::default()
+            },
+        ),
+        (
+            (6, 12),
+            TextRunPatch {
+                underline: Some(true),
+                ..Default::default()
+            },
+            TextRunPatch {
+                underline: Some(false),
+                ..Default::default()
+            },
+        ),
+        (
+            (15, 31),
+            TextRunPatch {
+                strikethrough: Some(true),
+                ..Default::default()
+            },
+            TextRunPatch {
+                strikethrough: Some(false),
+                ..Default::default()
+            },
+        ),
+        (
+            (15, 31),
+            TextRunPatch {
+                baseline: Some(Baseline::Superscript),
+                ..Default::default()
+            },
+            TextRunPatch {
+                baseline: Some(Baseline::Normal),
+                ..Default::default()
+            },
+        ),
+        (
+            (15, 31),
+            TextRunPatch {
+                baseline: Some(Baseline::Subscript),
+                ..Default::default()
+            },
+            TextRunPatch {
+                baseline: Some(Baseline::Normal),
+                ..Default::default()
+            },
+        ),
+    ] {
+        // For bold on (6..12), it starts true, so off -> on; for others, starts false, so on -> off.
+        let toggled_once = if patch_on.bold == Some(true) {
+            apply_style_to_range_with_base(&initial, plain, range, &patch_off, Some(&base))
+        } else {
+            apply_style_to_range_with_base(&initial, plain, range, &patch_on, Some(&base))
+        };
+        let toggled_back = if patch_on.bold == Some(true) {
+            apply_style_to_range_with_base(&toggled_once, plain, range, &patch_on, Some(&base))
+        } else {
+            apply_style_to_range_with_base(&toggled_once, plain, range, &patch_off, Some(&base))
+        };
+        assert_eq!(
+            toggled_back, initial,
+            "toggling {patch_on:?} on/off over {range:?} must restore exact runs"
+        );
+    }
+}

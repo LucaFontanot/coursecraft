@@ -11,7 +11,7 @@ use coursecraft_course::{
     SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide, SlideCue, SlideTarget, StateDef,
     TableBorders, TableCell, TableRow, TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition,
     Trigger, Trim, VAlign, Value, VarOp, VariableDef, WebSource, align_paragraphs,
-    apply_link_to_range, apply_style_to_range, apply_text_edit, course_string_locations,
+    apply_link_to_range, apply_style_to_range_with_base, apply_text_edit, course_string_locations,
     find_in_course, is_valid_link_url, normalize_table_fractions, paragraphs_for, parse_color,
     relative_luminance, replace_in_target, string_mut, table_cell_owners,
 };
@@ -7633,7 +7633,13 @@ fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
         baseline,
         letter_spacing,
     };
-    let new_runs = apply_style_to_range(parts.runs, parts.text, (range_start, range_end), &patch);
+    let new_runs = apply_style_to_range_with_base(
+        parts.runs,
+        parts.text,
+        (range_start, range_end),
+        &patch,
+        Some(parts.style),
+    );
     if new_runs.len() > 1000 {
         return Err(bad(C, "exceeded 1000 text runs"));
     }

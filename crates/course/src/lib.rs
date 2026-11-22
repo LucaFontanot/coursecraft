@@ -93,8 +93,9 @@ pub use strings::{
     variable_reference_spans,
 };
 pub use text::{
-    TextRunPatch, align_paragraphs, apply_link_to_range, apply_style_to_range, apply_text_edit,
-    normalize_runs, paragraph_range_at, paragraphs_for,
+    TextRunPatch, align_paragraphs, apply_link_to_range, apply_style_to_range,
+    apply_style_to_range_with_base, apply_text_edit, normalize_runs, paragraph_range_at,
+    paragraphs_for,
 };
 pub use validate::{Issue, MAX_CONDITION_DEPTH, Severity};
 
