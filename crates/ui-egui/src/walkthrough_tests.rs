@@ -263,7 +263,7 @@ fn configure_course_settings(harness: &mut TestHarness) {
     harness.click_at(proj);
     harness.idle_frame();
     let settings = harness
-        .find_text("Course Settings")
+        .find_text("Course settings")
         .expect("Course Settings menu item");
     harness.click_at(settings);
     // The window sizes itself over a few frames now that it holds more options.
@@ -272,9 +272,9 @@ fn configure_course_settings(harness: &mut TestHarness) {
     }
 
     let title_pos = harness
-        .find_text("Course Title")
+        .find_text("Course title")
         .map(|p| p + vec2(130.0, 0.0))
-        .expect("Course Title field");
+        .expect("Course title field");
     harness.set_field(title_pos, "Workplace Safety Basics");
 
     let id_pos = harness
@@ -283,8 +283,15 @@ fn configure_course_settings(harness: &mut TestHarness) {
         .expect("Course ID field");
     harness.set_field(id_pos, "hello-course");
 
-    let quiz_chk = harness
-        .find_text("Enable quiz grading and passing percentage")
+    let quiz_chk = (0..10)
+        .find_map(|_| {
+            if let Some(p) = harness.find_text("Enable quiz grading and passing percentage") {
+                Some(p)
+            } else {
+                harness.scroll_over(title_pos, -120.0);
+                None
+            }
+        })
         .expect("Quiz checkbox");
     harness.click_at(quiz_chk);
     harness.idle_frame();
@@ -381,8 +388,8 @@ fn build_intro_slide(harness: &mut TestHarness) {
     harness.set_field(layer_dur_rect.center(), "3000");
 
     let prev_chk = harness
-        .find_text("Stop clicks on the base layer")
-        .expect("Stop clicks checkbox");
+        .find_text("Block clicks on the base layer")
+        .expect("Block clicks checkbox");
     harness.click_at(prev_chk);
     harness.idle_frame();
     let ok = harness.find_text_last("OK").expect("Layer Settings OK");
@@ -535,8 +542,8 @@ fn build_tabs_slide(harness: &mut TestHarness) {
     harness.idle_frame();
 
     let add_var_label = harness
-        .find_text("Add Variable")
-        .expect("Add Variable label");
+        .find_text("Add variable")
+        .expect("Add variable label");
     harness.set_field(add_var_label + vec2(80.0, 0.0), "tabs_seen");
 
     let add_btn = harness
@@ -1629,6 +1636,8 @@ fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
     harness.editor.selection.clear_objects();
     harness.idle_frame();
     click_inspector_tab(&mut harness, "Slide");
+    let _ = scroll_to_label(&mut harness, "Notes");
+    harness.scroll_over(harness.right_panel_rect().center(), -80.0);
     let notes = scroll_to_label(&mut harness, "Notes");
     harness.click_at(notes + vec2(0.0, 40.0));
     harness.type_text("Welcome the learner.");

@@ -211,6 +211,44 @@ pub fn apply_text_edit(runs: &[TextRun], old_plain: &str, new_plain: &str) -> Ve
     normalize_runs(&prefix_runs)
 }
 
+/// Clear any override on `run` that already matches `base` so adjacent runs
+/// can merge back together after toggling a style off.
+fn strip_redundant_overrides(run: &mut TextRun, base: &crate::TextStyle) {
+    if run.bold == Some(base.bold) {
+        run.bold = None;
+    }
+    if run.italic == Some(base.italic) {
+        run.italic = None;
+    }
+    if run.underline == Some(base.underline) {
+        run.underline = None;
+    }
+    if run.strikethrough == Some(base.strikethrough) {
+        run.strikethrough = None;
+    }
+    if run.baseline == Some(base.baseline) {
+        run.baseline = None;
+    }
+    if run
+        .letter_spacing
+        .is_some_and(|ls| (ls - base.letter_spacing).abs() <= f32::EPSILON)
+    {
+        run.letter_spacing = None;
+    }
+    if run
+        .size
+        .is_some_and(|sz| (sz - base.size).abs() <= f32::EPSILON)
+    {
+        run.size = None;
+    }
+    if run.color.as_ref() == Some(&base.color) {
+        run.color = None;
+    }
+    if run.font.as_deref() == Some(base.font.as_str()) {
+        run.font = None;
+    }
+}
+
 /// Splits runs at the range edges and sets the given overrides on the covered part.
 ///
 /// An empty range applies to the whole text. If every run ends up with no overrides,
@@ -221,6 +259,19 @@ pub fn apply_style_to_range(
     plain_text: &str,
     char_range: (usize, usize),
     patch: &TextRunPatch,
+) -> Vec<TextRun> {
+    apply_style_to_range_with_base(runs_or_plain, plain_text, char_range, patch, None)
+}
+
+/// Like [`apply_style_to_range`], but also strips overrides that match `base`
+/// so toggling a style on and back off merges runs cleanly.
+#[must_use]
+pub fn apply_style_to_range_with_base(
+    runs_or_plain: &[TextRun],
+    plain_text: &str,
+    char_range: (usize, usize),
+    patch: &TextRunPatch,
+    base: Option<&crate::TextStyle>,
 ) -> Vec<TextRun> {
     if plain_text.is_empty() {
         return Vec::new();
@@ -358,6 +409,12 @@ pub fn apply_style_to_range(
         }
 
         cur_pos = run_end;
+    }
+
+    if let Some(base_style) = base {
+        for run in &mut split_runs {
+            strip_redundant_overrides(run, base_style);
+        }
     }
 
     let normalized = normalize_runs(&split_runs);

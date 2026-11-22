@@ -19,7 +19,7 @@ use crate::layout::SlideTransform;
 use crate::media::{LottieView, MediaCache, MediaSource, MediaView};
 use crate::path_geometry::{PathMeshSpec, path_mesh};
 use crate::shape_fill::{
-    fill_contours, fill_contours_shaded, fill_contours_uv, stroke_contours_pattern,
+    StrokeJoin, fill_contours, fill_contours_shaded, fill_contours_uv, stroke_contours_with_join,
 };
 use crate::shape_geometry::{shape_contours_adjusted, shape_text_rect};
 
@@ -628,12 +628,13 @@ pub fn paint_outline(
                 .collect()
         })
         .collect();
-    let mesh = stroke_contours_pattern(
+    let mesh = stroke_contours_with_join(
         &translated,
         outline.color,
         outline.width * scale,
         outline.dash,
         outline.dash_pattern.as_deref(),
+        StrokeJoin::from_outline(outline.join, outline.miter_limit),
         painter.pixels_per_point(),
     );
     if !mesh.is_empty() {
@@ -1322,18 +1323,20 @@ fn paint_path(
     };
     let points = to_screen(&path.points);
     let fill = path.fill.map(|color| apply_dim(color, dimmed, opacity));
-    let (outline_color, outline_width, dash, dash_pattern) = match &path.outline {
+    let (outline_color, outline_width, dash, dash_pattern, join) = match &path.outline {
         Some(outline) => (
             apply_dim(outline.color, dimmed, opacity),
             outline.width * scale,
             outline.dash,
             outline.dash_pattern.clone(),
+            StrokeJoin::from_outline(outline.join, outline.miter_limit),
         ),
         None => (
             Color32::TRANSPARENT,
             0.0,
             coursecraft_course::DashStyle::Solid,
             None,
+            StrokeJoin::default(),
         ),
     };
     if path.subpaths.is_empty() && path.fill_style.is_none() {
@@ -1349,6 +1352,7 @@ fn paint_path(
                 width: outline_width,
                 dash,
                 dash_pattern,
+                join,
                 fill,
                 pixels_per_point: painter.pixels_per_point(),
             },
@@ -1429,6 +1433,7 @@ fn paint_path(
                 width: outline_width,
                 dash,
                 dash_pattern: dash_pattern.clone(),
+                join,
                 fill: None,
                 pixels_per_point: painter.pixels_per_point(),
             },
@@ -1450,6 +1455,7 @@ fn paint_path(
                     width: outline_width,
                     dash,
                     dash_pattern: dash_pattern.clone(),
+                    join,
                     fill: None,
                     pixels_per_point: painter.pixels_per_point(),
                 },
@@ -1498,6 +1504,7 @@ fn paint_path_silhouette(
             width,
             dash: coursecraft_course::DashStyle::Solid,
             dash_pattern: None,
+            join: StrokeJoin::default(),
             fill,
             pixels_per_point: painter.pixels_per_point(),
         },
@@ -1656,36 +1663,27 @@ pub fn paint_items(
             0.0
         };
         let transformed = rotation != 0.0 || item.flip_h || item.flip_v;
-        let effect_margin = effect_margin(item, scale);
 
-        let mut item_painter = if transformed {
-            // The rotated frame's bounding box must be visible even when the
-            // unrotated frame is partly outside the slide. A wipe/fade clip
-            // still applies on top.
-            let bounds = transformed_bounds(
-                screen_rect.expand(effect_margin),
-                rotation,
-                item.flip_h,
-                item.flip_v,
-            );
-            let mut clip = bounds.intersect(slide_rect);
-            if let Some(frac) = item.clip {
-                let sub_x = shifted_item_rect.min.x + frac.min_x * shifted_item_rect.width();
-                let sub_y = shifted_item_rect.min.y + frac.min_y * shifted_item_rect.height();
-                let sub_w = (frac.max_x - frac.min_x) * shifted_item_rect.width();
-                let sub_h = (frac.max_y - frac.min_y) * shifted_item_rect.height();
-                let sub_rect = Rect::from_min_size(pos2(sub_x, sub_y), vec2(sub_w, sub_h));
-                clip = clip.intersect(t.to_screen_rect(sub_rect));
-            }
-            slide_painter.with_clip_rect(clip)
-        } else if let Some(clip) = item.clip {
-            let sub_x = shifted_item_rect.min.x + clip.min_x * shifted_item_rect.width();
-            let sub_y = shifted_item_rect.min.y + clip.min_y * shifted_item_rect.height();
-            let sub_w = (clip.max_x - clip.min_x) * shifted_item_rect.width();
-            let sub_h = (clip.max_y - clip.min_y) * shifted_item_rect.height();
+        let mut item_painter = if let Some(frac) = item.clip {
+            let sub_x = shifted_item_rect.min.x + frac.min_x * shifted_item_rect.width();
+            let sub_y = shifted_item_rect.min.y + frac.min_y * shifted_item_rect.height();
+            let sub_w = (frac.max_x - frac.min_x) * shifted_item_rect.width();
+            let sub_h = (frac.max_y - frac.min_y) * shifted_item_rect.height();
             let sub_rect = Rect::from_min_size(pos2(sub_x, sub_y), vec2(sub_w, sub_h));
             let screen_sub = t.to_screen_rect(sub_rect);
-            slide_painter.with_clip_rect(screen_sub.intersect(slide_rect))
+            let clip = if transformed {
+                let effect_margin = effect_margin(item, scale);
+                let bounds = transformed_bounds(
+                    screen_rect.expand(effect_margin),
+                    rotation,
+                    item.flip_h,
+                    item.flip_v,
+                );
+                bounds.intersect(slide_rect).intersect(screen_sub)
+            } else {
+                screen_sub.intersect(slide_rect)
+            };
+            slide_painter.with_clip_rect(clip)
         } else {
             slide_painter.clone()
         };
@@ -1718,6 +1716,8 @@ pub fn paint_items(
                         width: outline.width,
                         dash: outline.dash,
                         dash_pattern: outline.dash_pattern.clone(),
+                        join: outline.join,
+                        miter_limit: outline.miter_limit,
                     };
                     paint_outline(
                         &item_painter,
@@ -2029,6 +2029,8 @@ pub fn paint_items(
                         width: outline.width,
                         dash: outline.dash,
                         dash_pattern: outline.dash_pattern.clone(),
+                        join: outline.join,
+                        miter_limit: outline.miter_limit,
                     };
                     paint_outline(&item_painter, screen_rect, *shape, adjust, &resolved, scale);
                 }
@@ -2316,6 +2318,8 @@ pub fn paint_items(
                         width: outline.width,
                         dash: outline.dash,
                         dash_pattern: outline.dash_pattern.clone(),
+                        join: outline.join,
+                        miter_limit: outline.miter_limit,
                     };
                     paint_outline(
                         &item_painter,
@@ -2330,7 +2334,12 @@ pub fn paint_items(
             Visual::ImagePlaceholder { label } => {
                 draw_image_placeholder(&item_painter, screen_rect, scale, label, item.dimmed, op);
             }
-            Visual::Video { src: _, poster } => {
+            Visual::Video {
+                src: _,
+                poster,
+                playing,
+                show_placeholder,
+            } => {
                 // Desktop playback: draw the newest decoded frame as a texture
                 // when one exists, with the poster as the fallback.
                 let mut drawn_frame = false;
@@ -2365,69 +2374,83 @@ pub fn paint_items(
                         }
                     }
                 }
-                if drawn_frame {
-                    continue;
+                if !drawn_frame {
+                    let bg = apply_dim(Color32::from_rgb(0x1A, 0x1A, 0x1A), item.dimmed, op);
+                    item_painter.rect_filled(screen_rect, CornerRadius::ZERO, bg);
+                    let border = apply_dim(Color32::from_rgb(0x33, 0x33, 0x33), item.dimmed, op);
+                    let stroke_w = (1.0 * scale).max(1.0);
+                    item_painter.rect_stroke(
+                        screen_rect,
+                        CornerRadius::ZERO,
+                        Stroke::new(stroke_w, border),
+                        StrokeKind::Inside,
+                    );
                 }
-                let bg = apply_dim(Color32::from_rgb(0x1A, 0x1A, 0x1A), item.dimmed, op);
-                item_painter.rect_filled(screen_rect, CornerRadius::ZERO, bg);
-                let border = apply_dim(Color32::from_rgb(0x33, 0x33, 0x33), item.dimmed, op);
-                let stroke_w = (1.0 * scale).max(1.0);
-                item_painter.rect_stroke(
-                    screen_rect,
-                    CornerRadius::ZERO,
-                    Stroke::new(stroke_w, border),
-                    StrokeKind::Inside,
-                );
 
-                // Play icon in center
+                // Poster text (on editor canvas) or plain error message if preview decode failed.
+                let error_text = if drawn_frame {
+                    None
+                } else {
+                    media.as_ref().and_then(|(_, source)| {
+                        if let Hit::Object(id) = &item.hit {
+                            source.video_error(id)
+                        } else {
+                            None
+                        }
+                    })
+                };
+                let label = if let Some(err) = error_text {
+                    Some(err.to_owned())
+                } else if !drawn_frame && *show_placeholder {
+                    Some("Video plays in the published course".to_owned())
+                } else {
+                    None
+                };
+
                 let center = screen_rect.center();
                 let play_radius = (24.0 * scale).min(screen_rect.height() * 0.25).max(4.0);
-                let circle_color = apply_dim(
-                    Color32::from_rgba_unmultiplied(255, 255, 255, 48),
-                    item.dimmed,
-                    op,
-                );
-                item_painter.circle_filled(
-                    pos2(center.x, center.y - 12.0 * scale),
-                    play_radius,
-                    circle_color,
-                );
+                let icon_offset_y = if label.is_some() { 12.0 * scale } else { 0.0 };
+                if !*playing {
+                    let icon_center = pos2(center.x, center.y - icon_offset_y);
+                    let circle_color = apply_dim(
+                        Color32::from_rgba_unmultiplied(0, 0, 0, 140),
+                        item.dimmed,
+                        op,
+                    );
+                    item_painter.circle_filled(icon_center, play_radius, circle_color);
 
-                let tri_size = play_radius * 0.5;
-                let tri_center_y = center.y - 12.0 * scale;
-                let tri_points = vec![
-                    pos2(center.x - tri_size * 0.5, tri_center_y - tri_size * 0.7),
-                    pos2(center.x + tri_size * 0.8, tri_center_y),
-                    pos2(center.x - tri_size * 0.5, tri_center_y + tri_size * 0.7),
-                ];
-                let tri_color = apply_dim(Color32::WHITE, item.dimmed, op);
-                item_painter.add(PathShape::convex_polygon(
-                    tri_points,
-                    tri_color,
-                    Stroke::NONE,
-                ));
+                    let tri_size = play_radius * 0.5;
+                    let tri_points = vec![
+                        pos2(center.x - tri_size * 0.5, icon_center.y - tri_size * 0.7),
+                        pos2(center.x + tri_size * 0.8, icon_center.y),
+                        pos2(center.x - tri_size * 0.5, icon_center.y + tri_size * 0.7),
+                    ];
+                    let tri_color = apply_dim(Color32::WHITE, item.dimmed, op);
+                    item_painter.add(PathShape::convex_polygon(
+                        tri_points,
+                        tri_color,
+                        Stroke::NONE,
+                    ));
+                }
 
-                // Poster text (or plain error message if preview decode failed)
-                let error_text = media.as_ref().and_then(|(_, source)| {
-                    if let Hit::Object(id) = &item.hit {
-                        source.video_error(id)
-                    } else {
-                        None
-                    }
-                });
-                let label = error_text
-                    .unwrap_or("Video plays in the published course")
-                    .to_string();
-                let font_size = (14.0 * scale).max(1.0);
-                let font_id = crate::font::slide_font(item_painter.ctx(), false, false, font_size);
-                let text_color = apply_dim(Color32::from_rgb(0xAA, 0xAA, 0xAA), item.dimmed, op);
-                let galley =
-                    item_painter.layout(label, font_id, text_color, screen_rect.width().max(0.0));
-                let text_pos = pos2(
-                    center.x - galley.size().x * 0.5,
-                    center.y + play_radius + 4.0 * scale - 12.0 * scale,
-                );
-                item_painter.galley(text_pos, galley, text_color);
+                if let Some(label) = label {
+                    let font_size = (14.0 * scale).max(1.0);
+                    let font_id =
+                        crate::font::slide_font(item_painter.ctx(), false, false, font_size);
+                    let text_color =
+                        apply_dim(Color32::from_rgb(0xAA, 0xAA, 0xAA), item.dimmed, op);
+                    let galley = item_painter.layout(
+                        label,
+                        font_id,
+                        text_color,
+                        screen_rect.width().max(0.0),
+                    );
+                    let text_pos = pos2(
+                        center.x - galley.size().x * 0.5,
+                        center.y + play_radius + 4.0 * scale - icon_offset_y,
+                    );
+                    item_painter.galley(text_pos, galley, text_color);
+                }
             }
             Visual::Web { label } => {
                 draw_web_placeholder(&item_painter, screen_rect, scale, label, item.dimmed, op);

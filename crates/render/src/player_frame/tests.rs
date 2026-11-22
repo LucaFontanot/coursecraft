@@ -266,6 +266,7 @@ fn disabled_player_flags_ignore_keyboard_and_buttons() {
 fn idle_strip_hides_and_reappears_on_activity() {
     let (_course, player) = hello();
     let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.overlay_strip = true;
     harness.run(&player, Vec::new());
 
     harness.frame.hide_strip();
@@ -288,6 +289,7 @@ fn idle_strip_hides_and_reappears_on_activity() {
 fn reduced_motion_keeps_the_strip_visible() {
     let (_course, player) = hello();
     let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.overlay_strip = true;
     harness.frame.reduced_motion = true;
     harness.frame.hide_strip();
     harness.run(&player, Vec::new());
@@ -676,6 +678,7 @@ fn controls(frame: &PlayerFrame) -> Vec<(ChromeButton, Rect)> {
 fn play_and_pause_send_the_runtime_inputs_and_keep_the_strip_visible() {
     let (_course, mut player) = hello();
     let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.overlay_strip = true;
     harness.run(&player, Vec::new());
     let play = control(&harness.frame, ChromeButton::PlayPause).center();
 
@@ -1919,4 +1922,983 @@ fn a15_separate_replay_button_still_works_at_end() {
     apply_inputs(&mut player, &out.inputs);
     assert_eq!(player.state().slide, initial_slide);
     assert_eq!(player.seek_info().elapsed_ms, 0);
+}
+
+struct AreaHarness {
+    ctx: egui::Context,
+    frame: PlayerFrame,
+    view: SlideView,
+    screen_size: Vec2,
+    player_area: Rect,
+    time: f64,
+}
+
+impl AreaHarness {
+    fn new(screen_size: Vec2, player_area: Rect) -> Self {
+        Self {
+            ctx: egui::Context::default(),
+            frame: PlayerFrame::new(),
+            view: SlideView::new(),
+            screen_size,
+            player_area,
+            time: 0.1,
+        }
+    }
+
+    fn run(
+        &mut self,
+        player: &Player<'_>,
+        dt: f64,
+        events: Vec<Event>,
+    ) -> (FrameOutput, Vec<egui::epaint::ClippedShape>) {
+        self.time += dt;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), self.screen_size)),
+            time: Some(self.time),
+            events,
+            ..Default::default()
+        };
+        let mut output = FrameOutput::default();
+        let frame = &mut self.frame;
+        let view = &mut self.view;
+        let area = self.player_area;
+        let full = self.ctx.run_ui(raw, |ui| {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
+            child.set_clip_rect(area);
+            output = frame.show(&mut child, player, view, None);
+        });
+        let shapes = full.shapes.clone();
+        full.drop_without_applying_deltas();
+        (output, shapes)
+    }
+}
+
+fn assert_shapes_within(shapes: &[egui::epaint::ClippedShape], bounds: Rect, phase: &str) {
+    let drawer_bg = egui::Color32::from_rgb(0x2F, 0x2F, 0x33);
+    let mut saw_drawer_bg = false;
+    for clipped in shapes {
+        assert!(
+            clipped.clip_rect.left() >= bounds.left() - 0.5
+                && clipped.clip_rect.right() <= bounds.right() + 0.5
+                && clipped.clip_rect.top() >= bounds.top() - 0.5
+                && clipped.clip_rect.bottom() <= bounds.bottom() + 0.5,
+            "{phase}: shape clip_rect {:?} escaped player area {:?}",
+            clipped.clip_rect,
+            bounds
+        );
+        if let egui::epaint::Shape::Rect(rect_shape) = &clipped.shape
+            && rect_shape.fill == drawer_bg
+        {
+            saw_drawer_bg = true;
+            assert!(
+                rect_shape.rect.left() >= bounds.left() - 0.5
+                    && rect_shape.rect.right() <= bounds.right() + 0.5,
+                "{phase}: drawer background rect {:?} escaped player area {:?}",
+                rect_shape.rect,
+                bounds
+            );
+        }
+    }
+    assert!(
+        saw_drawer_bg,
+        "{phase}: expected drawer background to be painted"
+    );
+}
+
+#[test]
+fn drawer_clips_to_player_area_at_offset_rect_during_entire_animation() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    course.resources.push(coursecraft_course::Resource {
+        id: "res-1".to_owned(),
+        title: "Course Guide".to_owned(),
+        target: coursecraft_course::ResourceTarget::Url {
+            url: "https://example.com".to_owned(),
+        },
+    });
+    course.glossary.push(coursecraft_course::GlossaryEntry {
+        id: "gl-1".to_owned(),
+        term: "SCORM".to_owned(),
+        definition: "Sharable Content Object Reference Model".to_owned(),
+    });
+    course.player.show_menu = true;
+    course.player.show_transcript = true;
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    for (screen, area) in [
+        (
+            vec2(1280.0, 900.0),
+            Rect::from_min_size(pos2(180.0, 60.0), vec2(920.0, 580.0)),
+        ),
+        (
+            vec2(1600.0, 1000.0),
+            Rect::from_min_size(pos2(320.0, 120.0), vec2(960.0, 640.0)),
+        ),
+        (
+            vec2(1000.0, 700.0),
+            Rect::from_min_size(pos2(240.0, 40.0), vec2(520.0, 420.0)),
+        ),
+    ] {
+        for tab in [
+            crate::drawer::DrawerTab::Menu,
+            crate::drawer::DrawerTab::Resources,
+            crate::drawer::DrawerTab::Glossary,
+            crate::drawer::DrawerTab::Transcript,
+        ] {
+            let mut area_harness = AreaHarness::new(screen, area);
+
+            // Initialize frame.
+            area_harness.run(&player, 0.0, Vec::new());
+
+            // First animation frame (dt = 0.02s -> progress ~ 0.077).
+            area_harness.run(&player, 0.02, vec![key(egui::Key::M)]);
+            let (_, shapes_first) = area_harness.run(&player, 0.02, Vec::new());
+            assert_shapes_within(
+                &shapes_first,
+                area,
+                &format!("first frame {tab:?} {area:?}"),
+            );
+
+            // Middle of animation (dt = 0.09s -> progress ~ 0.50).
+            let (_, shapes_mid) = area_harness.run(&player, 0.09, Vec::new());
+            assert_shapes_within(&shapes_mid, area, &format!("mid frame {tab:?} {area:?}"));
+
+            // End of animation (settled).
+            let (_, shapes_end) = area_harness.run(&player, 0.25, Vec::new());
+            assert_shapes_within(&shapes_end, area, &format!("end frame {tab:?} {area:?}"));
+            let settled = area_harness
+                .frame
+                .drawer_rect()
+                .expect("drawer rect at end");
+            assert!(
+                (settled.left() - area.left()).abs() < 0.5,
+                "settled drawer left {} should equal area left {}",
+                settled.left(),
+                area.left()
+            );
+
+            // Switch tab while open and verify it stays clipped.
+            if tab != crate::drawer::DrawerTab::Menu {
+                let tab_rect = area_harness
+                    .frame
+                    .chrome_rect(&ChromeButton::DrawerTab(tab))
+                    .expect("tab rect");
+                let (_, shapes_tab) = area_harness.run(&player, 0.05, click(tab_rect.center()));
+                assert_shapes_within(&shapes_tab, area, &format!("tab {tab:?} {area:?}"));
+            }
+        }
+    }
+}
+
+#[test]
+fn drawer_clips_to_player_area_at_letterboxed_and_fullscreen_sizes() {
+    let (_course, player) = hello();
+    for size in [
+        vec2(1600.0, 720.0), // wider than 16:9 slide aspect
+        vec2(800.0, 900.0),  // taller than 16:9 slide aspect
+        vec2(1280.0, 720.0), // fullscreen 16:9
+    ] {
+        let area = Rect::from_min_size(pos2(0.0, 0.0), size);
+        let mut area_harness = AreaHarness::new(size, area);
+
+        area_harness.run(&player, 0.0, Vec::new());
+        let (_, shapes_first) = area_harness.run(&player, 0.02, vec![key(egui::Key::M)]);
+        assert_shapes_within(&shapes_first, area, &format!("first frame {size:?}"));
+
+        let (_, shapes_mid) = area_harness.run(&player, 0.10, Vec::new());
+        assert_shapes_within(&shapes_mid, area, &format!("mid frame {size:?}"));
+
+        let (_, shapes_end) = area_harness.run(&player, 0.25, Vec::new());
+        assert_shapes_within(&shapes_end, area, &format!("end frame {size:?}"));
+        let settled = area_harness.frame.drawer_rect().expect("drawer rect");
+        assert!((settled.left() - area.left()).abs() < 0.5);
+    }
+}
+
+#[test]
+fn reserved_strip_never_overlaps_slide_across_aspects_and_sizes() {
+    use coursecraft_course::{ObjectKind, Rect as CourseRect, Size};
+
+    let aspects = [
+        ("16:9", Size { w: 1280, h: 720 }),
+        ("4:3", Size { w: 1024, h: 768 }),
+        ("portrait", Size { w: 720, h: 1280 }),
+    ];
+
+    for (label, slide_size) in aspects {
+        let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+        course.slide_size = slide_size;
+        let mut video_obj = course.scenes[0].slides[0].objects[0].clone();
+        video_obj.id = "vid-1".to_owned();
+        video_obj.name = "Video".to_owned();
+        video_obj.frame = CourseRect {
+            x: 0.0,
+            y: (slide_size.h as f32) - 180.0,
+            w: 320.0,
+            h: 180.0,
+        };
+        video_obj.kind = ObjectKind::Video {
+            src: "clip.mp4".to_owned(),
+            poster: None,
+            autoplay: true,
+            captions: Some("clip.vtt".to_owned()),
+            volume: 1.0,
+            trim: None,
+            cues: Vec::new(),
+        };
+        course.scenes[0].slides[0].objects.push(video_obj);
+        let boxed: &'static Course = Box::leak(Box::new(course));
+        let mut player = Player::new(boxed).expect("valid player");
+        player.handle(&Input::Start);
+
+        let expected_aspect = slide_size.w as f32 / slide_size.h as f32;
+        let cases: &[(&str, Vec2, bool)] = &[
+            ("wider", vec2(1600.0, 500.0), false),
+            ("taller", vec2(420.0, 900.0), false),
+            (
+                "exact",
+                vec2(slide_size.w as f32, slide_size.h as f32),
+                false,
+            ),
+            ("tiny", vec2(240.0, 160.0), false),
+            ("fullscreen", vec2(1280.0, 720.0), true),
+        ];
+
+        for &(case_name, size, fullscreen) in cases {
+            let mut harness = Harness::new(size.x, size.y);
+            harness.frame.can_fullscreen = true;
+            harness.frame.fullscreen = fullscreen;
+            harness.frame.captions_on = true;
+            harness
+                .frame
+                .set_caption_frame(Some(crate::media_driver::CaptionFrame {
+                    object: "vid-1".to_owned(),
+                    kind: coursecraft_playback::MediaKind::Audio,
+                    text: "Sample caption line".to_owned(),
+                    rect: None,
+                }));
+
+            // Advance past 2.5 s idle to verify default reserved strip does not auto-hide.
+            harness.time = 0.0;
+            harness.run(&player, Vec::new());
+            harness.time = 4.0;
+            let output = harness.run(&player, Vec::new());
+
+            let player_rect = Rect::from_min_size(pos2(0.0, 0.0), size);
+            let bar_rect = harness
+                .frame
+                .strip_rect()
+                .unwrap_or_else(|| panic!("{label}/{case_name}: strip_rect missing"));
+            let slide_rect = output.slide_rect;
+
+            assert!(
+                slide_rect.is_positive(),
+                "{label}/{case_name}: slide_rect must be positive, got {slide_rect:?}"
+            );
+            assert!(
+                slide_rect.left() >= player_rect.left() - 0.5
+                    && slide_rect.right() <= player_rect.right() + 0.5
+                    && slide_rect.top() >= player_rect.top() - 0.5
+                    && slide_rect.bottom() <= player_rect.bottom() + 0.5,
+                "{label}/{case_name}: slide_rect {slide_rect:?} escaped {player_rect:?}"
+            );
+            assert!(
+                !slide_rect.intersects(bar_rect),
+                "{label}/{case_name}: slide_rect {slide_rect:?} intersects bar_rect {bar_rect:?}"
+            );
+            assert!(
+                slide_rect.bottom() < bar_rect.top(),
+                "{label}/{case_name}: slide bottom {} must be above bar top {}",
+                slide_rect.bottom(),
+                bar_rect.top()
+            );
+
+            let actual_aspect = slide_rect.width() / slide_rect.height();
+            assert!(
+                (actual_aspect - expected_aspect).abs() < 0.02,
+                "{label}/{case_name}: aspect {actual_aspect} != {expected_aspect}"
+            );
+
+            let transform = harness.view.last_transform().expect("transform");
+            let vid_item = harness
+                .view
+                .last_items()
+                .iter()
+                .find(|item| matches!(item.hit, crate::Hit::Object(ref id) if id == "vid-1"))
+                .expect("video item");
+            let vid_screen = transform.to_screen_rect(vid_item.rect);
+            assert!(
+                vid_screen.left() >= slide_rect.left() - 0.5
+                    && vid_screen.right() <= slide_rect.right() + 0.5
+                    && vid_screen.top() >= slide_rect.top() - 0.5
+                    && vid_screen.bottom() <= slide_rect.bottom() + 0.5,
+                "{label}/{case_name}: video rect {vid_screen:?} escaped slide_rect {slide_rect:?}"
+            );
+            assert!(
+                !vid_screen.intersects(bar_rect),
+                "{label}/{case_name}: video rect {vid_screen:?} intersects bar_rect {bar_rect:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rendered_bottom_edge_textbox_is_fully_visible_above_bar() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    let mut box_obj = course.scenes[0].slides[0].objects[0].clone();
+    box_obj.id = "bottom-box".to_owned();
+    box_obj.name = "Bottom Box".to_owned();
+    box_obj.frame = coursecraft_course::Rect {
+        x: 240.0,
+        y: 640.0,
+        w: 800.0,
+        h: 80.0,
+    };
+    box_obj.kind = coursecraft_course::ObjectKind::Shape {
+        shape: coursecraft_course::ShapeKind::Rectangle,
+        fill: coursecraft_course::Color("#E02020".to_owned()),
+        fill_style: None,
+        outline: None,
+        text: None,
+        adjust: Vec::new(),
+    };
+    course.scenes[0].slides[0].objects.push(box_obj);
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    struct EmptyMedia;
+    impl crate::media::MediaSource for EmptyMedia {
+        fn get(&self, _src: &str) -> crate::media::MediaFetch {
+            crate::media::MediaFetch::Missing
+        }
+    }
+
+    let mut frame = PlayerFrame::new();
+    frame.reduced_motion = true;
+    let mut view = SlideView::new();
+    view.set_reduced_motion(true);
+    let mut cache = crate::media::MediaCache::new();
+    let media = EmptyMedia;
+    let img = crate::offscreen::render_ui(
+        1280,
+        720,
+        1.0,
+        |_ctx| {},
+        |ctx| {
+            ctx.root_ui(|ui| {
+                frame.show(ui, &player, &mut view, Some((&mut cache, &media)));
+            });
+        },
+    )
+    .expect("render");
+
+    let slide_rect = frame.slide_rect().expect("slide_rect");
+    let bar_rect = frame.strip_rect().expect("strip_rect");
+    assert!(slide_rect.bottom() < bar_rect.top());
+
+    // Sample near the very bottom edge of the bottom-edge box inside slide_rect.
+    let sample_x = slide_rect.center().x as u32;
+    let sample_y = (slide_rect.bottom() - 4.0) as u32;
+    let idx = ((sample_y as usize) * (img.width as usize) + sample_x as usize) * 4;
+    let (r, g, b) = (img.pixels[idx], img.pixels[idx + 1], img.pixels[idx + 2]);
+    assert!(
+        r > 180 && g < 80 && b < 80,
+        "bottom-edge box should be fully visible above the bar, got ({r}, {g}, {b}) at ({sample_x}, {sample_y})"
+    );
+}
+
+#[test]
+fn overlay_strip_explicit_opt_in_auto_hides_and_uses_full_area() {
+    let (_course, player) = hello();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.overlay_strip = true;
+    let out = harness.run(&player, Vec::new());
+    assert_eq!(
+        out.slide_rect,
+        Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 720.0))
+    );
+    harness.frame.hide_strip();
+    harness.run(&player, Vec::new());
+    assert!(harness.frame.strip_rect().is_none());
+}
+
+fn find_tooltip_popup_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<Rect> {
+    fn collect(shape: &egui::epaint::Shape, out: &mut Vec<Rect>) {
+        match shape {
+            egui::epaint::Shape::Rect(r) => {
+                if r.fill != egui::Color32::TRANSPARENT {
+                    out.push(r.rect);
+                }
+            }
+            egui::epaint::Shape::Vec(v) => {
+                for s in v {
+                    collect(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        collect(&clipped.shape, &mut out);
+    }
+    out
+}
+
+fn has_painted_text(shapes: &[egui::epaint::ClippedShape], needle: &str) -> bool {
+    fn walk(shape: &egui::epaint::Shape, needle: &str) -> bool {
+        match shape {
+            egui::epaint::Shape::Text(t) => t.galley.text().contains(needle),
+            egui::epaint::Shape::Vec(v) => v.iter().any(|s| walk(s, needle)),
+            _ => false,
+        }
+    }
+    shapes.iter().any(|c| walk(&c.shape, needle))
+}
+
+#[test]
+fn speed_popup_clamps_to_player_area_and_closes_on_escape_regardless_of_pointer() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    // Hide fullscreen and keep 1 slide so speed sits right at the right edge of the strip.
+    course.player.show_fullscreen = false;
+    course.scenes[0].slides.truncate(1);
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    // Narrow inset player area (520x600 at (100, 50)) so an unclamped centered
+    // 72pt speed popup would spill past the right edge of `full`.
+    let full = Rect::from_min_size(pos2(100.0, 50.0), vec2(520.0, 600.0));
+    let mut harness = Harness::new(800.0, 800.0);
+    harness.frame.can_speed = true;
+    let run_inset = |h: &mut Harness, events: Vec<Event>| {
+        h.time += 0.1;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), h.size)),
+            time: Some(h.time),
+            events,
+            ..Default::default()
+        };
+        let frame = &mut h.frame;
+        let view = &mut h.view;
+        let full_out = h.ctx.run_ui(raw, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(full), |ui| {
+                frame.show(ui, &player, view, None);
+            });
+        });
+        h.last_shapes = full_out.shapes.clone();
+        full_out.drop_without_applying_deltas();
+    };
+
+    run_inset(&mut harness, Vec::new());
+    run_inset(&mut harness, Vec::new());
+    let speed_rect = harness
+        .frame
+        .chrome_rect(&ChromeButton::Speed)
+        .expect("speed button");
+    run_inset(&mut harness, click(speed_rect.center()));
+    run_inset(&mut harness, Vec::new());
+    assert!(
+        has_painted_text(&harness.last_shapes, "2×"),
+        "speed popup should be open"
+    );
+
+    // Check every painted rect on the speed popup (the 72pt-wide popup background)
+    // stays completely inside `full`.
+    let popup_rects: Vec<Rect> = find_tooltip_popup_rects(&harness.last_shapes)
+        .into_iter()
+        .filter(|r| (r.width() - 72.0).abs() < 0.5 && r.height() > 100.0)
+        .collect();
+    assert!(!popup_rects.is_empty(), "expected speed popup rect");
+    for r in &popup_rects {
+        assert!(
+            full.contains_rect(*r),
+            "speed popup {r:?} must stay inside player area {full:?}"
+        );
+    }
+
+    // Hovering INSIDE the speed popup and pressing Escape must close it (SUS-23).
+    let inside_popup = popup_rects[0].center();
+    run_inset(
+        &mut harness,
+        vec![Event::PointerMoved(inside_popup), key(egui::Key::Escape)],
+    );
+    run_inset(&mut harness, Vec::new());
+    assert!(
+        !has_painted_text(&harness.last_shapes, "2×"),
+        "Escape while hovering speed popup must close it"
+    );
+
+    // Reopen and press Escape with NO pointer position (keyboard-only, SUS-23).
+    run_inset(&mut harness, click(speed_rect.center()));
+    run_inset(&mut harness, Vec::new());
+    assert!(has_painted_text(&harness.last_shapes, "2×"));
+    run_inset(
+        &mut harness,
+        vec![Event::PointerGone, key(egui::Key::Escape)],
+    );
+    run_inset(&mut harness, Vec::new());
+    assert!(
+        !has_painted_text(&harness.last_shapes, "2×"),
+        "Escape with no pointer position must close speed popup"
+    );
+}
+
+#[test]
+fn fullscreen_button_tooltip_reflects_fullscreen_state() {
+    let (_course, player) = hello();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness
+        .ctx
+        .all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+    harness.frame.can_fullscreen = true;
+    harness.run(&player, Vec::new());
+
+    let fs_center = harness
+        .frame
+        .chrome_rect(&ChromeButton::Fullscreen)
+        .expect("fullscreen button")
+        .center();
+
+    // Windowed: tooltip should read "Full screen".
+    harness.run(&player, vec![Event::PointerMoved(fs_center)]);
+    harness.time += 1.0;
+    harness.run(&player, vec![Event::PointerMoved(fs_center)]);
+    assert!(
+        has_painted_text(&harness.last_shapes, "Full screen"),
+        "expected 'Full screen' tooltip when not fullscreen"
+    );
+    assert!(
+        !has_painted_text(&harness.last_shapes, "Exit full screen"),
+        "unexpected 'Exit full screen' tooltip when not fullscreen"
+    );
+
+    // Fullscreen: tooltip should read "Exit full screen".
+    harness.frame.fullscreen = true;
+    harness.time += 1.0;
+    harness.run(&player, vec![Event::PointerMoved(fs_center)]);
+    assert!(
+        has_painted_text(&harness.last_shapes, "Exit full screen"),
+        "expected 'Exit full screen' tooltip when fullscreen"
+    );
+}
+
+fn collect_text_shapes_in_rect(
+    shapes: &[egui::epaint::ClippedShape],
+    container: Rect,
+) -> Vec<(String, Rect, egui::Color32)> {
+    fn walk(
+        shape: &egui::epaint::Shape,
+        clip: Rect,
+        container: Rect,
+        out: &mut Vec<(String, Rect, egui::Color32)>,
+    ) {
+        match shape {
+            egui::epaint::Shape::Text(t) => {
+                let r = t.visual_bounding_rect();
+                if r.is_positive()
+                    && clip.intersects(container)
+                    && container.intersects(r)
+                    && clip.right() <= container.right() + 2.0
+                {
+                    let color = if t.override_text_color.is_some() {
+                        t.override_text_color.unwrap_or(egui::Color32::WHITE)
+                    } else if let Some(sec) = t.galley.job.sections.first() {
+                        sec.format.color
+                    } else {
+                        egui::Color32::WHITE
+                    };
+                    out.push((t.galley.text().to_string(), r, color));
+                }
+            }
+            egui::epaint::Shape::Vec(v) => {
+                for s in v {
+                    walk(s, clip, container, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, clipped.clip_rect, container, &mut out);
+    }
+    out
+}
+
+#[test]
+fn t14_1_responsive_player_strip_across_six_browser_sizes() {
+    let (_course, player) = hello();
+    let sizes = [
+        (320.0, 568.0),
+        (390.0, 844.0),
+        (844.0, 390.0),
+        (768.0, 1024.0),
+        (1280.0, 720.0),
+        (1920.0, 1080.0),
+    ];
+    for (w, h) in sizes {
+        let mut harness = Harness::new(w, h);
+        harness.frame.can_fullscreen = true;
+        harness.frame.can_speed = true;
+        harness.run(&player, Vec::new());
+
+        let strip = harness
+            .frame
+            .strip_rect()
+            .unwrap_or_else(|| panic!("strip rect missing at {w}x{h}"));
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, h));
+        assert!(
+            screen.expand(1.5).contains_rect(strip),
+            "strip {strip:?} overflows viewport {w}x{h}"
+        );
+
+        let play = harness
+            .frame
+            .chrome_rect(&ChromeButton::PlayPause)
+            .unwrap_or_else(|| panic!("play button missing at {w}x{h}"));
+        assert!(
+            play.width() >= 36.0 && play.height() >= 36.0,
+            "play button {play:?} < 36x36 at {w}x{h}"
+        );
+        let next = harness
+            .frame
+            .chrome_rect(&ChromeButton::Next)
+            .unwrap_or_else(|| panic!("next button missing at {w}x{h}"));
+        assert!(
+            next.width() >= 36.0 && next.height() >= 36.0,
+            "next button {next:?} < 36x36 at {w}x{h}"
+        );
+
+        // No chrome buttons on the strip may overlap each other.
+        let strip_buttons = controls(&harness.frame);
+        let strip_buttons: Vec<(ChromeButton, Rect)> = strip_buttons
+            .into_iter()
+            .filter(|(_, r)| strip.intersects(*r) && r.width() > 0.0 && r.height() > 0.0)
+            .collect();
+        for i in 0..strip_buttons.len() {
+            for j in (i + 1)..strip_buttons.len() {
+                let inter = strip_buttons[i].1.intersect(strip_buttons[j].1);
+                assert!(
+                    !inter.is_positive() || (inter.width() <= 1.0 && inter.height() <= 1.0),
+                    "strip controls {:?} and {:?} overlap at {w}x{h}: {inter:?}",
+                    strip_buttons[i].0,
+                    strip_buttons[j].0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn t14_3_drawer_long_titles_tabs_resources_and_glossary_truncate() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid hello course");
+    let long_100 = "VeryLongTitleForTestingDrawerTruncationAndNoOverlapWithIconsInThe320pxDrawerPanel_0123456789_012345";
+    course.title = long_100.to_string();
+    course.scenes[0].title = long_100.to_string();
+    course.scenes[0].slides[0].title = long_100.to_string();
+    course.resources.push(coursecraft_course::Resource {
+        id: "res1".into(),
+        title: long_100.to_string(),
+        target: coursecraft_course::ResourceTarget::Url {
+            url: "https://example.com".into(),
+        },
+    });
+    course.glossary.push(coursecraft_course::GlossaryEntry {
+        id: "gl1".into(),
+        term: long_100.to_string(),
+        definition: "Definition of long glossary term.".into(),
+    });
+    course.player.show_menu = true;
+    course.player.show_transcript = true;
+    course.scenes[0].slides[0].notes = "Speaker transcript text.".into();
+
+    let mut player = Player::new(&course).expect("valid player");
+    player.handle(&Input::Start);
+    let mut harness = Harness::new(1280.0, 720.0);
+    open_drawer(&mut harness, &player);
+
+    let drawer = harness.frame.drawer_rect().expect("drawer rect");
+
+    // 1. Menu tab: slide title must fit within drawer bounds (must not overflow right edge)
+    let texts = collect_text_shapes_in_rect(&harness.last_shapes, drawer);
+    for (text, rect, _) in &texts {
+        assert!(
+            rect.right() <= drawer.right() + 1.0,
+            "drawer text '{text}' overflows drawer right edge: rect={rect:?} drawer={drawer:?}"
+        );
+    }
+
+    // 2. Resources tab: resource title must not overlap ArrowSquareOut icon (drawer.right() - 28)
+    let res_tab = harness
+        .frame
+        .chrome_rect(&ChromeButton::DrawerTab(super::DrawerTab::Resources))
+        .expect("resources tab");
+    harness.run(
+        &player,
+        vec![
+            Event::PointerButton {
+                pos: res_tab.center(),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            Event::PointerButton {
+                pos: res_tab.center(),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    harness.run(&player, Vec::new());
+    let res_texts = collect_text_shapes_in_rect(&harness.last_shapes, drawer);
+    for (text, rect, _) in &res_texts {
+        if text.starts_with("VeryLong") {
+            assert!(
+                rect.right() <= drawer.right() - 32.0,
+                "resource title '{text}' overlaps external icon: rect={rect:?} drawer={drawer:?}"
+            );
+        }
+    }
+
+    // 3. Glossary tab: glossary term must fit within drawer bounds
+    let gl_tab = harness
+        .frame
+        .chrome_rect(&ChromeButton::DrawerTab(super::DrawerTab::Glossary))
+        .expect("glossary tab");
+    harness.run(
+        &player,
+        vec![
+            Event::PointerButton {
+                pos: gl_tab.center(),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            Event::PointerButton {
+                pos: gl_tab.center(),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    );
+    harness.run(&player, Vec::new());
+    let gl_texts = collect_text_shapes_in_rect(&harness.last_shapes, drawer);
+    for (text, rect, _) in &gl_texts {
+        assert!(
+            rect.right() <= drawer.right() + 1.0,
+            "glossary text '{text}' overflows drawer right edge: rect={rect:?} drawer={drawer:?}"
+        );
+    }
+}
+
+#[test]
+fn t14_6_player_chrome_contrast_under_bright_pastel_and_dark_themes() {
+    let themes = [
+        ("default", "#1B1B1B", "#F2F2F5", "#0A6CFF"),
+        ("light", "#FFFFFF", "#1D1D1F", "#0A6CFF"),
+        ("bright_yellow", "#1B1B1B", "#F2F2F5", "#FFD60A"),
+    ];
+
+    for (name, bar_hex, text_hex, accent_hex) in themes {
+        let mut course = Course::from_json(HELLO_JSON).expect("valid hello course");
+        course.theme.player.bar = coursecraft_course::Color(bar_hex.into());
+        course.theme.player.bar_text = coursecraft_course::Color(text_hex.into());
+        course.theme.accent = coursecraft_course::Color(accent_hex.into());
+        course.player.show_menu = true;
+        course.scenes[0].slides[0].duration_ms = 0; // triggers disabled seekbar time label
+        course.resources.push(coursecraft_course::Resource {
+            id: "r1".into(),
+            title: "Guide".into(),
+            target: coursecraft_course::ResourceTarget::Url {
+                url: "https://example.com".into(),
+            },
+        });
+
+        let mut player = Player::new(&course).expect("valid player");
+        player.handle(&Input::Start);
+        let mut harness = Harness::new(1280.0, 720.0);
+        harness.frame.captions_on = true;
+        open_drawer(&mut harness, &player);
+
+        let accent = super::parse_color(&course.theme.accent).unwrap();
+        let bar = super::parse_color(&course.theme.player.bar).unwrap();
+
+        // 1. Selected drawer tab text contrast against `accent`
+        let menu_tab = harness
+            .frame
+            .chrome_rect(&ChromeButton::DrawerTab(super::DrawerTab::Menu))
+            .expect("menu tab");
+        let tab_texts = collect_text_shapes_in_rect(&harness.last_shapes, menu_tab);
+        for (label, _, fg) in &tab_texts {
+            let cr = crate::design::contrast_ratio(*fg, accent);
+            assert!(
+                cr >= 4.5,
+                "[{name}] selected drawer tab '{label}' fg={fg:?} on accent={accent:?} has contrast {cr:.2} < 4.5"
+            );
+        }
+
+        // 2. Captions active icon contrast against `accent` (when present)
+        if let Some(cap_rect) = harness.frame.chrome_rect(&ChromeButton::Captions) {
+            let cap_texts = collect_text_shapes_in_rect(&harness.last_shapes, cap_rect);
+            for (_, _, fg) in &cap_texts {
+                let cr = crate::design::contrast_ratio(*fg, accent);
+                assert!(
+                    cr >= 3.0,
+                    "[{name}] active captions icon fg={fg:?} on accent={accent:?} has contrast {cr:.2} < 3.0"
+                );
+            }
+        }
+
+        // 3. Disabled seekbar time label contrast against `bar`
+        let strip = harness.frame.strip_rect().expect("strip");
+        let strip_texts = collect_text_shapes_in_rect(&harness.last_shapes, strip);
+        for (label, _, fg) in &strip_texts {
+            if label.contains(':') {
+                let [fr, fg_c, fb, fa] = fg.to_srgba_unmultiplied();
+                let a = f32::from(fa) / 255.0;
+                let blended = egui::Color32::from_rgb(
+                    (f32::from(fr) * a + f32::from(bar.r()) * (1.0 - a)).round() as u8,
+                    (f32::from(fg_c) * a + f32::from(bar.g()) * (1.0 - a)).round() as u8,
+                    (f32::from(fb) * a + f32::from(bar.b()) * (1.0 - a)).round() as u8,
+                );
+                let cr = crate::design::contrast_ratio(blended, bar);
+                assert!(
+                    cr >= 3.0,
+                    "[{name}] disabled time '{label}' blended={blended:?} on bar={bar:?} has contrast {cr:.2} < 3.0"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn t14_7_banners_captions_and_lightbox_close_never_collide() {
+    let (_course, player) = hello();
+    for (w, h) in [(390.0, 844.0), (1280.0, 720.0)] {
+        let mut harness = Harness::new(w, h);
+        harness.frame.captions_on = true;
+        harness
+            .frame
+            .set_caption_frame(Some(crate::media_driver::CaptionFrame {
+                object: "vid-1".to_owned(),
+                kind: coursecraft_playback::MediaKind::Audio,
+                text: "Sample audio caption text for overlap testing.".into(),
+                rect: None,
+            }));
+        harness.frame.notice = Some("Session notice message".into());
+        harness.run(&player, Vec::new());
+
+        let strip = harness.frame.strip_rect().expect("strip");
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(w, h));
+        // Captions and notice must stay inside screen and above strip
+        let texts = collect_text_shapes_in_rect(&harness.last_shapes, screen);
+        let caption_rect = texts
+            .iter()
+            .find(|(t, _, _)| t.contains("Sample audio caption"))
+            .map(|(_, r, _)| *r);
+        let notice_rect = texts
+            .iter()
+            .find(|(t, _, _)| t.contains("Session notice"))
+            .map(|(_, r, _)| *r);
+        if let Some(cr) = caption_rect {
+            assert!(
+                cr.bottom() <= strip.top() + 1.0,
+                "caption {cr:?} overlaps strip {strip:?} at {w}x{h}"
+            );
+        }
+        if let (Some(cr), Some(nr)) = (caption_rect, notice_rect) {
+            assert!(
+                !cr.intersects(nr),
+                "caption {cr:?} overlaps notice {nr:?} at {w}x{h}"
+            );
+        }
+    }
+}
+
+#[test]
+fn bar_off_uses_full_frame_without_strip_and_ignores_arrow_keys_and_menu() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    course.player.show_bar = false;
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.run(&player, Vec::new());
+
+    assert!(
+        harness.frame.strip_rect().is_none(),
+        "bar off must not draw or reserve a strip"
+    );
+    let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 720.0));
+    let expected_slide = super::slide_rect(full, &player);
+    assert_eq!(harness.frame.slide_rect(), Some(expected_slide));
+
+    let output = harness.run(&player, vec![key(egui::Key::ArrowRight)]);
+    assert!(
+        !output
+            .inputs
+            .iter()
+            .any(|input| matches!(input, Input::Next | Input::Previous)),
+        "arrow keys must not navigate when bar is off"
+    );
+    let output = harness.run(&player, vec![key(egui::Key::M)]);
+    assert!(output.inputs.is_empty());
+    assert!(!harness.frame.drawer_open());
+
+    // A trigger with Next still advances.
+    let first_id = player.current_slide().expect("slide").id.clone();
+    player.handle(&Input::Next);
+    assert_ne!(player.current_slide().expect("slide").id, first_id);
+}
+
+#[test]
+fn slide_show_bar_override_wins_both_ways() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    course.player.show_bar = true;
+    course.slide_mut("s-intro").expect("intro").player =
+        Some(coursecraft_course::SlidePlayerOverrides {
+            show_bar: Some(false),
+            ..Default::default()
+        });
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.run(&player, Vec::new());
+    assert!(harness.frame.strip_rect().is_none());
+
+    player.handle(&Input::Jump {
+        slide: "s-tabs".into(),
+    });
+    harness.run(&player, Vec::new());
+    assert!(harness.frame.strip_rect().is_some());
+
+    // Now test course show_bar = false with per-slide show_bar = Some(true).
+    let mut course2 = Course::from_json(HELLO_JSON).expect("valid course");
+    course2.player.show_bar = false;
+    course2.slide_mut("s-intro").expect("intro").player =
+        Some(coursecraft_course::SlidePlayerOverrides {
+            show_bar: Some(true),
+            ..Default::default()
+        });
+    let boxed2: &'static Course = Box::leak(Box::new(course2));
+    let mut player2 = Player::new(boxed2).expect("valid player");
+    player2.handle(&Input::Start);
+
+    let mut harness2 = Harness::new(1280.0, 720.0);
+    harness2.run(&player2, Vec::new());
+    assert!(harness2.frame.strip_rect().is_some());
+
+    player2.handle(&Input::Jump {
+        slide: "s-tabs".into(),
+    });
+    harness2.run(&player2, Vec::new());
+    assert!(harness2.frame.strip_rect().is_none());
 }

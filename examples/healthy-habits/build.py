@@ -418,6 +418,7 @@ trig(s, {"event": "timeline_starts"}, setv("tips_opened", 0.0))
 # ------------------------------------------------------------------ 5. Video with cues and captions
 s = "video"
 setup(s, CREAM, T_COVER("bottom"), "Follow along with three gentle stretches you can do at your desk.", duration=15000)
+slide(s)["revisit"] = "reset"
 add(s, eyebrow("v_eyebrow", "LESSON 1  ·  MOVE", 80, 52))
 add(s, heading("v_title", "Three stretches you can do at your desk", 78, 80, 1000))
 vid = add(s, obj("v_video", "Stretch video", {"type": "video", "src": "stretch.mp4", "autoplay": False, "captions": "stretch.vtt", "cues": [
@@ -587,6 +588,7 @@ trig(s, click("breathe_next"), jump("next"))
 # ------------------------------------------------------------------ 10. Steps (process steps insert)
 s = "steps"
 setup(s, CREAM, T_PUSH("right"), "Use Next and Back to walk through the four steps.")
+slide(s)["revisit"] = "reset"
 steps4 = [("Sit tall", "Feet flat, hands resting in your lap. Let your shoulders drop away from your ears."),
           ("Breathe in · 4", "Breathe in slowly through your nose while you count to four."),
           ("Hold · 4", "Hold the breath gently, without strain, for another count of four."),
@@ -752,6 +754,7 @@ for i in (1, 2, 3):
 # ------------------------------------------------------------------ 16. Tips (reveal grid insert)
 s = "tips"
 setup(s, CREAM, T_PUSH("right"), "Tap each tile to reveal a quick win.")
+slide(s)["revisit"] = "reset"
 add(s, eyebrow("tp_eyebrow", "SIX QUICK WINS", 80, 40))
 tips = [("Stand for calls", "Every phone call is a chance to stand and walk."),
         ("Stairs first", "One flight up beats the lift for your heart."),

@@ -112,7 +112,7 @@ pub fn show_export_dialog(
     let mut close_after = false;
     let desktop = editor.file_ops_available && !cfg!(target_arch = "wasm32");
 
-    Dialog::new("Export Video")
+    Dialog::new("Export video")
         .width(380.0)
         .open(&mut open)
         .show(ctx, |ui| {
@@ -135,17 +135,17 @@ pub fn show_export_dialog(
 
             ui.horizontal(|ui| {
                 ui.label(small("Frame rate").size(SIZE_BODY).color(p.text_secondary));
-                egui::ComboBox::from_id_salt("export-video-fps")
-                    .selected_text(format!("{} fps", editor.ui.export_fps))
-                    .show_ui(ui, |ui| {
-                        for fps in [24u32, 30u32] {
-                            ui.selectable_value(
-                                &mut editor.ui.export_fps,
-                                fps,
-                                format!("{fps} fps"),
-                            );
-                        }
-                    });
+                crate::widgets::styled_combo(
+                    ui,
+                    "export-video-fps",
+                    crate::widgets::COMBO_MIN_WIDTH,
+                )
+                .selected_text(format!("{} fps", editor.ui.export_fps))
+                .show_ui(ui, |ui| {
+                    for fps in [24u32, 30u32] {
+                        ui.selectable_value(&mut editor.ui.export_fps, fps, format!("{fps} fps"));
+                    }
+                });
             });
             ui.add_space(SPACE_MD);
 
@@ -174,7 +174,8 @@ pub fn show_export_dialog(
                         close_after = true;
                     }
                 } else {
-                    ui.add_enabled(false, egui::Button::new("Export…"));
+                    ui.add_enabled(false, egui::Button::new("Export…"))
+                        .on_disabled_hover_text("Available in the desktop app");
                 }
                 if ui.button("Cancel").clicked() {
                     close_after = true;
@@ -202,7 +203,7 @@ pub fn show_export_review_dialog(
     let desktop = editor.file_ops_available && !cfg!(target_arch = "wasm32");
     let label = editor.ui.review_format.label();
 
-    Dialog::new("Export for Review")
+    Dialog::new("Export for review")
         .width(380.0)
         .open(&mut open)
         .show(ctx, |ui| {
@@ -246,7 +247,8 @@ pub fn show_export_review_dialog(
                         close_after = true;
                     }
                 } else {
-                    ui.add_enabled(false, egui::Button::new("Export…"));
+                    ui.add_enabled(false, egui::Button::new("Export…"))
+                        .on_disabled_hover_text("Available in the desktop app");
                 }
                 if ui.button("Cancel").clicked() {
                     close_after = true;

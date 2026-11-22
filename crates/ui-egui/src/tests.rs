@@ -3555,7 +3555,7 @@ fn preview_on_intro_slide() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let preview = Preview::new(&course, Some("s-intro"));
     assert!(preview.is_valid());
-    assert_eq!(preview.course.start_slide.as_deref(), Some("s-intro"));
+    assert!(preview.is_partial_preview());
     assert!(preview.errors.is_empty());
     assert!(preview.state.is_some());
     assert!(preview.log.iter().any(|l| l.contains("s-intro")));
@@ -4424,6 +4424,92 @@ fn course_settings_shows_course_values_on_a_fresh_course() {
     assert_eq!(s.passing_percent, 80);
     // The title is actually painted in the dialog's text field.
     assert!(harness.find_text("Workplace Safety Basics").is_some());
+}
+
+#[test]
+fn course_settings_player_bar_switch_disables_bar_options_and_updates_course() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new_with_size(course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    for _ in 0..5 {
+        harness.idle_frame();
+    }
+
+    assert!(harness.editor.session.course.player.show_bar);
+    let bar_toggle = harness
+        .find_text_last("Player bar")
+        .expect("Player bar switch");
+    harness.click_at(bar_toggle);
+    harness.idle_frame();
+    assert!(!harness.editor.session.course.player.show_bar);
+
+    // Disabled bar options are marked disabled and show the tooltip.
+    let seekbar_node = harness
+        .last_widgets
+        .iter()
+        .find(|n| n.label.as_deref() == Some("Show seekbar"))
+        .cloned()
+        .expect("Show seekbar widget");
+    assert!(seekbar_node.disabled, "Show seekbar must be disabled");
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(seekbar_node.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Turn the player bar on to use this"),
+        "disabled bar option must show tooltip, got {tip:?}"
+    );
+}
+
+#[test]
+fn slide_properties_player_bar_override_updates_slide() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.screen_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 1100.0));
+    harness.editor.selection.object = None;
+    harness.editor.selection.layer = None;
+    for _ in 0..5 {
+        harness.idle_frame();
+    }
+
+    let slide_id = harness.editor.selection.slide.clone();
+    assert_eq!(
+        harness
+            .editor
+            .session
+            .course
+            .slide(&slide_id)
+            .and_then(|s| s.player.as_ref())
+            .and_then(|o| o.show_bar),
+        None
+    );
+
+    // Click the "Course default" combo next to "Player bar" in Slide Properties.
+    let bar_label = harness
+        .find_text("Player bar")
+        .expect("Player bar label in properties");
+    let combo_pos = harness
+        .find_texts("Course default")
+        .into_iter()
+        .min_by_key(|p| ((p.y - bar_label.y).abs() * 10.0) as i32)
+        .expect("Course default combo for Player bar");
+    harness.click_at(combo_pos);
+    harness.idle_frame();
+
+    let off_pos = harness.find_text_last("Off").expect("Off option");
+    harness.click_at(off_pos);
+    harness.idle_frame();
+
+    assert_eq!(
+        harness
+            .editor
+            .session
+            .course
+            .slide(&slide_id)
+            .and_then(|s| s.player.as_ref())
+            .and_then(|o| o.show_bar),
+        Some(false)
+    );
 }
 
 #[test]
@@ -5308,7 +5394,7 @@ fn image_replace_and_reset_to_natural_size() {
     assert_eq!(obj_after.frame.w, 2.0);
     assert_eq!(obj_after.frame.h, 2.0);
 
-    harness.editor.pending_replace_object = Some(obj.id.clone());
+    harness.editor.pending_image_pick = Some(PendingImagePick::ReplaceObject(obj.id.clone()));
     let src2 = harness.editor.import_image("second.png", &png).unwrap();
     assert_eq!(src2, "second.png");
     let slide_replaced = harness
@@ -7454,7 +7540,7 @@ fn showcase_media_library_harness() -> TestHarness {
 #[test]
 fn media_library_lists_showcase_files_and_usage_counts() {
     let mut harness = showcase_media_library_harness();
-    assert!(harness.find_text("Media Library").is_some());
+    assert!(harness.find_text("Media library").is_some());
     for name in ["banner.png", "chime.wav", "floorplan.png", "intro.mp4"] {
         assert!(
             harness.find_text(name).is_some(),
@@ -7614,8 +7700,8 @@ fn view_menu_toggles_the_media_library_window() {
     harness.click_at(view);
     harness.idle_frame();
     let media_library = harness
-        .find_text("Media Library")
-        .expect("Media Library item");
+        .find_text("Media library")
+        .expect("Media library item");
     harness.click_at(media_library);
     assert!(harness.editor.ui.show_media_library);
 }
@@ -8951,8 +9037,8 @@ fn hotspot_panel_asks_for_an_image_that_is_not_in_media_and_opens_the_picker() {
         .expect("Choose image button");
     let requests = click_for_requests(&mut harness, choose);
     assert_eq!(
-        harness.editor.pending_replace_object.as_deref(),
-        Some(image.as_str())
+        harness.editor.pending_image_pick,
+        Some(PendingImagePick::ReplaceObject(image.clone()))
     );
     assert!(
         requests
@@ -11909,7 +11995,7 @@ fn ungroup_is_disabled_for_an_ungrouped_object_in_the_canvas_menu() {
 }
 
 #[test]
-fn restart_preview_opened_on_a_later_slide_goes_to_the_course_start() {
+fn restart_preview_opened_on_a_later_slide_restarts_that_slide_subset() {
     let mut session = coursecraft_engine::Session::blank("Restart from the start");
     let scene = session.course.scenes[0].id.clone();
     session
@@ -11921,9 +12007,12 @@ fn restart_preview_opened_on_a_later_slide_goes_to_the_course_start() {
     let last = session.course.scenes[0].slides[1].id.clone();
 
     let mut preview = Preview::new(&session.course, Some(&last));
-    assert_eq!(preview.state.as_ref().map(|s| s.slide), Some(1));
+    assert!(preview.is_partial_preview());
+    assert_eq!(preview.state.as_ref().map(|s| s.slide), Some(0));
+    assert!(preview.log.iter().any(|l| l.contains(&last)));
     preview.restart();
     assert_eq!(preview.state.as_ref().map(|s| s.slide), Some(0));
+    assert!(preview.log.iter().any(|l| l.contains(&last)));
 }
 
 #[test]
@@ -14805,7 +14894,7 @@ fn story_view_toggle_toolbar_and_shortcut() {
     harness.idle_frame();
     assert!(!harness.editor.ui.story_view);
     // Toolbar toggle.
-    let story = harness.find_text("Story").expect("Story toolbar toggle");
+    let story = harness.find_text("Map").expect("Map toolbar toggle");
     harness.click_at(story);
     harness.idle_frame();
     assert!(harness.editor.ui.story_view, "toolbar toggle opens the map");
@@ -15056,7 +15145,7 @@ fn story_view_toggle_does_nothing_in_master_view() {
     );
     assert!(harness.editor.ui.master_view);
     // Toolbar toggle does nothing.
-    let story = harness.find_text("Story").expect("Story toolbar toggle");
+    let story = harness.find_text("Map").expect("Map toolbar toggle");
     harness.click_at(story);
     harness.idle_frame();
     assert!(
@@ -15966,7 +16055,7 @@ fn export_video_opens_from_the_file_menu() {
         "Export Video dialog opened"
     );
     assert!(
-        harness.find_text("Export Video").is_some(),
+        harness.find_text("Export video").is_some(),
         "dialog title is painted"
     );
 }
@@ -16071,7 +16160,7 @@ fn export_review_menu_items_open_the_dialog_with_the_right_format() {
     assert!(harness.editor.ui.show_export_review, "the dialog opened");
     assert_eq!(harness.editor.ui.review_format, ReviewFormat::Pdf);
     assert!(
-        harness.find_text("Export for Review").is_some(),
+        harness.find_text("Export for review").is_some(),
         "dialog title is painted"
     );
 
@@ -16669,8 +16758,8 @@ fn find_replace_message_clears_after_undo() {
     harness.idle_frame();
 
     let button = harness
-        .find_text("Replace All")
-        .expect("Replace All button");
+        .find_text("Replace all")
+        .expect("Replace all button");
     harness.click_at(button);
     harness.idle_frame();
     assert!(harness.editor.ui.find.message.is_some());
@@ -17213,15 +17302,15 @@ fn version_history_menu_item_is_disabled_without_a_file_and_opens_with_one() {
     assert!(h.find_text("2026-11-11 15:30:45 UTC").is_some());
     assert!(h.find_text("12 slides").is_some());
     assert!(h.find_text("Damaged").is_some());
-    let open = h.find_text("Open as Copy").expect("Open as Copy button");
+    let open = h.find_text("Open as copy").expect("Open as copy button");
     let requests = click_collect(&mut h, open);
     assert!(requests.iter().any(|r| matches!(
         r,
         EditorRequest::OpenVersionCopy { id } if id == "20261111-153045"
     )));
-    // The damaged row can only be deleted: one Open as Copy button in all.
+    // The damaged row can only be deleted: one Open as copy button in all.
     h.idle_frame();
-    assert_eq!(h.find_texts("Open as Copy").len(), 1);
+    assert_eq!(h.find_texts("Open as copy").len(), 1);
     assert_eq!(h.find_texts("Delete").len(), 2);
 }
 

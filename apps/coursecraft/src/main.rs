@@ -49,6 +49,8 @@ mod files_tests;
 mod m27_files_ui_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod u16_shell_tests;
 #[cfg(test)]
 mod versions_tests;
 
@@ -1211,8 +1213,8 @@ impl EditorApp {
             EditorRequest::PickImage => {
                 let picked = files::pick_image_file();
                 if picked.is_none() {
-                    // Cancelled: a picture fill waiting for this file is off.
-                    self.editor.pending_picture_fill = None;
+                    // Cancelled: any pending pick waiting for this file is off.
+                    self.editor.pending_image_pick = None;
                 }
                 if let Some(path) = picked {
                     let name = path
@@ -1574,7 +1576,7 @@ impl EditorApp {
                 } else if is_lottie {
                     self.editor.import_lottie(&name, &bytes);
                 } else if is_vtt {
-                    if self.editor.pending_replace_object.is_none()
+                    if self.editor.pending_image_pick.is_none()
                         && let Some(obj_id) = self.editor.selection.object.clone()
                         && let Some(slide) = self
                             .editor
@@ -1588,7 +1590,8 @@ impl EditorApp {
                                 | coursecraft_course::ObjectKind::Video { .. }
                         )
                     {
-                        self.editor.pending_replace_object = Some(obj_id);
+                        self.editor.pending_image_pick =
+                            Some(coursecraft_ui_egui::PendingImagePick::ReplaceObject(obj_id));
                     }
                     self.editor.import_captions(&name, &bytes);
                 } else {
@@ -2848,6 +2851,12 @@ impl EditorApp {
         #[cfg(not(target_arch = "wasm32"))]
         paste_image::maybe_paste_image(ui.ctx(), &mut self.editor);
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let shell_modal_esc = (self.pending_action.is_some()
+            || self.conflict_prompt.is_some()
+            || self.error_modal.is_some())
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+
         // 4. Editor main UI
         let _requests = self.editor.show(ui);
 
@@ -2893,131 +2902,173 @@ impl EditorApp {
             // Unsaved changes confirmation modal
             if self.pending_action.is_some() {
                 let modal_id = egui::Id::unique("unsaved_changes_modal");
-                egui::Modal::new(modal_id).show(ui.ctx(), |ui| {
-                    let name = self.project.file_name_display();
-                    ui.heading(format!("Save changes to {name}?"));
-                    ui.add_space(8.0);
-                    ui.label("Your changes will be lost if you don't save them.");
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Save").clicked()
-                            && self.perform_save()
-                            && let Some(action) = self.pending_action.take()
-                        {
-                            self.execute_pending_action(action, ui.ctx());
-                        }
-                        if ui.button("Don't Save").clicked()
-                            && let Some(action) = self.pending_action.take()
-                        {
-                            self.execute_pending_action(action, ui.ctx());
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.pending_action = None;
-                        }
+                let mode = self.prefs.theme.resolve(ui.ctx());
+                let modal = egui::Modal::new(modal_id)
+                    .backdrop_color(coursecraft_ui_egui::modal_backdrop_color(mode))
+                    .show(ui.ctx(), |ui| {
+                        ui.set_max_width(480.0);
+                        let name = self.project.file_name_display();
+                        ui.heading(format!("Save changes to {name}?"));
+                        ui.add_space(8.0);
+                        ui.add(
+                            egui::Label::new("Your changes will be lost if you don't save them.")
+                                .wrap(),
+                        );
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if coursecraft_ui_egui::primary_button(ui, "Save").clicked()
+                                && self.perform_save()
+                                && let Some(action) = self.pending_action.take()
+                            {
+                                self.execute_pending_action(action, ui.ctx());
+                            }
+                            if ui.button("Don't Save").clicked()
+                                && let Some(action) = self.pending_action.take()
+                            {
+                                self.execute_pending_action(action, ui.ctx());
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.pending_action = None;
+                            }
+                        });
                     });
-                });
+                if modal.should_close() || shell_modal_esc {
+                    self.pending_action = None;
+                }
             }
 
             // The file changed on disk since it was opened or saved.
             if let Some(prompt) = self.conflict_prompt.clone() {
                 let modal_id = egui::Id::unique("changed_on_disk_modal");
-                egui::Modal::new(modal_id).show(ui.ctx(), |ui| {
-                    let name = self.project.file_name_display();
-                    if prompt.files.is_empty() {
-                        ui.heading("This file changed since you opened it");
-                        ui.add_space(8.0);
-                        ui.label(format!(
-                            "{name} was changed by another app or computer. Overwrite it with what you have here, or keep both by saving a copy."
-                        ));
-                    } else {
-                        ui.heading("This folder changed since you opened it");
-                        ui.add_space(8.0);
-                        ui.label(changed_files_message(&name, &prompt.files));
-                    }
-                    ui.add_space(12.0);
-                    let mut done = false;
-                    let mut saved = false;
-                    ui.horizontal(|ui| {
-                        if ui.button("Overwrite").clicked() {
-                            saved = self.save_project_file(true);
-                            done = true;
+                let mode = self.prefs.theme.resolve(ui.ctx());
+                let mut done = false;
+                let mut saved = false;
+                let modal = egui::Modal::new(modal_id)
+                    .backdrop_color(coursecraft_ui_egui::modal_backdrop_color(mode))
+                    .show(ui.ctx(), |ui| {
+                        ui.set_max_width(480.0);
+                        let name = self.project.file_name_display();
+                        if prompt.files.is_empty() {
+                            ui.heading("This file changed since you opened it");
+                            ui.add_space(8.0);
+                            ui.add(
+                                egui::Label::new(format!(
+                                    "{name} was changed by another app or computer. Overwrite it with what you have here, or keep both by saving a copy."
+                                ))
+                                .wrap(),
+                            );
+                        } else {
+                            ui.heading("This folder changed since you opened it");
+                            ui.add_space(8.0);
+                            ui.add(
+                                egui::Label::new(changed_files_message(&name, &prompt.files))
+                                    .wrap(),
+                            );
                         }
-                        if ui.button("Save a Copy").clicked() {
-                            saved = if self.project.is_folder() {
-                                self.perform_save_as_folder()
-                            } else {
-                                self.perform_save_as()
-                            };
-                            done = true;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            done = true;
-                        }
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if coursecraft_ui_egui::primary_button(ui, "Overwrite").clicked() {
+                                saved = self.save_project_file(true);
+                                done = true;
+                            }
+                            if ui.button("Save a Copy").clicked() {
+                                saved = if self.project.is_folder() {
+                                    self.perform_save_as_folder()
+                                } else {
+                                    self.perform_save_as()
+                                };
+                                done = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                done = true;
+                            }
+                        });
                     });
-                    if done {
-                        self.conflict_prompt = None;
-                        if saved && let Some(action) = prompt.then.clone() {
-                            self.execute_pending_action(action, ui.ctx());
-                        }
+                if done || modal.should_close() || shell_modal_esc {
+                    self.conflict_prompt = None;
+                    if saved && let Some(action) = prompt.then.clone() {
+                        self.execute_pending_action(action, ui.ctx());
                     }
-                });
+                }
             }
 
             // Restore autosave modal
             if let Some(prompt) = self.restore_prompt.clone() {
                 let modal_id = egui::Id::unique("restore_autosave_modal");
-                egui::Modal::new(modal_id).show(ui.ctx(), |ui| {
-                    ui.heading("Restore unsaved changes?");
-                    ui.add_space(8.0);
-                    ui.label(format!("Restore unsaved changes from {}?", prompt.time_str));
-                    ui.add_space(12.0);
-                    let mut dismiss = false;
-                    ui.horizontal(|ui| {
-                        if ui.button("Restore").clicked() {
-                            self.finish_open(&prompt.autosave_path, prompt.file_path.clone(), true);
-                            dismiss = true;
-                        }
-                        if ui.button("Discard").clicked() {
-                            autosave::delete_autosave(&prompt.autosave_path);
-                            if let Some(ref file_path) = prompt.file_path {
-                                self.finish_open(file_path, Some(file_path.clone()), false);
+                let mode = self.prefs.theme.resolve(ui.ctx());
+                egui::Modal::new(modal_id)
+                    .backdrop_color(coursecraft_ui_egui::modal_backdrop_color(mode))
+                    .show(ui.ctx(), |ui| {
+                        ui.set_max_width(480.0);
+                        ui.heading("Restore unsaved changes?");
+                        ui.add_space(8.0);
+                        ui.add(
+                            egui::Label::new(format!(
+                                "Restore unsaved changes from {}?",
+                                prompt.time_str
+                            ))
+                            .wrap(),
+                        );
+                        ui.add_space(12.0);
+                        let mut dismiss = false;
+                        ui.horizontal(|ui| {
+                            if coursecraft_ui_egui::primary_button(ui, "Restore").clicked() {
+                                self.finish_open(
+                                    &prompt.autosave_path,
+                                    prompt.file_path.clone(),
+                                    true,
+                                );
+                                dismiss = true;
                             }
-                            dismiss = true;
+                            if ui.button("Discard").clicked() {
+                                autosave::delete_autosave(&prompt.autosave_path);
+                                if let Some(ref file_path) = prompt.file_path {
+                                    self.finish_open(file_path, Some(file_path.clone()), false);
+                                }
+                                dismiss = true;
+                            }
+                        });
+                        if dismiss {
+                            self.restore_prompt = None;
                         }
                     });
-                    if dismiss {
-                        self.restore_prompt = None;
-                    }
-                });
             }
 
             // Modal error dialog
             if let Some(ref msg) = self.error_modal.clone() {
                 let modal_id = egui::Id::unique("error_modal");
-                egui::Modal::new(modal_id).show(ui.ctx(), |ui| {
-                    ui.heading("Error");
-                    ui.add_space(8.0);
-                    ui.label(msg);
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        if let Some(version) = self.open_latest_offer.clone()
-                            && ui
-                                .button("Open Latest Version")
-                                .on_hover_text(
-                                    "Open the newest kept version of this file as a copy",
-                                )
-                                .clicked()
-                        {
-                            self.error_modal = None;
-                            self.open_latest_offer = None;
-                            self.open_version_copy(&version);
-                        }
-                        if ui.button("OK").clicked() {
-                            self.error_modal = None;
-                            self.open_latest_offer = None;
-                        }
+                let mode = self.prefs.theme.resolve(ui.ctx());
+                let modal = egui::Modal::new(modal_id)
+                    .backdrop_color(coursecraft_ui_egui::modal_backdrop_color(mode))
+                    .show(ui.ctx(), |ui| {
+                        ui.set_max_width(480.0);
+                        ui.heading("Error");
+                        ui.add_space(8.0);
+                        ui.add(egui::Label::new(msg).wrap());
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if let Some(version) = self.open_latest_offer.clone()
+                                && ui
+                                    .button("Open Latest Version")
+                                    .on_hover_text(
+                                        "Open the newest kept version of this file as a copy",
+                                    )
+                                    .clicked()
+                            {
+                                self.error_modal = None;
+                                self.open_latest_offer = None;
+                                self.open_version_copy(&version);
+                            }
+                            if coursecraft_ui_egui::primary_button(ui, "OK").clicked() {
+                                self.error_modal = None;
+                                self.open_latest_offer = None;
+                            }
+                        });
                     });
-                });
+                if modal.should_close() || shell_modal_esc {
+                    self.error_modal = None;
+                    self.open_latest_offer = None;
+                }
             }
         }
 
@@ -3425,6 +3476,27 @@ fn main() -> std::process::ExitCode {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn editor_viewport_builder() -> egui::ViewportBuilder {
+    #[cfg_attr(target_os = "macos", allow(unused_mut))]
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("CourseCraft")
+        .with_inner_size([1440.0, 900.0])
+        .with_min_inner_size([1024.0, 600.0]);
+    // The window and taskbar icon on Windows and Linux. macOS takes the Dock icon from
+    // the bundle's .icns, which has the system's padding; setting this would replace it.
+    #[cfg(not(target_os = "macos"))]
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../icons/window-256.png")) {
+        viewport = viewport.with_icon(icon);
+    }
+    viewport
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn resolve_web_theme(ctx: &egui::Context) -> coursecraft_ui_egui::coursecraft_render::ThemeMode {
+    coursecraft_ui_egui::coursecraft_render::ThemePref::System.resolve(ctx)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn run_editor_window() -> eframe::Result {
     let blank = std::env::args().any(|a| a == "--blank");
     let initial_path = std::env::args()
@@ -3437,16 +3509,7 @@ fn run_editor_window() -> eframe::Result {
 
     let (course, media) = initial_course_and_media(blank);
 
-    #[cfg_attr(target_os = "macos", allow(unused_mut))]
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title("CourseCraft")
-        .with_inner_size([1440.0, 900.0]);
-    // The window and taskbar icon on Windows and Linux. macOS takes the Dock icon from
-    // the bundle's .icns, which has the system's padding; setting this would replace it.
-    #[cfg(not(target_os = "macos"))]
-    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../icons/window-256.png")) {
-        viewport = viewport.with_icon(icon);
-    }
+    let viewport = editor_viewport_builder();
     let options = eframe::NativeOptions {
         viewport,
         ..Default::default()
@@ -3510,7 +3573,7 @@ fn main() {
                     coursecraft_ui_egui::install_fonts(&cc.egui_ctx);
                     coursecraft_ui_egui::coursecraft_render::apply_style(
                         &cc.egui_ctx,
-                        coursecraft_ui_egui::coursecraft_render::ThemeMode::Dark,
+                        resolve_web_theme(&cc.egui_ctx),
                     );
                     Ok(Box::new(EditorApp {
                         editor,

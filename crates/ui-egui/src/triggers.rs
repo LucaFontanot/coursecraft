@@ -48,9 +48,9 @@ pub fn combo_popup_height(ctx: &egui::Context) -> f32 {
     (ctx.content_rect().height() * 0.8).max(200.0)
 }
 
-/// A [`egui::ComboBox`] whose popup is tall enough to show long lists in full.
+/// A [`egui::ComboBox`] whose popup is tall enough to show long lists in full and has a minimum width.
 fn tall_combo<'a>(ui: &Ui, id_salt: impl egui::AsIdSalt) -> egui::ComboBox<'a> {
-    egui::ComboBox::from_id_salt(id_salt).height(combo_popup_height(ui.ctx()))
+    crate::widgets::styled_combo(ui, id_salt, 140.0)
 }
 
 /// Display name of a layer on `slide` (its name if non-empty, otherwise its id).
@@ -1777,14 +1777,29 @@ pub fn show_triggers_tab(
                         })
                         .collect();
                     for (pos, (idx, trig, desc)) in rows.into_iter().enumerate() {
+                        ui.push_id(idx, |ui| {
                         let (prev_idx, next_idx) = row_neighbors[pos];
                         let row_rect = egui::Rect::from_min_size(
                             ui.cursor().min,
                             egui::vec2(ui.available_width(), TRIGGER_ROW_HEIGHT),
                         );
+                        let hovered = ui.rect_contains_pointer(row_rect);
+                        let is_active = active_row == Some(idx);
+                        let show_actions = hovered || is_active;
+                        let interact_rect = if show_actions {
+                            egui::Rect::from_min_max(
+                                row_rect.min,
+                                egui::pos2(
+                                    (row_rect.max.x - 200.0).max(row_rect.min.x),
+                                    row_rect.max.y,
+                                ),
+                            )
+                        } else {
+                            row_rect
+                        };
                         // Registered before the row's widgets so the buttons win clicks over the row.
                         let row_resp = ui.interact(
-                            row_rect,
+                            interact_rect,
                             ui.scope_id().with(("trigger_row", idx)),
                             egui::Sense::click(),
                         );
@@ -1801,9 +1816,6 @@ pub fn show_triggers_tab(
                                 &session.course,
                             ));
                         }
-                        let hovered = ui.rect_contains_pointer(row_rect);
-                        let is_active = active_row == Some(idx);
-                        let show_actions = hovered || is_active;
                         if is_active || hovered {
                             ui.painter().rect_filled(
                                 row_rect,
@@ -1846,25 +1858,39 @@ pub fn show_triggers_tab(
                                     )
                                     .on_hover_text(tooltip);
                                 }
-                                if trig.disabled {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(&desc).color(p.text_tertiary),
-                                        )
-                                        .selectable(false),
-                                    );
-                                    ui.add(
-                                        egui::Label::new(
-                                            coursecraft_render::small("Off").color(p.text_tertiary),
-                                        )
-                                        .selectable(false),
-                                    );
+                                let text_max_w = if show_actions {
+                                    (ui.available_width() - 180.0).max(80.0)
                                 } else {
-                                    ui.add(
-                                        egui::Label::new(RichText::new(&desc).strong())
-                                            .selectable(false),
-                                    );
-                                }
+                                    ui.available_width().max(80.0)
+                                };
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(text_max_w, TRIGGER_ROW_HEIGHT),
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        if trig.disabled {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(&desc).color(p.text_tertiary),
+                                                )
+                                                .truncate()
+                                                .selectable(false),
+                                            );
+                                            ui.add(
+                                                egui::Label::new(
+                                                    coursecraft_render::small("Off")
+                                                        .color(p.text_tertiary),
+                                                )
+                                                .selectable(false),
+                                            );
+                                        } else {
+                                            ui.add(
+                                                egui::Label::new(RichText::new(&desc).strong())
+                                                    .truncate()
+                                                    .selectable(false),
+                                            );
+                                        }
+                                    },
+                                );
 
                                 if !show_actions {
                                     return;
@@ -1886,6 +1912,9 @@ pub fn show_triggers_tab(
                                         egui::Popup::menu(&more).show(|ui| {
                                             if ui
                                                 .add_enabled(!form_open, egui::Button::new("Duplicate"))
+                                                .on_disabled_hover_text(
+                                                    "Close the trigger editor to duplicate triggers",
+                                                )
                                                 .clicked()
                                             {
                                                 actions.push((
@@ -1951,11 +1980,18 @@ pub fn show_triggers_tab(
 
                                         // Move Down
                                         let can_down = !form_open && next_idx.is_some();
+                                        let down_tip = if form_open {
+                                            "Close the trigger editor to reorder triggers"
+                                        } else if next_idx.is_none() {
+                                            "Already at the bottom"
+                                        } else {
+                                            "Move trigger down"
+                                        };
                                         if crate::widgets::icon_button_enabled(
                                             ui,
                                             coursecraft_render::Icon::ArrowDown,
                                             can_down,
-                                            "Move trigger down",
+                                            down_tip,
                                         )
                                         .clicked()
                                             && let Some(to) = next_idx
@@ -1979,11 +2015,18 @@ pub fn show_triggers_tab(
 
                                         // Move Up
                                         let can_up = !form_open && prev_idx.is_some();
+                                        let up_tip = if form_open {
+                                            "Close the trigger editor to reorder triggers"
+                                        } else if prev_idx.is_none() {
+                                            "Already at the top"
+                                        } else {
+                                            "Move trigger up"
+                                        };
                                         if crate::widgets::icon_button_enabled(
                                             ui,
                                             coursecraft_render::Icon::ArrowUp,
                                             can_up,
-                                            "Move trigger up",
+                                            up_tip,
                                         )
                                         .clicked()
                                             && let Some(to) = prev_idx
@@ -2027,6 +2070,7 @@ pub fn show_triggers_tab(
                             });
                         });
                         ui.advance_cursor_after_rect(row_rect);
+                        });
                     }
                 }
             });
@@ -2744,20 +2788,16 @@ fn render_action_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide,
                 .default_height(160.0)
                 .min_height(80.0)
                 .show(ui, |ui| {
-                    egui::ScrollArea::both()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            let response = ui.add_sized(
-                                [ui.available_width(), ui.available_height().max(72.0)],
-                                TextEdit::multiline(&mut form.javascript_code)
-                                    .id_salt("trigger_javascript_code")
-                                    .code_editor()
-                                    .desired_rows(8),
-                            );
-                            if response.changed() && form.javascript_code.contains('\t') {
-                                form.javascript_code = form.javascript_code.replace('\t', "  ");
-                            }
-                        });
+                    let response = ui.add_sized(
+                        [ui.available_width(), ui.available_height().max(72.0)],
+                        TextEdit::multiline(&mut form.javascript_code)
+                            .id_salt("trigger_javascript_code")
+                            .code_editor()
+                            .desired_rows(8),
+                    );
+                    if response.changed() && form.javascript_code.contains('\t') {
+                        form.javascript_code = form.javascript_code.replace('\t', "  ");
+                    }
                 });
             if form.javascript_code.len() > coursecraft_course::MAX_JAVASCRIPT_BYTES {
                 ui.colored_label(
@@ -2931,7 +2971,8 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                     ui.add(
                         DragValue::new(&mut form.event_ms)
                             .speed(50.0)
-                            .range(0..=86_400_000),
+                            .range(0..=86_400_000)
+                            .suffix(" ms"),
                     );
                 });
             }
@@ -3261,7 +3302,7 @@ pub(crate) fn render_condition_editor(
             op,
             value,
         } => {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 condition_kind_picker(&snapshot, ui, slide, course, depth, &mut replacement);
                 tall_combo(ui, ("var_picker", depth))
                     .selected_text(variable.as_str())
@@ -3415,7 +3456,11 @@ pub(crate) fn render_condition_editor(
                                 Value::Text(tv) => tv.clone(),
                                 _ => String::new(),
                             };
-                            if ui.add(TextEdit::singleline(&mut t)).changed() {
+                            let w = ui.available_width().clamp(80.0, 180.0);
+                            if ui
+                                .add(TextEdit::singleline(&mut t).desired_width(w))
+                                .changed()
+                            {
                                 *const_val = Value::Text(t);
                             }
                         }
@@ -3424,7 +3469,7 @@ pub(crate) fn render_condition_editor(
             });
         }
         ConditionNode::ObjectState { object, state, is } => {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 condition_kind_picker(&snapshot, ui, slide, course, depth, &mut replacement);
                 tall_combo(ui, ("obj_state_picker", depth))
                     .selected_text(object_label(slide, object))
@@ -3471,21 +3516,21 @@ pub(crate) fn render_condition_editor(
         ConditionNode::All(list) => {
             ui.horizontal(|ui| {
                 condition_kind_picker(&snapshot, ui, slide, course, depth, &mut replacement);
-                ui.label(RichText::new("the following:").strong());
+                ui.label(RichText::new("the following").strong());
             });
             render_condition_group(list, ui, slide, course, depth);
         }
         ConditionNode::Any(list) => {
             ui.horizontal(|ui| {
                 condition_kind_picker(&snapshot, ui, slide, course, depth, &mut replacement);
-                ui.label(RichText::new("the following:").strong());
+                ui.label(RichText::new("the following").strong());
             });
             render_condition_group(list, ui, slide, course, depth);
         }
         ConditionNode::Not(inner) => {
             ui.horizontal(|ui| {
                 condition_kind_picker(&snapshot, ui, slide, course, depth, &mut replacement);
-                ui.label(RichText::new("the following:").strong());
+                ui.label(RichText::new("the following").strong());
             });
             ui.indent("not_child_indent", |ui| {
                 render_condition_editor(inner, ui, slide, course, depth + 1);

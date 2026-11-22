@@ -352,7 +352,7 @@ pub fn show_font_picker(
                 system_fonts,
                 search_query,
             );
-            let row_height = ui.spacing().interact_size.y.max(22.0);
+            let row_height = 24.0;
             let row_stride = row_height + ui.spacing().item_spacing.y;
             // Reserve vertical space for sticky search (~28px), spacing (4px),
             // bottom separator + "Add font…" button (~34px), and popup margins (~18px).
@@ -509,14 +509,14 @@ pub fn show_font_picker(
                             embedding_restricted,
                             is_current,
                         } => {
-                            let (rect, resp) =
+                            let (rect, mut resp) =
                                 ui.allocate_exact_size(vec2(row_w, row_height), Sense::click());
                             let is_highlighted = state.highlighted == Some(idx);
                             if *is_current || is_highlighted {
                                 ui.painter().rect_filled(
                                     rect,
                                     CornerRadius::same(RADIUS_SM as u8),
-                                    p.accent_hover,
+                                    p.accent_subtle,
                                 );
                             } else if resp.hovered() {
                                 ui.painter().rect_filled(
@@ -550,11 +550,15 @@ pub fn show_font_picker(
                                 overflow_character: Some('…'),
                             };
                             let galley = ui.painter().layout_job(job);
+                            let is_truncated = galley.elided;
                             ui.painter().galley(
                                 pos2(rect.left() + 8.0, rect.center().y - galley.size().y * 0.5),
                                 galley,
                                 p.text,
                             );
+                            if is_truncated {
+                                resp = resp.on_hover_text(name.clone());
+                            }
 
                             if *embedding_restricted {
                                 let badge_galley = ui.painter().layout_no_wrap(

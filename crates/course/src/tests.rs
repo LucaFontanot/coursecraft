@@ -2357,6 +2357,8 @@ fn shape_with_outline_and_text() -> crate::ObjectKind {
             width: 3.0,
             dash: crate::DashStyle::Dash,
             dash_pattern: None,
+            join: crate::LineJoin::Miter,
+            miter_limit: None,
         }),
         text: Some(crate::ShapeText {
             text: "Hello".to_owned(),
@@ -2543,6 +2545,8 @@ fn default_path() -> crate::Path {
             width: 2.0,
             dash: crate::DashStyle::Solid,
             dash_pattern: None,
+            join: crate::LineJoin::Miter,
+            miter_limit: None,
         },
         start_end: crate::LineEnd::None,
         end_end: crate::LineEnd::None,
@@ -5105,4 +5109,216 @@ fn course_string_locations_matches_course_strings() {
         .map(|item| item.location)
         .collect();
     assert_eq!(crate::course_string_locations(&c), expected);
+}
+
+#[test]
+fn apply_style_to_range_with_base_merges_cleanly_on_off_on() {
+    use crate::text::{TextRunPatch, apply_style_to_range_with_base};
+    use crate::{Baseline, TextStyle};
+
+    let base = TextStyle::default();
+    let plain = "bold+ italic + underline\nsecond line";
+    // Start with "bold+ " italic+bold, "italic" bold, " + underline" italic.
+    let initial = apply_style_to_range_with_base(
+        &[],
+        plain,
+        (0, 12),
+        &TextRunPatch {
+            bold: Some(true),
+            ..Default::default()
+        },
+        Some(&base),
+    );
+    let initial = apply_style_to_range_with_base(
+        &initial,
+        plain,
+        (0, 6),
+        &TextRunPatch {
+            italic: Some(true),
+            ..Default::default()
+        },
+        Some(&base),
+    );
+    let initial = apply_style_to_range_with_base(
+        &initial,
+        plain,
+        (12, 24),
+        &TextRunPatch {
+            italic: Some(true),
+            ..Default::default()
+        },
+        Some(&base),
+    );
+
+    // Toggle each style ON -> OFF -> ON on "italic" (6..12) and across two paragraphs (15..31).
+    for (range, patch_on, patch_off) in [
+        (
+            (6, 12),
+            TextRunPatch {
+                bold: Some(true),
+                ..Default::default()
+            },
+            TextRunPatch {
+                bold: Some(false),
+                ..Default::default()
+            },
+        ),
+        (
+            (6, 12),
+            TextRunPatch {
+                italic: Some(true),
+                ..Default::default()
+            },
+            TextRunPatch {
+                italic: Some(false),
+                ..Default::default()
+            },
+        ),
+        (
+            (6, 12),
+            TextRunPatch {
+                underline: Some(true),
+                ..Default::default()
+            },
+            TextRunPatch {
+                underline: Some(false),
+                ..Default::default()
+            },
+        ),
+        (
+            (15, 31),
+            TextRunPatch {
+                strikethrough: Some(true),
+                ..Default::default()
+            },
+            TextRunPatch {
+                strikethrough: Some(false),
+                ..Default::default()
+            },
+        ),
+        (
+            (15, 31),
+            TextRunPatch {
+                baseline: Some(Baseline::Superscript),
+                ..Default::default()
+            },
+            TextRunPatch {
+                baseline: Some(Baseline::Normal),
+                ..Default::default()
+            },
+        ),
+        (
+            (15, 31),
+            TextRunPatch {
+                baseline: Some(Baseline::Subscript),
+                ..Default::default()
+            },
+            TextRunPatch {
+                baseline: Some(Baseline::Normal),
+                ..Default::default()
+            },
+        ),
+    ] {
+        // For bold on (6..12), it starts true, so off -> on; for others, starts false, so on -> off.
+        let toggled_once = if patch_on.bold == Some(true) {
+            apply_style_to_range_with_base(&initial, plain, range, &patch_off, Some(&base))
+        } else {
+            apply_style_to_range_with_base(&initial, plain, range, &patch_on, Some(&base))
+        };
+        let toggled_back = if patch_on.bold == Some(true) {
+            apply_style_to_range_with_base(&toggled_once, plain, range, &patch_on, Some(&base))
+        } else {
+            apply_style_to_range_with_base(&toggled_once, plain, range, &patch_off, Some(&base))
+        };
+        assert_eq!(
+            toggled_back, initial,
+            "toggling {patch_on:?} on/off over {range:?} must restore exact runs"
+        );
+    }
+}
+
+#[test]
+fn player_settings_show_bar_defaults_true_and_omits_when_true_and_old_json_round_trips() {
+    let course = Course::from_json(HELLO).expect("hello course");
+    assert!(course.player.show_bar);
+    let json = serde_json::to_string(&course).expect("serialize");
+    assert!(
+        !json.contains("show_bar"),
+        "default show_bar=true must be omitted from JSON"
+    );
+    let round_tripped = Course::from_json(&json).expect("round-trip");
+    assert!(round_tripped.player.show_bar);
+
+    let mut off_course = course.clone();
+    off_course.player.show_bar = false;
+    off_course.scenes[0].slides[0].player = Some(crate::SlidePlayerOverrides {
+        show_bar: Some(true),
+        ..Default::default()
+    });
+    let off_json = serde_json::to_string(&off_course).expect("serialize off");
+    assert!(off_json.contains("\"show_bar\":false"));
+    let off_rt = Course::from_json(&off_json).expect("round-trip off");
+    assert!(!off_rt.player.show_bar);
+    assert_eq!(
+        off_rt.scenes[0].slides[0]
+            .player
+            .as_ref()
+            .and_then(|o| o.show_bar),
+        Some(true)
+    );
+}
+
+#[test]
+fn check_course_warns_when_bar_off_and_no_way_forward() {
+    let mut course = Course::from_json(HELLO).expect("hello course");
+    // Remove all triggers on slide 0 so it has no Next/Jump/Exit trigger.
+    course.scenes[0].slides[0].triggers.clear();
+    for layer in &mut course.scenes[0].slides[0].layers {
+        layer.triggers.clear();
+    }
+    course.player.show_bar = false;
+    let issues = course.validate();
+    let title = &course.scenes[0].slides[0].title;
+    assert!(
+        issues.iter().any(|i| {
+            i.severity == Severity::Warning
+                && i.message.contains(title)
+                && i.message.contains("player bar")
+        }),
+        "expected warning naming {title:?}, got: {issues:#?}"
+    );
+}
+
+#[test]
+fn check_course_does_not_warn_on_last_slide_or_slide_with_next_trigger() {
+    let mut course = Course::from_json(HELLO).expect("hello course");
+    course.player.show_bar = false;
+    // Clear triggers on all slides, then add a Next trigger only on non-last slides.
+    let last_scene_idx = course.scenes.len() - 1;
+    let last_slide_idx = course.scenes[last_scene_idx].slides.len() - 1;
+    for (si, scene) in course.scenes.iter_mut().enumerate() {
+        for (li, slide) in scene.slides.iter_mut().enumerate() {
+            slide.triggers.clear();
+            for layer in &mut slide.layers {
+                layer.triggers.clear();
+            }
+            if !(si == last_scene_idx && li == last_slide_idx) {
+                slide.triggers.push(crate::Trigger {
+                    action: crate::Action::JumpToSlide {
+                        target: crate::SlideTarget::Next,
+                    },
+                    when: crate::Event::TimelineEnds { layer: None },
+                    condition: None,
+                    disabled: false,
+                });
+            }
+        }
+    }
+    let issues = course.validate();
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.severity == Severity::Warning && i.message.contains("player bar")),
+        "unexpected player bar warning: {issues:#?}"
+    );
 }

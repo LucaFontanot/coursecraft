@@ -386,11 +386,39 @@ pub struct Guide {
     pub at: f32,
 }
 
+/// How SCORM 1.2 reports `cmi.core.lesson_status` to the LMS.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LmsStatus {
+    /// Report the status the runtime computed (default).
+    #[default]
+    Auto,
+    /// Passed or Completed -> `passed`; Failed or Incomplete -> `incomplete`.
+    PassedIncomplete,
+    /// Passed or Completed -> `passed`; Failed -> `failed`; Incomplete -> `incomplete`.
+    PassedFailed,
+    /// Passed or Completed -> `completed`; Failed or Incomplete -> `incomplete`.
+    CompletedIncomplete,
+    /// Passed or Completed -> `completed`; Failed -> `failed`; Incomplete -> `incomplete`.
+    CompletedFailed,
+}
+
+impl LmsStatus {
+    /// Returns `true` when this is the default (`Auto`).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::Auto
+    }
+}
+
 /// Last publish settings remembered for this course in the editor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublishSettings {
+    #[serde(default)]
     pub standard: String,
+    #[serde(default, skip_serializing_if = "LmsStatus::is_default")]
+    pub lms_status: LmsStatus,
 }
 
 /// How the base slide appears in the editor while a layer tab is active.
@@ -624,6 +652,11 @@ impl From<Rect> for CropRect {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlayerSettings {
+    /// Show the bottom player bar (chrome strip). When false, no strip is
+    /// drawn or reserved, the slide fills the frame, and bar-launched panels
+    /// and keyboard Previous/Next are disabled.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub show_bar: bool,
     /// Show the player's Previous/Next buttons.
     #[serde(default = "yes")]
     pub show_nav: bool,
@@ -665,6 +698,7 @@ pub struct PlayerSettings {
 impl Default for PlayerSettings {
     fn default() -> Self {
         Self {
+            show_bar: true,
             show_nav: true,
             show_menu: true,
             show_seekbar: true,
@@ -711,6 +745,9 @@ pub enum NextRequirement {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SlidePlayerOverrides {
+    /// Replaces `player.show_bar` on this slide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_bar: Option<bool>,
     /// Replaces the course's Next rule on this slide; `None` uses the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_requires: Option<NextRequirement>,
@@ -2743,6 +2780,30 @@ pub struct Outline {
     /// Omitted when using `dash`'s built-in spacing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dash_pattern: Option<Vec<f32>>,
+    /// How corners of the outline are joined (defaults to miter with limit 8).
+    #[serde(default, skip_serializing_if = "LineJoin::is_default")]
+    pub join: LineJoin,
+    /// Optional miter limit as a multiple of half-stroke-width (defaults to 8.0 when `None`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub miter_limit: Option<f32>,
+}
+
+/// How two segments of an outline meet at a corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineJoin {
+    #[default]
+    Miter,
+    Round,
+    Bevel,
+}
+
+impl LineJoin {
+    /// Whether this join is the default (`Miter`).
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::Miter)
+    }
 }
 
 impl Outline {

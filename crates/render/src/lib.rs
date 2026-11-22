@@ -43,11 +43,19 @@ mod bughunt_m26_render;
 #[cfg(test)]
 mod justify_tests;
 #[cfg(test)]
+mod outline_tests;
+#[cfg(test)]
 mod review_tests;
 #[cfg(test)]
 mod shape_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod u19_state_hover_tests;
+#[cfg(test)]
+mod u23_hand_pointer_tests;
+#[cfg(test)]
+mod uiux_player_tests;
 
 pub use access::{
     ANSWER_REQUIRED_ANNOUNCEMENT, AccessNode, AccessRole, AccessTree, announcement,
@@ -62,9 +70,9 @@ pub use compose::{
     ResolvedOutline, ResolvedPath, ResolvedShapeText, ResolvedTable, ResolvedTableCell,
     ResolvedTableRow, ResolvedTextRun, ReviewMark, Visual, compose, compose_authoring,
     compose_authoring_layers, compose_authoring_layers_opts, compose_object,
-    compose_object_with_theme, compose_object_with_value, flip_point, item_bounds, item_corners,
-    item_hit_test, item_link_at, item_local_point, question_prompt_rect, resolve_text_runs,
-    rotate_point,
+    compose_object_with_theme, compose_object_with_value, compose_with_pointer, flip_point,
+    item_bounds, item_corners, item_hit_test, item_link_at, item_local_point, question_prompt_rect,
+    resolve_text_runs, rotate_point,
 };
 pub use design::{
     CONTROL_COMPACT, CONTROL_PRIMARY, CONTROL_TOOLBAR, ICON_SM, ICON_TOOLBAR, PANEL_MARGIN,
@@ -110,8 +118,8 @@ pub use path_geometry::{
 };
 pub use player_frame::{FrameOutput, PlayerFrame, show_loading, show_loading_text};
 pub use shape_fill::{
-    even_odd_area, fill_contours, stroke_contours, stroke_contours_pattern, stroke_path,
-    stroke_path_pattern,
+    StrokeJoin, even_odd_area, fill_contours, stroke_contours, stroke_contours_pattern,
+    stroke_contours_with_join, stroke_path, stroke_path_pattern, stroke_path_with_join,
 };
 pub use shape_geometry::{
     Pt as ShapePoint, adjust_from_point, adjust_handle_name, adjust_handles, arc, regular_polygon,

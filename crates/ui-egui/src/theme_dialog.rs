@@ -45,11 +45,13 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
         .theme_dialog
         .sync(&editor.session.course, editor.session.revision);
 
+    let mut open = true;
     let mut close = false;
     let mut update_theme: Option<serde_json::Value> = None;
     let mut palette_actions = Vec::new();
 
     Dialog::new("Theme")
+        .open(&mut open)
         .width(420.0)
         .show_with_footer(ctx, |dialog| {
             dialog.body(|ui| {
@@ -72,7 +74,7 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
 
                 let (cr_bg, valid_bg) = show_color_field(
                     ui,
-                    "Slide Background",
+                    "Slide background",
                     &mut editor.ui.theme_dialog.background,
                     "theme_bg",
                 );
@@ -88,7 +90,7 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
 
                 let (cr_txt, valid_txt) = show_color_field(
                     ui,
-                    "Text Color",
+                    "Text color",
                     &mut editor.ui.theme_dialog.text,
                     "theme_text",
                 );
@@ -103,10 +105,10 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
 
                 ui.add_space(8.0);
                 ui.separator();
-                ui.heading("Player Chrome");
+                ui.heading("Player chrome");
 
                 let (cr_bar, valid_bar) =
-                    show_color_field(ui, "Bar Fill", &mut editor.ui.theme_dialog.bar, "theme_bar");
+                    show_color_field(ui, "Bar fill", &mut editor.ui.theme_dialog.bar, "theme_bar");
                 if is_committed(&cr_bar, ui)
                     && valid_bar
                     && editor.ui.theme_dialog.bar.trim() != editor.session.course.theme.player.bar.0
@@ -118,7 +120,7 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
 
                 let (cr_bar_txt, valid_bar_txt) = show_color_field(
                     ui,
-                    "Bar Text",
+                    "Bar text",
                     &mut editor.ui.theme_dialog.bar_text,
                     "theme_bar_text",
                 );
@@ -141,7 +143,7 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
                 ui.separator();
                 ui.heading("Typography");
 
-                crate::properties::inspector_row(ui, "Font Name", |ui| {
+                crate::properties::inspector_row(ui, "Font name", |ui| {
                     let r = ui.add(
                         TextEdit::singleline(&mut editor.ui.theme_dialog.font)
                             .id_salt("theme_font_name")
@@ -193,7 +195,7 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
         editor.run(id, params);
     }
 
-    if close {
+    if close || !open {
         editor.ui.show_theme_window = false;
     }
 }

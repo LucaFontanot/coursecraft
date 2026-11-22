@@ -31,6 +31,8 @@ use crate::view::SlideView;
 pub const STRIP_HEIGHT: f32 = 44.0;
 /// Distance between the strip and the bottom edge.
 pub const STRIP_MARGIN: f32 = 12.0;
+/// Gap kept between the reserved slide area and the top of the control strip.
+const STRIP_GAP_ABOVE: f32 = 8.0;
 /// Width of the outline drawer.
 pub const DRAWER_WIDTH: f32 = 320.0;
 
@@ -104,6 +106,9 @@ impl Default for FrameOutput {
 pub struct PlayerFrame {
     /// Respect the platform's reduced-motion preference: no fades, always shown.
     pub reduced_motion: bool,
+    /// Float the control strip over the slide and auto-hide when idle.
+    /// Defaults to `false` (reserved strip below the slide area).
+    pub overlay_strip: bool,
     /// The course has ended: dim the slide, show the completion message and
     /// hide the control strip.
     pub ended: bool,
@@ -156,6 +161,7 @@ pub struct PlayerFrame {
     last_ended_small: Option<Rect>,
     last_notice_rect: Option<Rect>,
     last_review_rect: Option<Rect>,
+    last_slide_rect: Option<Rect>,
     /// The learner dismissed the notice, so it stays hidden for the session.
     notice_dismissed: bool,
     /// Keyboard focus order, ring and keyboard-only gestures.
@@ -172,6 +178,7 @@ impl Default for PlayerFrame {
     fn default() -> Self {
         Self {
             reduced_motion: false,
+            overlay_strip: false,
             ended: false,
             captions_on: false,
             volume: 1.0,
@@ -204,6 +211,7 @@ impl Default for PlayerFrame {
             last_ended_small: None,
             last_notice_rect: None,
             last_review_rect: None,
+            last_slide_rect: None,
             notice_dismissed: false,
             focus: crate::focus::FocusManager::new(),
             last_chrome: Vec::new(),
@@ -230,6 +238,12 @@ impl PlayerFrame {
     #[must_use]
     pub fn drawer_rect(&self) -> Option<Rect> {
         self.last_drawer_rect
+    }
+
+    /// Return the slide rect from the most recent frame, if it was painted.
+    #[must_use]
+    pub fn slide_rect(&self) -> Option<Rect> {
+        self.last_slide_rect
     }
 
     /// Return the completion card rect from the most recent ended frame, if painted.
@@ -435,9 +449,14 @@ impl PlayerFrame {
             .rect_filled(full, CornerRadius::ZERO, PLAYER_GROUND);
 
         let started = player.state().started;
+        let show_bar = effective_show_bar(player);
+        if !show_bar {
+            self.drawer_open = false;
+            self.speed_open = false;
+        }
         let settings = &player.effective_player();
-        let show_menu = settings.show_menu && started;
-        let show_nav = settings.show_nav && started;
+        let show_menu = show_bar && settings.show_menu && started;
+        let show_nav = show_bar && settings.show_nav && started;
         let now = ui.input(|i| i.time);
         let dt = if self.initialized {
             (now - self.last_time).clamp(0.0, 0.1) as f32
@@ -456,12 +475,12 @@ impl PlayerFrame {
         self.focus.set_notice_visible(notice_showing);
 
         let mut media = media;
-        let logo = if self.ended {
+        let logo = if self.ended || !show_bar {
             None
         } else {
             logo_texture(ui, player, media.as_mut())
         };
-        let layout = if self.ended {
+        let layout = if self.ended || !show_bar {
             None
         } else {
             strip_layout(
@@ -603,7 +622,20 @@ impl PlayerFrame {
         if let Some(l) = &review_banner {
             covered.push(l.rect);
         }
-        let slide_rect = slide_rect(full, player);
+        let slide_area = if !self.overlay_strip
+            && let Some(l) = &layout
+        {
+            let bottom = (l.rect.top() - STRIP_GAP_ABOVE).max(full.top());
+            Rect::from_min_max(full.min, Pos2::new(full.max.x, bottom))
+        } else {
+            full
+        };
+        let slide_rect = if valid_rect(slide_area) {
+            slide_rect(slide_area, player)
+        } else {
+            Rect::NOTHING
+        };
+        self.last_slide_rect = valid_rect(slide_rect).then_some(slide_rect);
         let close_rect = if player.lightbox_open() {
             crate::view::lightbox_box_rect(slide_rect, player.course().slide_size)
                 .and_then(crate::view::lightbox_close_rect)
@@ -668,6 +700,7 @@ impl PlayerFrame {
                 draw_strip(
                     ui,
                     player,
+                    full,
                     l,
                     self.strip_opacity,
                     &mut self.drawer_open,
@@ -696,6 +729,7 @@ impl PlayerFrame {
             draw_drawer(
                 ui,
                 player,
+                full,
                 drawer,
                 self.drawer_progress,
                 show_nav,
@@ -719,7 +753,8 @@ impl PlayerFrame {
                 }
                 self.last_drawer_rect = Some(settled);
             } else {
-                self.last_drawer_rect = Some(drawer);
+                let visible = drawer.intersect(full);
+                self.last_drawer_rect = valid_rect(visible).then_some(visible);
             }
         } else {
             self.last_drawer_rect = None;
@@ -902,10 +937,14 @@ impl PlayerFrame {
         let Some(slide) = player.current_slide() else {
             return Vec::new();
         };
-        let (is_first, is_last) = nav_limits(
-            player.play_order().iter().map(|s| s.id.as_str()),
-            slide.id.as_str(),
-        );
+        let (is_first, is_last) = if player.is_partial_preview() {
+            (false, false)
+        } else {
+            nav_limits(
+                player.play_order().iter().map(|s| s.id.as_str()),
+                slide.id.as_str(),
+            )
+        };
         let mut inputs = Vec::new();
         if show_nav {
             let mut used_left = false;
@@ -985,7 +1024,8 @@ impl PlayerFrame {
         paused: bool,
     ) {
         let idle = now - self.last_activity;
-        let want_visible = self.reduced_motion
+        let want_visible = !self.overlay_strip
+            || self.reduced_motion
             || self.drawer_open
             || self.speed_open
             || over_strip
@@ -993,7 +1033,7 @@ impl PlayerFrame {
             || paused
             || idle < AUTO_HIDE_SECONDS;
         let target = if want_visible { 1.0 } else { 0.0 };
-        if self.reduced_motion {
+        if !self.overlay_strip || self.reduced_motion {
             self.strip_opacity = target;
         } else if dt > 0.0 {
             let step = dt / FADE_SECONDS;
@@ -1015,6 +1055,14 @@ impl PlayerFrame {
             }
         }
     }
+}
+
+fn effective_show_bar(player: &Player<'_>) -> bool {
+    player
+        .current_slide()
+        .and_then(|slide| slide.player.as_ref())
+        .and_then(|overrides| overrides.show_bar)
+        .unwrap_or(player.course().player.show_bar)
 }
 
 fn strip_has_focus(ui: &Ui) -> bool {
@@ -1672,6 +1720,64 @@ fn logo_texture(
     }
 }
 
+fn contrasting_fg(bg: Color32) -> Color32 {
+    let dark = Color32::from_rgb(0x1D, 0x1D, 0x1F);
+    if crate::design::contrast_ratio(Color32::WHITE, bg) >= crate::design::contrast_ratio(dark, bg)
+    {
+        Color32::WHITE
+    } else {
+        dark
+    }
+}
+
+fn dim_text_color(text: Color32, bar: Color32) -> Color32 {
+    let [tr, tg, tb, _] = text.to_srgba_unmultiplied();
+    let [br, bg, bb, _] = bar.to_srgba_unmultiplied();
+    let bar_opaque = Color32::from_rgb(br, bg, bb);
+    for alpha in [0x88u8, 0xA8, 0xC8, 0xFF] {
+        let a = f32::from(alpha) / 255.0;
+        let blended = Color32::from_rgb(
+            (f32::from(tr) * a + f32::from(br) * (1.0 - a)).round() as u8,
+            (f32::from(tg) * a + f32::from(bg) * (1.0 - a)).round() as u8,
+            (f32::from(tb) * a + f32::from(bb) * (1.0 - a)).round() as u8,
+        );
+        if crate::design::contrast_ratio(blended, bar_opaque) >= 3.2 {
+            return Color32::from_rgba_unmultiplied(tr, tg, tb, alpha);
+        }
+    }
+    text
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_truncated_text(
+    painter: &egui::Painter,
+    pos: Pos2,
+    align: Align2,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    max_width: f32,
+    resp: Option<&egui::Response>,
+) {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_owned(),
+        egui::TextFormat::simple(font, color),
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
+    let galley = painter.layout_job(job);
+    let truncated = galley.text() != text;
+    let size = galley.size();
+    let top_left = match align {
+        Align2::LEFT_CENTER => Pos2::new(pos.x, pos.y - size.y * 0.5),
+        Align2::CENTER_CENTER => Pos2::new(pos.x - size.x * 0.5, pos.y - size.y * 0.5),
+        _ => pos,
+    };
+    painter.galley(top_left, galley, color);
+    if truncated && let Some(resp) = resp {
+        resp.clone().on_hover_text(text);
+    }
+}
+
 fn bar_colors(player: &Player<'_>) -> (Color32, Color32, Color32) {
     let theme = &player.course().theme;
     let bar = parse_color(&theme.player.bar).unwrap_or(DEFAULT_BAR_COLOR);
@@ -1686,6 +1792,7 @@ fn bar_colors(player: &Player<'_>) -> (Color32, Color32, Color32) {
 fn draw_strip(
     ui: &mut Ui,
     player: &Player<'_>,
+    full: Rect,
     layout: &StripLayout,
     opacity: f32,
     drawer_open: &mut bool,
@@ -1733,7 +1840,7 @@ fn draw_strip(
         }
         let paused = player.player_paused();
         let secondary = Color32::from_rgba_unmultiplied(text.r(), text.g(), text.b(), 0x99);
-        let dim = Color32::from_rgba_unmultiplied(text.r(), text.g(), text.b(), 0x55);
+        let dim = dim_text_color(text, bar);
 
         if let Some(rect) = layout.play {
             let (icon, tooltip) = if layout.at_end || paused {
@@ -1818,6 +1925,7 @@ fn draw_strip(
             let sense = Sense::click_and_drag();
             let response = child
                 .interact(rect, strip_id("volume"), sense)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
                 .on_hover_text(player.course().chrome_string("volume"));
             if let Some(pos) = response.interact_pointer_pos()
                 && (response.is_pointer_button_down_on()
@@ -1865,6 +1973,7 @@ fn draw_strip(
         draw_speed_and_fullscreen(
             &child,
             player,
+            full,
             layout,
             speed_open,
             fullscreen_toggle,
@@ -1883,6 +1992,7 @@ fn draw_strip(
 fn draw_speed_and_fullscreen(
     ui: &Ui,
     player: &Player<'_>,
+    full: Rect,
     layout: &StripLayout,
     speed_open: &mut bool,
     fullscreen_toggle: &mut bool,
@@ -1900,6 +2010,7 @@ fn draw_speed_and_fullscreen(
         let id = strip_id("speed");
         let resp = ui
             .interact(rect, id, Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text(course.chrome_string("playbackSpeed"));
         let painter = ui.painter();
         let radius = CornerRadius::same(8);
@@ -1921,14 +2032,14 @@ fn draw_speed_and_fullscreen(
         }
         focus.paint_chrome(ui, rect, &crate::focus::ChromeButton::Speed, accent, bar);
         if *speed_open {
-            draw_speed_popup(ui, rect, rate, speed_open, inputs, text, accent, bar);
+            draw_speed_popup(ui, full, rect, rate, speed_open, inputs, text, accent, bar);
         }
     } else {
         *speed_open = false;
     }
     if let Some(rect) = layout.fullscreen {
         let (icon, tooltip) = if fullscreen_on {
-            (Icon::CornersIn, course.chrome_string("fullScreen"))
+            (Icon::CornersIn, "Exit full screen")
         } else {
             (Icon::CornersOut, course.chrome_string("fullScreen"))
         };
@@ -1953,6 +2064,7 @@ fn format_rate(rate: f32) -> String {
 #[allow(clippy::too_many_arguments)]
 fn draw_speed_popup(
     ui: &Ui,
+    full: Rect,
     anchor: Rect,
     current: f32,
     speed_open: &mut bool,
@@ -1964,13 +2076,13 @@ fn draw_speed_popup(
     let rates = coursecraft_logic::PLAYBACK_RATES;
     let height = SPEED_ROW * rates.len() as f32 + 8.0;
     let width = 72.0;
-    let popup = Rect::from_min_size(
-        Pos2::new(
-            anchor.center().x - width * 0.5,
-            (anchor.top() - 6.0 - height).max(0.0),
-        ),
-        vec2(width, height),
-    );
+    let pad = 4.0_f32.min(((full.width() - width) * 0.5).max(0.0));
+    let min_x = full.left() + pad;
+    let max_x = (full.right() - width - pad).max(min_x);
+    let x = (anchor.center().x - width * 0.5).clamp(min_x, max_x);
+    let y =
+        (anchor.top() - 6.0 - height).clamp(full.top(), (full.bottom() - height).max(full.top()));
+    let popup = Rect::from_min_size(Pos2::new(x, y), vec2(width, height));
     let painter = ui.ctx().layer_painter(egui::LayerId::new(
         egui::Order::Tooltip,
         Id::unique("coursecraft-speed-popup"),
@@ -1986,11 +2098,13 @@ fn draw_speed_popup(
             ),
             vec2(width - 8.0, SPEED_ROW),
         );
-        let resp = ui.interact(
-            row,
-            Id::unique(("coursecraft-speed-row", index)),
-            Sense::click(),
-        );
+        let resp = ui
+            .interact(
+                row,
+                Id::unique(("coursecraft-speed-row", index)),
+                Sense::click(),
+            )
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
         let selected = (*rate - current).abs() < 1e-3;
         if selected {
             painter.rect_filled(row, CornerRadius::same(6), accent);
@@ -2002,7 +2116,11 @@ fn draw_speed_popup(
             Align2::CENTER_CENTER,
             format_rate(*rate),
             FontId::new(SIZE_BODY, FontFamily::Name("inter".into())),
-            if selected { Color32::WHITE } else { text },
+            if selected {
+                contrasting_fg(accent)
+            } else {
+                text
+            },
         );
         if resp.clicked() {
             chosen = Some(*rate);
@@ -2011,7 +2129,9 @@ fn draw_speed_popup(
     if let Some(rate) = chosen {
         inputs.push(Input::SetSpeed { rate });
         *speed_open = false;
-    } else if ui.input(|i| i.pointer.any_pressed() || i.key_pressed(egui::Key::Escape))
+    } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        *speed_open = false;
+    } else if ui.input(|i| i.pointer.any_pressed())
         && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
         && !popup.contains(pos)
         && !anchor.contains(pos)
@@ -2036,19 +2156,27 @@ fn draw_secondary_controls(
     bar: Color32,
 ) {
     let slide = player.current_slide();
-    let (is_first, is_last) = slide.map_or((true, true), |slide| {
-        nav_limits(
-            player.play_order().iter().map(|s| s.id.as_str()),
-            slide.id.as_str(),
-        )
-    });
+    let (is_first, is_last) = if player.is_partial_preview() {
+        (false, false)
+    } else {
+        slide.map_or((true, true), |slide| {
+            nav_limits(
+                player.play_order().iter().map(|s| s.id.as_str()),
+                slide.id.as_str(),
+            )
+        })
+    };
     let started = player.state().started;
     let can_nav = show_nav && started && !player.lightbox_open();
     let can_menu = player.effective_player().show_menu && started;
 
     if let Some(rect) = layout.captions {
         let fill = (*captions_on).then_some(accent);
-        let icon_color = if *captions_on { Color32::WHITE } else { text };
+        let icon_color = if *captions_on {
+            contrasting_fg(accent)
+        } else {
+            text
+        };
         if button(
             ui,
             rect,
@@ -2069,7 +2197,11 @@ fn draw_secondary_controls(
             rect,
             "outline",
             Icon::List,
-            text,
+            if *drawer_open {
+                contrasting_fg(accent)
+            } else {
+                text
+            },
             can_menu,
             (*drawer_open).then_some(accent),
             player.course().chrome_string("outlineTooltip"),
@@ -2108,7 +2240,7 @@ fn draw_secondary_controls(
         let unlocked = player.can_next();
         let accent_fill = (complete && unlocked).then_some(accent);
         let icon_color = if complete && unlocked {
-            Color32::WHITE
+            contrasting_fg(accent)
         } else {
             text
         };
@@ -2139,12 +2271,20 @@ fn draw_secondary_controls(
 
     let painter = painter_with(ui, layout.rect);
     if let Some(rect) = layout.title {
-        painter.text(
+        let resp = ui.interact(
+            rect,
+            ui.scope_id().with("strip-title"),
+            egui::Sense::hover(),
+        );
+        paint_truncated_text(
+            &painter,
             Pos2::new(rect.left(), rect.center().y),
             Align2::LEFT_CENTER,
             &layout.title_text,
             FontId::new(SIZE_BODY, FontFamily::Name("inter".into())),
             text,
+            rect.width(),
+            Some(&resp),
         );
     }
     if let Some(rect) = layout.counter {
@@ -2188,6 +2328,11 @@ fn draw_seek_bar(
             },
         )
         .on_hover_text(player.course().chrome_string("slidePosition"));
+    let response = if enabled {
+        response.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        response
+    };
     let info = player.seek_info();
     if enabled {
         let interacting = response.is_pointer_button_down_on()
@@ -2352,6 +2497,11 @@ fn button(
         },
     );
     let resp = resp.on_hover_text(tooltip);
+    let resp = if enabled {
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        resp
+    };
     let painter = ui.painter();
     let hovered = enabled && resp.hovered();
     let radius = CornerRadius::same(8);
@@ -2401,6 +2551,7 @@ fn draw_lightbox_close(
     let (bar, text, accent) = bar_colors(player);
     let resp = ui
         .interact(rect, strip_id("close-lightbox"), Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text(player.course().chrome_string("closeLightbox"));
     let painter = ui.painter();
     let radius = rect.width().min(rect.height()) * 0.5;
@@ -2568,6 +2719,7 @@ fn ease_out(t: f32) -> f32 {
 fn draw_drawer(
     ui: &mut Ui,
     player: &Player<'_>,
+    full: Rect,
     rect: Rect,
     progress: f32,
     show_nav: bool,
@@ -2580,11 +2732,15 @@ fn draw_drawer(
     view: &mut DrawerView,
     focus_search: &mut bool,
 ) {
-    let painter = ui.painter().with_clip_rect(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, DRAWER_BG);
+    let clip = ui.clip_rect().intersect(full).intersect(rect);
+    if !valid_rect(clip) {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(clip);
+    painter.rect_filled(clip, CornerRadius::ZERO, DRAWER_BG);
     painter.vline(
         rect.right(),
-        rect.y_range(),
+        clip.y_range(),
         Stroke::new(1.0, Color32::from_white_alpha(0x18)),
     );
     let area = rect.shrink2(vec2(DRAWER_PAD, DRAWER_PAD));
@@ -2594,7 +2750,7 @@ fn draw_drawer(
             .id_salt("coursecraft-player-drawer"),
     );
     child.multiply_opacity(progress.clamp(0.0, 1.0));
-    child.set_clip_rect(rect);
+    child.set_clip_rect(clip);
     let title_font = FontId::new(SIZE_TITLE, FontFamily::Name("inter-bold".into()));
     let (header, _) =
         child.allocate_exact_size(vec2(child.available_width(), DRAWER_CLOSE), Sense::hover());
@@ -2737,13 +2893,24 @@ fn draw_drawer(
                     };
                     let (row, resp) =
                         ui.allocate_exact_size(vec2(ui.available_width(), 30.0), sense);
-                    // Report only the visible part; a row scrolled out of
-                    // view gets an empty rect instead of one over the header.
-                    let shown = row.intersect(ui.clip_rect());
-                    let shown = if shown.height() > 0.0 && shown.width() > 0.0 {
-                        shown
+                    let resp = if settled && reachable {
+                        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
                     } else {
-                        let clip = ui.clip_rect();
+                        resp
+                    };
+                    // Report only the vertically visible part; a row scrolled out of
+                    // view gets an empty rect instead of one over the header, while
+                    // horizontal bounds keep their full width during the slide-in so
+                    // `PlayerFrame::show` can translate them to the settled position.
+                    let clip = ui.clip_rect();
+                    let top = row.top().max(clip.top());
+                    let bottom = row.bottom().min(clip.bottom());
+                    let shown = if bottom > top {
+                        Rect::from_min_max(
+                            Pos2::new(row.left(), top),
+                            Pos2::new(row.right(), bottom),
+                        )
+                    } else {
                         let y = row.top().clamp(clip.top(), clip.bottom());
                         Rect::from_min_size(Pos2::new(row.left(), y), egui::Vec2::ZERO)
                     };
@@ -2803,10 +2970,12 @@ fn draw_drawer(
                         );
                     }
                     let title = player.display_text(&slide.title);
-                    painter.text(
+                    let max_title_w = (row.right() - (row.left() + 30.0) - 8.0).max(0.0);
+                    paint_truncated_text(
+                        &painter,
                         Pos2::new(row.left() + 30.0, row.center().y),
                         Align2::LEFT_CENTER,
-                        title,
+                        &title,
                         body_font.clone(),
                         if current {
                             DRAWER_TEXT
@@ -2815,6 +2984,8 @@ fn draw_drawer(
                         } else {
                             DRAWER_TERTIARY
                         },
+                        max_title_w,
+                        Some(&resp),
                     );
                     if resp.clicked() && !current && reachable {
                         go_to = Some(slide.id.clone());
@@ -2838,6 +3009,11 @@ fn draw_drawer(
         };
         let (btn_rect, resp) =
             child.allocate_exact_size(vec2(child.available_width(), 32.0), sense);
+        let resp = if settled {
+            resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        } else {
+            resp
+        };
         chrome.push((crate::focus::ChromeButton::StartOver, btn_rect));
         let bg = if resp.hovered() {
             Color32::from_white_alpha(0x1E)
@@ -2889,6 +3065,7 @@ fn draw_tab_row(
         ui.spacing_mut().item_spacing.x = gap;
         for tab in tabs {
             let (rect, resp) = ui.allocate_exact_size(vec2(each, 30.0), Sense::click());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             let kind = crate::focus::ChromeButton::DrawerTab(*tab);
             chrome.push((kind.clone(), rect));
             let selected = *tab == current;
@@ -2903,16 +3080,19 @@ fn draw_tab_row(
                 );
             }
             focus.paint_chrome(ui, rect, &kind, accent, DRAWER_BG);
-            ui.painter().text(
+            paint_truncated_text(
+                ui.painter(),
                 rect.center(),
                 Align2::CENTER_CENTER,
                 player.course().chrome_string(tab.label_key()),
                 font.clone(),
                 if selected {
-                    Color32::WHITE
+                    contrasting_fg(accent)
                 } else {
                     DRAWER_SECONDARY
                 },
+                (each - 8.0).max(0.0),
+                Some(&resp),
             );
             if resp.clicked() {
                 view.tab = *tab;
@@ -2937,6 +3117,7 @@ fn drawer_item(
     accent: Color32,
 ) -> (Rect, egui::Response) {
     let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     chrome.push((kind.clone(), row));
     if selected {
         ui.painter().rect_filled(
@@ -2980,12 +3161,16 @@ fn draw_content_tab(
                         let kind = crate::focus::ChromeButton::ResourceRow(resource.id.clone());
                         let (row, resp) =
                             drawer_item(ui, &kind, 34.0, false, focus, chrome, accent);
-                        ui.painter().text(
+                        let max_res_w = (row.right() - 28.0 - (row.left() + 8.0)).max(0.0);
+                        paint_truncated_text(
+                            ui.painter(),
                             Pos2::new(row.left() + 8.0, row.center().y),
                             Align2::LEFT_CENTER,
                             &resource.title,
                             body_font.clone(),
                             DRAWER_TEXT,
+                            max_res_w,
+                            Some(&resp),
                         );
                         ui.painter().text(
                             Pos2::new(row.right() - 12.0, row.center().y),
@@ -3031,12 +3216,16 @@ fn draw_content_tab(
                         let kind = crate::focus::ChromeButton::GlossaryTerm(entry.id.clone());
                         let open = view.selected.as_deref() == Some(entry.id.as_str());
                         let (row, resp) = drawer_item(ui, &kind, 30.0, open, focus, chrome, accent);
-                        ui.painter().text(
+                        let max_term_w = (row.right() - (row.left() + 8.0) - 8.0).max(0.0);
+                        paint_truncated_text(
+                            ui.painter(),
                             Pos2::new(row.left() + 8.0, row.center().y),
                             Align2::LEFT_CENTER,
                             &entry.term,
                             body_font.clone(),
                             DRAWER_TEXT,
+                            max_term_w,
+                            Some(&resp),
                         );
                         if resp.clicked() {
                             view.selected = Some(entry.id.clone());

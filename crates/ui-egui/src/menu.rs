@@ -786,7 +786,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 editor.toggle_master_view();
                 ui.close();
             }
-            ui.checkbox(&mut editor.ui.show_media_library, "Media Library");
+            ui.checkbox(&mut editor.ui.show_media_library, "Media library");
             ui.separator();
             ui.menu_button("Theme", |ui| {
                 let current = editor.theme_pref;
@@ -1673,7 +1673,7 @@ fn render_extra_category_items(
 
     if category == "Project" {
         ui.separator();
-        if ui.button("Course Settings").clicked() {
+        if ui.button("Course settings").clicked() {
             editor.ui.show_course_settings_window = true;
             ui.close();
         }

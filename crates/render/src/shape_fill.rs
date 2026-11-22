@@ -777,15 +777,45 @@ fn subdivide_mesh(mesh: &mut Mesh, max_edge: f32) {
     *mesh = out;
 }
 
-/// Miter joins longer than this many half-widths fall back to a bevel.
-const MITER_LIMIT: f32 = 4.0;
+/// Default miter limit (half-widths) matching PowerPoint's `<a:miter lim="800000"/>`.
+const DEFAULT_MITER_LIMIT: f32 = 8.0;
 /// Segments in one round dot.
 const DOT_SEGMENTS: usize = 12;
+
+/// How corners of a stroked path are joined.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StrokeJoin {
+    pub kind: coursecraft_course::LineJoin,
+    pub miter_limit: f32,
+}
+
+impl Default for StrokeJoin {
+    fn default() -> Self {
+        Self {
+            kind: coursecraft_course::LineJoin::Miter,
+            miter_limit: DEFAULT_MITER_LIMIT,
+        }
+    }
+}
+
+impl StrokeJoin {
+    /// Build a [`StrokeJoin`] from an outline's join kind and optional miter limit.
+    #[must_use]
+    pub fn from_outline(kind: coursecraft_course::LineJoin, miter_limit: Option<f32>) -> Self {
+        let limit = miter_limit
+            .filter(|v| v.is_finite() && *v >= 1.0)
+            .unwrap_or(DEFAULT_MITER_LIMIT);
+        Self {
+            kind,
+            miter_limit: limit,
+        }
+    }
+}
 
 /// Build a mesh for a band of `width` centred on each closed contour.
 ///
 /// Every contour, including a hole, gets its own closed band. Joins are mitred
-/// up to [`MITER_LIMIT`] and bevelled past it. `dash` breaks the band into
+/// up to [`DEFAULT_MITER_LIMIT`] and bevelled past it. `dash` breaks the band into
 /// dashes, round dots or dash-dot groups. The band is a single ring polygon fed
 /// through [`fill_contours`], so it gets the same one-pixel feather and never
 /// overlaps itself at a join. Non-finite or non-positive widths draw nothing.
@@ -809,6 +839,28 @@ pub fn stroke_contours_pattern(
     width: f32,
     dash: coursecraft_course::DashStyle,
     dash_pattern: Option<&[f32]>,
+    pixels_per_point: f32,
+) -> Mesh {
+    stroke_contours_with_join(
+        contours,
+        color,
+        width,
+        dash,
+        dash_pattern,
+        StrokeJoin::default(),
+        pixels_per_point,
+    )
+}
+
+/// Like [`stroke_contours_pattern`], with an explicit [`StrokeJoin`].
+#[must_use]
+pub fn stroke_contours_with_join(
+    contours: &[Vec<Pt>],
+    color: Color32,
+    width: f32,
+    dash: coursecraft_course::DashStyle,
+    dash_pattern: Option<&[f32]>,
+    join: StrokeJoin,
     pixels_per_point: f32,
 ) -> Mesh {
     let mut mesh = Mesh::default();
@@ -840,6 +892,7 @@ pub fn stroke_contours_pattern(
             pixels_per_point,
             dash,
             dash_pattern,
+            join,
         );
     }
     mesh
@@ -874,6 +927,31 @@ pub fn stroke_path_pattern(
     dash_pattern: Option<&[f32]>,
     pixels_per_point: f32,
 ) -> Mesh {
+    stroke_path_with_join(
+        points,
+        closed,
+        color,
+        width,
+        dash,
+        dash_pattern,
+        StrokeJoin::default(),
+        pixels_per_point,
+    )
+}
+
+/// Like [`stroke_path_pattern`], with an explicit [`StrokeJoin`].
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn stroke_path_with_join(
+    points: &[Pt],
+    closed: bool,
+    color: Color32,
+    width: f32,
+    dash: coursecraft_course::DashStyle,
+    dash_pattern: Option<&[f32]>,
+    join: StrokeJoin,
+    pixels_per_point: f32,
+) -> Mesh {
     let mut mesh = Mesh::default();
     if !width.is_finite() || width <= 0.0 {
         return mesh;
@@ -902,6 +980,7 @@ pub fn stroke_path_pattern(
         pixels_per_point,
         dash,
         dash_pattern,
+        join,
     );
     mesh
 }
@@ -918,9 +997,10 @@ fn add_patterned_stroke(
     pixels_per_point: f32,
     dash: coursecraft_course::DashStyle,
     dash_pattern: Option<&[f32]>,
+    join: StrokeJoin,
 ) {
     if dash == coursecraft_course::DashStyle::Solid {
-        add_band(mesh, points, closed, half, feather, color);
+        add_band(mesh, points, closed, half, feather, color, join);
         return;
     }
     let pattern: &[f32] = match dash_pattern {
@@ -932,7 +1012,7 @@ fn add_patterned_stroke(
         _ => dash.default_pattern(),
     };
     if pattern.len() < 2 {
-        add_band(mesh, points, closed, half, feather, color);
+        add_band(mesh, points, closed, half, feather, color, join);
         return;
     }
     let segs = segments(points, closed);
@@ -1005,7 +1085,7 @@ fn add_patterned_stroke(
             if phase >= phase_len - EPS {
                 if in_dash {
                     if !is_dot && current.len() >= 2 {
-                        add_band(mesh, &current, false, half, feather, color);
+                        add_band(mesh, &current, false, half, feather, color, join);
                     }
                     current.clear();
                     dot_mid_recorded = false;
@@ -1018,7 +1098,7 @@ fn add_patterned_stroke(
         }
     }
     if in_dash && current.len() >= 2 {
-        add_band(mesh, &current, false, half, feather, color);
+        add_band(mesh, &current, false, half, feather, color, join);
     }
 }
 
@@ -1119,8 +1199,15 @@ fn side(d: Pt) -> Pt {
     (d.1, -d.0)
 }
 
-/// Cross-sections at one point of the path: one for a mitred corner, two for a bevel.
-fn corner_stations(prev: Option<Pt>, cur: Pt, next: Option<Pt>, half: f32) -> Vec<Station> {
+/// Cross-sections at one point of the path: one for a mitred corner, two for a bevel,
+/// or an arc of stations for a round join.
+fn corner_stations(
+    prev: Option<Pt>,
+    cur: Pt,
+    next: Option<Pt>,
+    half: f32,
+    join: StrokeJoin,
+) -> Vec<Station> {
     let incoming = prev.and_then(|prev| direction(prev, cur));
     let outgoing = next.and_then(|next| direction(cur, next));
     let station = |normal: Pt, along: f32, inner: f32| Station {
@@ -1142,23 +1229,67 @@ fn corner_stations(prev: Option<Pt>, cur: Pt, next: Option<Pt>, half: f32) -> Ve
     let inner_limit = reach(prev).min(reach(next)).max(half.min(1.0));
     if sum_len <= EPS {
         // The path doubles straight back on itself.
+        if join.kind == coursecraft_course::LineJoin::Round {
+            let a0 = n_in.1.atan2(n_in.0);
+            let steps = 6usize;
+            return (0..=steps)
+                .map(|i| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let angle = a0 + std::f32::consts::PI * (i as f32 / steps as f32);
+                    station((angle.cos(), angle.sin()), half, half)
+                })
+                .collect();
+        }
         return vec![station(n_in, half, half), station(n_out, half, half)];
     }
     let miter = mul(sum, 1.0 / sum_len);
     let cos = dot(miter, n_in).max(EPS);
     let miter_len = half / cos;
     let inner_len = miter_len.min(inner_limit);
-    if miter_len <= half * MITER_LIMIT {
-        let turn = cross(d_in, d_out);
+    let turn = cross(d_in, d_out);
+    if join.kind == coursecraft_course::LineJoin::Miter
+        && miter_len <= half * join.miter_limit.max(1.0)
+    {
         return if turn >= 0.0 {
             vec![station(miter, miter_len, inner_len)]
         } else {
             vec![station(miter, inner_len, miter_len)]
         };
     }
-    // Too sharp for a mitre: the outside of the corner gets two points.
     let inner = mul(miter, inner_len);
-    if cross(d_in, d_out) >= 0.0 {
+    if join.kind == coursecraft_course::LineJoin::Round {
+        let a0 = n_in.1.atan2(n_in.0);
+        let a1 = n_out.1.atan2(n_out.0);
+        let da = if turn >= 0.0 {
+            (a1 - a0).rem_euclid(std::f32::consts::TAU)
+        } else {
+            -((a0 - a1).rem_euclid(std::f32::consts::TAU))
+        };
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let steps = ((da.abs() / (std::f32::consts::PI / 6.0)).ceil() as usize).clamp(2, 12);
+        return (0..=steps)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let angle = a0 + da * (i as f32 / steps as f32);
+                let u = (angle.cos(), angle.sin());
+                if turn >= 0.0 {
+                    Station {
+                        centre: cur,
+                        plus: add(cur, mul(u, half)),
+                        minus: sub(cur, inner),
+                    }
+                } else {
+                    Station {
+                        centre: cur,
+                        plus: add(cur, inner),
+                        minus: sub(cur, mul(u, half)),
+                    }
+                }
+            })
+            .collect();
+    }
+    // Bevel (explicit or miter exceeding limit): the outside of the corner gets two points.
+    if turn >= 0.0 {
         let bevel = |normal: Pt| Station {
             centre: cur,
             plus: add(cur, mul(normal, half)),
@@ -1185,7 +1316,15 @@ fn pushed_out(centre: Pt, edge: Pt, by: f32) -> Pt {
 /// A strip has no triangulation step to fail, and its quads meet without
 /// overlapping, so a translucent colour stays even. Every part of the path is
 /// always covered.
-fn add_band(mesh: &mut Mesh, points: &[Pt], closed: bool, half: f32, feather: f32, color: Color32) {
+fn add_band(
+    mesh: &mut Mesh,
+    points: &[Pt],
+    closed: bool,
+    half: f32,
+    feather: f32,
+    color: Color32,
+    join: StrokeJoin,
+) {
     let count = points.len();
     if count < 2 {
         return;
@@ -1206,7 +1345,7 @@ fn add_band(mesh: &mut Mesh, points: &[Pt], closed: bool, half: f32, feather: f3
         } else {
             None
         };
-        stations.extend(corner_stations(prev, cur, next, half));
+        stations.extend(corner_stations(prev, cur, next, half, join));
     }
     if stations.len() < 2 {
         return;

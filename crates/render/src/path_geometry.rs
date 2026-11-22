@@ -10,7 +10,7 @@ pub use coursecraft_course::{
 use coursecraft_course::{ConnectorStyle, DashStyle, LineEnd, PathStyle};
 use egui::{Color32, Mesh, pos2};
 
-use crate::shape_fill::{fill_contours, stroke_path_pattern};
+use crate::shape_fill::{StrokeJoin, fill_contours, stroke_path_pattern, stroke_path_with_join};
 
 pub use crate::shape_geometry::Pt;
 
@@ -550,6 +550,7 @@ pub struct PathMeshSpec {
     pub width: f32,
     pub dash: DashStyle,
     pub dash_pattern: Option<Vec<f32>>,
+    pub join: StrokeJoin,
     pub fill: Option<Color32>,
     pub pixels_per_point: f32,
 }
@@ -623,13 +624,14 @@ pub fn path_mesh(
         .and_then(|(a, b)| direction(b, a));
 
     let trimmed = trim_end(&trim_start(&flat, start_trim), end_trim);
-    let stroke = stroke_path_pattern(
+    let stroke = stroke_path_with_join(
         &trimmed,
         closed,
         spec.color,
         spec.width,
         spec.dash,
         spec.dash_pattern.as_deref(),
+        spec.join,
         spec.pixels_per_point,
     );
     append_mesh(&mut mesh, &stroke);
@@ -829,6 +831,7 @@ mod tests {
                         width: 3.0,
                         dash: DashStyle::Solid,
                         dash_pattern: None,
+                        join: StrokeJoin::default(),
                         fill: None,
                         pixels_per_point: 1.0,
                     },
@@ -868,6 +871,7 @@ mod tests {
                     width: 2.0,
                     dash: DashStyle::Solid,
                     dash_pattern: None,
+                    join: StrokeJoin::default(),
                     fill: Some(Color32::from_rgb(10, 20, 30)),
                     pixels_per_point: 1.0,
                 },

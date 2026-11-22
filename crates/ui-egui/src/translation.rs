@@ -21,7 +21,7 @@ fn show_export_prompt(editor: &mut Editor, ctx: &egui::Context, requests: &mut V
     Dialog::new("Export Translation")
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.label("Target language (BCP 47, for example fr or pt-BR):");
+            ui.label("Target language (BCP 47, for example fr or pt-BR)");
             ui.text_edit_singleline(&mut editor.ui.translation_target_language);
             let target = editor.ui.translation_target_language.trim().to_owned();
             let valid = coursecraft_course::is_language_tag_valid(&target);
@@ -34,6 +34,9 @@ fn show_export_prompt(editor: &mut Editor, ctx: &egui::Context, requests: &mut V
             ui.horizontal(|ui| {
                 if ui
                     .add_enabled(valid, egui::Button::new("Export…"))
+                    .on_disabled_hover_text(
+                        "Enter a valid BCP-47 language tag (for example, fr or es-MX)",
+                    )
                     .clicked()
                 {
                     requests.push(EditorRequest::ExportTranslation {
@@ -88,19 +91,18 @@ fn show_report(editor: &mut Editor, ctx: &egui::Context) {
         return;
     };
     let mut open = true;
-    let max_height = (ctx.content_rect().height() - 40.0).max(240.0);
     Dialog::new("Translation Import Report")
         .open(&mut open)
         .resizable(true)
-        .show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height((max_height - 80.0).max(160.0))
-                .show(ui, |ui| {
-                    ui.label(report);
-                });
-            if ui.button("OK").clicked() {
-                editor.ui.translation_report = None;
-            }
+        .show_with_footer(ctx, |dialog| {
+            dialog.body(|ui| {
+                ui.label(report);
+            });
+            dialog.footer(|ui| {
+                if ui.button("OK").clicked() {
+                    editor.ui.translation_report = None;
+                }
+            });
         });
     if !open {
         editor.ui.translation_report = None;

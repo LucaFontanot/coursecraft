@@ -47,9 +47,8 @@ pub fn next_rule_editor(
     };
     let first_variable = variables.first().cloned().unwrap_or_default();
     let mut chosen: Option<Option<NextRequirement>> = None;
-    egui::ComboBox::from_id_salt(id_salt)
+    crate::widgets::styled_combo(ui, id_salt, width)
         .selected_text(label)
-        .width(width)
         .show_ui(ui, |ui| {
             if allow_default
                 && ui
@@ -87,9 +86,8 @@ pub fn next_rule_editor(
         });
     if let Some(NextRequirement::Variable { name }) = current {
         let mut picked = name.clone();
-        egui::ComboBox::from_id_salt(format!("{id_salt}_variable"))
+        crate::widgets::styled_combo(ui, format!("{id_salt}_variable"), width)
             .selected_text(name.as_str())
-            .width(width)
             .show_ui(ui, |ui| {
                 for var in variables {
                     ui.selectable_value(&mut picked, var.clone(), var.as_str());
@@ -112,9 +110,8 @@ fn logo_picker(
 ) -> Option<Option<String>> {
     let mut chosen = None;
     form.row(ui, "Logo", |ui, _| {
-        egui::ComboBox::from_id_salt("course_player_logo")
+        crate::widgets::styled_combo(ui, "course_player_logo", 160.0)
             .selected_text(current.unwrap_or("None"))
-            .width(160.0)
             .show_ui(ui, |ui| {
                 for (src, _) in media {
                     if coursecraft_course::is_image_src(src)
@@ -128,6 +125,7 @@ fn logo_picker(
             });
         if ui
             .add_enabled(current.is_some(), egui::Button::new("Clear"))
+            .on_disabled_hover_text("No logo is selected")
             .clicked()
         {
             chosen = Some(None);
@@ -151,6 +149,7 @@ pub struct CourseSettingsState {
     pub title: String,
     pub id: String,
     pub language: String,
+    pub show_bar: bool,
     pub show_nav: bool,
     pub show_menu: bool,
     pub show_seekbar: bool,
@@ -182,6 +181,7 @@ impl CourseSettingsState {
         self.title = course.title.clone();
         self.id = course.id.clone();
         self.language = course.language.clone().unwrap_or_default();
+        self.show_bar = course.player.show_bar;
         self.show_nav = course.player.show_nav;
         self.show_menu = course.player.show_menu;
         self.show_seekbar = course.player.show_seekbar;
@@ -225,6 +225,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
         .course_settings
         .sync(&editor.session.course, editor.session.revision);
 
+    let mut open = true;
     let mut close = false;
     let mut update_course = false;
     let mut update_player = false;
@@ -240,8 +241,10 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
     let needs_result = !editor.session.course.reports_result();
     let bool_names = bool_variable_names(&editor.session.course);
 
-    Dialog::new("Course Settings")
-        .width(440.0)
+    Dialog::new("Course settings")
+        .open(&mut open)
+        .resizable(true)
+        .default_size(egui::vec2(460.0, 560.0))
         .show_with_footer(ctx, |dialog| {
             dialog.body(|ui| {
                 // Course Info
@@ -249,7 +252,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                 let form = Form::new(
                     ui,
                     &[
-                        "Course Title",
+                        "Course title",
                         "Course ID",
                         "Language",
                         "Logo",
@@ -260,7 +263,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                     ],
                 );
                 ui.heading("General");
-                form.row(ui, "Course Title", |ui, width| {
+                form.row(ui, "Course title", |ui, width| {
                     let tr = ui.add(
                         TextEdit::singleline(&mut editor.ui.course_settings.title)
                             .desired_width(width),
@@ -336,83 +339,109 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                 ui.separator();
 
                 // Player Chrome Toggles
-                ui.heading("Player Chrome");
+                ui.heading("Player chrome");
                 if ui
-                    .checkbox(
-                        &mut editor.ui.course_settings.show_nav,
-                        "Show Navigation (Previous / Next buttons)",
-                    )
+                    .checkbox(&mut editor.ui.course_settings.show_bar, "Player bar")
                     .changed()
                 {
                     update_player = true;
                 }
-                if ui
-                    .checkbox(
-                        &mut editor.ui.course_settings.show_menu,
-                        "Show Slide Menu (Outline)",
-                    )
-                    .changed()
-                {
-                    update_player = true;
-                }
-                if ui
-                    .checkbox(&mut editor.ui.course_settings.show_seekbar, "Show Seekbar")
-                    .changed()
-                {
-                    update_player = true;
-                }
-                if ui
-                    .checkbox(&mut editor.ui.course_settings.show_speed, "Show Playback Speed")
-                    .changed()
-                {
-                    update_player = true;
-                }
-                if ui
-                    .checkbox(
-                        &mut editor.ui.course_settings.show_fullscreen,
-                        "Show Full Screen",
-                    )
-                    .changed()
-                {
-                    update_player = true;
-                }
-                if ui
-                    .checkbox(
-                        &mut editor.ui.course_settings.show_transcript,
-                        "Show notes as transcript",
-                    )
-                    .changed()
-                {
-                    update_player = true;
-                }
-                ui.horizontal(|ui| {
-                    for (flag, label) in [
-                        (&mut editor.ui.course_settings.show_title, "Title"),
-                        (&mut editor.ui.course_settings.show_volume, "Volume"),
-                        (&mut editor.ui.course_settings.show_captions, "Captions"),
-                    ] {
-                        if ui.checkbox(flag, label).changed() {
-                            update_player = true;
+                const BAR_OFF_TOOLTIP: &str = "Turn the player bar on to use this";
+                ui.add_enabled_ui(editor.ui.course_settings.show_bar, |ui| {
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_nav,
+                            "Show navigation (Previous / Next buttons)",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_menu,
+                            "Show slide menu (outline)",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(&mut editor.ui.course_settings.show_seekbar, "Show seekbar")
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_speed,
+                            "Show playback speed",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_fullscreen,
+                            "Show full screen",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_transcript,
+                            "Show notes as transcript",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    ui.horizontal(|ui| {
+                        for (flag, label) in [
+                            (&mut editor.ui.course_settings.show_title, "Title"),
+                            (&mut editor.ui.course_settings.show_volume, "Volume"),
+                            (&mut editor.ui.course_settings.show_captions, "Captions"),
+                        ] {
+                            if ui
+                                .checkbox(flag, label)
+                                .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                                .changed()
+                            {
+                                update_player = true;
+                            }
                         }
+                    });
+                    if let Some(choice) = logo_picker(
+                        ui,
+                        &form,
+                        editor.ui.course_settings.logo.as_deref(),
+                        &editor.media,
+                    ) {
+                        logo_choice = Some(choice);
                     }
                 });
-                if let Some(choice) = logo_picker(
-                    ui,
-                    &form,
-                    editor.ui.course_settings.logo.as_deref(),
-                    &editor.media,
-                ) {
-                    logo_choice = Some(choice);
-                }
                 form.row(ui, "Navigation", |ui, _| {
                     let mut mode = editor.ui.course_settings.navigation;
-                    egui::ComboBox::from_id_salt("course_navigation_mode")
-                        .selected_text(nav_mode_label(mode))
-                        .show_ui(ui, |ui| {
-                            for choice in [NavMode::Free, NavMode::Restricted, NavMode::Locked] {
-                                ui.selectable_value(&mut mode, choice, nav_mode_label(choice));
-                            }
-                        });
+                    crate::widgets::styled_combo(
+                        ui,
+                        "course_navigation_mode",
+                        crate::widgets::COMBO_MIN_WIDTH,
+                    )
+                    .selected_text(nav_mode_label(mode))
+                    .show_ui(ui, |ui| {
+                        for choice in [NavMode::Free, NavMode::Restricted, NavMode::Locked] {
+                            ui.selectable_value(&mut mode, choice, nav_mode_label(choice));
+                        }
+                    });
                     if mode != editor.ui.course_settings.navigation {
                         editor.ui.course_settings.navigation = mode;
                         update_player = true;
@@ -437,7 +466,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                 ui.separator();
 
                 // Quiz Settings
-                ui.heading("Quiz Settings");
+                ui.heading("Quiz settings");
                 if ui
                     .checkbox(
                         &mut editor.ui.course_settings.quiz_enabled,
@@ -577,6 +606,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
         editor.run(
             "course.set_player",
             serde_json::json!({
+                "show_bar": editor.ui.course_settings.show_bar,
                 "show_nav": editor.ui.course_settings.show_nav,
                 "show_menu": editor.ui.course_settings.show_menu,
                 "show_seekbar": editor.ui.course_settings.show_seekbar,
@@ -646,7 +676,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
         editor.run("course.add_finish_button", serde_json::json!({}));
     }
 
-    if close {
+    if close || !open {
         editor.ui.show_course_settings_window = false;
     }
 }

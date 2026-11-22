@@ -1480,8 +1480,13 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let p = coursecraft_render::palette(ui.ctx());
     // The pills line up with the slide's left edge. When they are too many to fit between
     // there and the canvas edge, the row starts further left rather than running off.
+    let ruler_inset = if editor.session.course.editor.show_rulers {
+        crate::rulers::RULER_SIZE
+    } else {
+        0.0
+    };
     let canvas_right = ui.clip_rect().max.x - coursecraft_render::PANEL_MARGIN;
-    let canvas_left = ui.clip_rect().min.x + coursecraft_render::PANEL_MARGIN;
+    let canvas_left = ui.clip_rect().min.x + ruler_inset + coursecraft_render::PANEL_MARGIN;
     let estimated_w = editor
         .session
         .course
@@ -1509,8 +1514,9 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let has_layer_selected = editor.selection.layer.is_some();
     let wraps = has_layer_selected || estimated_w > (canvas_right - pills_x);
     let pills_h = if wraps { 64.0 } else { 24.0 };
+    let pills_y = (t.slide_rect().min.y - 24.0 - 8.0).max(ui.clip_rect().min.y + ruler_inset + 2.0);
     let pills_rect = Rect::from_min_size(
-        pos2(pills_x, t.slide_rect().min.y - 24.0 - 8.0),
+        pos2(pills_x, pills_y),
         vec2((canvas_right - pills_x).max(1.0), pills_h),
     );
 
@@ -1573,7 +1579,13 @@ fn show_layer_pills(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     .corner_radius(12)
     .min_size(vec2(24.0, 24.0));
 
-    if pills_ui.add(plus_btn).on_hover_text("Add layer").clicked() {
+    let plus_resp = pills_ui.add(plus_btn).on_hover_text("Add layer");
+    plus_resp.widget_info(|| {
+        let mut info = egui::WidgetInfo::new(egui::Role::Button);
+        info.label = Some("Add layer".to_owned());
+        info
+    });
+    if plus_resp.clicked() {
         editor.run(
             "layer.add",
             serde_json::json!({ "slide": editor.selection.slide }),
@@ -2337,6 +2349,8 @@ fn commit_draw(
             width: 2.0,
             dash: coursecraft_course::DashStyle::Solid,
             dash_pattern: None,
+            join: coursecraft_course::LineJoin::Miter,
+            miter_limit: None,
         },
         start_end: LineEnd::None,
         end_end: if tool == DrawTool::Arrow {
@@ -4525,40 +4539,100 @@ fn apply_inline_edit_style_shortcut(
     toggle_italic: bool,
     toggle_underline: bool,
 ) {
-    let Some(cr) = cursor_range.filter(|cr| !cr.is_empty()) else {
+    let Some(cr) = cursor_range else {
         return;
     };
     let sorted = cr.as_sorted_char_range();
-    if sorted.start.0 == sorted.end.0 {
-        return;
-    }
+    let is_selection = !cr.is_empty() && sorted.start.0 != sorted.end.0;
     let char_range = (sorted.start.0, sorted.end.0);
-    let cursor_pos = sorted.start.0;
     let eff = editor
         .session
         .course
         .slide(&edit.slide)
         .and_then(|slide| slide.object(&edit.object))
         .and_then(|(obj, _)| match (&obj.kind, edit.cell) {
-            (coursecraft_course::ObjectKind::Text { style, runs, .. }, None) => {
-                Some(crate::properties::style_at_cursor(runs, style, cursor_pos))
-            }
+            (coursecraft_course::ObjectKind::Text { style, .. }, None) => Some(if is_selection {
+                crate::properties::style_for_range(&edit.live_runs, style, char_range)
+            } else {
+                crate::properties::style_at_cursor(&edit.live_runs, style, char_range.0)
+            }),
             (coursecraft_course::ObjectKind::Shape { fill, text, .. }, None) => {
                 let fallback = default_shape_text_style(fill);
                 let style = text.as_ref().map_or(&fallback, |t| &t.style);
-                let runs = text.as_ref().map_or(&[][..], |t| t.runs.as_slice());
-                Some(crate::properties::style_at_cursor(runs, style, cursor_pos))
+                Some(if is_selection {
+                    crate::properties::style_for_range(&edit.live_runs, style, char_range)
+                } else {
+                    crate::properties::style_at_cursor(&edit.live_runs, style, char_range.0)
+                })
             }
             (coursecraft_course::ObjectKind::Table { rows, .. }, Some((row, col))) => {
                 rows.get(row).and_then(|r| r.cells.get(col)).map(|cell| {
-                    crate::properties::style_at_cursor(&cell.runs, &cell.style, cursor_pos)
+                    if is_selection {
+                        crate::properties::style_for_range(&edit.live_runs, &cell.style, char_range)
+                    } else {
+                        crate::properties::style_at_cursor(
+                            &edit.live_runs,
+                            &cell.style,
+                            char_range.0,
+                        )
+                    }
                 })
             }
             _ => None,
         });
-    let Some((eff_bold, eff_italic, eff_underline, _, _)) = eff else {
+    let Some((mut eff_bold, mut eff_italic, mut eff_underline, _, _)) = eff else {
         return;
     };
+    if !is_selection {
+        let caret = char_range.0;
+        let matches_pending = editor
+            .ui
+            .properties
+            .pending_caret_style
+            .as_ref()
+            .is_some_and(|p| {
+                p.slide == edit.slide
+                    && p.object == edit.object
+                    && p.cell == edit.cell
+                    && p.cursor == caret
+            });
+        if matches_pending && let Some(pending) = &editor.ui.properties.pending_caret_style {
+            if let Some(b) = pending.patch.bold {
+                eff_bold = b;
+            }
+            if let Some(it) = pending.patch.italic {
+                eff_italic = it;
+            }
+            if let Some(u) = pending.patch.underline {
+                eff_underline = u;
+            }
+        }
+        let entry = editor
+            .ui
+            .properties
+            .pending_caret_style
+            .get_or_insert_with(|| crate::properties::PendingCaretStyle {
+                slide: edit.slide.clone(),
+                object: edit.object.clone(),
+                cell: edit.cell,
+                cursor: caret,
+                patch: coursecraft_course::TextRunPatch::default(),
+            });
+        entry.slide = edit.slide.clone();
+        entry.object = edit.object.clone();
+        entry.cell = edit.cell;
+        entry.cursor = caret;
+        if toggle_bold {
+            entry.patch.bold = Some(!eff_bold);
+        }
+        if toggle_italic {
+            entry.patch.italic = Some(!eff_italic);
+        }
+        if toggle_underline {
+            entry.patch.underline = Some(!eff_underline);
+        }
+        return;
+    }
     let mut params = serde_json::json!({
         "slide": edit.slide,
         "object": edit.object,
@@ -4811,6 +4885,75 @@ fn inline_edit_shrink(
     .shrink
 }
 
+fn update_inline_edit_buffer(
+    editor: &mut Editor,
+    edit: &InlineEdit,
+    style: &coursecraft_course::TextStyle,
+    buffer: &str,
+) {
+    let Some(state) = editor.ui.inline_edit.as_mut() else {
+        return;
+    };
+    if buffer == state.buffer {
+        return;
+    }
+    let old_chars: Vec<char> = state.buffer.chars().collect();
+    let new_chars: Vec<char> = buffer.chars().collect();
+    let mut prefix = 0usize;
+    while prefix < old_chars.len()
+        && prefix < new_chars.len()
+        && old_chars.get(prefix) == new_chars.get(prefix)
+    {
+        prefix = prefix.saturating_add(1);
+    }
+    let max_suffix = old_chars
+        .len()
+        .saturating_sub(prefix)
+        .min(new_chars.len().saturating_sub(prefix));
+    let mut suffix = 0usize;
+    while suffix < max_suffix {
+        let old_idx = old_chars.len().saturating_sub(1).saturating_sub(suffix);
+        let new_idx = new_chars.len().saturating_sub(1).saturating_sub(suffix);
+        if old_chars.get(old_idx) == new_chars.get(new_idx) {
+            suffix = suffix.saturating_add(1);
+        } else {
+            break;
+        }
+    }
+    let inserted_end = new_chars.len().saturating_sub(suffix);
+    let mut next_runs =
+        coursecraft_course::apply_text_edit(&state.live_runs, &state.buffer, buffer);
+    if inserted_end > prefix
+        && let Some(pending) = editor.ui.properties.pending_caret_style.take()
+    {
+        if pending.slide == edit.slide
+            && pending.object == edit.object
+            && pending.cell == edit.cell
+            && pending.cursor == prefix
+        {
+            next_runs = coursecraft_course::apply_style_to_range_with_base(
+                &next_runs,
+                buffer,
+                (prefix, inserted_end),
+                &pending.patch,
+                Some(style),
+            );
+        }
+    } else if editor
+        .ui
+        .properties
+        .pending_caret_style
+        .as_ref()
+        .is_some_and(|p| p.slide == edit.slide && p.object == edit.object && p.cell == edit.cell)
+    {
+        editor.ui.properties.pending_caret_style = None;
+    }
+    state.live_runs = next_runs;
+    state.live_paragraphs =
+        coursecraft_course::align_paragraphs(&state.buffer, &state.live_paragraphs, buffer);
+    state.buffer = buffer.to_owned();
+}
+
 fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let Some(edit) = editor.ui.inline_edit.clone() else {
         return;
@@ -5034,7 +5177,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
             output.galley_pos,
             &buffer,
             &misspellings,
-            crate::spell_check::SQUIGGLE_COLOR,
+            crate::spell_check::squiggle_color(child.ctx()),
         );
         let menu_open = output.response.context_menu_opened();
         let secondary = ui.input(|i| {
@@ -5118,15 +5261,7 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         }
     }
 
-    if let Some(state) = editor.ui.inline_edit.as_mut()
-        && buffer != state.buffer
-    {
-        state.live_runs =
-            coursecraft_course::apply_text_edit(&state.live_runs, &state.buffer, &buffer);
-        state.live_paragraphs =
-            coursecraft_course::align_paragraphs(&state.buffer, &state.live_paragraphs, &buffer);
-        state.buffer = buffer.clone();
-    }
+    update_inline_edit_buffer(editor, &edit, &style, &buffer);
     if output.response.has_focus()
         && let Some(cr) = cursor_range
     {
@@ -5202,6 +5337,8 @@ fn draw_placement_preview(editor: &Editor, painter: &Painter, t: &SlideTransform
             width: 1.5,
             dash: coursecraft_course::DashStyle::Solid,
             dash_pattern: None,
+            join: coursecraft_course::LineJoin::Miter,
+            miter_limit: None,
         };
         coursecraft_render::paint_outline(painter, screen_rect, kind, &[], &outline, 1.0);
     } else {
@@ -5742,11 +5879,16 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         ),
     };
 
+    let screen = ui
+        .ctx()
+        .data(|d| d.get_temp::<Rect>(egui::Id::unique("coursecraft_screen_rect")))
+        .unwrap_or_else(|| ui.ctx().content_rect());
+    let hud_bounds = viewport_rect.intersect(screen);
     let zoom_hud_w = 132.0;
     let zoom_hud_h = 32.0;
     let zoom_hud_pos = pos2(
-        viewport_rect.max.x - zoom_hud_w - 16.0,
-        viewport_rect.max.y - zoom_hud_h - 16.0,
+        (hud_bounds.max.x - zoom_hud_w - 16.0).max(hud_bounds.min.x + 4.0),
+        (hud_bounds.max.y - zoom_hud_h - 16.0).max(hud_bounds.min.y + 4.0),
     );
     let zoom_hud_rect = Rect::from_min_size(zoom_hud_pos, vec2(zoom_hud_w, zoom_hud_h));
 
@@ -5837,7 +5979,6 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             !matches!(&item.hit, Hit::Object(id)
                 if slide.object(id).is_some_and(|(o, _)| o.editor_hidden))
         });
-        missing_images_as_placeholders(&mut items, &editor.media);
         if let Some(selected) = &editor.selection.object {
             for item in &mut items {
                 if item.hit == Hit::Object(selected.clone())
@@ -5870,8 +6011,17 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 items.push(preview_item);
             }
         }
+        missing_images_as_placeholders(&mut items, &editor.media);
 
-        if !eyedropper_owns_input && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        let popup_was_open = ui
+            .ctx()
+            .data(|d| d.get_temp::<bool>(egui::Id::unique("coursecraft_popup_open_prev_frame")))
+            .unwrap_or(false);
+        if !eyedropper_owns_input
+            && !popup_was_open
+            && !egui::Popup::is_any_open(ui.ctx())
+            && ui.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             let had_tool = editor.ui.placement_tool.is_some();
             let had_draw = editor.ui.draw.is_some();
             let had_path_edit = editor.ui.path_edit.is_some();
@@ -6241,7 +6391,7 @@ fn zoom_value_button(ui: &mut Ui, label: &str) -> egui::Response {
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 24.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 26.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, label.to_owned()));
     if ui.is_rect_visible(rect) {
         let hovered = resp.hovered();
@@ -6267,7 +6417,8 @@ fn zoom_value_button(ui: &mut Ui, label: &str) -> egui::Response {
         );
         ui.painter().galley(caret_pos, caret, color);
     }
-    resp.on_hover_cursor(CursorIcon::PointingHand)
+    resp.on_hover_text("Zoom level")
+        .on_hover_cursor(CursorIcon::PointingHand)
 }
 
 fn draw_dashed_rect(painter: &Painter, rect: Rect, stroke: Stroke) {

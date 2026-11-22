@@ -215,14 +215,22 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
             ui.separator();
         }
 
-        // Course / file title info
+        // Course / file title info (truncate long filenames so validation & error chips stay visible)
         let title_text = if let Some((ref name, dirty)) = editor.title_info {
             let dirty_marker = if dirty { " •" } else { "" };
             format!("{name}{dirty_marker}")
         } else {
             editor.session.course.title.clone()
         };
-        ui.label(coursecraft_render::small(title_text).color(p.text_secondary));
+        let max_title_w = (ui.available_width() * 0.35).clamp(60.0, 260.0);
+        ui.scope(|ui| {
+            ui.set_max_width(max_title_w);
+            ui.add(
+                egui::Label::new(coursecraft_render::small(&title_text).color(p.text_secondary))
+                    .truncate(),
+            )
+            .on_hover_text(&title_text);
+        });
         ui.separator();
 
         // Validation summary chip
@@ -245,7 +253,7 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
             .painter()
             .layout_no_wrap(summary_text.clone(), font_id, p.text);
         let desired_width = 8.0 + 6.0 + 6.0 + galley.size().x + 8.0;
-        let desired_height = 20.0;
+        let desired_height = 24.0;
         let (rect, resp) = ui.allocate_exact_size(
             egui::vec2(desired_width, desired_height),
             egui::Sense::click(),
@@ -258,7 +266,7 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
             p.input
         };
         ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(10), bg);
+            .rect_filled(rect, egui::CornerRadius::same(12), bg);
         let dot_center = egui::pos2(rect.min.x + 8.0 + 3.0, rect.center().y);
         ui.painter().circle_filled(dot_center, 3.0, dot_color);
         let text_pos = egui::pos2(
@@ -334,26 +342,21 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
                 if editor.ui.validation_issues.is_empty() {
                     ui.label("No validation issues found.");
                 } else {
-                    egui::ScrollArea::vertical()
-                        .max_height(240.0)
-                        .id_salt("validation-issues")
-                        .show(ui, |ui| {
-                            for issue in &editor.ui.validation_issues {
-                                let color = if issue.severity == "error" {
-                                    p.danger
-                                } else {
-                                    p.warning
-                                };
-                                let label = format!("{} — {}", issue.path, issue.message);
-                                if ui
-                                    .button(RichText::new(label).color(color))
-                                    .on_hover_text("Click to select referenced slide/object")
-                                    .clicked()
-                                {
-                                    path_to_navigate = Some(issue.path.clone());
-                                }
-                            }
-                        });
+                    for issue in &editor.ui.validation_issues {
+                        let color = if issue.severity == "error" {
+                            p.danger
+                        } else {
+                            p.warning
+                        };
+                        let label = format!("{} — {}", issue.path, issue.message);
+                        if ui
+                            .add(egui::Button::new(RichText::new(label).color(color)).wrap())
+                            .on_hover_text("Click to select referenced slide/object")
+                            .clicked()
+                        {
+                            path_to_navigate = Some(issue.path.clone());
+                        }
+                    }
                 }
 
                 ui.separator();
@@ -369,40 +372,33 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
                             .color(p.text_secondary),
                     );
                 } else {
-                    egui::ScrollArea::vertical()
-                        .max_height(240.0)
-                        .id_salt("accessibility-findings")
-                        .show(ui, |ui| {
-                            for finding in &editor.ui.audit_findings {
-                                let color = match finding.severity.as_str() {
-                                    "error" => p.danger,
-                                    "warning" => p.warning,
-                                    _ => p.text_secondary,
-                                };
-                                let object = finding
-                                    .object
-                                    .as_deref()
-                                    .map_or_else(String::new, |id| format!(" {id}"));
-                                let label = format!(
-                                    "{} [{}]{} — {}",
-                                    finding.severity, finding.criterion, object, finding.message
-                                );
-                                if ui
-                                    .button(RichText::new(label).color(color))
-                                    .on_hover_text(
-                                        "Click to select the referenced slide and object",
-                                    )
-                                    .clicked()
-                                {
-                                    audit_to_navigate =
-                                        Some((finding.slide.clone(), finding.object.clone()));
-                                }
-                                ui.label(
-                                    coursecraft_render::small(format!("Fix: {}", finding.fix))
-                                        .color(p.text_secondary),
-                                );
-                            }
-                        });
+                    for finding in &editor.ui.audit_findings {
+                        let color = match finding.severity.as_str() {
+                            "error" => p.danger,
+                            "warning" => p.warning,
+                            _ => p.text_secondary,
+                        };
+                        let object = finding
+                            .object
+                            .as_deref()
+                            .map_or_else(String::new, |id| format!(" {id}"));
+                        let label = format!(
+                            "{} [{}]{} — {}",
+                            finding.severity, finding.criterion, object, finding.message
+                        );
+                        if ui
+                            .add(egui::Button::new(RichText::new(label).color(color)).wrap())
+                            .on_hover_text("Click to select the referenced slide and object")
+                            .clicked()
+                        {
+                            audit_to_navigate =
+                                Some((finding.slide.clone(), finding.object.clone()));
+                        }
+                        ui.label(
+                            coursecraft_render::small(format!("Fix: {}", finding.fix))
+                                .color(p.text_secondary),
+                        );
+                    }
                 }
 
                 ui.separator();
@@ -419,8 +415,24 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
 
         if let Some(path) = path_to_navigate {
             let previous = editor.selection.slide.clone();
-            if navigate_to_issue_path(&editor.session.course, &mut editor.selection, &path) {
+            let navigated =
+                navigate_to_issue_path(&editor.session.course, &mut editor.selection, &path)
+                    || coursecraft_course::media_references(&editor.session.course)
+                        .into_iter()
+                        .find(|r| r.place == path)
+                        .is_some_and(|r| {
+                            navigate_to_audit_finding(
+                                &editor.session.course,
+                                &mut editor.selection,
+                                r.slide.as_deref(),
+                                r.object.as_deref(),
+                            )
+                        });
+            if navigated {
                 finish_slide_navigation(editor, previous);
+                if path.ends_with("/revisit") {
+                    editor.ui.inspector_tab = crate::properties::InspectorTab::Slide;
+                }
             }
         }
         if let Some((slide, object)) = audit_to_navigate {
@@ -456,11 +468,9 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
                 if editor.ui.error_history.is_empty() {
                     ui.label("No errors recorded.");
                 } else {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for (idx, err) in editor.ui.error_history.iter().enumerate() {
-                            ui.label(format!("{}. {}", idx + 1, err));
-                        }
-                    });
+                    for (idx, err) in editor.ui.error_history.iter().enumerate() {
+                        ui.label(format!("{}. {}", idx + 1, err));
+                    }
                 }
             });
     }
@@ -473,12 +483,17 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
             .open(&mut open)
             .default_size([450.0, 220.0])
             .resizable(true)
-            .show(ui.ctx(), |ui| {
-                ui.label(report);
-                ui.add_space(12.0);
-                if ui.button("Dismiss").clicked() {
-                    dismissed = true;
-                }
+            .show_with_footer(ui.ctx(), |dialog| {
+                dialog.body(|ui| {
+                    ui.label(report);
+                });
+                dialog.footer(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Dismiss").clicked() {
+                            dismissed = true;
+                        }
+                    });
+                });
             });
         if !open || dismissed {
             editor.ui.pptx_import_report = None;

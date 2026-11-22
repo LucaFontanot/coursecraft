@@ -522,3 +522,449 @@ fn debug_logging_from_query_matches_exact_flag() {
     assert!(!crate::load::debug_logging_from_query("?debug=0"));
     assert!(!crate::load::debug_logging_from_query("?debugger=1"));
 }
+
+#[test]
+fn player_drawer_clips_to_player_area_at_letterboxed_and_fullscreen_sizes() {
+    let raw_course = include_str!("../../../examples/hello-course/course.json");
+    for size in [
+        egui::vec2(1600.0, 720.0), // wider than 16:9 slide aspect
+        egui::vec2(800.0, 900.0),  // taller than 16:9 slide aspect
+        egui::vec2(1280.0, 720.0), // fullscreen 16:9
+    ] {
+        let course = Course::from_json(raw_course).expect("valid hello course");
+        let mut playing = Playing::from_course(course, false).expect("valid playing");
+        playing.handle_input(&Input::Start, None);
+
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
+        let mut time = 0.1;
+
+        let mut run_frame = |dt: f64, events: Vec<egui::Event>| {
+            time += dt;
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let full = ctx.run_ui(raw, |ui| {
+                playing.show_ui(ui);
+            });
+            let shapes = full.shapes.clone();
+            full.drop_without_applying_deltas();
+            shapes
+        };
+
+        let check_shapes = |shapes: &[egui::epaint::ClippedShape], phase: &str| {
+            let drawer_bg = egui::Color32::from_rgb(0x2F, 0x2F, 0x33);
+            let mut saw_drawer_bg = false;
+            for clipped in shapes {
+                assert!(
+                    clipped.clip_rect.left() >= screen.left() - 0.5
+                        && clipped.clip_rect.right() <= screen.right() + 0.5
+                        && clipped.clip_rect.top() >= screen.top() - 0.5
+                        && clipped.clip_rect.bottom() <= screen.bottom() + 0.5,
+                    "{phase} ({size:?}): clip_rect {:?} escaped screen {:?}",
+                    clipped.clip_rect,
+                    screen
+                );
+                if let egui::epaint::Shape::Rect(r) = &clipped.shape
+                    && r.fill == drawer_bg
+                    && r.rect.height() > 100.0
+                {
+                    saw_drawer_bg = true;
+                    assert!(
+                        r.rect.left() >= screen.left() - 0.5
+                            && r.rect.right() <= screen.right() + 0.5,
+                        "{phase} ({size:?}): drawer bg rect {:?} escaped screen {:?}",
+                        r.rect,
+                        screen
+                    );
+                }
+            }
+            assert!(saw_drawer_bg, "{phase} ({size:?}): expected drawer bg");
+        };
+
+        run_frame(0.0, Vec::new());
+        let shapes_first = run_frame(
+            0.02,
+            vec![egui::Event::Key {
+                key: egui::Key::M,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        check_shapes(&shapes_first, "first frame");
+
+        let shapes_mid = run_frame(0.10, Vec::new());
+        check_shapes(&shapes_mid, "mid frame");
+
+        let shapes_end = run_frame(0.25, Vec::new());
+        check_shapes(&shapes_end, "end frame");
+    }
+}
+
+#[test]
+fn player_scales_letterboxes_and_places_drawer_and_log_panel_across_window_sizes() {
+    let raw_course = include_str!("../../../examples/hello-course/course.json");
+    for size in [
+        egui::vec2(480.0, 800.0),   // narrow portrait
+        egui::vec2(1920.0, 720.0),  // ultrawide letterboxed horizontally
+        egui::vec2(1280.0, 720.0),  // exact 16:9
+        egui::vec2(2560.0, 1440.0), // large 16:9
+    ] {
+        let course = Course::from_json(raw_course).expect("valid hello course");
+        let mut playing = Playing::from_course(course, false).expect("valid playing");
+        playing.handle_input(&Input::Start, None);
+
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
+        let mut time = 0.1;
+
+        fn step(
+            ctx: &egui::Context,
+            playing: &mut Playing,
+            screen: egui::Rect,
+            time: &mut f64,
+            dt: f64,
+            events: Vec<egui::Event>,
+        ) {
+            *time += dt;
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(*time),
+                events,
+                ..Default::default()
+            };
+            let full = ctx.run_ui(raw, |ui| {
+                playing.show_ui(ui);
+            });
+            full.drop_without_applying_deltas();
+        }
+
+        step(&ctx, &mut playing, screen, &mut time, 0.0, Vec::new());
+        let slide_rect = playing.frame.slide_rect().expect("slide_rect");
+        assert!(
+            slide_rect.left() >= screen.left() - 0.5
+                && slide_rect.right() <= screen.right() + 0.5
+                && slide_rect.top() >= screen.top() - 0.5
+                && slide_rect.bottom() <= screen.bottom() + 0.5,
+            "{size:?}: slide_rect {slide_rect:?} escaped screen {screen:?}"
+        );
+        let aspect = slide_rect.width() / slide_rect.height();
+        assert!(
+            (aspect - 16.0 / 9.0).abs() < 0.02,
+            "{size:?}: slide_rect should preserve 16:9 aspect without cropping, got {aspect}"
+        );
+
+        // Open the log panel (F2) and outline drawer (M); slide and drawer must follow.
+        step(
+            &ctx,
+            &mut playing,
+            screen,
+            &mut time,
+            0.02,
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::F2,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::Key {
+                    key: egui::Key::M,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        step(&ctx, &mut playing, screen, &mut time, 0.25, Vec::new());
+        let slide_with_log = playing.frame.slide_rect().expect("slide_rect with log");
+        assert!(
+            slide_with_log.width() <= slide_rect.width() + 0.5,
+            "{size:?}: slide should shrink when log panel opens"
+        );
+        let drawer = playing.frame.drawer_rect().expect("drawer rect");
+        assert!(
+            drawer.left() >= screen.left() - 0.5 && drawer.right() <= screen.right() + 0.5,
+            "{size:?}: drawer {drawer:?} escaped screen {screen:?}"
+        );
+    }
+}
+
+#[test]
+fn player_click_and_keyboard_on_video_plays_pauses_and_fires_cues_without_placeholder() {
+    let json = r##"{
+      "schema_version": 1,
+      "id": "h7-player-video",
+      "title": "H7 Player Video",
+      "slide_size": { "w": 1280, "h": 720 },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Video Slide",
+          "duration_ms": 10000,
+          "revisit": "reset",
+          "objects": [
+            {
+              "id": "vid",
+              "name": "Stretch Video",
+              "kind": {
+                "type": "video",
+                "src": "stretch.mp4",
+                "cues": [{ "id": "c1", "at_ms": 500, "name": "Cue 1" }]
+              },
+              "frame": { "x": 80, "y": 160, "w": 720, "h": 402 }
+            },
+            {
+              "id": "row1",
+              "name": "Row 1",
+              "kind": { "type": "shape", "shape": "rectangle", "fill": "#FFFFFF" },
+              "frame": { "x": 840, "y": 160, "w": 360, "h": 120 },
+              "states": [{ "name": "active", "fill": "#FCE6DE" }]
+            }
+          ],
+          "triggers": [
+            {
+              "when": { "event": "cue_reached", "object": "vid", "cue": "c1" },
+              "action": { "action": "change_state", "object": "row1", "state": "active" }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course: &'static Course =
+        Box::leak(Box::new(Course::from_json(json).expect("valid course")));
+    let mut playing = Playing::new(course, false, None).expect("playing");
+    playing.handle_input(&coursecraft_logic::Input::Start, None);
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut time = 0.0;
+
+    let step = |ctx: &egui::Context,
+                playing: &mut Playing,
+                time: &mut f64,
+                events: Vec<egui::Event>|
+     -> egui::FullOutput {
+        *time += 0.02;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(*time),
+            events,
+            ..Default::default()
+        };
+        ctx.run_ui(raw, |ui| {
+            playing.show_ui(ui);
+        })
+    };
+
+    fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                egui::Shape::Vec(list) => {
+                    for s in list {
+                        walk(s, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for cs in shapes {
+            walk(&cs.shape, &mut out);
+        }
+        out
+    }
+
+    let out = step(&ctx, &mut playing, &mut time, Vec::new());
+    let texts = collect_texts(&out.shapes);
+    assert!(
+        !texts
+            .iter()
+            .any(|t| t.contains("Video plays in the published course")),
+        "published player must not show editor placeholder text: {texts:?}"
+    );
+    out.drop_without_applying_deltas();
+
+    let video_center = playing
+        .view
+        .last_transform()
+        .expect("slide transform")
+        .to_screen_rect(egui::Rect::from_min_size(
+            egui::pos2(80.0, 160.0),
+            egui::vec2(720.0, 402.0),
+        ))
+        .center();
+
+    // First click plays video.
+    step(
+        &ctx,
+        &mut playing,
+        &mut time,
+        vec![
+            egui::Event::PointerMoved(video_center),
+            egui::Event::PointerButton {
+                pos: video_center,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    )
+    .drop_without_applying_deltas();
+    step(
+        &ctx,
+        &mut playing,
+        &mut time,
+        vec![egui::Event::PointerButton {
+            pos: video_center,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    )
+    .drop_without_applying_deltas();
+    assert!(playing.player.is_media_playing("vid"));
+
+    // Cue trigger fires after click start.
+    playing.handle_input(
+        &coursecraft_logic::Input::MediaTime {
+            object: "vid".to_owned(),
+            at_ms: 600.0,
+        },
+        None,
+    );
+    assert_eq!(playing.player.object_state("row1"), Some("active"));
+
+    // Second click pauses video.
+    step(
+        &ctx,
+        &mut playing,
+        &mut time,
+        vec![
+            egui::Event::PointerMoved(video_center),
+            egui::Event::PointerButton {
+                pos: video_center,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+    )
+    .drop_without_applying_deltas();
+    step(
+        &ctx,
+        &mut playing,
+        &mut time,
+        vec![egui::Event::PointerButton {
+            pos: video_center,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    )
+    .drop_without_applying_deltas();
+    assert!(!playing.player.is_media_playing("vid"));
+
+    // Tab to focus the video and press Space to play again.
+    for _ in 0..8 {
+        step(
+            &ctx,
+            &mut playing,
+            &mut time,
+            vec![egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        )
+        .drop_without_applying_deltas();
+        if playing.frame.focus().focused().is_some_and(
+            |t| matches!(t, coursecraft_render::FocusTarget::Object(id) if id == "vid"),
+        ) {
+            break;
+        }
+    }
+    assert!(
+        playing.frame.focus().focused().is_some_and(
+            |t| matches!(t, coursecraft_render::FocusTarget::Object(id) if id == "vid")
+        ),
+        "Tab must focus the video in the published player"
+    );
+    step(
+        &ctx,
+        &mut playing,
+        &mut time,
+        vec![egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+    )
+    .drop_without_applying_deltas();
+    assert!(playing.player.is_media_playing("vid"));
+}
+
+#[test]
+fn t14_8_failed_screen_uses_player_ground_raised_card_and_wraps() {
+    let long_err = "Failed to load course package: ".to_string()
+        + &"missing_manifest_or_corrupted_archive_".repeat(8);
+    for (w, h) in [(390.0_f32, 844.0_f32), (1280.0, 720.0)] {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(w, h));
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(1.0),
+                ..Default::default()
+            },
+            |ui| {
+                crate::app::show_failed_screen(ui, &long_err);
+            },
+        );
+        // Must paint PLAYER_GROUND over full screen
+        let has_ground = out.shapes.iter().any(|c| match &c.shape {
+            egui::epaint::Shape::Rect(r) => {
+                r.fill == coursecraft_render::PLAYER_GROUND && r.rect.width() >= w - 2.0
+            }
+            _ => false,
+        });
+        assert!(
+            has_ground,
+            "State::Failed must paint PLAYER_GROUND at {w}x{h}"
+        );
+
+        // Must wrap text within <= 480 pt and stay inside screen
+        let mut found_text = false;
+        for c in &out.shapes {
+            if let egui::epaint::Shape::Text(t) = &c.shape {
+                let r = t.visual_bounding_rect();
+                if r.is_positive() {
+                    found_text = true;
+                    assert!(
+                        r.width() <= 480.0 && screen.expand(1.0).contains_rect(r),
+                        "State::Failed text {:?} overflows or exceeds 480pt at {w}x{h}: {r:?}",
+                        t.galley.text()
+                    );
+                }
+            }
+        }
+        assert!(
+            found_text,
+            "State::Failed must render error text at {w}x{h}"
+        );
+        out.drop_without_applying_deltas();
+    }
+}

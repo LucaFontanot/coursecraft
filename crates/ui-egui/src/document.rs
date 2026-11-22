@@ -137,7 +137,10 @@ fn close(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
 
 /// Close the window when Escape is pressed, before the canvas sees the key.
 pub fn consume_escape(editor: &mut Editor, ctx: &egui::Context) {
-    if editor.ui.document.open && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+    if editor.ui.document.open
+        && !egui::Popup::is_any_open(ctx)
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+    {
         let mut requests = Vec::new();
         close(editor, &mut requests);
         editor.pending_requests.append(&mut requests);
@@ -296,7 +299,7 @@ pub fn show_document_dialog(
         .resizable(true)
         .show_with_footer(ctx, |dialog| {
             let p = palette(ctx);
-            dialog.body(|ui| {
+            dialog.body_unscrolled(|ui| {
                 ui.set_max_width(640.0);
                 if !ready {
                     if crate::ai_settings::show_ai_not_ready(ui, "turn a document into a course") {
@@ -460,9 +463,7 @@ pub fn show_document_dialog(
                 });
             }
 
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-                close_clicked = true;
-            }
+            // Dialog::open handles Escape (popup-first) and sets `open = false`.
         });
 
     if !open {

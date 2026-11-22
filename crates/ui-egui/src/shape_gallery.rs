@@ -67,6 +67,11 @@ fn show_shape_gallery_inner(
             .desired_width(f32::INFINITY)
             .id_salt("shape_gallery_search"),
     );
+    let focus_key = ui.scope_id().with("shape_gallery_did_focus");
+    if !ui.data(|d| d.get_temp::<bool>(focus_key).unwrap_or(false)) {
+        search.request_focus();
+        ui.data_mut(|d| d.insert_temp(focus_key, true));
+    }
     output.search_rect = Some(search.rect);
     ui.add_space(4.0);
 
@@ -76,6 +81,14 @@ fn show_shape_gallery_inner(
         .max_height(GALLERY_MAX_HEIGHT - 52.0)
         .auto_shrink([false, true])
         .show(ui, |ui| {
+            #[cfg(test)]
+            crate::scroll_audit::record_scroll(
+                ui.ctx(),
+                ui.layer_id(),
+                ui.clip_rect(),
+                true,
+                false,
+            );
             let mut any = false;
             let draw_matches: Vec<DrawTool> = DrawTool::ALL
                 .iter()
@@ -309,19 +322,20 @@ pub fn show_shape_gallery_window(editor: &mut crate::Editor, ctx: &egui::Context
     Dialog::new("Shapes")
         .open(&mut open)
         .width(GALLERY_WIDTH)
-        .show(ctx, |ui| {
-            let output = show_shape_gallery_inner(
-                ui,
-                &mut editor.ui.shape_gallery_query,
-                None,
-                false,
-                &mut |pick| picked = Some(pick),
-            );
-            editor.ui.shape_gallery_rects = output.icons;
-            editor.ui.shape_gallery_draw_rects = output.draw_icons;
-            editor.ui.shape_gallery_search_rect = output.search_rect;
+        .show_with_footer(ctx, |dialog| {
+            dialog.body_unscrolled(|ui| {
+                let output = show_shape_gallery_inner(
+                    ui,
+                    &mut editor.ui.shape_gallery_query,
+                    None,
+                    false,
+                    &mut |pick| picked = Some(pick),
+                );
+                editor.ui.shape_gallery_rects = output.icons;
+                editor.ui.shape_gallery_draw_rects = output.draw_icons;
+                editor.ui.shape_gallery_search_rect = output.search_rect;
+            });
         });
-    let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
     if let Some(pick) = picked {
         match pick {
             GalleryPick::Shape(kind) => crate::toolbar::insert_shape(editor, kind),
@@ -329,7 +343,7 @@ pub fn show_shape_gallery_window(editor: &mut crate::Editor, ctx: &egui::Context
         }
         editor.ui.show_shape_gallery_window = false;
         editor.ui.shape_gallery_query.clear();
-    } else if !open || escape {
+    } else if !open {
         editor.ui.show_shape_gallery_window = false;
         editor.ui.shape_gallery_query.clear();
     }

@@ -84,6 +84,8 @@ pub struct ResolvedOutline {
     pub width: f32,
     pub dash: DashStyle,
     pub dash_pattern: Option<Vec<f32>>,
+    pub join: coursecraft_course::LineJoin,
+    pub miter_limit: Option<f32>,
 }
 
 /// Resolved drawn path. Points stay as fractions of the item's frame.
@@ -265,6 +267,8 @@ pub enum Visual {
     Video {
         src: String,
         poster: Option<String>,
+        playing: bool,
+        show_placeholder: bool,
     },
     /// A web object. Only the published player shows the page; every other host
     /// draws a placeholder card naming the source.
@@ -648,6 +652,8 @@ fn resolve_outline(outline: &coursecraft_course::Outline) -> Option<ResolvedOutl
         width: outline.width,
         dash: outline.dash,
         dash_pattern: outline.dash_pattern.clone(),
+        join: outline.join,
+        miter_limit: outline.miter_limit,
     })
 }
 
@@ -1122,12 +1128,91 @@ pub fn compose_object_with_value(
     )
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum PointerState {
+    #[default]
+    None,
+    Hovered,
+    Pressed,
+}
+
+fn pointer_state_for(
+    hovered: Option<&str>,
+    pressed: Option<&str>,
+    object_id: &str,
+) -> PointerState {
+    if pressed == Some(object_id) {
+        PointerState::Pressed
+    } else if hovered == Some(object_id) {
+        PointerState::Hovered
+    } else {
+        PointerState::None
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ResolvedStateOverrides<'a> {
+    fill: Option<&'a coursecraft_course::Color>,
+    text: Option<&'a str>,
+    src: Option<&'a str>,
+}
+
+/// Resolve an object's effective state overrides in layers:
+/// base (`normal`) -> runtime state (`selected`, `visited`, custom...) -> `hover`/`down`.
+/// `down` wins over `hover`, and pointer states are skipped when `disabled` or `hidden`.
+fn resolve_state_overrides<'a>(
+    object: &'a Object,
+    current_state: &str,
+    pointer: PointerState,
+) -> ResolvedStateOverrides<'a> {
+    let mut out = ResolvedStateOverrides::default();
+    let apply = |out: &mut ResolvedStateOverrides<'a>, state: &'a coursecraft_course::StateDef| {
+        if let Some(fill) = state.fill.as_ref() {
+            out.fill = Some(fill);
+        }
+        if let Some(text) = state.text.as_deref() {
+            out.text = Some(text);
+        }
+        if let Some(src) = state.src.as_deref().filter(|s| !s.is_empty()) {
+            out.src = Some(src);
+        }
+    };
+    if current_state != "normal"
+        && let Some(state) = object.states.iter().find(|s| s.name == current_state)
+    {
+        apply(&mut out, state);
+    }
+    if current_state != "disabled" && current_state != "hidden" {
+        let pointer_name = match pointer {
+            PointerState::Pressed => Some("down"),
+            PointerState::Hovered => Some("hover"),
+            PointerState::None => None,
+        };
+        if let Some(name) = pointer_name
+            && let Some(state) = object.states.iter().find(|s| s.name == name)
+        {
+            apply(&mut out, state);
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct ComposeOpts {
     marker_open: bool,
     marker_pulse: bool,
     authoring: bool,
     timer_remaining_ms: Option<u32>,
+    pointer: PointerState,
+}
+
+fn apply_runtime_media_state(item: &mut DrawItem, player: &Player<'_>, id: &str) {
+    if matches!(item.visual, Visual::Lottie { .. }) {
+        item.media_time_ms = player.media_clock_ms(id);
+    }
+    if let Visual::Video { playing, .. } = &mut item.visual {
+        *playing = player.is_media_playing(id);
+    }
 }
 
 /// Compose a marker or panel as the running player draws it.
@@ -1138,7 +1223,15 @@ pub(crate) fn compose_object_with_runtime(
     value: Option<&Value>,
     marker_open: bool,
 ) -> Option<DrawItem> {
-    compose_object_with_runtime_and_timer(object, current_state, theme, value, marker_open, None)
+    compose_object_with_runtime_and_timer(
+        object,
+        current_state,
+        theme,
+        value,
+        marker_open,
+        None,
+        PointerState::None,
+    )
 }
 
 /// Compose as the running player draws it, with a timer's live remaining time.
@@ -1149,6 +1242,7 @@ pub(crate) fn compose_object_with_runtime_and_timer(
     value: Option<&Value>,
     marker_open: bool,
     timer_remaining_ms: Option<u32>,
+    pointer: PointerState,
 ) -> Option<DrawItem> {
     compose_object_opts(
         object,
@@ -1160,6 +1254,7 @@ pub(crate) fn compose_object_with_runtime_and_timer(
             marker_pulse: true,
             authoring: false,
             timer_remaining_ms,
+            pointer,
         },
     )
 }
@@ -1172,7 +1267,7 @@ fn compose_object_opts(
     opts: ComposeOpts,
 ) -> Option<DrawItem> {
     let rect = validate_frame(&object.frame)?;
-    let state_def = object.states.iter().find(|s| s.name == current_state);
+    let state_overrides = resolve_state_overrides(object, current_state, opts.pointer);
     let disabled = current_state == "disabled";
 
     let default_btn_color = theme
@@ -1206,16 +1301,16 @@ fn compose_object_opts(
             outline,
             ..
         } => {
-            let style_color = state_def
-                .and_then(|s| s.fill.as_ref())
+            let style_color = state_overrides
+                .fill
                 .and_then(parse_color)
                 .unwrap_or_else(|| parse_color(&style.color).unwrap_or(default_txt_color));
-            let override_text = state_def.and_then(|s| s.text.clone());
+            let override_text = state_overrides.text;
             let resolved_runs = resolve_text_runs(
                 text,
                 style,
                 runs,
-                override_text.as_deref(),
+                override_text,
                 style_color,
                 default_btn_color,
                 theme.map(|t| t.font.as_str()),
@@ -1238,11 +1333,10 @@ fn compose_object_opts(
             fill,
             fill_style,
         } => {
-            let state_fill = state_def
-                .and_then(|s| s.fill.as_ref())
-                .and_then(parse_color);
-            let resolved_label = state_def
-                .and_then(|s| s.text.clone())
+            let state_fill = state_overrides.fill.and_then(parse_color);
+            let resolved_label = state_overrides
+                .text
+                .map(str::to_owned)
                 .unwrap_or_else(|| label.clone());
             let resolved_fill =
                 state_fill.unwrap_or_else(|| parse_color(fill).unwrap_or(default_btn_color));
@@ -1267,12 +1361,10 @@ fn compose_object_opts(
             text,
             adjust,
         } => {
-            let state_fill = state_def
-                .and_then(|s| s.fill.as_ref())
-                .and_then(parse_color);
+            let state_fill = state_overrides.fill.and_then(parse_color);
             let resolved_fill =
                 state_fill.unwrap_or_else(|| parse_color(fill).unwrap_or(FALLBACK_GREY));
-            let override_text = state_def.and_then(|s| s.text.clone());
+            let override_text = state_overrides.text.map(str::to_owned);
             let text = if !shape_allows_text(*shape) {
                 None
             } else if let Some(text) = text {
@@ -1341,7 +1433,7 @@ fn compose_object_opts(
         ObjectKind::Path { path } => {
             let resolved = resolve_path(
                 path,
-                state_def.and_then(|s| s.fill.as_ref()),
+                state_overrides.fill,
                 default_txt_color,
                 default_btn_color,
                 theme.map(|t| t.font.as_str()),
@@ -1368,23 +1460,17 @@ fn compose_object_opts(
             outline,
             shape,
         } => Visual::Image {
-            src: state_def
-                .and_then(|s| s.src.as_deref())
-                .filter(|s| !s.is_empty())
-                .unwrap_or(src)
-                .to_string(),
+            src: state_overrides.src.unwrap_or(src).to_string(),
             alt: alt.clone(),
             crop: crop.as_ref().and_then(valid_crop_rect),
             outline: outline.as_ref().and_then(resolve_outline),
             shape: *shape,
         },
         ObjectKind::Video { src, poster, .. } => Visual::Video {
-            src: state_def
-                .and_then(|s| s.src.as_deref())
-                .filter(|s| !s.is_empty())
-                .unwrap_or(src)
-                .to_string(),
+            src: state_overrides.src.unwrap_or(src).to_string(),
             poster: poster.clone(),
+            playing: false,
+            show_placeholder: opts.authoring,
         },
         ObjectKind::Web { source } => Visual::Web {
             label: source.label(),
@@ -1518,8 +1604,8 @@ fn compose_object_opts(
         } => {
             let remaining = opts.timer_remaining_ms.unwrap_or(*duration_ms);
             let text = format_timer_text(remaining, *format);
-            let style_color = state_def
-                .and_then(|s| s.fill.as_ref())
+            let style_color = state_overrides
+                .fill
                 .and_then(parse_color)
                 .unwrap_or_else(|| parse_color(&style.color).unwrap_or(default_txt_color));
             let runs = resolve_text_runs(
@@ -1559,11 +1645,7 @@ fn compose_object_opts(
             }
         }
         ObjectKind::Audio { src, .. } => Visual::Audio {
-            src: state_def
-                .and_then(|s| s.src.as_deref())
-                .filter(|s| !s.is_empty())
-                .unwrap_or(src)
-                .to_string(),
+            src: state_overrides.src.unwrap_or(src).to_string(),
         },
         ObjectKind::Lottie {
             src,
@@ -1571,11 +1653,7 @@ fn compose_object_opts(
             autoplay: _,
             speed,
         } => Visual::Lottie {
-            src: state_def
-                .and_then(|s| s.src.as_deref())
-                .filter(|s| !s.is_empty())
-                .unwrap_or(src)
-                .to_string(),
+            src: state_overrides.src.unwrap_or(src).to_string(),
             loop_playback: *loop_playback,
             speed: coursecraft_course::clamp_lottie_speed(*speed),
         },
@@ -2096,6 +2174,8 @@ fn push_base_items(
     player: &Player<'_>,
     slide: &Slide,
     base_hidden: bool,
+    hovered: Option<&str>,
+    pressed: Option<&str>,
     items: &mut Vec<DrawItem>,
 ) {
     if base_hidden {
@@ -2124,6 +2204,7 @@ fn push_base_items(
             player_input_value(player, obj),
             player.marker_open() == Some(obj.id.as_str()),
             player.timer_remaining_ms(&obj.id),
+            pointer_state_for(hovered, pressed, &obj.id),
         ) && !matches!(item.visual, Visual::Audio { .. })
         {
             item.rect = item
@@ -2134,9 +2215,7 @@ fn push_base_items(
             item.rect = egui::Rect::from_min_max(center - half, center + half);
             item.opacity = (item.opacity * sample.opacity).clamp(0.0, 1.0);
             item.clip = sample.clip;
-            if matches!(item.visual, Visual::Lottie { .. }) {
-                item.media_time_ms = player.media_clock_ms(&obj.id);
-            }
+            apply_runtime_media_state(&mut item, player, &obj.id);
             items.push(item);
         }
     }
@@ -2186,6 +2265,18 @@ fn push_question_items(
 /// 3. Objects on each visible layer, in layer order and bottom to top within each layer.
 #[must_use]
 pub fn compose(player: &Player<'_>) -> Vec<DrawItem> {
+    compose_with_pointer(player, None, None)
+}
+
+/// Compose the draw items for the current slide of `player` in bottom-to-top
+/// order, applying presentational `hover` and `down` state overrides for the
+/// given hovered/pressed object ids.
+#[must_use]
+pub fn compose_with_pointer(
+    player: &Player<'_>,
+    hovered: Option<&str>,
+    pressed: Option<&str>,
+) -> Vec<DrawItem> {
     let Some(slide) = player.current_slide() else {
         return Vec::new();
     };
@@ -2200,7 +2291,7 @@ pub fn compose(player: &Player<'_>) -> Vec<DrawItem> {
     push_master_items(player.course(), slide, theme, false, false, &mut items);
 
     // 2. Base objects
-    push_base_items(player, slide, base_hidden, &mut items);
+    push_base_items(player, slide, base_hidden, hovered, pressed, &mut items);
 
     // Drag items sit above every other base object (drop targets included), so a
     // dropped item is never hidden behind the target it landed on. When a target's
@@ -2325,6 +2416,7 @@ pub fn compose(player: &Player<'_>) -> Vec<DrawItem> {
                     player_input_value(player, obj),
                     player.marker_open() == Some(obj.id.as_str()),
                     player.timer_remaining_ms(&obj.id),
+                    pointer_state_for(hovered, pressed, &obj.id),
                 ) && !matches!(item.visual, Visual::Audio { .. })
                 {
                     item.rect = item
@@ -2335,9 +2427,7 @@ pub fn compose(player: &Player<'_>) -> Vec<DrawItem> {
                     item.rect = egui::Rect::from_min_max(center - half, center + half);
                     item.opacity = (item.opacity * sample.opacity).clamp(0.0, 1.0);
                     item.clip = sample.clip;
-                    if matches!(item.visual, Visual::Lottie { .. }) {
-                        item.media_time_ms = player.media_clock_ms(&obj.id);
-                    }
+                    apply_runtime_media_state(&mut item, player, &obj.id);
                     items.push(item);
                 }
             }

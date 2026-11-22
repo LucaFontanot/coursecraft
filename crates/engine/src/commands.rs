@@ -11,7 +11,7 @@ use coursecraft_course::{
     SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide, SlideCue, SlideTarget, StateDef,
     TableBorders, TableCell, TableRow, TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition,
     Trigger, Trim, VAlign, Value, VarOp, VariableDef, WebSource, align_paragraphs,
-    apply_link_to_range, apply_style_to_range, apply_text_edit, course_string_locations,
+    apply_link_to_range, apply_style_to_range_with_base, apply_text_edit, course_string_locations,
     find_in_course, is_valid_link_url, normalize_table_fractions, paragraphs_for, parse_color,
     relative_luminance, replace_in_target, string_mut, table_cell_owners,
 };
@@ -104,7 +104,7 @@ static REGISTRY: &[Command] = &[
         label: "Player Settings",
         menu: "Project/Player Settings",
         shortcut: None,
-        params: r#"{"show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}}"#,
+        params: r#"{"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}}"#,
         mutates: true,
         run: course_set_player,
     },
@@ -116,6 +116,15 @@ static REGISTRY: &[Command] = &[
         params: r#"{"passing_percent": 0..=100|null}"#,
         mutates: true,
         run: course_set_quiz,
+    },
+    Command {
+        id: "course.set_publish_settings",
+        label: "Publish Settings",
+        menu: "",
+        shortcut: None,
+        params: r#"{"standard"?: string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}"#,
+        mutates: true,
+        run: course_set_publish_settings,
     },
     Command {
         id: "course.set_background_audio",
@@ -383,7 +392,7 @@ static REGISTRY: &[Command] = &[
         label: "Slide Player Settings",
         menu: "",
         shortcut: None,
-        params: r#"{"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}"#,
+        params: r#"{"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_bar"?: bool|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}"#,
         mutates: true,
         run: slide_set_player_overrides,
     },
@@ -725,7 +734,7 @@ static REGISTRY: &[Command] = &[
         label: "Editor View Settings",
         menu: "",
         shortcut: None,
-        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "base_slide_view"?: "show"|"dim"|"hide", "last_publish"?: {"standard": string}}"#,
+        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "base_slide_view"?: "show"|"dim"|"hide", "last_publish"?: {"standard": string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}}"#,
         mutates: true,
         run: view_set,
     },
@@ -764,6 +773,15 @@ static REGISTRY: &[Command] = &[
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "opacity": number}"#,
         mutates: true,
         run: object_set_opacity,
+    },
+    Command {
+        id: "object.set_outline_join",
+        label: "Set Outline Corners",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object"?: id, "objects"?: id[], "join": "miter"|"round"|"bevel"}"#,
+        mutates: true,
+        run: object_set_outline_join,
     },
     Command {
         id: "object.set_fill_style",
@@ -1825,6 +1843,9 @@ fn course_set_title(s: &mut Session, p: &Json) -> Result<Json> {
 fn course_set_player(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.set_player";
     let was_valid = s.is_playable();
+    if let Some(v) = opt::<bool>(C, p, "show_bar")? {
+        s.course.player.show_bar = v;
+    }
     if let Some(v) = opt::<bool>(C, p, "show_nav")? {
         s.course.player.show_nav = v;
     }
@@ -1917,6 +1938,32 @@ fn course_set_quiz(s: &mut Session, p: &Json) -> Result<Json> {
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
+}
+
+fn course_set_publish_settings(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "course.set_publish_settings";
+    let was_valid = s.is_playable();
+    let _ = obj(C, p)?;
+    let standard: Option<String> = opt(C, p, "standard")?;
+    let lms_status: Option<coursecraft_course::LmsStatus> = opt(C, p, "lms_status")?;
+    if standard.is_none() && lms_status.is_none() {
+        return Err(bad(C, "provide `standard` and/or `lms_status`"));
+    }
+    let mut settings = s.course.editor.last_publish.clone().unwrap_or_else(|| {
+        coursecraft_course::PublishSettings {
+            standard: "scorm12".to_string(),
+            lms_status: coursecraft_course::LmsStatus::Auto,
+        }
+    });
+    if let Some(std) = standard {
+        settings.standard = std;
+    }
+    if let Some(status) = lms_status {
+        settings.lms_status = status;
+    }
+    s.course.editor.last_publish = Some(settings.clone());
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "last_publish": settings }))
 }
 
 fn course_set_background_audio(s: &mut Session, p: &Json) -> Result<Json> {
@@ -2641,6 +2688,7 @@ fn slide_set_player_overrides(s: &mut Session, p: &Json) -> Result<Json> {
         }
     };
     let flags = [
+        flag_override(C, map, "show_bar")?,
         flag_override(C, map, "show_nav")?,
         flag_override(C, map, "show_seekbar")?,
         flag_override(C, map, "show_menu")?,
@@ -2651,12 +2699,15 @@ fn slide_set_player_overrides(s: &mut Session, p: &Json) -> Result<Json> {
         overrides.next_requires = rule;
     }
     if let Some(value) = flags[0] {
-        overrides.show_nav = value;
+        overrides.show_bar = value;
     }
     if let Some(value) = flags[1] {
-        overrides.show_seekbar = value;
+        overrides.show_nav = value;
     }
     if let Some(value) = flags[2] {
+        overrides.show_seekbar = value;
+    }
+    if let Some(value) = flags[3] {
         overrides.show_menu = value;
     }
     sl.player = if overrides == coursecraft_course::SlidePlayerOverrides::default() {
@@ -5845,6 +5896,40 @@ fn object_set_opacity(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({ "opacity": opacity, "changed": changed }))
 }
 
+fn object_set_outline_join(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.set_outline_join";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let ids = object_or_objects_param(C, p)?;
+    let join: coursecraft_course::LineJoin = req(C, p, "join")?;
+    let mut changed = 0;
+    {
+        let slide = slide_mut(s, &sid)?;
+        for id in &ids {
+            let object = find_object_mut(slide, id)?;
+            match &mut object.kind {
+                ObjectKind::Shape {
+                    outline: Some(outline),
+                    ..
+                } if outline.join != join => {
+                    outline.join = join;
+                    changed += 1;
+                }
+                ObjectKind::Path { path } if path.outline.join != join => {
+                    path.outline.join = join;
+                    changed += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    if changed == 0 {
+        s.skip_undo = true;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "join": join, "changed": changed }))
+}
+
 fn object_set_fill_style(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.set_fill_style";
     let was_valid = s.is_playable();
@@ -7633,7 +7718,13 @@ fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
         baseline,
         letter_spacing,
     };
-    let new_runs = apply_style_to_range(parts.runs, parts.text, (range_start, range_end), &patch);
+    let new_runs = apply_style_to_range_with_base(
+        parts.runs,
+        parts.text,
+        (range_start, range_end),
+        &patch,
+        Some(parts.style),
+    );
     if new_runs.len() > 1000 {
         return Err(bad(C, "exceeded 1000 text runs"));
     }
@@ -9526,6 +9617,8 @@ fn build_certificate_slide(id: &str, theme: &Theme, size: Size) -> Slide {
                 width: 6.0,
                 dash: DashStyle::Solid,
                 dash_pattern: None,
+                join: Default::default(),
+                miter_limit: None,
             }),
             text: None,
             adjust: Vec::new(),
@@ -9933,6 +10026,8 @@ fn interaction_panel_objects(
             width: 2.0,
             dash: DashStyle::Solid,
             dash_pattern: None,
+            join: Default::default(),
+            miter_limit: None,
         }),
         None,
         Vec::new(),
@@ -10309,6 +10404,8 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                         width: 2.0,
                         dash: Default::default(),
                         dash_pattern: None,
+                        join: Default::default(),
+                        miter_limit: None,
                     }),
                     Some(("Card title".to_owned(), 26.0, true)),
                     vec![StateDef {
@@ -10380,6 +10477,8 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                     width: 2.0,
                     dash: DashStyle::Solid,
                     dash_pattern: None,
+                    join: Default::default(),
+                    miter_limit: None,
                 }),
                 Some(("Replace with your picture".to_owned(), 24.0, false)),
                 Vec::new(),
@@ -10880,6 +10979,8 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                         width: 2.0,
                         dash: DashStyle::Solid,
                         dash_pattern: None,
+                        join: Default::default(),
+                        miter_limit: None,
                     }),
                     Some(("Tap to reveal".to_owned(), 18.0, false)),
                     vec![StateDef {
@@ -11037,6 +11138,8 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                             width: 2.0,
                             dash: DashStyle::Solid,
                             dash_pattern: None,
+                            join: Default::default(),
+                            miter_limit: None,
                         }),
                         None,
                         Vec::new(),
@@ -11151,6 +11254,8 @@ fn interaction_insert(s: &mut Session, p: &Json) -> Result<Json> {
                             width: 2.0,
                             dash: DashStyle::Solid,
                             dash_pattern: None,
+                            join: Default::default(),
+                            miter_limit: None,
                         }),
                         None,
                         Vec::new(),

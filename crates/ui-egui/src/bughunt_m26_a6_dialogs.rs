@@ -62,7 +62,7 @@ fn a6_1_every_interaction_card_reopens_full_size() {
         let mut h = TestHarness::new(hello());
         h.idle_frame();
         open_insert_interaction(&mut h);
-        let r1 = dialog_rect(&mut h, "Insert Interaction");
+        let r1 = dialog_rect(&mut h, "Insert interaction");
         assert!(
             r1.width() >= 700.0 && r1.height() >= 300.0,
             "{card} 1st open too small: {r1:?}"
@@ -79,7 +79,7 @@ fn a6_1_every_interaction_card_reopens_full_size() {
         );
 
         open_insert_interaction(&mut h);
-        let r2 = dialog_rect(&mut h, "Insert Interaction");
+        let r2 = dialog_rect(&mut h, "Insert interaction");
         assert!(
             r2.width() >= 700.0 && r2.height() >= 300.0,
             "{card} 2nd open collapsed: {r2:?}"
@@ -99,7 +99,7 @@ fn a6_2_close_by_x_escape_and_card_reopens_full_size() {
     let mut h = TestHarness::new(hello());
     h.idle_frame();
     open_insert_interaction(&mut h);
-    let r1 = dialog_rect(&mut h, "Insert Interaction");
+    let r1 = dialog_rect(&mut h, "Insert interaction");
     assert!(r1.width() >= 700.0 && r1.height() >= 300.0);
 
     // Close via title-bar ×
@@ -111,7 +111,7 @@ fn a6_2_close_by_x_escape_and_card_reopens_full_size() {
     assert!(!h.editor.ui.show_interaction_gallery);
 
     open_insert_interaction(&mut h);
-    let r2 = dialog_rect(&mut h, "Insert Interaction");
+    let r2 = dialog_rect(&mut h, "Insert interaction");
     assert!(r2.width() >= 700.0 && r2.height() >= 300.0);
 
     // Close via Escape
@@ -120,7 +120,7 @@ fn a6_2_close_by_x_escape_and_card_reopens_full_size() {
     assert!(!h.editor.ui.show_interaction_gallery);
 
     open_insert_interaction(&mut h);
-    let r3 = dialog_rect(&mut h, "Insert Interaction");
+    let r3 = dialog_rect(&mut h, "Insert interaction");
     assert!(r3.width() >= 700.0 && r3.height() >= 300.0);
 
     // Close via card click
@@ -130,7 +130,7 @@ fn a6_2_close_by_x_escape_and_card_reopens_full_size() {
     assert!(!h.editor.ui.show_interaction_gallery);
 
     open_insert_interaction(&mut h);
-    let r4 = dialog_rect(&mut h, "Insert Interaction");
+    let r4 = dialog_rect(&mut h, "Insert interaction");
     assert!(r4.width() >= 700.0 && r4.height() >= 300.0);
 }
 
@@ -178,10 +178,10 @@ fn a6_3_shapes_gallery_filtered_close_reopens_full_size() {
 #[test]
 fn a6_4_sweep_other_dialogs_reopen_full_size() {
     let cases: [(&str, &str, &str); 6] = [
-        ("Insert", "Web object…", "Insert Web Object"),
-        ("File", "Slide Size…", "Slide Size"),
+        ("Insert", "Web object…", "Insert web object"),
+        ("File", "Slide Size…", "Slide size"),
         ("Project", "Theme…", "Theme"),
-        ("Project", "Course Settings", "Course Settings"),
+        ("Project", "Course settings", "Course settings"),
         ("File", "Publish…", "Publish course"),
         ("Edit", "Find and Replace…", "Find and Replace"),
     ];
@@ -226,7 +226,7 @@ fn a6_4_sweep_other_dialogs_reopen_full_size() {
 fn a6_9_fixed_footer_dialogs_on_short_screen_reopen_unclipped() {
     let cases: [(&str, &str, &str); 2] = [
         ("Project", "Theme…", "Theme"),
-        ("Project", "Course Settings", "Course Settings"),
+        ("Project", "Course settings", "Course settings"),
     ];
     for (menu, item, title) in cases {
         let mut h = TestHarness::new_with_size(hello(), (1024.0, 620.0));
@@ -302,7 +302,7 @@ fn a6_5_dialog_dragged_by_title_bar_reopens_full_size_on_screen() {
     let mut h = TestHarness::new(hello());
     h.idle_frame();
     open_insert_interaction(&mut h);
-    let r1 = dialog_rect(&mut h, "Insert Interaction");
+    let r1 = dialog_rect(&mut h, "Insert interaction");
     h.drag_by(
         pos2(r1.center().x, r1.min.y + 12.0),
         vec2(120.0, 60.0),
@@ -315,7 +315,7 @@ fn a6_5_dialog_dragged_by_title_bar_reopens_full_size_on_screen() {
     h.idle_frame();
 
     open_insert_interaction(&mut h);
-    let r2 = dialog_rect(&mut h, "Insert Interaction");
+    let r2 = dialog_rect(&mut h, "Insert interaction");
     assert!(r2.width() >= 700.0 && r2.height() >= 300.0);
     let report = h.layout_report(2);
     assert!(
@@ -330,7 +330,7 @@ fn a6_6_window_shrink_and_enlarge_between_dialog_opens() {
     let mut h = TestHarness::new_with_size(hello(), (1280.0, 900.0));
     h.idle_frame();
     open_insert_interaction(&mut h);
-    assert!(dialog_rect(&mut h, "Insert Interaction").width() >= 700.0);
+    assert!(dialog_rect(&mut h, "Insert interaction").width() >= 700.0);
     h.press(Key::Escape, Modifiers::NONE);
     h.idle_frame();
 
@@ -349,7 +349,7 @@ fn a6_6_window_shrink_and_enlarge_between_dialog_opens() {
     h.screen_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 900.0));
     h.idle_frame();
     open_insert_interaction(&mut h);
-    let r_big = dialog_rect(&mut h, "Insert Interaction");
+    let r_big = dialog_rect(&mut h, "Insert interaction");
     assert!(r_big.width() >= 700.0 && r_big.height() >= 300.0);
 }
 
@@ -381,7 +381,7 @@ fn a6_8_alternating_between_two_dialogs_no_bleed() {
     h.idle_frame();
 
     open_insert_interaction(&mut h);
-    let r = dialog_rect(&mut h, "Insert Interaction");
+    let r = dialog_rect(&mut h, "Insert interaction");
     assert!(r.width() >= 700.0 && r.height() >= 300.0);
 }
 
@@ -398,7 +398,7 @@ fn a6_10_undo_after_interaction_choice_then_reopen() {
     h.idle_frame();
 
     open_insert_interaction(&mut h);
-    let r2 = dialog_rect(&mut h, "Insert Interaction");
+    let r2 = dialog_rect(&mut h, "Insert interaction");
     assert!(r2.width() >= 700.0 && r2.height() >= 300.0);
     let acc = h.find_text("Accordion").expect("Accordion");
     h.click_at(acc);
@@ -421,7 +421,7 @@ fn a6_7_zero_idle_frames_between_close_and_reopen() {
     h.editor.ui.show_interaction_gallery = true;
     h.idle_frame();
     h.idle_frame();
-    let r = dialog_rect(&mut h, "Insert Interaction");
+    let r = dialog_rect(&mut h, "Insert interaction");
     assert!(
         r.width() >= 700.0 && r.height() >= 300.0,
         "immediate reopen: {r:?}"

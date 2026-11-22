@@ -10,8 +10,8 @@ use coursecraft_render::{
     palette, theme_mode,
 };
 use egui::{
-    Align, Align2, Area, Color32, CornerRadius, CursorIcon, Id, Key, Layout, Modifiers, Rect,
-    RichText, Sense, Stroke, Ui, pos2, vec2,
+    Align, Align2, Area, CornerRadius, Id, Key, Layout, Modifiers, Rect, RichText, Sense, Stroke,
+    Ui, pos2, vec2,
 };
 
 use crate::Editor;
@@ -69,6 +69,8 @@ pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
         .order(egui::Order::Middle)
         .fixed_pos(screen_rect.min)
         .show(ctx, |ui| {
+            ui.painter()
+                .rect_filled(screen_rect, 0.0, crate::widgets::modal_backdrop_color(mode));
             let (_, response) = ui.allocate_exact_size(screen_rect.size(), Sense::click());
             if response.clicked() {
                 close = true;
@@ -76,15 +78,17 @@ pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
         });
 
     let groups = build_shortcut_groups();
-    let dialog_w = DIALOG_WIDTH.min(screen_rect.width() - 32.0);
-    let dialog_h = dialog_height(&groups, screen_rect.height());
-    let dialog_x = screen_rect.min.x + (screen_rect.width() - dialog_w) * 0.5;
-    let dialog_y = screen_rect.min.y + (screen_rect.height() - dialog_h) * 0.5;
+    let area = crate::dialog::dialog_area(ctx);
+    let dialog_w = DIALOG_WIDTH.min(area.width());
+    let dialog_h = dialog_height(&groups, screen_rect.height()).min(area.height());
+    let dialog_x = area.min.x + (area.width() - dialog_w) * 0.5;
+    let dialog_y = area.min.y + (area.height() - dialog_h) * 0.5;
     let dialog_rect = Rect::from_min_size(pos2(dialog_x, dialog_y), vec2(dialog_w, dialog_h));
 
     Area::new(Id::unique("shortcuts_dialog_area"))
         .order(egui::Order::Foreground)
         .fade_in(false)
+        .constrain_to(area)
         .fixed_pos(dialog_rect.min)
         .show(ctx, |ui| {
             let frame = egui::Frame::NONE
@@ -109,18 +113,12 @@ pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
                     );
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let close_btn = egui::Button::new(
-                            coursecraft_render::icon(
-                                coursecraft_render::Icon::X,
-                                coursecraft_render::ICON_SM,
-                            )
-                            .color(p.text_secondary),
+                        if crate::widgets::icon_button(
+                            ui,
+                            coursecraft_render::Icon::X,
+                            "Close (Esc)",
                         )
-                        .fill(Color32::TRANSPARENT);
-                        if ui
-                            .add(close_btn)
-                            .on_hover_cursor(CursorIcon::PointingHand)
-                            .clicked()
+                        .clicked()
                         {
                             close = true;
                         }

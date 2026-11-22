@@ -594,6 +594,8 @@ fn big_slide_reroutes_quickly() {
         width: 2.0,
         dash: DashStyle::Solid,
         dash_pattern: None,
+        join: Default::default(),
+        miter_limit: None,
     };
     for index in 0..2000usize {
         #[allow(clippy::cast_precision_loss)]

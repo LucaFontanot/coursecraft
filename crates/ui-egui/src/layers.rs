@@ -541,13 +541,31 @@ fn show_layer_row(
         pos2(eye_rect.right() + 4.0, row_rect.top()),
         pos2(gear_rect.left() - 4.0, row_rect.bottom()),
     );
-    painter.text(
-        name_rect.left_center(),
-        Align2::LEFT_CENTER,
-        layer_name,
+    let name_color = if selected { p.text } else { p.text_secondary };
+    let mut name_job = egui::text::LayoutJob::simple_singleline(
+        layer_name.to_owned(),
         FontId::proportional(coursecraft_render::SIZE_BODY),
-        if selected { p.text } else { p.text_secondary },
+        name_color,
     );
+    name_job.wrap = egui::text::TextWrapping::truncate_at_width(name_rect.width().max(0.0));
+    let name_galley = painter.layout_job(name_job);
+    let name_elided = name_galley.elided;
+    let painted_name_rect = Rect::from_min_size(
+        pos2(
+            name_rect.left(),
+            name_rect.center().y - name_galley.size().y * 0.5,
+        ),
+        name_galley.size(),
+    );
+    painter.galley(painted_name_rect.min, name_galley, name_color);
+    if name_elided {
+        ui.interact(
+            name_rect,
+            ui.scope_id().with(("layer_name_tip", slide_id, layer_id)),
+            Sense::hover(),
+        )
+        .on_hover_text(layer_name);
+    }
 
     let focus_layer = editor.selection.layer.as_deref();
     let focused = focus_layer == Some(layer_id);
@@ -648,13 +666,15 @@ fn show_layer_row(
     } else {
         "Hide layer"
     };
-    ui.interact(
-        eye_rect,
-        ui.scope_id().with(("layer_eye", slide_id, layer_id)),
-        Sense::hover(),
-    )
-    .on_hover_text(eye_tooltip)
-    .on_hover_cursor(CursorIcon::PointingHand);
+    let eye_resp = ui
+        .interact(
+            eye_rect,
+            ui.scope_id().with(("layer_eye", slide_id, layer_id)),
+            Sense::hover(),
+        )
+        .on_hover_text(eye_tooltip)
+        .on_hover_cursor(CursorIcon::PointingHand);
+    eye_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, !focused, eye_tooltip));
 
     // Gear opens Layer Settings.
     editor
@@ -670,13 +690,15 @@ fn show_layer_row(
             p.text_secondary,
         );
     }
-    ui.interact(
-        gear_rect,
-        ui.scope_id().with(("layer_gear", slide_id, layer_id)),
-        Sense::hover(),
-    )
-    .on_hover_text("Layer settings")
-    .on_hover_cursor(CursorIcon::PointingHand);
+    let gear_resp = ui
+        .interact(
+            gear_rect,
+            ui.scope_id().with(("layer_gear", slide_id, layer_id)),
+            Sense::hover(),
+        )
+        .on_hover_text("Layer settings")
+        .on_hover_cursor(CursorIcon::PointingHand);
+    gear_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Layer settings"));
 }
 
 fn paint_icon(ui: &Ui, rect: Rect, icon: coursecraft_render::Icon, color: Color32) {
@@ -805,6 +827,7 @@ fn show_layer_row_menu(
     let can_forward = index.saturating_add(1) < layer_count;
     if ui
         .add_enabled(can_forward, egui::Button::new("Bring forward"))
+        .on_disabled_hover_text("Already at the front")
         .clicked()
     {
         actions.push((
@@ -820,6 +843,7 @@ fn show_layer_row_menu(
     let can_backward = index > 0;
     if ui
         .add_enabled(can_backward, egui::Button::new("Send backward"))
+        .on_disabled_hover_text("Already at the back")
         .clicked()
     {
         actions.push((
@@ -885,7 +909,11 @@ fn show_footer(
         &mut footer,
         coursecraft_render::Icon::Copy,
         selected_layer.is_some(),
-        "Duplicate layer",
+        if selected_layer.is_some() {
+            "Duplicate layer"
+        } else {
+            "Select a layer to duplicate"
+        },
     );
     editor.ui.layers.duplicate_button_rect = Some(duplicate.rect);
     if duplicate.clicked()
@@ -901,7 +929,11 @@ fn show_footer(
         &mut footer,
         coursecraft_render::Icon::Trash,
         selected_layer.is_some(),
-        "Delete layer",
+        if selected_layer.is_some() {
+            "Delete layer"
+        } else {
+            "Select a layer to delete"
+        },
     );
     editor.ui.layers.delete_button_rect = Some(delete.rect);
     if delete.clicked()
@@ -1079,7 +1111,6 @@ pub fn show_layer_settings_window(editor: &mut crate::Editor, ctx: &egui::Contex
     let mut open = true;
     let mut close = false;
     let mut commit = false;
-    let mut escape = false;
 
     Dialog::new(title)
         .width(360.0)
@@ -1108,7 +1139,7 @@ pub fn show_layer_settings_window(editor: &mut crate::Editor, ctx: &egui::Contex
             ui.add_space(6.0);
             ui.separator();
             ui.label(
-                RichText::new("While this layer shows:")
+                RichText::new("While this layer shows")
                     .strong()
                     .color(coursecraft_render::palette(ui.ctx()).text_secondary),
             );
@@ -1121,13 +1152,13 @@ pub fn show_layer_settings_window(editor: &mut crate::Editor, ctx: &egui::Contex
             state.hide_base_rect = Some(hide_base.rect);
             let pause = ui.checkbox(&mut state.pause_base_timeline, "Pause the base timeline");
             state.pause_base_rect = Some(pause.rect);
-            let prevent = ui.checkbox(&mut state.prevent_base_clicks, "Stop clicks on the base layer");
+            let prevent = ui.checkbox(&mut state.prevent_base_clicks, "Block clicks on the base layer");
             state.prevent_clicks_rect = Some(prevent.rect);
 
             ui.add_space(6.0);
             ui.separator();
             ui.label(
-                RichText::new("When its timeline ends:")
+                RichText::new("When its timeline ends")
                     .strong()
                     .color(coursecraft_render::palette(ui.ctx()).text_secondary),
             );
@@ -1137,12 +1168,12 @@ pub fn show_layer_settings_window(editor: &mut crate::Editor, ctx: &egui::Contex
             ui.add_space(6.0);
             ui.separator();
             ui.label(
-                RichText::new("Learner seeking:")
+                RichText::new("Learner seeking")
                     .strong()
                     .color(coursecraft_render::palette(ui.ctx()).text_secondary),
             );
-            form.row(ui, "Allow seeking", |ui, _| {
-                let combo = egui::ComboBox::from_id_salt("layer_allow_seek")
+            form.row(ui, "Allow seeking", |ui, width| {
+                let combo = crate::widgets::styled_combo(ui, "layer_allow_seek", width)
                     .selected_text(seek_label(state.allow_seek))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut state.allow_seek, SeekMode::Auto, "Automatic");
@@ -1158,12 +1189,12 @@ pub fn show_layer_settings_window(editor: &mut crate::Editor, ctx: &egui::Contex
             ui.add_space(6.0);
             ui.separator();
             ui.label(
-                RichText::new("When shown again:")
+                RichText::new("When shown again")
                     .strong()
                     .color(coursecraft_render::palette(ui.ctx()).text_secondary),
             );
-            form.row(ui, "When revisiting", |ui, _| {
-                let combo = egui::ComboBox::from_id_salt("layer_revisit")
+            form.row(ui, "When revisiting", |ui, width| {
+                let combo = crate::widgets::styled_combo(ui, "layer_revisit", width)
                     .selected_text(revisit_label(state.revisit))
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut state.revisit, RevisitMode::Auto, "Automatic");
@@ -1188,27 +1219,24 @@ pub fn show_layer_settings_window(editor: &mut crate::Editor, ctx: &egui::Contex
                 }
                 let ok_enabled = !state.name.trim().is_empty();
                 let p = coursecraft_render::palette(ui.ctx());
-                let ok = ui.add_enabled(
-                    ok_enabled,
-                    egui::Button::new(RichText::new("OK").color(Color32::WHITE))
-                        .fill(p.accent)
-                        .corner_radius(coursecraft_render::RADIUS_MD as u8)
-                        .min_size(vec2(0.0, coursecraft_render::CONTROL_PRIMARY)),
-                );
+                let ok = ui
+                    .add_enabled(
+                        ok_enabled,
+                        egui::Button::new(RichText::new("OK").color(Color32::WHITE))
+                            .fill(p.accent)
+                            .corner_radius(coursecraft_render::RADIUS_MD as u8)
+                            .min_size(vec2(0.0, coursecraft_render::CONTROL_PRIMARY)),
+                    )
+                    .on_disabled_hover_text("Enter a layer name");
                 state.ok_rect = Some(ok.rect);
                 if ok.clicked() {
                     commit = true;
                 }
             });
             });
-
-            escape = ctx.input(|input| input.key_pressed(Key::Escape));
         });
 
     if !open {
-        close = true;
-    }
-    if escape {
         close = true;
     }
 

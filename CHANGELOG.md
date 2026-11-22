@@ -2,6 +2,30 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.3.6
+
+**New: a calmer, more consistent editor.** Every dialog, menu, panel and player control was checked against the same 22 rules (readable contrast in light and dark, comfortable click targets, tooltips on every icon and on every greyed-out button, one scroll area per dialog, Esc closes one thing at a time) and fixed until an automated sweep of 61 editor screens and the player found nothing left to fix.
+
+**New: states that do what you expect.** Hover and pressed states now change an object's picture and text, not only a button's colour. A state's picture is chosen with **Choose image…** (or **From project…**) instead of typing a file path, and a picture that isn't in the course is flagged in Check Course. Thanks to Noe for the feedback and the screen recordings.
+
+**New, from tester requests** (thanks to PhilOB):
+- **SCORM 1.2 status:** choose what the LMS receives: Passed/Incomplete, Passed/Failed, Completed/Incomplete or Completed/Failed (Automatic keeps today's behaviour).
+- **Player bar off:** hide the player bar for the whole course or one slide and use your own buttons; the slide fills the window and the arrow keys don't skip ahead. Check Course warns about a slide with no way forward.
+- **Hand pointer** over everything a learner can click in the preview and the published course.
+- **Shadow and glow opacity** sliders.
+
+**Preview and player:**
+- The preview has a darker backdrop, can be resized from any edge or corner, and has a full-screen mode.
+- **Preview this slide** previews only that slide, and **Preview selected slides** is new; at the end a short message offers to replay or close.
+- The player's controls have their own space and never cover the slide or a video's subtitles.
+- The outline drawer opens inside the player, not at the edge of the screen.
+- Clicking a video plays and pauses it.
+
+**Fixes:**
+- Thick shape outlines are even all the way round, and pointed corners are no longer cut off; PowerPoint's corner style comes across, and a new **Corners** choice (Sharp, Round, Bevel) sits next to Dash.
+- Bold, Italic and Underline show the style of the selected text, not of the letters next to it, and Underline toggles reliably.
+- Check Course warns when a slide's states change from its timeline but revisiting keeps the old states (the example courses now reset on revisit).
+
 ## 0.3.5
 
 **New: PowerPoint animations come across.** Importing a `.pptx` now brings its entrance and exit animations (Appear, Fly, Fade, Wipe, Zoom, Float), motion paths, effects that start on a click of a shape, and repeats, with their timing and order. Other entrance and exit effects become the closest match and are noted in the import report. Emphasis effects (Spin, Pulse and the like) are not imported yet.

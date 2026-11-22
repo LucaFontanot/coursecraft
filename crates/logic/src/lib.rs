@@ -798,6 +798,7 @@ pub(crate) struct SlideCache<'c> {
 pub struct PlayPlan {
     draw_seed: u32,
     slides: Vec<SlideLoc>,
+    preview_subset: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -816,6 +817,12 @@ pub struct Player<'c> {
     entered: bool,
     slide_cache: SlideCache<'c>,
     reach_buf: Vec<(u32, Option<&'c str>)>,
+    /// Preview-only slide subset: when `Some`, navigation is restricted to these
+    /// slide IDs and leaving them sets `preview_boundary_hit` instead of moving.
+    preview_subset: Option<Vec<String>>,
+    /// Set to `true` when a navigation, jump, or completion action in a partial
+    /// preview attempts to leave the previewed subset.
+    preview_boundary_hit: bool,
 }
 
 impl<'c> Player<'c> {
@@ -832,6 +839,30 @@ impl<'c> Player<'c> {
     /// # Errors
     /// Returns the validation errors if the course is not playable.
     pub fn with_draw_seed(course: &'c Course, seed: u32) -> Result<Self, Vec<Issue>> {
+        Self::init_with_subset(course, seed, None)
+    }
+
+    /// Create a player for a validated course restricted to a preview slide subset.
+    ///
+    /// Only slides in `subset` are included in the play order (in course order),
+    /// starting at the first slide of the subset. Attempts to navigate outside the
+    /// subset set [`Player::take_preview_boundary`] instead of changing slides.
+    ///
+    /// # Errors
+    /// Returns the validation errors if the course is not playable.
+    pub fn with_preview_subset(
+        course: &'c Course,
+        seed: u32,
+        subset: &[String],
+    ) -> Result<Self, Vec<Issue>> {
+        Self::init_with_subset(course, seed, Some(subset))
+    }
+
+    fn init_with_subset(
+        course: &'c Course,
+        seed: u32,
+        subset: Option<&[String]>,
+    ) -> Result<Self, Vec<Issue>> {
         let errors: Vec<Issue> = course
             .validate()
             .into_iter()
@@ -840,9 +871,26 @@ impl<'c> Player<'c> {
         if !errors.is_empty() {
             return Err(errors);
         }
-        let slides = draw::play_order(course, seed);
+        let full_slides = draw::play_order(course, seed);
+        let (slides, preview_subset, start_slide) = if let Some(ids) = subset {
+            let filtered: Vec<&'c Slide> = full_slides
+                .iter()
+                .copied()
+                .filter(|s| ids.iter().any(|id| id == &s.id))
+                .collect();
+            if filtered.is_empty() {
+                let start = draw::expanded_start(course, &full_slides);
+                (full_slides, None, start)
+            } else {
+                let normalized: Vec<String> = filtered.iter().map(|s| s.id.clone()).collect();
+                (filtered, Some(normalized), 0)
+            }
+        } else {
+            let start = draw::expanded_start(course, &full_slides);
+            (full_slides, None, start)
+        };
         let st = PlayerState {
-            slide: draw::expanded_start(course, &slides),
+            slide: start_slide,
             draw_seed: seed,
             variables: course
                 .variables
@@ -858,6 +906,8 @@ impl<'c> Player<'c> {
             entered: false,
             slide_cache: SlideCache::default(),
             reach_buf: Vec::new(),
+            preview_subset,
+            preview_boundary_hit: false,
         };
         p.refresh_slide_cache();
         Ok(p)
@@ -884,6 +934,8 @@ impl<'c> Player<'c> {
             entered: false,
             slide_cache: SlideCache::default(),
             reach_buf: Vec::new(),
+            preview_subset: None,
+            preview_boundary_hit: false,
         };
         p.refresh_slide_cache();
         p
@@ -912,6 +964,7 @@ impl<'c> Player<'c> {
         PlayPlan {
             draw_seed: self.st.draw_seed,
             slides,
+            preview_subset: self.preview_subset.clone(),
         }
     }
 
@@ -920,6 +973,14 @@ impl<'c> Player<'c> {
     /// # Errors
     /// Validation errors, or a state that does not fit this course.
     pub fn resume(course: &'c Course, state: PlayerState) -> Result<Self, Vec<Issue>> {
+        Self::resume_with_subset(course, state, None)
+    }
+
+    fn resume_with_subset(
+        course: &'c Course,
+        state: PlayerState,
+        subset: Option<&[String]>,
+    ) -> Result<Self, Vec<Issue>> {
         let errors: Vec<Issue> = course
             .validate()
             .into_iter()
@@ -928,8 +989,23 @@ impl<'c> Player<'c> {
         if !errors.is_empty() {
             return Err(errors);
         }
-        let slides = draw::play_order(course, state.draw_seed);
-        Self::finish_resume(course, slides, state)
+        let mut slides = draw::play_order(course, state.draw_seed);
+        let preview_subset = if let Some(ids) = subset {
+            let filtered: Vec<&'c Slide> = slides
+                .iter()
+                .copied()
+                .filter(|s| ids.iter().any(|id| id == &s.id))
+                .collect();
+            if filtered.is_empty() {
+                None
+            } else {
+                slides = filtered;
+                Some(slides.iter().map(|s| s.id.clone()).collect())
+            }
+        } else {
+            None
+        };
+        Self::finish_resume(course, slides, state, preview_subset)
     }
 
     /// Restore a player from a state produced by this same validated course
@@ -946,7 +1022,7 @@ impl<'c> Player<'c> {
         plan: &PlayPlan,
     ) -> Result<Self, Vec<Issue>> {
         if plan.draw_seed != state.draw_seed {
-            return Self::resume(course, state);
+            return Self::resume_with_subset(course, state, plan.preview_subset.as_deref());
         }
         let mut slides: Vec<&'c Slide> = Vec::with_capacity(plan.slides.len());
         for loc in &plan.slides {
@@ -955,17 +1031,18 @@ impl<'c> Player<'c> {
                 SlideLoc::Bank(bi, li) => course.banks.get(bi).and_then(|b| b.slides.get(li)),
             };
             let Some(slide) = resolved else {
-                return Self::resume(course, state);
+                return Self::resume_with_subset(course, state, plan.preview_subset.as_deref());
             };
             slides.push(slide);
         }
-        Self::finish_resume(course, slides, state)
+        Self::finish_resume(course, slides, state, plan.preview_subset.clone())
     }
 
     fn finish_resume(
         course: &'c Course,
         slides: Vec<&'c Slide>,
         state: PlayerState,
+        preview_subset: Option<Vec<String>>,
     ) -> Result<Self, Vec<Issue>> {
         if state.slide >= slides.len() {
             return Err(vec![Issue {
@@ -984,6 +1061,8 @@ impl<'c> Player<'c> {
             entered,
             slide_cache: SlideCache::default(),
             reach_buf: Vec::new(),
+            preview_subset,
+            preview_boundary_hit: false,
         };
         // Saved states can list visible layers in a different order. Put them back
         // into `slide.layers` order (back to front), dropping nothing.
@@ -1056,6 +1135,18 @@ impl<'c> Player<'c> {
     #[must_use]
     pub fn lightbox_open(&self) -> bool {
         self.st.lightbox.is_some()
+    }
+
+    /// Whether this player is running a partial preview subset of slides.
+    #[must_use]
+    pub fn is_partial_preview(&self) -> bool {
+        self.preview_subset.is_some()
+    }
+
+    /// Returns and clears whether a navigation, jump, or course-end action hit
+    /// the boundary of a partial preview subset.
+    pub fn take_preview_boundary(&mut self) -> bool {
+        std::mem::take(&mut self.preview_boundary_hit)
     }
 
     /// The slide inside the open lightbox, if any.
@@ -1883,5 +1974,7 @@ fn push_str_capped(out: &mut String, s: &str, max_len: usize) -> bool {
 mod bughunt_m26_a3_exit_transitions;
 #[cfg(test)]
 mod f23_media_timeline_tests;
+#[cfg(test)]
+mod preview_subset_tests;
 #[cfg(test)]
 mod tests;

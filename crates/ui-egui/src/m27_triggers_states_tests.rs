@@ -1432,21 +1432,11 @@ fn d2_3_edit_fill_text_and_src_overrides_across_object_kinds() {
     );
     harness.editor.selection.object = Some("img-1".to_owned());
     open_states_panel(&mut harness);
-    let src_rect = scroll_inspector_to_rect(&mut harness, |e| {
-        e.ui.states.edit_buffers.get("alt").and_then(|b| b.src_rect)
+    let row_rect = scroll_inspector_to_rect(&mut harness, |e| {
+        e.ui.states.state_row_rects.get("alt").copied()
     });
-    harness.set_field(src_rect.center(), "alt.png");
-    harness.idle_frame();
-    let img_obj = harness
-        .editor
-        .session
-        .course
-        .slide("s1")
-        .unwrap()
-        .object("img-1")
-        .unwrap()
-        .0;
-    assert_eq!(img_obj.states[0].src.as_deref(), Some("alt.png"));
+    assert!(harness.find_text_in("Src", row_rect).is_none());
+    assert!(harness.find_text("Choose image…").is_some());
 }
 
 #[test]

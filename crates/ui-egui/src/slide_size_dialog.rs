@@ -68,9 +68,10 @@ pub fn show_slide_size_dialog(editor: &mut Editor, ctx: &egui::Context) {
     if !editor.ui.slide_size_dialog.open {
         return;
     }
+    let mut open = true;
     let mut apply = false;
     let mut cancel = false;
-    Dialog::new("Slide Size").show(ctx, |ui| {
+    Dialog::new("Slide size").open(&mut open).show(ctx, |ui| {
         let state = &mut editor.ui.slide_size_dialog;
         ui.label("Size");
         for (idx, (label, w, h)) in PRESETS.iter().enumerate() {
@@ -88,9 +89,17 @@ pub fn show_slide_size_dialog(editor: &mut Editor, ctx: &egui::Context) {
         }
         ui.horizontal(|ui| {
             ui.label("W");
-            ui.add(DragValue::new(&mut state.w).range(0..=100_000));
+            ui.add(
+                DragValue::new(&mut state.w)
+                    .range(0..=100_000)
+                    .suffix(" px"),
+            );
             ui.label("H");
-            ui.add(DragValue::new(&mut state.h).range(0..=100_000));
+            ui.add(
+                DragValue::new(&mut state.h)
+                    .range(0..=100_000)
+                    .suffix(" px"),
+            );
         });
         if !state.valid() {
             ui.colored_label(
@@ -108,6 +117,7 @@ pub fn show_slide_size_dialog(editor: &mut Editor, ctx: &egui::Context) {
             }
             if ui
                 .add_enabled(state.valid(), egui::Button::new("Apply"))
+                .on_disabled_hover_text("Width must be 100 to 7680 px and height 100 to 4320 px.")
                 .clicked()
             {
                 apply = true;
@@ -126,7 +136,7 @@ pub fn show_slide_size_dialog(editor: &mut Editor, ctx: &egui::Context) {
         );
         editor.ui.slide_size_dialog.open = false;
     }
-    if cancel {
+    if cancel || !open {
         editor.ui.slide_size_dialog.open = false;
     }
 }

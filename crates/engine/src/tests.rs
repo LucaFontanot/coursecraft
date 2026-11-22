@@ -8667,6 +8667,52 @@ fn slide_set_player_overrides_sets_and_clears_the_show_flags() {
     );
 }
 
+#[test]
+fn course_set_player_toggles_show_bar_with_undo() {
+    let mut s = Session::blank("Title");
+    assert!(s.course.player.show_bar);
+    ok(&mut s, "course.set_player", json!({ "show_bar": false }));
+    assert!(!s.course.player.show_bar);
+    s.undo().unwrap();
+    assert!(s.course.player.show_bar);
+}
+
+#[test]
+fn slide_set_player_overrides_sets_and_clears_show_bar_with_undo() {
+    let mut s = Session::blank("Title");
+    let slide = s.course.slides().next().unwrap().id.clone();
+    ok(
+        &mut s,
+        "slide.set_player_overrides",
+        json!({ "slide": slide, "show_bar": false }),
+    );
+    assert_eq!(
+        s.course
+            .slide(&slide)
+            .unwrap()
+            .player
+            .as_ref()
+            .and_then(|o| o.show_bar),
+        Some(false)
+    );
+    ok(
+        &mut s,
+        "slide.set_player_overrides",
+        json!({ "slide": slide, "show_bar": null }),
+    );
+    assert!(s.course.slide(&slide).unwrap().player.is_none());
+    s.undo().unwrap();
+    assert_eq!(
+        s.course
+            .slide(&slide)
+            .unwrap()
+            .player
+            .as_ref()
+            .and_then(|o| o.show_bar),
+        Some(false)
+    );
+}
+
 /// Flip cards keep one text colour for both sides, so it must read on the
 /// front fill and on the back state's fill (composited over the slide), for
 /// the default theme and a dark-accent theme.
@@ -9708,4 +9754,89 @@ fn editor_guides_survive_save_and_open_project() {
     assert_eq!(reopened.editor.guides.len(), 1);
     assert!(reopened.editor.guides[0].vertical);
     assert!((reopened.editor.guides[0].at - 250.0).abs() < 0.01);
+}
+
+#[test]
+fn text_style_range_toggles_cleanly_and_undo_restores_exact_runs() {
+    let mut s = Session::blank("Toggle");
+    let id = ok(
+        &mut s,
+        "object.add",
+        json!({ "slide": "slide1", "kind": { "type": "text", "text": "bold+ italic + underline\nsecond line" },
+                "frame": { "x": 10, "y": 10, "w": 400, "h": 100 } }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "text.style_range",
+        json!({ "slide": "slide1", "object": id, "start": 0, "end": 6, "italic": true }),
+    );
+    ok(
+        &mut s,
+        "text.style_range",
+        json!({ "slide": "slide1", "object": id, "start": 12, "end": 24, "italic": true }),
+    );
+    let baseline_runs = match &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object(&id)
+        .unwrap()
+        .0
+        .kind
+    {
+        ObjectKind::Text { runs, .. } => runs.clone(),
+        other => panic!("{other:?}"),
+    };
+
+    // Toggle underline ON then OFF on "italic" (6..12), then across two paragraphs (15..31).
+    for (start, end, key, on, off) in [
+        (6, 12, "underline", json!(true), json!(false)),
+        (6, 12, "bold", json!(true), json!(false)),
+        (6, 12, "italic", json!(true), json!(false)),
+        (6, 12, "strikethrough", json!(true), json!(false)),
+        (15, 31, "underline", json!(true), json!(false)),
+        (15, 31, "baseline", json!("superscript"), json!("normal")),
+        (15, 31, "baseline", json!("subscript"), json!("normal")),
+    ] {
+        let mut p_on = json!({ "slide": "slide1", "object": id, "start": start, "end": end });
+        p_on[key] = on;
+        let mut p_off = json!({ "slide": "slide1", "object": id, "start": start, "end": end });
+        p_off[key] = off;
+        ok(&mut s, "text.style_range", p_on.clone());
+        ok(&mut s, "text.style_range", p_off);
+        let after_off = match &s
+            .course
+            .slide("slide1")
+            .unwrap()
+            .object(&id)
+            .unwrap()
+            .0
+            .kind
+        {
+            ObjectKind::Text { runs, .. } => runs.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            after_off, baseline_runs,
+            "toggling {key} on/off must merge runs back"
+        );
+        ok(&mut s, "text.style_range", p_on);
+        s.undo().unwrap();
+        let after_undo = match &s
+            .course
+            .slide("slide1")
+            .unwrap()
+            .object(&id)
+            .unwrap()
+            .0
+            .kind
+        {
+            ObjectKind::Text { runs, .. } => runs.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(after_undo, baseline_runs, "undo must restore exact runs");
+    }
 }

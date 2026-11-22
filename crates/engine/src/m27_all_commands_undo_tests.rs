@@ -509,6 +509,8 @@ fn fixture_session() -> Session {
                     width: 2.0,
                     dash: Default::default(),
                     dash_pattern: None,
+                    join: Default::default(),
+                    miter_limit: None,
                 },
                 start_end: Default::default(),
                 end_end: Default::default(),
@@ -807,6 +809,10 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         ),
         ("course.set_quiz", json!({ "passing_percent": 75 })),
         (
+            "course.set_publish_settings",
+            json!({ "lms_status": "passed_failed" }),
+        ),
+        (
             "course.set_background_audio",
             json!({ "src": "audio/new.mp3", "volume": 0.25, "loop": false }),
         ),
@@ -1037,6 +1043,10 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         (
             "object.set_opacity",
             json!({ "slide": "slide1", "object": "obj_shape", "opacity": 0.5 }),
+        ),
+        (
+            "object.set_outline_join",
+            json!({ "slide": "slide1", "object": "obj_path", "join": "round" }),
         ),
         (
             "object.set_fill_style",

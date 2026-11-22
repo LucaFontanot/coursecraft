@@ -3,7 +3,7 @@
 //! the rows it is given and asks for an action through an [`EditorRequest`].
 
 use crate::dialog::Dialog;
-use egui::{Button, Grid, ScrollArea};
+use egui::{Button, Grid};
 
 use crate::{Editor, EditorRequest};
 use coursecraft_render::design;
@@ -69,10 +69,10 @@ pub fn show_version_history_window(
         return;
     }
     let mut open = true;
-    Dialog::new("Version History")
+    Dialog::new("Version history")
         .open(&mut open)
         .resizable(true)
-        .width(540.0)
+        .default_size(egui::vec2(540.0, 380.0))
         .show(ctx, |ui| {
             if editor.ui.versions.folder_project {
                 ui.label(
@@ -87,48 +87,46 @@ pub fn show_version_history_window(
                 return;
             }
             ui.label(design::caption(
-                "Each save keeps the file it replaced. Open as Copy never changes your project.",
+                "Each save keeps the file it replaced. Open as copy never changes your project.",
             ));
             ui.add_space(design::SPACE_MD);
-            ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                Grid::new("version_history_rows")
-                    .num_columns(4)
-                    .spacing([design::SPACE_XL, design::SPACE_MD])
-                    .show(ui, |ui| {
-                        for row in &rows {
-                            ui.label(&row.when);
-                            ui.label(&row.size);
-                            match row.slides {
-                                Some(1) => ui.label("1 slide"),
-                                Some(n) => ui.label(format!("{n} slides")),
-                                None => ui.colored_label(ui.visuals().error_fg_color, "Damaged"),
-                            };
-                            ui.horizontal(|ui| {
-                                if row.slides.is_some()
-                                    && ui
-                                        .add(Button::new("Open as Copy"))
-                                        .on_hover_text(format!(
-                                            "Open the version from {} as a new copy",
-                                            row.when
-                                        ))
-                                        .clicked()
-                                {
-                                    requests
-                                        .push(EditorRequest::OpenVersionCopy { id: row.id.clone() });
-                                }
-                                if ui
-                                    .add(Button::new("Delete"))
-                                    .on_hover_text(format!("Delete the version from {}", row.when))
+            Grid::new("version_history_rows")
+                .num_columns(4)
+                .spacing([design::SPACE_XL, design::SPACE_MD])
+                .show(ui, |ui| {
+                    for row in &rows {
+                        ui.label(&row.when);
+                        ui.label(&row.size);
+                        match row.slides {
+                            Some(1) => ui.label("1 slide"),
+                            Some(n) => ui.label(format!("{n} slides")),
+                            None => ui.colored_label(ui.visuals().error_fg_color, "Damaged"),
+                        };
+                        ui.horizontal(|ui| {
+                            if row.slides.is_some()
+                                && ui
+                                    .add(Button::new("Open as copy"))
+                                    .on_hover_text(format!(
+                                        "Open the version from {} as a new copy",
+                                        row.when
+                                    ))
                                     .clicked()
-                                {
-                                    requests
-                                        .push(EditorRequest::DeleteVersion { id: row.id.clone() });
-                                }
-                            });
-                            ui.end_row();
-                        }
-                    });
-            });
+                            {
+                                requests
+                                    .push(EditorRequest::OpenVersionCopy { id: row.id.clone() });
+                            }
+                            if ui
+                                .add(Button::new("Delete"))
+                                .on_hover_text(format!("Delete the version from {}", row.when))
+                                .clicked()
+                            {
+                                requests
+                                    .push(EditorRequest::DeleteVersion { id: row.id.clone() });
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
         });
     if !open {
         editor.ui.versions.open = false;

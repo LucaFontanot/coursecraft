@@ -82,8 +82,10 @@ pub struct PropertiesState {
     pub pick_picture_fill: bool,
     pub shadow_enabled: bool,
     pub shadow: coursecraft_course::Shadow,
+    pub shadow_alpha: u8,
     pub glow_enabled: bool,
     pub glow: coursecraft_course::Glow,
+    pub glow_alpha: u8,
     pub drag_enabled: bool,
     pub drag: coursecraft_course::DragSpec,
     pub drag_toggle_rect: Option<Rect>,
@@ -123,6 +125,8 @@ pub struct PropertiesState {
     pub line_spacing_editing: bool,
     /// Snapshot of active canvas inline-edit `(slide, object, selection_range, cursor_pos)`.
     pub inline_selection: Option<crate::InlineEditSelection>,
+    /// Pending style overrides toggled at a caret (no selection), applied to the next typed chars.
+    pub pending_caret_style: Option<PendingCaretStyle>,
     /// The font picker's "Add font…" entry was clicked.
     pub add_font_requested: bool,
     /// Search text for the "On this computer" font list.
@@ -146,6 +150,7 @@ pub struct PropertiesState {
     pub shape_outline_dash_pattern: Option<Vec<f32>>,
     pub shape_outline_dash_length: f32,
     pub shape_outline_gap: f32,
+    pub shape_outline_join: coursecraft_course::LineJoin,
     /// Search text in the shape gallery popup.
     pub shape_gallery_query: String,
     /// Icon rects painted by the last open gallery (test hook).
@@ -160,6 +165,7 @@ pub struct PropertiesState {
     pub path_outline_dash_pattern: Option<Vec<f32>>,
     pub path_outline_dash_length: f32,
     pub path_outline_gap: f32,
+    pub path_outline_join: coursecraft_course::LineJoin,
     pub path_start_end: coursecraft_course::LineEnd,
     pub path_end_end: coursecraft_course::LineEnd,
     pub path_style: coursecraft_course::PathStyle,
@@ -345,11 +351,13 @@ impl Default for PropertiesState {
                 offset_y: 4.0,
                 blur: 8.0,
             },
+            shadow_alpha: 0x80,
             glow_enabled: false,
             glow: Glow {
                 color: Color("#2F6FEB80".into()),
                 size: 8.0,
             },
+            glow_alpha: 0x80,
             drag_enabled: false,
             drag: coursecraft_course::DragSpec::default(),
             drag_toggle_rect: None,
@@ -381,6 +389,7 @@ impl Default for PropertiesState {
             line_spacing_seen: f32::NAN,
             line_spacing_editing: false,
             inline_selection: None,
+            pending_caret_style: None,
             add_font_requested: false,
             system_font_search: String::new(),
             system_fonts_list_requested: false,
@@ -396,6 +405,7 @@ impl Default for PropertiesState {
             shape_outline_dash_pattern: None,
             shape_outline_dash_length: 3.0,
             shape_outline_gap: 2.0,
+            shape_outline_join: coursecraft_course::LineJoin::Miter,
             shape_gallery_query: String::new(),
             shape_gallery_rects: Vec::new(),
             shape_gallery_search_rect: None,
@@ -405,6 +415,7 @@ impl Default for PropertiesState {
             path_outline_dash_pattern: None,
             path_outline_dash_length: 3.0,
             path_outline_gap: 2.0,
+            path_outline_join: coursecraft_course::LineJoin::Miter,
             path_start_end: coursecraft_course::LineEnd::None,
             path_end_end: coursecraft_course::LineEnd::None,
             path_style: coursecraft_course::PathStyle::Straight,
@@ -587,10 +598,12 @@ impl PropertiesState {
             if let Some(shadow) = &obj.shadow {
                 self.shadow = shadow.clone();
             }
+            self.shadow_alpha = parse_color(&self.shadow.color).map_or(255, |c| c.a());
             self.glow_enabled = obj.glow.is_some();
             if let Some(glow) = &obj.glow {
                 self.glow = glow.clone();
             }
+            self.glow_alpha = parse_color(&self.glow.color).map_or(255, |c| c.a());
             self.drag_enabled = obj.drag.is_some();
             self.drag_toggle_rect = None;
             if let Some(drag) = &obj.drag {
@@ -693,6 +706,7 @@ impl PropertiesState {
                             &mut self.shape_outline_dash_length,
                             &mut self.shape_outline_gap,
                         );
+                        self.shape_outline_join = outline.join;
                     } else {
                         self.shape_outline_color = "#1F1F1F".into();
                         self.shape_outline_width = 1.5;
@@ -700,6 +714,7 @@ impl PropertiesState {
                         self.shape_outline_dash_pattern = None;
                         self.shape_outline_dash_length = 3.0;
                         self.shape_outline_gap = 2.0;
+                        self.shape_outline_join = coursecraft_course::LineJoin::Miter;
                     }
                     if let Some(text) = text {
                         self.text_body = text.text.clone();
@@ -732,6 +747,7 @@ impl PropertiesState {
                         &mut self.path_outline_dash_length,
                         &mut self.path_outline_gap,
                     );
+                    self.path_outline_join = path.outline.join;
                     self.path_start_end = path.start_end;
                     self.path_end_end = path.end_end;
                     self.path_style = path.style;
@@ -1125,6 +1141,7 @@ impl PropertiesState {
                     &mut self.shape_outline_dash_length,
                     &mut self.shape_outline_gap,
                 );
+                self.shape_outline_join = outline.join;
             } else {
                 self.shape_outline_color = "#1F1F1F".to_owned();
                 self.shape_outline_width = 1.5;
@@ -1132,6 +1149,7 @@ impl PropertiesState {
                 self.shape_outline_dash_pattern = None;
                 self.shape_outline_dash_length = 3.0;
                 self.shape_outline_gap = 2.0;
+                self.shape_outline_join = coursecraft_course::LineJoin::Miter;
             }
         }
 
@@ -1267,10 +1285,22 @@ pub(crate) fn show_color_field(
             ui.spacing_mut().item_spacing.x = 6.0;
             let picked = color_swatch_picker(ui, color_hex, id_salt, 18.0, 4);
             let rem_w = ui.available_width().max(30.0);
-            let response = ui.add_sized(
+            let mut response = ui.add_sized(
                 [rem_w, coursecraft_render::CONTROL_COMPACT],
                 TextEdit::singleline(color_hex).id_salt(id_salt),
             );
+            let valid = parse_color(&Color(color_hex.trim().to_owned())).is_some();
+            if !valid && !color_hex.trim().is_empty() {
+                let p = coursecraft_render::palette(ui.ctx());
+                ui.painter().rect_stroke(
+                    response.rect,
+                    CornerRadius::same(4),
+                    Stroke::new(1.5, p.danger),
+                    StrokeKind::Outside,
+                );
+                response = response
+                    .on_hover_text("Invalid hex colour (expected #RGB, #RRGGBB, or #RRGGBBAA)");
+            }
             if picked {
                 mark_color_picked(&response);
             }
@@ -1344,62 +1374,69 @@ pub(crate) fn color_swatch_picker(
         .id(popup_id)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            ui.spacing_mut().slider_width = 220.0;
-            let eyedropper = ui
-                .add(
-                    egui::Button::new(coursecraft_render::icon_text(
-                        coursecraft_render::Icon::Target,
-                        "Eyedropper",
-                    ))
-                    .min_size(egui::vec2(120.0, 0.0)),
-                )
-                .on_hover_text("Pick a colour from anywhere in the window (Esc cancels)");
-            if eyedropper.clicked() {
-                egui::Popup::close_id(ui.ctx(), popup_id);
-                crate::eyedropper::start_pick(ui.ctx(), field_key.clone());
-            }
-            ui.add_space(4.0);
-            let palette: Vec<(String, String)> = ui
-                .ctx()
-                .data(|d| d.get_temp(palette_colors_id()))
-                .unwrap_or_default();
-            if let Some(hex) = swatch_row(ui, "Palette", &palette) {
-                *color_hex = hex;
-                pending = true;
-                swatch_picked = true;
-            }
-            let theme: Vec<(String, String)> = ui
-                .ctx()
-                .data(|d| d.get_temp(theme_colors_id()))
-                .unwrap_or_default();
-            if let Some(hex) = swatch_row(ui, "Theme", &theme) {
-                *color_hex = hex;
-                pending = true;
-                swatch_picked = true;
-            }
-            let recent: Vec<(String, String)> = recent_colors(ui.ctx())
-                .into_iter()
-                .map(|hex| (hex.clone(), hex))
-                .collect();
-            if let Some(hex) = swatch_row(ui, "Recent", &recent) {
-                *color_hex = hex;
-                pending = true;
-                swatch_picked = true;
-            }
-            // "No fill" and an empty field have no colour to start from, and
-            // dragging from invisible would stay invisible.
-            let mut color = match parsed {
-                Some(color) if color.a() > 0 || pending => color,
-                _ => Color32::WHITE,
-            };
-            if egui::color_picker::color_picker_color32(
-                ui,
-                &mut color,
-                egui::color_picker::Alpha::OnlyBlend,
-            ) {
-                *color_hex = color_to_hex(color);
-                pending = true;
-            }
+            let max_h = (ui.ctx().content_rect().height() - 24.0).max(160.0);
+            egui::ScrollArea::vertical()
+                .id_salt((popup_id, "color_picker_scroll"))
+                .max_height(max_h)
+                .auto_shrink([true, true])
+                .show(ui, |ui| {
+                    ui.spacing_mut().slider_width = 220.0;
+                    let eyedropper = ui
+                        .add(
+                            egui::Button::new(coursecraft_render::icon_text(
+                                coursecraft_render::Icon::Target,
+                                "Eyedropper",
+                            ))
+                            .min_size(egui::vec2(120.0, 0.0)),
+                        )
+                        .on_hover_text("Pick a colour from anywhere in the window (Esc cancels)");
+                    if eyedropper.clicked() {
+                        egui::Popup::close_id(ui.ctx(), popup_id);
+                        crate::eyedropper::start_pick(ui.ctx(), field_key.clone());
+                    }
+                    ui.add_space(4.0);
+                    let palette: Vec<(String, String)> = ui
+                        .ctx()
+                        .data(|d| d.get_temp(palette_colors_id()))
+                        .unwrap_or_default();
+                    if let Some(hex) = swatch_row(ui, "Palette", &palette) {
+                        *color_hex = hex;
+                        pending = true;
+                        swatch_picked = true;
+                    }
+                    let theme: Vec<(String, String)> = ui
+                        .ctx()
+                        .data(|d| d.get_temp(theme_colors_id()))
+                        .unwrap_or_default();
+                    if let Some(hex) = swatch_row(ui, "Theme", &theme) {
+                        *color_hex = hex;
+                        pending = true;
+                        swatch_picked = true;
+                    }
+                    let recent: Vec<(String, String)> = recent_colors(ui.ctx())
+                        .into_iter()
+                        .map(|hex| (hex.clone(), hex))
+                        .collect();
+                    if let Some(hex) = swatch_row(ui, "Recent", &recent) {
+                        *color_hex = hex;
+                        pending = true;
+                        swatch_picked = true;
+                    }
+                    // "No fill" and an empty field have no colour to start from, and
+                    // dragging from invisible would stay invisible.
+                    let mut color = match parsed {
+                        Some(color) if color.a() > 0 || pending => color,
+                        _ => Color32::WHITE,
+                    };
+                    if egui::color_picker::color_picker_color32(
+                        ui,
+                        &mut color,
+                        egui::color_picker::Alpha::OnlyBlend,
+                    ) {
+                        *color_hex = color_to_hex(color);
+                        pending = true;
+                    }
+                });
         });
     let picked = swatch_picked || (pending && !ui.input(|i| i.pointer.any_down()));
     if picked {
@@ -1555,7 +1592,7 @@ pub(crate) fn show_paired_numeric_row(
                     let r = add_drag_left(
                         ui,
                         [rem, coursecraft_render::CONTROL_COMPACT],
-                        DragValue::new(v1).speed(speed1),
+                        DragValue::new(v1).speed(speed1).suffix(" px"),
                     );
                     let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     (r, enter)
@@ -1578,7 +1615,7 @@ pub(crate) fn show_paired_numeric_row(
                     let r = add_drag_left(
                         ui,
                         [rem, coursecraft_render::CONTROL_COMPACT],
-                        DragValue::new(v2).speed(speed2),
+                        DragValue::new(v2).speed(speed2).suffix(" px"),
                     );
                     let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     (r, enter)
@@ -1655,8 +1692,7 @@ fn show_anim_row(
 
     inspector_row(ui, "Effect", |ui| {
         let rem_w = ui.available_width().max(30.0);
-        egui::ComboBox::from_id_salt(format!("anim_effect_{which}"))
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, format!("anim_effect_{which}"), rem_w)
             .selected_text(effect_label)
             .show_ui(ui, |ui| {
                 for id in ["none", "fade", "fly_in", "zoom", "wipe", "float"] {
@@ -1696,8 +1732,7 @@ fn show_anim_row(
             };
             inspector_row(ui, "Direction", |ui| {
                 let rem_w = ui.available_width().max(30.0);
-                egui::ComboBox::from_id_salt(format!("anim_dir_{which}"))
-                    .width(rem_w)
+                crate::widgets::styled_combo(ui, format!("anim_dir_{which}"), rem_w)
                     .selected_text(dir_label)
                     .show_ui(ui, |ui| {
                         for (val, l) in [
@@ -1722,8 +1757,7 @@ fn show_anim_row(
         };
         inspector_row(ui, "Easing", |ui| {
             let rem_w = ui.available_width().max(30.0);
-            egui::ComboBox::from_id_salt(format!("anim_ease_{which}"))
-                .width(rem_w)
+            crate::widgets::styled_combo(ui, format!("anim_ease_{which}"), rem_w)
                 .selected_text(ease_label)
                 .show_ui(ui, |ui| {
                     for (val, l) in [
@@ -1791,25 +1825,51 @@ pub(crate) fn animation_command(
     )
 }
 
+/// Pending style overrides toggled while a caret (with no selection) is active.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingCaretStyle {
+    pub slide: String,
+    pub object: String,
+    pub cell: Option<(usize, usize)>,
+    pub cursor: usize,
+    pub patch: coursecraft_course::TextRunPatch,
+}
+
+/// The run that typing at `cursor_char` would inherit: at `0`, the first
+/// non-empty run; otherwise the run containing the character before the caret.
+fn run_at_caret(runs: &[TextRun], cursor_char: usize) -> Option<&TextRun> {
+    if cursor_char == 0 {
+        return runs.iter().find(|r| !r.text.is_empty());
+    }
+    let target = cursor_char - 1;
+    let mut offset = 0usize;
+    let mut last = None;
+    for run in runs.iter().filter(|r| !r.text.is_empty()) {
+        let len = run.text.chars().count();
+        let next = offset.saturating_add(len);
+        if target < next {
+            return Some(run);
+        }
+        offset = next;
+        last = Some(run);
+    }
+    last
+}
+
 /// Strikethrough, baseline and letter spacing in effect at the cursor.
 fn effects_at_cursor(
     runs: &[TextRun],
     style: &TextStyle,
     cursor_char: usize,
 ) -> (bool, coursecraft_course::Baseline, f32) {
-    let mut offset = 0;
-    for run in runs {
-        let len = run.text.chars().count();
-        if cursor_char >= offset && cursor_char <= offset + len {
-            return (
-                run.strikethrough.unwrap_or(style.strikethrough),
-                run.baseline.unwrap_or(style.baseline),
-                run.letter_spacing.unwrap_or(style.letter_spacing),
-            );
-        }
-        offset += len;
-    }
-    (style.strikethrough, style.baseline, style.letter_spacing)
+    let Some(run) = run_at_caret(runs, cursor_char) else {
+        return (style.strikethrough, style.baseline, style.letter_spacing);
+    };
+    (
+        run.strikethrough.unwrap_or(style.strikethrough),
+        run.baseline.unwrap_or(style.baseline),
+        run.letter_spacing.unwrap_or(style.letter_spacing),
+    )
 }
 
 pub(crate) fn style_at_cursor(
@@ -1817,18 +1877,7 @@ pub(crate) fn style_at_cursor(
     style: &TextStyle,
     cursor_char: usize,
 ) -> (bool, bool, bool, f32, String) {
-    let mut current_offset = 0;
-    let mut found_run = None;
-    for run in runs {
-        let len = run.text.chars().count();
-        if cursor_char >= current_offset && cursor_char <= current_offset + len {
-            found_run = Some(run);
-            break;
-        }
-        current_offset += len;
-    }
-
-    let Some(found_run) = found_run else {
+    let Some(found_run) = run_at_caret(runs, cursor_char) else {
         return (
             style.bold,
             style.italic,
@@ -1850,30 +1899,259 @@ pub(crate) fn style_at_cursor(
     )
 }
 
-/// The font named by the run at `cursor_char`, if any.
-fn font_at_cursor(runs: &[TextRun], cursor_char: usize) -> Option<String> {
-    let mut offset = 0;
+/// Effective `(bold, italic, underline, size, color)` for a character range
+/// `[start, end)`. A boolean style is `true` only if every selected character
+/// has it; neighbours outside `[start, end)` never count.
+pub(crate) fn style_for_range(
+    runs: &[TextRun],
+    style: &TextStyle,
+    range: (usize, usize),
+) -> (bool, bool, bool, f32, String) {
+    let (start, end) = (range.0.min(range.1), range.0.max(range.1));
+    if start == end {
+        return style_at_cursor(runs, style, start);
+    }
+    if runs.is_empty() {
+        return (
+            style.bold,
+            style.italic,
+            style.underline,
+            style.size,
+            style.color.0.clone(),
+        );
+    }
+    let mut offset = 0usize;
+    let mut any = false;
+    let mut all_bold = true;
+    let mut all_italic = true;
+    let mut all_underline = true;
+    let mut first_size = None;
+    let mut first_color = None;
     for run in runs {
         let len = run.text.chars().count();
-        if cursor_char >= offset && cursor_char < offset.saturating_add(len) {
-            return run.font.clone();
+        let run_start = offset;
+        let run_end = offset.saturating_add(len);
+        offset = run_end;
+        if run_end <= start || run_start >= end {
+            continue;
         }
-        offset = offset.saturating_add(len);
+        any = true;
+        all_bold &= run.bold.unwrap_or(style.bold);
+        all_italic &= run.italic.unwrap_or(style.italic);
+        all_underline &= run.underline.unwrap_or(style.underline);
+        if first_size.is_none() {
+            first_size = Some(run.size.unwrap_or(style.size));
+        }
+        if first_color.is_none() {
+            first_color = Some(
+                run.color
+                    .as_ref()
+                    .map_or_else(|| style.color.0.clone(), |c| c.0.clone()),
+            );
+        }
     }
-    runs.iter().rev().find_map(|run| run.font.clone())
+    if !any {
+        return style_at_cursor(runs, style, start);
+    }
+    (
+        all_bold,
+        all_italic,
+        all_underline,
+        first_size.unwrap_or(style.size),
+        first_color.unwrap_or_else(|| style.color.0.clone()),
+    )
+}
+
+fn tri_bool(all_true: bool, any_true: bool) -> Option<bool> {
+    if all_true {
+        Some(true)
+    } else if any_true {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+/// Tri-state `(bold, italic, underline)` for a character range `[start, end)`.
+/// Returns `Some(true)` if all selected chars have the style, `Some(false)` if
+/// none do, and `None` (Mixed) when runs disagree.
+fn style_tri_for_range(
+    runs: &[TextRun],
+    style: &TextStyle,
+    range: (usize, usize),
+) -> (Option<bool>, Option<bool>, Option<bool>) {
+    let (start, end) = (range.0.min(range.1), range.0.max(range.1));
+    if start == end {
+        let (b, i, u, _, _) = style_at_cursor(runs, style, start);
+        return (Some(b), Some(i), Some(u));
+    }
+    if runs.is_empty() {
+        return (Some(style.bold), Some(style.italic), Some(style.underline));
+    }
+    let mut offset = 0usize;
+    let mut any = false;
+    let (mut all_b, mut any_b) = (true, false);
+    let (mut all_i, mut any_i) = (true, false);
+    let (mut all_u, mut any_u) = (true, false);
+    for run in runs {
+        let len = run.text.chars().count();
+        let run_start = offset;
+        let run_end = offset.saturating_add(len);
+        offset = run_end;
+        if run_end <= start || run_start >= end {
+            continue;
+        }
+        any = true;
+        let b = run.bold.unwrap_or(style.bold);
+        let i = run.italic.unwrap_or(style.italic);
+        let u = run.underline.unwrap_or(style.underline);
+        all_b &= b;
+        any_b |= b;
+        all_i &= i;
+        any_i |= i;
+        all_u &= u;
+        any_u |= u;
+    }
+    if !any {
+        let (b, i, u, _, _) = style_at_cursor(runs, style, start);
+        return (Some(b), Some(i), Some(u));
+    }
+    (
+        tri_bool(all_b, any_b),
+        tri_bool(all_i, any_i),
+        tri_bool(all_u, any_u),
+    )
+}
+
+/// Tri-state `(strikethrough, superscript, subscript)` for `[start, end)`.
+fn effects_tri_for_range(
+    runs: &[TextRun],
+    style: &TextStyle,
+    range: (usize, usize),
+) -> (Option<bool>, Option<bool>, Option<bool>) {
+    let (start, end) = (range.0.min(range.1), range.0.max(range.1));
+    if start == end {
+        let (st, base, _) = effects_at_cursor(runs, style, start);
+        return (
+            Some(st),
+            Some(base == coursecraft_course::Baseline::Superscript),
+            Some(base == coursecraft_course::Baseline::Subscript),
+        );
+    }
+    if runs.is_empty() {
+        return (
+            Some(style.strikethrough),
+            Some(style.baseline == coursecraft_course::Baseline::Superscript),
+            Some(style.baseline == coursecraft_course::Baseline::Subscript),
+        );
+    }
+    let mut offset = 0usize;
+    let mut any = false;
+    let (mut all_s, mut any_s) = (true, false);
+    let (mut all_sup, mut any_sup) = (true, false);
+    let (mut all_sub, mut any_sub) = (true, false);
+    for run in runs {
+        let len = run.text.chars().count();
+        let run_start = offset;
+        let run_end = offset.saturating_add(len);
+        offset = run_end;
+        if run_end <= start || run_start >= end {
+            continue;
+        }
+        any = true;
+        let s = run.strikethrough.unwrap_or(style.strikethrough);
+        let b = run.baseline.unwrap_or(style.baseline);
+        let is_sup = b == coursecraft_course::Baseline::Superscript;
+        let is_sub = b == coursecraft_course::Baseline::Subscript;
+        all_s &= s;
+        any_s |= s;
+        all_sup &= is_sup;
+        any_sup |= is_sup;
+        all_sub &= is_sub;
+        any_sub |= is_sub;
+    }
+    if !any {
+        let (st, base, _) = effects_at_cursor(runs, style, start);
+        return (
+            Some(st),
+            Some(base == coursecraft_course::Baseline::Superscript),
+            Some(base == coursecraft_course::Baseline::Subscript),
+        );
+    }
+    (
+        tri_bool(all_s, any_s),
+        tri_bool(all_sup, any_sup),
+        tri_bool(all_sub, any_sub),
+    )
+}
+
+/// Effective `(strikethrough, common_baseline, letter_spacing)` for `[start, end)`.
+/// `common_baseline` is `Some(b)` only when every selected character has `b`.
+fn effects_for_range(
+    runs: &[TextRun],
+    style: &TextStyle,
+    range: (usize, usize),
+) -> (bool, Option<coursecraft_course::Baseline>, f32) {
+    let (start, end) = (range.0.min(range.1), range.0.max(range.1));
+    if start == end {
+        let (strike, base, spacing) = effects_at_cursor(runs, style, start);
+        return (strike, Some(base), spacing);
+    }
+    if runs.is_empty() {
+        return (
+            style.strikethrough,
+            Some(style.baseline),
+            style.letter_spacing,
+        );
+    }
+    let mut offset = 0usize;
+    let mut any = false;
+    let mut all_strike = true;
+    let mut common_baseline: Option<Option<coursecraft_course::Baseline>> = None;
+    let mut first_spacing = None;
+    for run in runs {
+        let len = run.text.chars().count();
+        let run_start = offset;
+        let run_end = offset.saturating_add(len);
+        offset = run_end;
+        if run_end <= start || run_start >= end {
+            continue;
+        }
+        any = true;
+        all_strike &= run.strikethrough.unwrap_or(style.strikethrough);
+        let b = run.baseline.unwrap_or(style.baseline);
+        common_baseline = match common_baseline {
+            None => Some(Some(b)),
+            Some(Some(prev)) if prev == b => Some(Some(prev)),
+            _ => Some(None),
+        };
+        if first_spacing.is_none() {
+            first_spacing = Some(run.letter_spacing.unwrap_or(style.letter_spacing));
+        }
+    }
+    if !any {
+        let (strike, base, spacing) = effects_at_cursor(runs, style, start);
+        return (strike, Some(base), spacing);
+    }
+    (
+        all_strike,
+        common_baseline.flatten(),
+        first_spacing.unwrap_or(style.letter_spacing),
+    )
+}
+
+/// The font named by the run at `cursor_char`, if any.
+fn font_at_cursor(runs: &[TextRun], cursor_char: usize) -> Option<String> {
+    run_at_caret(runs, cursor_char)
+        .and_then(|run| run.font.clone())
+        .or_else(|| runs.iter().rev().find_map(|run| run.font.clone()))
 }
 
 /// The link on the run at `cursor_char`, if any.
 fn link_at_char(runs: &[TextRun], cursor_char: usize) -> Option<coursecraft_course::Link> {
-    let mut offset = 0;
-    for run in runs {
-        let len = run.text.chars().count();
-        if cursor_char >= offset && cursor_char < offset.saturating_add(len) {
-            return run.link.clone();
-        }
-        offset = offset.saturating_add(len);
-    }
-    runs.iter().rev().find_map(|run| run.link.clone())
+    run_at_caret(runs, cursor_char)
+        .and_then(|run| run.link.clone())
+        .or_else(|| runs.iter().rev().find_map(|run| run.link.clone()))
 }
 
 /// Render the segmented inspector panel (Format · Animate · Slide · Course).
@@ -2026,8 +2304,6 @@ fn show_arrange_icons(
     }
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-        ui.spacing_mut().button_padding = vec2(2.0, 1.0);
-        let icon_size = coursecraft_render::ICON_SM - 2.0;
         for (icon, label, edge) in [
             (Icon::TextAlignLeft, "Align Left", "left"),
             (Icon::TextAlignCenter, "Align Center", "center"),
@@ -2038,57 +2314,51 @@ fn show_arrange_icons(
         ] {
             let params = crate::menu::align_params(editor, edge);
             let enabled = params.is_some();
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            let response = ui.add_enabled(enabled, button);
-            let response = if enabled {
-                response.on_hover_text(label)
+            let tooltip = if enabled {
+                label
             } else {
-                response.on_disabled_hover_text("Select an object first")
+                "Select an object first"
             };
+            let response = crate::widgets::icon_button_enabled(ui, icon, enabled, tooltip);
             if response.clicked()
                 && let Some(params) = params
             {
                 actions_to_run.push(("object.align", params));
             }
         }
-        for (icon, label, axis) in [
-            (Icon::TextColumns, "Distribute Horizontally", "horizontal"),
-            (Icon::Rows, "Distribute Vertically", "vertical"),
-        ] {
-            let params = crate::menu::distribute_params(editor, axis);
-            let enabled = params.is_some();
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            let response = ui.add_enabled(enabled, button);
-            let response = if enabled {
-                response.on_hover_text(label)
-            } else {
-                response.on_disabled_hover_text("Select at least three objects")
-            };
-            if response.clicked()
-                && let Some(params) = params
-            {
-                actions_to_run.push(("object.distribute", params));
+        let more = crate::widgets::icon_button(ui, Icon::DotsThree, "More arrange options");
+        egui::Popup::menu(&more).show(|ui| {
+            for (label, axis) in [
+                ("Distribute Horizontally", "horizontal"),
+                ("Distribute Vertically", "vertical"),
+            ] {
+                let params = crate::menu::distribute_params(editor, axis);
+                let enabled = params.is_some();
+                if ui
+                    .add_enabled(enabled, egui::Button::new(label))
+                    .on_disabled_hover_text("Select at least three objects")
+                    .clicked()
+                    && let Some(params) = params
+                {
+                    actions_to_run.push(("object.distribute", params));
+                    ui.close();
+                }
             }
-        }
-        for (icon, label, dimension) in [
-            (Icon::TextColumns, "Match Width", "width"),
-            (Icon::Rows, "Match Height", "height"),
-        ] {
-            let params = crate::menu::match_size_params(editor, dimension);
-            let enabled = params.is_some();
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            let response = ui.add_enabled(enabled, button);
-            let response = if enabled {
-                response.on_hover_text(label)
-            } else {
-                response.on_disabled_hover_text("Select at least two objects")
-            };
-            if response.clicked()
-                && let Some(params) = params
-            {
-                actions_to_run.push(("object.match_size", params));
+            ui.separator();
+            for (label, dimension) in [("Match Width", "width"), ("Match Height", "height")] {
+                let params = crate::menu::match_size_params(editor, dimension);
+                let enabled = params.is_some();
+                if ui
+                    .add_enabled(enabled, egui::Button::new(label))
+                    .on_disabled_hover_text("Select at least two objects")
+                    .clicked()
+                    && let Some(params) = params
+                {
+                    actions_to_run.push(("object.match_size", params));
+                    ui.close();
+                }
             }
-        }
+        });
     });
 }
 
@@ -2191,6 +2461,8 @@ fn show_multi_properties(
     let is_one_group = editor.selection.is_one_group(&editor.session.course);
     let group_ids: Vec<String> = objects.iter().map(|object| object.id.clone()).collect();
     let font_families = editor.ui.properties_lists.font_families.clone();
+    let system_fonts = editor.ui.system_fonts.as_deref();
+    let mut font_requests: Vec<crate::EditorRequest> = Vec::new();
     let props = &mut editor.ui.properties;
     let header = if is_one_group {
         format!("Group of {} objects", objects.len())
@@ -2332,35 +2604,25 @@ fn show_multi_properties(
         inspector_row(ui, "Font", |ui| {
             let label = if props.multi_font_mixed {
                 "Mixed"
+            } else if props.multi_font.is_empty() {
+                "Inter"
             } else {
                 props.multi_font.as_str()
             };
-            let selected_font = coursecraft_render::slide_font_named(
-                ui.ctx(),
-                (!props.multi_font_mixed && !props.multi_font.is_empty())
-                    .then_some(props.multi_font.as_str()),
-                false,
-                false,
-                coursecraft_render::SIZE_BODY,
-            );
-            egui::ComboBox::from_id_salt("prop_multi_font")
-                .selected_text(RichText::new(label).font(selected_font))
-                .show_ui(ui, |ui| {
-                    for name in
-                        std::iter::once("Inter".to_owned()).chain(font_families.iter().cloned())
-                    {
-                        let font = coursecraft_render::slide_font_named(
-                            ui.ctx(),
-                            Some(&name),
-                            false,
-                            false,
-                            coursecraft_render::SIZE_BODY,
-                        );
-                        let is_selected = !props.multi_font_mixed && props.multi_font == name;
-                        if ui
-                            .selectable_label(is_selected, RichText::new(&name).font(font))
-                            .clicked()
-                        {
+            if let Some(picked) = crate::font_picker::show_font_picker(
+                ui,
+                "multi_text",
+                label,
+                &font_families,
+                &mut props.recent_fonts,
+                system_fonts,
+                &mut props.system_fonts_list_requested,
+                &mut props.system_font_search,
+                &mut font_requests,
+            ) {
+                match picked {
+                    crate::font_picker::FontPickerAction::PickCourseOrRecent(name) => {
+                        if props.multi_font_mixed || props.multi_font != name {
                             props.multi_font = name.clone();
                             props.multi_font_mixed = false;
                             for object in &objects {
@@ -2375,19 +2637,41 @@ fn show_multi_properties(
                                     }),
                                 ));
                             }
-                            ui.close();
                         }
                     }
-                });
+                    crate::font_picker::FontPickerAction::PickSystem(name) => {
+                        props.multi_font = name.clone();
+                        props.multi_font_mixed = false;
+                        font_requests.push(crate::EditorRequest::AddSystemFont {
+                            family: name.clone(),
+                            apply: None,
+                        });
+                        for object in &objects {
+                            actions_to_run.push((
+                                "text.style_range",
+                                serde_json::json!({
+                                    "slide": slide.id,
+                                    "object": object.id,
+                                    "start": 0,
+                                    "end": 0,
+                                    "font": name,
+                                }),
+                            ));
+                        }
+                    }
+                    crate::font_picker::FontPickerAction::AddFont => {
+                        props.add_font_requested = true;
+                    }
+                }
+            }
         });
 
         inspector_row(ui, "Style", |ui| {
             let bold = props.multi_bold;
-            if ui
-                .selectable_label(bold == Some(true), RichText::new("B").strong())
+            if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), bold, "Bold (Ctrl+B)")
                 .clicked()
             {
-                let value = bold.is_none_or(|value| !value);
+                let value = bold != Some(true);
                 for object in &objects {
                     let needs = matches!(
                         &object.kind,
@@ -2408,11 +2692,15 @@ fn show_multi_properties(
                 }
             }
             let italic = props.multi_italic;
-            if ui
-                .selectable_label(italic == Some(true), RichText::new("I").italics())
-                .clicked()
+            if crate::widgets::mixed_toggle(
+                ui,
+                RichText::new("I").italics(),
+                italic,
+                "Italic (Ctrl+I)",
+            )
+            .clicked()
             {
-                let value = italic.is_none_or(|value| !value);
+                let value = italic != Some(true);
                 for object in &objects {
                     let needs = matches!(
                         &object.kind,
@@ -2433,11 +2721,15 @@ fn show_multi_properties(
                 }
             }
             let underline = props.multi_underline;
-            if ui
-                .selectable_label(underline == Some(true), RichText::new("U").underline())
-                .clicked()
+            if crate::widgets::mixed_toggle(
+                ui,
+                RichText::new("U").underline(),
+                underline,
+                "Underline (Ctrl+U)",
+            )
+            .clicked()
             {
-                let value = underline.is_none_or(|value| !value);
+                let value = underline != Some(true);
                 for object in &objects {
                     let needs = matches!(
                         &object.kind,
@@ -2460,30 +2752,36 @@ fn show_multi_properties(
         });
 
         inspector_row(ui, "Size", |ui| {
-            let r = ui.add_sized(
-                [
-                    ui.available_width().max(30.0),
-                    coursecraft_render::CONTROL_COMPACT,
-                ],
-                TextEdit::singleline(&mut props.multi_text_size)
-                    .id_salt("prop_multi_text_size")
-                    .hint_text(if props.multi_text_size_mixed {
-                        "Mixed"
-                    } else {
-                        ""
+            let mixed = props.multi_text_size_mixed;
+            let mut size_val = if mixed {
+                16.0
+            } else {
+                parse_finite(&props.multi_text_size).unwrap_or(16.0)
+            };
+            let r = ui.add(
+                DragValue::new(&mut size_val)
+                    .speed(0.5)
+                    .range(1.0..=400.0)
+                    .custom_formatter(move |v, _| {
+                        if mixed {
+                            "Mixed".to_owned()
+                        } else {
+                            format!("{v:.0} pt")
+                        }
                     }),
             );
+            if r.changed() {
+                props.multi_text_size = format!("{size_val}");
+                props.multi_text_size_mixed = false;
+            }
             let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (r.lost_focus() || enter)
-                && let Some(size) = parse_finite(&props.multi_text_size)
-                && size > 0.0
-            {
+            if (r.drag_stopped() || r.lost_focus() || enter) && !props.multi_text_size_mixed {
                 for object in &objects {
                     let needs = matches!(
                         &object.kind,
                         ObjectKind::Text { style, runs, .. }
-                            if (style.size - size).abs() >= 0.001
-                                || runs.iter().any(|run| run.size.is_some_and(|s| (s - size).abs() >= 0.001))
+                            if (style.size - size_val).abs() >= 0.001
+                                || runs.iter().any(|run| run.size.is_some_and(|s| (s - size_val).abs() >= 0.001))
                     );
                     if needs {
                         actions_to_run.push((
@@ -2493,7 +2791,7 @@ fn show_multi_properties(
                                 "object": object.id,
                                 "start": 0,
                                 "end": 0,
-                                "size": size,
+                                "size": size_val,
                             }),
                         ));
                     }
@@ -2715,6 +3013,7 @@ fn show_multi_properties(
                         props.shape_outline_width,
                         props.shape_outline_dash,
                         &props.shape_outline_dash_pattern,
+                        props.shape_outline_join,
                     )
                 } else {
                     Json::Null
@@ -2819,7 +3118,6 @@ fn show_multi_properties(
     });
 
     inspector_row(ui, "Flip", |ui| {
-        let icon_size = coursecraft_render::ICON_SM - 2.0;
         for (icon, label, axis) in [
             (
                 coursecraft_render::Icon::ArrowsOut,
@@ -2832,8 +3130,7 @@ fn show_multi_properties(
                 "vertical",
             ),
         ] {
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            if ui.add(button).on_hover_text(label).clicked() {
+            if crate::widgets::icon_button(ui, icon, label).clicked() {
                 let ids: Vec<String> = objects.iter().map(|object| object.id.clone()).collect();
                 actions_to_run.push((
                     "object.flip",
@@ -2846,6 +3143,7 @@ fn show_multi_properties(
             }
         }
     });
+    editor.pending_requests.append(&mut font_requests);
 }
 
 /// Object accessibility fields: text alternative, decorative flag and focus order.
@@ -2925,6 +3223,7 @@ fn show_accessibility_section(
                 }
                 if ui
                     .add_enabled(props.focus_order.is_some(), egui::Button::new("Clear"))
+                    .on_disabled_hover_text("No focus order set")
                     .clicked()
                 {
                     props.focus_order = None;
@@ -3075,7 +3374,8 @@ fn show_slide_tab(
                 .unwrap_or_else(|| "None".to_owned());
             let mut set_to: Option<Option<String>> = None;
             inspector_row(ui, "Master", |ui| {
-                egui::ComboBox::from_id_salt("prop_master")
+                let rem_w = ui.available_width().max(30.0);
+                crate::widgets::styled_combo(ui, "prop_master", rem_w)
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
                         if ui.selectable_label(current.is_none(), "None").clicked() {
@@ -3137,7 +3437,8 @@ fn show_slide_tab(
             .map_or(0, |bank| bank.slides.len());
         let mut set_bank: Option<String> = None;
         inspector_row(ui, "Bank", |ui| {
-            egui::ComboBox::from_id_salt("prop_draw_bank")
+            let rem_w = ui.available_width().max(30.0);
+            crate::widgets::styled_combo(ui, "prop_draw_bank", rem_w)
                 .selected_text(current_label)
                 .show_ui(ui, |ui| {
                     for bank in &banks {
@@ -3266,26 +3567,109 @@ fn show_text_controls(
     let text_edit_id = egui::Id::unique(("prop_text_body", id_prefix));
     let text_edit_state = egui::TextEdit::load_state(ui.ctx(), text_edit_id);
     let cursor_range = text_edit_state.as_ref().and_then(|s| s.cursor.char_range());
-    let (char_range, cursor_pos): ((usize, usize), usize) = if let Some(cr) = cursor_range
+    let text_edit_has_focus = ui.ctx().memory(|m| m.has_focus(text_edit_id));
+    enum TextStyleTarget {
+        Selection(usize, usize),
+        Caret(usize),
+        WholeObject,
+    }
+    let target = if let Some(cr) = cursor_range
         && !cr.is_empty()
     {
         let sorted = cr.as_sorted_char_range();
-        ((sorted.start.0, sorted.end.0), sorted.start.0)
+        TextStyleTarget::Selection(sorted.start.0, sorted.end.0)
     } else if let Some((_, _, inline_range, inline_cursor)) = props
         .inline_selection
         .as_ref()
         .filter(|(s, o, _, _)| s == slide_id && o == obj_id)
     {
-        (inline_range.unwrap_or((0, 0)), *inline_cursor)
-    } else if let Some(cr) = cursor_range {
-        ((0, 0), cr.primary.index.0)
+        if let Some((s, e)) = inline_range
+            && s != e
+        {
+            TextStyleTarget::Selection((*s).min(*e), (*s).max(*e))
+        } else {
+            TextStyleTarget::Caret(*inline_cursor)
+        }
+    } else if let Some(cr) = cursor_range
+        && text_edit_has_focus
+    {
+        TextStyleTarget::Caret(cr.primary.index.0)
     } else {
-        ((0, 0), 0)
+        TextStyleTarget::WholeObject
     };
 
-    let (eff_bold, eff_italic, eff_underline, eff_size, eff_color) =
-        style_at_cursor(runs, style, cursor_pos);
-    let (eff_strike, eff_baseline, eff_spacing) = effects_at_cursor(runs, style, cursor_pos);
+    let (char_range, cursor_pos): ((usize, usize), usize) = match target {
+        TextStyleTarget::Selection(s, e) => ((s, e), s),
+        TextStyleTarget::Caret(pos) => ((0, 0), pos),
+        TextStyleTarget::WholeObject => ((0, 0), 0),
+    };
+
+    let total_chars = current_text.chars().count();
+    let (eff_bold, eff_italic, eff_underline, eff_size, eff_color) = match target {
+        TextStyleTarget::Selection(s, e) => style_for_range(runs, style, (s, e)),
+        TextStyleTarget::Caret(pos) => style_at_cursor(runs, style, pos),
+        TextStyleTarget::WholeObject => style_for_range(runs, style, (0, total_chars)),
+    };
+    let (eff_strike, eff_baseline, eff_spacing) = match target {
+        TextStyleTarget::Selection(s, e) => effects_for_range(runs, style, (s, e)),
+        TextStyleTarget::Caret(pos) => {
+            let (st, base, sp) = effects_at_cursor(runs, style, pos);
+            (st, Some(base), sp)
+        }
+        TextStyleTarget::WholeObject => effects_for_range(runs, style, (0, total_chars)),
+    };
+    let (mut tri_bold, mut tri_italic, mut tri_underline) = match target {
+        TextStyleTarget::Selection(s, e) => style_tri_for_range(runs, style, (s, e)),
+        TextStyleTarget::Caret(_) => (Some(eff_bold), Some(eff_italic), Some(eff_underline)),
+        TextStyleTarget::WholeObject => style_tri_for_range(runs, style, (0, total_chars)),
+    };
+    let (mut tri_strike, mut tri_super, mut tri_sub) = match target {
+        TextStyleTarget::Selection(s, e) => effects_tri_for_range(runs, style, (s, e)),
+        TextStyleTarget::Caret(_) => (
+            Some(eff_strike),
+            Some(eff_baseline == Some(coursecraft_course::Baseline::Superscript)),
+            Some(eff_baseline == Some(coursecraft_course::Baseline::Subscript)),
+        ),
+        TextStyleTarget::WholeObject => effects_tri_for_range(runs, style, (0, total_chars)),
+    };
+
+    if let TextStyleTarget::Caret(pos) = target {
+        let matches_pending = props.pending_caret_style.as_ref().is_some_and(|p| {
+            p.slide == slide_id && p.object == obj_id && p.cell == cell && p.cursor == pos
+        });
+        if matches_pending {
+            if let Some(pending) = &props.pending_caret_style {
+                if let Some(b) = pending.patch.bold {
+                    tri_bold = Some(b);
+                }
+                if let Some(it) = pending.patch.italic {
+                    tri_italic = Some(it);
+                }
+                if let Some(u) = pending.patch.underline {
+                    tri_underline = Some(u);
+                }
+                if let Some(st) = pending.patch.strikethrough {
+                    tri_strike = Some(st);
+                }
+                if let Some(base) = pending.patch.baseline {
+                    tri_super = Some(base == coursecraft_course::Baseline::Superscript);
+                    tri_sub = Some(base == coursecraft_course::Baseline::Subscript);
+                }
+            }
+        } else if props
+            .pending_caret_style
+            .as_ref()
+            .is_some_and(|p| p.slide == slide_id && p.object == obj_id && p.cell == cell)
+        {
+            props.pending_caret_style = None;
+        }
+    } else if props
+        .pending_caret_style
+        .as_ref()
+        .is_some_and(|p| p.slide == slide_id && p.object == obj_id && p.cell == cell)
+    {
+        props.pending_caret_style = None;
+    }
 
     // Font picker: Inter plus every course family, each name drawn in its own
     // face. "Add font…" opens the same picker the File menu uses.
@@ -3352,7 +3736,8 @@ fn show_text_controls(
                 "Off"
             };
             let mut chosen = None;
-            egui::ComboBox::from_id_salt(("autofit", id_prefix, obj_id))
+            let rem_w = ui.available_width().max(30.0);
+            crate::widgets::styled_combo(ui, ("autofit", id_prefix, obj_id), rem_w)
                 .selected_text(selected)
                 .show_ui(ui, |ui| {
                     if ui
@@ -3384,91 +3769,34 @@ fn show_text_controls(
     }
 
     // Formatting toolbar
+    let set_pending =
+        |props: &mut PropertiesState,
+         pos: usize,
+         apply: &dyn Fn(&mut coursecraft_course::TextRunPatch)| {
+            let entry = props
+                .pending_caret_style
+                .get_or_insert_with(|| PendingCaretStyle {
+                    slide: slide_id.to_owned(),
+                    object: obj_id.to_owned(),
+                    cell,
+                    cursor: pos,
+                    patch: coursecraft_course::TextRunPatch::default(),
+                });
+            entry.slide = slide_id.to_owned();
+            entry.object = obj_id.to_owned();
+            entry.cell = cell;
+            entry.cursor = pos;
+            apply(&mut entry.patch);
+        };
     inspector_row(ui, "Style", |ui| {
-        if ui
-            .selectable_label(eff_bold, RichText::new("B").strong())
+        ui.spacing_mut().item_spacing.x = 2.0;
+        if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), tri_bold, "Bold (Ctrl+B)")
             .clicked()
         {
-            action_to_run = Some((
-                "text.style_range",
-                serde_json::json!({
-                    "slide": slide_id,
-                    "object": obj_id,
-                    "start": char_range.0,
-                    "end": char_range.1,
-                    "bold": !eff_bold,
-                }),
-            ));
-        }
-        if ui
-            .selectable_label(eff_italic, RichText::new("I").italics())
-            .clicked()
-        {
-            action_to_run = Some((
-                "text.style_range",
-                serde_json::json!({
-                    "slide": slide_id,
-                    "object": obj_id,
-                    "start": char_range.0,
-                    "end": char_range.1,
-                    "italic": !eff_italic,
-                }),
-            ));
-        }
-        if ui
-            .selectable_label(eff_underline, RichText::new("U").underline())
-            .clicked()
-        {
-            action_to_run = Some((
-                "text.style_range",
-                serde_json::json!({
-                    "slide": slide_id,
-                    "object": obj_id,
-                    "start": char_range.0,
-                    "end": char_range.1,
-                    "underline": !eff_underline,
-                }),
-            ));
-        }
-
-        if ui
-            .selectable_label(eff_strike, RichText::new("S").strikethrough())
-            .on_hover_text("Strikethrough")
-            .clicked()
-        {
-            action_to_run = Some((
-                "text.style_range",
-                serde_json::json!({
-                    "slide": slide_id,
-                    "object": obj_id,
-                    "start": char_range.0,
-                    "end": char_range.1,
-                    "strikethrough": !eff_strike,
-                }),
-            ));
-        }
-        for (label, tip, target) in [
-            (
-                "x\u{b2}",
-                "Superscript",
-                coursecraft_course::Baseline::Superscript,
-            ),
-            (
-                "x\u{2082}",
-                "Subscript",
-                coursecraft_course::Baseline::Subscript,
-            ),
-        ] {
-            if ui
-                .selectable_label(eff_baseline == target, label)
-                .on_hover_text(tip)
-                .clicked()
-            {
-                let next = if eff_baseline == target {
-                    coursecraft_course::Baseline::Normal
-                } else {
-                    target
-                };
+            let next = tri_bold != Some(true);
+            if let TextStyleTarget::Caret(pos) = target {
+                set_pending(props, pos, &|p| p.bold = Some(next));
+            } else {
                 action_to_run = Some((
                     "text.style_range",
                     serde_json::json!({
@@ -3476,9 +3804,118 @@ fn show_text_controls(
                         "object": obj_id,
                         "start": char_range.0,
                         "end": char_range.1,
-                        "baseline": next,
+                        "bold": next,
                     }),
                 ));
+            }
+        }
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("I").italics(),
+            tri_italic,
+            "Italic (Ctrl+I)",
+        )
+        .clicked()
+        {
+            let next = tri_italic != Some(true);
+            if let TextStyleTarget::Caret(pos) = target {
+                set_pending(props, pos, &|p| p.italic = Some(next));
+            } else {
+                action_to_run = Some((
+                    "text.style_range",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": obj_id,
+                        "start": char_range.0,
+                        "end": char_range.1,
+                        "italic": next,
+                    }),
+                ));
+            }
+        }
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("U").underline(),
+            tri_underline,
+            "Underline (Ctrl+U)",
+        )
+        .clicked()
+        {
+            let next = tri_underline != Some(true);
+            if let TextStyleTarget::Caret(pos) = target {
+                set_pending(props, pos, &|p| p.underline = Some(next));
+            } else {
+                action_to_run = Some((
+                    "text.style_range",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": obj_id,
+                        "start": char_range.0,
+                        "end": char_range.1,
+                        "underline": next,
+                    }),
+                ));
+            }
+        }
+
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("S").strikethrough(),
+            tri_strike,
+            "Strikethrough",
+        )
+        .clicked()
+        {
+            let next = tri_strike != Some(true);
+            if let TextStyleTarget::Caret(pos) = target {
+                set_pending(props, pos, &|p| p.strikethrough = Some(next));
+            } else {
+                action_to_run = Some((
+                    "text.style_range",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": obj_id,
+                        "start": char_range.0,
+                        "end": char_range.1,
+                        "strikethrough": next,
+                    }),
+                ));
+            }
+        }
+        for (label, tip, tri_val, target_base) in [
+            (
+                "x\u{b2}",
+                "Superscript",
+                tri_super,
+                coursecraft_course::Baseline::Superscript,
+            ),
+            (
+                "x\u{2082}",
+                "Subscript",
+                tri_sub,
+                coursecraft_course::Baseline::Subscript,
+            ),
+        ] {
+            if crate::widgets::mixed_toggle(ui, label, tri_val, tip).clicked() {
+                let next = if tri_val == Some(true) {
+                    coursecraft_course::Baseline::Normal
+                } else {
+                    target_base
+                };
+                if let TextStyleTarget::Caret(pos) = target {
+                    set_pending(props, pos, &|p| p.baseline = Some(next));
+                } else {
+                    action_to_run = Some((
+                        "text.style_range",
+                        serde_json::json!({
+                            "slide": slide_id,
+                            "object": obj_id,
+                            "start": char_range.0,
+                            "end": char_range.1,
+                            "baseline": next,
+                        }),
+                    ));
+                }
             }
         }
     });
@@ -3495,7 +3932,8 @@ fn show_text_controls(
             [rem_w, coursecraft_render::CONTROL_COMPACT],
             DragValue::new(&mut props.text_size)
                 .speed(1.0)
-                .range(1.0..=200.0),
+                .range(1.0..=200.0)
+                .suffix(" pt"),
         );
         let enter_size = r_size.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if (r_size.drag_stopped() || r_size.lost_focus() || enter_size)
@@ -3666,7 +4104,8 @@ fn show_text_controls(
                             DragValue::new(val)
                                 .speed(0.5)
                                 .range(0.0..=200.0)
-                                .max_decimals(1),
+                                .max_decimals(1)
+                                .suffix(" px"),
                         );
                         if r.changed() {
                             changed = true;
@@ -3703,7 +4142,7 @@ fn show_text_controls(
                 output.galley_pos,
                 &props.text_body,
                 &props.spell_words,
-                crate::spell_check::SQUIGGLE_COLOR,
+                crate::spell_check::squiggle_color(ui.ctx()),
             );
             let secondary = ui.input(|i| {
                 i.pointer.secondary_pressed()
@@ -3854,6 +4293,7 @@ fn show_paragraph_controls(
         if ui
             .add_enabled(level > 0, egui::Button::new("Decrease"))
             .on_hover_text("Decrease indent")
+            .on_disabled_hover_text("Already at minimum indent")
             .clicked()
         {
             let mut params = paragraph_base();
@@ -3863,6 +4303,7 @@ fn show_paragraph_controls(
         if ui
             .add_enabled(level < 4, egui::Button::new("Increase"))
             .on_hover_text("Increase indent")
+            .on_disabled_hover_text("Already at maximum indent")
             .clicked()
         {
             let mut params = paragraph_base();
@@ -3880,7 +4321,8 @@ fn show_paragraph_controls(
         let id = egui::Id::unique(("line_spacing", id_prefix, obj_id));
         let mut chosen = None;
         let mut popup_was_drawn = false;
-        egui::ComboBox::from_id_salt(id)
+        let rem_w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, id, rem_w)
             .selected_text(format!("{current:.2}x"))
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show_ui(ui, |ui| {
@@ -3900,7 +4342,8 @@ fn show_paragraph_controls(
                     DragValue::new(&mut props.line_spacing_custom)
                         .speed(0.05)
                         .range(0.8..=3.0)
-                        .prefix("custom "),
+                        .prefix("custom ")
+                        .suffix("×"),
                 );
                 if response.has_focus() || response.changed() || response.dragged() {
                     props.line_spacing_editing = true;
@@ -3966,7 +4409,7 @@ fn show_paragraph_controls(
                         .find(|(id, _)| id == &props.link_slide)
                         .map(|(_, title)| title.clone())
                         .unwrap_or_else(|| "Choose a slide…".to_owned());
-                    egui::ComboBox::from_id_salt(("link_slide_pick", id_prefix, obj_id))
+                    crate::widgets::styled_combo(ui, ("link_slide_pick", id_prefix, obj_id), 180.0)
                         .selected_text(chosen)
                         .show_ui(ui, |ui| {
                             for (id, title) in slides {
@@ -4089,8 +4532,7 @@ fn show_fill_style_editor(
     inspector_row(ui, "Fill type", |ui| {
         let rem_w = ui.available_width().max(30.0);
         let current = fill_style_kind(&props.fill_style);
-        egui::ComboBox::from_id_salt("prop_fill_type")
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, "prop_fill_type", rem_w)
             .selected_text(current)
             .show_ui(ui, |ui| {
                 for label in ["Solid", "Linear gradient", "Radial gradient", "Picture"] {
@@ -4207,8 +4649,7 @@ fn show_fill_style_editor(
                 } else {
                     src.clone()
                 };
-                egui::ComboBox::from_id_salt("prop_picture_src")
-                    .width(rem_w)
+                crate::widgets::styled_combo(ui, "prop_picture_src", rem_w)
                     .selected_text(selected)
                     .show_ui(ui, |ui| {
                         if ui.selectable_label(false, "Choose a file…").clicked() {
@@ -4231,8 +4672,7 @@ fn show_fill_style_editor(
             });
             inspector_row(ui, "Picture fit", |ui| {
                 let rem_w = ui.available_width().max(30.0);
-                egui::ComboBox::from_id_salt("prop_picture_mode")
-                    .width(rem_w)
+                crate::widgets::styled_combo(ui, "prop_picture_mode", rem_w)
                     .selected_text(match mode {
                         coursecraft_course::PictureFillMode::Stretch => "Stretch",
                         coursecraft_course::PictureFillMode::Tile => "Tile",
@@ -4401,6 +4841,7 @@ fn show_gradient_stops(
                 if ui
                     .add_enabled(i > 0, egui::Button::new("↑").small())
                     .on_hover_text("Move colour up")
+                    .on_disabled_hover_text("Already first colour")
                     .clicked()
                 {
                     move_up = Some(i);
@@ -4408,6 +4849,7 @@ fn show_gradient_stops(
                 if ui
                     .add_enabled(i + 1 < len, egui::Button::new("↓").small())
                     .on_hover_text("Move colour down")
+                    .on_disabled_hover_text("Already last colour")
                     .clicked()
                 {
                     move_down = Some(i);
@@ -4461,6 +4903,23 @@ fn show_gradient_stops(
     }
 }
 
+fn alpha_to_percent(alpha: u8) -> f32 {
+    (f32::from(alpha) / 255.0 * 100.0).round()
+}
+
+fn set_color_alpha_percent(color: &mut Color, percent: f32) -> u8 {
+    let c = parse_color(color).unwrap_or(Color32::BLACK);
+    let a = (percent.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8;
+    color.0 = color_to_hex(Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a));
+    a
+}
+
+fn apply_color_alpha(color: &mut Color, alpha: u8) {
+    if let Some(c) = parse_color(color) {
+        color.0 = color_to_hex(Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha));
+    }
+}
+
 /// Shadow and glow toggles with their values.
 fn show_effect_controls(
     ui: &mut Ui,
@@ -4484,6 +4943,27 @@ fn show_effect_controls(
             let (response, valid) =
                 show_color_field(ui, "", &mut props.shadow.color.0, "prop_shadow_color");
             if is_committed(&response, ui) && valid {
+                apply_color_alpha(&mut props.shadow.color, props.shadow_alpha);
+                shadow_changed = true;
+            }
+        });
+        inspector_row(ui, "Opacity", |ui| {
+            let mut opacity_pct = alpha_to_percent(props.shadow_alpha);
+            let rem_w = ui.available_width().max(30.0);
+            let response = add_drag_left(
+                ui,
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                DragValue::new(&mut opacity_pct)
+                    .speed(1.0)
+                    .range(0.0..=100.0)
+                    .fixed_decimals(0)
+                    .suffix(" %"),
+            );
+            if response.changed() {
+                props.shadow_alpha = set_color_alpha_percent(&mut props.shadow.color, opacity_pct);
+            }
+            let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if response.drag_stopped() || response.lost_focus() || enter {
                 shadow_changed = true;
             }
         });
@@ -4497,7 +4977,7 @@ fn show_effect_controls(
                 let response = add_drag_left(
                     ui,
                     [rem_w, coursecraft_render::CONTROL_COMPACT],
-                    DragValue::new(value).speed(0.5).range(range),
+                    DragValue::new(value).speed(0.5).range(range).suffix(" px"),
                 );
                 let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if response.drag_stopped() || response.lost_focus() || enter {
@@ -4517,6 +4997,27 @@ fn show_effect_controls(
             let (response, valid) =
                 show_color_field(ui, "", &mut props.glow.color.0, "prop_glow_color");
             if is_committed(&response, ui) && valid {
+                apply_color_alpha(&mut props.glow.color, props.glow_alpha);
+                glow_changed = true;
+            }
+        });
+        inspector_row(ui, "Opacity", |ui| {
+            let mut opacity_pct = alpha_to_percent(props.glow_alpha);
+            let rem_w = ui.available_width().max(30.0);
+            let response = add_drag_left(
+                ui,
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                DragValue::new(&mut opacity_pct)
+                    .speed(1.0)
+                    .range(0.0..=100.0)
+                    .fixed_decimals(0)
+                    .suffix(" %"),
+            );
+            if response.changed() {
+                props.glow_alpha = set_color_alpha_percent(&mut props.glow.color, opacity_pct);
+            }
+            let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if response.drag_stopped() || response.lost_focus() || enter {
                 glow_changed = true;
             }
         });
@@ -4527,7 +5028,8 @@ fn show_effect_controls(
                 [rem_w, coursecraft_render::CONTROL_COMPACT],
                 DragValue::new(&mut props.glow.size)
                     .speed(0.5)
-                    .range(0.0..=100.0),
+                    .range(0.0..=100.0)
+                    .suffix(" px"),
             );
             let enter = response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if response.drag_stopped() || response.lost_focus() || enter {
@@ -4780,6 +5282,7 @@ fn show_table_controls(
         }
         if ui
             .add_enabled(rows.len() > 1, egui::Button::new("Delete row"))
+            .on_disabled_hover_text("A table must have at least one row")
             .clicked()
         {
             actions.push((
@@ -4828,6 +5331,7 @@ fn show_table_controls(
         }
         if ui
             .add_enabled(columns.len() > 1, egui::Button::new("Delete column"))
+            .on_disabled_hover_text("A table must have at least one column")
             .clicked()
         {
             actions.push((
@@ -5162,9 +5666,8 @@ fn show_input_controls(
         } else {
             props.input_variable.clone()
         };
-        let combo = egui::ComboBox::from_id_salt("prop_input_variable")
+        let combo = crate::widgets::styled_combo(ui, "prop_input_variable", rem_w)
             .selected_text(label)
-            .width(rem_w)
             .show_ui(ui, |ui| {
                 for variable in &course.variables {
                     if variable.value.kind() != required {
@@ -5436,6 +5939,7 @@ pub(crate) fn timer_patch(props: &PropertiesState) -> Json {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_timer_controls(
     ui: &mut Ui,
     props: &mut PropertiesState,
@@ -5443,6 +5947,8 @@ fn show_timer_controls(
     slide_id: &str,
     object_id: &str,
     font_families: &[String],
+    system_fonts: Option<&[crate::SystemFontChoice]>,
+    font_requests: &mut Vec<crate::EditorRequest>,
     actions: &mut Vec<(&'static str, Json)>,
 ) {
     let mut action_to_run: Option<(&'static str, Json)> = None;
@@ -5502,37 +6008,69 @@ fn show_timer_controls(
         } else {
             props.timer_font.clone()
         };
-        egui::ComboBox::from_id_salt("prop_timer_font")
-            .selected_text(shown.clone())
-            .show_ui(ui, |ui| {
-                for name in std::iter::once("Inter".to_owned()).chain(font_families.iter().cloned())
-                {
-                    if ui.selectable_label(shown == name, name.clone()).clicked() && shown != name {
+        if let Some(picked) = crate::font_picker::show_font_picker(
+            ui,
+            "timer",
+            &shown,
+            font_families,
+            &mut props.recent_fonts,
+            system_fonts,
+            &mut props.system_fonts_list_requested,
+            &mut props.system_font_search,
+            font_requests,
+        ) {
+            match picked {
+                crate::font_picker::FontPickerAction::PickCourseOrRecent(name) => {
+                    if shown != name {
                         props.timer_font = name;
                         action_to_run = Some(commit(props));
-                        ui.close();
                     }
                 }
-            });
+                crate::font_picker::FontPickerAction::PickSystem(name) => {
+                    props.timer_font = name.clone();
+                    action_to_run = Some(commit(props));
+                    font_requests.push(crate::EditorRequest::AddSystemFont {
+                        family: name,
+                        apply: None,
+                    });
+                }
+                crate::font_picker::FontPickerAction::AddFont => {
+                    props.add_font_requested = true;
+                }
+            }
+        }
     });
     inspector_row(ui, "Style", |ui| {
-        if ui
-            .selectable_label(props.text_bold, RichText::new("B").strong())
-            .clicked()
+        ui.spacing_mut().item_spacing.x = 2.0;
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("B").strong(),
+            Some(props.text_bold),
+            "Bold (Ctrl+B)",
+        )
+        .clicked()
         {
             props.text_bold = !props.text_bold;
             action_to_run = Some(commit(props));
         }
-        if ui
-            .selectable_label(props.text_italic, RichText::new("I").italics())
-            .clicked()
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("I").italics(),
+            Some(props.text_italic),
+            "Italic (Ctrl+I)",
+        )
+        .clicked()
         {
             props.text_italic = !props.text_italic;
             action_to_run = Some(commit(props));
         }
-        if ui
-            .selectable_label(props.text_underline, RichText::new("U").underline())
-            .clicked()
+        if crate::widgets::mixed_toggle(
+            ui,
+            RichText::new("U").underline(),
+            Some(props.text_underline),
+            "Underline (Ctrl+U)",
+        )
+        .clicked()
         {
             props.text_underline = !props.text_underline;
             action_to_run = Some(commit(props));
@@ -5541,7 +6079,8 @@ fn show_timer_controls(
         let r = ui.add(
             DragValue::new(&mut props.text_size)
                 .speed(1.0)
-                .range(1.0..=400.0),
+                .range(1.0..=400.0)
+                .suffix(" pt"),
         );
         let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if r.drag_stopped() || r.lost_focus() || enter {
@@ -5630,9 +6169,8 @@ fn show_meter_controls(
         } else {
             props.input_variable.clone()
         };
-        let combo = egui::ComboBox::from_id_salt("prop_meter_variable")
+        let combo = crate::widgets::styled_combo(ui, "prop_meter_variable", rem_w)
             .selected_text(label)
-            .width(rem_w)
             .show_ui(ui, |ui| {
                 for variable in &course.variables {
                     if variable.value.kind() != coursecraft_course::ValueKind::Number {
@@ -5745,7 +6283,8 @@ fn show_scroll_panel_controls(
         let r = ui.add(
             DragValue::new(&mut props.scroll_content_height)
                 .speed(1.0)
-                .range(frame_height..=coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT),
+                .range(frame_height..=coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT)
+                .suffix(" px"),
         );
         props.scroll_content_height_rect = Some(r.rect);
         if r.changed() {
@@ -5817,9 +6356,8 @@ fn show_panel_picker(
                 .map_or_else(|| props.panel_target.clone(), |(_, name)| name.clone())
         };
         let rem_w = ui.available_width().max(30.0);
-        let combo = egui::ComboBox::from_id_salt("prop_panel_target")
+        let combo = crate::widgets::styled_combo(ui, "prop_panel_target", rem_w)
             .selected_text(label)
-            .width(rem_w)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut props.panel_target, String::new(), "(None)");
                 for (id, name) in panels {
@@ -5907,6 +6445,7 @@ fn show_radio_options(
                         egui::Button::new("✕").small(),
                     )
                     .on_hover_text("Remove option")
+                    .on_disabled_hover_text("At least two options are required")
                     .clicked()
                 {
                     remove = Some(index);
@@ -5914,6 +6453,7 @@ fn show_radio_options(
                 if ui
                     .add_enabled(index + 1 < count, egui::Button::new("↓").small())
                     .on_hover_text("Move down")
+                    .on_disabled_hover_text("Already last option")
                     .clicked()
                 {
                     move_down = Some(index);
@@ -5921,6 +6461,7 @@ fn show_radio_options(
                 if ui
                     .add_enabled(index > 0, egui::Button::new("↑").small())
                     .on_hover_text("Move up")
+                    .on_disabled_hover_text("Already first option")
                     .clicked()
                 {
                     move_up = Some(index);
@@ -5968,6 +6509,7 @@ fn show_radio_options(
             props.input_options.len() < coursecraft_course::MAX_RADIO_OPTIONS,
             egui::Button::new("+ Add option"),
         )
+        .on_disabled_hover_text("Maximum number of options reached")
         .clicked()
     {
         let mut n = props.input_options.len() + 1;
@@ -6167,6 +6709,8 @@ fn show_object_properties(
                         width: 1.0,
                         dash: coursecraft_course::DashStyle::Solid,
                         dash_pattern: None,
+                        join: coursecraft_course::LineJoin::Miter,
+                        miter_limit: None,
                     });
                 if has_border {
                     let r = ui.add(
@@ -6435,6 +6979,7 @@ fn show_object_properties(
                             props.shape_outline_width,
                             props.shape_outline_dash,
                             &props.shape_outline_dash_pattern,
+                            props.shape_outline_join,
                         )
                     } else {
                         Json::Null
@@ -6468,6 +7013,7 @@ fn show_object_properties(
                             props.shape_outline_width,
                             props.shape_outline_dash,
                             &props.shape_outline_dash_pattern,
+                            props.shape_outline_join,
                         );
                         action_to_run = Some((
                             "object.update",
@@ -6501,6 +7047,7 @@ fn show_object_properties(
                             props.shape_outline_width,
                             props.shape_outline_dash,
                             &props.shape_outline_dash_pattern,
+                            props.shape_outline_join,
                         );
                         action_to_run = Some((
                             "object.update",
@@ -6527,6 +7074,7 @@ fn show_object_properties(
                         props.shape_outline_width,
                         props.shape_outline_dash,
                         &props.shape_outline_dash_pattern,
+                        props.shape_outline_join,
                     );
                     action_to_run = Some((
                         "object.update",
@@ -6534,6 +7082,16 @@ fn show_object_properties(
                             "slide": slide.id,
                             "object": obj.id,
                             "kind": kind,
+                        }),
+                    ));
+                }
+                if show_corners_control(ui, "prop_shape_outline", &mut props.shape_outline_join) {
+                    action_to_run = Some((
+                        "object.set_outline_join",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "join": props.shape_outline_join,
                         }),
                     ));
                 }
@@ -6597,6 +7155,7 @@ fn show_object_properties(
                         props.path_outline_width,
                         props.path_outline_dash,
                         &props.path_outline_dash_pattern,
+                        props.path_outline_join,
                     );
                     action_to_run = Some((
                         "object.update",
@@ -6630,6 +7189,7 @@ fn show_object_properties(
                         props.path_outline_width,
                         props.path_outline_dash,
                         &props.path_outline_dash_pattern,
+                        props.path_outline_join,
                     );
                     action_to_run = Some((
                         "object.update",
@@ -6656,6 +7216,7 @@ fn show_object_properties(
                     props.path_outline_width,
                     props.path_outline_dash,
                     &props.path_outline_dash_pattern,
+                    props.path_outline_join,
                 );
                 action_to_run = Some((
                     "object.update",
@@ -6709,8 +7270,7 @@ fn show_object_properties(
                 inspector_row(ui, "Connector", |ui| {
                     let rem_w = ui.available_width().max(30.0);
                     let mut changed = false;
-                    egui::ComboBox::from_id_salt("prop_path_connector")
-                        .width(rem_w)
+                    crate::widgets::styled_combo(ui, "prop_path_connector", rem_w)
                         .selected_text(label)
                         .show_ui(ui, |ui| {
                             for (style, label) in [
@@ -6743,8 +7303,7 @@ fn show_object_properties(
                 inspector_row(ui, "Style", |ui| {
                     let rem_w = ui.available_width().max(30.0);
                     let mut changed = false;
-                    egui::ComboBox::from_id_salt("prop_path_style")
-                        .width(rem_w)
+                    crate::widgets::styled_combo(ui, "prop_path_style", rem_w)
                         .selected_text(match props.path_style {
                             coursecraft_course::PathStyle::Straight => "Straight",
                             coursecraft_course::PathStyle::Curved => "Curved",
@@ -7164,7 +7723,8 @@ fn show_object_properties(
                         .range(
                             coursecraft_course::LOTTIE_MIN_SPEED
                                 ..=coursecraft_course::LOTTIE_MAX_SPEED,
-                        ),
+                        )
+                        .suffix("×"),
                 );
                 if r.changed() && (props.lottie_speed - speed).abs() > f32::EPSILON {
                     action_to_run = Some((
@@ -7260,6 +7820,8 @@ fn show_object_properties(
                 &slide.id,
                 &obj.id,
                 &lists.font_families,
+                system_fonts,
+                &mut font_requests,
                 actions_to_run,
             );
         }
@@ -7416,7 +7978,9 @@ fn show_object_properties(
         let r = add_drag_left(
             ui,
             [rem_w, coursecraft_render::CONTROL_COMPACT],
-            DragValue::new(&mut props.start_ms).speed(10.0),
+            DragValue::new(&mut props.start_ms)
+                .speed(10.0)
+                .suffix(" ms"),
         );
         let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         timing_committed |= r.drag_stopped() || r.lost_focus() || enter;
@@ -7437,7 +8001,7 @@ fn show_object_properties(
             let r = add_drag_left(
                 ui,
                 [rem_w, coursecraft_render::CONTROL_COMPACT],
-                DragValue::new(&mut props.end_ms).speed(10.0),
+                DragValue::new(&mut props.end_ms).speed(10.0).suffix(" ms"),
             );
             let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             timing_committed |= r.drag_stopped() || r.lost_focus() || enter;
@@ -7498,7 +8062,6 @@ fn show_object_properties(
     });
 
     inspector_row(ui, "Flip", |ui| {
-        let icon_size = coursecraft_render::ICON_SM - 2.0;
         for (icon, label, axis) in [
             (
                 coursecraft_render::Icon::ArrowsOut,
@@ -7511,8 +8074,7 @@ fn show_object_properties(
                 "vertical",
             ),
         ] {
-            let button = egui::Button::new(coursecraft_render::icon(icon, icon_size)).frame(false);
-            if ui.add(button).on_hover_text(label).clicked() {
+            if crate::widgets::icon_button(ui, icon, label).clicked() {
                 action_to_run = Some((
                     "object.flip",
                     serde_json::json!({
@@ -7542,8 +8104,7 @@ fn show_object_properties(
 
     inspector_row(ui, "Initial", |ui| {
         let rem_w = ui.available_width().max(30.0);
-        egui::ComboBox::from_id_salt("prop_initial_state")
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, "prop_initial_state", rem_w)
             .selected_text(&props.initial_state)
             .show_ui(ui, |ui| {
                 for state in available_states {
@@ -7707,9 +8268,9 @@ fn show_slide_properties(
                 RevisitMode::Resume => "Resume where it left off",
             };
             let mut chosen = props.slide_revisit;
-            egui::ComboBox::from_id_salt("prop_slide_revisit")
+            let rem_w = ui.available_width().max(90.0);
+            crate::widgets::styled_combo(ui, "prop_slide_revisit", rem_w)
                 .selected_text(label)
-                .width(ui.available_width().max(90.0))
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut chosen, RevisitMode::Auto, "Automatic");
                     ui.selectable_value(&mut chosen, RevisitMode::Reset, "Start over");
@@ -7791,13 +8352,34 @@ fn show_slide_properties(
         });
         let overrides = slide.player.clone().unwrap_or_default();
         ui.label(RichText::new("Player on this slide").strong());
-        for (key, label, value) in [
-            ("show_nav", "Navigation buttons", overrides.show_nav),
-            ("show_seekbar", "Seekbar", overrides.show_seekbar),
-            ("show_menu", "Slide menu", overrides.show_menu),
+        for (key, label, value, on_label, off_label) in [
+            ("show_bar", "Player bar", overrides.show_bar, "On", "Off"),
+            (
+                "show_nav",
+                "Navigation buttons",
+                overrides.show_nav,
+                "Show",
+                "Hide",
+            ),
+            (
+                "show_seekbar",
+                "Seekbar",
+                overrides.show_seekbar,
+                "Show",
+                "Hide",
+            ),
+            (
+                "show_menu",
+                "Slide menu",
+                overrides.show_menu,
+                "Show",
+                "Hide",
+            ),
         ] {
             inspector_row(ui, label, |ui| {
-                if let Some(choice) = tri_state_combo(ui, ("prop_slide_player", key), value) {
+                if let Some(choice) =
+                    tri_state_combo(ui, ("prop_slide_player", key), value, on_label, off_label)
+                {
                     action_to_run = Some((
                         "slide.set_player_overrides",
                         serde_json::json!({ "slide": slide.id, key: choice }),
@@ -7835,26 +8417,28 @@ fn show_slide_properties(
     action_to_run
 }
 
-/// "Course default / Show / Hide". Returns the new choice (`None` clears it).
+/// "Course default / <on_label> / <off_label>". Returns the new choice (`None` clears it).
 fn tri_state_combo(
     ui: &mut Ui,
     id_salt: (&str, &str),
     value: Option<bool>,
+    on_label: &str,
+    off_label: &str,
 ) -> Option<Option<bool>> {
     let label = match value {
         None => "Course default",
-        Some(true) => "Show",
-        Some(false) => "Hide",
+        Some(true) => on_label,
+        Some(false) => off_label,
     };
     let mut chosen = None;
-    egui::ComboBox::from_id_salt(id_salt)
+    let rem_w = ui.available_width().max(90.0);
+    crate::widgets::styled_combo(ui, id_salt, rem_w)
         .selected_text(label)
-        .width(ui.available_width().max(90.0))
         .show_ui(ui, |ui| {
             for (option, text) in [
                 (None, "Course default"),
-                (Some(true), "Show"),
-                (Some(false), "Hide"),
+                (Some(true), on_label),
+                (Some(false), off_label),
             ] {
                 if ui.selectable_label(value == option, text).clicked() && value != option {
                     chosen = Some(option);
@@ -7880,8 +8464,7 @@ fn show_transition_section(
 
     inspector_row(ui, "Effect", |ui| {
         let rem_w = ui.available_width().max(30.0);
-        egui::ComboBox::from_id_salt("slide_transition_combo")
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, "slide_transition_combo", rem_w)
             .selected_text(trans_label)
             .show_ui(ui, |ui| {
                 if ui
@@ -7953,8 +8536,7 @@ fn show_transition_section(
             };
             inspector_row(ui, "Direction", |ui| {
                 let rem_w = ui.available_width().max(30.0);
-                egui::ComboBox::from_id_salt("slide_transition_dir_combo")
-                    .width(rem_w)
+                crate::widgets::styled_combo(ui, "slide_transition_dir_combo", rem_w)
                     .selected_text(dir_label)
                     .show_ui(ui, |ui| {
                         for (val, l) in [
@@ -8040,8 +8622,9 @@ fn outline_json(
     width: f32,
     dash: coursecraft_course::DashStyle,
     dash_pattern: &Option<Vec<f32>>,
+    join: coursecraft_course::LineJoin,
 ) -> Json {
-    match dash_pattern {
+    let mut obj = match dash_pattern {
         Some(pattern) => serde_json::json!({
             "color": color.trim(),
             "width": width,
@@ -8053,7 +8636,41 @@ fn outline_json(
             "width": width,
             "dash": dash,
         }),
+    };
+    if !join.is_default() {
+        obj["join"] = serde_json::json!(join);
     }
+    obj
+}
+
+fn show_corners_control(
+    ui: &mut Ui,
+    id_prefix: &str,
+    join: &mut coursecraft_course::LineJoin,
+) -> bool {
+    let mut changed = false;
+    inspector_row(ui, "Corners", |ui| {
+        let label = match *join {
+            coursecraft_course::LineJoin::Miter => "Sharp",
+            coursecraft_course::LineJoin::Round => "Round",
+            coursecraft_course::LineJoin::Bevel => "Bevel",
+        };
+        let rem_w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, format!("{id_prefix}_corners"), rem_w)
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                for (choice, choice_label) in [
+                    (coursecraft_course::LineJoin::Miter, "Sharp"),
+                    (coursecraft_course::LineJoin::Round, "Round"),
+                    (coursecraft_course::LineJoin::Bevel, "Bevel"),
+                ] {
+                    if ui.selectable_value(join, choice, choice_label).clicked() {
+                        changed = true;
+                    }
+                }
+            });
+    });
+    changed
 }
 
 fn show_dash_controls(
@@ -8074,8 +8691,7 @@ fn show_dash_controls(
             coursecraft_course::DashStyle::Custom => "Custom",
         };
         let rem_w = ui.available_width().max(30.0);
-        egui::ComboBox::from_id_salt(format!("{id_prefix}_dash"))
-            .width(rem_w)
+        crate::widgets::styled_combo(ui, format!("{id_prefix}_dash"), rem_w)
             .selected_text(label)
             .show_ui(ui, |ui| {
                 for (choice, choice_label) in [
@@ -8246,25 +8862,42 @@ fn handle_image_actions(
     if std::mem::take(&mut editor.ui.properties.pick_picture_fill)
         && let Some(object) = editor.selection.object.clone()
     {
-        editor.pending_replace_object = None;
-        editor.pending_picture_fill = Some((editor.selection.slide.clone(), object));
+        editor.pending_image_pick = Some(crate::PendingImagePick::PictureFill {
+            slide: editor.selection.slide.clone(),
+            object,
+        });
         editor.request(crate::EditorRequest::PickImage);
     }
     if replace_image_requested {
-        editor.pending_picture_fill = None;
-        editor.pending_replace_object = editor.selection.object.clone();
+        editor.pending_image_pick = editor
+            .selection
+            .object
+            .clone()
+            .map(crate::PendingImagePick::ReplaceObject);
         editor.request(crate::EditorRequest::PickImage);
     }
     if replace_audio_requested {
-        editor.pending_replace_object = editor.selection.object.clone();
+        editor.pending_image_pick = editor
+            .selection
+            .object
+            .clone()
+            .map(crate::PendingImagePick::ReplaceObject);
         editor.request(crate::EditorRequest::PickAudio);
     }
     if replace_video_requested {
-        editor.pending_replace_object = editor.selection.object.clone();
+        editor.pending_image_pick = editor
+            .selection
+            .object
+            .clone()
+            .map(crate::PendingImagePick::ReplaceObject);
         editor.request(crate::EditorRequest::PickVideo);
     }
     if pick_captions_requested {
-        editor.pending_replace_object = editor.selection.object.clone();
+        editor.pending_image_pick = editor
+            .selection
+            .object
+            .clone()
+            .map(crate::PendingImagePick::ReplaceObject);
         editor.request(crate::EditorRequest::PickCaptions);
     }
     if let Some(src) = reset_natural_size_src
@@ -8428,9 +9061,9 @@ pub fn show_animations_section(
                         Easing::EaseOut => "EaseOut",
                         Easing::EaseInOut => "EaseInOut",
                     };
-                    egui::ComboBox::from_id_salt(format!("mp_easing_{}", path.id))
+                    let rem_w = ui.available_width().max(30.0);
+                    crate::widgets::styled_combo(ui, format!("mp_easing_{}", path.id), rem_w)
                         .selected_text(ease_label)
-                        .width(ui.available_width().max(30.0))
                         .show_ui(ui, |ui| {
                             for (val, l) in [
                                 (Easing::EaseOut, "EaseOut"),
@@ -8775,8 +9408,7 @@ fn line_end_label(end: coursecraft_course::LineEnd) -> &'static str {
 
 fn show_line_end_combo(ui: &mut Ui, id: &str, value: &mut coursecraft_course::LineEnd) {
     let rem_w = ui.available_width().max(30.0);
-    egui::ComboBox::from_id_salt(id)
-        .width(rem_w)
+    crate::widgets::styled_combo(ui, id, rem_w)
         .selected_text(line_end_label(*value))
         .show_ui(ui, |ui| {
             for end in [

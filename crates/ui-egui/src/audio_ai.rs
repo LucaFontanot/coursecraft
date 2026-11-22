@@ -19,7 +19,7 @@ use coursecraft_ai::{
 use coursecraft_media::parse_webvtt;
 use coursecraft_playback::{MediaBackend, MediaKind};
 use coursecraft_render::{Icon, SIZE_BODY, SIZE_SMALL, palette};
-use egui::{Button, ComboBox, Id, Key, Modifiers, RichText, TextEdit};
+use egui::{Button, Id, RichText, TextEdit};
 
 use crate::elevenlabs::{
     SpeechSource, commit_pasted_voice as commit_pasted_elevenlabs_voice,
@@ -411,6 +411,7 @@ pub fn show_captions_window(
         .width(560.0)
         .open(&mut open)
         .resizable(true)
+        .close_on_escape(!editor.ui.captions.is_running())
         .show_with_footer(ctx, |dialog| {
             let p = palette(ctx);
             dialog.body(|ui| {
@@ -514,11 +515,7 @@ pub fn show_captions_window(
                 }
             });
 
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
-                && !editor.ui.captions.is_running()
-            {
-                close_clicked = true;
-            }
+            // Dialog::open handles Escape (popup-first, disabled while running) and sets `open = false`.
         });
 
     if !open {
@@ -653,6 +650,7 @@ pub fn show_speech_window(
         .width(560.0)
         .open(&mut open)
         .resizable(true)
+        .close_on_escape(!editor.ui.speech.is_running())
         .show_with_footer(ctx, |dialog| {
             let p = palette(ctx);
             dialog.body(|ui| {
@@ -816,9 +814,18 @@ pub fn show_speech_window(
                             !editor.ui.speech.text.trim().is_empty()
                                 && characters <= MAX_SPEECH_CHARS
                         };
+                        let disabled_reason = if editor.ui.speech_source == SpeechSource::ElevenLabs
+                        {
+                            elevenlabs_problem.as_deref().unwrap_or("")
+                        } else if editor.ui.speech.text.trim().is_empty() {
+                            "Type the words to speak first"
+                        } else {
+                            "Shorten the text to fit the character limit"
+                        };
                         ui.horizontal(|ui| {
                             if ui
                                 .add_enabled(can_generate, Button::new("Generate"))
+                                .on_disabled_hover_text(disabled_reason)
                                 .clicked()
                             {
                                 generate = true;
@@ -843,11 +850,7 @@ pub fn show_speech_window(
                 }
             });
 
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
-                && !editor.ui.speech.is_running()
-            {
-                close_clicked = true;
-            }
+            // Dialog::open handles Escape (popup-first, disabled while running) and sets `open = false`.
         });
 
     if !open {
@@ -986,7 +989,7 @@ fn show_elevenlabs_settings(
     ui.horizontal(|ui| {
         ui.label("Model");
         let selected = state.model_label();
-        ComboBox::from_id_salt("elevenlabs_model")
+        crate::widgets::styled_combo(ui, "elevenlabs_model", 260.0)
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 for model in &state.models {
@@ -1018,7 +1021,7 @@ fn show_elevenlabs_settings(
     ui.horizontal(|ui| {
         ui.label("Voice");
         let selected = state.voice_label();
-        ComboBox::from_id_salt("elevenlabs_voice")
+        crate::widgets::styled_combo(ui, "elevenlabs_voice", 260.0)
             .selected_text(selected)
             .show_ui(ui, |ui| {
                 for (id, name, category) in &voices {

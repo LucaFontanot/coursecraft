@@ -27,10 +27,6 @@ const MAX_TEXT_BYTES: usize = 4096;
 #[derive(Debug, Clone, Default)]
 pub struct FindState {
     pub open: bool,
-    /// Counts openings. Each opening gets a new window id, so the window
-    /// centres again.
-    openings: u64,
-    window_id: Option<Id>,
     /// Put the caret in the Find field on the next frame.
     pub focus_query: bool,
     pub query: String,
@@ -39,7 +35,7 @@ pub struct FindState {
     pub whole_word: bool,
     /// Index of the selected row in the result list.
     pub selected: usize,
-    /// Result of the last Replace or Replace All.
+    /// Result of the last Replace or Replace all.
     pub message: Option<String>,
     /// Course revision when the message was set. Cleared when the revision changes.
     pub message_revision: Option<u64>,
@@ -76,8 +72,6 @@ pub fn open(editor: &mut Editor) {
     let state = &mut editor.ui.find;
     if !state.open {
         state.open = true;
-        state.openings = state.openings.wrapping_add(1);
-        state.window_id = Some(Id::unique(("find_and_replace", state.openings)));
         state.selected = 0;
     }
     state.focus_query = true;
@@ -86,33 +80,37 @@ pub fn open(editor: &mut Editor) {
 /// Close the window when Escape is pressed. Runs before the canvas sees the key,
 /// so Escape closes this window and does not also clear the selection.
 pub fn consume_escape(editor: &mut Editor, ctx: &egui::Context) {
-    if editor.ui.find.open && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+    if editor.ui.find.open
+        && !egui::Popup::is_any_open(ctx)
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+    {
         editor.ui.find.open = false;
     }
 }
 
-/// Draw the Find and Replace window when it is open.
+/// Draw the Find and replace window when it is open.
 pub fn show_find_window(editor: &mut Editor, ctx: &egui::Context) {
     if !editor.ui.find.open {
         return;
     }
-    let screen = ctx.content_rect();
-    let max_height = (screen.height() - 40.0).max(240.0);
-    let window_id = editor
-        .ui
-        .find
-        .window_id
-        .unwrap_or_else(|| Id::unique(("find_and_replace", 0_u64)));
+    let window_id = Id::unique("find_and_replace_window");
     let mut open = true;
     let mut action = Action::None;
-    Dialog::new("Find and Replace")
+    Dialog::new("Find and replace")
         .id(window_id)
         // Pinned by its top edge, so the window doesn't jump as its height changes.
         .pinned_top()
-        .width(440.0)
+        .resizable(true)
+        .default_size(egui::vec2(440.0, 590.0))
         .open(&mut open)
-        .show(ctx, |ui| {
-            action = window_body(editor, ui, max_height);
+        .show_with_footer(ctx, |dialog| {
+            dialog.body_unscrolled(|ui| {
+                action = window_body(editor, ui);
+                ui.separator();
+                if let Some(footer_action) = window_footer(editor, ui) {
+                    action = footer_action;
+                }
+            });
         });
     if !open {
         editor.ui.find.open = false;
@@ -133,7 +131,7 @@ pub fn show_find_window(editor: &mut Editor, ctx: &egui::Context) {
     }
 }
 
-fn window_body(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) -> Action {
+fn window_body(editor: &mut Editor, ui: &mut egui::Ui) -> Action {
     let p = palette(ui.ctx());
     let mut action = Action::None;
 
@@ -180,8 +178,6 @@ fn window_body(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) -> Actio
     refresh(editor);
 
     let query_len = editor.ui.find.query.len();
-    let replacement_too_long = editor.ui.find.replacement.len() > MAX_TEXT_BYTES;
-    let searchable = !editor.ui.find.query.is_empty() && query_len <= MAX_TEXT_BYTES;
     let (hits, truncated) = match &editor.ui.find.results {
         Some(results) => (results.hits.as_slice(), results.truncated),
         None => (&[][..], false),
@@ -217,13 +213,14 @@ fn window_body(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) -> Actio
     }
 
     ui.add_space(4.0);
-    // The list takes under half the window so the buttons always fit.
-    let list_height = (max_height * 0.45).clamp(120.0, 420.0);
+    let list_height = (ui.available_height() - 72.0).clamp(120.0, 420.0);
     ScrollArea::vertical()
         .id_salt("find_results")
         .auto_shrink([false, false])
         .max_height(list_height)
         .show(ui, |ui| {
+            #[cfg(test)]
+            crate::scroll_audit::record_scroll(ui.ctx(), ui.layer_id(), ui.clip_rect(), true, true);
             for (index, hit) in hits.iter().enumerate() {
                 ui.label(
                     RichText::new(&hit.label)
@@ -240,20 +237,45 @@ fn window_body(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) -> Actio
             }
         });
 
-    ui.separator();
-    let can_replace = searchable && !replacement_too_long && !hits.is_empty();
+    action
+}
+
+fn window_footer(editor: &Editor, ui: &mut egui::Ui) -> Option<Action> {
+    let p = palette(ui.ctx());
+    let mut action = None;
+    let query_len = editor.ui.find.query.len();
+    let replacement_too_long = editor.ui.find.replacement.len() > MAX_TEXT_BYTES;
+    let searchable = !editor.ui.find.query.is_empty() && query_len <= MAX_TEXT_BYTES;
+    let hits_len = editor
+        .ui
+        .find
+        .results
+        .as_ref()
+        .map_or(0, |results| results.hits.len());
+    let selected = editor.ui.find.selected;
+    let can_replace = searchable && !replacement_too_long && hits_len > 0;
+    let disabled_reason = if query_len > MAX_TEXT_BYTES {
+        "Search text is too long"
+    } else if replacement_too_long {
+        "Replacement text is too long"
+    } else {
+        "Enter search text with at least one match"
+    };
+
     ui.horizontal(|ui| {
         let replace_one = ui
-            .add_enabled(can_replace && selected < hits.len(), Button::new("Replace"))
-            .on_hover_text("Replaces every match in this text");
+            .add_enabled(can_replace && selected < hits_len, Button::new("Replace"))
+            .on_hover_text("Replaces every match in this text")
+            .on_disabled_hover_text(disabled_reason);
         if replace_one.clicked() {
-            action = Action::ReplaceOne(selected);
+            action = Some(Action::ReplaceOne(selected));
         }
         if ui
-            .add_enabled(can_replace, Button::new("Replace All"))
+            .add_enabled(can_replace, Button::new("Replace all"))
+            .on_disabled_hover_text(disabled_reason)
             .clicked()
         {
-            action = Action::ReplaceAll;
+            action = Some(Action::ReplaceAll);
         }
     });
     if replacement_too_long {

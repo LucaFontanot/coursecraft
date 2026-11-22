@@ -155,6 +155,7 @@ impl Course {
         check_course_fonts(&mut cx);
         check_background_audio(&mut cx);
         check_next_rules(&mut cx);
+        check_bar_off_dead_ends(&mut cx);
         check_resources_and_glossary(&mut cx);
         check_logo(&mut cx);
         check_font_name(&mut cx, &self.theme.font, "/theme/font");
@@ -711,12 +712,42 @@ fn check_slide(cx: &mut Ctx<'_>, slide: &Slide, p: &str) {
         }
     }
     check_question(cx, slide, p);
+    if slide.revisit == crate::RevisitMode::Auto
+        && slide_changes_states_from_timeline_or_media(slide)
+    {
+        cx.warn(
+            format!("{p}/revisit"),
+            format!(
+                "Slide \u{201C}{}\u{201D} changes object states from its timeline or media, but revisiting keeps old states while the timeline restarts. Set When revisiting to Reset to start fresh.",
+                slide.title
+            ),
+        );
+    }
     if slide_has_unsupported_script(slide) {
         cx.warn(
             p,
             "text uses characters the bundled Inter font has no glyphs for; right-to-left and complex shaping are not supported",
         );
     }
+}
+
+fn slide_changes_states_from_timeline_or_media(slide: &Slide) -> bool {
+    slide
+        .triggers
+        .iter()
+        .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+        .any(|t| {
+            !t.disabled
+                && matches!(
+                    t.when,
+                    Event::TimelineStarts { .. }
+                        | Event::TimelineEnds { .. }
+                        | Event::TimelineReaches { .. }
+                        | Event::CueReached { .. }
+                        | Event::MediaEnds { .. }
+                )
+                && matches!(t.action, Action::ChangeState { .. })
+        })
 }
 
 /// Check a slide master. A master is a slide for authoring, but it must never
@@ -1197,6 +1228,7 @@ fn check_shape_outline_and_text(
             outline.dash_pattern.as_deref(),
             &format!("{p}/kind/outline"),
         );
+        check_miter_limit(cx, outline.miter_limit, &format!("{p}/kind/outline"));
     }
     if let Some(text) = text {
         if !crate::shape_allows_text(shape) {
@@ -1268,6 +1300,11 @@ fn check_path(cx: &mut Ctx<'_>, path: &crate::Path, p: &str) {
     check_dash_pattern(
         cx,
         path.outline.dash_pattern.as_deref(),
+        &format!("{p}/kind/path/outline"),
+    );
+    check_miter_limit(
+        cx,
+        path.outline.miter_limit,
         &format!("{p}/kind/path/outline"),
     );
     for (end, glue) in [
@@ -1416,6 +1453,19 @@ fn check_table(
             cx,
             outline.dash_pattern.as_deref(),
             &format!("{p}/kind/borders/{name}"),
+        );
+        check_miter_limit(cx, outline.miter_limit, &format!("{p}/kind/borders/{name}"));
+    }
+}
+
+fn check_miter_limit(cx: &mut Ctx<'_>, limit: Option<f32>, p: &str) {
+    let Some(limit) = limit else {
+        return;
+    };
+    if !limit.is_finite() || !(1.0..=100.0).contains(&limit) {
+        cx.err(
+            format!("{p}/miter_limit"),
+            "miter limit must be finite and within 1..=100",
         );
     }
 }
@@ -2004,6 +2054,12 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
             check_media_options(cx, *volume, trim.as_ref(), p);
         }
     }
+    check_object_states(cx, o, p);
+    check_object_animations(cx, o, p);
+    check_object_motion_paths(cx, o, p);
+}
+
+fn check_object_states(cx: &mut Ctx<'_>, o: &Object, p: &str) {
     let mut seen = BTreeSet::new();
     for (i, s) in o.states.iter().enumerate() {
         if s.name == "normal" {
@@ -2026,6 +2082,33 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
                 format!("color {:?} is not #RRGGBB or #RRGGBBAA", c.0),
             );
         }
+        if let Some(src) = &s.src
+            && !src.is_empty()
+        {
+            let obj_label = if o.name.trim().is_empty() {
+                o.id.as_str()
+            } else {
+                o.name.as_str()
+            };
+            if !matches!(o.kind, ObjectKind::Image { .. }) {
+                cx.warn(
+                    format!("{p}/states/{i}/src"),
+                    format!(
+                        "State \u{201C}{}\u{201D} on \u{201C}{obj_label}\u{201D} sets an image, which only applies to image objects.",
+                        s.name
+                    ),
+                );
+            }
+            if !is_safe_relative_path(src) {
+                cx.warn(
+                    format!("{p}/states/{i}/src"),
+                    format!(
+                        "State \u{201C}{}\u{201D} on \u{201C}{obj_label}\u{201D} points at a file outside the course. Choose the image again from the state card.",
+                        s.name
+                    ),
+                );
+            }
+        }
     }
     if !o.has_state(&o.initial_state) {
         cx.err(
@@ -2033,8 +2116,6 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
             format!("state {:?} is not defined on this object", o.initial_state),
         );
     }
-    check_object_animations(cx, o, p);
-    check_object_motion_paths(cx, o, p);
 }
 
 fn check_object_animations(cx: &mut Ctx<'_>, o: &Object, p: &str) {
@@ -2580,6 +2661,58 @@ fn check_logo(cx: &mut Ctx<'_>) {
             format!("player logo {logo:?} must be a safe relative path to an image"),
         );
     }
+}
+
+/// Warn on any non-last slide whose player bar is off and that has no Next,
+/// Jump, or Exit trigger on the slide or its layers.
+fn check_bar_off_dead_ends(cx: &mut Ctx<'_>) {
+    let total_slides: usize = cx.course.scenes.iter().map(|s| s.slides.len()).sum();
+    let mut seen = 0usize;
+    for (si, scene) in cx.course.scenes.iter().enumerate() {
+        for (li, slide) in scene.slides.iter().enumerate() {
+            seen += 1;
+            if seen == total_slides {
+                continue;
+            }
+            let show_bar = slide
+                .player
+                .as_ref()
+                .and_then(|o| o.show_bar)
+                .unwrap_or(cx.course.player.show_bar);
+            if show_bar || slide_has_forward_trigger(slide) {
+                continue;
+            }
+            let name = if slide.title.is_empty() {
+                slide.id.as_str()
+            } else {
+                slide.title.as_str()
+            };
+            cx.warn(
+                format!("/scenes/{si}/slides/{li}/player/show_bar"),
+                format!(
+                    "Slide \u{201C}{name}\u{201D} has the player bar turned off and no Next, Jump, or Exit trigger to move forward."
+                ),
+            );
+        }
+    }
+}
+
+fn slide_has_forward_trigger(slide: &Slide) -> bool {
+    slide
+        .triggers
+        .iter()
+        .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+        .any(|t| {
+            !t.disabled
+                && matches!(
+                    &t.action,
+                    crate::Action::JumpToSlide {
+                        target: crate::SlideTarget::Next
+                            | crate::SlideTarget::Id(_)
+                            | crate::SlideTarget::Scene(_),
+                    } | crate::Action::ExitCourse
+                )
+        })
 }
 
 /// Every "Next unlocks" rule, course-wide and per slide.

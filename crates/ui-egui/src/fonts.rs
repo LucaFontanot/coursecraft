@@ -39,8 +39,10 @@ pub fn show_fonts_window(editor: &mut Editor, ctx: &Context) {
     }
     let mut open = true;
     let mut action: Option<Action> = None;
+    let has_confirm = editor.ui.pending_remove_font.is_some();
     Dialog::new("Fonts")
         .open(&mut open)
+        .close_on_escape(!has_confirm)
         .width(420.0)
         .resizable(true)
         .show(ctx, |ui| {
@@ -72,7 +74,15 @@ pub fn show_fonts_window(editor: &mut Editor, ctx: &Context) {
                             .color(coursecraft_render::palette(ctx).text_secondary),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Remove").clicked() {
+                        if ui
+                            .button("Remove")
+                            .on_hover_text(format!(
+                                "Remove {} ({})",
+                                face.family,
+                                style_label(face.style)
+                            ))
+                            .clicked()
+                        {
                             action = Some(Action::Remove(face.family.clone(), face.style));
                         }
                     });

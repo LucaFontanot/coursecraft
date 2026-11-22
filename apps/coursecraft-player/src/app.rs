@@ -977,6 +977,54 @@ impl PlayerApp {
     }
 }
 
+/// Render the course load failure screen on `PLAYER_GROUND` inside a raised card.
+pub(crate) fn show_failed_screen(ui: &mut egui::Ui, message: &str) {
+    let full = ui.available_rect_before_wrap();
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE.fill(coursecraft_render::PLAYER_GROUND))
+        .show(ui, |ui| {
+            let max_card_w = (full.width() - 32.0).clamp(200.0, 480.0);
+            ui.centered_and_justified(|ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(0x23, 0x23, 0x26))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(0x1E)))
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .inner_margin(egui::Margin::same(24))
+                    .show(ui, |ui| {
+                        ui.set_max_width(max_card_w - 48.0);
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Unable to load course")
+                                    .size(16.0)
+                                    .strong()
+                                    .color(egui::Color32::from_rgb(0xF2, 0xF2, 0xF5)),
+                            );
+                            ui.add_space(8.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(message)
+                                        .size(13.0)
+                                        .color(egui::Color32::from_rgb(0xD1, 0xD1, 0xD6)),
+                                )
+                                .wrap(),
+                            );
+                            ui.add_space(12.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(
+                                        "Check that the course package is complete and reload the page.",
+                                    )
+                                    .size(12.0)
+                                    .color(egui::Color32::from_rgb(0xA8, 0xA8, 0xB0)),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    });
+            });
+        });
+}
+
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         #[cfg(target_arch = "wasm32")]
@@ -1015,171 +1063,181 @@ impl eframe::App for PlayerApp {
                     });
             }
             State::Failed(ref message) => {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    ui.centered_and_justified(|ui| {
-                        ui.add(egui::Label::new(message).wrap());
-                    });
-                });
+                show_failed_screen(ui, message);
             }
             State::Playing(ref mut playing) => {
-                playing.media_cache.begin_frame();
-                // 5. Repaint continuously while playing so the clock advances
-                ui.ctx().request_repaint();
-
-                #[cfg(target_arch = "wasm32")]
-                if let Some(ref xapi) = playing.xapi {
-                    crate::lrs::update(xapi, playing.player.course());
-                    // A refreshed cmi5 course can't reuse its single-use launch;
-                    // tell the learner their work isn't being recorded.
-                    if crate::lrs::reporting_lost(xapi) && playing.frame.notice.is_none() {
-                        playing.frame.notice = Some(
-                            playing
-                                .player
-                                .course()
-                                .chrome_string("reportingLost")
-                                .to_owned(),
-                        );
-                    }
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                if let Some(ref lti) = playing.lti {
-                    crate::lti::update(lti);
-                    // The one retry failed, so the platform will not see any
-                    // more results.
-                    if crate::lti::lost(lti) && playing.frame.notice.is_none() {
-                        playing.frame.notice = Some(
-                            playing
-                                .player
-                                .course()
-                                .chrome_string("reportingLost")
-                                .to_owned(),
-                        );
-                    }
-                }
-
-                // 6. F2 toggles the effect log panel
-                if ui.input(|i| i.key_pressed(egui::Key::F2)) {
-                    playing.show_log = !playing.show_log;
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                if let Some(layer) = playing.a11y.as_ref() {
-                    layer.before_frame(playing.frame.focus_mut());
-                }
-
-                // 1. Advance ticker and handle tick input if emitted
-                let dt = ui.input(|i| i.stable_dt);
-                if let Some(tick) = playing.ticker.advance(dt) {
-                    playing.handle_input(&tick, Some(ui.ctx()));
-                }
-
-                // Right panel for effect log if active
-                if playing.show_log {
-                    egui::Panel::right("log_panel")
-                        .default_size(360.0)
-                        .show(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false, false])
-                                .stick_to_bottom(true)
-                                .show(ui, |ui| {
-                                    for line in &playing.log {
-                                        ui.monospace(line);
-                                    }
-                                });
-                        });
-                }
-
-                // Central area runs the player frame (slide, strip, rule, drawer)
-                let mut frame_output = coursecraft_render::FrameOutput::default();
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::NONE)
-                    .show(ui, |ui| {
-                        playing.frame.ended = playing.ended;
-                        playing.frame.can_speed = playing.media.supports_rate();
-                        playing.frame.can_fullscreen = fullscreen_available();
-                        playing.frame.fullscreen = is_fullscreen(ui.ctx());
-                        #[cfg(target_arch = "wasm32")]
-                        {
-                            playing.frame.can_restart = playing.web_resume.is_some();
-                        }
-                        let caption = playing.media.caption_frame(
-                            &playing.player,
-                            Some(&playing.media_source),
-                            &playing.view,
-                        );
-                        playing
-                            .media
-                            .present_captions(caption.as_ref(), playing.frame.captions_on);
-                        playing
-                            .frame
-                            .set_caption_frame(if playing.frame.captions_on {
-                                caption
-                            } else {
-                                None
-                            });
-                        let source = playing.media.as_media_source(&playing.media_source);
-                        frame_output = playing.frame.show(
-                            ui,
-                            &playing.player,
-                            &mut playing.view,
-                            Some((&mut playing.media_cache, &source as &dyn MediaSource)),
-                        );
-                    });
-
-                #[cfg(target_arch = "wasm32")]
-                playing.sync_web_media_prefetch();
-
-                if let Some(volume) = frame_output.volume {
-                    playing.media.set_volume(volume);
-                }
-                if frame_output.fullscreen_toggle {
-                    toggle_fullscreen(ui.ctx(), is_fullscreen(ui.ctx()));
-                }
-                #[cfg(target_arch = "wasm32")]
-                if frame_output.restart {
-                    playing.restart(Some(ui.ctx()));
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                if let Some(layer) = playing.a11y.as_mut() {
-                    let settings = &playing.player.effective_player();
-                    let started = playing.player.state().started;
-                    let show_menu = settings.show_menu && started;
-                    let show_nav = settings.show_nav && started;
-                    let transform = if playing.player.lightbox_open() {
-                        playing.view.lightbox_transform()
-                    } else {
-                        playing.view.last_transform()
-                    };
-                    let items = playing.view.last_items();
-                    layer.after_frame(
-                        &playing.player,
-                        &playing.frame,
-                        items,
-                        transform,
-                        show_nav,
-                        show_menu,
-                    );
-                }
-
-                // Feed returned inputs after the frame has painted
-                for input in frame_output.inputs {
-                    playing.handle_input(&input, Some(ui.ctx()));
-                }
-
-                // Poll media ends, pending async media fetches, and update video element layout
-                playing.poll_media(Some(ui.ctx()));
-                let dt = ui.input(|i| i.stable_dt);
-                let dt_ms = if dt.is_finite() && dt > 0.0 {
-                    (f64::from(dt) * 1000.0).round().clamp(0.0, u64::MAX as f64) as u64
-                } else {
-                    0
-                };
-                playing.poll_media_time(Some(ui.ctx()), dt_ms);
-                #[cfg(target_arch = "wasm32")]
-                playing.web_objects.layout(&playing.player, &playing.view);
+                playing.show_ui(ui);
             }
         }
+    }
+}
+
+impl Playing {
+    /// Render one frame of the active player UI inside `ui`.
+    pub(crate) fn show_ui(&mut self, ui: &mut egui::Ui) {
+        let playing = self;
+        playing.media_cache.begin_frame();
+        // 5. Repaint continuously while playing so the clock advances
+        ui.ctx().request_repaint();
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(ref xapi) = playing.xapi {
+            crate::lrs::update(xapi, playing.player.course());
+            // A refreshed cmi5 course can't reuse its single-use launch;
+            // tell the learner their work isn't being recorded.
+            if crate::lrs::reporting_lost(xapi) && playing.frame.notice.is_none() {
+                playing.frame.notice = Some(
+                    playing
+                        .player
+                        .course()
+                        .chrome_string("reportingLost")
+                        .to_owned(),
+                );
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(ref lti) = playing.lti {
+            crate::lti::update(lti);
+            // The one retry failed, so the platform will not see any
+            // more results.
+            if crate::lti::lost(lti) && playing.frame.notice.is_none() {
+                playing.frame.notice = Some(
+                    playing
+                        .player
+                        .course()
+                        .chrome_string("reportingLost")
+                        .to_owned(),
+                );
+            }
+        }
+
+        // 6. F2 toggles the effect log panel
+        if ui.input(|i| i.key_pressed(egui::Key::F2)) {
+            playing.show_log = !playing.show_log;
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(layer) = playing.a11y.as_ref() {
+            layer.before_frame(playing.frame.focus_mut());
+        }
+
+        // 1. Advance ticker and handle tick input if emitted
+        let dt = ui.input(|i| i.stable_dt);
+        if let Some(tick) = playing.ticker.advance(dt) {
+            playing.handle_input(&tick, Some(ui.ctx()));
+        }
+
+        // Right panel for effect log if active
+        if playing.show_log {
+            egui::Panel::right("log_panel")
+                .default_size(360.0)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            for line in &playing.log {
+                                ui.monospace(line);
+                            }
+                        });
+                });
+        }
+
+        // Central area runs the player frame (slide, strip, rule, drawer)
+        let mut frame_output = coursecraft_render::FrameOutput::default();
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| {
+                playing.frame.ended = playing.ended;
+                playing.frame.can_speed = playing.media.supports_rate();
+                playing.frame.can_fullscreen = fullscreen_available();
+                playing.frame.fullscreen = is_fullscreen(ui.ctx());
+                #[cfg(target_arch = "wasm32")]
+                {
+                    playing.frame.can_restart = playing.web_resume.is_some();
+                }
+                let caption = playing.media.caption_frame(
+                    &playing.player,
+                    Some(&playing.media_source),
+                    &playing.view,
+                );
+                playing
+                    .media
+                    .present_captions(caption.as_ref(), playing.frame.captions_on);
+                playing
+                    .frame
+                    .set_caption_frame(if playing.frame.captions_on {
+                        caption
+                    } else {
+                        None
+                    });
+                let source = playing.media.as_media_source(&playing.media_source);
+                frame_output = playing.frame.show(
+                    ui,
+                    &playing.player,
+                    &mut playing.view,
+                    Some((&mut playing.media_cache, &source as &dyn MediaSource)),
+                );
+            });
+
+        #[cfg(target_arch = "wasm32")]
+        playing.sync_web_media_prefetch();
+
+        if let Some(volume) = frame_output.volume {
+            playing.media.set_volume(volume);
+        }
+        if frame_output.fullscreen_toggle {
+            toggle_fullscreen(ui.ctx(), is_fullscreen(ui.ctx()));
+        }
+        #[cfg(target_arch = "wasm32")]
+        if frame_output.restart {
+            playing.restart(Some(ui.ctx()));
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(layer) = playing.a11y.as_mut() {
+            let settings = &playing.player.effective_player();
+            let started = playing.player.state().started;
+            let show_bar = playing
+                .player
+                .current_slide()
+                .and_then(|slide| slide.player.as_ref())
+                .and_then(|overrides| overrides.show_bar)
+                .unwrap_or(settings.show_bar);
+            let show_menu = show_bar && settings.show_menu && started;
+            let show_nav = show_bar && settings.show_nav && started;
+            let transform = if playing.player.lightbox_open() {
+                playing.view.lightbox_transform()
+            } else {
+                playing.view.last_transform()
+            };
+            let items = playing.view.last_items();
+            layer.after_frame(
+                &playing.player,
+                &playing.frame,
+                items,
+                transform,
+                show_nav,
+                show_menu,
+            );
+        }
+
+        // Feed returned inputs after the frame has painted
+        for input in frame_output.inputs {
+            playing.handle_input(&input, Some(ui.ctx()));
+        }
+
+        // Poll media ends, pending async media fetches, and update video element layout
+        playing.poll_media(Some(ui.ctx()));
+        let dt = ui.input(|i| i.stable_dt);
+        let dt_ms = if dt.is_finite() && dt > 0.0 {
+            (f64::from(dt) * 1000.0).round().clamp(0.0, u64::MAX as f64) as u64
+        } else {
+            0
+        };
+        playing.poll_media_time(Some(ui.ctx()), dt_ms);
+        #[cfg(target_arch = "wasm32")]
+        playing.web_objects.layout(&playing.player, &playing.view);
     }
 }

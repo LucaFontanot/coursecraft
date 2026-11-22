@@ -77,15 +77,15 @@ fn edge_color(p: coursecraft_render::Palette, kind: MapEdgeKind) -> Color32 {
 
 /// One line of the legend: a sample stroke and its label.
 fn legend_entry(ui: &mut Ui, color: Color32, dashed: bool, label: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(22.0, 2.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(14.0, 2.0), Sense::hover());
     let y = rect.center().y;
     let stroke = Stroke::new(1.5, color);
     if dashed {
         for shape in egui::Shape::dashed_line(
             &[pos2(rect.min.x, y), pos2(rect.max.x, y)],
             stroke,
-            5.0,
-            3.0,
+            4.0,
+            2.0,
         ) {
             ui.painter().add(shape);
         }
@@ -109,7 +109,8 @@ pub fn show_course_map(editor: &mut Editor, ui: &mut Ui) {
 
     // Legend, pinned above the scroll area.
     ui.horizontal(|ui| {
-        ui.label(coursecraft_render::small("Course map"));
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(coursecraft_render::small("Map"));
         legend_entry(ui, edge_color(p, MapEdgeKind::Jump), false, "Jump");
         legend_entry(ui, edge_color(p, MapEdgeKind::Lightbox), false, "Lightbox");
         legend_entry(ui, edge_color(p, MapEdgeKind::Link), false, "Link");
@@ -202,7 +203,7 @@ pub fn show_course_map(editor: &mut Editor, ui: &mut Ui) {
             // Insertion marker while dragging.
             handle_map_drag(editor, ui, &rows, &headers);
         });
-    let _ = out;
+    crate::content_region::mark_content_region(ui.ctx(), ui.layer_id(), out.inner_rect);
     editor.ui.course_map.cached_map = Some(map);
 }
 
@@ -231,16 +232,22 @@ fn show_scene_header(editor: &mut Editor, ui: &mut Ui, scene_id: &str, title: &s
     if renaming {
         show_map_rename_editor(editor, ui, rect);
     } else {
-        ui.painter_at(rect).text(
-            rect.left_center(),
-            Align2::LEFT_CENTER,
-            title,
+        let mut job = egui::text::LayoutJob::simple_singleline(
+            title.to_owned(),
             FontId::new(
                 coursecraft_render::SIZE_CAPTION,
                 egui::FontFamily::Name("inter-bold".into()),
             ),
             p.text,
         );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width().max(16.0));
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        let elided = galley.elided;
+        let title_pos = pos2(rect.min.x, rect.center().y - galley.size().y * 0.5);
+        ui.painter_at(rect).galley(title_pos, galley, p.text);
+        if elided {
+            resp.on_hover_text(title);
+        }
     }
 }
 
@@ -444,16 +451,18 @@ fn show_map_thumbnail(
     } else {
         p.text_secondary
     };
-    ui.painter_at(title_rect).text(
-        title_rect.left_top(),
-        Align2::LEFT_TOP,
-        &slide_title,
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        slide_title,
         FontId::new(
             coursecraft_render::SIZE_SMALL,
             egui::FontFamily::Name("inter".into()),
         ),
         title_color,
     );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(title_rect.width().max(16.0));
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    ui.painter_at(title_rect)
+        .galley(title_rect.left_top(), galley, title_color);
 }
 
 /// Where a slide sits: (scene id, index in that scene).

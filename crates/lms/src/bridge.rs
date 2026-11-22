@@ -1,6 +1,6 @@
 //! SCORM 1.2 and SCORM 2004 LMS bridge implementation.
 
-use coursecraft_course::{CompletionStatus, Course};
+use coursecraft_course::{CompletionStatus, Course, LmsStatus};
 use coursecraft_logic::{Effect, PlayerState, decode_suspend, encode_suspend};
 use coursecraft_scorm::{LessonStatus, Standard};
 
@@ -200,6 +200,7 @@ impl CmiMapping {
         status: CompletionStatus,
         last_status: &mut Option<CompletionStatus>,
         warnings: &mut Vec<String>,
+        lms_status: LmsStatus,
     ) {
         if *last_status == Some(status) {
             return;
@@ -210,7 +211,7 @@ impl CmiMapping {
             Standard::Scorm12 => set_cmi(
                 api,
                 "cmi.core.lesson_status",
-                map_status(status).as_cmi(),
+                map_status(status, lms_status).as_cmi(),
                 warnings,
             ),
             Standard::Scorm2004 => match status {
@@ -422,6 +423,7 @@ pub struct StartPlan {
 #[derive(Debug, Default)]
 pub struct LmsBridge {
     mapping: CmiMapping,
+    lms_status: LmsStatus,
     active: bool,
     last_suspend: Option<String>,
     finished: bool,
@@ -446,6 +448,13 @@ impl LmsBridge {
             mapping: CmiMapping::for_standard(standard),
             ..Self::default()
         }
+    }
+
+    /// Configure how SCORM 1.2 maps runtime status to `cmi.core.lesson_status`.
+    #[must_use]
+    pub fn with_lms_status(mut self, lms_status: LmsStatus) -> Self {
+        self.lms_status = lms_status;
+        self
     }
 
     /// The standard this bridge writes.
@@ -488,6 +497,11 @@ impl LmsBridge {
             );
         }
         self.active = true;
+        self.lms_status = course
+            .editor
+            .last_publish
+            .as_ref()
+            .map_or(LmsStatus::Auto, |p| p.lms_status);
 
         let learner_name = {
             let name = api.get_value(self.mapping.learner_name_key);
@@ -520,6 +534,7 @@ impl LmsBridge {
                 CompletionStatus::Incomplete,
                 &mut last_status,
                 &mut warnings,
+                self.lms_status,
             );
         }
         if self.mapping.is_passed(&statuses) {
@@ -719,7 +734,7 @@ impl LmsBridge {
         }
         self.mapping.write_score(api, percent, warnings);
         self.mapping
-            .write_status(api, status, last_status, warnings);
+            .write_status(api, status, last_status, warnings, self.lms_status);
         if status == CompletionStatus::Passed {
             self.passed = true;
             self.best_passed_score = Some(
@@ -727,10 +742,17 @@ impl LmsBridge {
                     .map_or(percent_f, |best| best.max(percent_f)),
             );
         }
-        if matches!(
-            status,
-            CompletionStatus::Passed | CompletionStatus::Failed | CompletionStatus::Completed
-        ) {
+        let is_finished_status = match self.mapping.standard {
+            Standard::Scorm12 => !matches!(
+                map_status(status, self.lms_status),
+                LessonStatus::Incomplete
+            ),
+            Standard::Scorm2004 => matches!(
+                status,
+                CompletionStatus::Passed | CompletionStatus::Failed | CompletionStatus::Completed
+            ),
+        };
+        if is_finished_status {
             self.completed = true;
         }
     }
@@ -752,14 +774,21 @@ impl LmsBridge {
             return;
         }
         self.mapping
-            .write_status(api, status, last_status, warnings);
+            .write_status(api, status, last_status, warnings, self.lms_status);
         if status == CompletionStatus::Passed {
             self.passed = true;
         }
-        if matches!(
-            status,
-            CompletionStatus::Passed | CompletionStatus::Failed | CompletionStatus::Completed
-        ) {
+        let is_finished_status = match self.mapping.standard {
+            Standard::Scorm12 => !matches!(
+                map_status(status, self.lms_status),
+                LessonStatus::Incomplete
+            ),
+            Standard::Scorm2004 => matches!(
+                status,
+                CompletionStatus::Passed | CompletionStatus::Failed | CompletionStatus::Completed
+            ),
+        };
+        if is_finished_status {
             self.completed = true;
         }
     }
@@ -814,12 +843,32 @@ impl LmsBridge {
     }
 }
 
-fn map_status(status: CompletionStatus) -> LessonStatus {
-    match status {
-        CompletionStatus::Passed => LessonStatus::Passed,
-        CompletionStatus::Failed => LessonStatus::Failed,
-        CompletionStatus::Completed => LessonStatus::Completed,
-        CompletionStatus::Incomplete => LessonStatus::Incomplete,
+fn map_status(status: CompletionStatus, lms_status: LmsStatus) -> LessonStatus {
+    match lms_status {
+        LmsStatus::Auto => match status {
+            CompletionStatus::Passed => LessonStatus::Passed,
+            CompletionStatus::Failed => LessonStatus::Failed,
+            CompletionStatus::Completed => LessonStatus::Completed,
+            CompletionStatus::Incomplete => LessonStatus::Incomplete,
+        },
+        LmsStatus::PassedIncomplete => match status {
+            CompletionStatus::Passed | CompletionStatus::Completed => LessonStatus::Passed,
+            CompletionStatus::Failed | CompletionStatus::Incomplete => LessonStatus::Incomplete,
+        },
+        LmsStatus::PassedFailed => match status {
+            CompletionStatus::Passed | CompletionStatus::Completed => LessonStatus::Passed,
+            CompletionStatus::Failed => LessonStatus::Failed,
+            CompletionStatus::Incomplete => LessonStatus::Incomplete,
+        },
+        LmsStatus::CompletedIncomplete => match status {
+            CompletionStatus::Passed | CompletionStatus::Completed => LessonStatus::Completed,
+            CompletionStatus::Failed | CompletionStatus::Incomplete => LessonStatus::Incomplete,
+        },
+        LmsStatus::CompletedFailed => match status {
+            CompletionStatus::Passed | CompletionStatus::Completed => LessonStatus::Completed,
+            CompletionStatus::Failed => LessonStatus::Failed,
+            CompletionStatus::Incomplete => LessonStatus::Incomplete,
+        },
     }
 }
 

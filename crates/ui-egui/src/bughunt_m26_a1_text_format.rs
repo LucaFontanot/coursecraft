@@ -463,11 +463,11 @@ fn a1_4_multi_select_mixed_sizes_and_shape_text() {
     assert!((text_size(&h, "t1") - 36.0).abs() < 0.01);
     assert!((text_size(&h, "t2") - 36.0).abs() < 0.01);
 
-    // Invalid strings should be ignored
+    // Out-of-range negative input clamps to DragValue minimum (1.0); non-numeric input is ignored
     h.set_field(field, "-10");
-    assert!((text_size(&h, "t1") - 36.0).abs() < 0.01);
+    assert!((text_size(&h, "t1") - 1.0).abs() < 0.01);
     h.set_field(field, "abc");
-    assert!((text_size(&h, "t2") - 36.0).abs() < 0.01);
+    assert!((text_size(&h, "t2") - 1.0).abs() < 0.01);
 
     // Mixed Text + Shape with text: should not crash or corrupt
     h.editor.selection.set_many(["t1", "s1"]);

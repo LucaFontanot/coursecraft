@@ -15,7 +15,7 @@ use coursecraft_ai::{
 use coursecraft_course::{Course, is_language_tag_valid};
 use coursecraft_format::xliff::{fill_xliff, translation_units};
 use coursecraft_render::{CONTROL_COMPACT, SIZE_BODY, SIZE_SMALL, palette};
-use egui::{Button, ComboBox, Id, Key, Label, Modifiers, RichText, ScrollArea, TextEdit, vec2};
+use egui::{Button, Id, Key, Label, Modifiers, RichText, ScrollArea, TextEdit, vec2};
 
 use crate::{AiPurpose, Editor, EditorRequest};
 
@@ -242,7 +242,7 @@ pub fn set_cancelled(editor: &mut Editor, batch: usize) {
 
 /// Escape closes the window, cancelling any run first.
 pub fn consume_escape(editor: &mut Editor, ctx: &egui::Context) {
-    if !editor.ui.translate.open {
+    if !editor.ui.translate.open || egui::Popup::is_any_open(ctx) {
         return;
     }
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -475,12 +475,13 @@ pub fn show_translate_window(
 
     Dialog::new("Translate with AI")
         .id(Id::unique(("translate_with_ai_dialog", 0_u64)))
-        .width(760.0)
+        .default_size(vec2(760.0, 560.0))
+        .pinned_top()
         .open(&mut open)
         .resizable(true)
         .show_with_footer(ctx, |dialog| {
             let p = palette(ctx);
-            dialog.body(|ui| {
+            dialog.body_unscrolled(|ui| {
                 ui.set_max_width(760.0);
                 if !ready {
                     if crate::ai_settings::show_ai_not_ready(ui, "translate this course") {
@@ -504,13 +505,13 @@ pub fn show_translate_window(
                 ui.add_space(6.0);
 
                 ui.horizontal(|ui| {
-                    ui.label("Translate to:");
+                    ui.label("Translate to");
                     ui.add(
                         TextEdit::singleline(&mut editor.ui.translate.target_language)
                             .desired_width(80.0)
                             .hint_text("fr"),
                     );
-                    ComboBox::from_id_salt("translate_common_language")
+                    crate::widgets::styled_combo(ui, "translate_common_language", 220.0)
                         .selected_text("Common languages")
                         .show_ui(ui, |ui| {
                             for (name, tag) in COMMON_LANGUAGES {
@@ -593,8 +594,14 @@ pub fn show_translate_window(
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         let can_translate = valid && units_count > 0;
+                        let translate_reason = if units_count == 0 {
+                            "This course has no text to translate"
+                        } else {
+                            "Enter a valid BCP-47 language tag (for example, fr or pt-BR)"
+                        };
                         if ui
                             .add_enabled(can_translate, Button::new("Translate"))
+                            .on_disabled_hover_text(translate_reason)
                             .clicked()
                         {
                             translate = true;
@@ -630,9 +637,11 @@ pub fn show_translate_window(
                         ui.label(RichText::new("Target").strong());
                     });
 
+                    let avail_table_height =
+                        (ui.available_height() - 48.0).clamp(40.0, table_height);
                     ScrollArea::vertical()
                         .id_salt("translate_review_rows")
-                        .max_height(table_height)
+                        .max_height(avail_table_height)
                         .show_rows(ui, ROW_HEIGHT, visible.len(), |ui, range| {
                             for visible_index in range {
                                 let Some(&row_index) = visible.get(visible_index) else {
@@ -702,8 +711,18 @@ pub fn show_translate_window(
                                 && !editor.ui.translate.running
                                 && !editor.ui.translate.changed
                                 && valid_count > 0;
+                            let apply_reason = if !valid {
+                                "Enter a valid BCP-47 language tag (for example, fr or pt-BR)"
+                            } else if editor.ui.translate.changed {
+                                "The course changed; translate again first"
+                            } else if editor.ui.translate.running {
+                                "Wait for translation to finish"
+                            } else {
+                                "Enter at least one translation first"
+                            };
                             if ui
                                 .add_enabled(can_apply, Button::new(format!("Apply {valid_count}")))
+                                .on_disabled_hover_text(apply_reason)
                                 .clicked()
                             {
                                 apply = true;

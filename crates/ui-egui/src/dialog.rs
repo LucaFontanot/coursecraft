@@ -64,6 +64,7 @@ pub struct Dialog<'a> {
     resizable: bool,
     movable: bool,
     pinned_top: bool,
+    close_on_escape: bool,
 }
 
 impl<'a> Dialog<'a> {
@@ -78,6 +79,7 @@ impl<'a> Dialog<'a> {
             resizable: false,
             movable: true,
             pinned_top: false,
+            close_on_escape: true,
         }
     }
 
@@ -131,6 +133,13 @@ impl<'a> Dialog<'a> {
         self
     }
 
+    /// Whether pressing `Escape` closes the dialog when no popup is open (on by default).
+    #[must_use]
+    pub fn close_on_escape(mut self, close: bool) -> Self {
+        self.close_on_escape = close;
+        self
+    }
+
     /// Show the dialog with one scrolling body.
     pub fn show<R>(
         self,
@@ -167,30 +176,49 @@ impl<'a> Dialog<'a> {
                 .pivot(Align2::CENTER_CENTER)
                 .default_pos(area.center())
         };
-        if let Some(open) = self.open {
-            window = window.open(open);
-        }
         if let Some(size) = self.default_size {
             window = window.default_size(size);
         } else if let Some(width) = self.width {
             window = window.default_width(width);
         }
         let fixed_width = !self.resizable;
-        window.show(ctx, move |ui| {
-            let footer_h = ui
-                .ctx()
-                .data(|d| d.get_temp::<f32>(footer_id(window_id)))
-                .unwrap_or(0.0);
-            let start_y = ui.cursor().min.y;
-            let mut dialog = DialogUi {
-                ui,
-                window_id,
-                max_body_height: (area.height() - FRAME_CHROME - footer_h).max(80.0),
-                start_y,
-                fixed_width,
-            };
-            content(&mut dialog)
-        })
+        let popup_was_open = egui::Popup::is_any_open(ctx);
+        let close_on_escape = self.close_on_escape;
+        let show_window = |window: Window<'_>| {
+            window.show(ctx, move |ui| {
+                let footer_h = ui
+                    .ctx()
+                    .data(|d| d.get_temp::<f32>(footer_id(window_id)))
+                    .unwrap_or(0.0);
+                let start_y = ui.cursor().min.y;
+                let mut dialog = DialogUi {
+                    ui,
+                    window_id,
+                    max_body_height: (area.height() - FRAME_CHROME - footer_h).max(80.0),
+                    start_y,
+                    fixed_width,
+                };
+                content(&mut dialog)
+            })
+        };
+
+        if let Some(open) = self.open {
+            let mut still_open = *open;
+            let response = show_window(window.open(&mut still_open));
+            if response.is_some()
+                && still_open
+                && close_on_escape
+                && !popup_was_open
+                && !egui::Popup::is_any_open(ctx)
+                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            {
+                still_open = false;
+            }
+            *open = still_open;
+            response
+        } else {
+            show_window(window)
+        }
     }
 }
 
@@ -220,6 +248,34 @@ impl DialogUi<'_> {
             .max_height(height)
             .min_scrolled_height(height)
             .show(self.ui, |ui| {
+                #[cfg(test)]
+                crate::scroll_audit::record_scroll(
+                    ui.ctx(),
+                    ui.layer_id(),
+                    ui.clip_rect(),
+                    true,
+                    true,
+                );
+                if fixed_width {
+                    ui.set_min_width(ui.available_width());
+                }
+                add_body(ui)
+            })
+            .inner
+    }
+
+    /// The dialog's body without an outer [`ScrollArea`], for dialogs that manage their own
+    /// internal scrolling (such as a table or virtualised list) so they never nest vertical
+    /// scroll areas.
+    pub fn body_unscrolled<R>(&mut self, add_body: impl FnOnce(&mut Ui) -> R) -> R {
+        let fixed_width = self.fixed_width;
+        let above = (self.ui.cursor().min.y - self.start_y).max(0.0);
+        let height = (self.max_body_height - above).max(60.0);
+        self.ui
+            .scope(|ui| {
+                if ui.available_height() > height {
+                    ui.set_max_height(height);
+                }
                 if fixed_width {
                     ui.set_min_width(ui.available_width());
                 }
@@ -311,5 +367,131 @@ impl Form {
             field(ui, width)
         })
         .inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, Key, Modifiers, Pos2, RawInput, vec2};
+
+    fn run_dialog_frame(
+        ctx: &Context,
+        open: &mut bool,
+        popup_id: Id,
+        open_popup: bool,
+        press_escape: bool,
+    ) {
+        let mut events = Vec::new();
+        if press_escape {
+            events.push(Event::Key {
+                key: Key::Escape,
+                physical_key: Some(Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            });
+        }
+        let raw = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1024.0, 768.0))),
+            events,
+            ..Default::default()
+        };
+        let output = ctx.run_ui(raw, |ui| {
+            if open_popup {
+                egui::Popup::open_id(ui.ctx(), popup_id);
+            }
+            Dialog::new("Test Esc Dialog")
+                .open(open)
+                .show_with_footer(ui.ctx(), |dialog| {
+                    dialog.body(|ui| {
+                        let resp = ui.button("Trigger");
+                        egui::Popup::from_toggle_button_response(&resp)
+                            .id(popup_id)
+                            .show(|ui| {
+                                ui.label("Popup item");
+                            });
+                    });
+                });
+        });
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn dialog_handles_escape_only_when_no_popup_is_open() {
+        let ctx = Context::default();
+        coursecraft_render::apply_style(&ctx, coursecraft_render::ThemeMode::Dark);
+        let mut open = true;
+        let popup_id = Id::unique("dialog_esc_test_popup");
+
+        // Initial frame + open popup.
+        run_dialog_frame(&ctx, &mut open, popup_id, false, false);
+        run_dialog_frame(&ctx, &mut open, popup_id, true, false);
+        assert!(open, "dialog should be open");
+        assert!(
+            egui::Popup::is_any_open(&ctx),
+            "popup should be open before pressing Escape"
+        );
+
+        // Escape while popup is open: popup closes, dialog stays open.
+        run_dialog_frame(&ctx, &mut open, popup_id, false, true);
+        assert!(
+            open,
+            "dialog must stay open when Escape dismisses an open popup"
+        );
+        assert!(
+            !egui::Popup::is_any_open(&ctx),
+            "popup should have closed on Escape"
+        );
+
+        // Escape when no popup is open: dialog closes.
+        run_dialog_frame(&ctx, &mut open, popup_id, false, true);
+        assert!(!open, "dialog should close on Escape when no popup is open");
+    }
+
+    #[test]
+    fn dialog_body_unscrolled_emits_zero_outer_scroll_area() {
+        let ctx = Context::default();
+        coursecraft_render::apply_style(&ctx, coursecraft_render::ThemeMode::Dark);
+        let mut open = true;
+        let mut recorded_count = 0;
+        let mut nested_findings = Vec::new();
+        let raw = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1024.0, 768.0))),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(raw, |ui| {
+            Dialog::new("Unscrolled Dialog")
+                .open(&mut open)
+                .show_with_footer(ui.ctx(), |dialog| {
+                    dialog.body_unscrolled(|ui| {
+                        ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                            crate::scroll_audit::record_scroll(
+                                ui.ctx(),
+                                ui.layer_id(),
+                                ui.clip_rect(),
+                                true,
+                                false,
+                            );
+                            for i in 0..30 {
+                                ui.label(format!("Row {i}"));
+                            }
+                        });
+                    });
+                });
+            let scrolls = crate::scroll_audit::recorded_scrolls(ui.ctx());
+            recorded_count = scrolls.iter().filter(|s| s.from_dialog_body).count();
+            let layers = crate::test_harness::capture_layers(ui.ctx());
+            nested_findings = crate::test_harness::check_nested_scrolls(&layers, &scrolls);
+        });
+        output.drop_without_applying_deltas();
+        assert_eq!(
+            recorded_count, 0,
+            "DialogUi::body_unscrolled must not emit an outer DialogUi::body ScrollArea"
+        );
+        assert!(
+            nested_findings.is_empty(),
+            "inner ScrollArea inside body_unscrolled must have zero nested-scroll findings: {nested_findings:?}"
+        );
     }
 }

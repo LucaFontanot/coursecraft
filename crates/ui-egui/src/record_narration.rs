@@ -13,7 +13,7 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use coursecraft_render::palette;
 #[cfg(not(target_arch = "wasm32"))]
-use egui::{Button, Color32, ComboBox, CornerRadius, Rect, RichText, Sense, vec2};
+use egui::{Button, Color32, CornerRadius, Rect, RichText, Sense, vec2};
 use egui::{Id, Key, Modifiers};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -132,6 +132,7 @@ pub fn close_record_narration(editor: &mut Editor) {
 /// Escape closes the window before the canvas sees the key.
 pub fn consume_escape(editor: &mut Editor, ctx: &egui::Context) {
     if editor.ui.record_narration.open
+        && !egui::Popup::is_any_open(ctx)
         && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
     {
         close_record_narration(editor);
@@ -201,9 +202,9 @@ fn desktop_contents(editor: &mut Editor, ui: &mut egui::Ui) -> bool {
             state.playing = false;
         }
 
-        crate::dialog::Form::new(ui, &["Microphone"]).row(ui, "Microphone", |ui, _| {
+        crate::dialog::Form::new(ui, &["Microphone"]).row(ui, "Microphone", |ui, width| {
             let selected = state.device.as_deref().unwrap_or("Default").to_owned();
-            ComboBox::from_id_salt("record_narration_device")
+            crate::widgets::styled_combo(ui, "record_narration_device", width)
                 .selected_text(selected)
                 .show_ui(ui, |ui| {
                     if ui
@@ -258,12 +259,30 @@ fn desktop_contents(editor: &mut Editor, ui: &mut egui::Ui) -> bool {
                 }
             });
         } else {
+            if state.devices.is_empty() {
+                ui.label(
+                    RichText::new(
+                        "No microphone detected. Connect a microphone and reopen this window.",
+                    )
+                    .size(coursecraft_render::SIZE_SMALL)
+                    .color(p.warning),
+                );
+                ui.add_space(4.0);
+            }
             ui.label(
                 RichText::new("Records from the microphone into this slide as narration.")
                     .color(p.text_secondary),
             );
             ui.add_space(6.0);
-            let record = Button::new(RichText::new("Record").color(Color32::WHITE)).fill(p.danger);
+            let record_fill = if coursecraft_render::theme_mode(ui.ctx())
+                == coursecraft_render::ThemeMode::Dark
+            {
+                Color32::from_rgb(0xC9, 0x2A, 0x2A)
+            } else {
+                p.danger
+            };
+            let record =
+                Button::new(RichText::new("Record").color(Color32::WHITE)).fill(record_fill);
             if ui.add(record).clicked() {
                 start = true;
             }

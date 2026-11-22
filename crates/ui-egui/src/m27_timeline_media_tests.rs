@@ -1479,7 +1479,7 @@ fn d4_8_webvtt_captions_attach_replace_clear_and_hostile_path_rejection() {
         .to_owned();
 
     // Attach valid .vtt via import_captions.
-    h.editor.pending_replace_object = Some(aud_id.clone());
+    h.editor.pending_image_pick = Some(crate::PendingImagePick::ReplaceObject(aud_id.clone()));
     let vtt = b"WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n";
     let cap_src = h
         .editor
@@ -1494,7 +1494,7 @@ fn d4_8_webvtt_captions_attach_replace_clear_and_hostile_path_rejection() {
     );
 
     // Invalid .txt rejected without leaking into editor.media; traversal path rejected by engine.
-    h.editor.pending_replace_object = Some(aud_id.clone());
+    h.editor.pending_image_pick = Some(crate::PendingImagePick::ReplaceObject(aud_id.clone()));
     assert!(h.editor.import_captions("notes.txt", b"not vtt").is_none());
     assert!(!h.editor.media.iter().any(|(s, _)| s == "notes.txt"));
     assert!(

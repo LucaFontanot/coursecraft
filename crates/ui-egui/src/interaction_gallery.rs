@@ -390,18 +390,19 @@ pub fn show_interaction_gallery_window(editor: &mut Editor, ctx: &egui::Context)
     }
     let mut open = true;
     let mut picked = None;
-    Dialog::new("Insert Interaction")
+    Dialog::new("Insert interaction")
         .open(&mut open)
         .width(GALLERY_WIDTH)
+        .default_size(vec2(GALLERY_WIDTH, 520.0))
+        .resizable(true)
         .show(ctx, |ui| {
             editor.ui.interaction_gallery_rects =
                 show_interaction_gallery(ui, &mut |kind| picked = Some(kind));
         });
-    let escape = ctx.input(|input| input.key_pressed(egui::Key::Escape));
     if let Some(kind) = picked {
         insert_choice(editor, kind);
         editor.ui.show_interaction_gallery = false;
-    } else if !open || escape {
+    } else if !open {
         editor.ui.show_interaction_gallery = false;
     }
 }

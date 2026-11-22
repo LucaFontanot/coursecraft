@@ -44,12 +44,23 @@ pub fn agent_message(exe: &str) -> String {
 /// A label, a copy button and the line itself.
 pub(crate) fn copy_row(ui: &mut Ui, label: &str, text: &str) {
     let p = coursecraft_render::palette(ui.ctx());
+    let copied_id = ui.scope_id().with(("connect_agent_copied_at", label));
+    let now = ui.input(|i| i.time);
+    let copied_at = ui.ctx().data(|d| d.get_temp::<f64>(copied_id));
+    let recently_copied = copied_at.is_some_and(|t| now - t < 1.5);
+    if recently_copied {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(200));
+    }
+
     ui.add_space(coursecraft_render::SPACE_LG);
     ui.horizontal(|ui| {
         ui.label(coursecraft_render::body_strong(label));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::quiet_button(ui, "Copy", QuietTone::Accent, true).clicked() {
+            let button_label = if recently_copied { "Copied" } else { "Copy" };
+            if crate::quiet_button(ui, button_label, QuietTone::Accent, true).clicked() {
                 ui.ctx().copy_text(text.to_owned());
+                ui.ctx().data_mut(|d| d.insert_temp(copied_id, now));
             }
         });
     });

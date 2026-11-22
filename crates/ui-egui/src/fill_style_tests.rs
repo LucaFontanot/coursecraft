@@ -125,10 +125,12 @@ fn picture_fill_with_no_pictures_opens_the_file_picker_and_fills_the_button() {
         .map(|slide| slide.objects.len());
     harness.pick_combo("Solid", "Picture");
     assert_eq!(
-        harness.editor.pending_picture_fill,
-        Some(("s-intro".to_owned(), "btn-start".to_owned()))
+        harness.editor.pending_image_pick,
+        Some(crate::PendingImagePick::PictureFill {
+            slide: "s-intro".to_owned(),
+            object: "btn-start".to_owned(),
+        })
     );
-    assert!(harness.editor.pending_replace_object.is_none());
     assert_eq!(
         fill_style(&start_button_kind(&harness)),
         None,
@@ -148,7 +150,7 @@ fn picture_fill_with_no_pictures_opens_the_file_picker_and_fills_the_button() {
         harness.editor.ui.placement_tool.is_none(),
         "nothing to place"
     );
-    assert!(harness.editor.pending_picture_fill.is_none());
+    assert!(harness.editor.pending_image_pick.is_none());
     assert_eq!(
         harness
             .editor
@@ -176,7 +178,7 @@ fn picture_menu_offers_choose_a_file_and_lists_only_pictures() {
         matches!(fill_style(&start_button_kind(&harness)), Some(FillStyle::Picture { ref src, .. }) if src == "photo.png"),
         "the course's picture is used straight away"
     );
-    assert!(harness.editor.pending_picture_fill.is_none());
+    assert!(harness.editor.pending_image_pick.is_none());
 
     let combo = harness.find_text_last("photo.png").expect("image combo");
     harness.click_at(combo);
@@ -192,8 +194,11 @@ fn picture_menu_offers_choose_a_file_and_lists_only_pictures() {
     harness.click_at(choose);
     harness.idle_frame();
     assert_eq!(
-        harness.editor.pending_picture_fill,
-        Some(("s-intro".to_owned(), "btn-start".to_owned()))
+        harness.editor.pending_image_pick,
+        Some(crate::PendingImagePick::PictureFill {
+            slide: "s-intro".to_owned(),
+            object: "btn-start".to_owned(),
+        })
     );
 }
 
@@ -204,7 +209,7 @@ fn a_stale_picture_fill_request_does_not_capture_a_later_image() {
     let mut harness = TestHarness::new(hello());
     select_start_button(&mut harness);
     harness.pick_combo("Solid", "Picture");
-    assert!(harness.editor.pending_picture_fill.is_some());
+    assert!(harness.editor.pending_image_pick.is_some());
     // The picker was cancelled; the author clicks away and inserts a picture.
     harness.editor.selection.clear_objects();
     harness.idle_frame();

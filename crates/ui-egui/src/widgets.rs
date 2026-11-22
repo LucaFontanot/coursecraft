@@ -138,58 +138,64 @@ fn icon_button_impl(
 ) -> Response {
     let p = palette(ui.ctx());
     let size = vec2(CONTROL_COMPACT, CONTROL_COMPACT);
-    let sense = if enabled {
-        Sense::click()
-    } else {
-        Sense::hover()
-    };
-    let (rect, resp) = ui.allocate_exact_size(size, sense);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tooltip.to_owned()));
+    let resp = ui
+        .add_enabled_ui(enabled, |ui| {
+            let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+            resp.widget_info(|| {
+                let mut info = egui::WidgetInfo::new(egui::Role::Button);
+                info.enabled = enabled;
+                info.label = Some(tooltip.to_owned());
+                info.selected = active.then_some(true);
+                info
+            });
 
-    if ui.is_rect_visible(rect) {
-        let radius = CornerRadius::same(RADIUS_MD as u8);
-        let hovered = enabled && resp.hovered();
-        let pressed = enabled && resp.is_pointer_button_down_on();
+            if ui.is_rect_visible(rect) {
+                let radius = CornerRadius::same(RADIUS_MD as u8);
+                let hovered = enabled && resp.hovered();
+                let pressed = enabled && resp.is_pointer_button_down_on();
 
-        ui.painter().rect_filled(
-            rect,
-            radius,
-            state_fill(ui, &resp, &p, hovered, pressed, active),
-        );
+                ui.painter().rect_filled(
+                    rect,
+                    radius,
+                    state_fill(ui, &resp, &p, hovered, pressed, active),
+                );
 
-        // Icon color
-        let icon_color = if !enabled {
-            p.text_disabled
-        } else if active {
-            p.accent_text
-        } else {
-            match tone {
-                IconTone::Danger if hovered => p.danger,
-                IconTone::Accent => p.accent_text,
-                _ if hovered || pressed => p.text,
-                _ => p.text_secondary,
+                // Icon color
+                let icon_color = if !enabled {
+                    p.text_disabled
+                } else if active {
+                    p.accent_text
+                } else {
+                    match tone {
+                        IconTone::Danger if hovered => p.danger,
+                        IconTone::Accent => p.accent_text,
+                        _ if hovered || pressed => p.text,
+                        _ => p.text_secondary,
+                    }
+                };
+
+                let font_id = FontId::new(
+                    ICON_SM,
+                    if active {
+                        FontFamily::Name("phosphor-fill".into())
+                    } else {
+                        FontFamily::Name("phosphor".into())
+                    },
+                );
+                let galley =
+                    ui.painter()
+                        .layout_no_wrap(icon.codepoint().to_string(), font_id, icon_color);
+                let pos = pos2(
+                    rect.center().x - galley.size().x * 0.5,
+                    rect.center().y - galley.size().y * 0.5,
+                );
+                ui.painter().galley(pos, galley, icon_color);
             }
-        };
+            resp
+        })
+        .inner;
 
-        let font_id = FontId::new(
-            ICON_SM,
-            if active {
-                FontFamily::Name("phosphor-fill".into())
-            } else {
-                FontFamily::Name("phosphor".into())
-            },
-        );
-        let galley = ui
-            .painter()
-            .layout_no_wrap(icon.codepoint().to_string(), font_id, icon_color);
-        let pos = pos2(
-            rect.center().x - galley.size().x * 0.5,
-            rect.center().y - galley.size().y * 0.5,
-        );
-        ui.painter().galley(pos, galley, icon_color);
-    }
-
-    let resp = resp.on_hover_text(tooltip);
+    let resp = resp.on_hover_text(tooltip).on_disabled_hover_text(tooltip);
     if enabled {
         resp.on_hover_cursor(CursorIcon::PointingHand)
     } else {
@@ -241,13 +247,27 @@ pub fn toolbar_button_enabled(
     toolbar_button_impl(ui, icon, label, active, enabled, tooltip)
 }
 
+const TOOLBAR_SHOW_LABELS_ID: &str = "coursecraft_toolbar_show_labels";
+
+/// Record whether the current frame's toolbar buttons should render text labels.
+pub fn set_toolbar_show_labels(ctx: &egui::Context, show: bool) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(TOOLBAR_SHOW_LABELS_ID), show));
+}
+
+/// Whether toolbar buttons should render text labels on the current frame.
+#[must_use]
+pub fn toolbar_show_labels(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(egui::Id::unique(TOOLBAR_SHOW_LABELS_ID)))
+        .unwrap_or_else(|| ctx.content_rect().width() >= 1100.0)
+}
+
 /// A Keynote-style toolbar button with an accent fill and white icon/label.
 ///
-/// Used for the primary toolbar action (Publish). Below ≈1100 px window width it
+/// Used for the primary toolbar action (Publish). Below the responsive width threshold it
 /// drops the label and shows the icon alone, like the other toolbar buttons.
 pub fn toolbar_primary_button(ui: &mut Ui, icon: Icon, label: &str, tooltip: &str) -> Response {
     let p = palette(ui.ctx());
-    let show_label = ui.ctx().content_rect().width() >= 1100.0;
+    let show_label = toolbar_show_labels(ui.ctx());
     let label_galley = if show_label {
         Some(ui.painter().layout_no_wrap(
             label.to_owned(),
@@ -318,7 +338,7 @@ pub fn toolbar_primary_button(ui: &mut Ui, icon: Icon, label: &str, tooltip: &st
 /// A small caret button companion for toolbar dropdowns (e.g. next to Add Slide).
 pub fn toolbar_caret_button(ui: &mut Ui, tooltip: &str) -> Response {
     let p = palette(ui.ctx());
-    let size = vec2(16.0, 44.0);
+    let size = vec2(20.0, 44.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tooltip.to_owned()));
 
@@ -365,8 +385,8 @@ fn toolbar_button_impl(
     tooltip: &str,
 ) -> Response {
     let p = palette(ui.ctx());
-    // Drop labels and show icons only below ≈1100 px so nothing clips or overlaps at 1024.
-    let show_label = ui.ctx().content_rect().width() >= 1100.0;
+    // Drop labels and show icons only when narrow so nothing clips or overlaps.
+    let show_label = toolbar_show_labels(ui.ctx());
 
     let height = 44.0;
     let label_font = FontId::proportional(SIZE_SMALL);
@@ -454,5 +474,289 @@ fn toolbar_button_impl(
         resp.on_hover_cursor(CursorIcon::PointingHand)
     } else {
         resp
+    }
+}
+
+/// Minimum width in points for [`styled_combo`] so labels never collapse into cramped boxes.
+pub const COMBO_MIN_WIDTH: f32 = 120.0;
+
+/// Minimum popup height in points for [`styled_combo`] so at least 12 items fit without scrolling.
+pub const COMBO_MIN_POPUP_HEIGHT: f32 = 320.0;
+
+/// A [`egui::ComboBox`] with an enforced minimum width and a tall popup (`>= 12` items).
+pub fn styled_combo<'a>(
+    ui: &Ui,
+    id_salt: impl egui::AsIdSalt,
+    min_width: f32,
+) -> egui::ComboBox<'a> {
+    let popup_height = (ui.ctx().content_rect().height() * 0.8).max(COMBO_MIN_POPUP_HEIGHT);
+    egui::ComboBox::from_id_salt(id_salt)
+        .width(min_width.max(COMBO_MIN_WIDTH))
+        .height(popup_height)
+}
+
+/// Scrim colour for modal overlays (`UX-15`), meeting `alpha >= 0x99` in both themes.
+#[must_use]
+pub const fn modal_backdrop_color(mode: coursecraft_render::ThemeMode) -> Color32 {
+    match mode {
+        coursecraft_render::ThemeMode::Dark => Color32::from_black_alpha(0xB8),
+        coursecraft_render::ThemeMode::Light => Color32::from_black_alpha(0x99),
+    }
+}
+
+/// A tri-state toggle button supporting Off (`Some(false)`), On (`Some(true)`), and Mixed
+/// (`None`) states with a hover tooltip and `accesskit::Toggled` accessibility state.
+pub fn mixed_toggle(
+    ui: &mut Ui,
+    label: impl Into<egui::WidgetText>,
+    state: Option<bool>,
+    tooltip: &str,
+) -> Response {
+    let p = palette(ui.ctx());
+    let widget_text: egui::WidgetText = label.into();
+    let galley = widget_text.into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Button,
+    );
+    let width = (galley.size().x + 12.0).max(CONTROL_COMPACT);
+    let size = vec2(width, CONTROL_COMPACT);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let accessible_name = if tooltip.is_empty() {
+        galley.text().to_owned()
+    } else {
+        tooltip.to_owned()
+    };
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::Role::Button,
+            true,
+            state == Some(true),
+            accessible_name.clone(),
+        )
+    });
+    if state.is_none() {
+        ui.ctx().accesskit_node_builder(resp.id, |builder| {
+            builder.set_toggled(egui::accesskit::Toggled::Mixed);
+        });
+    }
+
+    if ui.is_rect_visible(rect) {
+        let radius = CornerRadius::same(RADIUS_MD as u8);
+        let hovered = resp.hovered();
+        let pressed = resp.is_pointer_button_down_on();
+        let fill = match state {
+            Some(true) => {
+                if pressed {
+                    p.pressed
+                } else {
+                    p.accent_subtle
+                }
+            }
+            Some(false) => {
+                if pressed {
+                    p.pressed
+                } else if hovered {
+                    p.hover
+                } else {
+                    Color32::TRANSPARENT
+                }
+            }
+            None => {
+                if pressed {
+                    p.pressed
+                } else if hovered {
+                    p.hover
+                } else {
+                    p.raised
+                }
+            }
+        };
+        let stroke = match state {
+            Some(true) => egui::Stroke::new(1.0, p.accent),
+            None => egui::Stroke::new(1.0, p.border),
+            Some(false) => egui::Stroke::NONE,
+        };
+        ui.painter()
+            .rect(rect, radius, fill, stroke, egui::StrokeKind::Inside);
+
+        let text_color = match state {
+            Some(true) => p.accent_text,
+            Some(false) => {
+                if hovered || pressed {
+                    p.text
+                } else {
+                    p.text_secondary
+                }
+            }
+            None => p.text,
+        };
+        let text_pos = pos2(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        );
+        ui.painter().galley(text_pos, galley, text_color);
+
+        if state.is_none() {
+            let bar = egui::Rect::from_center_size(
+                pos2(rect.center().x, rect.bottom() - 3.5),
+                vec2(10.0, 2.0),
+            );
+            ui.painter()
+                .rect_filled(bar, CornerRadius::same(1), p.accent);
+        }
+    }
+
+    resp.on_hover_text(tooltip)
+        .on_hover_cursor(CursorIcon::PointingHand)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coursecraft_render::ThemeMode;
+    use egui::{Context, Pos2, RawInput, Rect};
+
+    #[test]
+    fn styled_combo_enforces_min_width_and_twelve_item_popup_height() {
+        let ctx = Context::default();
+        coursecraft_render::apply_style(&ctx, ThemeMode::Dark);
+        let mut selected = 0usize;
+
+        let run_frame = |ctx: &Context, selected: &mut usize, click_pos: Option<Pos2>| {
+            let mut events = Vec::new();
+            if let Some(pos) = click_pos {
+                events.push(egui::Event::PointerMoved(pos));
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            let raw = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1024.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let mut rect_out = Rect::NOTHING;
+            let mut popup_layers = Vec::new();
+            let output = ctx.run_ui(raw, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let resp = styled_combo(ui, "test_styled_combo", 30.0)
+                        .selected_text(format!("Item {selected}"))
+                        .show_ui(ui, |ui| {
+                            for i in 0..20 {
+                                ui.selectable_value(selected, i, format!("Item {i}"));
+                            }
+                        });
+                    rect_out = resp.response.rect;
+                });
+                popup_layers = crate::test_harness::capture_layers(ui.ctx());
+            });
+            output.drop_without_applying_deltas();
+            (rect_out, popup_layers)
+        };
+
+        let (combo_rect, _) = run_frame(&ctx, &mut selected, None);
+        assert!(
+            combo_rect.width() >= COMBO_MIN_WIDTH - 1.0,
+            "styled_combo must enforce min width >= {COMBO_MIN_WIDTH}, got {}",
+            combo_rect.width()
+        );
+
+        // Click to open popup and measure visible items on the next frame.
+        let (_, _) = run_frame(&ctx, &mut selected, Some(combo_rect.center()));
+        let (_, layers) = run_frame(&ctx, &mut selected, None);
+        assert!(egui::Popup::is_any_open(&ctx), "combo popup should be open");
+
+        let mut visible_items = 0usize;
+        let mut popup_rect = Rect::NOTHING;
+        for (layer_id, shapes) in &layers {
+            if layer_id.order == egui::Order::Foreground {
+                for clipped in shapes {
+                    if let egui::Shape::Text(t) = &clipped.shape {
+                        let text = t.galley.text();
+                        if text.starts_with("Item ") {
+                            let y = t.pos.y;
+                            if y >= clipped.clip_rect.min.y - 1.0
+                                && y + t.galley.size().y <= clipped.clip_rect.max.y + 1.0
+                            {
+                                visible_items += 1;
+                                popup_rect = clipped.clip_rect;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            visible_items >= 12,
+            "styled_combo popup must display >= 12 items without scrolling, got {visible_items} (popup_rect={popup_rect:?})"
+        );
+    }
+
+    #[test]
+    fn modal_backdrop_color_meets_ux15_alpha_thresholds() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let color = modal_backdrop_color(mode);
+            assert_eq!(color.r(), 0);
+            assert_eq!(color.g(), 0);
+            assert_eq!(color.b(), 0);
+            assert!(
+                color.a() >= 0x99,
+                "modal_backdrop_color({mode:?}) alpha {} must be >= 0x99",
+                color.a()
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_toggle_supports_off_on_mixed_with_tooltip_and_accesskit_state() {
+        let ctx = Context::default();
+        ctx.enable_accesskit();
+        coursecraft_render::apply_style(&ctx, ThemeMode::Dark);
+        let raw = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 400.0))),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    mixed_toggle(ui, "B", Some(false), "Bold off");
+                    mixed_toggle(ui, "I", Some(true), "Italic on");
+                    mixed_toggle(ui, "U", None, "Underline mixed");
+                });
+            });
+        });
+        let nodes = crate::test_harness::extract_widget_nodes(
+            output.platform_output.accesskit_update.as_ref(),
+        );
+        output.drop_without_applying_deltas();
+
+        let off = nodes
+            .iter()
+            .find(|n| n.label.as_deref() == Some("Bold off"))
+            .expect("Off toggle node");
+        assert_eq!(off.toggled, Some(egui::accesskit::Toggled::False));
+
+        let on = nodes
+            .iter()
+            .find(|n| n.label.as_deref() == Some("Italic on"))
+            .expect("On toggle node");
+        assert_eq!(on.toggled, Some(egui::accesskit::Toggled::True));
+
+        let mixed = nodes
+            .iter()
+            .find(|n| n.label.as_deref() == Some("Underline mixed"))
+            .expect("Mixed toggle node");
+        assert_eq!(mixed.toggled, Some(egui::accesskit::Toggled::Mixed));
     }
 }

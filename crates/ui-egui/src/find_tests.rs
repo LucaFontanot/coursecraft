@@ -110,7 +110,7 @@ fn replace_all_then_undo_restores_the_text_and_the_list_refreshes() {
     harness.editor.ui.find.replacement = "dog".to_owned();
     harness.idle_frame();
 
-    let button = harness.find_text("Replace All").expect("Replace All");
+    let button = harness.find_text("Replace all").expect("Replace all");
     harness.click_at(button);
     assert_eq!(object_text(&harness, "plain"), "Hello dog world");
     assert_eq!(object_text(&harness, "btn"), "dog button");

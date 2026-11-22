@@ -37,6 +37,8 @@ pub mod export_dialog;
 pub(crate) mod eyedropper;
 pub mod find;
 pub mod fonts;
+#[cfg(test)]
+mod scroll_audit;
 
 /// `(slide, object, selection_range, cursor_pos)` captured from an active inline text edit.
 pub type InlineEditSelection = (String, String, Option<(usize, usize)>, usize);
@@ -166,6 +168,8 @@ mod guard_counters;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
+mod h7_video_revisit_tests;
+#[cfg(test)]
 mod history_tests;
 #[cfg(test)]
 mod idle_tests;
@@ -194,7 +198,13 @@ mod perf_tests;
 #[cfg(test)]
 mod preview_close_tests;
 #[cfg(test)]
+mod preview_drawer_tests;
+#[cfg(test)]
+mod preview_subset_tests;
+#[cfg(test)]
 mod preview_variables_tests;
+#[cfg(test)]
+mod preview_window_tests;
 #[cfg(test)]
 mod publish_tests;
 #[cfg(test)]
@@ -210,6 +220,8 @@ mod spacing_tests;
 #[cfg(test)]
 mod spell_check_tests;
 #[cfg(test)]
+mod style_toggles_tests;
+#[cfg(test)]
 mod templates_tests;
 #[cfg(test)]
 pub(crate) mod test_harness;
@@ -224,6 +236,8 @@ mod timeline_f23_tests;
 #[cfg(test)]
 mod timeline_scrub_tests;
 #[cfg(test)]
+mod toolbar_menu_tests;
+#[cfg(test)]
 mod translate_tests;
 #[cfg(test)]
 mod trigger_problems_tests;
@@ -231,6 +245,36 @@ mod trigger_problems_tests;
 mod trigger_speed_tests;
 #[cfg(test)]
 mod try_again_tests;
+#[cfg(test)]
+mod u10_timeline_layers_tests;
+#[cfg(test)]
+mod u11_triggers_vars_question_tests;
+#[cfg(test)]
+mod u12_media_fonts_styles_galleries_tests;
+#[cfg(test)]
+mod u13_core_authoring_dialogs_tests;
+#[cfg(test)]
+mod u14_ai_dialogs_tests;
+#[cfg(test)]
+mod u15_status_welcome_tests;
+#[cfg(test)]
+mod u16_preview_tests;
+#[cfg(test)]
+mod u19_state_check_tests;
+#[cfg(test)]
+mod u20_state_image_picker_tests;
+#[cfg(test)]
+mod u21_publish_status_tests;
+#[cfg(test)]
+mod u23_shadow_glow_opacity_tests;
+#[cfg(test)]
+mod u8_inspector_tests;
+#[cfg(test)]
+mod u9_navigator_canvas_tests;
+#[cfg(test)]
+mod uiux_allowlist;
+#[cfg(test)]
+mod uiux_sweep_tests;
 #[cfg(test)]
 mod var_compare_tests;
 #[cfg(test)]
@@ -333,9 +377,10 @@ pub use welcome::{
     template_course,
 };
 pub use widgets::{
-    IconTone, icon_button, icon_button_danger, icon_button_enabled, icon_toggle, toolbar_button,
-    toolbar_button_active, toolbar_button_enabled, toolbar_caret_button, toolbar_primary_button,
-    toolbar_toggle,
+    COMBO_MIN_POPUP_HEIGHT, COMBO_MIN_WIDTH, IconTone, icon_button, icon_button_danger,
+    icon_button_enabled, icon_toggle, mixed_toggle, modal_backdrop_color, styled_combo,
+    toolbar_button, toolbar_button_active, toolbar_button_enabled, toolbar_caret_button,
+    toolbar_primary_button, toolbar_toggle,
 };
 
 use coursecraft_course::{Course, FontStyle, ShapeKind, shape_label};
@@ -888,6 +933,8 @@ pub struct UiState {
     /// Open the Text styles window on the next frame (it keeps its open flag in the context).
     pub open_text_styles_window: bool,
     pub preview_state: Option<String>,
+    /// Remembered non-fullscreen preview window size for the current session.
+    pub preview_size: Option<egui::Vec2>,
     pub bottom_tab: BottomTab,
     pub inspector_tab: InspectorTab,
     pub last_selected_object: Option<String>,
@@ -1085,10 +1132,8 @@ pub struct Editor {
     /// Cached video durations in ms keyed by media `src`, populated off the UI thread.
     pub video_durations:
         std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<u64>>>>,
-    pub pending_replace_object: Option<String>,
-    /// The shape or button (slide id, object id) whose picture fill the next
-    /// picked image becomes, instead of placing or replacing an object.
-    pub pending_picture_fill: Option<(String, String)>,
+    /// What the next picked file is for, if not inserting a new object on the canvas.
+    pub pending_image_pick: Option<PendingImagePick>,
     pub pending_requests: Vec<EditorRequest>,
     pub automation_available: bool,
     /// This app's own binary, for the Connect an AI agent dialog.
@@ -1174,6 +1219,21 @@ pub fn quiet_button(ui: &mut Ui, text: &str, tone: QuietTone, enabled: bool) -> 
     } else {
         resp
     }
+}
+
+/// What the next picked file is for, if not inserting a new object on the canvas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingImagePick {
+    /// Replace the source file of an existing object (image, audio, video, or captions).
+    ReplaceObject(String),
+    /// Set the picture fill of a shape or button on a slide.
+    PictureFill { slide: String, object: String },
+    /// Set the image override (`src`) of an image object's state.
+    StateImage {
+        slide: String,
+        object: String,
+        state: String,
+    },
 }
 
 /// A quiet button with `accent_text` color used for primary list actions.
@@ -1311,6 +1371,7 @@ impl Editor {
                 show_theme_window: false,
                 open_text_styles_window: false,
                 preview_state: None,
+                preview_size: None,
                 bottom_tab: BottomTab::Timeline,
                 inspector_tab: InspectorTab::Slide,
                 last_selected_object: None,
@@ -1372,8 +1433,7 @@ impl Editor {
             video_durations: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
-            pending_replace_object: None,
-            pending_picture_fill: None,
+            pending_image_pick: None,
             pending_requests: Vec::new(),
             automation_available: false,
             agent_exe_path: None,
@@ -1661,8 +1721,7 @@ impl Editor {
 
         self.media.clear();
         self.media_cache = coursecraft_render::MediaCache::new();
-        self.pending_replace_object = None;
-        self.pending_picture_fill = None;
+        self.pending_image_pick = None;
         self.pending_requests.clear();
 
         self.check_revision();
@@ -1755,8 +1814,7 @@ impl Editor {
         // The Insert importers arm a placement tool (or replace a queued
         // object). The library wants the bytes only, so keep both untouched.
         let previous_tool = self.ui.placement_tool.take();
-        let previous_replace = self.pending_replace_object.take();
-        let previous_picture_fill = self.pending_picture_fill.take();
+        let previous_pick = self.pending_image_pick.take();
         let src = if is_image || lower.ends_with(".svg") || lower.ends_with(".svgz") {
             self.import_image(file_name, bytes)
         } else if is_lottie {
@@ -1797,8 +1855,7 @@ impl Editor {
             }
         };
         self.ui.placement_tool = previous_tool;
-        self.pending_replace_object = previous_replace;
-        self.pending_picture_fill = previous_picture_fill;
+        self.pending_image_pick = previous_pick;
         let src = src?;
         self.mark_media_changed();
         self.set_status(format!("Added “{src}”. File operations are not undoable."));
@@ -2296,12 +2353,10 @@ impl Editor {
         // import_image validates, stores under a unique name and reports the
         // natural size through the placement tool. Paste always inserts a new
         // picture, so a pending "replace" intent must not consume the import.
-        let pending_replace = self.pending_replace_object.take();
-        let pending_picture_fill = self.pending_picture_fill.take();
+        let pending_pick = self.pending_image_pick.take();
         self.ui.placement_tool = None;
         let Some(src) = self.import_image("pasted-image.png", png_bytes) else {
-            self.pending_replace_object = pending_replace;
-            self.pending_picture_fill = pending_picture_fill;
+            self.pending_image_pick = pending_pick;
             return false;
         };
         let Some(PlacementTool::Image { natural_size, .. }) = self.ui.placement_tool.take() else {
@@ -2400,50 +2455,95 @@ impl Editor {
             (decoded.width as f32, decoded.height as f32)
         };
 
+        let pending_pick = self.pending_image_pick.take();
+        if let Some(PendingImagePick::StateImage {
+            slide: slide_id,
+            object: object_id,
+            state: state_name,
+        }) = pending_pick
+        {
+            let existing_state = self
+                .session
+                .course
+                .slide(&slide_id)
+                .and_then(|s| s.object(&object_id))
+                .and_then(|(o, _)| o.states.iter().find(|st| st.name == state_name))
+                .cloned();
+            let mut updated = existing_state?;
+            let src = sanitize_media_src(file_name, &self.media);
+            let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
+            self.media.push((src.clone(), arc_bytes));
+            updated.src = Some(src.clone());
+            let Ok(state_val) = serde_json::to_value(&updated) else {
+                self.media.retain(|(name, _)| name != &src);
+                return None;
+            };
+            if self
+                .run(
+                    "object.update_state",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "object": object_id,
+                        "state": state_val,
+                    }),
+                )
+                .is_none()
+            {
+                self.media.retain(|(name, _)| name != &src);
+                return None;
+            }
+            if is_svg && bytes.windows(5).any(|w| w.eq_ignore_ascii_case(b"<text")) {
+                self.set_status(
+                    "This SVG has text, which CourseCraft draws only as shapes. Convert text to outlines in your drawing app.",
+                );
+            }
+            return Some(src);
+        }
+
         let src = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
         self.media.push((src.clone(), arc_bytes));
 
-        // A picture fill applies only while its shape or button is still the
-        // selection; otherwise the picture is placed as usual.
-        let picture_fill = self
-            .pending_picture_fill
-            .take()
-            .filter(|(slide_id, object_id)| {
-                self.selection.slide == *slide_id
-                    && self.selection.object.as_deref() == Some(object_id.as_str())
-            });
-        if let Some((slide_id, object_id)) = picture_fill {
-            self.apply_picture_fill(&slide_id, &object_id, &src);
-        } else if let Some(object_id) = self.pending_replace_object.take() {
-            let current_alt = self
-                .session
-                .course
-                .slide(&self.selection.slide)
-                .and_then(|s| s.objects.iter().find(|o| o.id == object_id))
-                .and_then(|o| match &o.kind {
-                    coursecraft_course::ObjectKind::Image { alt, .. } => Some(alt.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
+        match pending_pick {
+            Some(PendingImagePick::PictureFill {
+                slide: slide_id,
+                object: object_id,
+            }) if self.selection.slide == slide_id
+                && self.selection.object.as_deref() == Some(object_id.as_str()) =>
+            {
+                self.apply_picture_fill(&slide_id, &object_id, &src);
+            }
+            Some(PendingImagePick::ReplaceObject(object_id)) => {
+                let current_alt = self
+                    .session
+                    .course
+                    .slide(&self.selection.slide)
+                    .and_then(|s| s.objects.iter().find(|o| o.id == object_id))
+                    .and_then(|o| match &o.kind {
+                        coursecraft_course::ObjectKind::Image { alt, .. } => Some(alt.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
 
-            self.run(
-                "object.update",
-                serde_json::json!({
-                    "slide": self.selection.slide,
-                    "object": object_id,
-                    "kind": {
-                        "type": "image",
-                        "src": src,
-                        "alt": current_alt,
-                    }
-                }),
-            );
-        } else {
-            self.ui.placement_tool = Some(PlacementTool::Image {
-                src: src.clone(),
-                natural_size: (natural_width, natural_height),
-            });
+                self.run(
+                    "object.update",
+                    serde_json::json!({
+                        "slide": self.selection.slide,
+                        "object": object_id,
+                        "kind": {
+                            "type": "image",
+                            "src": src,
+                            "alt": current_alt,
+                        }
+                    }),
+                );
+            }
+            _ => {
+                self.ui.placement_tool = Some(PlacementTool::Image {
+                    src: src.clone(),
+                    natural_size: (natural_width, natural_height),
+                });
+            }
         }
 
         if is_svg && bytes.windows(5).any(|w| w.eq_ignore_ascii_case(b"<text")) {
@@ -2647,7 +2747,12 @@ impl Editor {
         };
         let src = self.store_media(kind, file_name, bytes)?;
 
-        if let Some(object_id) = self.pending_replace_object.take() {
+        if matches!(
+            self.pending_image_pick,
+            Some(PendingImagePick::ReplaceObject(_))
+        ) && let Some(PendingImagePick::ReplaceObject(object_id)) =
+            self.pending_image_pick.take()
+        {
             let current_autoplay =
                 self.session
                     .course
@@ -2733,7 +2838,14 @@ impl Editor {
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
         self.media.push((path.clone(), arc_bytes));
 
-        let Some(object_id) = self.pending_replace_object.take() else {
+        let Some(PendingImagePick::ReplaceObject(object_id)) = (if matches!(
+            self.pending_image_pick,
+            Some(PendingImagePick::ReplaceObject(_))
+        ) {
+            self.pending_image_pick.take()
+        } else {
+            None
+        }) else {
             return Some(path);
         };
         if self
@@ -2953,13 +3065,39 @@ impl Editor {
         self.open_preview_at(slide.as_deref());
     }
 
-    /// Open the in-editor course preview window starting at the given slide.
+    /// Open the in-editor course preview window for the given slide, or the whole course if `None`.
     ///
     /// Bank slides live outside play order, so starting a preview at one
-    /// falls back to the course's own start slide.
+    /// falls back to the whole course from its start slide.
     pub fn open_preview_at(&mut self, slide: Option<&str>) {
         let slide = slide.filter(|id| self.session.course.bank_slide(id).is_none());
-        self.preview = Some(Preview::new(&self.session.course, slide));
+        let mut preview = Preview::new(&self.session.course, slide);
+        preview.set_initial_size(self.ui.preview_size);
+        self.preview = Some(preview);
+    }
+
+    /// Open the in-editor course preview window restricted to the given slide IDs.
+    ///
+    /// Bank slides are ignored; if no scene slides remain, opens the whole course.
+    pub fn open_preview_subset(&mut self, slides: &[String]) {
+        let filtered: Vec<String> = slides
+            .iter()
+            .filter(|id| !id.is_empty() && self.session.course.bank_slide(id).is_none())
+            .cloned()
+            .collect();
+        let mut preview = if filtered.is_empty() {
+            Preview::new(&self.session.course, None)
+        } else {
+            Preview::new_subset(&self.session.course, Some(&filtered))
+        };
+        preview.set_initial_size(self.ui.preview_size);
+        self.preview = Some(preview);
+    }
+
+    /// Open the in-editor course preview window for all currently selected slides.
+    pub fn open_preview_selected(&mut self) {
+        let ids = self.selection.slide_ids();
+        self.open_preview_subset(&ids);
     }
 
     /// Show a neutral status message in the status bar.
@@ -3622,7 +3760,20 @@ impl Editor {
         #[cfg(test)]
         crate::guard_counters::note_validation_run();
         if let Some(res) = self.run("course.validate", serde_json::json!({})) {
-            let (errs, warns, issues) = parse_validation_result(&res);
+            let (errs, mut warns, mut issues) = parse_validation_result(&res);
+            for r in coursecraft_course::media_references(&self.session.course) {
+                if r.src.ends_with('/') {
+                    continue;
+                }
+                if !self.media.iter().any(|(name, _)| name == &r.src) {
+                    warns += 1;
+                    issues.push(ValidationIssueSummary {
+                        severity: "warning".to_owned(),
+                        path: r.place.clone(),
+                        message: format!("Missing media \u{201C}{}\u{201D} in {}.", r.src, r.place),
+                    });
+                }
+            }
             self.ui.trigger_issues_by_path = index_trigger_issues(&issues);
             self.ui.validation_errors = errs;
             self.ui.validation_warnings = warns;
@@ -4098,7 +4249,7 @@ impl Editor {
         }
 
         // 1. Top menu bar (panel fill, hairline below)
-        Panel::top("editor_menu_bar")
+        let menu_bar = Panel::top("editor_menu_bar")
             .exact_size(TOP_BAR_HEIGHT)
             .resizable(false)
             .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
@@ -4120,7 +4271,7 @@ impl Editor {
         dialog::set_top_inset(ui.ctx(), toolbar_panel.response.rect.max.y);
 
         // 2. Bottom status bar (26 px, panel fill, hairline above)
-        Panel::bottom("editor_status_bar")
+        let status_bar = Panel::bottom("editor_status_bar")
             .exact_size(STATUS_BAR_HEIGHT)
             .resizable(false)
             .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
@@ -4128,52 +4279,68 @@ impl Editor {
             .show(ui, |ui| {
                 status::show_status_bar(self, ui);
             });
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::unique("coursecraft_screen_rect"),
+                egui::Rect::from_min_max(
+                    egui::pos2(0.0, 0.0),
+                    egui::pos2(menu_bar.response.rect.max.x, status_bar.response.rect.max.y),
+                ),
+            );
+        });
 
         // 3. Bottom timeline panel. Keep at least 200 px of canvas above it.
-        let content_h = ui.ctx().content_rect().height();
-        let chrome_h = TOP_BAR_HEIGHT + toolbar::TOOLBAR_HEIGHT + STATUS_BAR_HEIGHT;
-        let max_by_canvas = (content_h - chrome_h - 200.0).max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
-        let max_panel_h = (content_h * timeline::TIMELINE_PANEL_MAX_FRACTION)
-            .min(max_by_canvas)
-            .max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
-        let initial_panel_h = self
-            .ui
-            .timeline
-            .panel_height
-            .clamp(timeline::TIMELINE_PANEL_MIN_HEIGHT, max_panel_h);
-        // The canvas/side panels are laid out after this panel and sit on top of the outer half
-        // of the default 5px resize grab zone, leaving only ~4px inside the panel. Widen it and
-        // keep the first `RESIZE_GRAB_PX` of the panel free of content so it is easy to hit.
-        let old_grab = ui.style().interaction.resize_grab_radius_side;
-        ui.style_mut().interaction.resize_grab_radius_side = timeline::PANEL_RESIZE_GRAB_PX;
-        let timeline_panel = Panel::bottom("editor_timeline_panel")
-            .default_size(initial_panel_h)
-            .size_range(timeline::TIMELINE_PANEL_MIN_HEIGHT..=max_panel_h)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
-            .show_separator_line(true)
-            .show(ui, |ui| {
-                // A resizable panel otherwise shrinks to its content; always fill the
-                // size the user picked (or the default).
-                ui.set_min_height(ui.available_height());
-                ui.add_space(timeline::PANEL_RESIZE_GRAB_PX - 2.0);
-                let mut actions = Vec::new();
-                timeline::show_timeline_panel(self, ui, &mut actions);
-                for (cmd, params) in actions {
-                    self.run(cmd, params);
-                }
-            });
-        ui.style_mut().interaction.resize_grab_radius_side = old_grab;
-        self.ui.timeline.panel_rect = Some(timeline_panel.response.rect);
-        self.ui.timeline.panel_height = timeline_panel.response.rect.height();
-        if ui.input(|i| i.pointer.primary_pressed())
-            && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
-        {
-            self.ui.timeline.focused = timeline_panel.response.rect.contains(pos);
+        // Hidden in Master View, which edits slide masters without a timeline.
+        if self.ui.master_view {
+            self.ui.timeline.panel_rect = None;
+            self.ui.timeline.tab_rects.clear();
+        } else {
+            let content_h = ui.ctx().content_rect().height();
+            let chrome_h = TOP_BAR_HEIGHT + toolbar::TOOLBAR_HEIGHT + STATUS_BAR_HEIGHT;
+            let max_by_canvas =
+                (content_h - chrome_h - 200.0).max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
+            let max_panel_h = (content_h * timeline::TIMELINE_PANEL_MAX_FRACTION)
+                .min(max_by_canvas)
+                .max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
+            let initial_panel_h = self
+                .ui
+                .timeline
+                .panel_height
+                .clamp(timeline::TIMELINE_PANEL_MIN_HEIGHT, max_panel_h);
+            // The canvas/side panels are laid out after this panel and sit on top of the outer half
+            // of the default 5px resize grab zone, leaving only ~4px inside the panel. Widen it and
+            // keep the first `RESIZE_GRAB_PX` of the panel free of content so it is easy to hit.
+            let old_grab = ui.style().interaction.resize_grab_radius_side;
+            ui.style_mut().interaction.resize_grab_radius_side = timeline::PANEL_RESIZE_GRAB_PX;
+            let timeline_panel = Panel::bottom("editor_timeline_panel")
+                .default_size(initial_panel_h)
+                .size_range(timeline::TIMELINE_PANEL_MIN_HEIGHT..=max_panel_h)
+                .resizable(true)
+                .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
+                .show_separator_line(true)
+                .show(ui, |ui| {
+                    // A resizable panel otherwise shrinks to its content; always fill the
+                    // size the user picked (or the default).
+                    ui.set_min_height(ui.available_height());
+                    ui.add_space(timeline::PANEL_RESIZE_GRAB_PX - 2.0);
+                    let mut actions = Vec::new();
+                    timeline::show_timeline_panel(self, ui, &mut actions);
+                    for (cmd, params) in actions {
+                        self.run(cmd, params);
+                    }
+                });
+            ui.style_mut().interaction.resize_grab_radius_side = old_grab;
+            self.ui.timeline.panel_rect = Some(timeline_panel.response.rect);
+            self.ui.timeline.panel_height = timeline_panel.response.rect.height();
+            if ui.input(|i| i.pointer.primary_pressed())
+                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+            {
+                self.ui.timeline.focused = timeline_panel.response.rect.contains(pos);
+            }
         }
 
         // 4. Left slides panel
-        Panel::left("editor_slides_panel")
+        let slides_panel = Panel::left("editor_slides_panel")
             .default_size(220.0)
             .size_range(180.0..=320.0)
             .resizable(true)
@@ -4185,7 +4352,7 @@ impl Editor {
             });
 
         // 5. Right properties panel (Inspector: Format, Animate, Slide, Course)
-        Panel::right("editor_properties_panel")
+        let properties_panel = Panel::right("editor_properties_panel")
             .default_size(PROPERTIES_PANEL_WIDTH)
             .size_range(260.0..=400.0)
             .resizable(true)
@@ -4200,6 +4367,12 @@ impl Editor {
                 properties::show_properties_panel(self, &mut content);
                 ui.allocate_rect(rect, egui::Sense::hover());
             });
+        coach::set_chrome_rects(
+            ui.ctx(),
+            toolbar_panel.response.rect,
+            slides_panel.response.rect,
+            properties_panel.response.rect,
+        );
 
         // 6. Central canvas and layers strip, or the course map.
         egui::CentralPanel::default()
@@ -4289,6 +4462,9 @@ impl Editor {
             if let Some(ref mut preview) = self.preview {
                 let source = MemoryMediaSource { media: &self.media };
                 preview.show(ui.ctx(), &mut open, Some((&mut self.media_cache, &source)));
+                if let Some(size) = preview.remembered_size() {
+                    self.ui.preview_size = Some(size);
+                }
                 requests.append(&mut preview.requests);
             }
             if !open {
@@ -4318,6 +4494,13 @@ impl Editor {
         self.check_revision();
 
         eyedropper::paint_overlay(ui.ctx());
+        let any_popup_open = egui::Popup::is_any_open(ui.ctx());
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::unique("coursecraft_popup_open_prev_frame"),
+                any_popup_open,
+            );
+        });
         widgets::end_press_guard(ui.ctx());
         requests.append(&mut self.pending_requests);
         requests

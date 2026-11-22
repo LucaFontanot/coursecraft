@@ -21,7 +21,7 @@ Course
 │                   (User variables use [A-Za-z0-9_-]; read-only built-in variables
 │                    like Course.Progress and Slide.ElapsedMs are computed by logic)
 ├─ quiz?            {passing_percent}
-├─ player           {show_nav, show_menu, show_seekbar, show_speed, show_fullscreen (default true),
+├─ player           {show_bar, show_nav, show_menu, show_seekbar, show_speed, show_fullscreen (default true),
 │                    show_transcript=false (notes shown as a transcript tab),
 │                    show_title, show_volume, show_captions (default true),
 │                    logo? (project-relative image src, shown in the strip, max 28 pt high),
@@ -36,6 +36,7 @@ Course
 ├─ fonts[]?         {family, style: regular|bold|italic|bold_italic, src} (omitted when empty)
 ├─ background_audio? {src, volume=0.5, loop=true} (omitted when unset)
 ├─ start_slide?     slide id (default: first slide)
+├─ editor?          {last_publish?: {standard, lms_status?="auto"}} (omitted when default)
 ├─ scenes[] {id, title}
    └─ slides[] {id, title, duration_ms=5000, background?, transition?, notes?, master?, revisit=auto, draw?, player?}
       ├─ objects[]      base layer, bottom → top (timing, states, entrance?, exit?, motion_paths[])
@@ -324,7 +325,7 @@ Hit testing stays the object's frame (rotated and flipped when the object is), n
 
 ### Shape outlines, unfilled shapes and text
 
-A shape may set `outline` to `{color, width, dash, dash_pattern?}`. `color` is a normal `#RRGGBB`/`#RRGGBBAA` colour, `width` is in slide pixels and must be finite and within `0..=50`, `dash` is `solid` (default), `dash`, `dot`, `dash_dot` or `custom`, and optional `dash_pattern` is an even-length list (2 to 32 entries, each in `(0, 100]`) of alternating dash and gap lengths as multiples of `width` (omitted when using `dash`'s built-in spacing). The outline is a band centred on the shape's edge, including a hole's edge; it is a mesh, not an `egui::Stroke`, so the wasm player and the offscreen rasteriser draw it the same way. Miter joins fall back to a bevel past a limit. Non-finite or zero widths draw nothing. `Lines` kinds keep their filled bands and take neither an outline nor text. `text` and `image` objects may also carry an optional `outline` (and `image` may carry an optional `shape` mask).
+A shape may set `outline` to `{color, width, dash, dash_pattern?, join?, miter_limit?}`. `color` is a normal `#RRGGBB`/`#RRGGBBAA` colour, `width` is in slide pixels and must be finite and within `0..=50`, `dash` is `solid` (default), `dash`, `dot`, `dash_dot` or `custom`, and optional `dash_pattern` is an even-length list (2 to 32 entries, each in `(0, 100]`) of alternating dash and gap lengths as multiples of `width` (omitted when using `dash`'s built-in spacing). Optional `join` is `miter` (default, omitted), `round` or `bevel`, and optional `miter_limit` is a positive finite multiple of half-stroke-width (defaults to `8` when omitted). The outline is a band centred on the shape's edge, including a hole's edge; it is a mesh, not an `egui::Stroke`, so the wasm player and the offscreen rasteriser draw it the same way. Miter joins fall back to a bevel past `miter_limit`. Non-finite or zero widths draw nothing. `Lines` kinds keep their filled bands and take neither an outline nor text. `text` and `image` objects may also carry an optional `outline` (and `image` may carry an optional `shape` mask).
 
 An unfilled shape is `fill: "#00000000"`; the shape then draws only its outline and text. `outline` and `text` are omitted when unset, so a plain shape saves exactly as it did before these fields existed.
 
@@ -427,7 +428,7 @@ Layer options beyond the basic flags are omitted from JSON when default, so exis
 - `allow_seek` is `auto` (default), `yes` or `no`, and decides whether the learner's seekbar moves this layer's clock.
 - `revisit` is `auto` (default), `reset` or `resume`, and decides what showing the layer again does to its clock and object states.
 
-`Slide.player` is an optional struct of per-slide player overrides, omitted when unset. Its `next_requires` (same shape as `player.next_requires`) replaces the course rule on that slide. Its `show_nav`, `show_seekbar` and `show_menu` (each true, false or unset) replace the course flags of the same name on that slide. A `variable` rule must name a true/false variable. See "Player navigation modes" in `triggers.md`.
+`Slide.player` is an optional struct of per-slide player overrides, omitted when unset. Its `next_requires` (same shape as `player.next_requires`) replaces the course rule on that slide. Its `show_bar`, `show_nav`, `show_seekbar` and `show_menu` (each true, false or unset) replace the course flags of the same name on that slide. A `variable` rule must name a true/false variable. See "Player navigation modes" in `triggers.md`.
 
 `Slide.revisit` uses the same `auto | reset | resume` values and applies when entering an already-visited slide. See `triggers.md` for the runtime rules.
 
@@ -584,7 +585,7 @@ Applying a style copies it into the object's base style and sets the link; per-r
 | `hidden` | not drawn, not clickable (needs no definition) |
 | `disabled` | drawn, swallows clicks |
 | `visited` / `selected` | set automatically after a click (see `triggers.md`) |
-| `hover` / `down` | applied by the renderer while hovered or pressed |
+| `hover` / `down` | applied by the renderer while hovered or pressed, layered over the current runtime state (`down` wins over `hover`; skipped in `disabled` or `hidden`) |
 
 Any other name is a custom state you change with `change_state`.
 
@@ -650,3 +651,10 @@ XLIFF 1.2 export walks every learner-visible field: course, scene and slide titl
 ## Versioning
 
 Any breaking change bumps `SCHEMA_VERSION` and ships a migration in `coursecraft-course`. Never silently reinterpret old files.
+
+## Editor publish settings
+
+`editor.last_publish` is optional and omitted when unset. It stores `{standard, lms_status?}`:
+
+- `standard`: last chosen publish target (`"scorm12"`, `"scorm2004"`, `"cmi5"`, `"xapi"`, `"lti"`, `"web"`).
+- `lms_status` (optional, default `"auto"`, omitted when default): how SCORM 1.2 maps runtime completion (`Passed`, `Failed`, `Completed`, `Incomplete`) to `cmi.core.lesson_status` (`"auto"`, `"passed_incomplete"`, `"passed_failed"`, `"completed_incomplete"`, `"completed_failed"`). Ignored by SCORM 2004, cmi5, xAPI, LTI, and Web.

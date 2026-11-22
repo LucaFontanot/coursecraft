@@ -242,8 +242,9 @@ course.validate      File/Check Course        -          {}
 course.audit         -                        -          {}
 course.update        File/Course Properties   -          {"title"?: string, "id"?: string, "start_slide"?: id|null, "language"?: string|null}
 course.set_title     -                        -          {"title": string}
-course.set_player    Project/Player Settings  -          {"show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}}
+course.set_player    Project/Player Settings  -          {"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}}
 course.set_quiz      Project/Quiz Settings    -          {"passing_percent": 0..=100|null}
+course.set_publish_settings -                 -          {"standard"?: string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}
 course.set_background_audio -                        -          {"src"?: string | null, "volume"?: number, "loop"?: bool}
 course.add_finish_button -                        -          {}
 course.recolor       -                        -          {"from": "#RRGGBB", "to": "#RRGGBB"}  (every use of a colour, course-wide; keeps each use's alpha; returns {changed})
@@ -273,7 +274,7 @@ slide.paste          -                        -          {"scene"?: id, "after"?
 slide.set_duration   -                        -          {"slide": id, "ms": u32}
 slide.set_background -                        -          {"slide": id, "background": color|null}
 slide.set_transition -                        -          {"slide": id, "transition": Transition|null}
-slide.set_player_overrides -                  -          {"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}
+slide.set_player_overrides -                  -          {"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_bar"?: bool|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}
 slide.add_cue        -                        -          {"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}
 slide.set_cue        -                        -          {"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}
 slide.remove_cue     -                        -          {"slide": id, "layer"?: id, "cue": id}
@@ -319,6 +320,7 @@ view.guides.add      -                        -          {"vertical": bool, "at"
 view.guides.move     -                        -          {"index": usize, "at": number}
 view.guides.remove   -                        -          {"index": usize}
 object.set_opacity   -                        -          {"slide": id, "object"?: id, "objects"?: id[], "opacity": number}
+object.set_outline_join -                       -          {"slide": id, "object"?: id, "objects"?: id[], "join": "miter"|"round"|"bevel"}
 object.set_fill_style -                       -          {"slide": id, "object"?: id, "objects"?: id[], "fill_style": FillStyle|null}
 object.set_shadow    -                        -          {"slide": id, "object"?: id, "objects"?: id[], "shadow": Shadow|null}
 object.set_glow      -                        -          {"slide": id, "object"?: id, "objects"?: id[], "glow": Glow|null}
