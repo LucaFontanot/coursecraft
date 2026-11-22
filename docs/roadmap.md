@@ -318,19 +318,64 @@ From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Sugges
 ## M30 Ribbon UI parity (planned)
 
 A Storyline 360 author should find every command where they look for it. Plan and full inventory:
-`docs/ui/` (start at `docs/ui/README.md`), taken from public beginner tutorials. Clean-room: same
-tabs, groups and order; our own look and coined names.
+`docs/ui/` (start at `docs/ui/README.md`), taken from public beginner tutorials. Feature-level
+status: `docs/ui/feature-parity.md` (2026-11-23: 103 built, 35 partly, 69 not yet, 12 not
+planned). Clean-room: same tabs, groups and order; our own look and coined names. Hand checks:
+`docs/release-checklist.md` § 9.
 
 1. Ribbon drawn from one declarative spec (`crates/ui-egui/src/ribbon/spec.rs`), widgets ported
    from DeckCraft; Home first, beside the old toolbar.
 2. Every main tab (File, Home, Insert, Slides, Design, Transitions, Animations, View, Help) with
    built controls wired and the rest **drawn disabled** with a "Not available yet" or "Not planned"
-   tooltip.
-3. Contextual tabs (Drawing, Picture, Audio/Video, Table, Question Tools) and modes (Slide Master,
-   Preview); then the menu bar and flat toolbar go, the quick access toolbar arrives.
-4. Shell: view tabs for open slides, status bar, right panel (Triggers over Slide Layers), Slide
-   Properties in the Course Map, undockable panels.
-5. Dialog front-ends over existing commands: Trigger, Insert Slide, Player Properties, Publish.
+   tooltip; the shared New Slide ▾ menu.
+3. Contextual tabs (Drawing, Picture, Button, Audio/Video, Table, Question Tools) and modes (Slide
+   Master, Preview); then the menu bar and flat toolbar go, the quick access toolbar arrives.
+4. File page (the welcome screen restyled: start actions, Recent with thumbnails, Close project).
+5. Shell: view tabs for open slides, status bar, right panel (Triggers over Slide Layers), Slide
+   Properties in the Course Map, collapsible and undockable panels, Reset Panels, tooltips with
+   shortcut and help, complete right-click menus.
+6. Dialog front-ends over existing commands: Trigger, Insert Slide / Insert Question, Player
+   Properties, Publish.
+
+The milestones after M30 switch the disabled buttons on, one area at a time. Each one moves rows
+in `docs/ui/feature-parity.md` to ✅ and flips the matching `NotYet` actions in the ribbon spec.
+Order follows what testers ask for; this is the default.
+
+## M31 Text and formatting gaps (planned)
+
+Clear formatting, text shadow, change case, highlight colour (new run field), text direction,
+numbering styles, vertical alignment in the ribbon, paste options (keep source, text only, Paste
+Special), Font, Paragraph and Size and Position dialogs, Create New Theme Fonts dialog, slide
+number field, symbol picker, insert variable reference, focus order dialog.
+
+## M32 Pictures, buttons and media polish (planned)
+
+Brightness and contrast, picture styles, crop to shape, zoom picture, recolor photos, reset
+picture, reflection and soft edges, change shape, button icons (gallery, align, colour, remove),
+button sets, When Clicked Action pre-filled, callout shapes, export picture/audio/video, audio and
+video editor beyond trim, captions add/export/delete, compression, video in a new window, webcam
+recording, a bundled open-licence icon set.
+
+## M33 Structure, masters and questions (planned)
+
+Starting scene (model field and runtime rule in `docs/spec/triggers.md`), scene index, reset slide
+to layout, master Preserve / Title / Insert Placeholder, hide background graphics, feedback master,
+swipe gestures (editor and player), custom mouse cursor, convert slide to custom question, question
+form view, feedback and scoring by choice, media per choice and feedback.
+
+## M34 Animation and timeline depth (planned)
+
+Full entrance/exit gallery, emphasis animations, animation painter, sequence by paragraph with
+build steps on the timeline, transition effect options and Apply to All, path options, zoom
+regions, timeline menu (fit to longest, reset, align to playhead or cue point, Timing dialog),
+C adds a cue point while playing, Course Map scene collapse and branch lines.
+
+## M35 Preview and AI ribbon (planned)
+
+Preview device sizes and orientations, Replay scopes, Edit Slide and Inspect (variables and
+trigger log from the simulator), publish quality, LRS beside an LMS, editable player text labels,
+save and import player settings. The AI group through the user's own agent: quiz, question and
+summary from course content, insert and edit text, image, sound effects and music, and an AI panel.
 
 ## After the first release
 

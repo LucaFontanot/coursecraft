@@ -152,3 +152,40 @@ Do each of these once per service:
 - [ ] Look in the synced folder after a few saves. Pass: only the project and its `.autosave.ccraft` are there; no `.tmp-` files and no version copies (versions are in `~/Library/Application Support/CourseCraft/versions/` on a Mac, `%APPDATA%\CourseCraft\versions\` on Windows).
 - [ ] While the service is uploading the file, press Save. Pass: it succeeds or, after about 2 seconds, shows the "sync service" message; the old file is never damaged.
 - [ ] Open the project from an iCloud or OneDrive file that is only online (not downloaded yet). Pass: it downloads and opens, or says why it cannot.
+
+## 9. Ribbon UI parity (M30 onward)
+
+Time: about 1.5 hours, then 20 minutes for each later milestone (M31 to M35). Needs: the desktop app, a Storyline-experienced author if possible, `docs/ui/ribbon.md`, `docs/ui/contextual-tabs.md` and `docs/ui/feature-parity.md` open beside it, the showcase course.
+
+Tab strip and ribbon
+
+- [ ] The tab strip reads File, Home, Insert, Slides, Design, Transitions, Animations, View, Help, in that order. Pass: same order as `ribbon.md` › Tab strip; no menu bar and no old flat toolbar.
+- [ ] Walk every main tab and compare each group and button with `ribbon.md`. Pass: nothing missing, nothing extra, same order; differences noted in the doc.
+- [ ] Hover every disabled button. Pass: each says "Not available yet: …" or "Not planned: …"; clicking does nothing and changes nothing (undo history unchanged).
+- [ ] Hover enabled buttons on each tab. Pass: name, shortcut (if any) and one sentence of help.
+- [ ] Open the Course Map, then a slide. Pass: Home changes between the map variant and the slide variant; Insert, Transitions and Animations are disabled in the map with "Open a slide first".
+- [ ] Narrow the window step by step down to the minimum. Pass: groups shrink to small buttons, then to one group button; nothing clips, nothing wraps to a second row.
+- [ ] Collapse and expand the ribbon (Ctrl+F1, double-click a tab). Pass: the canvas grows and shrinks; the setting survives a restart.
+
+Contextual tabs and modes
+
+- [ ] Select a shape, a picture, a button, an audio, a video, a table and a question slide in turn. Pass: Drawing Tools, Picture Tools, Button Tools, Audio Tools, Video Tools, Table Tools and Question Tools appear with their caption, and only for their object; with two kinds selected both captions show.
+- [ ] Sit on a contextual tab and deselect. Pass: the ribbon returns to Home.
+- [ ] Open the slide master, then Preview. Pass: the strip changes to the master tabs and to the Preview tab; Close returns to the normal strip.
+
+File page, quick access toolbar, shell
+
+- [ ] Click File. Pass: the full-window File page with New Project, Import, Recent (with thumbnails) and Browse for more…; Esc returns to the editor. On launch with no course, the same page shows.
+- [ ] Every item of the old File, Edit, Insert, Arrange, Project, View and Help menus is reachable (File page, ribbon, right-click menus). Use the list in `docs/ui/ribbon.md` › File and › Help.
+- [ ] Right-click a ribbon button, Add to Quick Access Toolbar; remove it again. Pass: it shows in the title bar and survives a restart.
+- [ ] Open two slides. Pass: each gets a view tab next to Course Map; closing a tab keeps the course.
+- [ ] Undock the Timeline, move it, dock it back; collapse Triggers and Slide Layers. Pass: the layout is kept after a restart and View › Reset Panels restores it.
+
+Feature parity
+
+- [ ] For each milestone released (M31 to M35), take the rows it moved in `docs/ui/feature-parity.md` and try each one in the app and in a published course. Pass: the row's status is true; the summary counts match the tables.
+- [ ] A Storyline-experienced author builds the two tutorial courses' first slides (a title slide on a master, a narrated slide with cue points, a marker slide, a layer with a Start button, a multiple-choice question) without help. Note every place they looked for a command and did not find it.
+
+Web editor
+
+- [ ] Open the web editor in Chrome and Safari. Pass: the same ribbon draws; desktop-only file actions are disabled with their reason; no console errors.

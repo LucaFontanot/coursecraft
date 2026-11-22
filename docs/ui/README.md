@@ -20,6 +20,7 @@ feature lands, the button is switched on; nothing moves.
 | File | What it holds |
 |---|---|
 | [storyline-observed.md](storyline-observed.md) | What the tutorials show, tab by tab and panel by panel. The reference. |
+| [feature-parity.md](feature-parity.md) | One row per feature: CourseCraft status and the milestone (M30–M35) that closes it. The summary the roadmap follows. |
 | [ribbon.md](ribbon.md) | CourseCraft's main tabs: every group and control, its CourseCraft label, kind, command id and status. |
 | [contextual-tabs.md](contextual-tabs.md) | Tabs that appear for a selection or a mode: Drawing Tools, Picture Tools, Audio/Video Tools, Question Tools, Table Tools, Slide Master, Feedback Master, Preview, question form view. |
 | [shell-panels-dialogs.md](shell-panels-dialogs.md) | Window layout around the ribbon: title bar, quick access toolbar, view tabs, panels (Scenes, Timeline/States/Notes, Triggers, Slide Layers, Slide Properties), status bar, context menus and dialogs. |
@@ -86,6 +87,7 @@ differences).
    checklist). UIs only dispatch (AGENTS.md rule 2).
 3. In the ribbon spec (see [implementation.md](implementation.md)), change the control's action from
    `NotYet(..)` to `Command("<id>")` or `Ui(<action>)`.
-4. Change its status in the table to ✅ or 🟡.
+4. Change its status in the table to ✅ or 🟡, and the feature's row and summary counts in
+   [feature-parity.md](feature-parity.md).
 5. If the control changes play-time behaviour, update `docs/spec/triggers.md` in the same commit.
 6. Run `cargo xtask ci`.
