@@ -294,6 +294,22 @@ Test plan by Gemini 4 Neon (`docs/testing/m27-plan.md`, reviewed by Opus); 25 st
 - Editor sweep: triggers, states, timeline, media, undo/redo (every editing command), clipboard, layers, questions, masters, scenes, find, accessibility, save/open/autosave/versions.
 - 48 bugs found and fixed: all 27 suspected by the plan, plus 21 more found by the tests.
 
+## M28 Owner feedback and the UI/UX pass
+
+Owner feedback (h1–h7), then the UI/UX plan by Gemini 4 Neon (`docs/testing/m28-uiux-plan.md`, reviewed by Opus); steps by Gemini 4 Hydrogen (agy CLI). Log: `docs/bug-hunt/2026-11-22-m28.md`.
+
+- Player outline drawer inside the player, even shape outlines (corners and miter limit from PowerPoint), resizable full-screen preview with a darker backdrop, preview of one slide or selected slides, true text-style buttons, a control bar that never covers the slide, clickable video, revisit warning.
+- UI/UX pass over every surface (u1–u18): hit targets, tooltips, contrast, dialogs, menus, inspector, panels, player chrome.
+- Tester feedback on states (Noe, `docs/testing/m28-noe-states-analysis.md`): hover and down states change images and text on every object (u19), a state's image is picked, not typed, and checked (u20), and States sit at the top of the Format panel with Edit states… in the right-click menu (u21).
+
+## M29 Rich object states (planned)
+
+From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Suggestions 1 and 3, Phase B). About 10–12 steps. Clean-room: match the capability, our own look and wording.
+
+1. **States tab** at the bottom, next to Timeline and Triggers: every state of the selected object as a live thumbnail, side by side; duplicate and rename states (renaming rewrites the triggers that use them). Format panel keeps a compact Initial row and a link to the tab. (2 steps)
+2. **Wider states and canvas state editing:** a state can change fill style, outline, text style, opacity, shadow, glow, crop, rotation and flips, not only fill, text and image (backward-compatible fields, one undoable `object.patch_state`). An edit-state mode on the canvas sends normal toolbar and inspector edits into the active state, shows which properties the state overrides and lets each be reset. (4–5 steps)
+3. **Items inside a state:** a state can add its own shapes, images, text or icons (a check mark on a visited button, a new face on a character), positioned relative to the object, drawn and hit-tested as part of it, included in publish, the web player and translation export. (4–5 steps)
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
