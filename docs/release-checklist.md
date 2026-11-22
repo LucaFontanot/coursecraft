@@ -186,6 +186,15 @@ Feature parity
 - [ ] For each milestone released (M31 to M35), take the rows it moved in `docs/ui/feature-parity.md` and try each one in the app and in a published course. Pass: the row's status is true; the summary counts match the tables.
 - [ ] A Storyline-experienced author builds the two tutorial courses' first slides (a title slide on a master, a narrated slide with cue points, a marker slide, a layer with a Start button, a multiple-choice question) without help. Note every place they looked for a command and did not find it.
 
+Localization (craft-i18n)
+
+- [ ] Build with `CRAFT_I18N_DIR` set to the pinned craft-i18n checkout and `CRAFT_I18N_REQUIRED=1`. Pass: the build embeds the offered languages; without the variable it still builds, English only.
+- [ ] Preferences › Language: Automatic follows the system language; pick each offered language. Pass: the whole UI (ribbon, panels, dialogs, tooltips, disabled reasons, messages) switches at once without a restart; untranslated strings show in English, never as keys or blanks.
+- [ ] In German (the longest common language), walk every ribbon tab at the minimum window width. Pass: no clipped or overlapping labels.
+- [ ] Type numbers in X, Y, Width, Duration with the language set to German or French. Pass: the decimal comma is accepted and shown; the saved course file still has plain numbers.
+- [ ] A file name with right-to-left letters in a message. Pass: the sentence around it stays in order.
+- [ ] Debug build in the pseudo locale. Pass: every visible string is marked.
+
 Web editor
 
 - [ ] Open the web editor in Chrome and Safari. Pass: the same ribbon draws; desktop-only file actions are disabled with their reason; no console errors.

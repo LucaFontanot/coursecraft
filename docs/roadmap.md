@@ -323,8 +323,14 @@ status: `docs/ui/feature-parity.md` (2026-11-23: 103 built, 35 partly, 69 not ye
 planned). Clean-room: same tabs, groups and order; our own look and coined names. Hand checks:
 `docs/release-checklist.md` § 9.
 
-1. Ribbon drawn from one declarative spec (`crates/ui-egui/src/ribbon/spec.rs`), widgets ported
-   from DeckCraft; Home first, beside the old toolbar.
+0. **Foundation** (owner decision 2026-11-23): the new UI is built on `craft-ui` and localized
+   with `craft-i18n`, both from `storytold/craft-libs`, pinned to one rev, with DeckCraft's egui
+   fork patch. `build.rs` embeds the craft-i18n catalogs when `CRAFT_I18N_DIR` is set (English
+   otherwise); `tl!` for every interface string; Preferences › Language. See
+   `docs/ui/implementation.md` § 0 and `docs/ui/localization.md`.
+1. Workspace on `craft-ui` docking and panes with today's panels inside. Ribbon drawn from one
+   declarative spec (`crates/ui-egui/src/ribbon/spec.rs`), ribbon widgets ported from DeckCraft
+   onto `craft-ui`; Home first, beside the old toolbar.
 2. Every main tab (File, Home, Insert, Slides, Design, Transitions, Animations, View, Help) with
    built controls wired and the rest **drawn disabled** with a "Not available yet" or "Not planned"
    tooltip; the shared New Slide ▾ menu.
@@ -379,7 +385,8 @@ summary from course content, insert and edit text, image, sound effects and musi
 
 ## After the first release
 
-- More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
+- Interface translations: `coursecraft.tsv` catalogs in the craft-i18n data repository, starting with de, fr, es, it, pt-br, nl, pl (Latin script); the wiring lands in M30 (`docs/ui/localization.md`).
+- More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Right-to-left interface languages wait for a mirrored layout. Until then, testing uses English and the other scripts the bundled font supports.
 - Phone-friendly, scrolling lessons, once CourseCraft can compete with Storyline 360. This is where it starts to stand apart from the competition.
 
 ## Later

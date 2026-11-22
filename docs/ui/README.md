@@ -24,7 +24,8 @@ feature lands, the button is switched on; nothing moves.
 | [ribbon.md](ribbon.md) | CourseCraft's main tabs: every group and control, its CourseCraft label, kind, command id and status. |
 | [contextual-tabs.md](contextual-tabs.md) | Tabs that appear for a selection or a mode: Drawing Tools, Picture Tools, Audio/Video Tools, Question Tools, Table Tools, Slide Master, Feedback Master, Preview, question form view. |
 | [shell-panels-dialogs.md](shell-panels-dialogs.md) | Window layout around the ribbon: title bar, quick access toolbar, view tabs, panels (Scenes, Timeline/States/Notes, Triggers, Slide Layers, Slide Properties), status bar, context menus and dialogs. |
-| [implementation.md](implementation.md) | How to build it in `coursecraft-ui-egui`: a declarative ribbon spec, the widgets to port from DeckCraft, enable rules, tests and the order of work. |
+| [implementation.md](implementation.md) | How to build it in `coursecraft-ui-egui` on `craft-ui` (craft-libs): a declarative ribbon spec, the ribbon widgets to port from DeckCraft, the egui fork, enable rules, tests and the order of work. |
+| [localization.md](localization.md) | Localizing the interface with `craft-i18n`: wiring, rules for strings, offered languages, language setting, tests, getting translations. |
 
 ## Status legend
 
@@ -87,7 +88,8 @@ differences).
    checklist). UIs only dispatch (AGENTS.md rule 2).
 3. In the ribbon spec (see [implementation.md](implementation.md)), change the control's action from
    `NotYet(..)` to `Command("<id>")` or `Ui(<action>)`.
-4. Change its status in the table to ✅ or 🟡, and the feature's row and summary counts in
+4. Write its label and tooltip in English through `tl!` / `tid` (localization.md).
+5. Change its status in the table to ✅ or 🟡, and the feature's row and summary counts in
    [feature-parity.md](feature-parity.md).
-5. If the control changes play-time behaviour, update `docs/spec/triggers.md` in the same commit.
-6. Run `cargo xtask ci`.
+6. If the control changes play-time behaviour, update `docs/spec/triggers.md` in the same commit.
+7. Run `cargo xtask ci`.

@@ -1,9 +1,57 @@
-# Building the ribbon
+# Building the new UI
 
 > Part of [the ribbon plan](README.md). How to turn [ribbon.md](ribbon.md),
 > [contextual-tabs.md](contextual-tabs.md) and [shell-panels-dialogs.md](shell-panels-dialogs.md)
 > into code in `coursecraft-ui-egui` (layer L6). Nothing here changes play-time behaviour, so
 > `docs/spec/triggers.md` is untouched unless a newly wired button adds a runtime feature.
+>
+> **Decision (2026-11-23, owner):** the UI rewrite is built on **`craft-ui`**, the shared egui
+> component library of the Craft apps, and the interface is localized with **`craft-i18n`** (see
+> [localization.md](localization.md)). Both come from `storytold/craft-libs`.
+
+## 0. Foundation: craft-libs
+
+`craft-ui` is the base of every panel, tab, pane, button, combo and number field. CourseCraft code
+adds only what `craft-ui` does not have: the ribbon (spec, groups, large and split buttons), the
+CourseCraft theme values and the document views. When something generic is missing from
+`craft-ui` (a ribbon group frame, say), prefer adding it to craft-libs upstream over a local copy.
+
+| Crate (craft-libs) | Used for | Where |
+|---|---|---|
+| `craft-ui` `docking` | the work area: Scenes, canvas, Timeline/States/Notes, Triggers, Slide Layers as dockable panels; float, redock, Reset Panels; layout saved with the `serde` feature | `ui-egui/src/workspace.rs` (new) |
+| `craft-ui` `panes` | task panes with title, ▾ menu and ×, resizable edge, floating frame | each panel's frame |
+| `craft-ui` `tabs` | view tabs row (Course Map + open slides), Timeline/States/Notes tabs, right-panel tabs | `ui-egui/src/view_tabs.rs` (new) |
+| `craft-ui` `layout` | split rects and resize handles (canvas / timeline splitter), toolbar layout | |
+| `craft-ui` `buttons`, `icons` | icon buttons; SVG icon sets prepared once (needs `egui_extras` SVG loader) | ribbon buttons, panel toolbars |
+| `craft-ui` `combo`, `localized` | `ComboBox`; number fields in the user's region (X, Y, Width, Height, Duration spinners) | ribbon combos and spinners |
+| `craft-ui` `focus`, `ime`, `text`, `theme`, `fonts` | keyboard focus, input methods, text helpers, theme mechanisms, font install | everywhere |
+| `craft-i18n` | every interface string, plurals, numbers, language names, system locale | [localization.md](localization.md) |
+| later: `craft-menu`, `craft-keymap` | native macOS menu, customisable shortcuts | M30 step 8 or after |
+| later: `craft-window`, `craft-dialogs`, `craft-settings` | app-drawn title bar with the QAT, non-blocking file dialogs, settings storage | after M30 |
+
+**Pins.** Like DeckCraft, add each crate as a git dependency pinned to one craft-libs `rev` in
+`[workspace.dependencies]`, all on the same rev, and bump them together:
+
+```toml
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "<rev>", version = "=0.1.0" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "<rev>", version = "=0.1.0" }
+```
+
+**egui fork.** craft-libs is built and tested against storytold's egui fork. CourseCraft adopts
+DeckCraft's `[patch.crates-io]` block (egui, eframe, egui-winit, egui-wgpu, egui_extras,
+egui_kittest, epaint, emath, ecolor, epaint_default_fonts, winit) on the same rev DeckCraft uses,
+so the editor runs on what craft-ui was tested with. This changes the player and render crates'
+egui too: run the full gate and `cargo xtask wasm`, and compare the player in a browser before and
+after.
+
+**Toolchain.** craft-libs needs Rust 1.95 or newer; CourseCraft already requires 1.99.
+
+**Layering.** craft-* crates are external dependencies of L6 (`coursecraft-ui-egui`) and the apps
+only. Nothing below L6 depends on them; `cargo xtask layers` keeps it so. (A later choice may let
+the player use `craft-i18n` for its own built-in labels; that is a separate decision.)
+
+**Licences.** craft-libs is MIT OR Apache-2.0. Add rows to `ATTRIBUTION.md` for any assets they
+embed (icon sets, fonts, CLDR data in `craft-i18n`).
 
 ## 1. One declarative spec
 
@@ -35,13 +83,19 @@ pub enum TabWhen { Always, SlideOpen, MasterMode, Contextual(Ctx) }
   move them to `ribbon/adapters.rs` when the menu bar goes.
 - `NotYet` / `NotPlanned` reasons are short nouns ("zoom regions"); the tooltip text is built in
   one place.
+- Every `label`, group caption, tooltip and reason is **English source text**, looked up through
+  `tl!` when drawn, never stored translated. `Command` items look their label up with
+  `I18N.tid(lang, id, label)` so translators can key it by command id (localization.md).
 - A split button's `menu` items follow the same rules: one disabled entry never hides the button.
 
-## 2. Widgets to port from DeckCraft
+## 2. Ribbon widgets to port from DeckCraft
 
-DeckCraft (`../deckcraft/crates/ui-egui`, same licence MIT OR Apache-2.0, same egui 0.37) already
-draws this kind of ribbon. Port, do not depend on it (it is a different product crate). Copy
-with a header comment naming the source file and commit.
+`craft-ui` has no ribbon. DeckCraft (`../deckcraft/crates/ui-egui`, same licence MIT OR
+Apache-2.0, same egui fork) already draws one. Port only the ribbon-specific widgets, rebuilt on
+`craft-ui` buttons and combos where those exist; do not depend on `deckcraft-ui-egui` (it pulls
+in DeckCraft's model and engine). Copy with a header comment naming the source file and commit.
+Generic pieces that turn out useful to other Craft apps (a ribbon group, a split button) are
+candidates for craft-libs.
 
 | DeckCraft | What it gives | Adapt |
 |---|---|---|
@@ -53,7 +107,7 @@ with a header comment naming the source file and commit.
 | `ribbon.rs` `show`, `contextual`, `tab_label` | tab strip, contextual captions, collapse | drive from `spec.rs` instead of a match per tab |
 | `ribbon/qat.rs` | quick access toolbar with right-click Add / Remove | |
 | `ribbon/title_bar.rs` | title bar on macOS / Windows | |
-| `icons.rs` | vector icon enum drawn with the painter | CourseCraft draws its own icons (`widgets::IconTone`); add the missing ones in the same style |
+| `icons.rs` | vector icon enum drawn with the painter | not ported: CourseCraft keeps its Phosphor icons (re-subset the font for the ribbon's glyphs) or moves to an SVG set through `craft-ui::icons`; one style only |
 
 DeckCraft's tab-specific modules (`home.rs`, `insert.rs`…) are PowerPoint tabs; use them only as
 examples of wiring, not as content.
@@ -89,7 +143,9 @@ In `crates/ui-egui/src/ribbon/spec_tests.rs` (debug test builds only, like the o
 - item ids are unique; no tab is empty; Publish is the last group of every main tab;
 - every command the old menu bar and toolbar reached is reachable from the ribbon or File menu
   (guards the removal of the menu bar);
-- tab order matches the documented strip (`ribbon.md` › Tab strip).
+- tab order matches the documented strip (`ribbon.md` › Tab strip);
+- every ribbon string is looked up through `tl!`/`tid` (the pseudo-locale test in
+  localization.md marks them all).
 
 UI tests with `egui_kittest` (as the existing `*_tests.rs`): a disabled control shows its tooltip and
 does not dispatch; a contextual tab appears for a picture and goes when it is deselected; the ribbon
@@ -102,8 +158,12 @@ diffed against the code.
 
 Each step is one commit, `cargo xtask ci` green, docs status updated in the same commit.
 
-1. Port widgets and draw the tab strip + Home from `spec.rs`, side by side with the old toolbar
-   behind a View › Ribbon toggle.
+0. Foundation: add `craft-ui` and `craft-i18n` (pinned rev), the egui fork patch, the
+   `build.rs` that embeds `CRAFT_I18N`, the `tl!` macro and the Preferences › Language setting.
+   Gate and web player checked before and after the fork.
+1. Workspace on `craft-ui` docking and panes with today's panels inside; then port the ribbon
+   widgets and draw the tab strip + Home from `spec.rs`, side by side with the old toolbar behind
+   a View › Ribbon toggle.
 2. Fill every main tab from ribbon.md with the right `Action`s (most ✅ wire to existing commands;
    the rest are `NotYet`).
 3. Contextual tabs: Drawing Tools, Picture Tools, Audio/Video Tools, Table Tools, Question Tools;
@@ -125,3 +185,5 @@ Each step is one commit, `cargo xtask ci` green, docs status updated in the same
 - Everything is a command: a button that edits the course dispatches an engine command; if none
   exists, add it to `coursecraft-engine` first.
 - Clean-room: own icons and colours; labels per README › Clean-room.
+- Every new user-facing string goes through `tl!` (or `tid`, `trn`, `fmt`); English only in the
+  code, translations only in craft-i18n (localization.md).

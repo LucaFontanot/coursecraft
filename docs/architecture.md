@@ -30,7 +30,9 @@ A crate may depend only on lower layers. `cargo xtask layers` enforces this.
 
 The editor UI in L6 is specified in `docs/ui/`: a tabbed ribbon drawn from one declarative spec,
 every control dispatching an engine command or an editor action, and controls for missing features
-drawn disabled (`docs/ui/implementation.md`).
+drawn disabled (`docs/ui/implementation.md`). It is built on `craft-ui` and localized with
+`craft-i18n` from the shared Craft libraries (`storytold/craft-libs`, pinned rev); these are
+dependencies of L6 and the apps only, never of lower layers (`docs/ui/localization.md`).
 
 Below L6, only `coursecraft-render` may use egui (painting and input only). eframe and winit belong to apps. L0–L5 and the player must build for `wasm32-unknown-unknown` (`cargo xtask wasm`, part of `ci`). The web player logs runtime effects to the browser console only when `?debug=1` is in the page query string.
 

@@ -43,6 +43,11 @@ Issues: label them `bug` or `idea` (the templates do this), and close duplicates
 
 ## Releasing a version
 
+Release builds set `CRAFT_I18N_DIR` to a checkout of the craft-i18n data repository at the commit
+pinned here, and `CRAFT_I18N_REQUIRED=1` (`docs/ui/localization.md`). Pinned craft-i18n commit:
+_not set yet (set it when the first `coursecraft.tsv` lands)_.
+
+
 1. Update `CHANGELOG.md`: move the "Unreleased" notes under a new version heading.
 2. Set the version in the root `Cargo.toml` (`[workspace.package] version`).
 3. Commit, then tag and push the tag:

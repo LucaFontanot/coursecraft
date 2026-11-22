@@ -30,6 +30,11 @@ The editor's layout is specified in `docs/ui/` (start at `docs/ui/README.md`).
 4. Update its status in the doc table and the feature's row and summary in
    `docs/ui/feature-parity.md`.
 5. Labels follow the naming table in `docs/ui/README.md` › Clean-room.
+6. Every user-facing string is English in the code and goes through `tl!` (or `tid`, `trn`,
+   `fmt`); never concatenate sentences. Translations go to the craft-i18n data repository, not
+   here (`docs/ui/localization.md`).
+7. Use `craft-ui` components (panes, docking, tabs, buttons, combos, number fields) before writing
+   a new widget; generic additions go upstream to craft-libs.
 
 ## Clean-room rules
 

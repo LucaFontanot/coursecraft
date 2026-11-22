@@ -13,6 +13,7 @@ It is built to the conventions of the ArtCraft Crafting Apps (storytold) so it c
 | `docs/spec/triggers.md` | Exact runtime semantics (the contract) |
 | `docs/roadmap.md` | Milestones and current focus |
 | `docs/ui/README.md` | Editor UI contract: ribbon tabs, groups and buttons (built or drawn disabled), panels, dialogs |
+| `docs/ui/localization.md` | Interface localization with craft-i18n: `tl!`, string rules, offered languages |
 | `docs/ui/feature-parity.md` | Storyline 360 feature parity, feature by feature, with the milestone that closes each gap |
 | `docs/cli.md` | CLI and MCP setup for agents, and every command |
 | `docs/contributing.md` | Gate, add-a-command checklist, clean-room rules |
@@ -29,7 +30,8 @@ It is built to the conventions of the ArtCraft Crafting Apps (storytold) so it c
 8. **UI follows `docs/ui/`.** The ribbon layout is the contract: same tabs, groups and order; a
    control whose feature is missing is drawn disabled with its reason, never hidden. Wiring or
    adding a control updates `docs/ui/ribbon.md` (or `contextual-tabs.md`) and
-   `docs/ui/feature-parity.md` in the same change.
+   `docs/ui/feature-parity.md` in the same change. The UI is built on `craft-ui`; every
+   user-facing string goes through `tl!` (craft-i18n, `docs/ui/localization.md`).
 
 ## Drive it headlessly
 
