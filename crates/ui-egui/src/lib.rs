@@ -198,6 +198,8 @@ mod m29_format_state_routing_tests;
 #[cfg(test)]
 mod m29_slice2_interactions_tests;
 #[cfg(test)]
+mod m29_state_extras_ui_tests;
+#[cfg(test)]
 mod m29_states_tab_tests;
 #[cfg(test)]
 mod outline_tests;
@@ -1240,6 +1242,12 @@ pub enum PendingImagePick {
     PictureFill { slide: String, object: String },
     /// Set the image override (`src`) of an image object's state.
     StateImage {
+        slide: String,
+        object: String,
+        state: String,
+    },
+    /// Insert a new `StateExtraKind::Image` into an object's state.
+    StateExtraImage {
         slide: String,
         object: String,
         state: String,
@@ -2579,6 +2587,83 @@ impl Editor {
             }
             return Some(src);
         }
+        if let Some(PendingImagePick::StateExtraImage {
+            slide: slide_id,
+            object: object_id,
+            state: state_name,
+        }) = pending_pick
+        {
+            let parent_frame = self
+                .session
+                .course
+                .slide(&slide_id)
+                .and_then(|s| s.object(&object_id))
+                .and_then(|(o, _)| {
+                    o.states
+                        .iter()
+                        .any(|st| st.name == state_name)
+                        .then_some(o.frame)
+                });
+            let parent_frame = parent_frame?;
+            let src = sanitize_media_src(file_name, &self.media);
+            let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
+            self.media.push((src.clone(), arc_bytes));
+
+            let (mut w, mut h) = (natural_width, natural_height);
+            if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
+                w = 120.0;
+                h = 90.0;
+            }
+            let max_w = parent_frame.w.clamp(48.0, 240.0);
+            let max_h = parent_frame.h.clamp(48.0, 240.0);
+            if w > max_w || h > max_h {
+                let scale = (max_w / w).min(max_h / h);
+                w = (w * scale).round().max(16.0);
+                h = (h * scale).round().max(16.0);
+            }
+            let rel_x = ((parent_frame.w - w) * 0.5).round();
+            let rel_y = ((parent_frame.h - h) * 0.5).round();
+            let res = self.run(
+                "object.state_add_extra",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": object_id,
+                    "state": state_name,
+                    "extra": {
+                        "name": file_name,
+                        "kind": {
+                            "type": "image",
+                            "src": src,
+                            "alt": ""
+                        },
+                        "frame": {
+                            "x": rel_x,
+                            "y": rel_y,
+                            "w": w.round().max(1.0),
+                            "h": h.round().max(1.0)
+                        }
+                    }
+                }),
+            );
+            let Some(res) = res else {
+                self.media.retain(|(name, _)| name != &src);
+                return None;
+            };
+            if let Some(id) = res.get("id").and_then(serde_json::Value::as_str)
+                && let Some(session) = self.ui.editing_state.as_mut()
+                && session.slide_id == slide_id
+                && session.object_id == object_id
+                && session.state_name == state_name
+            {
+                session.selected_extra = Some(id.to_owned());
+            }
+            if is_svg && bytes.windows(5).any(|w| w.eq_ignore_ascii_case(b"<text")) {
+                self.set_status(
+                    "This SVG has text, which CourseCraft draws only as shapes. Convert text to outlines in your drawing app.",
+                );
+            }
+            return Some(src);
+        }
 
         let src = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
@@ -3255,6 +3340,25 @@ impl Editor {
     /// In point-edit mode, Delete removes the selected point instead, refusing
     /// to leave a path with fewer than two.
     pub fn delete_selection(&mut self) {
+        if let Some(session) = self.ui.editing_state.clone() {
+            if let Some(extra_id) = session.selected_extra
+                && self
+                    .run(
+                        "object.state_delete_extra",
+                        serde_json::json!({
+                            "slide": session.slide_id,
+                            "object": session.object_id,
+                            "state": session.state_name,
+                            "extra": extra_id,
+                        }),
+                    )
+                    .is_some()
+                && let Some(active) = self.ui.editing_state.as_mut()
+            {
+                active.selected_extra = None;
+            }
+            return;
+        }
         if crate::canvas::delete_selected_path_point(self) {
             return;
         }
@@ -3616,6 +3720,41 @@ impl Editor {
 
     /// Nudge every selected object by `(dx, dy)` as one undo step.
     pub fn nudge_selection(&mut self, dx: f32, dy: f32) {
+        if let Some(session) = self.ui.editing_state.clone() {
+            if let Some(extra_id) = session.selected_extra
+                && let Some(frame) = self
+                    .session
+                    .course
+                    .slide(&session.slide_id)
+                    .and_then(|s| s.object(&session.object_id))
+                    .and_then(|(o, _)| o.states.iter().find(|st| st.name == session.state_name))
+                    .and_then(|st| st.extras.iter().find(|ex| ex.id == extra_id))
+                    .map(|ex| ex.frame)
+            {
+                let nx = frame.x + dx;
+                let ny = frame.y + dy;
+                if nx.is_finite() && ny.is_finite() {
+                    self.run(
+                        "object.state_update_extra",
+                        serde_json::json!({
+                            "slide": session.slide_id,
+                            "object": session.object_id,
+                            "state": session.state_name,
+                            "extra": extra_id,
+                            "patch": {
+                                "frame": {
+                                    "x": nx,
+                                    "y": ny,
+                                    "w": frame.w,
+                                    "h": frame.h,
+                                }
+                            }
+                        }),
+                    );
+                }
+            }
+            return;
+        }
         let Some(slide) = self.session.course.slide(&self.selection.slide) else {
             return;
         };

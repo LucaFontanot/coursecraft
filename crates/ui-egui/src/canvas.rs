@@ -127,6 +127,16 @@ pub enum DragOp {
         start_angle: f32,
         orig_rotation: f32,
     },
+    StateExtraMove,
+    StateExtraResize {
+        handle: ResizeHandle,
+        rotation: f32,
+    },
+    StateExtraRotate {
+        centre: Pos2,
+        start_angle: f32,
+        orig_rotation: f32,
+    },
     Marquee,
     RegionMove,
     RegionResize(ResizeHandle),
@@ -1038,7 +1048,7 @@ fn compute_drag_frame(drag: &CanvasDrag, curr_screen: Pos2, shift: bool, scale: 
     let delta_y = (curr_screen.y - drag.start_screen.y) / scale;
 
     match drag.op {
-        DragOp::Move | DragOp::RegionMove => {
+        DragOp::Move | DragOp::RegionMove | DragOp::StateExtraMove => {
             let (dx, dy) = if shift {
                 if delta_x.abs() >= delta_y.abs() {
                     (delta_x, 0.0)
@@ -1053,17 +1063,20 @@ fn compute_drag_frame(drag: &CanvasDrag, curr_screen: Pos2, shift: bool, scale: 
                 drag.orig_frame.size(),
             )
         }
-        DragOp::Resize { handle, rotation } => resize_frame_rotated(
-            drag.orig_frame,
-            handle,
-            vec2(delta_x, delta_y),
-            shift,
-            rotation,
-        ),
+        DragOp::Resize { handle, rotation } | DragOp::StateExtraResize { handle, rotation } => {
+            resize_frame_rotated(
+                drag.orig_frame,
+                handle,
+                vec2(delta_x, delta_y),
+                shift,
+                rotation,
+            )
+        }
         DragOp::RegionResize(handle) => {
             resize_frame(drag.orig_frame, handle, vec2(delta_x, delta_y), shift)
         }
         DragOp::Rotate { .. }
+        | DragOp::StateExtraRotate { .. }
         | DragOp::MotionPathPoint { .. }
         | DragOp::Adjust { .. }
         | DragOp::PathPoint { .. }
@@ -2026,8 +2039,205 @@ fn next_shape_name(editor: &Editor, kind: ShapeKind) -> String {
     base.to_owned()
 }
 
+fn resolved_parent_transform(parent: &Object, state_name: &str) -> (f32, bool, bool) {
+    let state_def = parent.states.iter().find(|s| s.name == state_name);
+    let rot = state_def
+        .and_then(|s| s.rotation)
+        .unwrap_or(parent.rotation);
+    let flip_h = state_def.and_then(|s| s.flip_h).unwrap_or(parent.flip_h);
+    let flip_v = state_def.and_then(|s| s.flip_v).unwrap_or(parent.flip_v);
+    (coursecraft_course::normalize_rotation(rot), flip_h, flip_v)
+}
+
+fn rotate_point_2d(pt: Pos2, center: Pos2, degrees: f32) -> Pos2 {
+    if degrees.abs() <= 0.0001 {
+        return pt;
+    }
+    let rad = degrees.to_radians();
+    let (sin, cos) = rad.sin_cos();
+    let dx = pt.x - center.x;
+    let dy = pt.y - center.y;
+    pos2(
+        center.x + dx * cos - dy * sin,
+        center.y + dx * sin + dy * cos,
+    )
+}
+
+fn flip_point_2d(pt: Pos2, center: Pos2, flip_h: bool, flip_v: bool) -> Pos2 {
+    pos2(
+        if flip_h { 2.0 * center.x - pt.x } else { pt.x },
+        if flip_v { 2.0 * center.y - pt.y } else { pt.y },
+    )
+}
+
+fn state_extra_world_geometry(
+    parent: &Object,
+    state_name: &str,
+    extra: &coursecraft_course::StateExtra,
+) -> (Rect, f32) {
+    let parent_rect = Rect::from_min_size(
+        pos2(parent.frame.x, parent.frame.y),
+        vec2(parent.frame.w, parent.frame.h),
+    );
+    let (parent_rot, parent_flip_h, parent_flip_v) = resolved_parent_transform(parent, state_name);
+    let unrotated = Rect::from_min_size(
+        pos2(
+            parent.frame.x + extra.frame.x,
+            parent.frame.y + extra.frame.y,
+        ),
+        vec2(extra.frame.w.max(1.0), extra.frame.h.max(1.0)),
+    );
+    let parent_center = parent_rect.center();
+    let extra_center = flip_point_2d(
+        rotate_point_2d(unrotated.center(), parent_center, parent_rot),
+        parent_center,
+        parent_flip_h,
+        parent_flip_v,
+    );
+    let world_rect = Rect::from_center_size(extra_center, unrotated.size());
+    let flip_sign = if parent_flip_h ^ parent_flip_v {
+        -1.0
+    } else {
+        1.0
+    };
+    let extra_rot = coursecraft_course::normalize_rotation(extra.rotation);
+    let world_rot = coursecraft_course::normalize_rotation(parent_rot + flip_sign * extra_rot);
+    (world_rect, world_rot)
+}
+
+fn world_to_extra_frame(
+    parent: &Object,
+    state_name: &str,
+    world_rect: Rect,
+) -> coursecraft_course::Rect {
+    let parent_center = pos2(
+        parent.frame.x + parent.frame.w * 0.5,
+        parent.frame.y + parent.frame.h * 0.5,
+    );
+    let (parent_rot, parent_flip_h, parent_flip_v) = resolved_parent_transform(parent, state_name);
+    let unflipped = flip_point_2d(
+        world_rect.center(),
+        parent_center,
+        parent_flip_h,
+        parent_flip_v,
+    );
+    let unrotated_center = rotate_point_2d(unflipped, parent_center, -parent_rot);
+    let w = world_rect.width().round().max(1.0);
+    let h = world_rect.height().round().max(1.0);
+    coursecraft_course::Rect {
+        x: (unrotated_center.x - w * 0.5 - parent.frame.x).round(),
+        y: (unrotated_center.y - h * 0.5 - parent.frame.y).round(),
+        w,
+        h,
+    }
+}
+
+fn world_to_extra_rotation(parent: &Object, state_name: &str, world_rot: f32) -> f32 {
+    let (parent_rot, parent_flip_h, parent_flip_v) = resolved_parent_transform(parent, state_name);
+    let flip_sign = if parent_flip_h ^ parent_flip_v {
+        -1.0
+    } else {
+        1.0
+    };
+    coursecraft_course::normalize_rotation(flip_sign * (world_rot - parent_rot))
+}
+
+fn pick_state_extra(editor: &Editor, slide_pos: Pos2) -> Option<(String, Rect, f32)> {
+    let session = editor.ui.editing_state.as_ref()?;
+    let slide = editor.session.course.slide(&session.slide_id)?;
+    let (parent, _) = slide.object(&session.object_id)?;
+    let state = parent
+        .states
+        .iter()
+        .find(|s| s.name == session.state_name)?;
+    for extra in state.extras.iter().rev() {
+        let (world_rect, world_rot) = state_extra_world_geometry(parent, &state.name, extra);
+        let local_pos = rotate_point_2d(slide_pos, world_rect.center(), -world_rot);
+        if world_rect.contains(local_pos) {
+            return Some((extra.id.clone(), world_rect, world_rot));
+        }
+    }
+    None
+}
+
+fn selected_state_extra_geometry(editor: &Editor) -> Option<(String, Rect, f32)> {
+    let session = editor.ui.editing_state.as_ref()?;
+    let extra_id = session.selected_extra.as_ref()?;
+    let slide = editor.session.course.slide(&session.slide_id)?;
+    let (parent, _) = slide.object(&session.object_id)?;
+    let state = parent
+        .states
+        .iter()
+        .find(|s| s.name == session.state_name)?;
+    let extra = state.extras.iter().find(|ex| &ex.id == extra_id)?;
+    let (world_rect, world_rot) = state_extra_world_geometry(parent, &state.name, extra);
+    Some((extra.id.clone(), world_rect, world_rot))
+}
+
 /// Create the object with `frame` through the same command a click uses.
 fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
+    if let Some(session) = editor.ui.editing_state.clone() {
+        let Some(parent_frame) = editor
+            .session
+            .course
+            .slide(&session.slide_id)
+            .and_then(|s| s.object(&session.object_id))
+            .map(|(o, _)| o.frame)
+        else {
+            return;
+        };
+        let (kind, extra_name) = match tool {
+            PlacementTool::TextBox => (
+                serde_json::json!({
+                    "type": "text",
+                    "text": "Text",
+                    "style": {
+                        "color": editor.session.course.theme.text.0,
+                    }
+                }),
+                "Text".to_owned(),
+            ),
+            PlacementTool::Shape(kind) => (
+                serde_json::json!({
+                    "type": "shape",
+                    "shape": kind,
+                    "fill": "#D0D7DE",
+                }),
+                shape_label(*kind).to_owned(),
+            ),
+            PlacementTool::Image { src, .. } => (
+                serde_json::json!({
+                    "type": "image",
+                    "src": src,
+                    "alt": "",
+                }),
+                "Image".to_owned(),
+            ),
+            _ => return,
+        };
+        let rel_x = (frame.min.x - parent_frame.x).round();
+        let rel_y = (frame.min.y - parent_frame.y).round();
+        let w = frame.width().round().max(1.0);
+        let h = frame.height().round().max(1.0);
+        if let Some(res) = editor.run(
+            "object.state_add_extra",
+            serde_json::json!({
+                "slide": session.slide_id,
+                "object": session.object_id,
+                "state": session.state_name,
+                "extra": {
+                    "name": extra_name,
+                    "kind": kind,
+                    "frame": { "x": rel_x, "y": rel_y, "w": w, "h": h },
+                }
+            }),
+        ) && let Some(id) = res.get("id").and_then(serde_json::Value::as_str)
+            && let Some(active) = editor.ui.editing_state.as_mut()
+        {
+            active.selected_extra = Some(id.to_owned());
+        }
+        return;
+    }
     let is_text = matches!(tool, PlacementTool::TextBox);
     let (kind, _) = placement_kind_and_size(editor, tool);
     let mut params = serde_json::json!({
@@ -2461,6 +2671,61 @@ fn commit_draw(
         text: None,
     };
     let name = next_draw_name(editor, tool.base_name());
+    if let Some(session) = editor.ui.editing_state.clone() {
+        let Some(parent_frame) = editor
+            .session
+            .course
+            .slide(&session.slide_id)
+            .and_then(|s| s.object(&session.object_id))
+            .map(|(o, _)| o.frame)
+        else {
+            editor.ui.placement_tool = None;
+            editor.ui.draw = None;
+            return;
+        };
+        let mut extra_path = path;
+        extra_path.connector = None;
+        extra_path.start_glue = None;
+        extra_path.end_glue = None;
+        let Ok(path_json) = serde_json::to_value(&extra_path) else {
+            editor.ui.placement_tool = None;
+            editor.ui.draw = None;
+            return;
+        };
+        let mut kind_json = path_json;
+        if let Some(obj) = kind_json.as_object_mut() {
+            obj.insert("type".to_owned(), serde_json::json!("path"));
+        }
+        let result = editor.run(
+            "object.state_add_extra",
+            serde_json::json!({
+                "slide": session.slide_id,
+                "object": session.object_id,
+                "state": session.state_name,
+                "extra": {
+                    "name": name,
+                    "kind": kind_json,
+                    "frame": {
+                        "x": (frame.x - parent_frame.x).round(),
+                        "y": (frame.y - parent_frame.y).round(),
+                        "w": frame.w.round().max(1.0),
+                        "h": frame.h.round().max(1.0),
+                    }
+                }
+            }),
+        );
+        editor.ui.placement_tool = None;
+        editor.ui.draw = None;
+        if let Some(id) = result
+            .as_ref()
+            .and_then(|value| value.get("id"))
+            .and_then(serde_json::Value::as_str)
+            && let Some(active) = editor.ui.editing_state.as_mut()
+        {
+            active.selected_extra = Some(id.to_owned());
+        }
+        return;
+    }
     if wants_glue {
         // Add first, then attach both ends through `object.set_path` in the same
         // batch, so the placement is one undo step.
@@ -3015,11 +3280,68 @@ fn start_drag_if_pressed(
     modifiers: egui::Modifiers,
 ) {
     editor.ui.last_active_area = crate::ActiveArea::Canvas;
-    if let Some(ref session) = editor.ui.editing_state {
-        if !is_locked(editor, &session.object_id)
-            && let Some(item) = items
-                .iter()
-                .find(|item| item.hit == Hit::Object(session.object_id.clone()))
+    if let Some(session) = editor.ui.editing_state.clone() {
+        if is_locked(editor, &session.object_id) {
+            return;
+        }
+        if let Some((extra_id, world_rect, world_rot)) = selected_state_extra_geometry(editor) {
+            let screen_rect = t.to_screen_rect(world_rect);
+            let rot_handle = rotate_handle_center(screen_rect, world_rot);
+            if Rect::from_center_size(rot_handle, vec2(14.0, 14.0)).contains(start_pos) {
+                let centre = screen_rect.center();
+                let start_angle = (start_pos.y - centre.y).atan2(start_pos.x - centre.x);
+                editor.ui.canvas_drag = Some(CanvasDrag {
+                    op: DragOp::StateExtraRotate {
+                        centre,
+                        start_angle,
+                        orig_rotation: world_rot,
+                    },
+                    object_id: extra_id,
+                    orig_frame: world_rect,
+                    start_screen: start_pos,
+                    frames: Vec::new(),
+                    alt_duplicate: false,
+                });
+                return;
+            }
+            for (h, c) in rotated_handle_centers(screen_rect, world_rot) {
+                if Rect::from_center_size(c, vec2(8.0, 8.0)).contains(start_pos) {
+                    editor.ui.canvas_drag = Some(CanvasDrag {
+                        op: DragOp::StateExtraResize {
+                            handle: h,
+                            rotation: world_rot,
+                        },
+                        object_id: extra_id,
+                        orig_frame: world_rect,
+                        start_screen: start_pos,
+                        frames: Vec::new(),
+                        alt_duplicate: false,
+                    });
+                    return;
+                }
+            }
+        }
+        if t.slide_rect().contains(start_pos) {
+            let slide_pos = t.to_slide_pos(start_pos);
+            if let Some((extra_id, world_rect, _)) = pick_state_extra(editor, slide_pos) {
+                if let Some(active) = editor.ui.editing_state.as_mut() {
+                    active.selected_extra = Some(extra_id.clone());
+                }
+                editor.ui.canvas_drag = Some(CanvasDrag {
+                    op: DragOp::StateExtraMove,
+                    object_id: extra_id.clone(),
+                    orig_frame: world_rect,
+                    start_screen: start_pos,
+                    frames: vec![(extra_id, world_rect)],
+                    alt_duplicate: false,
+                });
+                return;
+            }
+        }
+        if session.selected_extra.is_none()
+            && let Some(item) = items.iter().find(|item| {
+                !item.is_state_extra && item.hit == Hit::Object(session.object_id.clone())
+            })
         {
             let screen_rect = t.to_screen_rect(item.rect);
             let handle = rotate_handle_center(screen_rect, item.rotation);
@@ -3719,6 +4041,96 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
         return;
     }
 
+    if let DragOp::StateExtraRotate {
+        centre,
+        start_angle,
+        orig_rotation,
+    } = drag.op
+    {
+        let current_angle = (curr_screen.y - centre.y).atan2(curr_screen.x - centre.x);
+        let mut degrees = orig_rotation + (current_angle - start_angle).to_degrees();
+        if shift_held {
+            degrees = (degrees / 15.0).round() * 15.0;
+        }
+        let rotation = coursecraft_course::normalize_rotation(degrees);
+        if primary_released || !primary_down {
+            editor.ui.canvas_drag = None;
+            let orig = coursecraft_course::normalize_rotation(orig_rotation);
+            if (rotation - orig).abs() > 0.001
+                && let Some(session) = editor.ui.editing_state.clone()
+                && let Some(parent) = editor
+                    .session
+                    .course
+                    .slide(&session.slide_id)
+                    .and_then(|s| s.object(&session.object_id))
+                    .map(|(o, _)| o.clone())
+            {
+                let extra_rot = world_to_extra_rotation(&parent, &session.state_name, rotation);
+                editor.run(
+                    "object.state_update_extra",
+                    serde_json::json!({
+                        "slide": session.slide_id,
+                        "object": session.object_id,
+                        "state": session.state_name,
+                        "extra": drag.object_id,
+                        "patch": {
+                            "rotation": extra_rot,
+                        }
+                    }),
+                );
+            }
+        }
+        return;
+    }
+
+    if matches!(
+        drag.op,
+        DragOp::StateExtraMove | DragOp::StateExtraResize { .. }
+    ) {
+        let scale = t.scale();
+        let preview_rect = if is_move {
+            compute_drag_frame(&drag, curr_screen, shift_held, scale)
+        } else {
+            drag.orig_frame
+        };
+        if primary_released || !primary_down {
+            editor.ui.canvas_drag = None;
+            if is_move
+                && let Some(session) = editor.ui.editing_state.clone()
+                && let Some(parent) = editor
+                    .session
+                    .course
+                    .slide(&session.slide_id)
+                    .and_then(|s| s.object(&session.object_id))
+                    .map(|(o, _)| o.clone())
+            {
+                let new_frame = world_to_extra_frame(&parent, &session.state_name, preview_rect);
+                let orig_frame =
+                    world_to_extra_frame(&parent, &session.state_name, drag.orig_frame);
+                if new_frame != orig_frame {
+                    editor.run(
+                        "object.state_update_extra",
+                        serde_json::json!({
+                            "slide": session.slide_id,
+                            "object": session.object_id,
+                            "state": session.state_name,
+                            "extra": drag.object_id,
+                            "patch": {
+                                "frame": {
+                                    "x": new_frame.x,
+                                    "y": new_frame.y,
+                                    "w": new_frame.w,
+                                    "h": new_frame.h,
+                                }
+                            }
+                        }),
+                    );
+                }
+            }
+        }
+        return;
+    }
+
     if let DragOp::Rotate {
         centre,
         start_angle,
@@ -4208,7 +4620,23 @@ fn handle_canvas_click(
     modifiers: egui::Modifiers,
 ) {
     editor.ui.last_active_area = crate::ActiveArea::Canvas;
-    if editor.ui.editing_state.is_some() {
+    if let Some(session) = editor.ui.editing_state.clone() {
+        if t.slide_rect().contains(pos) {
+            let slide_pos = t.to_slide_pos(pos);
+            if let Some((extra_id, _, _)) = pick_state_extra(editor, slide_pos) {
+                if let Some(active) = editor.ui.editing_state.as_mut() {
+                    active.selected_extra = Some(extra_id);
+                }
+                return;
+            }
+            let picked = pick_object(&editor.session.course, &editor.selection, slide_pos, items)
+                .map(|(id, _)| id);
+            if picked.as_deref() == Some(session.object_id.as_str())
+                && let Some(active) = editor.ui.editing_state.as_mut()
+            {
+                active.selected_extra = None;
+            }
+        }
         return;
     }
     let additive = modifiers.shift || modifiers.command;
@@ -5742,6 +6170,101 @@ fn draw_handles_and_outline(
             FontId::new(11.0, egui::FontFamily::Name("phosphor".into())),
             p.accent_text,
         );
+        return;
+    }
+
+    if editor.ui.editing_state.is_some()
+        && let Some((extra_id, mut world_rect, mut world_rot)) =
+            selected_state_extra_geometry(editor)
+    {
+        if let Some(drag) = editor.ui.canvas_drag.as_ref()
+            && drag.object_id == extra_id
+        {
+            match &drag.op {
+                DragOp::StateExtraMove | DragOp::StateExtraResize { .. } => {
+                    if let Some(curr) = current_pointer {
+                        let moved = (curr - drag.start_screen).length() >= 2.0;
+                        if moved {
+                            let shift = ui.input(|i| i.modifiers.shift);
+                            world_rect = compute_drag_frame(drag, curr, shift, t.scale());
+                        }
+                    }
+                }
+                DragOp::StateExtraRotate {
+                    centre,
+                    start_angle,
+                    orig_rotation,
+                } => {
+                    if let Some(curr) = current_pointer {
+                        let current_angle = (curr.y - centre.y).atan2(curr.x - centre.x);
+                        let mut degrees =
+                            orig_rotation + (current_angle - start_angle).to_degrees();
+                        if ui.input(|i| i.modifiers.shift) {
+                            degrees = (degrees / 15.0).round() * 15.0;
+                        }
+                        world_rot = coursecraft_course::normalize_rotation(degrees);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let extra_screen = t.to_screen_rect(world_rect);
+        let extra_corners: Vec<Pos2> = [
+            extra_screen.left_top(),
+            extra_screen.right_top(),
+            extra_screen.right_bottom(),
+            extra_screen.left_bottom(),
+        ]
+        .into_iter()
+        .map(|pt| rotate_point_2d(pt, extra_screen.center(), world_rot))
+        .collect();
+        painter.add(egui::Shape::closed_line(
+            extra_corners,
+            Stroke::new(2.0, accent_color),
+        ));
+        let centers = rotated_handle_centers(extra_screen, world_rot);
+        let rot_handle = rotate_handle_center(extra_screen, world_rot);
+        let top = rotated_handle_centers(extra_screen, world_rot)[1].1;
+        painter.line_segment([top, rot_handle], Stroke::new(1.0, accent_color));
+        painter.circle_filled(rot_handle, 6.0, Color32::WHITE);
+        painter.circle_stroke(rot_handle, 6.0, Stroke::new(1.5, accent_color));
+        for (_, c) in centers {
+            let handle_rect = Rect::from_center_size(c, vec2(8.0, 8.0));
+            painter.rect_filled(handle_rect, CornerRadius::ZERO, Color32::WHITE);
+            painter.rect_stroke(
+                handle_rect,
+                CornerRadius::ZERO,
+                Stroke::new(1.0, accent_color),
+                StrokeKind::Middle,
+            );
+        }
+        if editor.ui.canvas_drag.is_none()
+            && editor.ui.placement_tool.is_none()
+            && let Some(pos) = current_pointer
+        {
+            if Rect::from_center_size(rot_handle, vec2(14.0, 14.0)).contains(pos) {
+                ui.ctx().set_cursor_icon(CursorIcon::Grab);
+            } else {
+                for (h, c) in centers {
+                    if Rect::from_center_size(c, vec2(8.0, 8.0)).contains(pos) {
+                        let cursor = match h {
+                            ResizeHandle::TopLeft | ResizeHandle::BottomRight => {
+                                CursorIcon::ResizeNwSe
+                            }
+                            ResizeHandle::TopRight | ResizeHandle::BottomLeft => {
+                                CursorIcon::ResizeNeSw
+                            }
+                            ResizeHandle::Top | ResizeHandle::Bottom => CursorIcon::ResizeVertical,
+                            ResizeHandle::Left | ResizeHandle::Right => {
+                                CursorIcon::ResizeHorizontal
+                            }
+                        };
+                        ui.ctx().set_cursor_icon(cursor);
+                        break;
+                    }
+                }
+            }
+        }
         return;
     }
 

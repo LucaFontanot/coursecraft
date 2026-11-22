@@ -1737,16 +1737,26 @@ fn render_extra_category_items(
     }
 
     if category == "Insert" {
+        let state_locked = editor.ui.editing_state.is_some();
+        let state_tip = "Not available inside a state";
         ui.separator();
         if ui.button("Text Box").clicked() {
             crate::toolbar::insert_text_box(editor);
             ui.close();
         }
-        if ui.button("Table").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Table"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_table(editor);
             ui.close();
         }
-        if ui.button("Button").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Button"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_button(editor);
             ui.close();
         }
@@ -1758,45 +1768,69 @@ fn render_extra_category_items(
             crate::toolbar::insert_image(editor, requests);
             ui.close();
         }
-        if ui.button("Audio").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Audio"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_audio(editor, requests);
             ui.close();
         }
-        if ui.button("Video").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Video"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_video(editor, requests);
             ui.close();
         }
-        if ui.button("Lottie…").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Lottie…"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             crate::toolbar::insert_lottie(editor, requests);
             ui.close();
         }
-        ui.menu_button("Input", |ui| {
-            if ui.button("Text entry").clicked() {
-                crate::input_insert::insert_text_entry(editor);
-                ui.close();
-            }
-            if ui.button("Slider").clicked() {
-                crate::input_insert::insert_slider(editor);
-                ui.close();
-            }
-            if ui.button("Dial").clicked() {
-                crate::input_insert::insert_dial(editor);
-                ui.close();
-            }
-            if ui.button("Checkbox").clicked() {
-                crate::input_insert::insert_checkbox(editor);
-                ui.close();
-            }
-            if ui.button("Radio buttons").clicked() {
-                crate::input_insert::insert_radio_group(editor);
-                ui.close();
-            }
+        ui.add_enabled_ui(!state_locked, |ui| {
+            ui.menu_button("Input", |ui| {
+                if ui.button("Text entry").clicked() {
+                    crate::input_insert::insert_text_entry(editor);
+                    ui.close();
+                }
+                if ui.button("Slider").clicked() {
+                    crate::input_insert::insert_slider(editor);
+                    ui.close();
+                }
+                if ui.button("Dial").clicked() {
+                    crate::input_insert::insert_dial(editor);
+                    ui.close();
+                }
+                if ui.button("Checkbox").clicked() {
+                    crate::input_insert::insert_checkbox(editor);
+                    ui.close();
+                }
+                if ui.button("Radio buttons").clicked() {
+                    crate::input_insert::insert_radio_group(editor);
+                    ui.close();
+                }
+            })
+            .response
+            .on_disabled_hover_text(state_tip);
         });
-        if ui.button("Interaction…").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Interaction…"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             editor.ui.show_interaction_gallery = true;
             ui.close();
         }
-        if ui.button("Web object…").clicked() {
+        if ui
+            .add_enabled(!state_locked, egui::Button::new("Web object…"))
+            .on_disabled_hover_text(state_tip)
+            .clicked()
+        {
             editor.ui.web_error = None;
             editor.ui.show_web_window = true;
             ui.close();
