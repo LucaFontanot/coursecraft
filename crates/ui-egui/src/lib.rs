@@ -254,6 +254,8 @@ mod u12_media_fonts_styles_galleries_tests;
 #[cfg(test)]
 mod u13_core_authoring_dialogs_tests;
 #[cfg(test)]
+mod u14_ai_dialogs_tests;
+#[cfg(test)]
 mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;

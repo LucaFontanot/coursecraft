@@ -283,7 +283,7 @@ pub fn set_cancelled(editor: &mut Editor, src: &str) {
 
 /// Escape closes the window only when nothing is running.
 pub fn consume_escape(editor: &mut Editor, ctx: &egui::Context) {
-    if !editor.ui.alt.open || editor.ui.alt.running {
+    if !editor.ui.alt.open || editor.ui.alt.running || egui::Popup::is_any_open(ctx) {
         return;
     }
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
@@ -371,6 +371,7 @@ pub fn show_alt_text_window(
         .width(620.0)
         .open(&mut open)
         .resizable(true)
+        .close_on_escape(!editor.ui.alt.running)
         .show_with_footer(ctx, |dialog| {
             let p = palette(ctx);
             dialog.body(|ui| {
@@ -442,8 +443,14 @@ pub fn show_alt_text_window(
                     ui.horizontal(|ui| {
                         let can_suggest =
                             !editor.ui.alt.queue.is_empty() && editor.ui.alt.inline.is_none();
+                        let suggest_reason = if editor.ui.alt.inline.is_some() {
+                            "Finish the inline suggestion first"
+                        } else {
+                            "All images already have suggestions"
+                        };
                         if ui
                             .add_enabled(can_suggest, Button::new("Suggest"))
+                            .on_disabled_hover_text(suggest_reason)
                             .clicked()
                         {
                             suggest = true;
@@ -454,7 +461,11 @@ pub fn show_alt_text_window(
                             .rows
                             .iter()
                             .any(|row| row.ticked && !row.suggestion.trim().is_empty());
-                        if ui.add_enabled(any_ticked, Button::new("Apply")).clicked() {
+                        if ui
+                            .add_enabled(any_ticked, Button::new("Apply"))
+                            .on_disabled_hover_text("Tick at least one row with a suggestion")
+                            .clicked()
+                        {
                             apply = true;
                         }
                     });
@@ -517,11 +528,7 @@ pub fn show_alt_text_window(
                 });
             }
 
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
-                && !editor.ui.alt.running
-            {
-                close_clicked = true;
-            }
+            // Dialog::open handles Escape (popup-first, disabled while running) and sets `open = false`.
         });
 
     if !open {

@@ -12,7 +12,7 @@ use coursecraft_ai::{
     AiConfig, AiSource, ChatMessage, ChatReply, ChatRequest, MessageContent, Role, check_config,
     endpoint_host,
 };
-use egui::{Button, ComboBox, Key, Modifiers, RichText, TextEdit, Ui};
+use egui::{Button, RichText, TextEdit, Ui};
 
 use crate::{AiPurpose, Editor, EditorRequest};
 
@@ -430,6 +430,7 @@ pub fn show_ai_settings_window(
     Dialog::new("AI Settings")
         .width(max_width)
         .open(&mut open)
+        .resizable(true)
         .show_with_footer(ctx, |dialog| {
             let tabs = dialog.ui();
             tabs.set_max_width(max_width);
@@ -471,9 +472,7 @@ pub fn show_ai_settings_window(
                 });
             });
 
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-                close = true;
-            }
+            // Dialog::open handles Escape (popup-first) and sets `open = false`.
         });
 
     if !open {
@@ -524,7 +523,7 @@ fn show_features_tab(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
     {
         let mut chosen = None;
         ui.vertical(|ui| {
-            ui.label("Use:");
+            ui.label("Use");
             ui.horizontal(|ui| {
                 for option in AiSource::ALL {
                     if ui
@@ -581,8 +580,14 @@ fn show_features_tab(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
 
     ui.add_space(coursecraft_render::SPACE_SM);
     ui.horizontal(|ui| {
+        let disabled_reason = if source.is_agent() {
+            "Install and connect the agent first"
+        } else {
+            "Enter an API URL and model"
+        };
         if ui
             .add_enabled(ready, Button::new("Test connection"))
+            .on_disabled_hover_text(disabled_reason)
             .clicked()
         {
             let host = if source.is_agent() {
@@ -604,8 +609,8 @@ fn show_features_tab(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
 fn show_endpoint_settings(editor: &mut Editor, ui: &mut Ui) -> bool {
     let p = coursecraft_render::palette(ui.ctx());
     let form = Form::new(ui, &["Provider", "Base URL", "Model", "API key"]);
-    form.row(ui, "Provider", |ui, _| {
-        ComboBox::from_id_salt("ai_provider")
+    form.row(ui, "Provider", |ui, width| {
+        crate::widgets::styled_combo(ui, "ai_provider", width)
             .selected_text(editor.ui.ai.provider.label())
             .show_ui(ui, |ui| {
                 for provider in AiProvider::ALL {

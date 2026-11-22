@@ -40,6 +40,7 @@ pub fn open(editor: &mut Editor) {
 /// key, so Escape closes this window instead of moving or clearing anything.
 pub fn consume_escape(editor: &mut Editor, ctx: &egui::Context) {
     if editor.ui.show_outline_dialog
+        && !egui::Popup::is_any_open(ctx)
         && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
     {
         close(editor);
@@ -132,7 +133,7 @@ pub fn show_outline_dialog(editor: &mut Editor, ctx: &egui::Context) {
         .show_with_footer(ctx, |dialog| {
             let p = palette(ctx);
             let mut can = false;
-            dialog.body(|ui| {
+            dialog.body_unscrolled(|ui| {
                 ui.label(
                     RichText::new(
                         "Paste an outline: `#` starts a scene, `##` a slide, `-` a body line, \
@@ -154,7 +155,7 @@ pub fn show_outline_dialog(editor: &mut Editor, ctx: &egui::Context) {
                 }
                 ui.add_space(6.0);
 
-                let field_height = (max_height - 280.0).clamp(120.0, 420.0);
+                let field_height = (max_height - 340.0).clamp(100.0, 420.0);
                 let response = ScrollArea::vertical()
                     .id_salt("outline_source_scroll")
                     .max_height(field_height)
