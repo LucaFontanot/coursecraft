@@ -31,6 +31,8 @@ use crate::view::SlideView;
 pub const STRIP_HEIGHT: f32 = 44.0;
 /// Distance between the strip and the bottom edge.
 pub const STRIP_MARGIN: f32 = 12.0;
+/// Gap kept between the reserved slide area and the top of the control strip.
+const STRIP_GAP_ABOVE: f32 = 8.0;
 /// Width of the outline drawer.
 pub const DRAWER_WIDTH: f32 = 320.0;
 
@@ -104,6 +106,9 @@ impl Default for FrameOutput {
 pub struct PlayerFrame {
     /// Respect the platform's reduced-motion preference: no fades, always shown.
     pub reduced_motion: bool,
+    /// Float the control strip over the slide and auto-hide when idle.
+    /// Defaults to `false` (reserved strip below the slide area).
+    pub overlay_strip: bool,
     /// The course has ended: dim the slide, show the completion message and
     /// hide the control strip.
     pub ended: bool,
@@ -173,6 +178,7 @@ impl Default for PlayerFrame {
     fn default() -> Self {
         Self {
             reduced_motion: false,
+            overlay_strip: false,
             ended: false,
             captions_on: false,
             volume: 1.0,
@@ -611,8 +617,20 @@ impl PlayerFrame {
         if let Some(l) = &review_banner {
             covered.push(l.rect);
         }
-        let slide_rect = slide_rect(full, player);
-        self.last_slide_rect = Some(slide_rect);
+        let slide_area = if !self.overlay_strip
+            && let Some(l) = &layout
+        {
+            let bottom = (l.rect.top() - STRIP_GAP_ABOVE).max(full.top());
+            Rect::from_min_max(full.min, Pos2::new(full.max.x, bottom))
+        } else {
+            full
+        };
+        let slide_rect = if valid_rect(slide_area) {
+            slide_rect(slide_area, player)
+        } else {
+            Rect::NOTHING
+        };
+        self.last_slide_rect = valid_rect(slide_rect).then_some(slide_rect);
         let close_rect = if player.lightbox_open() {
             crate::view::lightbox_box_rect(slide_rect, player.course().slide_size)
                 .and_then(crate::view::lightbox_close_rect)
@@ -1000,7 +1018,8 @@ impl PlayerFrame {
         paused: bool,
     ) {
         let idle = now - self.last_activity;
-        let want_visible = self.reduced_motion
+        let want_visible = !self.overlay_strip
+            || self.reduced_motion
             || self.drawer_open
             || self.speed_open
             || over_strip
@@ -1008,7 +1027,7 @@ impl PlayerFrame {
             || paused
             || idle < AUTO_HIDE_SECONDS;
         let target = if want_visible { 1.0 } else { 0.0 };
-        if self.reduced_motion {
+        if !self.overlay_strip || self.reduced_motion {
             self.strip_opacity = target;
         } else if dt > 0.0 {
             let step = dt / FADE_SECONDS;

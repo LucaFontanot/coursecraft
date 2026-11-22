@@ -266,6 +266,7 @@ fn disabled_player_flags_ignore_keyboard_and_buttons() {
 fn idle_strip_hides_and_reappears_on_activity() {
     let (_course, player) = hello();
     let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.overlay_strip = true;
     harness.run(&player, Vec::new());
 
     harness.frame.hide_strip();
@@ -288,6 +289,7 @@ fn idle_strip_hides_and_reappears_on_activity() {
 fn reduced_motion_keeps_the_strip_visible() {
     let (_course, player) = hello();
     let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.overlay_strip = true;
     harness.frame.reduced_motion = true;
     harness.frame.hide_strip();
     harness.run(&player, Vec::new());
@@ -676,6 +678,7 @@ fn controls(frame: &PlayerFrame) -> Vec<(ChromeButton, Rect)> {
 fn play_and_pause_send_the_runtime_inputs_and_keep_the_strip_visible() {
     let (_course, mut player) = hello();
     let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.overlay_strip = true;
     harness.run(&player, Vec::new());
     let play = control(&harness.frame, ChromeButton::PlayPause).center();
 
@@ -2110,4 +2113,212 @@ fn drawer_clips_to_player_area_at_letterboxed_and_fullscreen_sizes() {
         let settled = area_harness.frame.drawer_rect().expect("drawer rect");
         assert!((settled.left() - area.left()).abs() < 0.5);
     }
+}
+
+#[test]
+fn reserved_strip_never_overlaps_slide_across_aspects_and_sizes() {
+    use coursecraft_course::{ObjectKind, Rect as CourseRect, Size};
+
+    let aspects = [
+        ("16:9", Size { w: 1280, h: 720 }),
+        ("4:3", Size { w: 1024, h: 768 }),
+        ("portrait", Size { w: 720, h: 1280 }),
+    ];
+
+    for (label, slide_size) in aspects {
+        let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+        course.slide_size = slide_size;
+        let mut video_obj = course.scenes[0].slides[0].objects[0].clone();
+        video_obj.id = "vid-1".to_owned();
+        video_obj.name = "Video".to_owned();
+        video_obj.frame = CourseRect {
+            x: 0.0,
+            y: (slide_size.h as f32) - 180.0,
+            w: 320.0,
+            h: 180.0,
+        };
+        video_obj.kind = ObjectKind::Video {
+            src: "clip.mp4".to_owned(),
+            poster: None,
+            autoplay: true,
+            captions: Some("clip.vtt".to_owned()),
+            volume: 1.0,
+            trim: None,
+            cues: Vec::new(),
+        };
+        course.scenes[0].slides[0].objects.push(video_obj);
+        let boxed: &'static Course = Box::leak(Box::new(course));
+        let mut player = Player::new(boxed).expect("valid player");
+        player.handle(&Input::Start);
+
+        let expected_aspect = slide_size.w as f32 / slide_size.h as f32;
+        let cases: &[(&str, Vec2, bool)] = &[
+            ("wider", vec2(1600.0, 500.0), false),
+            ("taller", vec2(420.0, 900.0), false),
+            (
+                "exact",
+                vec2(slide_size.w as f32, slide_size.h as f32),
+                false,
+            ),
+            ("tiny", vec2(240.0, 160.0), false),
+            ("fullscreen", vec2(1280.0, 720.0), true),
+        ];
+
+        for &(case_name, size, fullscreen) in cases {
+            let mut harness = Harness::new(size.x, size.y);
+            harness.frame.can_fullscreen = true;
+            harness.frame.fullscreen = fullscreen;
+            harness.frame.captions_on = true;
+            harness
+                .frame
+                .set_caption_frame(Some(crate::media_driver::CaptionFrame {
+                    object: "vid-1".to_owned(),
+                    kind: coursecraft_playback::MediaKind::Audio,
+                    text: "Sample caption line".to_owned(),
+                    rect: None,
+                }));
+
+            // Advance past 2.5 s idle to verify default reserved strip does not auto-hide.
+            harness.time = 0.0;
+            harness.run(&player, Vec::new());
+            harness.time = 4.0;
+            let output = harness.run(&player, Vec::new());
+
+            let player_rect = Rect::from_min_size(pos2(0.0, 0.0), size);
+            let bar_rect = harness
+                .frame
+                .strip_rect()
+                .unwrap_or_else(|| panic!("{label}/{case_name}: strip_rect missing"));
+            let slide_rect = output.slide_rect;
+
+            assert!(
+                slide_rect.is_positive(),
+                "{label}/{case_name}: slide_rect must be positive, got {slide_rect:?}"
+            );
+            assert!(
+                slide_rect.left() >= player_rect.left() - 0.5
+                    && slide_rect.right() <= player_rect.right() + 0.5
+                    && slide_rect.top() >= player_rect.top() - 0.5
+                    && slide_rect.bottom() <= player_rect.bottom() + 0.5,
+                "{label}/{case_name}: slide_rect {slide_rect:?} escaped {player_rect:?}"
+            );
+            assert!(
+                !slide_rect.intersects(bar_rect),
+                "{label}/{case_name}: slide_rect {slide_rect:?} intersects bar_rect {bar_rect:?}"
+            );
+            assert!(
+                slide_rect.bottom() < bar_rect.top(),
+                "{label}/{case_name}: slide bottom {} must be above bar top {}",
+                slide_rect.bottom(),
+                bar_rect.top()
+            );
+
+            let actual_aspect = slide_rect.width() / slide_rect.height();
+            assert!(
+                (actual_aspect - expected_aspect).abs() < 0.02,
+                "{label}/{case_name}: aspect {actual_aspect} != {expected_aspect}"
+            );
+
+            let transform = harness.view.last_transform().expect("transform");
+            let vid_item = harness
+                .view
+                .last_items()
+                .iter()
+                .find(|item| matches!(item.hit, crate::Hit::Object(ref id) if id == "vid-1"))
+                .expect("video item");
+            let vid_screen = transform.to_screen_rect(vid_item.rect);
+            assert!(
+                vid_screen.left() >= slide_rect.left() - 0.5
+                    && vid_screen.right() <= slide_rect.right() + 0.5
+                    && vid_screen.top() >= slide_rect.top() - 0.5
+                    && vid_screen.bottom() <= slide_rect.bottom() + 0.5,
+                "{label}/{case_name}: video rect {vid_screen:?} escaped slide_rect {slide_rect:?}"
+            );
+            assert!(
+                !vid_screen.intersects(bar_rect),
+                "{label}/{case_name}: video rect {vid_screen:?} intersects bar_rect {bar_rect:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rendered_bottom_edge_textbox_is_fully_visible_above_bar() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    let mut box_obj = course.scenes[0].slides[0].objects[0].clone();
+    box_obj.id = "bottom-box".to_owned();
+    box_obj.name = "Bottom Box".to_owned();
+    box_obj.frame = coursecraft_course::Rect {
+        x: 240.0,
+        y: 640.0,
+        w: 800.0,
+        h: 80.0,
+    };
+    box_obj.kind = coursecraft_course::ObjectKind::Shape {
+        shape: coursecraft_course::ShapeKind::Rectangle,
+        fill: coursecraft_course::Color("#E02020".to_owned()),
+        fill_style: None,
+        outline: None,
+        text: None,
+        adjust: Vec::new(),
+    };
+    course.scenes[0].slides[0].objects.push(box_obj);
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    struct EmptyMedia;
+    impl crate::media::MediaSource for EmptyMedia {
+        fn get(&self, _src: &str) -> crate::media::MediaFetch {
+            crate::media::MediaFetch::Missing
+        }
+    }
+
+    let mut frame = PlayerFrame::new();
+    frame.reduced_motion = true;
+    let mut view = SlideView::new();
+    view.set_reduced_motion(true);
+    let mut cache = crate::media::MediaCache::new();
+    let media = EmptyMedia;
+    let img = crate::offscreen::render_ui(
+        1280,
+        720,
+        1.0,
+        |_ctx| {},
+        |ctx| {
+            ctx.root_ui(|ui| {
+                frame.show(ui, &player, &mut view, Some((&mut cache, &media)));
+            });
+        },
+    )
+    .expect("render");
+
+    let slide_rect = frame.slide_rect().expect("slide_rect");
+    let bar_rect = frame.strip_rect().expect("strip_rect");
+    assert!(slide_rect.bottom() < bar_rect.top());
+
+    // Sample near the very bottom edge of the bottom-edge box inside slide_rect.
+    let sample_x = slide_rect.center().x as u32;
+    let sample_y = (slide_rect.bottom() - 4.0) as u32;
+    let idx = ((sample_y as usize) * (img.width as usize) + sample_x as usize) * 4;
+    let (r, g, b) = (img.pixels[idx], img.pixels[idx + 1], img.pixels[idx + 2]);
+    assert!(
+        r > 180 && g < 80 && b < 80,
+        "bottom-edge box should be fully visible above the bar, got ({r}, {g}, {b}) at ({sample_x}, {sample_y})"
+    );
+}
+
+#[test]
+fn overlay_strip_explicit_opt_in_auto_hides_and_uses_full_area() {
+    let (_course, player) = hello();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.overlay_strip = true;
+    let out = harness.run(&player, Vec::new());
+    assert_eq!(
+        out.slide_rect,
+        Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 720.0))
+    );
+    harness.frame.hide_strip();
+    harness.run(&player, Vec::new());
+    assert!(harness.frame.strip_rect().is_none());
 }

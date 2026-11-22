@@ -7339,9 +7339,16 @@ fn lightbox_draws_a_dark_backdrop_over_the_base() {
             img.pixels.get(index + 2).copied().unwrap_or(0),
         )
     };
-    let base_corner = pixel(&first, 10, 10);
-    let dimmed_corner = pixel(&second, 10, 10);
-    let centre = pixel(&second, 200, 100);
+    let slide_rect = frame.slide_rect().expect("slide_rect");
+    let box_rect =
+        crate::view::lightbox_box_rect(slide_rect, player.course().slide_size).expect("box_rect");
+    let corner_x = (slide_rect.left() + 10.0) as u32;
+    let corner_y = (slide_rect.top() + 10.0) as u32;
+    let box_x = (box_rect.left() + 20.0) as u32;
+    let box_y = (box_rect.top() + 20.0) as u32;
+    let base_corner = pixel(&first, corner_x, corner_y);
+    let dimmed_corner = pixel(&second, corner_x, corner_y);
+    let centre = pixel(&second, box_x, box_y);
     assert!(
         base_corner.0 > 200,
         "base slide corner starts light: {base_corner:?}"

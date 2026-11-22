@@ -99,7 +99,10 @@ pub fn snapshot_player(
     let title = course.title.clone();
     let mut frame = PlayerFrame::new();
     match select {
-        PlayerSnapshotSelect::Hidden => frame.hide_strip(),
+        PlayerSnapshotSelect::Hidden => {
+            frame.overlay_strip = true;
+            frame.hide_strip();
+        }
         PlayerSnapshotSelect::Drawer => frame.open_drawer(),
         PlayerSnapshotSelect::Ended => frame.ended = true,
         PlayerSnapshotSelect::Playing
