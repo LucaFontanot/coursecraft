@@ -15,7 +15,7 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Course, Object, ObjectKind, Question, Slide, TextRun};
+use crate::{Course, Object, ObjectKind, Question, Slide, StateExtraKind, TextRun};
 
 /// Most hits [`find_in_course`] returns before it reports `truncated`.
 pub const MAX_HITS: usize = 1000;
@@ -416,6 +416,50 @@ fn walk_object<S: StringSink>(
                 runs,
             );
         }
+        for extra in &state.extras {
+            let extra_name = if extra.name.is_empty() {
+                extra.id.as_str()
+            } else {
+                extra.name.as_str()
+            };
+            match &extra.kind {
+                StateExtraKind::Text { text, runs, .. } => out.emit_runs(
+                    at(format!("state/{}/extra/{}/text", state.name, extra.id)),
+                    || {
+                        format!(
+                            "{object_place} ▸ State \"{}\" ▸ {extra_name} text",
+                            state.name
+                        )
+                    },
+                    text,
+                    runs,
+                ),
+                StateExtraKind::Shape {
+                    text: Some(text), ..
+                } => out.emit_runs(
+                    at(format!("state/{}/extra/{}/text", state.name, extra.id)),
+                    || {
+                        format!(
+                            "{object_place} ▸ State \"{}\" ▸ {extra_name} text",
+                            state.name
+                        )
+                    },
+                    &text.text,
+                    &text.runs,
+                ),
+                StateExtraKind::Image { alt, .. } => out.emit(
+                    at(format!("state/{}/extra/{}/alt", state.name, extra.id)),
+                    || {
+                        format!(
+                            "{object_place} ▸ State \"{}\" ▸ {extra_name} alt text",
+                            state.name
+                        )
+                    },
+                    alt,
+                ),
+                StateExtraKind::Shape { text: None, .. } | StateExtraKind::Path { .. } => {}
+            }
+        }
     }
 }
 
@@ -507,20 +551,65 @@ fn object_mut<'a>(slide: &'a mut Slide, layer: Option<&str>, id: &str) -> Option
 }
 
 fn object_target<'a>(object: &'a mut Object, field: &str) -> Option<StringTarget<'a>> {
-    if let Some(name) = field
-        .strip_prefix("state/")
-        .and_then(|rest| rest.strip_suffix("/text"))
-    {
-        let state = object.states.iter_mut().find(|state| state.name == name)?;
-        if let Some(runs) = &mut state.runs
-            && !runs.is_empty()
-        {
-            let text = state
-                .text
-                .get_or_insert_with(|| runs.iter().map(|r| r.text.as_str()).collect());
-            return Some(StringTarget::Runs { text, runs });
+    if let Some(rest) = field.strip_prefix("state/") {
+        if let Some(before_text) = rest.strip_suffix("/text") {
+            if let Some((state_name, extra_id)) = before_text.rsplit_once("/extra/") {
+                let state = object
+                    .states
+                    .iter_mut()
+                    .find(|state| state.name == state_name)?;
+                let extra = state.extras.iter_mut().find(|e| e.id == extra_id)?;
+                return match &mut extra.kind {
+                    StateExtraKind::Text { text, runs, .. } => {
+                        if runs.is_empty() {
+                            Some(StringTarget::Plain(text))
+                        } else {
+                            Some(StringTarget::Runs { text, runs })
+                        }
+                    }
+                    StateExtraKind::Shape {
+                        text: Some(shape_text),
+                        ..
+                    } => {
+                        if shape_text.runs.is_empty() {
+                            Some(StringTarget::Plain(&mut shape_text.text))
+                        } else {
+                            Some(StringTarget::Runs {
+                                text: &mut shape_text.text,
+                                runs: &mut shape_text.runs,
+                            })
+                        }
+                    }
+                    _ => None,
+                };
+            }
+            let state = object
+                .states
+                .iter_mut()
+                .find(|state| state.name == before_text)?;
+            if let Some(runs) = &mut state.runs
+                && !runs.is_empty()
+            {
+                let text = state
+                    .text
+                    .get_or_insert_with(|| runs.iter().map(|r| r.text.as_str()).collect());
+                return Some(StringTarget::Runs { text, runs });
+            }
+            return Some(StringTarget::Optional(&mut state.text));
         }
-        return Some(StringTarget::Optional(&mut state.text));
+        if let Some(before_alt) = rest.strip_suffix("/alt")
+            && let Some((state_name, extra_id)) = before_alt.rsplit_once("/extra/")
+        {
+            let state = object
+                .states
+                .iter_mut()
+                .find(|state| state.name == state_name)?;
+            let extra = state.extras.iter_mut().find(|e| e.id == extra_id)?;
+            if let StateExtraKind::Image { alt, .. } = &mut extra.kind {
+                return Some(StringTarget::Plain(alt));
+            }
+            return None;
+        }
     }
     if let Some(rest) = field
         .strip_prefix("table/")

@@ -7813,6 +7813,113 @@ fn object_uses_font_checks_state_text_style_and_runs() {
     assert!(!object_uses_font(&obj_style, &|f| f == "Other"));
 }
 
+#[test]
+fn referenced_media_and_rewrite_walk_state_extra_image_shape_and_path() {
+    let mut course = coursecraft_course::Course::from_json(include_str!(
+        "../../../examples/hello-course/course.json"
+    ))
+    .expect("valid course");
+    let obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-extra-media",
+        "name": "Btn",
+        "kind": { "type": "button", "label": "Go" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "ex-img",
+                    "kind": { "type": "image", "src": "ex-img.png" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-shp",
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#112233",
+                        "fill_style": { "type": "picture", "src": "ex-shp.png" }
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-path",
+                    "kind": {
+                        "type": "path",
+                        "points": [{ "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 1.0, "y": 1.0 }],
+                        "closed": true,
+                        "outline": { "color": "#000000", "width": 1.0 },
+                        "fill_style": { "type": "picture", "src": "ex-path.png" }
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                }
+            ]
+        }]
+    }))
+    .expect("btn");
+    course.scenes[0].slides[0].objects.push(obj);
+
+    let referenced = referenced_media_srcs(&course);
+    assert!(referenced.contains("ex-img.png"), "{referenced:?}");
+    assert!(referenced.contains("ex-shp.png"), "{referenced:?}");
+    assert!(referenced.contains("ex-path.png"), "{referenced:?}");
+
+    let mut renames = std::collections::HashMap::new();
+    renames.insert("ex-img.png".to_string(), "ex-img-2.png".to_string());
+    renames.insert("ex-shp.png".to_string(), "ex-shp-2.png".to_string());
+    renames.insert("ex-path.png".to_string(), "ex-path-2.png".to_string());
+    rewrite_slide_media_srcs(&mut course.scenes[0].slides[0], &renames);
+
+    let after = referenced_media_srcs(&course);
+    assert!(after.contains("ex-img-2.png"), "{after:?}");
+    assert!(after.contains("ex-shp-2.png"), "{after:?}");
+    assert!(after.contains("ex-path-2.png"), "{after:?}");
+}
+
+#[test]
+fn object_uses_font_checks_state_extra_text_and_shape_runs() {
+    let obj: coursecraft_course::Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-extra-font",
+        "name": "Btn",
+        "kind": { "type": "button", "label": "Go" },
+        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 40.0 },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "ex-txt",
+                    "kind": {
+                        "type": "text",
+                        "text": "Hi",
+                        "style": { "font": "Merriweather", "size": 14.0, "color": "#111111" },
+                        "runs": [{ "text": "Hi", "font": "IBM Plex Mono" }]
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-shp",
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#112233",
+                        "text": {
+                            "text": "Yo",
+                            "style": { "font": "Rubik", "size": 14.0, "color": "#111111" }
+                        }
+                    },
+                    "frame": { "x": 0.0, "y": 24.0, "w": 40.0, "h": 20.0 }
+                }
+            ]
+        }]
+    }))
+    .expect("btn");
+
+    assert!(object_uses_font(&obj, &|f| f == "Merriweather"));
+    assert!(object_uses_font(&obj, &|f| f == "IBM Plex Mono"));
+    assert!(object_uses_font(&obj, &|f| f == "Rubik"));
+    assert!(!object_uses_font(&obj, &|f| f == "Other"));
+}
+
 fn click_for_requests(harness: &mut TestHarness, pos: egui::Pos2) -> Vec<EditorRequest> {
     harness.frame(vec![Event::PointerMoved(pos)]);
     harness.frame(vec![Event::PointerButton {

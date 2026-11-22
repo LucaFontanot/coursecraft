@@ -968,3 +968,282 @@ fn fuzz_500_extras_and_5000_point_path_extra_return_bounded_validation_errors() 
         "expected bounded-count error for 5000-point path extra: {issues_path:?}"
     );
 }
+
+#[test]
+fn unsupported_script_in_state_runs_or_extra_text_is_flagged_by_validate() {
+    let course_extra_text = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [{
+                "id": "lbl",
+                "kind": { "type": "text", "text": "مرحبا" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 24.0 }
+            }]
+        }]
+    }));
+    let issues = course_extra_text.validate();
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.severity == Severity::Warning && i.message.contains("no glyphs for")),
+        "expected unsupported script warning for state extra text: {issues:?}"
+    );
+
+    let course_extra_shape = course_with_slide_object(serde_json::json!({
+        "id": "btn-2",
+        "name": "Button 2",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [{
+                "id": "badge",
+                "kind": {
+                    "type": "shape",
+                    "shape": "rectangle",
+                    "fill": "#112233",
+                    "text": { "text": "שלום" }
+                },
+                "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 24.0 }
+            }]
+        }]
+    }));
+    let issues_shape = course_extra_shape.validate();
+    assert!(
+        issues_shape
+            .iter()
+            .any(|i| i.severity == Severity::Warning && i.message.contains("no glyphs for")),
+        "expected unsupported script warning for state extra shape text: {issues_shape:?}"
+    );
+}
+
+#[test]
+fn media_references_includes_state_extra_image_shape_and_path_picture() {
+    let course = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "ex-img",
+                    "kind": { "type": "image", "src": "extra-img.png" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-shp",
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#112233",
+                        "fill_style": { "type": "picture", "src": "extra-shape.png" }
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-path",
+                    "kind": {
+                        "type": "path",
+                        "points": [{ "x": 0.0, "y": 0.0 }, { "x": 1.0, "y": 0.0 }, { "x": 1.0, "y": 1.0 }],
+                        "closed": true,
+                        "outline": { "color": "#000000", "width": 1.0 },
+                        "fill_style": { "type": "picture", "src": "extra-path.png" }
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                }
+            ]
+        }]
+    }));
+    let refs = crate::media_references(&course);
+    for expected in ["extra-img.png", "extra-shape.png", "extra-path.png"] {
+        assert!(
+            refs.iter().any(|r| r.src == expected),
+            "expected {expected} in media_references: {refs:?}"
+        );
+    }
+}
+
+#[test]
+fn recolor_course_updates_state_extra_colors_and_preserves_alpha() {
+    let course = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "ex-shp",
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#11223380",
+                        "outline": { "color": "#112233", "width": 2.0 },
+                        "text": {
+                            "text": "Hi",
+                            "style": { "font": "Inter", "size": 14.0, "color": "#112233" },
+                            "runs": [{ "text": "Hi", "color": "#112233CC" }]
+                        }
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 20.0 },
+                    "shadow": { "color": "#11223340", "blur": 4.0, "offset_x": 1.0, "offset_y": 1.0 },
+                    "glow": { "color": "#112233", "size": 6.0 }
+                },
+                {
+                    "id": "ex-txt",
+                    "kind": {
+                        "type": "text",
+                        "text": "Tag",
+                        "style": { "font": "Inter", "size": 12.0, "color": "#112233" },
+                        "runs": [{ "text": "Tag", "color": "#11223399" }]
+                    },
+                    "frame": { "x": 0.0, "y": 24.0, "w": 40.0, "h": 20.0 }
+                }
+            ]
+        }]
+    }));
+    let (recolored, changed) =
+        crate::recolor_course(&course, "#112233", "#AA5500", false).expect("recolor");
+    assert_eq!(changed, 8);
+    let extras = &recolored.scenes[0].slides[0].objects[0].states[0].extras;
+    let crate::StateExtraKind::Shape {
+        fill,
+        outline,
+        text,
+        ..
+    } = &extras[0].kind
+    else {
+        panic!("expected shape extra");
+    };
+    assert_eq!(fill.0, "#AA550080");
+    assert_eq!(outline.as_ref().unwrap().color.0, "#AA5500");
+    let shp_text = text.as_ref().unwrap();
+    assert_eq!(shp_text.style.color.0, "#AA5500");
+    assert_eq!(shp_text.runs[0].color.as_ref().unwrap().0, "#AA5500CC");
+    assert_eq!(extras[0].shadow.as_ref().unwrap().color.0, "#AA550040");
+    assert_eq!(extras[0].glow.as_ref().unwrap().color.0, "#AA5500");
+
+    let crate::StateExtraKind::Text { style, runs, .. } = &extras[1].kind else {
+        panic!("expected text extra");
+    };
+    assert_eq!(style.color.0, "#AA5500");
+    assert_eq!(runs[0].color.as_ref().unwrap().0, "#AA550099");
+}
+
+#[test]
+fn course_strings_and_replace_cover_state_extra_text_runs_and_alt() {
+    let mut course = course_with_slide_object(serde_json::json!({
+        "id": "btn-1",
+        "name": "Button 1",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 60 },
+        "kind": { "type": "button", "label": "Next" },
+        "states": [{
+            "name": "hover",
+            "extras": [
+                {
+                    "id": "ex-txt",
+                    "name": "Badge text",
+                    "kind": {
+                        "type": "text",
+                        "text": "Hello %user%, click next",
+                        "runs": [
+                            { "text": "Hello %user%, ", "bold": true },
+                            { "text": "click next", "italic": true }
+                        ]
+                    },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-shp",
+                    "kind": {
+                        "type": "shape",
+                        "shape": "rectangle",
+                        "fill": "#112233",
+                        "text": { "text": "Shape next" }
+                    },
+                    "frame": { "x": 0.0, "y": 24.0, "w": 80.0, "h": 20.0 }
+                },
+                {
+                    "id": "ex-img",
+                    "kind": { "type": "image", "src": "icon.png", "alt": "Next icon" },
+                    "frame": { "x": 84.0, "y": 0.0, "w": 20.0, "h": 20.0 }
+                }
+            ]
+        }]
+    }));
+
+    let strings = crate::strings::course_strings(&course);
+    let txt_item = strings
+        .iter()
+        .find(|s| s.location.field == "state/hover/extra/ex-txt/text")
+        .expect("extra text item")
+        .clone();
+    let shp_item = strings
+        .iter()
+        .find(|s| s.location.field == "state/hover/extra/ex-shp/text")
+        .expect("extra shape text item")
+        .clone();
+    let alt_item = strings
+        .iter()
+        .find(|s| s.location.field == "state/hover/extra/ex-img/alt")
+        .expect("extra alt item")
+        .clone();
+
+    assert_eq!(txt_item.text, "Hello %user%, click next");
+    assert_eq!(shp_item.text, "Shape next");
+    assert_eq!(alt_item.text, "Next icon");
+
+    let target = crate::strings::string_mut(&mut course, &txt_item.location).expect("txt target");
+    let out1 =
+        crate::strings::replace_in_target(target, "next", "forward", true, false, usize::MAX);
+    assert_eq!(out1.replaced, 1);
+
+    let target_var =
+        crate::strings::string_mut(&mut course, &txt_item.location).expect("txt var target");
+    let out_var =
+        crate::strings::replace_in_target(target_var, "user", "guest", true, false, usize::MAX);
+    assert_eq!(out_var.replaced, 0);
+    assert_eq!(out_var.skipped, 1);
+
+    let target_shp =
+        crate::strings::string_mut(&mut course, &shp_item.location).expect("shp target");
+    let out2 =
+        crate::strings::replace_in_target(target_shp, "next", "forward", true, false, usize::MAX);
+    assert_eq!(out2.replaced, 1);
+
+    let target_alt =
+        crate::strings::string_mut(&mut course, &alt_item.location).expect("alt target");
+    let out3 =
+        crate::strings::replace_in_target(target_alt, "Next", "Forward", true, false, usize::MAX);
+    assert_eq!(out3.replaced, 1);
+
+    let extras = &course.scenes[0].slides[0].objects[0].states[0].extras;
+    let crate::StateExtraKind::Text { text, runs, .. } = &extras[0].kind else {
+        panic!("expected text extra");
+    };
+    assert_eq!(text, "Hello %user%, click forward");
+    assert_eq!(runs[0].bold, Some(true));
+    assert_eq!(runs[1].text, "click forward");
+    assert_eq!(runs[1].italic, Some(true));
+
+    let crate::StateExtraKind::Shape {
+        text: Some(shp_text),
+        ..
+    } = &extras[1].kind
+    else {
+        panic!("expected shape extra");
+    };
+    assert_eq!(shp_text.text, "Shape forward");
+
+    let crate::StateExtraKind::Image { alt, .. } = &extras[2].kind else {
+        panic!("expected image extra");
+    };
+    assert_eq!(alt, "Forward icon");
+}

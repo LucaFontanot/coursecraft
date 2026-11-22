@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::{
     Action, Condition, Course, Event, Layer, Object, ObjectKind, QuestionKind, SCHEMA_VERSION,
-    Scoring, Slide, SlideTarget, Trigger, ValueKind, ValueSource, VarOp,
+    Scoring, Slide, SlideTarget, StateExtraKind, Trigger, ValueKind, ValueSource, VarOp,
 };
 
 /// Conditions nested deeper than this are rejected (and the player refuses them).
@@ -890,10 +890,23 @@ fn slide_has_unsupported_script(slide: &Slide) -> bool {
             | ObjectKind::Timer { .. }
             | ObjectKind::ProgressMeter { .. }
             | ObjectKind::Path { .. } => false,
-        }) || o
-            .states
-            .iter()
-            .any(|state| state.text.as_deref().is_some_and(bad))
+        }) || o.states.iter().any(|state| {
+            state.text.as_deref().is_some_and(bad)
+                || state
+                    .runs
+                    .as_deref()
+                    .is_some_and(|runs| runs.iter().any(|run| bad(&run.text)))
+                || state.extras.iter().any(|extra| match &extra.kind {
+                    StateExtraKind::Text { text, runs, .. } => {
+                        bad(text) || runs.iter().any(|run| bad(&run.text))
+                    }
+                    StateExtraKind::Shape { text: Some(t), .. } => {
+                        bad(&t.text) || t.runs.iter().any(|run| bad(&run.text))
+                    }
+                    StateExtraKind::Image { alt, .. } => bad(alt),
+                    StateExtraKind::Shape { text: None, .. } | StateExtraKind::Path { .. } => false,
+                })
+        })
     };
     if slide.objects.iter().any(object_bad)
         || slide

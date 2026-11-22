@@ -182,6 +182,27 @@ fn collect_object_media<'a>(obj: &'a Object, out: &mut Vec<MediaRef<'a>>) {
                 src,
             });
         }
+        for extra in &state.extras {
+            let extra_src = match &extra.kind {
+                coursecraft_course::StateExtraKind::Image { src, .. } => Some(src.as_str()),
+                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => fill_style
+                    .as_ref()
+                    .and_then(coursecraft_course::FillStyle::picture_src),
+                coursecraft_course::StateExtraKind::Path { path } => path
+                    .fill_style
+                    .as_ref()
+                    .and_then(coursecraft_course::FillStyle::picture_src),
+                coursecraft_course::StateExtraKind::Text { .. } => None,
+            };
+            if let Some(src) = extra_src
+                && !src.is_empty()
+            {
+                out.push(MediaRef {
+                    object_id: &obj.id,
+                    src,
+                });
+            }
+        }
     }
 }
 
@@ -757,6 +778,21 @@ fn collect_object_faces(out: &mut Vec<(String, FontStyle)>, obj: &Object) {
                 }
             }
             (None, None) => {}
+        }
+        for extra in &state.extras {
+            match &extra.kind {
+                coursecraft_course::StateExtraKind::Text { style, runs, .. } => {
+                    collect_runs_faces(out, style, runs);
+                }
+                coursecraft_course::StateExtraKind::Shape {
+                    text: Some(text), ..
+                } => {
+                    collect_runs_faces(out, &text.style, &text.runs);
+                }
+                coursecraft_course::StateExtraKind::Shape { text: None, .. }
+                | coursecraft_course::StateExtraKind::Image { .. }
+                | coursecraft_course::StateExtraKind::Path { .. } => {}
+            }
         }
     }
 }

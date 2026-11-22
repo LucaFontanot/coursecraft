@@ -956,3 +956,140 @@ fn state_delete_extra_and_reorder_extra_mutate_error_and_undo_redo() {
     s.redo().unwrap();
     assert_eq!(s.course, after_delete);
 }
+
+#[test]
+fn copy_paste_duplicate_and_template_preserve_state_extras() {
+    let mut s = Session::blank("E15 Extras");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({ "slide": "slide1", "object": "btn", "state": { "name": "hover" } }),
+    );
+    ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": "hover",
+            "extra": {
+                "id": "badge",
+                "name": "Badge",
+                "kind": { "type": "shape", "shape": "ellipse", "fill": "#22AA44" },
+                "frame": { "x": -6.0, "y": -6.0, "w": 20.0, "h": 20.0 }
+            }
+        }),
+    );
+
+    // 1. object.duplicate
+    let dup = ok(
+        &mut s,
+        "object.duplicate",
+        json!({ "slide": "slide1", "object": "btn" }),
+    );
+    let dup_id = dup["id"].as_str().unwrap().to_owned();
+    let (dup_obj, _) = s.course.slide("slide1").unwrap().object(&dup_id).unwrap();
+    assert_eq!(dup_obj.states[0].extras.len(), 1);
+    assert_eq!(dup_obj.states[0].extras[0].id, "badge");
+
+    // 2. slide.duplicate
+    let sdup = ok(&mut s, "slide.duplicate", json!({ "slide": "slide1" }));
+    let sdup_id = sdup["id"].as_str().unwrap().to_owned();
+    let sdup_obj = s
+        .course
+        .slide(&sdup_id)
+        .unwrap()
+        .objects
+        .iter()
+        .find(|o| o.states.iter().any(|st| st.extras.len() == 1))
+        .expect("duplicated slide object should preserve extras");
+    assert_eq!(sdup_obj.states[0].extras[0].id, "badge");
+
+    // 3. layer.duplicate
+    let layer = ok(
+        &mut s,
+        "layer.add",
+        json!({ "slide": "slide1", "name": "L1" }),
+    );
+    let layer_id = layer["id"].as_str().unwrap().to_owned();
+    let btn = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("btn")
+        .unwrap()
+        .0
+        .clone();
+    let paste_layer = ok(
+        &mut s,
+        "object.paste",
+        json!({ "slide": "slide1", "layer": layer_id, "objects": [btn] }),
+    );
+    let pasted_id = paste_layer["ids"][0].as_str().unwrap().to_owned();
+    let ldup = ok(
+        &mut s,
+        "layer.duplicate",
+        json!({ "slide": "slide1", "layer": layer_id }),
+    );
+    let ldup_id = ldup["id"].as_str().unwrap().to_owned();
+    let ldup_layer = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .layers
+        .iter()
+        .find(|l| l.id == ldup_id)
+        .unwrap();
+    let ldup_obj = ldup_layer
+        .objects
+        .iter()
+        .find(|o| o.states.iter().any(|st| st.extras.len() == 1))
+        .expect("duplicated layer object should preserve extras");
+    assert_eq!(ldup_obj.states[0].extras[0].id, "badge");
+    assert!(!pasted_id.is_empty());
+
+    // 4. template.save / template.add_slide
+    let tpl = ok(
+        &mut s,
+        "template.save",
+        json!({ "slide": "slide1", "title": "Rich Template" }),
+    );
+    let tpl_id = tpl["id"].as_str().unwrap().to_owned();
+    let from_tpl = ok(
+        &mut s,
+        "template.add_slide",
+        json!({ "template": tpl_id, "scene": "scene1" }),
+    );
+    let from_tpl_id = from_tpl["id"].as_str().unwrap().to_owned();
+    let tpl_obj = s
+        .course
+        .slide(&from_tpl_id)
+        .unwrap()
+        .objects
+        .iter()
+        .find(|o| o.states.iter().any(|st| st.extras.len() == 1))
+        .expect("template slide object should preserve extras");
+    assert_eq!(tpl_obj.states[0].extras[0].id, "badge");
+
+    // 5. object.paste onto a master strips states (including extras)
+    let master = ok(&mut s, "master.add", json!({ "title": "M" }));
+    let master_id = master["id"].as_str().unwrap().to_owned();
+    let btn = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("btn")
+        .unwrap()
+        .0
+        .clone();
+    let master_paste = ok(
+        &mut s,
+        "object.paste",
+        json!({ "slide": master_id, "objects": [btn] }),
+    );
+    let mp_id = master_paste["ids"][0].as_str().unwrap().to_owned();
+    let (mp_obj, _) = s.course.slide(&master_id).unwrap().object(&mp_id).unwrap();
+    assert!(mp_obj.states.is_empty());
+    assert_eq!(mp_obj.initial_state, "normal");
+}

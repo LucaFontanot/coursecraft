@@ -290,6 +290,28 @@ fn walk_object_media_references(
                 object: Some(object.id.clone()),
             });
         }
+        for extra in &state.extras {
+            let extra_src = match &extra.kind {
+                StateExtraKind::Image { src, .. } => Some(src.as_str()),
+                StateExtraKind::Shape { fill_style, .. } => {
+                    fill_style.as_ref().and_then(FillStyle::picture_src)
+                }
+                StateExtraKind::Path { path } => {
+                    path.fill_style.as_ref().and_then(FillStyle::picture_src)
+                }
+                StateExtraKind::Text { .. } => None,
+            };
+            if let Some(src) = extra_src
+                && !src.is_empty()
+            {
+                out.push(MediaReference {
+                    src: src.to_owned(),
+                    place: place(),
+                    slide: Some(slide.id.clone()),
+                    object: Some(object.id.clone()),
+                });
+            }
+        }
     }
 }
 

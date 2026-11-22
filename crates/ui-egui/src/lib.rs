@@ -4896,6 +4896,24 @@ fn collect_object_media_srcs(
         {
             set.insert(src.to_owned());
         }
+        for extra in &state.extras {
+            let extra_src = match &extra.kind {
+                coursecraft_course::StateExtraKind::Image { src, .. } => Some(src.as_str()),
+                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => fill_style
+                    .as_ref()
+                    .and_then(coursecraft_course::FillStyle::picture_src),
+                coursecraft_course::StateExtraKind::Path { path } => path
+                    .fill_style
+                    .as_ref()
+                    .and_then(coursecraft_course::FillStyle::picture_src),
+                coursecraft_course::StateExtraKind::Text { .. } => None,
+            };
+            if let Some(src) = extra_src
+                && !src.is_empty()
+            {
+                set.insert(src.to_owned());
+            }
+        }
     }
 }
 
@@ -4965,6 +4983,24 @@ fn rewrite_object_media_srcs(
         if let Some(coursecraft_course::FillStyle::Picture { src, .. }) = &mut state.fill_style {
             remap(src);
         }
+        for extra in &mut state.extras {
+            match &mut extra.kind {
+                coursecraft_course::StateExtraKind::Image { src, .. } => remap(src),
+                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => {
+                    if let Some(coursecraft_course::FillStyle::Picture { src, .. }) = fill_style {
+                        remap(src);
+                    }
+                }
+                coursecraft_course::StateExtraKind::Path { path } => {
+                    if let Some(coursecraft_course::FillStyle::Picture { src, .. }) =
+                        &mut path.fill_style
+                    {
+                        remap(src);
+                    }
+                }
+                coursecraft_course::StateExtraKind::Text { .. } => {}
+            }
+        }
     }
 }
 
@@ -4995,6 +5031,17 @@ fn object_uses_font(object: &coursecraft_course::Object, matches: &impl Fn(&str)
                 || state.runs.as_deref().is_some_and(|runs| {
                     runs.iter()
                         .any(|run| run.font.as_deref().is_some_and(matches))
+                })
+                || state.extras.iter().any(|extra| match &extra.kind {
+                    coursecraft_course::StateExtraKind::Text { style, runs, .. } => {
+                        text_uses(style, runs)
+                    }
+                    coursecraft_course::StateExtraKind::Shape {
+                        text: Some(text), ..
+                    } => text_uses(&text.style, &text.runs),
+                    coursecraft_course::StateExtraKind::Shape { text: None, .. }
+                    | coursecraft_course::StateExtraKind::Image { .. }
+                    | coursecraft_course::StateExtraKind::Path { .. } => false,
                 })
         })
 }
