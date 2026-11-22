@@ -118,6 +118,15 @@ static REGISTRY: &[Command] = &[
         run: course_set_quiz,
     },
     Command {
+        id: "course.set_publish_settings",
+        label: "Publish Settings",
+        menu: "",
+        shortcut: None,
+        params: r#"{"standard"?: string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}"#,
+        mutates: true,
+        run: course_set_publish_settings,
+    },
+    Command {
         id: "course.set_background_audio",
         label: "Set Background Audio",
         menu: "",
@@ -725,7 +734,7 @@ static REGISTRY: &[Command] = &[
         label: "Editor View Settings",
         menu: "",
         shortcut: None,
-        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "base_slide_view"?: "show"|"dim"|"hide", "last_publish"?: {"standard": string}}"#,
+        params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "base_slide_view"?: "show"|"dim"|"hide", "last_publish"?: {"standard": string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}}"#,
         mutates: true,
         run: view_set,
     },
@@ -1926,6 +1935,32 @@ fn course_set_quiz(s: &mut Session, p: &Json) -> Result<Json> {
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
+}
+
+fn course_set_publish_settings(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "course.set_publish_settings";
+    let was_valid = s.is_playable();
+    let _ = obj(C, p)?;
+    let standard: Option<String> = opt(C, p, "standard")?;
+    let lms_status: Option<coursecraft_course::LmsStatus> = opt(C, p, "lms_status")?;
+    if standard.is_none() && lms_status.is_none() {
+        return Err(bad(C, "provide `standard` and/or `lms_status`"));
+    }
+    let mut settings = s.course.editor.last_publish.clone().unwrap_or_else(|| {
+        coursecraft_course::PublishSettings {
+            standard: "scorm12".to_string(),
+            lms_status: coursecraft_course::LmsStatus::Auto,
+        }
+    });
+    if let Some(std) = standard {
+        settings.standard = std;
+    }
+    if let Some(status) = lms_status {
+        settings.lms_status = status;
+    }
+    s.course.editor.last_publish = Some(settings.clone());
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "last_publish": settings }))
 }
 
 fn course_set_background_audio(s: &mut Session, p: &Json) -> Result<Json> {

@@ -735,7 +735,17 @@ The renderer and LMS bridge consume these: `slide_entered`, `layer_shown`, `laye
 
 `Effect::Print { slide, exclude }` asks the host to render the named slide without the excluded objects and offer it for printing; the LMS bridge ignores it because it changes no durable state. The bare desktop player logs that printing works in the published course or the editor preview.
 
-The LMS bridge maps `score` to `cmi.core.score.raw` (set to `percent`), `cmi.core.score.min` (`0`), `cmi.core.score.max` (`100`), and `cmi.core.lesson_status` (`status`). It maps `completion` to `cmi.core.lesson_status` and `slide_entered` to `cmi.core.lesson_location`. Once a pass has been reported in an attempt, neither the SCORM bridge nor the LTI reporter overwrites it with a later fail or a lower score (and in SCORM 1.2, where `cmi.core.lesson_status` is a single field, a later `completion` of `completed` does not overwrite `passed`). Durable progress is stored in `cmi.suspend_data` using the compact `cc1:` encoding; writes exceeding the SCORM 1.2 limit of 4096 characters are skipped with a warning. Commits are batched at most once per input. On `start` the bridge calls `LMSInitialize`, turns `not attempted` into `incomplete`, and resumes from `cmi.suspend_data` when it decodes (otherwise it starts fresh with a warning). Finishing (on `exit`, or when the page closes) sets `cmi.core.exit` to `suspend` until a passed/failed/completed status has been written and to an empty string after, sets `cmi.core.session_time` (`HHHH:MM:SS.SS`), commits and calls `LMSFinish`, once.
+The LMS bridge maps `score` to `cmi.core.score.raw` (set to `percent`), `cmi.core.score.min` (`0`), `cmi.core.score.max` (`100`), and `cmi.core.lesson_status` (`status`). It maps `completion` to `cmi.core.lesson_status` and `slide_entered` to `cmi.core.lesson_location`. For SCORM 1.2, `course.editor.last_publish.lms_status` controls how the runtime's `CompletionStatus` maps to `cmi.core.lesson_status`:
+
+| `lms_status` | `Passed` | `Completed` | `Failed` | `Incomplete` |
+|---|---|---|---|---|
+| `auto` (default) | `passed` | `completed` | `failed` | `incomplete` |
+| `passed_incomplete` | `passed` | `passed` | `incomplete` | `incomplete` |
+| `passed_failed` | `passed` | `passed` | `failed` | `incomplete` |
+| `completed_incomplete` | `completed` | `completed` | `incomplete` | `incomplete` |
+| `completed_failed` | `completed` | `completed` | `failed` | `incomplete` |
+
+SCORM 2004, cmi5, xAPI, and LTI are unchanged (they report completion and success separately). Once a pass has been reported in an attempt, neither the SCORM bridge nor the LTI reporter overwrites it with a later fail or a lower score (and in SCORM 1.2, where `cmi.core.lesson_status` is a single field, a later `completion` of `completed` does not overwrite `passed`). Durable progress is stored in `cmi.suspend_data` using the compact `cc1:` encoding; writes exceeding the SCORM 1.2 limit of 4096 characters are skipped with a warning. Commits are batched at most once per input. On `start` the bridge calls `LMSInitialize`, turns `not attempted` into `incomplete`, and resumes from `cmi.suspend_data` when it decodes (otherwise it starts fresh with a warning). Finishing (on `exit`, or when the page closes) sets `cmi.core.exit` to `suspend` until a finished status (not `incomplete`) has been written and to an empty string after, sets `cmi.core.session_time` (`HHHH:MM:SS.SS`), commits and calls `LMSFinish`, once.
 
 ## SCORM 2004
 

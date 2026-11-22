@@ -264,6 +264,8 @@ mod u19_state_check_tests;
 #[cfg(test)]
 mod u20_state_image_picker_tests;
 #[cfg(test)]
+mod u21_publish_status_tests;
+#[cfg(test)]
 mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;

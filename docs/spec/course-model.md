@@ -36,6 +36,7 @@ Course
 ├─ fonts[]?         {family, style: regular|bold|italic|bold_italic, src} (omitted when empty)
 ├─ background_audio? {src, volume=0.5, loop=true} (omitted when unset)
 ├─ start_slide?     slide id (default: first slide)
+├─ editor?          {last_publish?: {standard, lms_status?="auto"}} (omitted when default)
 ├─ scenes[] {id, title}
    └─ slides[] {id, title, duration_ms=5000, background?, transition?, notes?, master?, revisit=auto, draw?, player?}
       ├─ objects[]      base layer, bottom → top (timing, states, entrance?, exit?, motion_paths[])
@@ -650,3 +651,10 @@ XLIFF 1.2 export walks every learner-visible field: course, scene and slide titl
 ## Versioning
 
 Any breaking change bumps `SCHEMA_VERSION` and ships a migration in `coursecraft-course`. Never silently reinterpret old files.
+
+## Editor publish settings
+
+`editor.last_publish` is optional and omitted when unset. It stores `{standard, lms_status?}`:
+
+- `standard`: last chosen publish target (`"scorm12"`, `"scorm2004"`, `"cmi5"`, `"xapi"`, `"lti"`, `"web"`).
+- `lms_status` (optional, default `"auto"`, omitted when default): how SCORM 1.2 maps runtime completion (`Passed`, `Failed`, `Completed`, `Incomplete`) to `cmi.core.lesson_status` (`"auto"`, `"passed_incomplete"`, `"passed_failed"`, `"completed_incomplete"`, `"completed_failed"`). Ignored by SCORM 2004, cmi5, xAPI, LTI, and Web.

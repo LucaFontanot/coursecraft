@@ -1,6 +1,7 @@
 //! The Publish dialog: standard picker, pre-flight checks and publish results.
 
 use crate::dialog::Dialog;
+use coursecraft_course::LmsStatus;
 use coursecraft_render::{
     CONTROL_PRIMARY, RADIUS_MD, SIZE_BODY, SPACE_MD, SPACE_SM, palette, small,
 };
@@ -367,10 +368,20 @@ pub fn show_publish_dialog(
                         editor.ui.publish.phase = PublishPhase::Idle;
                         editor.ui.publish.status = None;
                         let standard = editor.ui.publish.standard;
+                        let lms_status = editor
+                            .session
+                            .course
+                            .editor
+                            .last_publish
+                            .as_ref()
+                            .map_or(LmsStatus::Auto, |lp| lp.lms_status);
                         editor.run(
                             "view.set",
                             serde_json::json!({
-                                "last_publish": { "standard": standard.file_stem() }
+                                "last_publish": {
+                                    "standard": standard.file_stem(),
+                                    "lms_status": lms_status,
+                                }
                             }),
                         );
                         requests.push(EditorRequest::Publish { standard });
@@ -388,6 +399,27 @@ pub fn show_publish_dialog(
     }
 }
 
+const LMS_STATUS_TOOLTIP: &str =
+    "What CourseCraft sends to the LMS when the learner finishes. Match what your LMS expects.";
+
+const LMS_STATUS_OPTIONS: [LmsStatus; 5] = [
+    LmsStatus::Auto,
+    LmsStatus::PassedIncomplete,
+    LmsStatus::PassedFailed,
+    LmsStatus::CompletedIncomplete,
+    LmsStatus::CompletedFailed,
+];
+
+fn lms_status_label(status: LmsStatus) -> &'static str {
+    match status {
+        LmsStatus::Auto => "Automatic",
+        LmsStatus::PassedIncomplete => "Passed / Incomplete",
+        LmsStatus::PassedFailed => "Passed / Failed",
+        LmsStatus::CompletedIncomplete => "Completed / Incomplete",
+        LmsStatus::CompletedFailed => "Completed / Failed",
+    }
+}
+
 fn show_standards(editor: &mut Editor, ui: &mut egui::Ui, busy: bool) {
     let p = palette(ui.ctx());
     for standard in PublishStandard::ALL {
@@ -400,6 +432,46 @@ fn show_standards(editor: &mut Editor, ui: &mut egui::Ui, busy: bool) {
         }
         ui.add_space(2.0);
         ui.label(small(standard.help()).color(p.text_secondary));
+        ui.add_space(SPACE_SM);
+    }
+    if editor.ui.publish.standard == PublishStandard::Scorm12 {
+        let current = editor
+            .session
+            .course
+            .editor
+            .last_publish
+            .as_ref()
+            .map_or(LmsStatus::Auto, |lp| lp.lms_status);
+        let mut selected = current;
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    small("Report status as")
+                        .size(SIZE_BODY)
+                        .color(p.text_secondary),
+                )
+                .on_hover_text(LMS_STATUS_TOOLTIP);
+                crate::widgets::styled_combo(
+                    ui,
+                    "publish_scorm12_lms_status",
+                    crate::widgets::COMBO_MIN_WIDTH,
+                )
+                .selected_text(lms_status_label(selected))
+                .show_ui(ui, |ui| {
+                    for option in LMS_STATUS_OPTIONS {
+                        ui.selectable_value(&mut selected, option, lms_status_label(option));
+                    }
+                })
+                .response
+                .on_hover_text(LMS_STATUS_TOOLTIP);
+            });
+        });
+        if selected != current {
+            editor.run(
+                "course.set_publish_settings",
+                serde_json::json!({ "lms_status": selected }),
+            );
+        }
         ui.add_space(SPACE_SM);
     }
     ui.add_space(SPACE_SM);

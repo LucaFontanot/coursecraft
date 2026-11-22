@@ -809,6 +809,10 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         ),
         ("course.set_quiz", json!({ "passing_percent": 75 })),
         (
+            "course.set_publish_settings",
+            json!({ "lms_status": "passed_failed" }),
+        ),
+        (
             "course.set_background_audio",
             json!({ "src": "audio/new.mp3", "volume": 0.25, "loop": false }),
         ),

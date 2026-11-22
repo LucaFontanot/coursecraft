@@ -386,11 +386,39 @@ pub struct Guide {
     pub at: f32,
 }
 
+/// How SCORM 1.2 reports `cmi.core.lesson_status` to the LMS.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LmsStatus {
+    /// Report the status the runtime computed (default).
+    #[default]
+    Auto,
+    /// Passed or Completed -> `passed`; Failed or Incomplete -> `incomplete`.
+    PassedIncomplete,
+    /// Passed or Completed -> `passed`; Failed -> `failed`; Incomplete -> `incomplete`.
+    PassedFailed,
+    /// Passed or Completed -> `completed`; Failed or Incomplete -> `incomplete`.
+    CompletedIncomplete,
+    /// Passed or Completed -> `completed`; Failed -> `failed`; Incomplete -> `incomplete`.
+    CompletedFailed,
+}
+
+impl LmsStatus {
+    /// Returns `true` when this is the default (`Auto`).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::Auto
+    }
+}
+
 /// Last publish settings remembered for this course in the editor.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PublishSettings {
+    #[serde(default)]
     pub standard: String,
+    #[serde(default, skip_serializing_if = "LmsStatus::is_default")]
+    pub lms_status: LmsStatus,
 }
 
 /// How the base slide appears in the editor while a layer tab is active.
