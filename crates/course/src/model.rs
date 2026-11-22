@@ -652,6 +652,11 @@ impl From<Rect> for CropRect {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlayerSettings {
+    /// Show the bottom player bar (chrome strip). When false, no strip is
+    /// drawn or reserved, the slide fills the frame, and bar-launched panels
+    /// and keyboard Previous/Next are disabled.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub show_bar: bool,
     /// Show the player's Previous/Next buttons.
     #[serde(default = "yes")]
     pub show_nav: bool,
@@ -693,6 +698,7 @@ pub struct PlayerSettings {
 impl Default for PlayerSettings {
     fn default() -> Self {
         Self {
+            show_bar: true,
             show_nav: true,
             show_menu: true,
             show_seekbar: true,
@@ -739,6 +745,9 @@ pub enum NextRequirement {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SlidePlayerOverrides {
+    /// Replaces `player.show_bar` on this slide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_bar: Option<bool>,
     /// Replaces the course's Next rule on this slide; `None` uses the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_requires: Option<NextRequirement>,

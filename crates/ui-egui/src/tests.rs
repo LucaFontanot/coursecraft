@@ -4427,6 +4427,92 @@ fn course_settings_shows_course_values_on_a_fresh_course() {
 }
 
 #[test]
+fn course_settings_player_bar_switch_disables_bar_options_and_updates_course() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new_with_size(course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    for _ in 0..5 {
+        harness.idle_frame();
+    }
+
+    assert!(harness.editor.session.course.player.show_bar);
+    let bar_toggle = harness
+        .find_text_last("Player bar")
+        .expect("Player bar switch");
+    harness.click_at(bar_toggle);
+    harness.idle_frame();
+    assert!(!harness.editor.session.course.player.show_bar);
+
+    // Disabled bar options are marked disabled and show the tooltip.
+    let seekbar_node = harness
+        .last_widgets
+        .iter()
+        .find(|n| n.label.as_deref() == Some("Show seekbar"))
+        .cloned()
+        .expect("Show seekbar widget");
+    assert!(seekbar_node.disabled, "Show seekbar must be disabled");
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(seekbar_node.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Turn the player bar on to use this"),
+        "disabled bar option must show tooltip, got {tip:?}"
+    );
+}
+
+#[test]
+fn slide_properties_player_bar_override_updates_slide() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new(course);
+    harness.screen_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 1100.0));
+    harness.editor.selection.object = None;
+    harness.editor.selection.layer = None;
+    for _ in 0..5 {
+        harness.idle_frame();
+    }
+
+    let slide_id = harness.editor.selection.slide.clone();
+    assert_eq!(
+        harness
+            .editor
+            .session
+            .course
+            .slide(&slide_id)
+            .and_then(|s| s.player.as_ref())
+            .and_then(|o| o.show_bar),
+        None
+    );
+
+    // Click the "Course default" combo next to "Player bar" in Slide Properties.
+    let bar_label = harness
+        .find_text("Player bar")
+        .expect("Player bar label in properties");
+    let combo_pos = harness
+        .find_texts("Course default")
+        .into_iter()
+        .min_by_key(|p| ((p.y - bar_label.y).abs() * 10.0) as i32)
+        .expect("Course default combo for Player bar");
+    harness.click_at(combo_pos);
+    harness.idle_frame();
+
+    let off_pos = harness.find_text_last("Off").expect("Off option");
+    harness.click_at(off_pos);
+    harness.idle_frame();
+
+    assert_eq!(
+        harness
+            .editor
+            .session
+            .course
+            .slide(&slide_id)
+            .and_then(|s| s.player.as_ref())
+            .and_then(|o| o.show_bar),
+        Some(false)
+    );
+}
+
+#[test]
 fn course_settings_background_audio_choose_pick_and_remove() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);

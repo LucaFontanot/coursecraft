@@ -149,6 +149,7 @@ pub struct CourseSettingsState {
     pub title: String,
     pub id: String,
     pub language: String,
+    pub show_bar: bool,
     pub show_nav: bool,
     pub show_menu: bool,
     pub show_seekbar: bool,
@@ -180,6 +181,7 @@ impl CourseSettingsState {
         self.title = course.title.clone();
         self.id = course.id.clone();
         self.language = course.language.clone().unwrap_or_default();
+        self.show_bar = course.player.show_bar;
         self.show_nav = course.player.show_nav;
         self.show_menu = course.player.show_menu;
         self.show_seekbar = course.player.show_seekbar;
@@ -339,72 +341,94 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                 // Player Chrome Toggles
                 ui.heading("Player chrome");
                 if ui
-                    .checkbox(
-                        &mut editor.ui.course_settings.show_nav,
-                        "Show navigation (Previous / Next buttons)",
-                    )
+                    .checkbox(&mut editor.ui.course_settings.show_bar, "Player bar")
                     .changed()
                 {
                     update_player = true;
                 }
-                if ui
-                    .checkbox(
-                        &mut editor.ui.course_settings.show_menu,
-                        "Show slide menu (outline)",
-                    )
-                    .changed()
-                {
-                    update_player = true;
-                }
-                if ui
-                    .checkbox(&mut editor.ui.course_settings.show_seekbar, "Show seekbar")
-                    .changed()
-                {
-                    update_player = true;
-                }
-                if ui
-                    .checkbox(&mut editor.ui.course_settings.show_speed, "Show playback speed")
-                    .changed()
-                {
-                    update_player = true;
-                }
-                if ui
-                    .checkbox(
-                        &mut editor.ui.course_settings.show_fullscreen,
-                        "Show full screen",
-                    )
-                    .changed()
-                {
-                    update_player = true;
-                }
-                if ui
-                    .checkbox(
-                        &mut editor.ui.course_settings.show_transcript,
-                        "Show notes as transcript",
-                    )
-                    .changed()
-                {
-                    update_player = true;
-                }
-                ui.horizontal(|ui| {
-                    for (flag, label) in [
-                        (&mut editor.ui.course_settings.show_title, "Title"),
-                        (&mut editor.ui.course_settings.show_volume, "Volume"),
-                        (&mut editor.ui.course_settings.show_captions, "Captions"),
-                    ] {
-                        if ui.checkbox(flag, label).changed() {
-                            update_player = true;
+                const BAR_OFF_TOOLTIP: &str = "Turn the player bar on to use this";
+                ui.add_enabled_ui(editor.ui.course_settings.show_bar, |ui| {
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_nav,
+                            "Show navigation (Previous / Next buttons)",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_menu,
+                            "Show slide menu (outline)",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(&mut editor.ui.course_settings.show_seekbar, "Show seekbar")
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_speed,
+                            "Show playback speed",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_fullscreen,
+                            "Show full screen",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    if ui
+                        .checkbox(
+                            &mut editor.ui.course_settings.show_transcript,
+                            "Show notes as transcript",
+                        )
+                        .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                        .changed()
+                    {
+                        update_player = true;
+                    }
+                    ui.horizontal(|ui| {
+                        for (flag, label) in [
+                            (&mut editor.ui.course_settings.show_title, "Title"),
+                            (&mut editor.ui.course_settings.show_volume, "Volume"),
+                            (&mut editor.ui.course_settings.show_captions, "Captions"),
+                        ] {
+                            if ui
+                                .checkbox(flag, label)
+                                .on_disabled_hover_text(BAR_OFF_TOOLTIP)
+                                .changed()
+                            {
+                                update_player = true;
+                            }
                         }
+                    });
+                    if let Some(choice) = logo_picker(
+                        ui,
+                        &form,
+                        editor.ui.course_settings.logo.as_deref(),
+                        &editor.media,
+                    ) {
+                        logo_choice = Some(choice);
                     }
                 });
-                if let Some(choice) = logo_picker(
-                    ui,
-                    &form,
-                    editor.ui.course_settings.logo.as_deref(),
-                    &editor.media,
-                ) {
-                    logo_choice = Some(choice);
-                }
                 form.row(ui, "Navigation", |ui, _| {
                     let mut mode = editor.ui.course_settings.navigation;
                     crate::widgets::styled_combo(
@@ -582,6 +606,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
         editor.run(
             "course.set_player",
             serde_json::json!({
+                "show_bar": editor.ui.course_settings.show_bar,
                 "show_nav": editor.ui.course_settings.show_nav,
                 "show_menu": editor.ui.course_settings.show_menu,
                 "show_seekbar": editor.ui.course_settings.show_seekbar,

@@ -242,7 +242,7 @@ course.validate      File/Check Course        -          {}
 course.audit         -                        -          {}
 course.update        File/Course Properties   -          {"title"?: string, "id"?: string, "start_slide"?: id|null, "language"?: string|null}
 course.set_title     -                        -          {"title": string}
-course.set_player    Project/Player Settings  -          {"show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}}
+course.set_player    Project/Player Settings  -          {"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}}
 course.set_quiz      Project/Quiz Settings    -          {"passing_percent": 0..=100|null}
 course.set_publish_settings -                 -          {"standard"?: string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}
 course.set_background_audio -                        -          {"src"?: string | null, "volume"?: number, "loop"?: bool}
@@ -274,7 +274,7 @@ slide.paste          -                        -          {"scene"?: id, "after"?
 slide.set_duration   -                        -          {"slide": id, "ms": u32}
 slide.set_background -                        -          {"slide": id, "background": color|null}
 slide.set_transition -                        -          {"slide": id, "transition": Transition|null}
-slide.set_player_overrides -                  -          {"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}
+slide.set_player_overrides -                  -          {"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_bar"?: bool|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}
 slide.add_cue        -                        -          {"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}
 slide.set_cue        -                        -          {"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}
 slide.remove_cue     -                        -          {"slide": id, "layer"?: id, "cue": id}

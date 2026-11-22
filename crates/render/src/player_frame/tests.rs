@@ -2819,3 +2819,86 @@ fn t14_7_banners_captions_and_lightbox_close_never_collide() {
         }
     }
 }
+
+#[test]
+fn bar_off_uses_full_frame_without_strip_and_ignores_arrow_keys_and_menu() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    course.player.show_bar = false;
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.run(&player, Vec::new());
+
+    assert!(
+        harness.frame.strip_rect().is_none(),
+        "bar off must not draw or reserve a strip"
+    );
+    let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 720.0));
+    let expected_slide = super::slide_rect(full, &player);
+    assert_eq!(harness.frame.slide_rect(), Some(expected_slide));
+
+    let output = harness.run(&player, vec![key(egui::Key::ArrowRight)]);
+    assert!(
+        !output
+            .inputs
+            .iter()
+            .any(|input| matches!(input, Input::Next | Input::Previous)),
+        "arrow keys must not navigate when bar is off"
+    );
+    let output = harness.run(&player, vec![key(egui::Key::M)]);
+    assert!(output.inputs.is_empty());
+    assert!(!harness.frame.drawer_open());
+
+    // A trigger with Next still advances.
+    let first_id = player.current_slide().expect("slide").id.clone();
+    player.handle(&Input::Next);
+    assert_ne!(player.current_slide().expect("slide").id, first_id);
+}
+
+#[test]
+fn slide_show_bar_override_wins_both_ways() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    course.player.show_bar = true;
+    course.slide_mut("s-intro").expect("intro").player =
+        Some(coursecraft_course::SlidePlayerOverrides {
+            show_bar: Some(false),
+            ..Default::default()
+        });
+    let boxed: &'static Course = Box::leak(Box::new(course));
+    let mut player = Player::new(boxed).expect("valid player");
+    player.handle(&Input::Start);
+
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.run(&player, Vec::new());
+    assert!(harness.frame.strip_rect().is_none());
+
+    player.handle(&Input::Jump {
+        slide: "s-tabs".into(),
+    });
+    harness.run(&player, Vec::new());
+    assert!(harness.frame.strip_rect().is_some());
+
+    // Now test course show_bar = false with per-slide show_bar = Some(true).
+    let mut course2 = Course::from_json(HELLO_JSON).expect("valid course");
+    course2.player.show_bar = false;
+    course2.slide_mut("s-intro").expect("intro").player =
+        Some(coursecraft_course::SlidePlayerOverrides {
+            show_bar: Some(true),
+            ..Default::default()
+        });
+    let boxed2: &'static Course = Box::leak(Box::new(course2));
+    let mut player2 = Player::new(boxed2).expect("valid player");
+    player2.handle(&Input::Start);
+
+    let mut harness2 = Harness::new(1280.0, 720.0);
+    harness2.run(&player2, Vec::new());
+    assert!(harness2.frame.strip_rect().is_some());
+
+    player2.handle(&Input::Jump {
+        slide: "s-tabs".into(),
+    });
+    harness2.run(&player2, Vec::new());
+    assert!(harness2.frame.strip_rect().is_none());
+}

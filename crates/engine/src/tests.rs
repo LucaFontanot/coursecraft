@@ -8667,6 +8667,52 @@ fn slide_set_player_overrides_sets_and_clears_the_show_flags() {
     );
 }
 
+#[test]
+fn course_set_player_toggles_show_bar_with_undo() {
+    let mut s = Session::blank("Title");
+    assert!(s.course.player.show_bar);
+    ok(&mut s, "course.set_player", json!({ "show_bar": false }));
+    assert!(!s.course.player.show_bar);
+    s.undo().unwrap();
+    assert!(s.course.player.show_bar);
+}
+
+#[test]
+fn slide_set_player_overrides_sets_and_clears_show_bar_with_undo() {
+    let mut s = Session::blank("Title");
+    let slide = s.course.slides().next().unwrap().id.clone();
+    ok(
+        &mut s,
+        "slide.set_player_overrides",
+        json!({ "slide": slide, "show_bar": false }),
+    );
+    assert_eq!(
+        s.course
+            .slide(&slide)
+            .unwrap()
+            .player
+            .as_ref()
+            .and_then(|o| o.show_bar),
+        Some(false)
+    );
+    ok(
+        &mut s,
+        "slide.set_player_overrides",
+        json!({ "slide": slide, "show_bar": null }),
+    );
+    assert!(s.course.slide(&slide).unwrap().player.is_none());
+    s.undo().unwrap();
+    assert_eq!(
+        s.course
+            .slide(&slide)
+            .unwrap()
+            .player
+            .as_ref()
+            .and_then(|o| o.show_bar),
+        Some(false)
+    );
+}
+
 /// Flip cards keep one text colour for both sides, so it must read on the
 /// front fill and on the back state's fill (composited over the slide), for
 /// the default theme and a dark-accent theme.

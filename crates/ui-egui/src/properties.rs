@@ -8287,13 +8287,34 @@ fn show_slide_properties(
         });
         let overrides = slide.player.clone().unwrap_or_default();
         ui.label(RichText::new("Player on this slide").strong());
-        for (key, label, value) in [
-            ("show_nav", "Navigation buttons", overrides.show_nav),
-            ("show_seekbar", "Seekbar", overrides.show_seekbar),
-            ("show_menu", "Slide menu", overrides.show_menu),
+        for (key, label, value, on_label, off_label) in [
+            ("show_bar", "Player bar", overrides.show_bar, "On", "Off"),
+            (
+                "show_nav",
+                "Navigation buttons",
+                overrides.show_nav,
+                "Show",
+                "Hide",
+            ),
+            (
+                "show_seekbar",
+                "Seekbar",
+                overrides.show_seekbar,
+                "Show",
+                "Hide",
+            ),
+            (
+                "show_menu",
+                "Slide menu",
+                overrides.show_menu,
+                "Show",
+                "Hide",
+            ),
         ] {
             inspector_row(ui, label, |ui| {
-                if let Some(choice) = tri_state_combo(ui, ("prop_slide_player", key), value) {
+                if let Some(choice) =
+                    tri_state_combo(ui, ("prop_slide_player", key), value, on_label, off_label)
+                {
                     action_to_run = Some((
                         "slide.set_player_overrides",
                         serde_json::json!({ "slide": slide.id, key: choice }),
@@ -8331,16 +8352,18 @@ fn show_slide_properties(
     action_to_run
 }
 
-/// "Course default / Show / Hide". Returns the new choice (`None` clears it).
+/// "Course default / <on_label> / <off_label>". Returns the new choice (`None` clears it).
 fn tri_state_combo(
     ui: &mut Ui,
     id_salt: (&str, &str),
     value: Option<bool>,
+    on_label: &str,
+    off_label: &str,
 ) -> Option<Option<bool>> {
     let label = match value {
         None => "Course default",
-        Some(true) => "Show",
-        Some(false) => "Hide",
+        Some(true) => on_label,
+        Some(false) => off_label,
     };
     let mut chosen = None;
     let rem_w = ui.available_width().max(90.0);
@@ -8349,8 +8372,8 @@ fn tri_state_combo(
         .show_ui(ui, |ui| {
             for (option, text) in [
                 (None, "Course default"),
-                (Some(true), "Show"),
-                (Some(false), "Hide"),
+                (Some(true), on_label),
+                (Some(false), off_label),
             ] {
                 if ui.selectable_label(value == option, text).clicked() && value != option {
                     chosen = Some(option);

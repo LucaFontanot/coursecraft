@@ -449,9 +449,14 @@ impl PlayerFrame {
             .rect_filled(full, CornerRadius::ZERO, PLAYER_GROUND);
 
         let started = player.state().started;
+        let show_bar = effective_show_bar(player);
+        if !show_bar {
+            self.drawer_open = false;
+            self.speed_open = false;
+        }
         let settings = &player.effective_player();
-        let show_menu = settings.show_menu && started;
-        let show_nav = settings.show_nav && started;
+        let show_menu = show_bar && settings.show_menu && started;
+        let show_nav = show_bar && settings.show_nav && started;
         let now = ui.input(|i| i.time);
         let dt = if self.initialized {
             (now - self.last_time).clamp(0.0, 0.1) as f32
@@ -470,12 +475,12 @@ impl PlayerFrame {
         self.focus.set_notice_visible(notice_showing);
 
         let mut media = media;
-        let logo = if self.ended {
+        let logo = if self.ended || !show_bar {
             None
         } else {
             logo_texture(ui, player, media.as_mut())
         };
-        let layout = if self.ended {
+        let layout = if self.ended || !show_bar {
             None
         } else {
             strip_layout(
@@ -1050,6 +1055,14 @@ impl PlayerFrame {
             }
         }
     }
+}
+
+fn effective_show_bar(player: &Player<'_>) -> bool {
+    player
+        .current_slide()
+        .and_then(|slide| slide.player.as_ref())
+        .and_then(|overrides| overrides.show_bar)
+        .unwrap_or(player.course().player.show_bar)
 }
 
 fn strip_has_focus(ui: &Ui) -> bool {

@@ -21,7 +21,7 @@ Course
 │                   (User variables use [A-Za-z0-9_-]; read-only built-in variables
 │                    like Course.Progress and Slide.ElapsedMs are computed by logic)
 ├─ quiz?            {passing_percent}
-├─ player           {show_nav, show_menu, show_seekbar, show_speed, show_fullscreen (default true),
+├─ player           {show_bar, show_nav, show_menu, show_seekbar, show_speed, show_fullscreen (default true),
 │                    show_transcript=false (notes shown as a transcript tab),
 │                    show_title, show_volume, show_captions (default true),
 │                    logo? (project-relative image src, shown in the strip, max 28 pt high),
@@ -428,7 +428,7 @@ Layer options beyond the basic flags are omitted from JSON when default, so exis
 - `allow_seek` is `auto` (default), `yes` or `no`, and decides whether the learner's seekbar moves this layer's clock.
 - `revisit` is `auto` (default), `reset` or `resume`, and decides what showing the layer again does to its clock and object states.
 
-`Slide.player` is an optional struct of per-slide player overrides, omitted when unset. Its `next_requires` (same shape as `player.next_requires`) replaces the course rule on that slide. Its `show_nav`, `show_seekbar` and `show_menu` (each true, false or unset) replace the course flags of the same name on that slide. A `variable` rule must name a true/false variable. See "Player navigation modes" in `triggers.md`.
+`Slide.player` is an optional struct of per-slide player overrides, omitted when unset. Its `next_requires` (same shape as `player.next_requires`) replaces the course rule on that slide. Its `show_bar`, `show_nav`, `show_seekbar` and `show_menu` (each true, false or unset) replace the course flags of the same name on that slide. A `variable` rule must name a true/false variable. See "Player navigation modes" in `triggers.md`.
 
 `Slide.revisit` uses the same `auto | reset | resume` values and applies when entering an already-visited slide. See `triggers.md` for the runtime rules.
 

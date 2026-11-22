@@ -155,6 +155,7 @@ impl Course {
         check_course_fonts(&mut cx);
         check_background_audio(&mut cx);
         check_next_rules(&mut cx);
+        check_bar_off_dead_ends(&mut cx);
         check_resources_and_glossary(&mut cx);
         check_logo(&mut cx);
         check_font_name(&mut cx, &self.theme.font, "/theme/font");
@@ -2660,6 +2661,58 @@ fn check_logo(cx: &mut Ctx<'_>) {
             format!("player logo {logo:?} must be a safe relative path to an image"),
         );
     }
+}
+
+/// Warn on any non-last slide whose player bar is off and that has no Next,
+/// Jump, or Exit trigger on the slide or its layers.
+fn check_bar_off_dead_ends(cx: &mut Ctx<'_>) {
+    let total_slides: usize = cx.course.scenes.iter().map(|s| s.slides.len()).sum();
+    let mut seen = 0usize;
+    for (si, scene) in cx.course.scenes.iter().enumerate() {
+        for (li, slide) in scene.slides.iter().enumerate() {
+            seen += 1;
+            if seen == total_slides {
+                continue;
+            }
+            let show_bar = slide
+                .player
+                .as_ref()
+                .and_then(|o| o.show_bar)
+                .unwrap_or(cx.course.player.show_bar);
+            if show_bar || slide_has_forward_trigger(slide) {
+                continue;
+            }
+            let name = if slide.title.is_empty() {
+                slide.id.as_str()
+            } else {
+                slide.title.as_str()
+            };
+            cx.warn(
+                format!("/scenes/{si}/slides/{li}/player/show_bar"),
+                format!(
+                    "Slide \u{201C}{name}\u{201D} has the player bar turned off and no Next, Jump, or Exit trigger to move forward."
+                ),
+            );
+        }
+    }
+}
+
+fn slide_has_forward_trigger(slide: &Slide) -> bool {
+    slide
+        .triggers
+        .iter()
+        .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+        .any(|t| {
+            !t.disabled
+                && matches!(
+                    &t.action,
+                    crate::Action::JumpToSlide {
+                        target: crate::SlideTarget::Next
+                            | crate::SlideTarget::Id(_)
+                            | crate::SlideTarget::Scene(_),
+                    } | crate::Action::ExitCourse
+                )
+        })
 }
 
 /// Every "Next unlocks" rule, course-wide and per slide.

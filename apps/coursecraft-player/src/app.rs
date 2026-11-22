@@ -1199,8 +1199,14 @@ impl Playing {
         if let Some(layer) = playing.a11y.as_mut() {
             let settings = &playing.player.effective_player();
             let started = playing.player.state().started;
-            let show_menu = settings.show_menu && started;
-            let show_nav = settings.show_nav && started;
+            let show_bar = playing
+                .player
+                .current_slide()
+                .and_then(|slide| slide.player.as_ref())
+                .and_then(|overrides| overrides.show_bar)
+                .unwrap_or(settings.show_bar);
+            let show_menu = show_bar && settings.show_menu && started;
+            let show_nav = show_bar && settings.show_nav && started;
             let transform = if playing.player.lightbox_open() {
                 playing.view.lightbox_transform()
             } else {

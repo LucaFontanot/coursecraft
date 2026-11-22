@@ -104,7 +104,7 @@ static REGISTRY: &[Command] = &[
         label: "Player Settings",
         menu: "Project/Player Settings",
         shortcut: None,
-        params: r#"{"show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}}"#,
+        params: r#"{"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}}"#,
         mutates: true,
         run: course_set_player,
     },
@@ -392,7 +392,7 @@ static REGISTRY: &[Command] = &[
         label: "Slide Player Settings",
         menu: "",
         shortcut: None,
-        params: r#"{"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}"#,
+        params: r#"{"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_bar"?: bool|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}"#,
         mutates: true,
         run: slide_set_player_overrides,
     },
@@ -1843,6 +1843,9 @@ fn course_set_title(s: &mut Session, p: &Json) -> Result<Json> {
 fn course_set_player(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "course.set_player";
     let was_valid = s.is_playable();
+    if let Some(v) = opt::<bool>(C, p, "show_bar")? {
+        s.course.player.show_bar = v;
+    }
     if let Some(v) = opt::<bool>(C, p, "show_nav")? {
         s.course.player.show_nav = v;
     }
@@ -2685,6 +2688,7 @@ fn slide_set_player_overrides(s: &mut Session, p: &Json) -> Result<Json> {
         }
     };
     let flags = [
+        flag_override(C, map, "show_bar")?,
         flag_override(C, map, "show_nav")?,
         flag_override(C, map, "show_seekbar")?,
         flag_override(C, map, "show_menu")?,
@@ -2695,12 +2699,15 @@ fn slide_set_player_overrides(s: &mut Session, p: &Json) -> Result<Json> {
         overrides.next_requires = rule;
     }
     if let Some(value) = flags[0] {
-        overrides.show_nav = value;
+        overrides.show_bar = value;
     }
     if let Some(value) = flags[1] {
-        overrides.show_seekbar = value;
+        overrides.show_nav = value;
     }
     if let Some(value) = flags[2] {
+        overrides.show_seekbar = value;
+    }
+    if let Some(value) = flags[3] {
         overrides.show_menu = value;
     }
     sl.player = if overrides == coursecraft_course::SlidePlayerOverrides::default() {

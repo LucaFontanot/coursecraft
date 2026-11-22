@@ -283,8 +283,15 @@ fn configure_course_settings(harness: &mut TestHarness) {
         .expect("Course ID field");
     harness.set_field(id_pos, "hello-course");
 
-    let quiz_chk = harness
-        .find_text("Enable quiz grading and passing percentage")
+    let quiz_chk = (0..10)
+        .find_map(|_| {
+            if let Some(p) = harness.find_text("Enable quiz grading and passing percentage") {
+                Some(p)
+            } else {
+                harness.scroll_over(title_pos, -120.0);
+                None
+            }
+        })
         .expect("Quiz checkbox");
     harness.click_at(quiz_chk);
     harness.idle_frame();
@@ -1629,6 +1636,8 @@ fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
     harness.editor.selection.clear_objects();
     harness.idle_frame();
     click_inspector_tab(&mut harness, "Slide");
+    let _ = scroll_to_label(&mut harness, "Notes");
+    harness.scroll_over(harness.right_panel_rect().center(), -80.0);
     let notes = scroll_to_label(&mut harness, "Notes");
     harness.click_at(notes + vec2(0.0, 40.0));
     harness.type_text("Welcome the learner.");

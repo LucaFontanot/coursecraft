@@ -5236,3 +5236,89 @@ fn apply_style_to_range_with_base_merges_cleanly_on_off_on() {
         );
     }
 }
+
+#[test]
+fn player_settings_show_bar_defaults_true_and_omits_when_true_and_old_json_round_trips() {
+    let course = Course::from_json(HELLO).expect("hello course");
+    assert!(course.player.show_bar);
+    let json = serde_json::to_string(&course).expect("serialize");
+    assert!(
+        !json.contains("show_bar"),
+        "default show_bar=true must be omitted from JSON"
+    );
+    let round_tripped = Course::from_json(&json).expect("round-trip");
+    assert!(round_tripped.player.show_bar);
+
+    let mut off_course = course.clone();
+    off_course.player.show_bar = false;
+    off_course.scenes[0].slides[0].player = Some(crate::SlidePlayerOverrides {
+        show_bar: Some(true),
+        ..Default::default()
+    });
+    let off_json = serde_json::to_string(&off_course).expect("serialize off");
+    assert!(off_json.contains("\"show_bar\":false"));
+    let off_rt = Course::from_json(&off_json).expect("round-trip off");
+    assert!(!off_rt.player.show_bar);
+    assert_eq!(
+        off_rt.scenes[0].slides[0]
+            .player
+            .as_ref()
+            .and_then(|o| o.show_bar),
+        Some(true)
+    );
+}
+
+#[test]
+fn check_course_warns_when_bar_off_and_no_way_forward() {
+    let mut course = Course::from_json(HELLO).expect("hello course");
+    // Remove all triggers on slide 0 so it has no Next/Jump/Exit trigger.
+    course.scenes[0].slides[0].triggers.clear();
+    for layer in &mut course.scenes[0].slides[0].layers {
+        layer.triggers.clear();
+    }
+    course.player.show_bar = false;
+    let issues = course.validate();
+    let title = &course.scenes[0].slides[0].title;
+    assert!(
+        issues.iter().any(|i| {
+            i.severity == Severity::Warning
+                && i.message.contains(title)
+                && i.message.contains("player bar")
+        }),
+        "expected warning naming {title:?}, got: {issues:#?}"
+    );
+}
+
+#[test]
+fn check_course_does_not_warn_on_last_slide_or_slide_with_next_trigger() {
+    let mut course = Course::from_json(HELLO).expect("hello course");
+    course.player.show_bar = false;
+    // Clear triggers on all slides, then add a Next trigger only on non-last slides.
+    let last_scene_idx = course.scenes.len() - 1;
+    let last_slide_idx = course.scenes[last_scene_idx].slides.len() - 1;
+    for (si, scene) in course.scenes.iter_mut().enumerate() {
+        for (li, slide) in scene.slides.iter_mut().enumerate() {
+            slide.triggers.clear();
+            for layer in &mut slide.layers {
+                layer.triggers.clear();
+            }
+            if !(si == last_scene_idx && li == last_slide_idx) {
+                slide.triggers.push(crate::Trigger {
+                    action: crate::Action::JumpToSlide {
+                        target: crate::SlideTarget::Next,
+                    },
+                    when: crate::Event::TimelineEnds { layer: None },
+                    condition: None,
+                    disabled: false,
+                });
+            }
+        }
+    }
+    let issues = course.validate();
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.severity == Severity::Warning && i.message.contains("player bar")),
+        "unexpected player bar warning: {issues:#?}"
+    );
+}
