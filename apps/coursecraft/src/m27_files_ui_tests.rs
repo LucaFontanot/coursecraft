@@ -878,7 +878,7 @@ fn d13_9_version_history_lifecycle_dedup_prune_keep_zero_and_ui() {
     h.idle_frame();
     h.assert_foreground_texts_unclipped(false);
     let texts = h.all_texts();
-    assert!(texts.iter().any(|t| t == "Open as Copy"));
+    assert!(texts.iter().any(|t| t == "Open as copy"));
     assert!(texts.iter().any(|t| t == "Delete"));
 
     // keep == 0 creates no new snapshots
@@ -946,8 +946,8 @@ fn d13_10_version_history_open_as_copy_and_delete_cache_invalidation() {
     );
     assert_eq!(versions::list_versions(&cfg, &proj).len(), 1);
 
-    // Click Open as Copy on remaining version ("First Title") -> untitled dirty copy, original untouched
-    h.click_button_index("Open as Copy", 0);
+    // Click Open as copy on remaining version ("First Title") -> untitled dirty copy, original untouched
+    h.click_button_index("Open as copy", 0);
     assert!(h.app.project.path.is_none());
     assert!(h.app.project.is_dirty(&h.app.editor.session));
     assert!(
