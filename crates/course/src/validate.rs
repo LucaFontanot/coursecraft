@@ -793,6 +793,15 @@ fn check_master(cx: &mut Ctx<'_>, master: &Slide, p: &str) {
                 ),
             );
         }
+        if !object.states.is_empty() {
+            cx.warn(
+                format!("{p}/objects/{i}/states"),
+                format!(
+                    "{label}: master objects do not have states (object {:?})",
+                    object.id
+                ),
+            );
+        }
     }
     if let Some(ref bg) = master.background
         && !bg.is_valid()
@@ -2060,12 +2069,38 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
 }
 
 fn check_object_states(cx: &mut Ctx<'_>, o: &Object, p: &str) {
+    if o.states.len() > crate::MAX_STATES_PER_OBJECT {
+        cx.warn(
+            format!("{p}/states"),
+            format!(
+                "object has {} states; at most {} are recommended",
+                o.states.len(),
+                crate::MAX_STATES_PER_OBJECT
+            ),
+        );
+    }
     let mut seen = BTreeSet::new();
     for (i, s) in o.states.iter().enumerate() {
         if s.name == "normal" {
             cx.err(
                 format!("{p}/states/{i}"),
                 "`normal` is the object's own appearance; don't redefine it",
+            );
+        } else if s.name == "hidden" {
+            cx.warn(
+                format!("{p}/states/{i}"),
+                "`hidden` is built in and needs no state definition",
+            );
+        } else if s.name.trim().is_empty() {
+            cx.warn(format!("{p}/states/{i}"), "state name is empty");
+        } else if s.name.chars().count() > crate::MAX_STATE_NAME_CHARS {
+            cx.warn(
+                format!("{p}/states/{i}"),
+                format!(
+                    "state name {:?} is longer than {} characters",
+                    s.name,
+                    crate::MAX_STATE_NAME_CHARS
+                ),
             );
         }
         if !seen.insert(s.name.as_str()) {

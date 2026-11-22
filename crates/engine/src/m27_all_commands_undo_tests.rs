@@ -317,12 +317,20 @@ fn fixture_session() -> Session {
 
     // Populate slide1 with all object kinds, layers, cues, triggers, states, motion paths.
     let mut obj_shape = make_shape_obj("obj_shape", 40.0, 40.0, 120.0, 80.0, "#112233");
-    obj_shape.states = vec![StateDef {
-        name: "custom1".into(),
-        fill: Some(Color("#223344".into())),
-        text: None,
-        src: None,
-    }];
+    obj_shape.states = vec![
+        StateDef {
+            name: "custom1".into(),
+            fill: Some(Color("#223344".into())),
+            text: None,
+            src: None,
+        },
+        StateDef {
+            name: "custom2".into(),
+            fill: Some(Color("#334455".into())),
+            text: None,
+            src: None,
+        },
+    ];
     obj_shape.motion_paths = vec![MotionPath {
         id: "mpath1".into(),
         points: vec![Point { x: 0.0, y: 0.0 }, Point { x: 100.0, y: 0.0 }],
@@ -1155,6 +1163,18 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         (
             "object.delete_state",
             json!({ "slide": "slide1", "object": "obj_shape", "name": "custom1" }),
+        ),
+        (
+            "object.duplicate_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "name": "custom1" }),
+        ),
+        (
+            "object.rename_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "from": "custom1", "to": "custom1_renamed" }),
+        ),
+        (
+            "object.reorder_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "name": "custom2", "index": 0 }),
         ),
         (
             "object.delete",

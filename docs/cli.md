@@ -347,6 +347,9 @@ video.add_question_cue -                      -          {"slide": id, "object":
 object.add_state     -                        -          {"slide": id, "object": id, "state": StateDef}
 object.update_state  -                        -          {"slide": id, "object": id, "state": StateDef}
 object.delete_state  -                        -          {"slide": id, "object": id, "name": string}
+object.duplicate_state -                      -          {"slide": id, "object": id, "name": string, "new_name"?: string}
+object.rename_state  -                        -          {"slide": id, "object": id, "from": string, "to": string}
+object.reorder_state -                        -          {"slide": id, "object": id, "name": string, "index": usize}
 object.delete        Edit/Delete              Delete     {"slide": id, "object": id}
 object.set_animation -                        -          {"slide": id, "object": id, "which": "entrance"|"exit", "animation": Animation|null}
 interaction.insert   -                        -          {"slide": id, "kind": "tabs"|"accordion"}

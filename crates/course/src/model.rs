@@ -3881,6 +3881,12 @@ pub struct Timing {
     pub end_ms: Option<u32>,
 }
 
+/// Maximum number of custom states on a single object.
+pub const MAX_STATES_PER_OBJECT: usize = 32;
+
+/// Maximum number of Unicode scalar values in a state name.
+pub const MAX_STATE_NAME_CHARS: usize = 64;
+
 /// Property overrides applied while an object is in a named state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

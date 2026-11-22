@@ -589,6 +589,8 @@ Applying a style copies it into the object's base style and sets the link; per-r
 
 Any other name is a custom state you change with `change_state`.
 
+Validation limits and warnings: an object may have at most 32 custom states (`MAX_STATES_PER_OBJECT`), and state names are trimmed, non-empty, and at most 64 characters (`MAX_STATE_NAME_CHARS`). Redefining `normal` is an error; defining `hidden` as a `StateDef`, exceeding 32 states, exceeding 64 characters, or placing states on a master slide object produces a validation warning (so older courses still open), while authoring commands refuse to create them.
+
 ## Questions
 
 `kind` is one of `multiple_choice`, `multiple_response`, `true_false`, `fill_in`, `sequence`, `matching`, `hotspot`, `drag_drop`, `likert`, `short_answer`, `essay`, `freeform`.

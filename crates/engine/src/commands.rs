@@ -1027,6 +1027,33 @@ static REGISTRY: &[Command] = &[
         run: object_delete_state,
     },
     Command {
+        id: "object.duplicate_state",
+        label: "Duplicate State",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object": id, "name": string, "new_name"?: string}"#,
+        mutates: true,
+        run: object_duplicate_state,
+    },
+    Command {
+        id: "object.rename_state",
+        label: "Rename State",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object": id, "from": string, "to": string}"#,
+        mutates: true,
+        run: object_rename_state,
+    },
+    Command {
+        id: "object.reorder_state",
+        label: "Reorder State",
+        menu: "",
+        shortcut: None,
+        params: r#"{"slide": id, "object": id, "name": string, "index": usize}"#,
+        mutates: true,
+        run: object_reorder_state,
+    },
+    Command {
         id: "object.delete",
         label: "Delete Object",
         menu: "Edit/Delete",
@@ -5418,6 +5445,10 @@ fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
         object.frame.x += offset;
         object.frame.y += offset;
         clamp_frame(&mut object.frame, slide_size);
+        if is_master {
+            object.states.clear();
+            object.initial_state = "normal".to_owned();
+        }
         ids.push(new_id);
         pasted.push(object);
     }
@@ -7332,14 +7363,123 @@ fn cue_name(cmd: &str, name: String) -> Result<String> {
     text(cmd, name, "name")
 }
 
+fn validate_state_name(cmd: &str, raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(bad(cmd, "state name cannot be empty"));
+    }
+    if trimmed.chars().count() > coursecraft_course::MAX_STATE_NAME_CHARS {
+        return Err(bad(
+            cmd,
+            format!(
+                "state name cannot exceed {} characters",
+                coursecraft_course::MAX_STATE_NAME_CHARS
+            ),
+        ));
+    }
+    if trimmed == "normal" {
+        return Err(bad(cmd, "`normal` is built in and cannot be redefined"));
+    }
+    if trimmed == "hidden" {
+        return Err(bad(
+            cmd,
+            "`hidden` is built in and needs no state definition",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn refuse_master_states(cmd: &str, s: &Session, sid: &str) -> Result<()> {
+    if s.course.master(sid).is_some() {
+        return Err(bad(cmd, "master objects cannot have states"));
+    }
+    Ok(())
+}
+
+fn next_copy_state_name(base: &str, existing: &[StateDef]) -> String {
+    let taken: BTreeSet<&str> = existing.iter().map(|s| s.name.as_str()).collect();
+    let max_chars = coursecraft_course::MAX_STATE_NAME_CHARS;
+    for n in 1usize.. {
+        let suffix = if n == 1 {
+            " copy".to_owned()
+        } else {
+            format!(" copy {n}")
+        };
+        let suffix_chars = suffix.chars().count();
+        let max_base = max_chars.saturating_sub(suffix_chars);
+        let prefix: String = base.chars().take(max_base).collect();
+        let candidate = format!("{prefix}{suffix}");
+        if !taken.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    format!("{base} copy")
+}
+
+fn rewrite_state_in_condition(cond: &mut Condition, oid: &str, from: &str, to: &str) {
+    match cond {
+        Condition::All(list) | Condition::Any(list) => {
+            for item in list {
+                rewrite_state_in_condition(item, oid, from, to);
+            }
+        }
+        Condition::Not(inner) => rewrite_state_in_condition(inner, oid, from, to),
+        Condition::ObjectState { object, state, .. } if object == oid && state == from => {
+            *state = to.to_owned();
+        }
+        Condition::ObjectState { .. } | Condition::Compare { .. } => {}
+    }
+}
+
+fn rewrite_state_in_triggers(triggers: &mut [Trigger], oid: &str, from: &str, to: &str) {
+    for trigger in triggers {
+        if let Event::StateChanges {
+            object,
+            to: Some(state),
+        } = &mut trigger.when
+            && object == oid
+            && state == from
+        {
+            *state = to.to_owned();
+        }
+        if let Action::ChangeState { object, state } = &mut trigger.action
+            && object == oid
+            && state == from
+        {
+            *state = to.to_owned();
+        }
+        if let Some(cond) = &mut trigger.condition {
+            rewrite_state_in_condition(cond, oid, from, to);
+        }
+    }
+}
+
 fn object_add_state(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.add_state";
     let was_valid = s.is_playable();
-    let sid: String = req("object.add_state", p, "slide")?;
-    let oid: String = req("object.add_state", p, "object")?;
-    let state: StateDef = req("object.add_state", p, "state")?;
-    find_object_mut(slide_mut(s, &sid)?, &oid)?
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let mut state: StateDef = req(C, p, "state")?;
+    refuse_master_states(C, s, &sid)?;
+    state.name = validate_state_name(C, &state.name)?;
+    let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+    if obj.states.len() >= coursecraft_course::MAX_STATES_PER_OBJECT {
+        return Err(bad(
+            C,
+            format!(
+                "an object may have at most {} states",
+                coursecraft_course::MAX_STATES_PER_OBJECT
+            ),
+        ));
+    }
+    if obj
         .states
-        .push(state);
+        .iter()
+        .any(|existing| existing.name == state.name)
+    {
+        return Err(bad(C, format!("state {:?} already exists", state.name)));
+    }
+    obj.states.push(state);
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
 }
@@ -7350,6 +7490,7 @@ fn object_update_state(s: &mut Session, p: &Json) -> Result<Json> {
     let sid: String = req(C, p, "slide")?;
     let oid: String = req(C, p, "object")?;
     let state: StateDef = req(C, p, "state")?;
+    refuse_master_states(C, s, &sid)?;
 
     let slide = slide_mut(s, &sid)?;
     let obj = find_object_mut(slide, &oid)?;
@@ -7384,6 +7525,119 @@ fn object_delete_state(s: &mut Session, p: &Json) -> Result<Json> {
             "state {name:?} not found on object {oid:?}"
         )));
     }
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+fn object_duplicate_state(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.duplicate_state";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let name: String = req(C, p, "name")?;
+    let new_name: Option<String> = opt(C, p, "new_name")?;
+    refuse_master_states(C, s, &sid)?;
+
+    let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+    if obj.states.len() >= coursecraft_course::MAX_STATES_PER_OBJECT {
+        return Err(bad(
+            C,
+            format!(
+                "an object may have at most {} states",
+                coursecraft_course::MAX_STATES_PER_OBJECT
+            ),
+        ));
+    }
+    let idx = obj
+        .states
+        .iter()
+        .position(|st| st.name == name)
+        .ok_or_else(|| {
+            EngineError::NotFound(format!("state {name:?} not found on object {oid:?}"))
+        })?;
+    let created_name = match new_name {
+        Some(raw) => {
+            let validated = validate_state_name(C, &raw)?;
+            if obj.states.iter().any(|st| st.name == validated) {
+                return Err(bad(C, format!("state {validated:?} already exists")));
+            }
+            validated
+        }
+        None => next_copy_state_name(&name, &obj.states),
+    };
+    let mut dup = obj.states[idx].clone();
+    dup.name = created_name.clone();
+    obj.states.insert(idx + 1, dup);
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "name": created_name }))
+}
+
+fn object_rename_state(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.rename_state";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let from: String = req(C, p, "from")?;
+    let to_raw: String = req(C, p, "to")?;
+    refuse_master_states(C, s, &sid)?;
+    let to = validate_state_name(C, &to_raw)?;
+
+    let slide = slide_mut(s, &sid)?;
+    {
+        let obj = find_object_mut(slide, &oid)?;
+        if obj.states.iter().any(|st| st.name == to) {
+            return Err(bad(C, format!("state {to:?} already exists")));
+        }
+        let target = obj
+            .states
+            .iter_mut()
+            .find(|st| st.name == from)
+            .ok_or_else(|| {
+                EngineError::NotFound(format!("state {from:?} not found on object {oid:?}"))
+            })?;
+        target.name = to.clone();
+        if obj.initial_state == from {
+            obj.initial_state = to.clone();
+        }
+    }
+    rewrite_state_in_triggers(&mut slide.triggers, &oid, &from, &to);
+    for layer in &mut slide.layers {
+        rewrite_state_in_triggers(&mut layer.triggers, &oid, &from, &to);
+    }
+    if let Some(question) = &mut slide.question
+        && let Some(cond) = &mut question.correct_when
+    {
+        rewrite_state_in_condition(cond, &oid, &from, &to);
+    }
+    keep_valid(s, was_valid)?;
+    Ok(Json::Null)
+}
+
+fn object_reorder_state(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "object.reorder_state";
+    let was_valid = s.is_playable();
+    let sid: String = req(C, p, "slide")?;
+    let oid: String = req(C, p, "object")?;
+    let name: String = req(C, p, "name")?;
+    let index: usize = req(C, p, "index")?;
+    refuse_master_states(C, s, &sid)?;
+
+    let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+    let pos = obj
+        .states
+        .iter()
+        .position(|st| st.name == name)
+        .ok_or_else(|| {
+            EngineError::NotFound(format!("state {name:?} not found on object {oid:?}"))
+        })?;
+    if index >= obj.states.len() {
+        return Err(bad(
+            C,
+            format!("index {index} out of range (0..{})", obj.states.len()),
+        ));
+    }
+    let item = obj.states.remove(pos);
+    obj.states.insert(index, item);
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
 }
