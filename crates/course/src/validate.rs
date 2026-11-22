@@ -2053,6 +2053,12 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
             check_media_options(cx, *volume, trim.as_ref(), p);
         }
     }
+    check_object_states(cx, o, p);
+    check_object_animations(cx, o, p);
+    check_object_motion_paths(cx, o, p);
+}
+
+fn check_object_states(cx: &mut Ctx<'_>, o: &Object, p: &str) {
     let mut seen = BTreeSet::new();
     for (i, s) in o.states.iter().enumerate() {
         if s.name == "normal" {
@@ -2075,6 +2081,33 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
                 format!("color {:?} is not #RRGGBB or #RRGGBBAA", c.0),
             );
         }
+        if let Some(src) = &s.src
+            && !src.is_empty()
+        {
+            let obj_label = if o.name.trim().is_empty() {
+                o.id.as_str()
+            } else {
+                o.name.as_str()
+            };
+            if !matches!(o.kind, ObjectKind::Image { .. }) {
+                cx.warn(
+                    format!("{p}/states/{i}/src"),
+                    format!(
+                        "State \u{201C}{}\u{201D} on \u{201C}{obj_label}\u{201D} sets an image, which only applies to image objects.",
+                        s.name
+                    ),
+                );
+            }
+            if !is_safe_relative_path(src) {
+                cx.warn(
+                    format!("{p}/states/{i}/src"),
+                    format!(
+                        "State \u{201C}{}\u{201D} on \u{201C}{obj_label}\u{201D} points at a file outside the course. Choose the image again from the state card.",
+                        s.name
+                    ),
+                );
+            }
+        }
     }
     if !o.has_state(&o.initial_state) {
         cx.err(
@@ -2082,8 +2115,6 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
             format!("state {:?} is not defined on this object", o.initial_state),
         );
     }
-    check_object_animations(cx, o, p);
-    check_object_motion_paths(cx, o, p);
 }
 
 fn check_object_animations(cx: &mut Ctx<'_>, o: &Object, p: &str) {

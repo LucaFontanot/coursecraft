@@ -6,7 +6,7 @@ use coursecraft_course::{
 use coursecraft_logic::{Input, Player};
 use egui::{Color32, CornerRadius, Event, PointerButton, Pos2, Rect, Stroke, StrokeKind, Ui};
 
-use crate::compose::{DrawItem, Hit, Visual, compose};
+use crate::compose::{DrawItem, Hit, Visual, compose_with_pointer};
 use crate::layout::SlideTransform;
 use crate::media::{MediaCache, MediaSource};
 use crate::paint::{self, Highlight};
@@ -1080,7 +1080,23 @@ impl SlideView {
         self.lightbox_transform = box_transform;
         let active_t = box_transform.unwrap_or(t);
 
-        let mut items = compose(player);
+        let pointer_ids = |view: &Self| -> (Option<String>, Option<String>) {
+            let hovered = view
+                .hovered_object()
+                .or(view.keyboard_hover.as_deref())
+                .map(str::to_owned);
+            let pressed = match view.pointer.pressed.as_ref() {
+                Some(Hit::Object(id)) => Some(id.clone()),
+                _ => None,
+            };
+            (hovered, pressed)
+        };
+        let (initial_hovered, initial_pressed) = pointer_ids(self);
+        let mut items = compose_with_pointer(
+            player,
+            initial_hovered.as_deref(),
+            initial_pressed.as_deref(),
+        );
         if self.reduced_motion {
             for item in &mut items {
                 if let Visual::Marker { pulse, .. } = &mut item.visual {
@@ -1113,6 +1129,18 @@ impl SlideView {
         let mut inputs = self
             .pointer
             .handle_events(&events, &active_t, &items, &covered);
+        let (next_hovered, next_pressed) = pointer_ids(self);
+        if next_hovered != initial_hovered || next_pressed != initial_pressed {
+            items = compose_with_pointer(player, next_hovered.as_deref(), next_pressed.as_deref());
+            if self.reduced_motion {
+                for item in &mut items {
+                    if let Visual::Marker { pulse, .. } = &mut item.visual {
+                        *pulse = false;
+                    }
+                }
+            }
+            crate::text_layout::fill_item_links(ui.ctx(), &mut items);
+        }
         for input in &inputs {
             if let Input::Click { object } = input {
                 self.last_clicked_object = Some(object.clone());

@@ -84,7 +84,7 @@ These run **after** the click's triggers, and only if those triggers left the ob
 
 Built-in changes fire `state_changes` like any other state change.
 
-`hover` and `down` are presentational. The renderer applies them, and they are not stored in runtime state.
+`hover` and `down` are presentational. The renderer applies them, and they are not stored in runtime state. When an object is hovered or pressed, the renderer resolves its look in layers: first the object's own (`normal`) properties, then its current runtime state's overrides (`selected`, `visited`, custom…), then `hover` (or `down` while pressed; `down` wins over `hover`). Each layer applies only the fields it sets (`fill`, `text`, `src`), and `hover`/`down` are skipped when the runtime state is `disabled` or `hidden`.
 
 ## Text links
 

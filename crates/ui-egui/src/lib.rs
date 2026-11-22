@@ -260,6 +260,8 @@ mod u15_status_welcome_tests;
 #[cfg(test)]
 mod u16_preview_tests;
 #[cfg(test)]
+mod u19_state_check_tests;
+#[cfg(test)]
 mod u8_inspector_tests;
 #[cfg(test)]
 mod u9_navigator_canvas_tests;
@@ -3688,7 +3690,20 @@ impl Editor {
         #[cfg(test)]
         crate::guard_counters::note_validation_run();
         if let Some(res) = self.run("course.validate", serde_json::json!({})) {
-            let (errs, warns, issues) = parse_validation_result(&res);
+            let (errs, mut warns, mut issues) = parse_validation_result(&res);
+            for r in coursecraft_course::media_references(&self.session.course) {
+                if r.src.ends_with('/') {
+                    continue;
+                }
+                if !self.media.iter().any(|(name, _)| name == &r.src) {
+                    warns += 1;
+                    issues.push(ValidationIssueSummary {
+                        severity: "warning".to_owned(),
+                        path: r.place.clone(),
+                        message: format!("Missing media \u{201C}{}\u{201D} in {}.", r.src, r.place),
+                    });
+                }
+            }
             self.ui.trigger_issues_by_path = index_trigger_issues(&issues);
             self.ui.validation_errors = errs;
             self.ui.validation_warnings = warns;

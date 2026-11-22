@@ -415,7 +415,20 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
 
         if let Some(path) = path_to_navigate {
             let previous = editor.selection.slide.clone();
-            if navigate_to_issue_path(&editor.session.course, &mut editor.selection, &path) {
+            let navigated =
+                navigate_to_issue_path(&editor.session.course, &mut editor.selection, &path)
+                    || coursecraft_course::media_references(&editor.session.course)
+                        .into_iter()
+                        .find(|r| r.place == path)
+                        .is_some_and(|r| {
+                            navigate_to_audit_finding(
+                                &editor.session.course,
+                                &mut editor.selection,
+                                r.slide.as_deref(),
+                                r.object.as_deref(),
+                            )
+                        });
+            if navigated {
                 finish_slide_navigation(editor, previous);
                 if path.ends_with("/revisit") {
                     editor.ui.inspector_tab = crate::properties::InspectorTab::Slide;

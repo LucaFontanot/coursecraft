@@ -584,7 +584,7 @@ Applying a style copies it into the object's base style and sets the link; per-r
 | `hidden` | not drawn, not clickable (needs no definition) |
 | `disabled` | drawn, swallows clicks |
 | `visited` / `selected` | set automatically after a click (see `triggers.md`) |
-| `hover` / `down` | applied by the renderer while hovered or pressed |
+| `hover` / `down` | applied by the renderer while hovered or pressed, layered over the current runtime state (`down` wins over `hover`; skipped in `disabled` or `hidden`) |
 
 Any other name is a custom state you change with `change_state`.
 

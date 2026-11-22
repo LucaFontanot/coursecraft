@@ -51,6 +51,8 @@ mod shape_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod u19_state_hover_tests;
+#[cfg(test)]
 mod uiux_player_tests;
 
 pub use access::{
@@ -66,9 +68,9 @@ pub use compose::{
     ResolvedOutline, ResolvedPath, ResolvedShapeText, ResolvedTable, ResolvedTableCell,
     ResolvedTableRow, ResolvedTextRun, ReviewMark, Visual, compose, compose_authoring,
     compose_authoring_layers, compose_authoring_layers_opts, compose_object,
-    compose_object_with_theme, compose_object_with_value, flip_point, item_bounds, item_corners,
-    item_hit_test, item_link_at, item_local_point, question_prompt_rect, resolve_text_runs,
-    rotate_point,
+    compose_object_with_theme, compose_object_with_value, compose_with_pointer, flip_point,
+    item_bounds, item_corners, item_hit_test, item_link_at, item_local_point, question_prompt_rect,
+    resolve_text_runs, rotate_point,
 };
 pub use design::{
     CONTROL_COMPACT, CONTROL_PRIMARY, CONTROL_TOOLBAR, ICON_SM, ICON_TOOLBAR, PANEL_MARGIN,

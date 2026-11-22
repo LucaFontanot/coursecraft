@@ -5979,7 +5979,6 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             !matches!(&item.hit, Hit::Object(id)
                 if slide.object(id).is_some_and(|(o, _)| o.editor_hidden))
         });
-        missing_images_as_placeholders(&mut items, &editor.media);
         if let Some(selected) = &editor.selection.object {
             for item in &mut items {
                 if item.hit == Hit::Object(selected.clone())
@@ -6012,6 +6011,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 items.push(preview_item);
             }
         }
+        missing_images_as_placeholders(&mut items, &editor.media);
 
         let popup_was_open = ui
             .ctx()
