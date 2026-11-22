@@ -21,10 +21,11 @@ use std::sync::Arc;
 
 use coursecraft_course::{
     Align, Autofit, Baseline, Color, ConnectorStyle, Course, DashStyle, FillStyle, Glow, Glue,
-    GradientStop, LineEnd, Link, ListKind, MAX_OBJECT_FRAME_SIZE, NumberScheme, Object, ObjectKind,
-    Outline, Paragraph, Path, PathPoint, PathStyle, PictureFillMode, Point, Rect, SCHEMA_VERSION,
-    Scene, Shadow, ShapeKind, ShapeText, Slide, TableBorders, TableCell, TableRow, TextRun,
-    TextStyle, Timing, VAlign, is_valid_link_url, normalize_table_fractions, path_frame_and_points,
+    GradientStop, LineEnd, LineJoin, Link, ListKind, MAX_OBJECT_FRAME_SIZE, NumberScheme, Object,
+    ObjectKind, Outline, Paragraph, Path, PathPoint, PathStyle, PictureFillMode, Point, Rect,
+    SCHEMA_VERSION, Scene, Shadow, ShapeKind, ShapeText, Slide, TableBorders, TableCell, TableRow,
+    TextRun, TextStyle, Timing, VAlign, is_valid_link_url, normalize_table_fractions,
+    path_frame_and_points,
 };
 
 /// A point in the coordinate space of one geometry helper.
@@ -2949,11 +2950,14 @@ fn parse_table_part_style(node: &XmlNode, theme: &ThemePalette) -> TablePartStyl
                     .and_then(|v| v.trim().parse::<f64>().ok())
                     .map_or(1.0, |emu| (emu / 12700.0) as f32)
                     .clamp(0.5, 10.0);
+                let (join, miter_limit) = extract_join_from_ln(ln);
                 Some(Outline {
                     color,
                     width,
                     dash: DashStyle::Solid,
                     dash_pattern: None,
+                    join,
+                    miter_limit,
                 })
             })
     });
@@ -3053,6 +3057,8 @@ fn default_table_grid_outline(layout: SlideLayout) -> Outline {
         width: ((12_700.0 * layout.scale) as f32).clamp(0.5, 50.0),
         dash: DashStyle::Solid,
         dash_pattern: None,
+        join: LineJoin::Miter,
+        miter_limit: None,
     }
 }
 
@@ -3108,6 +3114,8 @@ fn builtin_table_style(
         width: 1.0,
         dash: DashStyle::Solid,
         dash_pattern: None,
+        join: LineJoin::Miter,
+        miter_limit: None,
     });
     Some(TableStyleDef {
         whole: TablePartStyle {
@@ -3594,11 +3602,14 @@ fn table_side_outline(
         return SideLine::ExplicitNone;
     }
     let (dash, dash_pattern) = extract_dash_from_ln(line);
+    let (join, miter_limit) = extract_join_from_ln(line);
     SideLine::Solid(Outline {
         color,
         width,
         dash,
         dash_pattern,
+        join,
+        miter_limit,
     })
 }
 
@@ -3765,6 +3776,8 @@ fn path_outline(sp_pr: &XmlNode, layout: SlideLayout, theme: &ThemePalette) -> O
             width: 0.0,
             dash: DashStyle::Solid,
             dash_pattern: None,
+            join: LineJoin::Miter,
+            miter_limit: None,
         }
     } else {
         Outline {
@@ -3772,6 +3785,8 @@ fn path_outline(sp_pr: &XmlNode, layout: SlideLayout, theme: &ThemePalette) -> O
             width: 1.0,
             dash: DashStyle::Solid,
             dash_pattern: None,
+            join: LineJoin::Miter,
+            miter_limit: None,
         }
     }
 }
@@ -4010,6 +4025,8 @@ fn process_connector(cxn: &XmlNode, transform: GroupTransform, cx: &mut SlideCon
             width: 1.0,
             dash: DashStyle::Solid,
             dash_pattern: None,
+            join: LineJoin::Miter,
+            miter_limit: None,
         },
         |sp_pr| path_outline(sp_pr, *cx.layout, cx.theme),
     );
@@ -4276,6 +4293,8 @@ fn custom_geometry_paths(
                 width: 0.0,
                 dash: outline.dash,
                 dash_pattern: outline.dash_pattern.clone(),
+                join: outline.join,
+                miter_limit: outline.miter_limit,
             }
         } else {
             outline.clone()
@@ -5097,12 +5116,37 @@ fn extract_outline(sp_pr: &XmlNode, layout: SlideLayout, theme: &ThemePalette) -
         .map_or(1.0, |emu| (emu * layout.scale) as f32)
         .clamp(0.0, 50.0);
     let (dash, dash_pattern) = extract_dash_from_ln(ln);
+    let (join, miter_limit) = extract_join_from_ln(ln);
     Some(Outline {
         color,
         width,
         dash,
         dash_pattern,
+        join,
+        miter_limit,
     })
+}
+
+/// PowerPoint's default miter limit (`<a:miter lim="800000"/>` = 800% = 8.0).
+const DEFAULT_PPTX_MITER_LIMIT: f32 = 8.0;
+
+fn extract_join_from_ln(ln: &XmlNode) -> (LineJoin, Option<f32>) {
+    if ln.child("round").is_some() {
+        return (LineJoin::Round, None);
+    }
+    if ln.child("bevel").is_some() {
+        return (LineJoin::Bevel, None);
+    }
+    if let Some(miter) = ln.child("miter") {
+        let limit = miter
+            .attr("lim")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .map(|pct| (pct / 100_000.0) as f32)
+            .filter(|lim| (*lim - DEFAULT_PPTX_MITER_LIMIT).abs() > 1e-4 && *lim <= 100.0);
+        return (LineJoin::Miter, limit);
+    }
+    (LineJoin::Miter, None)
 }
 
 #[derive(Default)]

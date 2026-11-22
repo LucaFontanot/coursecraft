@@ -132,6 +132,8 @@ pub fn insert_table(editor: &mut Editor) {
         width: 1.0,
         dash: coursecraft_course::DashStyle::Solid,
         dash_pattern: None,
+        join: coursecraft_course::LineJoin::Miter,
+        miter_limit: None,
     };
     let kind = coursecraft_course::ObjectKind::Table {
         columns,

@@ -19,7 +19,7 @@ use crate::layout::SlideTransform;
 use crate::media::{LottieView, MediaCache, MediaSource, MediaView};
 use crate::path_geometry::{PathMeshSpec, path_mesh};
 use crate::shape_fill::{
-    fill_contours, fill_contours_shaded, fill_contours_uv, stroke_contours_pattern,
+    StrokeJoin, fill_contours, fill_contours_shaded, fill_contours_uv, stroke_contours_with_join,
 };
 use crate::shape_geometry::{shape_contours_adjusted, shape_text_rect};
 
@@ -628,12 +628,13 @@ pub fn paint_outline(
                 .collect()
         })
         .collect();
-    let mesh = stroke_contours_pattern(
+    let mesh = stroke_contours_with_join(
         &translated,
         outline.color,
         outline.width * scale,
         outline.dash,
         outline.dash_pattern.as_deref(),
+        StrokeJoin::from_outline(outline.join, outline.miter_limit),
         painter.pixels_per_point(),
     );
     if !mesh.is_empty() {
@@ -1322,18 +1323,20 @@ fn paint_path(
     };
     let points = to_screen(&path.points);
     let fill = path.fill.map(|color| apply_dim(color, dimmed, opacity));
-    let (outline_color, outline_width, dash, dash_pattern) = match &path.outline {
+    let (outline_color, outline_width, dash, dash_pattern, join) = match &path.outline {
         Some(outline) => (
             apply_dim(outline.color, dimmed, opacity),
             outline.width * scale,
             outline.dash,
             outline.dash_pattern.clone(),
+            StrokeJoin::from_outline(outline.join, outline.miter_limit),
         ),
         None => (
             Color32::TRANSPARENT,
             0.0,
             coursecraft_course::DashStyle::Solid,
             None,
+            StrokeJoin::default(),
         ),
     };
     if path.subpaths.is_empty() && path.fill_style.is_none() {
@@ -1349,6 +1352,7 @@ fn paint_path(
                 width: outline_width,
                 dash,
                 dash_pattern,
+                join,
                 fill,
                 pixels_per_point: painter.pixels_per_point(),
             },
@@ -1429,6 +1433,7 @@ fn paint_path(
                 width: outline_width,
                 dash,
                 dash_pattern: dash_pattern.clone(),
+                join,
                 fill: None,
                 pixels_per_point: painter.pixels_per_point(),
             },
@@ -1450,6 +1455,7 @@ fn paint_path(
                     width: outline_width,
                     dash,
                     dash_pattern: dash_pattern.clone(),
+                    join,
                     fill: None,
                     pixels_per_point: painter.pixels_per_point(),
                 },
@@ -1498,6 +1504,7 @@ fn paint_path_silhouette(
             width,
             dash: coursecraft_course::DashStyle::Solid,
             dash_pattern: None,
+            join: StrokeJoin::default(),
             fill,
             pixels_per_point: painter.pixels_per_point(),
         },
@@ -1656,36 +1663,27 @@ pub fn paint_items(
             0.0
         };
         let transformed = rotation != 0.0 || item.flip_h || item.flip_v;
-        let effect_margin = effect_margin(item, scale);
 
-        let mut item_painter = if transformed {
-            // The rotated frame's bounding box must be visible even when the
-            // unrotated frame is partly outside the slide. A wipe/fade clip
-            // still applies on top.
-            let bounds = transformed_bounds(
-                screen_rect.expand(effect_margin),
-                rotation,
-                item.flip_h,
-                item.flip_v,
-            );
-            let mut clip = bounds.intersect(slide_rect);
-            if let Some(frac) = item.clip {
-                let sub_x = shifted_item_rect.min.x + frac.min_x * shifted_item_rect.width();
-                let sub_y = shifted_item_rect.min.y + frac.min_y * shifted_item_rect.height();
-                let sub_w = (frac.max_x - frac.min_x) * shifted_item_rect.width();
-                let sub_h = (frac.max_y - frac.min_y) * shifted_item_rect.height();
-                let sub_rect = Rect::from_min_size(pos2(sub_x, sub_y), vec2(sub_w, sub_h));
-                clip = clip.intersect(t.to_screen_rect(sub_rect));
-            }
-            slide_painter.with_clip_rect(clip)
-        } else if let Some(clip) = item.clip {
-            let sub_x = shifted_item_rect.min.x + clip.min_x * shifted_item_rect.width();
-            let sub_y = shifted_item_rect.min.y + clip.min_y * shifted_item_rect.height();
-            let sub_w = (clip.max_x - clip.min_x) * shifted_item_rect.width();
-            let sub_h = (clip.max_y - clip.min_y) * shifted_item_rect.height();
+        let mut item_painter = if let Some(frac) = item.clip {
+            let sub_x = shifted_item_rect.min.x + frac.min_x * shifted_item_rect.width();
+            let sub_y = shifted_item_rect.min.y + frac.min_y * shifted_item_rect.height();
+            let sub_w = (frac.max_x - frac.min_x) * shifted_item_rect.width();
+            let sub_h = (frac.max_y - frac.min_y) * shifted_item_rect.height();
             let sub_rect = Rect::from_min_size(pos2(sub_x, sub_y), vec2(sub_w, sub_h));
             let screen_sub = t.to_screen_rect(sub_rect);
-            slide_painter.with_clip_rect(screen_sub.intersect(slide_rect))
+            let clip = if transformed {
+                let effect_margin = effect_margin(item, scale);
+                let bounds = transformed_bounds(
+                    screen_rect.expand(effect_margin),
+                    rotation,
+                    item.flip_h,
+                    item.flip_v,
+                );
+                bounds.intersect(slide_rect).intersect(screen_sub)
+            } else {
+                screen_sub.intersect(slide_rect)
+            };
+            slide_painter.with_clip_rect(clip)
         } else {
             slide_painter.clone()
         };
@@ -1718,6 +1716,8 @@ pub fn paint_items(
                         width: outline.width,
                         dash: outline.dash,
                         dash_pattern: outline.dash_pattern.clone(),
+                        join: outline.join,
+                        miter_limit: outline.miter_limit,
                     };
                     paint_outline(
                         &item_painter,
@@ -2029,6 +2029,8 @@ pub fn paint_items(
                         width: outline.width,
                         dash: outline.dash,
                         dash_pattern: outline.dash_pattern.clone(),
+                        join: outline.join,
+                        miter_limit: outline.miter_limit,
                     };
                     paint_outline(&item_painter, screen_rect, *shape, adjust, &resolved, scale);
                 }
@@ -2316,6 +2318,8 @@ pub fn paint_items(
                         width: outline.width,
                         dash: outline.dash,
                         dash_pattern: outline.dash_pattern.clone(),
+                        join: outline.join,
+                        miter_limit: outline.miter_limit,
                     };
                     paint_outline(
                         &item_painter,

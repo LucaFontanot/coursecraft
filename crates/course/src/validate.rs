@@ -1197,6 +1197,7 @@ fn check_shape_outline_and_text(
             outline.dash_pattern.as_deref(),
             &format!("{p}/kind/outline"),
         );
+        check_miter_limit(cx, outline.miter_limit, &format!("{p}/kind/outline"));
     }
     if let Some(text) = text {
         if !crate::shape_allows_text(shape) {
@@ -1268,6 +1269,11 @@ fn check_path(cx: &mut Ctx<'_>, path: &crate::Path, p: &str) {
     check_dash_pattern(
         cx,
         path.outline.dash_pattern.as_deref(),
+        &format!("{p}/kind/path/outline"),
+    );
+    check_miter_limit(
+        cx,
+        path.outline.miter_limit,
         &format!("{p}/kind/path/outline"),
     );
     for (end, glue) in [
@@ -1416,6 +1422,19 @@ fn check_table(
             cx,
             outline.dash_pattern.as_deref(),
             &format!("{p}/kind/borders/{name}"),
+        );
+        check_miter_limit(cx, outline.miter_limit, &format!("{p}/kind/borders/{name}"));
+    }
+}
+
+fn check_miter_limit(cx: &mut Ctx<'_>, limit: Option<f32>, p: &str) {
+    let Some(limit) = limit else {
+        return;
+    };
+    if !limit.is_finite() || !(1.0..=100.0).contains(&limit) {
+        cx.err(
+            format!("{p}/miter_limit"),
+            "miter limit must be finite and within 1..=100",
         );
     }
 }

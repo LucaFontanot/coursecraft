@@ -2337,6 +2337,8 @@ fn commit_draw(
             width: 2.0,
             dash: coursecraft_course::DashStyle::Solid,
             dash_pattern: None,
+            join: coursecraft_course::LineJoin::Miter,
+            miter_limit: None,
         },
         start_end: LineEnd::None,
         end_end: if tool == DrawTool::Arrow {
@@ -5202,6 +5204,8 @@ fn draw_placement_preview(editor: &Editor, painter: &Painter, t: &SlideTransform
             width: 1.5,
             dash: coursecraft_course::DashStyle::Solid,
             dash_pattern: None,
+            join: coursecraft_course::LineJoin::Miter,
+            miter_limit: None,
         };
         coursecraft_render::paint_outline(painter, screen_rect, kind, &[], &outline, 1.0);
     } else {

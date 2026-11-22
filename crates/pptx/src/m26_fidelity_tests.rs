@@ -762,3 +762,51 @@ fn imports_custom_and_preset_dash_patterns() {
         Some(&[8.0, 3.0, 1.0, 3.0, 1.0, 3.0][..])
     );
 }
+
+#[test]
+fn imports_line_join_and_miter_limit() {
+    let slide_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="2" name="Default"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></p:spPr>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="3" name="Round"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:round/></a:ln></p:spPr>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="4" name="Bevel"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:bevel/></a:ln></p:spPr>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="5" name="Miter4"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:miter lim="400000"/></a:ln></p:spPr>
+    </p:sp>
+    <p:sp>
+      <p:nvSpPr><p:cNvPr id="6" name="Miter8"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100000" cy="100000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:miter lim="800000"/></a:ln></p:spPr>
+    </p:sp>
+  </p:spTree></p:cSld>
+</p:sld>"#;
+    let bytes = build_pptx(&[slide_xml], &[]);
+    let imported = import_pptx(&bytes, "Joins").unwrap();
+    let objs = &imported.course.scenes[0].slides[0].objects;
+    let outline_of = |idx: usize| match &objs[idx].kind {
+        ObjectKind::Shape { outline, .. } => outline.as_ref().expect("outline").clone(),
+        _ => panic!("expected shape at {idx}"),
+    };
+    assert_eq!(outline_of(0).join, coursecraft_course::LineJoin::Miter);
+    assert_eq!(outline_of(0).miter_limit, None);
+
+    assert_eq!(outline_of(1).join, coursecraft_course::LineJoin::Round);
+    assert_eq!(outline_of(2).join, coursecraft_course::LineJoin::Bevel);
+
+    assert_eq!(outline_of(3).join, coursecraft_course::LineJoin::Miter);
+    assert_eq!(outline_of(3).miter_limit, Some(4.0));
+
+    assert_eq!(outline_of(4).join, coursecraft_course::LineJoin::Miter);
+    assert_eq!(outline_of(4).miter_limit, None);
+}

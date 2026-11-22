@@ -84,6 +84,8 @@ pub struct ResolvedOutline {
     pub width: f32,
     pub dash: DashStyle,
     pub dash_pattern: Option<Vec<f32>>,
+    pub join: coursecraft_course::LineJoin,
+    pub miter_limit: Option<f32>,
 }
 
 /// Resolved drawn path. Points stay as fractions of the item's frame.
@@ -648,6 +650,8 @@ fn resolve_outline(outline: &coursecraft_course::Outline) -> Option<ResolvedOutl
         width: outline.width,
         dash: outline.dash,
         dash_pattern: outline.dash_pattern.clone(),
+        join: outline.join,
+        miter_limit: outline.miter_limit,
     })
 }
 

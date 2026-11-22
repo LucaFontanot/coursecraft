@@ -509,6 +509,8 @@ fn fixture_session() -> Session {
                     width: 2.0,
                     dash: Default::default(),
                     dash_pattern: None,
+                    join: Default::default(),
+                    miter_limit: None,
                 },
                 start_end: Default::default(),
                 end_end: Default::default(),

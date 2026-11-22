@@ -2357,6 +2357,8 @@ fn shape_with_outline_and_text() -> crate::ObjectKind {
             width: 3.0,
             dash: crate::DashStyle::Dash,
             dash_pattern: None,
+            join: crate::LineJoin::Miter,
+            miter_limit: None,
         }),
         text: Some(crate::ShapeText {
             text: "Hello".to_owned(),
@@ -2543,6 +2545,8 @@ fn default_path() -> crate::Path {
             width: 2.0,
             dash: crate::DashStyle::Solid,
             dash_pattern: None,
+            join: crate::LineJoin::Miter,
+            miter_limit: None,
         },
         start_end: crate::LineEnd::None,
         end_end: crate::LineEnd::None,

@@ -359,6 +359,8 @@ fn outline_text_slide() -> Slide {
                 width,
                 dash,
                 dash_pattern: None,
+                join: coursecraft_course::LineJoin::Miter,
+                miter_limit: None,
             }),
             label,
             ModelRect {
@@ -577,6 +579,8 @@ fn draw_slide(text_color: Color) -> Slide {
         width: 2.0,
         dash: coursecraft_course::DashStyle::Solid,
         dash_pattern: None,
+        join: coursecraft_course::LineJoin::Miter,
+        miter_limit: None,
     };
     let mut objects = Vec::new();
     let specs: Vec<(&str, coursecraft_course::Path)> = vec![
@@ -895,6 +899,8 @@ fn draw_slide(text_color: Color) -> Slide {
                     width: 2.0,
                     dash: coursecraft_course::DashStyle::Solid,
                     dash_pattern: None,
+                    join: coursecraft_course::LineJoin::Miter,
+                    miter_limit: None,
                 },
                 start_end: coursecraft_course::LineEnd::None,
                 end_end: coursecraft_course::LineEnd::None,
@@ -1063,6 +1069,8 @@ fn no_fill_is_a_transparent_colour() {
                 width: 3.0,
                 dash: coursecraft_course::DashStyle::Dash,
                 dash_pattern: None,
+                join: coursecraft_course::LineJoin::Miter,
+                miter_limit: None,
             }),
             text: Some(coursecraft_course::ShapeText {
                 text: "No fill".to_owned(),
@@ -1655,6 +1663,7 @@ fn custom_dash_pattern_renders_on_rounded_corners_and_curves() {
             width: 3.0,
             dash: DashStyle::Custom,
             dash_pattern: Some(vec![3.0, 2.0]),
+            join: crate::StrokeJoin::default(),
             fill: None,
             pixels_per_point: 1.0,
         },

@@ -2743,6 +2743,30 @@ pub struct Outline {
     /// Omitted when using `dash`'s built-in spacing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dash_pattern: Option<Vec<f32>>,
+    /// How corners of the outline are joined (defaults to miter with limit 8).
+    #[serde(default, skip_serializing_if = "LineJoin::is_default")]
+    pub join: LineJoin,
+    /// Optional miter limit as a multiple of half-stroke-width (defaults to 8.0 when `None`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub miter_limit: Option<f32>,
+}
+
+/// How two segments of an outline meet at a corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineJoin {
+    #[default]
+    Miter,
+    Round,
+    Bevel,
+}
+
+impl LineJoin {
+    /// Whether this join is the default (`Miter`).
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        matches!(self, Self::Miter)
+    }
 }
 
 impl Outline {

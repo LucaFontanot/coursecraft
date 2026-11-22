@@ -43,6 +43,8 @@ mod bughunt_m26_render;
 #[cfg(test)]
 mod justify_tests;
 #[cfg(test)]
+mod outline_tests;
+#[cfg(test)]
 mod review_tests;
 #[cfg(test)]
 mod shape_tests;
@@ -110,8 +112,8 @@ pub use path_geometry::{
 };
 pub use player_frame::{FrameOutput, PlayerFrame, show_loading, show_loading_text};
 pub use shape_fill::{
-    even_odd_area, fill_contours, stroke_contours, stroke_contours_pattern, stroke_path,
-    stroke_path_pattern,
+    StrokeJoin, even_odd_area, fill_contours, stroke_contours, stroke_contours_pattern,
+    stroke_contours_with_join, stroke_path, stroke_path_pattern, stroke_path_with_join,
 };
 pub use shape_geometry::{
     Pt as ShapePoint, adjust_from_point, adjust_handle_name, adjust_handles, arc, regular_polygon,
