@@ -34,3 +34,10 @@
 - `cargo xtask build-player`: _pending driver run_
 - `cargo xtask ci`: _pending driver run_
 - `cargo xtask perf`: _pending driver run_
+
+
+## Driver gates and perf
+
+- `cargo xtask build-player`: passed after S4, S7 and S9.
+- `cargo xtask ci`: passed at S4, S7 and S9, each on the first attempt.
+- `cargo xtask perf`: all 8 editor timing tests and the 300-slide big-course test passed within budget.
