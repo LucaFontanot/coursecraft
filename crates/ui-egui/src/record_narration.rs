@@ -147,7 +147,7 @@ pub fn show_record_narration_window(editor: &mut Editor, ctx: &egui::Context) {
 
     let mut open = true;
     let mut close = false;
-    Dialog::new("Record Narration")
+    Dialog::new("Record narration")
         .id(Id::unique(("record_narration_dialog", 0_u64)))
         .width(420.0)
         .open(&mut open)

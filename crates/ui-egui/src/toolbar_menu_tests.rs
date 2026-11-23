@@ -280,7 +280,7 @@ fn toolbar_carets_meet_hit_target_and_popups_clamp_and_close_on_escape() {
         ("More preview options", "Preview this slide"),
         ("Insert shape", "Rectangle"),
         ("Insert media", "Video…"),
-        ("Insert question", "Multiple Choice"),
+        ("Insert question", "Multiple choice"),
     ] {
         let w = widget_with_label(&h, needle);
         h.click_at(w.bounds.center());

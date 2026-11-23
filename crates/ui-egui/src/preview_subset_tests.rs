@@ -159,8 +159,8 @@ fn single_slide_preview_shows_end_popup_on_next_prev_button_and_complete_and_dis
             .find_text("This is the end of the preview")
             .is_some()
     );
-    assert!(harness.find_text("Replay Slide(s)").is_some());
-    assert!(harness.find_text("Close Preview").is_some());
+    assert!(harness.find_text("Replay slide(s)").is_some());
+    assert!(harness.find_text("Close preview").is_some());
 
     // Esc closes the popup first, keeping preview open.
     harness.press(Key::Escape, Modifiers::NONE);
@@ -279,8 +279,8 @@ fn multi_slide_preview_jumps_between_selected_slides_and_replay_resets_vars() {
     );
     assert!(harness.find_text("Slide Three").is_some());
 
-    // Click "Replay Slide(s)" -> restarts at s1 with fresh variables (score = 0).
-    let replay = harness.find_text("Replay Slide(s)").expect("replay btn");
+    // Click "Replay slide(s)" -> restarts at s1 with fresh variables (score = 0).
+    let replay = harness.find_text("Replay slide(s)").expect("replay btn");
     harness.click_at(replay);
     harness.idle_frame();
     assert!(
@@ -305,7 +305,7 @@ fn multi_slide_preview_jumps_between_selected_slides_and_replay_resets_vars() {
         .expect("next button");
     harness.click_at(next_btn);
     harness.idle_frame();
-    let close_preview = harness.find_text("Close Preview").expect("close preview");
+    let close_preview = harness.find_text("Close preview").expect("close preview");
     harness.click_at(close_preview);
     harness.idle_frame();
     assert!(harness.editor.preview.is_none());

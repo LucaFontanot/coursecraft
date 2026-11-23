@@ -4038,7 +4038,7 @@ fn show_animate_tab(
         let mut exit_action: Option<(&'static str, Json)> = None;
         show_anim_row(
             ui,
-            "Entrance Animation",
+            "Entrance animation",
             "entrance",
             &mut props.entrance_effect,
             &mut props.entrance_direction,
@@ -4051,7 +4051,7 @@ fn show_animate_tab(
         inspector_separator(ui);
         show_anim_row(
             ui,
-            "Exit Animation",
+            "Exit animation",
             "exit",
             &mut props.exit_effect,
             &mut props.exit_direction,
@@ -4911,7 +4911,7 @@ fn show_text_controls(
         }
     });
 
-    inspector_row(ui, "Text Content", |ui| {
+    inspector_row(ui, "Text content", |ui| {
         let rem_w = ui.available_width().max(30.0);
         let output = TextEdit::multiline(&mut props.text_body)
             .id(text_edit_id)
@@ -10034,7 +10034,7 @@ fn show_image_properties(
     let state_ctx = target.state_ctx;
     if let Some(ctx) = state_ctx {
         let src_overridden = ctx.state.src.is_some();
-        let display_src = ctx.state.src.as_deref().unwrap_or("Same as Normal");
+        let display_src = ctx.state.src.as_deref().unwrap_or("Same as normal");
         inspector_row_state(
             ui,
             "Image",
@@ -10340,7 +10340,7 @@ pub fn show_animations_section(
 
     show_anim_row(
         ui,
-        "Entrance Animation",
+        "Entrance animation",
         "entrance",
         &mut props.entrance_effect,
         &mut props.entrance_direction,
@@ -10353,7 +10353,7 @@ pub fn show_animations_section(
     inspector_separator(ui);
     show_anim_row(
         ui,
-        "Exit Animation",
+        "Exit animation",
         "exit",
         &mut props.exit_effect,
         &mut props.exit_direction,

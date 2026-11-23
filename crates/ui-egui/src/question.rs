@@ -13,9 +13,9 @@ use serde_json::Value as Json;
 #[must_use]
 pub fn question_kind_name(kind: QuestionKind) -> &'static str {
     match kind {
-        QuestionKind::MultipleChoice => "Multiple Choice",
-        QuestionKind::MultipleResponse => "Multiple Response",
-        QuestionKind::TrueFalse => "True / False",
+        QuestionKind::MultipleChoice => "Multiple choice",
+        QuestionKind::MultipleResponse => "Multiple response",
+        QuestionKind::TrueFalse => "True / false",
         QuestionKind::FillIn => "Fill in",
         QuestionKind::Sequence => "Sequence",
         QuestionKind::Matching => "Matching",

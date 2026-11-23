@@ -92,8 +92,8 @@ fn not_ready_shows_the_settings_button_and_sends_nothing() {
     h.idle_frame();
 
     let button = h
-        .find_text("Open AI Settings")
-        .expect("Open AI Settings button");
+        .find_text("Open AI settings")
+        .expect("Open AI settings button");
     assert!(h.find_text("Generate outline").is_none());
     let requests = click_for_requests(&mut h, button);
     assert!(

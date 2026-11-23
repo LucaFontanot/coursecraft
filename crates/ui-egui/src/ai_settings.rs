@@ -400,10 +400,10 @@ impl Editor {
 /// `Open AI Settings`.
 pub fn show_ai_not_ready(ui: &mut Ui, what: &str) -> bool {
     ui.label(format!(
-        "AI isn't set up yet. CourseCraft can {what} once an AI is set up in AI Settings."
+        "AI isn't set up yet. CourseCraft can {what} once an AI is set up in AI settings."
     ));
     ui.add_space(8.0);
-    crate::primary_button(ui, "Open AI Settings").clicked()
+    crate::primary_button(ui, "Open AI settings").clicked()
 }
 
 /// Draw the AI Settings dialog when it is open.
@@ -427,7 +427,7 @@ pub fn show_ai_settings_window(
         560.0
     };
 
-    Dialog::new("AI Settings")
+    Dialog::new("AI settings")
         .width(max_width)
         .open(&mut open)
         .resizable(true)

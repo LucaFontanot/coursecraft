@@ -320,7 +320,7 @@ fn trigger_editor_idle_frames_copy_no_course() {
     h.editor.ui.trigger_form = Some(form);
     let _ = h.idle_frame();
     assert!(
-        h.find_text("New Trigger").is_some(),
+        h.find_text("New trigger").is_some(),
         "trigger editor window should be open"
     );
 

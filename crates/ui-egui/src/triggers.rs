@@ -1568,7 +1568,7 @@ pub fn show_triggers_tab(
                         );
                     }
                     if can_paste
-                        && crate::quiet_button(ui, "Paste Triggers", crate::QuietTone::Accent, true)
+                        && crate::quiet_button(ui, "Paste triggers", crate::QuietTone::Accent, true)
                             .clicked()
                     {
                         paste_clicked = true;
@@ -2228,9 +2228,9 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
     }
 
     let title = if form.editing_index.is_some() {
-        "Edit Trigger"
+        "Edit trigger"
     } else {
-        "New Trigger"
+        "New trigger"
     };
 
     let course = &editor.session.course;
@@ -2877,13 +2877,13 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                 let is_base = form.event_layer.is_none();
                 let display = match form.event_layer.as_deref() {
                     Some(id) => format!("Layer: {}", layer_name(slide, id)),
-                    None => "Slide Base Timeline".to_owned(),
+                    None => "Slide base timeline".to_owned(),
                 };
                 tall_combo(ui, "event_layer_combo")
                     .selected_text(display)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_label(is_base, "Slide Base Timeline")
+                            .selectable_label(is_base, "Slide base timeline")
                             .clicked()
                         {
                             form.event_layer = None;
@@ -2903,13 +2903,13 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                 let is_base = form.event_layer.is_none();
                 let display = match form.event_layer.as_deref() {
                     Some(id) => format!("Layer: {}", layer_name(slide, id)),
-                    None => "Slide Base Timeline".to_owned(),
+                    None => "Slide base timeline".to_owned(),
                 };
                 tall_combo(ui, "event_reach_layer_combo")
                     .selected_text(display)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_label(is_base, "Slide Base Timeline")
+                            .selectable_label(is_base, "Slide base timeline")
                             .clicked()
                         {
                             form.event_layer = None;

@@ -1978,7 +1978,7 @@ fn gear_opens_layer_settings_and_selection_alone_does_not() {
         Some("about")
     );
     assert!(
-        harness.find_text("Layer Settings: About").is_some(),
+        harness.find_text("Layer settings: About").is_some(),
         "the window is titled after the layer"
     );
 }
@@ -6018,13 +6018,13 @@ fn typing_in_styled_text_preserves_runs() {
     let mut text_edit_pos = None;
     for _ in 0..20 {
         let panel = harness.right_panel_rect();
-        if let Some(pos) = harness.find_text_in("Text Content", panel) {
+        if let Some(pos) = harness.find_text_in("Text content", panel) {
             text_edit_pos = Some(pos + vec2(110.0, 0.0));
             break;
         }
         harness.scroll_over(panel.center(), -120.0);
     }
-    let text_edit_pos = text_edit_pos.expect("Text Content label");
+    let text_edit_pos = text_edit_pos.expect("Text content label");
     harness.editor.ui.properties.text_body = "Thanks a lot for completing the course.".to_owned();
     // Simulate commit via blur
     harness.click_at(text_edit_pos);
@@ -6685,7 +6685,7 @@ fn switching_question_kind_to_fill_in_shows_the_fill_in_form() {
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
     assert!(harness.find_text("+ Add choice").is_some());
     let prompt = quiz_question(&harness).prompt;
-    harness.pick_combo("Multiple Choice", "Fill in");
+    harness.pick_combo("Multiple choice", "Fill in");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::FillIn);
@@ -6707,7 +6707,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
     use coursecraft_course::{CmpOp, Condition, QuestionKind, Value};
 
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Custom question (graded by a condition)");
+    harness.pick_combo("Multiple choice", "Custom question (graded by a condition)");
     harness.idle_frame();
     harness.idle_frame();
 
@@ -6758,7 +6758,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
 fn likert_choices_never_mark_correct_and_add_hides_at_eleven() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Likert scale");
+    harness.pick_combo("Multiple choice", "Likert scale");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Likert);
@@ -6801,7 +6801,7 @@ fn likert_choices_never_mark_correct_and_add_hides_at_eleven() {
 fn survey_question_shows_not_graded_and_no_points() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Likert scale");
+    harness.pick_combo("Multiple choice", "Likert scale");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Likert);
@@ -6813,7 +6813,7 @@ fn survey_question_shows_not_graded_and_no_points() {
 fn adding_a_matching_pair_appends_one() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Matching");
+    harness.pick_combo("Multiple choice", "Matching");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Matching);
@@ -6836,7 +6836,7 @@ fn adding_a_matching_pair_appends_one() {
 fn reordering_a_sequence_item_moves_it_down() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Sequence");
+    harness.pick_combo("Multiple choice", "Sequence");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Sequence);
@@ -6866,7 +6866,7 @@ fn switching_question_kind_to_hotspot_shows_the_hotspot_form_and_adds_region() {
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
 
     // Switching to Hotspot before an image exists on the slide fails
-    harness.pick_combo("Multiple Choice", "Hotspot");
+    harness.pick_combo("Multiple choice", "Hotspot");
     harness.idle_frame();
     assert!(harness.editor.ui.last_error.is_some());
     assert_ne!(quiz_question(&harness).kind, QuestionKind::Hotspot);
@@ -6883,7 +6883,7 @@ fn switching_question_kind_to_hotspot_shows_the_hotspot_form_and_adds_region() {
     harness.idle_frame();
 
     // Now switch to Hotspot succeeds
-    harness.pick_combo("Multiple Choice", "Hotspot");
+    harness.pick_combo("Multiple choice", "Hotspot");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Hotspot);
@@ -6916,7 +6916,7 @@ fn canvas_hotspot_region_dragging_updates_position_and_undo() {
     );
     harness.idle_frame();
 
-    harness.pick_combo("Multiple Choice", "Hotspot");
+    harness.pick_combo("Multiple choice", "Hotspot");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Hotspot);
@@ -7002,7 +7002,7 @@ fn switching_question_kind_to_drag_drop_shows_form_and_updates_target() {
     harness.idle_frame();
 
     // Switch to Drag and drop
-    harness.pick_combo("Multiple Choice", "Drag and drop");
+    harness.pick_combo("Multiple choice", "Drag and drop");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::DragDrop);
@@ -8832,9 +8832,9 @@ fn toolbar_question_popup_inserts_and_opens_question_tab() {
     harness.click_at(question_btn);
     harness.idle_frame();
     for name in [
-        "Multiple Choice",
-        "Multiple Response",
-        "True / False",
+        "Multiple choice",
+        "Multiple response",
+        "True / false",
         "Fill in",
         "Sequence",
         "Matching",
@@ -8847,8 +8847,8 @@ fn toolbar_question_popup_inserts_and_opens_question_tab() {
         );
     }
     let kind = harness
-        .find_text("Multiple Choice")
-        .expect("Multiple Choice popup item");
+        .find_text("Multiple choice")
+        .expect("Multiple choice popup item");
     harness.click_at(kind);
     harness.idle_frame();
 
@@ -18076,7 +18076,7 @@ fn trigger_copy_then_paste_adds_it_to_another_owner_and_skips_misfits() {
         .triggers
         .len();
     let undo = h.editor.session.undo_len();
-    let paste = h.find_text("Paste Triggers").expect("Paste Triggers");
+    let paste = h.find_text("Paste triggers").expect("Paste triggers");
     h.click_at(paste);
     h.idle_frame();
     let slide = h.editor.session.course.slide("s-tabs").unwrap();
@@ -19378,4 +19378,260 @@ fn m31_04_file_menu_hints_and_compound_shortcut_formatting() {
             "File menu must show shortcut hint '{hint}' for '{label}'"
         );
     }
+}
+
+/// L-04: Static sentence-case lint over all production `Dialog::new("...")` titles
+/// in `crates/ui-egui/src/` and menu/toolbar/navigator button literals in
+/// `menu.rs`, `toolbar.rs`, and `slides.rs`.
+#[test]
+fn static_sentence_case_lint_for_dialogs_menus_toolbar_and_slides() {
+    const ALLOWED_CAPS: &[&str] = &[
+        "CourseCraft",
+        "PowerPoint",
+        "PPTX",
+        "Word",
+        "PDF",
+        "MP4",
+        "CSV",
+        "XLIFF",
+        "SCORM",
+        "LTI",
+        "xAPI",
+        "cmi5",
+        "HTML5",
+        "AI",
+        "Lottie",
+        "GitHub",
+        "Inter",
+        "OK",
+        "ID",
+        "A–Z",
+        "Web",
+        "Esc",
+        "Enter",
+        "Delete",
+        "Ctrl",
+        "Cmd",
+        "Shift",
+        "Alt",
+        "F2",
+        "F7",
+        "F11",
+        "F12",
+    ];
+
+    fn strip_test_module(src: &str) -> &str {
+        src.find("\n#[cfg(test)]").map_or(src, |idx| &src[..idx])
+    }
+
+    fn strip_line_comments(src: &str) -> String {
+        src.lines()
+            .map(|line| {
+                if line.trim_start().starts_with("//") {
+                    ""
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn parse_quoted_literal(s: &str) -> Option<(String, usize)> {
+        let mut chars = s.char_indices();
+        let (_, first) = chars.next()?;
+        if first != '"' {
+            return None;
+        }
+        let mut out = String::new();
+        let mut escaped = false;
+        for (idx, ch) in chars {
+            if escaped {
+                out.push(ch);
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                return Some((out, idx + 1));
+            } else {
+                out.push(ch);
+            }
+        }
+        None
+    }
+
+    fn collect_first_string_arg_after(src: &str, needle: &str) -> Vec<String> {
+        let mut results = Vec::new();
+        let mut offset = 0;
+        while let Some(pos) = src[offset..].find(needle) {
+            let after = offset + pos + needle.len();
+            let rest = src[after..].trim_start();
+            if let Some((lit, consumed)) = parse_quoted_literal(rest) {
+                results.push(lit);
+                offset = after + (src[after..].len() - rest.len()) + consumed;
+            } else {
+                offset = after;
+            }
+        }
+        results
+    }
+
+    fn collect_nth_string_arg_after(src: &str, needle: &str, arg_index: usize) -> Vec<String> {
+        let mut results = Vec::new();
+        let mut offset = 0;
+        while let Some(pos) = src[offset..].find(needle) {
+            let after = offset + pos + needle.len();
+            let rest = &src[after..];
+            let mut depth = 0usize;
+            let mut comma_count = 0usize;
+            let mut in_str = false;
+            let mut escaped = false;
+            let mut arg_start = if arg_index == 0 { Some(0) } else { None };
+            for (idx, ch) in rest.char_indices() {
+                if in_str {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        in_str = false;
+                    }
+                    continue;
+                }
+                match ch {
+                    '"' => {
+                        if let Some(start) = arg_start
+                            && rest[start..idx].trim().is_empty()
+                        {
+                            if let Some((lit, _)) = parse_quoted_literal(&rest[idx..]) {
+                                results.push(lit);
+                            }
+                            break;
+                        }
+                        in_str = true;
+                    }
+                    '(' | '[' | '{' => depth += 1,
+                    ')' => {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    ']' | '}' => depth = depth.saturating_sub(1),
+                    ',' if depth == 0 => {
+                        comma_count += 1;
+                        if comma_count == arg_index {
+                            arg_start = Some(idx + 1);
+                        } else if comma_count > arg_index {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            offset = after;
+        }
+        results
+    }
+
+    fn check_sentence_case(phrase: &str, context: &str, violations: &mut Vec<String>) {
+        if phrase.is_empty() || phrase == "Don't Save" {
+            return;
+        }
+        if let Some(first_alpha) = phrase.chars().find(|c| c.is_alphabetic())
+            && !first_alpha.is_uppercase()
+        {
+            violations.push(format!(
+                "{context}: {phrase:?} must start with an uppercase letter"
+            ));
+            return;
+        }
+        let tokens: Vec<&str> = phrase
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .filter(|t| !t.is_empty())
+            .collect();
+        for &token in tokens.iter().skip(1) {
+            let trimmed = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '–');
+            if trimmed.is_empty() || ALLOWED_CAPS.contains(&trimmed) {
+                continue;
+            }
+            if trimmed.chars().any(char::is_uppercase) {
+                violations.push(format!(
+                    "{context}: unexpected Title Case token {trimmed:?} in {phrase:?}"
+                ));
+            }
+        }
+    }
+
+    let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations = Vec::new();
+    let mut dialog_count = 0usize;
+    let mut button_count = 0usize;
+
+    let entries = std::fs::read_dir(&src_dir).expect("read crates/ui-egui/src");
+    for entry in entries {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if file_name == "tests.rs"
+            || file_name == "test_harness.rs"
+            || file_name.ends_with("_tests.rs")
+            || file_name.starts_with("bughunt_")
+        {
+            continue;
+        }
+
+        let raw = std::fs::read_to_string(&path).expect("read source file");
+        let prod = strip_line_comments(strip_test_module(&raw));
+
+        for title in collect_first_string_arg_after(&prod, "Dialog::new(") {
+            dialog_count += 1;
+            check_sentence_case(&title, &format!("{file_name} Dialog::new"), &mut violations);
+        }
+
+        if matches!(file_name, "menu.rs" | "toolbar.rs" | "slides.rs") {
+            for needle in ["Button::new(", ".button(", ".menu_button("] {
+                for label in collect_first_string_arg_after(&prod, needle) {
+                    button_count += 1;
+                    check_sentence_case(&label, &format!("{file_name} {needle}"), &mut violations);
+                }
+            }
+            for (needle, arg_idx) in [
+                (".checkbox(", 1),
+                ("quiet_button(", 1),
+                ("primary_button(", 1),
+                ("toolbar_toggle(", 2),
+                ("toolbar_toggle(", 4),
+                ("toolbar_button_enabled(", 2),
+            ] {
+                for label in collect_nth_string_arg_after(&prod, needle, arg_idx) {
+                    button_count += 1;
+                    check_sentence_case(
+                        &label,
+                        &format!("{file_name} {needle} arg {arg_idx}"),
+                        &mut violations,
+                    );
+                }
+            }
+        }
+    }
+
+    assert!(
+        dialog_count >= 25,
+        "expected >= 25 Dialog::new titles scanned, found {dialog_count}"
+    );
+    assert!(
+        button_count >= 80,
+        "expected >= 80 menu/toolbar/navigator button literals scanned, found {button_count}"
+    );
+    assert!(
+        violations.is_empty(),
+        "sentence-case lint violations:\n{}",
+        violations.join("\n")
+    );
 }

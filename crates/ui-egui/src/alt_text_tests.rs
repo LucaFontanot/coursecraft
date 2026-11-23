@@ -275,8 +275,8 @@ fn not_ready_shows_the_settings_button_and_sends_nothing() {
 
     assert!(h.find_text("Suggest").is_none());
     let button = h
-        .find_text("Open AI Settings")
-        .expect("Open AI Settings button");
+        .find_text("Open AI settings")
+        .expect("Open AI settings button");
     let requests = click_for_requests(&mut h, button);
     assert!(
         !requests

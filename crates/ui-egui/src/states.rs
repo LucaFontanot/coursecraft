@@ -363,7 +363,7 @@ pub fn show_states_section(
             if normal_is_initial {
                 ui.label(RichText::new("(initial)").italics());
             } else {
-                let btn = ui.button("Set Initial");
+                let btn = ui.button("Set initial");
                 if btn.clicked() {
                     actions.push((
                         "object.update",
@@ -434,7 +434,7 @@ pub fn show_states_section(
 
                 ui.horizontal(|ui| {
                     if !is_initial {
-                        let btn = ui.button("Set Initial");
+                        let btn = ui.button("Set initial");
                         buf.set_initial_rect = Some(btn.rect);
                         if btn.clicked() {
                             actions.push((
@@ -635,7 +635,7 @@ pub fn show_states_section(
                             }
                         } else {
                             ui.label(
-                                RichText::new("Same as Normal")
+                                RichText::new("Same as normal")
                                     .color(p.text_secondary)
                                     .size(coursecraft_render::SIZE_BODY),
                             );
@@ -1777,7 +1777,7 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
                         }
                     } else {
                         ui.label(
-                            RichText::new("Same as Normal")
+                            RichText::new("Same as normal")
                                 .color(p.text_secondary)
                                 .size(coursecraft_render::SIZE_BODY),
                         );

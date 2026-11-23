@@ -806,7 +806,7 @@ fn d1_6_copy_and_paste_triggers_across_slides_and_layers_with_partial_skip() {
     harness.idle_frame();
 
     let paste_pos = harness
-        .find_text("Paste Triggers")
+        .find_text("Paste triggers")
         .expect("Paste Triggers button");
     harness.click_at(paste_pos);
     harness.idle_frame();
@@ -844,7 +844,7 @@ fn d1_6_copy_and_paste_triggers_across_slides_and_layers_with_partial_skip() {
     harness.editor.selection.layer = Some("l1".to_owned());
     harness.idle_frame();
     let paste_pos = harness
-        .find_text("Paste Triggers")
+        .find_text("Paste triggers")
         .expect("Paste Triggers on layer");
     harness.click_at(paste_pos);
     harness.idle_frame();

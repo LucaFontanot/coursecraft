@@ -125,7 +125,7 @@ pub fn show_outline_dialog(editor: &mut Editor, ctx: &egui::Context) {
     let mut add_clicked = false;
     let mut cancel_clicked = false;
 
-    Dialog::new("Slides from Outline")
+    Dialog::new("Slides from outline")
         .id(Id::unique(("slides_from_outline_dialog", 0_u64)))
         .width(580.0)
         .open(&mut open)

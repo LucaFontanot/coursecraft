@@ -46,11 +46,11 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
     select_button_animate(&mut harness);
 
     let ent_header = harness
-        .find_text_in("Entrance Animation", harness.right_panel_rect())
-        .expect("Entrance Animation header");
+        .find_text_in("Entrance animation", harness.right_panel_rect())
+        .expect("Entrance animation header");
     let exit_header = harness
-        .find_text_in("Exit Animation", harness.right_panel_rect())
-        .expect("Exit Animation header");
+        .find_text_in("Exit animation", harness.right_panel_rect())
+        .expect("Exit animation header");
 
     // Open Entrance Effect dropdown.
     let ent_combo = find_text_below_in_inspector(&mut harness, "None", ent_header.y)
@@ -151,11 +151,11 @@ fn existing_course_with_fly_in_exit_loads_and_shows_fly_out() {
     select_button_animate(&mut harness);
 
     let ent_header = harness
-        .find_text_in("Entrance Animation", harness.right_panel_rect())
-        .expect("Entrance Animation header");
+        .find_text_in("Entrance animation", harness.right_panel_rect())
+        .expect("Entrance animation header");
     let exit_header = harness
-        .find_text_in("Exit Animation", harness.right_panel_rect())
-        .expect("Exit Animation header");
+        .find_text_in("Exit animation", harness.right_panel_rect())
+        .expect("Exit animation header");
 
     assert!(
         find_text_below_in_inspector(&mut harness, "Fade in", ent_header.y).is_some(),
@@ -189,8 +189,8 @@ fn multi_selection_shows_entrance_and_exit_names_and_undo_redo() {
     harness.idle_frame();
 
     let exit_header = harness
-        .find_text_in("Exit Animation", harness.right_panel_rect())
-        .expect("Exit Animation header");
+        .find_text_in("Exit animation", harness.right_panel_rect())
+        .expect("Exit animation header");
     let exit_combo = find_text_below_in_inspector(&mut harness, "None", exit_header.y)
         .expect("exit effect combo");
     harness.click_at(exit_combo);

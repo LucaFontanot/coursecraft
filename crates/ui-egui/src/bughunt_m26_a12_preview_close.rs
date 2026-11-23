@@ -273,7 +273,7 @@ fn a12_4_effect_log_and_variables_panels_inside_preview() {
     h.click_at(vars);
     h.idle_frame();
 
-    if let Some(el) = h.find_text("Effect Log") {
+    if let Some(el) = h.find_text("Effect log") {
         h.click_at(el);
         h.idle_frame();
     }

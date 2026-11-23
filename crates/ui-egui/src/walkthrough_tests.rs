@@ -326,7 +326,7 @@ fn build_intro_slide(harness: &mut TestHarness) {
         .expect("Bold button");
     harness.click_at(bold_pos);
     harness.idle_frame();
-    let text_pos = scroll_to_label(harness, "Text Content") + vec2(110.0, 0.0);
+    let text_pos = scroll_to_label(harness, "Text content") + vec2(110.0, 0.0);
     set_multiline_text(harness, text_pos, "Workplace Safety Basics");
 
     // Button `btn-start`
@@ -398,7 +398,7 @@ fn build_intro_slide(harness: &mut TestHarness) {
     // Text `about-text`
     insert_object(harness, "Text box");
     set_object_name(harness, "about-text");
-    let text_pos = scroll_to_label(harness, "Text Content") + vec2(110.0, 0.0);
+    let text_pos = scroll_to_label(harness, "Text content") + vec2(110.0, 0.0);
     set_multiline_text(harness, text_pos, "Ten minutes. One quiz. 80% to pass.");
     set_object_frame(harness, 280.0, 200.0, 720.0, 200.0);
 
@@ -633,7 +633,7 @@ fn build_tabs_slide(harness: &mut TestHarness) {
 
         insert_object(harness, "Text box");
         set_object_name(harness, text_obj_name);
-        let text_pos = scroll_to_label(harness, "Text Content") + vec2(110.0, 0.0);
+        let text_pos = scroll_to_label(harness, "Text content") + vec2(110.0, 0.0);
         set_multiline_text(harness, text_pos, text_body);
         set_object_frame(harness, 80.0, 200.0, 1000.0, 300.0);
     }
@@ -1117,7 +1117,7 @@ fn build_results_slide(harness: &mut TestHarness) {
     // Text object results-text
     insert_object(harness, "Text box");
     set_object_name(harness, "results-text");
-    let text_pos = scroll_to_label(harness, "Text Content") + vec2(110.0, 0.0);
+    let text_pos = scroll_to_label(harness, "Text content") + vec2(110.0, 0.0);
     set_multiline_text(harness, text_pos, "Thanks for completing the course.");
     set_object_frame(harness, 80.0, 200.0, 1120.0, 200.0);
 

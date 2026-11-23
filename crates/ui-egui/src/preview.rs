@@ -1207,7 +1207,7 @@ impl Preview {
                                                 Layout::top_down(Align::Min),
                                                 |ui| {
                                                     ui.label(
-                                                        egui::RichText::new("Effect Log").strong(),
+                                                        egui::RichText::new("Effect log").strong(),
                                                     );
                                                     ScrollArea::vertical()
                                                         .auto_shrink([false, false])
@@ -1229,7 +1229,7 @@ impl Preview {
                                                 now,
                                             );
                                         } else {
-                                            ui.label(egui::RichText::new("Effect Log").strong());
+                                            ui.label(egui::RichText::new("Effect log").strong());
                                             ScrollArea::vertical()
                                                 .auto_shrink([false, false])
                                                 .stick_to_bottom(true)
@@ -1297,10 +1297,10 @@ impl Preview {
                             );
                             ui.add_space(12.0);
                             ui.horizontal(|ui| {
-                                if ui.button("Replay Slide(s)").clicked() {
+                                if ui.button("Replay slide(s)").clicked() {
                                     popup_replay = true;
                                 }
-                                if ui.button("Close Preview").clicked() {
+                                if ui.button("Close preview").clicked() {
                                     popup_close_preview = true;
                                 }
                             });

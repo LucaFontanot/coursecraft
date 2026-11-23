@@ -7,7 +7,7 @@ This is the page to give Claude Code, Codex or any other agent. It says how to g
 The CourseCraft app contains both agent tools, so there is nothing else to install.
 
 1. Open the app.
-2. Choose **Help ▸ Connect an AI agent**. This opens **AI Settings** on its **Agents** tab.
+2. Choose **Help ▸ Connect an AI agent**. This opens **AI settings** on its **Agents** tab.
 3. Connect the agent, or open **Set up by hand** and copy the line for your agent to run once in a terminal.
 
 The lines look like this, with your app's real location filled in:
@@ -71,7 +71,7 @@ Their `publish` uses `target/player-dist` when present (or `--player <folder>`),
 
 | Symptom | Fix |
 |---|---|
-| Command not found | The app moved. In **AI Settings ▸ Agents**, open **Set up by hand**, copy a new line and run it |
+| Command not found | The app moved. In **AI settings ▸ Agents**, open **Set up by hand**, copy a new line and run it |
 | "CourseCraft isn't reachable" | Open the desktop app. The web version has no automation channel |
 | Still not reachable | In the app, turn on **Help ▸ Allow automation**. The status bar shows "Automation on" |
 | macOS blocks the app | Open it once from Finder and allow it in System Settings ▸ Privacy & Security |

@@ -152,5 +152,5 @@ fn preview_variables_panel_updates_on_click_and_stays_inside_window() {
         report_both.findings
     );
     assert!(report_both.painted("Variables"));
-    assert!(report_both.painted("Effect Log"));
+    assert!(report_both.painted("Effect log"));
 }

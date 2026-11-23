@@ -210,7 +210,7 @@ fn t12_2_check_course_and_error_history_single_scroll_wrap_and_esc() {
         .findings
         .iter()
         .filter(|f| {
-            f.contains("Check Course")
+            f.contains("Check course")
                 || f.contains("Validation issue")
                 || f.contains("Accessibility finding")
         })
@@ -533,5 +533,52 @@ fn t12_8_pptx_import_report_single_scroll_and_pinned_dismiss_footer() {
     assert!(
         h.editor.ui.pptx_import_report.is_none(),
         "Clicking Dismiss must close PPTX Import Report"
+    );
+}
+
+/// L-03: Status, report, and PowerPoint import-report dialogs paint sentence-case titles.
+#[test]
+fn status_and_report_dialogs_paint_sentence_case_titles() {
+    let mut h = TestHarness::new_with_size(base_course(), (1280.0, 800.0));
+
+    h.editor.ui.show_validation_window = true;
+    h.idle_frame();
+    assert!(
+        h.find_text("Check course").is_some(),
+        "expected 'Check course'"
+    );
+    assert!(h.find_text("Check Course").is_none());
+    h.editor.ui.show_validation_window = false;
+    h.idle_frame();
+
+    h.editor.ui.error_history = vec!["Sample error".to_owned()];
+    h.editor.ui.show_error_history_window = true;
+    h.idle_frame();
+    assert!(
+        h.find_text("Error history").is_some(),
+        "expected 'Error history'"
+    );
+    assert!(h.find_text("Error History").is_none());
+    h.editor.ui.show_error_history_window = false;
+    h.idle_frame();
+
+    h.editor.ui.pptx_import_report = Some("Imported 3 slides.".to_owned());
+    h.idle_frame();
+    assert!(
+        h.find_text("PowerPoint import report").is_some(),
+        "expected 'PowerPoint import report'"
+    );
+    h.editor.ui.pptx_import_report = None;
+    h.idle_frame();
+
+    h.editor.open_report();
+    h.idle_frame();
+    assert!(
+        h.find_text("Report a problem").is_some(),
+        "expected 'Report a problem'"
+    );
+    assert!(
+        h.find_text("Copy to clipboard").is_some(),
+        "expected 'Copy to clipboard'"
     );
 }
