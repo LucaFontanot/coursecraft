@@ -50,7 +50,6 @@ thread_local! {
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
 pub(crate) fn with_scope_verifier_disabled<T>(f: impl FnOnce() -> T) -> T {
     struct Reset(bool);
     impl Drop for Reset {
@@ -402,7 +401,7 @@ impl Session {
             return self.execute_full_course(cmd, params);
         };
         #[cfg(test)]
-        let verify_before = self.course.clone();
+        let verify_before = VERIFY_SCOPE.get().then(|| self.course.clone());
         self.skip_undo = false;
         self.validated_in_cmd = false;
         let outcome = (cmd.run)(self, params);
@@ -410,7 +409,9 @@ impl Session {
         match outcome {
             Ok(v) => {
                 #[cfg(test)]
-                verify_single_slide_isolation(&verify_before, &self.course, loc, cmd.id);
+                if let Some(ref before) = verify_before {
+                    verify_single_slide_isolation(before, &self.course, loc, cmd.id);
+                }
                 let unchanged = skip_undo || slide_at(&self.course, loc) == Some(&before_slide);
                 if unchanged {
                     return Ok(v);
@@ -434,9 +435,9 @@ impl Session {
                     *slot = before_slide;
                 }
                 #[cfg(test)]
-                if VERIFY_SCOPE.get() {
+                if let Some(ref before) = verify_before {
                     assert_eq!(
-                        self.course, verify_before,
+                        self.course, *before,
                         "scope isolation violation ({}): SingleSlide error rollback left course modified",
                         cmd.id
                     );
@@ -449,7 +450,7 @@ impl Session {
     fn execute_course_header(&mut self, cmd: &Command, params: &Json) -> Result<Json> {
         let before_header = CourseHeaderSnapshot::capture(&self.course);
         #[cfg(test)]
-        let verify_before = self.course.clone();
+        let verify_before = VERIFY_SCOPE.get().then(|| self.course.clone());
         self.skip_undo = false;
         self.validated_in_cmd = false;
         let outcome = (cmd.run)(self, params);
@@ -457,7 +458,9 @@ impl Session {
         match outcome {
             Ok(v) => {
                 #[cfg(test)]
-                verify_course_header_isolation(&verify_before, &self.course, cmd.id);
+                if let Some(ref before) = verify_before {
+                    verify_course_header_isolation(before, &self.course, cmd.id);
+                }
                 if skip_undo {
                     return Ok(v);
                 }
@@ -473,9 +476,9 @@ impl Session {
             Err(e) => {
                 before_header.restore(&mut self.course);
                 #[cfg(test)]
-                if VERIFY_SCOPE.get() {
+                if let Some(ref before) = verify_before {
                     assert_eq!(
-                        self.course, verify_before,
+                        self.course, *before,
                         "scope isolation violation ({}): CourseHeader error rollback left course modified",
                         cmd.id
                     );
@@ -637,7 +640,7 @@ impl Session {
             return Err(EngineError::NotFound(format!("slide at {loc:?} not found")));
         };
         #[cfg(test)]
-        let verify_before = self.course.clone();
+        let verify_before = VERIFY_SCOPE.get().then(|| self.course.clone());
         let mut results = Vec::with_capacity(steps.len());
         let mut any_changed = false;
         let mut first_label: Option<&'static str> = None;
@@ -685,9 +688,9 @@ impl Session {
                         *slot = before_slide;
                     }
                     #[cfg(test)]
-                    if VERIFY_SCOPE.get() {
+                    if let Some(ref before) = verify_before {
                         assert_eq!(
-                            self.course, verify_before,
+                            self.course, *before,
                             "scope isolation violation (batch step {i} {id}): SingleSlide rollback left course modified"
                         );
                     }
@@ -701,7 +704,9 @@ impl Session {
         }
 
         #[cfg(test)]
-        verify_single_slide_isolation(&verify_before, &self.course, loc, "batch");
+        if let Some(ref before) = verify_before {
+            verify_single_slide_isolation(before, &self.course, loc, "batch");
+        }
 
         if any_changed && slide_at(&self.course, loc) != Some(&before_slide) {
             if let Some(slide) = slide_at_mut(&mut self.course, loc) {

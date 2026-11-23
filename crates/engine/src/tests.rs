@@ -12118,3 +12118,72 @@ fn u_07_session_merge_last_two_undos_roundtrip() {
     let mut s_mixed = Session::new(s_moves.course);
     assert_u07_mixed_merge_preserves_label_and_redo(&mut s_mixed);
 }
+
+/// GD-02 (`M33-08`, `M33-09`): 200 single-object edits on a 300-slide course
+/// (`perf300`) perform zero full-course clones, keep all 200 undo deltas under
+/// 512 KiB, and roundtrip byte-identically across `undo_steps(200)` and
+/// `redo_steps(200)`.
+#[test]
+fn two_hundred_edits_on_300_slide_course_zero_full_clones_and_small_deltas() {
+    let mut s = Session::new(crate::undo_perf_tests::perf300());
+    let orig_json = s.course.to_json().expect("initial perf300 JSON");
+
+    crate::with_scope_verifier_disabled(|| {
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        for i in 0..200 {
+            ok(
+                &mut s,
+                "object.set_frame",
+                json!({
+                    "slide": "s-150",
+                    "object": "h150",
+                    "frame": {
+                        "x": 60.0 + (i + 1) as f64,
+                        "y": 520.0,
+                        "w": 200.0,
+                        "h": 80.0
+                    }
+                }),
+            );
+        }
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "200 single-slide edits must perform zero full-course clones"
+        );
+        assert_eq!(s.undo_len(), 200);
+        let est_bytes = s.undo_estimated_bytes();
+        assert!(
+            est_bytes < 512 * 1024,
+            "200 single-object deltas must use < 512 KiB, got {est_bytes} bytes"
+        );
+
+        let after_json = s.course.to_json().expect("after-200 perf300 JSON");
+        assert_ne!(after_json, orig_json);
+
+        s.undo_steps(200).expect("undo_steps(200) succeeds");
+        assert_eq!(
+            s.course.to_json().expect("undone perf300 JSON"),
+            orig_json,
+            "undo_steps(200) must restore original perf300 JSON byte-identically"
+        );
+
+        s.redo_steps(200).expect("redo_steps(200) succeeds");
+        assert_eq!(
+            s.course.to_json().expect("redone perf300 JSON"),
+            after_json,
+            "redo_steps(200) must restore post-edit perf300 JSON byte-identically"
+        );
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "undo_steps(200) and redo_steps(200) must also perform zero full-course clones"
+        );
+    });
+}

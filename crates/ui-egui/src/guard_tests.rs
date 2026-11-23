@@ -189,8 +189,8 @@ fn switching_slides_decodes_only_the_new_pictures() {
     assert_eq!(picture_decodes(), 0, "the first slide's picture is cached");
 }
 
-/// A nudge changes one slide's content, so only that slide's thumbnail is
-/// recomposed. The engine takes one whole-course undo snapshot for the edit.
+/// GD-01: A nudge changes one slide's content, so only that slide's thumbnail is
+/// recomposed, and the engine records a scoped slide delta with zero whole-course copies.
 #[test]
 fn moving_an_object_redraws_only_that_slide_thumbnail() {
     let mut h = hello();
@@ -208,8 +208,8 @@ fn moving_an_object_redraws_only_that_slide_thumbnail() {
     );
     assert_eq!(
         gc::course_copies(),
-        1,
-        "one mutating command takes one undo snapshot"
+        0,
+        "single-slide edits use a scoped slide delta with zero full-course clones"
     );
 }
 

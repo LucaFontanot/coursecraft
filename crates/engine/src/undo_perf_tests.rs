@@ -20,7 +20,7 @@ const SLIDES_PER_SCENE: usize = SLIDES / SCENES;
 
 /// Deterministic 300-slide course (10 scenes × 30 slides, 6 objects/slide:
 /// 3 text boxes, 1 image, 1 shape, 1 button), matching `crates/ui-egui/src/perf_tests.rs::big_course()`.
-fn perf300() -> Course {
+pub(crate) fn perf300() -> Course {
     let mut scenes = Vec::with_capacity(SCENES);
     for scene in 0..SCENES {
         let mut slides = Vec::with_capacity(SLIDES_PER_SCENE);
@@ -147,145 +147,213 @@ fn report_stage(label: &str, samples: &[Duration], rss_before_mb: f64) {
 #[test]
 #[ignore = "release-only undo performance benchmark (PF-01)"]
 fn pf_01_perf300_200_edits_undo_redo_and_eviction() {
-    let mut session = Session::new(perf300());
-    let initial_json = session.course.to_json().expect("initial perf300 JSON");
-    let rss_start = rss_mb();
+    crate::with_scope_verifier_disabled(|| {
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
 
-    let mut edit_times = Vec::with_capacity(MAX_HISTORY);
-    for i in 0..MAX_HISTORY {
-        let params = json!({
-            "slide": "s-150",
-            "object": "h150",
-            "frame": { "x": 60.0 + (i + 1) as f64, "y": 520.0, "w": 200.0, "h": 80.0 }
-        });
-        let start = Instant::now();
-        session
-            .execute("object.set_frame", &params)
-            .expect("set_frame edit succeeds");
-        edit_times.push(start.elapsed());
-    }
-    report_stage("PF-01 perf300 200 edits", &edit_times, rss_start);
-    assert_eq!(session.undo_len(), MAX_HISTORY);
-    let after_200_json = session.course.to_json().expect("after-200 perf300 JSON");
+        let mut session = Session::new(perf300());
+        let initial_json = session.course.to_json().expect("initial perf300 JSON");
+        let rss_start = rss_mb();
 
-    let mut undo_times = Vec::with_capacity(MAX_HISTORY);
-    for _ in 0..MAX_HISTORY {
-        let start = Instant::now();
-        session.undo().expect("undo succeeds");
-        undo_times.push(start.elapsed());
-    }
-    report_stage("PF-01 perf300 200 undos", &undo_times, rss_start);
-    assert_eq!(
-        session.course.to_json().expect("undone perf300 JSON"),
-        initial_json,
-        "200 undos must restore initial perf300 JSON byte-identically"
-    );
+        let mut edit_times = Vec::with_capacity(MAX_HISTORY);
+        for i in 0..MAX_HISTORY {
+            let params = json!({
+                "slide": "s-150",
+                "object": "h150",
+                "frame": { "x": 60.0 + (i + 1) as f64, "y": 520.0, "w": 200.0, "h": 80.0 }
+            });
+            let start = Instant::now();
+            session
+                .execute("object.set_frame", &params)
+                .expect("set_frame edit succeeds");
+            edit_times.push(start.elapsed());
+        }
+        report_stage("PF-01 perf300 200 edits", &edit_times, rss_start);
+        assert_eq!(session.undo_len(), MAX_HISTORY);
+        let est_bytes = session.undo_estimated_bytes();
+        println!(
+            "| {:<34} | {} bytes ({:.1} KB)",
+            "PF-01 perf300 undo_estimated_bytes",
+            est_bytes,
+            est_bytes as f64 / 1024.0
+        );
+        assert!(
+            est_bytes <= 512 * 1024,
+            "PF-01 undo_estimated_bytes should be <= 512 KiB, got {est_bytes} bytes"
+        );
+        let after_200_json = session.course.to_json().expect("after-200 perf300 JSON");
 
-    let mut redo_times = Vec::with_capacity(MAX_HISTORY);
-    for _ in 0..MAX_HISTORY {
-        let start = Instant::now();
-        session.redo().expect("redo succeeds");
-        redo_times.push(start.elapsed());
-    }
-    report_stage("PF-01 perf300 200 redos", &redo_times, rss_start);
-    assert_eq!(
-        session.course.to_json().expect("redone perf300 JSON"),
-        after_200_json,
-        "200 redos must restore post-edit perf300 JSON byte-identically"
-    );
+        let mut undo_times = Vec::with_capacity(MAX_HISTORY);
+        for _ in 0..MAX_HISTORY {
+            let start = Instant::now();
+            session.undo().expect("undo succeeds");
+            undo_times.push(start.elapsed());
+        }
+        report_stage("PF-01 perf300 200 undos", &undo_times, rss_start);
+        assert_eq!(
+            session.course.to_json().expect("undone perf300 JSON"),
+            initial_json,
+            "200 undos must restore initial perf300 JSON byte-identically"
+        );
 
-    let mut evict_times = Vec::with_capacity(100);
-    for i in 0..100 {
-        let params = json!({
-            "slide": "s-150",
-            "object": "h150",
-            "frame": { "x": 300.0 + (i + 1) as f64, "y": 520.0, "w": 200.0, "h": 80.0 }
-        });
-        let start = Instant::now();
-        session
-            .execute("object.set_frame", &params)
-            .expect("eviction set_frame edit succeeds");
-        evict_times.push(start.elapsed());
-    }
-    report_stage("PF-01 perf300 100 evictions", &evict_times, rss_start);
-    assert!(session.history_truncated());
-    assert_eq!(session.undo_len(), MAX_HISTORY);
+        let mut redo_times = Vec::with_capacity(MAX_HISTORY);
+        for _ in 0..MAX_HISTORY {
+            let start = Instant::now();
+            session.redo().expect("redo succeeds");
+            redo_times.push(start.elapsed());
+        }
+        report_stage("PF-01 perf300 200 redos", &redo_times, rss_start);
+        assert_eq!(
+            session.course.to_json().expect("redone perf300 JSON"),
+            after_200_json,
+            "200 redos must restore post-edit perf300 JSON byte-identically"
+        );
+
+        let mut evict_times = Vec::with_capacity(100);
+        for i in 0..100 {
+            let params = json!({
+                "slide": "s-150",
+                "object": "h150",
+                "frame": { "x": 300.0 + (i + 1) as f64, "y": 520.0, "w": 200.0, "h": 80.0 }
+            });
+            let start = Instant::now();
+            session
+                .execute("object.set_frame", &params)
+                .expect("eviction set_frame edit succeeds");
+            evict_times.push(start.elapsed());
+        }
+        report_stage("PF-01 perf300 100 evictions", &evict_times, rss_start);
+        assert!(session.history_truncated());
+        assert_eq!(session.undo_len(), MAX_HISTORY);
+        let est_bytes_after_evict = session.undo_estimated_bytes();
+        assert!(
+            est_bytes_after_evict <= 512 * 1024,
+            "PF-01 undo_estimated_bytes after eviction should be <= 512 KiB, got {est_bytes_after_evict} bytes"
+        );
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "PF-01 single-slide edits must perform zero full-course clones"
+        );
+    });
 }
 
 /// PF-02: 200 edits, 200 undos, and 200 redos on `rich300`.
 #[test]
 #[ignore = "release-only undo performance benchmark (PF-02)"]
 fn pf_02_rich300_200_edits_undo_redo() {
-    let mut session = Session::new(rich300());
-    let initial_json = session.course.to_json().expect("initial rich300 JSON");
-    let rss_start = rss_mb();
+    crate::with_scope_verifier_disabled(|| {
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
 
-    let mut edit_times = Vec::with_capacity(MAX_HISTORY);
-    for i in 0..MAX_HISTORY {
-        let params = json!({
-            "slide": "s-150",
-            "object": "o150_0",
-            "frame": { "x": 40.0 + (i + 1) as f64, "y": 40.0, "w": 210.0, "h": 180.0 }
-        });
-        let start = Instant::now();
-        session
-            .execute("object.set_frame", &params)
-            .expect("rich300 set_frame edit succeeds");
-        edit_times.push(start.elapsed());
-    }
-    report_stage("PF-02 rich300 200 edits", &edit_times, rss_start);
-    assert_eq!(session.undo_len(), MAX_HISTORY);
-    let after_200_json = session.course.to_json().expect("after-200 rich300 JSON");
+        let mut session = Session::new(rich300());
+        let initial_json = session.course.to_json().expect("initial rich300 JSON");
+        let rss_start = rss_mb();
 
-    let mut undo_times = Vec::with_capacity(MAX_HISTORY);
-    for _ in 0..MAX_HISTORY {
-        let start = Instant::now();
-        session.undo().expect("undo succeeds");
-        undo_times.push(start.elapsed());
-    }
-    report_stage("PF-02 rich300 200 undos", &undo_times, rss_start);
-    assert_eq!(
-        session.course.to_json().expect("undone rich300 JSON"),
-        initial_json,
-        "200 undos must restore initial rich300 JSON byte-identically"
-    );
+        let mut edit_times = Vec::with_capacity(MAX_HISTORY);
+        for i in 0..MAX_HISTORY {
+            let params = json!({
+                "slide": "s-150",
+                "object": "o150_0",
+                "frame": { "x": 40.0 + (i + 1) as f64, "y": 40.0, "w": 210.0, "h": 180.0 }
+            });
+            let start = Instant::now();
+            session
+                .execute("object.set_frame", &params)
+                .expect("rich300 set_frame edit succeeds");
+            edit_times.push(start.elapsed());
+        }
+        report_stage("PF-02 rich300 200 edits", &edit_times, rss_start);
+        assert_eq!(session.undo_len(), MAX_HISTORY);
+        let est_bytes = session.undo_estimated_bytes();
+        println!(
+            "| {:<34} | {} bytes ({:.1} KB)",
+            "PF-02 rich300 undo_estimated_bytes",
+            est_bytes,
+            est_bytes as f64 / 1024.0
+        );
+        assert!(
+            est_bytes <= 2 * 1024 * 1024,
+            "PF-02 undo_estimated_bytes should be <= 2 MiB, got {est_bytes} bytes"
+        );
+        let after_200_json = session.course.to_json().expect("after-200 rich300 JSON");
 
-    let mut redo_times = Vec::with_capacity(MAX_HISTORY);
-    for _ in 0..MAX_HISTORY {
-        let start = Instant::now();
-        session.redo().expect("redo succeeds");
-        redo_times.push(start.elapsed());
-    }
-    report_stage("PF-02 rich300 200 redos", &redo_times, rss_start);
-    assert_eq!(
-        session.course.to_json().expect("redone rich300 JSON"),
-        after_200_json,
-        "200 redos must restore post-edit rich300 JSON byte-identically"
-    );
+        let mut undo_times = Vec::with_capacity(MAX_HISTORY);
+        for _ in 0..MAX_HISTORY {
+            let start = Instant::now();
+            session.undo().expect("undo succeeds");
+            undo_times.push(start.elapsed());
+        }
+        report_stage("PF-02 rich300 200 undos", &undo_times, rss_start);
+        assert_eq!(
+            session.course.to_json().expect("undone rich300 JSON"),
+            initial_json,
+            "200 undos must restore initial rich300 JSON byte-identically"
+        );
+
+        let mut redo_times = Vec::with_capacity(MAX_HISTORY);
+        for _ in 0..MAX_HISTORY {
+            let start = Instant::now();
+            session.redo().expect("redo succeeds");
+            redo_times.push(start.elapsed());
+        }
+        report_stage("PF-02 rich300 200 redos", &redo_times, rss_start);
+        assert_eq!(
+            session.course.to_json().expect("redone rich300 JSON"),
+            after_200_json,
+            "200 redos must restore post-edit rich300 JSON byte-identically"
+        );
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "PF-02 single-slide edits must perform zero full-course clones"
+        );
+    });
 }
 
 /// PF-03: 200 identical no-op `object.set_frame` edits on `perf300`.
 #[test]
 #[ignore = "release-only undo performance benchmark (PF-03)"]
 fn pf_03_perf300_200_noop_edits() {
-    let mut session = Session::new(perf300());
-    let rss_start = rss_mb();
-    let params = json!({
-        "slide": "s-150",
-        "object": "h150",
-        "frame": { "x": 60.0, "y": 520.0, "w": 200.0, "h": 80.0 }
-    });
+    crate::with_scope_verifier_disabled(|| {
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
 
-    let mut noop_times = Vec::with_capacity(MAX_HISTORY);
-    for _ in 0..MAX_HISTORY {
-        let start = Instant::now();
-        session
-            .execute("object.set_frame", &params)
-            .expect("no-op set_frame succeeds");
-        noop_times.push(start.elapsed());
-    }
-    report_stage("PF-03 perf300 200 no-ops", &noop_times, rss_start);
-    assert_eq!(session.undo_len(), 0);
+        let mut session = Session::new(perf300());
+        let rss_start = rss_mb();
+        let params = json!({
+            "slide": "s-150",
+            "object": "h150",
+            "frame": { "x": 60.0, "y": 520.0, "w": 200.0, "h": 80.0 }
+        });
+
+        let mut noop_times = Vec::with_capacity(MAX_HISTORY);
+        for _ in 0..MAX_HISTORY {
+            let start = Instant::now();
+            session
+                .execute("object.set_frame", &params)
+                .expect("no-op set_frame succeeds");
+            noop_times.push(start.elapsed());
+        }
+        report_stage("PF-03 perf300 200 no-ops", &noop_times, rss_start);
+        let est_bytes = session.undo_estimated_bytes();
+        println!(
+            "| {:<34} | {} bytes ({:.1} KB)",
+            "PF-03 perf300 undo_estimated_bytes",
+            est_bytes,
+            est_bytes as f64 / 1024.0
+        );
+        assert_eq!(session.undo_len(), 0);
+        assert_eq!(est_bytes, 0);
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "PF-03 no-op single-slide edits must perform zero full-course clones"
+        );
+    });
 }
 
 #[cfg(debug_assertions)]
