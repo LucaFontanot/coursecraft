@@ -26,6 +26,7 @@ thread_local! {
     static SPELLER_RUNS: Cell<u64> = const { Cell::new(0) };
     static SUGGESTION_LOOKUPS: Cell<u64> = const { Cell::new(0) };
     static THUMBNAIL_REDRAWS: Cell<u64> = const { Cell::new(0) };
+    static THUMBNAIL_COMPOSES: Cell<u64> = const { Cell::new(0) };
     static STATE_THUMBNAIL_REDRAWS: Cell<u64> = const { Cell::new(0) };
     static VALIDATION_RUNS: Cell<u64> = const { Cell::new(0) };
     static AUDIT_RUNS: Cell<u64> = const { Cell::new(0) };
@@ -56,6 +57,7 @@ pub(crate) fn reset() {
     SPELLER_RUNS.set(0);
     SUGGESTION_LOOKUPS.set(0);
     THUMBNAIL_REDRAWS.set(0);
+    THUMBNAIL_COMPOSES.set(0);
     STATE_THUMBNAIL_REDRAWS.set(0);
     VALIDATION_RUNS.set(0);
     AUDIT_RUNS.set(0);
@@ -96,6 +98,10 @@ pub(crate) fn note_thumbnail_paint(slide_id: &str, slide: &Slide) {
             bump(&THUMBNAIL_REDRAWS);
         }
     });
+}
+
+pub(crate) fn note_thumbnail_compose() {
+    bump(&THUMBNAIL_COMPOSES);
 }
 
 pub(crate) fn note_validation_run() {
@@ -147,6 +153,10 @@ pub(crate) fn state_thumbnail_redraws() -> u64 {
 
 pub(crate) fn thumbnail_redraws() -> u64 {
     THUMBNAIL_REDRAWS.get()
+}
+
+pub(crate) fn thumbnail_composes() -> u64 {
+    THUMBNAIL_COMPOSES.get()
 }
 
 pub(crate) fn validation_runs() -> u64 {

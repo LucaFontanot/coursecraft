@@ -1027,6 +1027,10 @@ pub struct UiState {
     pub(crate) properties_lists: PropertiesListCache,
     /// Cached `media_references` for the Media Library window.
     pub(crate) media_refs_cache: MediaRefsCache,
+    /// Revision- and fingerprint-keyed thumbnail draw-item cache.
+    pub(crate) thumbnail_cache: crate::slides::ThumbnailCache,
+    /// Revision-cached slide/scene/bank summaries for the left navigator.
+    pub(crate) navigator_index: crate::slides::NavigatorIndex,
 }
 
 /// Cached per-revision / per-media-count lists for the Properties panel.
@@ -1473,6 +1477,8 @@ impl Editor {
                 course_map: CourseMapState::default(),
                 properties_lists: PropertiesListCache::default(),
                 media_refs_cache: MediaRefsCache::default(),
+                thumbnail_cache: crate::slides::ThumbnailCache::default(),
+                navigator_index: crate::slides::NavigatorIndex::default(),
             },
             preview: None,
             recent_files: Vec::new(),
@@ -1761,6 +1767,8 @@ impl Editor {
         self.ui.media_library = media_library::MediaLibraryState::default();
         self.ui.story_view = false;
         self.ui.course_map = CourseMapState::default();
+        self.ui.thumbnail_cache.clear();
+        self.ui.navigator_index.clear();
         self.ui.publish.open = false;
         self.ui.publish.phase = PublishPhase::Idle;
         self.ui.publish.status = None;

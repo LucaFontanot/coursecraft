@@ -1637,10 +1637,11 @@ pub fn show_triggers_tab(
 
         if !triggers.is_empty() {
             ui.horizontal(|ui| {
+                let filter_w = (ui.available_width() - 180.0).clamp(140.0, 220.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut editor_ui.triggers.filter)
                         .hint_text("Filter triggers…")
-                        .desired_width(140.0),
+                        .desired_width(filter_w),
                 );
                 if !editor_ui.triggers.filter.is_empty()
                     && crate::widgets::icon_button(ui, coursecraft_render::Icon::X, "Clear filter")
