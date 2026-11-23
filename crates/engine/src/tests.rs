@@ -10798,8 +10798,14 @@ impl Df02LegacyOracle {
             .ok_or_else(|| EngineError::UnknownCommand(id.to_owned()))?;
         let snapshot = self.course.clone();
         let mut tmp = Session::new(self.course.clone());
-        let val = tmp.execute(id, params)?;
-        if cmd.mutates && tmp.revision > 0 {
+        if !cmd.mutates {
+            return (cmd.run)(&mut tmp, params);
+        }
+        tmp.skip_undo = false;
+        let val = (cmd.run)(&mut tmp, params)?;
+        let unchanged = std::mem::take(&mut tmp.skip_undo) || tmp.course == snapshot;
+        if !unchanged {
+            crate::reroute_connectors(&mut tmp.course);
             self.course = tmp.course;
             self.push_undo(snapshot, cmd.label.to_owned());
         }
@@ -10811,23 +10817,74 @@ impl Df02LegacyOracle {
         name: Option<&str>,
         steps: &[(String, Json)],
     ) -> crate::Result<Vec<Json>> {
+        if steps.is_empty() {
+            return Ok(Vec::new());
+        }
+        for (i, (id, _)) in steps.iter().enumerate() {
+            if matches!(id.as_str(), "edit.undo" | "edit.redo") {
+                return Err(EngineError::BatchFailed {
+                    step: i,
+                    command: id.clone(),
+                    error: Box::new(EngineError::Invalid(format!(
+                        "{id} is not allowed inside a batch"
+                    ))),
+                });
+            }
+        }
         let snapshot = self.course.clone();
         let mut tmp = Session::new(self.course.clone());
-        let vals = match name {
-            Some(label) => tmp.execute_batch_named(label, steps)?,
-            None => tmp.execute_batch(steps)?,
-        };
-        if tmp.revision > 0 {
-            let label = tmp
-                .undo_names()
-                .first()
-                .copied()
-                .unwrap_or("Batch")
-                .to_owned();
+        let mut results = Vec::with_capacity(steps.len());
+        let mut any_changed = false;
+        let mut first_label: Option<&'static str> = None;
+
+        for (i, (id, params)) in steps.iter().enumerate() {
+            let cmd = registry()
+                .iter()
+                .find(|c| c.id == id.as_str())
+                .ok_or_else(|| EngineError::BatchFailed {
+                    step: i,
+                    command: id.clone(),
+                    error: Box::new(EngineError::UnknownCommand(id.clone())),
+                })?;
+            let step_snapshot = (name.is_none() && first_label.is_none() && cmd.mutates)
+                .then(|| tmp.course.clone());
+            tmp.skip_undo = false;
+            let outcome = (cmd.run)(&mut tmp, params);
+            if cmd.mutates {
+                tmp.valid_at_revision = None;
+            }
+            if std::mem::take(&mut tmp.skip_undo) {
+                // Nothing to record for this step.
+            } else if cmd.mutates {
+                any_changed = true;
+                if let Some(before) = step_snapshot
+                    && tmp.course != before
+                {
+                    first_label = Some(cmd.label);
+                }
+            }
+            match outcome {
+                Ok(res) => results.push(res),
+                Err(e) => {
+                    return Err(EngineError::BatchFailed {
+                        step: i,
+                        command: id.clone(),
+                        error: Box::new(e),
+                    });
+                }
+            }
+        }
+
+        if any_changed && tmp.course != snapshot {
+            crate::reroute_connectors(&mut tmp.course);
+            let label = name
+                .map(str::to_owned)
+                .or_else(|| first_label.map(str::to_owned))
+                .unwrap_or_else(|| "Batch".to_owned());
             self.course = tmp.course;
             self.push_undo(snapshot, label);
         }
-        Ok(vals)
+        Ok(results)
     }
 
     fn undo(&mut self) -> crate::Result<()> {
@@ -10895,7 +10952,12 @@ fn df_02_assert_parity(s: &Session, o: &Df02LegacyOracle, step: usize, op: &str)
 }
 
 fn df_02_exec_both(s: &mut Session, o: &mut Df02LegacyOracle, id: &str, p: &Json) {
-    assert_eq!(s.execute(id, p).is_ok(), o.execute(id, p).is_ok());
+    let sr = s.execute(id, p);
+    let or = o.execute(id, p);
+    assert!(
+        sr.is_ok() && or.is_ok(),
+        "expected {id} to succeed in DF-02: session={sr:?}, oracle={or:?}"
+    );
 }
 
 fn df_02_phase1_single_slide(
@@ -11052,9 +11114,11 @@ fn df_02_phase1_batch_or_edge(
                 }),
             ),
         ];
-        assert_eq!(
-            s.execute_batch(&steps).is_ok(),
-            o.execute_batch_with_name(None, &steps).is_ok()
+        let sr = s.execute_batch(&steps);
+        let or = o.execute_batch_with_name(None, &steps);
+        assert!(
+            sr.is_ok() && or.is_ok(),
+            "execute_batch failed at step {step}: session={sr:?}, oracle={or:?}"
         );
         "execute_batch"
     } else if bucket < 96 {
@@ -11073,10 +11137,11 @@ fn df_02_phase1_batch_or_edge(
                 }),
             ),
         ];
-        assert_eq!(
-            s.execute_batch_named("Named tweak", &steps).is_ok(),
-            o.execute_batch_with_name(Some("Named tweak"), &steps)
-                .is_ok()
+        let sr = s.execute_batch_named("Named tweak", &steps);
+        let or = o.execute_batch_with_name(Some("Named tweak"), &steps);
+        assert!(
+            sr.is_ok() && or.is_ok(),
+            "execute_batch_named failed at step {step}: session={sr:?}, oracle={or:?}"
         );
         "execute_batch_named"
     } else if bucket < 98 {
@@ -11097,10 +11162,10 @@ fn df_02_phase1_batch_or_edge(
     } else if bucket == 98 {
         counts[6] += 1;
         let p = json!({ "slide": "slide1", "object": "missing_obj" });
-        assert_eq!(
-            s.execute("object.delete", &p),
-            o.execute("object.delete", &p)
-        );
+        let sr = s.execute("object.delete", &p);
+        let or = o.execute("object.delete", &p);
+        assert!(sr.is_err(), "expected failing_single to error");
+        assert_eq!(sr, or);
         "failing_single"
     } else {
         counts[7] += 1;
@@ -11114,10 +11179,10 @@ fn df_02_phase1_batch_or_edge(
                 json!({ "slide": "slide1", "object": "missing_obj" }),
             ),
         ];
-        assert_eq!(
-            s.execute_batch(&steps),
-            o.execute_batch_with_name(None, &steps)
-        );
+        let sr = s.execute_batch(&steps);
+        let or = o.execute_batch_with_name(None, &steps);
+        assert!(sr.is_err(), "expected failing_batch to error");
+        assert_eq!(sr, or);
         "failing_batch"
     }
 }
@@ -11131,17 +11196,20 @@ fn df_02_phase2_step(
     match step - 218 {
         0 | 1 | 2 | 12 | 25 => {
             counts[8] += 1;
-            assert_eq!(s.undo(), o.undo());
+            assert_eq!(s.undo(), Ok(()));
+            assert_eq!(o.undo(), Ok(()));
             "undo"
         }
         3 | 13 | 26 => {
             counts[9] += 1;
-            assert_eq!(s.redo(), o.redo());
+            assert_eq!(s.redo(), Ok(()));
+            assert_eq!(o.redo(), Ok(()));
             "redo"
         }
         4 | 14 | 20 => {
             counts[10] += 1;
-            assert_eq!(s.undo_steps(5), o.undo_steps(5));
+            assert_eq!(s.undo_steps(5), Ok(()));
+            assert_eq!(o.undo_steps(5), Ok(()));
             "undo_steps_ok"
         }
         5 | 21 => {
@@ -11153,7 +11221,8 @@ fn df_02_phase2_step(
         }
         6 | 15 | 22 => {
             counts[12] += 1;
-            assert_eq!(s.redo_steps(3), o.redo_steps(3));
+            assert_eq!(s.redo_steps(3), Ok(()));
+            assert_eq!(o.redo_steps(3), Ok(()));
             "redo_steps_ok"
         }
         7 | 23 => {
@@ -11172,10 +11241,10 @@ fn df_02_phase2_step(
         9 | 17 => {
             counts[6] += 1;
             let p = json!({ "slide": "slide1", "object": "missing_obj" });
-            assert_eq!(
-                s.execute("object.delete", &p),
-                o.execute("object.delete", &p)
-            );
+            let sr = s.execute("object.delete", &p);
+            let or = o.execute("object.delete", &p);
+            assert!(sr.is_err(), "expected failing_single_phase2 to error");
+            assert_eq!(sr, or);
             "failing_single_phase2"
         }
         10 | 18 => {
@@ -11190,10 +11259,10 @@ fn df_02_phase2_step(
                     json!({ "slide": "slide1", "object": "missing_obj" }),
                 ),
             ];
-            assert_eq!(
-                s.execute_batch(&steps),
-                o.execute_batch_with_name(None, &steps)
-            );
+            let sr = s.execute_batch(&steps);
+            let or = o.execute_batch_with_name(None, &steps);
+            assert!(sr.is_err(), "expected failing_batch_phase2 to error");
+            assert_eq!(sr, or);
             "failing_batch_phase2"
         }
         11 | 19 | 24 => {
@@ -11204,7 +11273,8 @@ fn df_02_phase2_step(
         }
         _ => {
             counts[8] += 1;
-            assert_eq!(s.undo(), o.undo());
+            assert_eq!(s.undo(), Ok(()));
+            assert_eq!(o.undo(), Ok(()));
             "undo_tail"
         }
     }
