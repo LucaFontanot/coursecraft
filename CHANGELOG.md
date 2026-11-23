@@ -2,6 +2,24 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.4.1
+
+**New: change a course's slide size** (thanks to PhilOB). A redesigned **Slide size** dialog has presets for Full HD, HD, 16:10, 4:3, square and portrait, or your own size, with an aspect-ratio lock. Choose **Scale to fit**, **Fill slide** or **Keep as is**, and a live preview shows where the content lands and how many objects would end up outside the slide before you apply. **Use as default for new courses** makes any size the starting size. Resizing now scales everything, including states and the items inside them. Open it from the File or Slide menu, the Course tab, Course settings, or the size shown in the status bar. Check Course warns about any object left completely outside the slide.
+
+**New, small things:**
+- The glossary is included in Find and Replace, Spell Check and translation (XLIFF), and can be sorted A to Z.
+- **Show all** and **Unlock all** in the timeline and the View menu, each undone in one step.
+
+**Fixes:**
+- Reset overrides on a state no longer deletes the items inside it.
+- In a published web course, web objects and videos no longer cover the Play button, the menu or the end screen, and keyboard shortcuts wait until the learner starts.
+- A pressed button keeps its gradient or picture fill.
+- Renaming the state you are editing keeps you in that state.
+- The Timer uses a state's text style.
+- Items inside a rotated or flipped object are placed, edited and rotated correctly.
+- Dragging the seekbar to the end counts as watching the slide, so Next stays unlocked.
+- The Seekbar setting is greyed out, with a reason, when the player bar or seekbar is off.
+
 ## 0.4.0
 
 **New: rich object states.** States grow from a colour swap into a full second look for an object. Thanks to Noe for the feedback that shaped this.

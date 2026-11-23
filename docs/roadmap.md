@@ -322,6 +322,7 @@ Plan by Gemini 4 Neon: `docs/testing/m30-plan.md`; log: `docs/bug-hunt/2026-11-2
 - Slide size, from a tester request (PhilOB): a redesigned dialog (presets including Full HD and portrait, aspect lock, use as default for new courses, Scale to fit / Fill slide / Keep as is, live preview), resizing that scales everything including states and state items, a Check Course warning for objects left outside the slide, and the dialog reachable from the Slide menu, Course tab, Course settings and status bar.
 - Eight 0.4.0 bugs fixed (states, the web start gate, seekbar completion).
 - Glossary in Find and Replace, Spell Check and translation; sort the glossary A to Z; Timeline Show all and Unlock all.
+- Released as 0.4.1.
 
 ## After the first release
 
