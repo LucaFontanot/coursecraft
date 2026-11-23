@@ -438,7 +438,12 @@ fn quick_access_undo_reverts_the_last_change() {
     let undo = h
         .last_widgets
         .iter()
-        .find(|w| w.label.as_deref().is_some_and(|l| l.starts_with("Undo")) && !w.disabled)
+        .find(|w| {
+            w.label
+                .as_deref()
+                .is_some_and(|l| l.starts_with("Undo") && !l.starts_with("Undo History"))
+                && !w.disabled
+        })
         .map(|w| w.bounds)
         .expect("Undo in the quick access toolbar");
     h.click_at(undo.center());

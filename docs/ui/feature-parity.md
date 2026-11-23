@@ -22,10 +22,10 @@
 | Animation, transitions, timeline | 10 | 3 | 9 | 0 |
 | Questions and quizzes | 9 | 3 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
-| Editor shell and panels | 11 | 8 | 3 | 0 |
+| Editor shell and panels | 12 | 8 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **105** | **38** | **64** | **12** |
+| **Total** | **106** | **38** | **63** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -35,7 +35,7 @@ Counted from the tables below; recount when a row changes.
 |---|---|---|---|
 | New, Open, Save, Save As | File menu | ✅ | — |
 | Recent projects | File › Open Recent (names) | 🟡 thumbnails missing | M30 |
-| Start screen / File page with start actions and Recent | welcome screen | 🟡 layout | M30 |
+| Start screen / File page with start actions and Recent | File page from the File tab (`file_page.rs`), welcome screen on launch; one page with thumbnails and news to come | 🟡 layout | M30 |
 | Import PowerPoint | File › Import | ✅ | — |
 | Import questions (CSV / spreadsheet) | File › Import | ✅ | — |
 | Translation export / import (XLIFF) | File › Translation | ✅ | — |
@@ -271,10 +271,10 @@ Counted from the tables below; recount when a row changes.
 | Right-click menus complete (canvas, timeline, scenes) | | 🟡 | M30 |
 | Collapse panels | | 🟡 | M30 |
 | Slide Properties in the Course Map | | 🟡 | M30 |
-| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab; the File page, the galleries (themes, transitions, animations) and the contextual tabs to come | 🟡 | M30 |
-| Quick access toolbar | Save, Undo, Redo left of the tab strip; Customize to come | 🟡 | M30 |
+| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab and the File page, replacing the menu bar; the galleries (themes, transitions, animations) and the contextual tabs to come | 🟡 | M30 |
+| Quick access toolbar | Save, Undo, Redo, Undo History left of the tab strip; Customize to come | 🟡 | M30 |
 | Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |
-| View tabs for open slides | — | ⛔ | M30 |
+| View tabs for open slides | `doc_tabs.rs`: a Course Map tab, then a tab per opened slide (× closes it), under the ribbon | ✅ | — |
 | Undock / float / redock panels | docked by default (`dock.rs`, craft-ui docking): move, tab, float, close and reopen (View › Panels), the four inspectors included; the arrangement is saved in the preferences; Preferences › Interface turns it off | ✅ | — |
 | Reset panel layout | View › Panels › Reset Panel Layout | ✅ | — |
 | Slide-flow arrows in the Scenes panel | — | ⛔ | M30 |

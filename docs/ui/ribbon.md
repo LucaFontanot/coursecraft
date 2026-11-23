@@ -16,7 +16,7 @@
 
 | Order | Tab | Shown when |
 |---|---|---|
-| 0 | **File** | always; opens the file menu (below), drawn in the accent colour |
+| 0 | **File** | always; opens the File page (below), drawn in the accent colour |
 | 1 | **Home** | always; Course Map variant or Slide variant |
 | 2 | **Insert** | slide open |
 | 3 | **Slides** | always (hidden in master mode) |
@@ -36,6 +36,12 @@ Every main tab but AI and Help ends with a **Publish** group (Preview at least).
 everywhere and are specified once, under Home.
 
 ## File
+
+**Built** (`file_page.rs`): the File tab opens it over the window; an accent column of entries
+(Back, New, Open…, Open Folder…, Save, Save As…, Save As Project Folder…, Save Slide as Template,
+Version History…, Recent, Import, Export, Translation, Fonts, Publish…, Course Info…, Check Course,
+Preferences…, Close ⛔, Quit), and the chosen section's choices on the right. Every action closes
+the page; Esc and Back return. Still to do: one page with the launch screen, thumbnails and news.
 
 Not a ribbon tab: a full-window **File page**, the same page CourseCraft shows on launch
 (today's welcome screen, `crates/ui-egui/src/welcome.rs`). Layout per storyline-observed.md ›
@@ -70,7 +76,10 @@ Project commands (below the start actions once a course is open):
 | Course Info… | `course.info` | 🟡 | Course settings |
 | Version History… | `ui:versionHistory` | ✅ | `version_history.rs` |
 | Preferences… | `ui:preferences` | ✅ | File › Preferences… |
-| Close | `ui:file.close` | ⛔ | today New replaces the course; add a real Close |
+| Close | `ui:file.close` | ⛔ | today New replaces the course; add a real Close (drawn disabled) |
+| Save Slide as Template | `template.save` | ✅ | Project › Save as Template |
+| Fonts ▸ Add Font…, Manage Fonts… | `ui:fonts.*` | ✅ | File › Add font…, Manage fonts… |
+| Check Course | `course.validate` | ✅ | File › Check Course |
 | Quit | `ui:quit` | ✅ | File › Quit |
 
 ## Home (Course Map variant)
@@ -126,6 +135,7 @@ Shown when the Course Map view tab is active.
 | | Cut | S | `ui:edit.cut` | ✅ | |
 | | Copy | SS | `ui:edit.copy` | ✅ | ▾ Copy, Duplicate (`object.duplicate`) |
 | | Format Painter | S | `ui:formatPainter` | ✅ | double-click keeps it on |
+| | Select All | S | `ui:edit.selectAll` | ✅ | CourseCraft extra, from Edit › Select All (Storyline: Ctrl+A only) |
 | Slide | New Slide | LS | as Course Map | ✅ | |
 | | Apply Layout | SS | `slide.set_master` | ✅ | |
 | | Focus Order | S | `ui:focusOrder` | 🟡 | focus order exists (`focus_order`); needs its own dialog |
@@ -296,6 +306,7 @@ its AI Assistant group on Home; the controls and their status are the same.
 | | Insert Audio | LS | `ui:narration.fromText` | 🟡 | ▾ Narration from Text… ✅ (`audio_ai.rs`), Sound Effect ⛔, Music ⛔ |
 | Assess | Quiz | L | `ui:ai.quiz` (new) | ⛔ | draft a quiz from the course text through the user's agent |
 | | Question | L | `ui:ai.question` (new) | ⛔ | |
+| | Suggest Alt Text | L | `ui:alt.suggest` | ✅ | from Project › Suggest Alt Text… (`alt_text.rs`) |
 | Agents | Connect an AI Agent…, AI Settings…, Allow automation | S×3 | `ui:ai.*` | ✅ | moved from Help |
 
 ## Help
@@ -308,6 +319,28 @@ its AI Assistant group on Home; the controls and their status are the same.
 | Community | CourseCraft on GitHub, Report a Problem…, Suggest a Feature… | `ui:help.*` | ✅ |
 | Updates | Check for Updates | `ui:updates` | ✅ |
 | About | About CourseCraft | `ui:about` | ⛔ (no About window yet; drawn disabled) |
+
+### Where the menu bar went
+
+With the ribbon on, the menu bar is not drawn. File is the File page; the rest:
+
+| Menu item | Ribbon home |
+|---|---|
+| Edit › Undo, Redo | quick access toolbar, Ctrl+Z / Ctrl+Y |
+| Edit › History… | quick access toolbar › Undo History |
+| Edit › Cut, Copy, Paste, Duplicate | Home › Clipboard |
+| Edit › Select All | Home › Clipboard › Select All, Ctrl+A |
+| Edit › Check Spelling…, Find and Replace… | Home › Font › Spelling, Home › Paragraph › Find / Replace |
+| Edit › Delete (object, slide, scene, layer, question) | Delete key and the right-click menus |
+| Insert | Insert and Slides tabs |
+| Arrange | Home › Drawing › Arrange |
+| Project › Course settings, Player Settings, Quiz Settings | Home › Publish › Player; File › Course Info… |
+| Project › Variables | the Variables tab of the timeline panel |
+| Project › Theme… | Design › Themes |
+| Project › AI Settings…, Suggest Alt Text…, Translate with AI… | AI tab; Translate with AI also File › Translation |
+| Project › Save as Template | File › Save Slide as Template |
+| View | View tab; Ribbon and Docked Panels in Preferences › Interface |
+| Help | Help tab; agent and automation controls on the AI tab |
 
 CourseCraft's **Project** menu (Course settings, Variables, Glossary, Resources, Audit,
 Accessibility check, Suggest Alt Text…) has no Storyline twin on a tab. Course settings and Player go

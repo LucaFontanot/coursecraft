@@ -101,6 +101,15 @@ pub fn availability(
     }
 }
 
+/// Select All needs the slide editor.
+fn select_all_available(editor: &Editor) -> Result<(), &'static str> {
+    if editor.ui.story_view {
+        Err("Open a slide first")
+    } else {
+        Ok(())
+    }
+}
+
 const MASTER: &str = "Not available in Master View";
 
 const STATE: &str = "Not available inside a state";
@@ -113,6 +122,7 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
     let state = editor.ui.editing_state.is_some();
     match action {
         UiAction::Paste => crate::menu::clipboard_rules(editor).paste,
+        UiAction::SelectAll => select_all_available(editor),
         UiAction::Cut => crate::menu::clipboard_rules(editor).cut,
         UiAction::Copy => crate::menu::clipboard_rules(editor).copy,
         UiAction::FormatPainter => {
@@ -163,6 +173,7 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
         }
         UiAction::NarrationFromText
         | UiAction::FindReplace
+        | UiAction::AltText
         | UiAction::Spelling
         | UiAction::FormatInspector
         | UiAction::Player => Ok(()),
@@ -306,6 +317,8 @@ fn run_ui(
         }
         UiAction::NarrationFromText => editor.open_speech_dialog(),
         UiAction::FindReplace => crate::find::open(editor),
+        UiAction::SelectAll => editor.select_all_objects(),
+        UiAction::AltText => editor.open_alt_text_dialog(),
         UiAction::Spelling => crate::spell_check::open(editor),
         UiAction::FormatInspector => editor.ui.inspector_tab = InspectorTab::Format,
         // Its menu opens on click.
@@ -490,7 +503,7 @@ pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>)
 /// Returns its right edge.
 fn quick_access(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>) -> f32 {
     let top = ui.max_rect().min;
-    let rect = Rect::from_min_size(top, vec2(90.0, STRIP_H));
+    let rect = Rect::from_min_size(top, vec2(120.0, STRIP_H));
     let mut bar = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(rect)
@@ -533,6 +546,9 @@ fn quick_access(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorReque
             editor.run(id, params);
         }
     }
+    if crate::widgets::icon_button(&mut bar, Icon::ListBullets, tl!("Undo History…")).clicked() {
+        editor.ui.show_history = true;
+    }
     let right = bar.min_rect().max.x + 6.0;
     ui.painter().line_segment(
         [
@@ -561,22 +577,34 @@ fn tab_strip(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>
         r
     };
 
-    // File: a full-window page (ribbon.md › File), not built yet.
+    // File: opens the full-window File page (ribbon.md › File).
     let file = tl!("File");
     let r = tab_rect(ui, file);
-    let resp = ui.interact(r, ui.scope_id().with("ribbon_tab_file"), Sense::hover());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Tab, false, file));
+    let resp = ui.interact(r, ui.scope_id().with("ribbon_tab_file"), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Tab, true, file));
+    let fill = if resp.hovered() {
+        p.accent.gamma_multiply(0.85)
+    } else {
+        p.accent
+    };
+    ui.painter().rect_filled(
+        r.shrink(2.0),
+        egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+        fill,
+    );
     ui.painter().text(
         r.center(),
         Align2::CENTER_CENTER,
         file,
         font.clone(),
-        p.text_disabled,
+        crate::file_page::ON_ACCENT,
     );
-    resp.on_hover_text(craft_i18n::fmt(
-        tl!("Not available yet: {reason}"),
-        &[("reason", tl!("the File page (use the File menu)"))],
-    ));
+    if resp
+        .on_hover_text(tl!("New, open, save, import, export and publish"))
+        .clicked()
+    {
+        crate::file_page::open(editor);
+    }
 
     for tab in spec::TABS {
         let label = tl!(tab.label);

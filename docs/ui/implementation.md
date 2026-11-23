@@ -203,12 +203,14 @@ Each step is one commit, `cargo xtask ci` green, docs status updated in the same
    group's width is measured when it is last drawn whole. Design, Transitions, Animations and
    Help are built too: their controls open the dialog or inspector that does the work (theme
    window, Slide and Animate inspectors) until the theme, transition and animation galleries
-   are wired. Still open: the File page.
+   are wired. The File tab opens the File page (`file_page.rs`), and with the ribbon on the
+   menu bar is no longer drawn: every item has a ribbon home (ribbon.md › Where the menu bar
+   went). Still open: merging the launch screen into the File page, and the galleries.
 3. Contextual tabs: Drawing Tools, Picture Tools, Audio/Video Tools, Table Tools, Question Tools;
    modes: Slide Master, Preview.
-4. File menu and Help tab take over the menu bar items; delete the menu bar and the flat toolbar;
-   QAT.
-5. View tabs row (open slides as tabs), status bar parity.
+4. File menu and Help tab take over the menu bar items (**done**: File page, menu bar hidden under
+   the ribbon); delete the menu bar and flat toolbar code; QAT customization.
+5. View tabs row (open slides as tabs, **done**: `doc_tabs.rs`), status bar parity.
 6. Panels: right panel Triggers above Slide Layers; Slide Properties in the Course Map; undock.
 7. Dialogs that are only missing a front-end over existing commands (Trigger dialog form, Insert
    Slide dialog, Player Properties ribbon, Publish list).

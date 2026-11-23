@@ -453,9 +453,10 @@ mod tests {
         )
         .expect("coach snapshot");
 
-        // Coach mark 1 sits right of the slides panel, under the ribbon (about
-        // (236, 206)), so inside it at (280, 240) should be dark_pal.raised.
-        let idx = (240 * 1440 + 280) * 4;
+        // Coach mark 1 sits right of the slides panel, under the ribbon and the
+        // view tabs (about (236, 240)), so inside it at (300, 300) should be
+        // dark_pal.raised.
+        let idx = (300 * 1440 + 300) * 4;
         let r = coach_img.pixels[idx];
         let g = coach_img.pixels[idx + 1];
         let b = coach_img.pixels[idx + 2];

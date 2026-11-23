@@ -54,7 +54,11 @@ fn every_panel_is_drawn_where_today_s_panels_are() {
         rect(Panel::Slides),
         rect(Panel::Canvas),
         rect(Panel::Timeline),
-        h.editor.ui.dock.inspector_rect().expect("an inspector is drawn"),
+        h.editor
+            .ui
+            .dock
+            .inspector_rect()
+            .expect("an inspector is drawn"),
     );
     assert!(
         slides.max.x <= canvas.min.x + 1.0,

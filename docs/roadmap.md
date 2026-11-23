@@ -348,7 +348,9 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    Format, Animate, Slide and Course are dock panels of their own, and the AI controls have
    their own tab. Design, Transitions,
    Animations and Help followed: their buttons open the dialog or inspector that does the work
-   until the galleries are wired. Still open: the File page and the galleries.
+   until the galleries are wired. Then the File page (from the File tab; the menu bar is no
+   longer drawn under the ribbon) and the view tabs row (Course Map, then each opened slide).
+   Still open: the galleries and merging the launch screen into the File page.
 3. Contextual tabs (Drawing, Picture, Button, Audio/Video, Table, Question Tools) and modes (Slide
    Master, Preview); then the menu bar and flat toolbar go, the quick access toolbar arrives.
 4. File page (the welcome screen restyled: start actions, Recent with thumbnails, Close project).

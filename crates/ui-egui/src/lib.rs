@@ -40,7 +40,9 @@ pub mod find;
 pub mod fonts;
 #[macro_use]
 pub mod i18n;
+pub mod doc_tabs;
 pub mod dock;
+pub mod file_page;
 pub mod ribbon;
 #[cfg(test)]
 mod scroll_audit;
@@ -153,6 +155,8 @@ mod daily_fixes_tests;
 #[cfg(test)]
 mod dialog_reopen_tests;
 #[cfg(test)]
+mod doc_tabs_tests;
+#[cfg(test)]
 mod dock_tests;
 #[cfg(test)]
 mod document_tests;
@@ -162,6 +166,8 @@ mod eyedropper_tests;
 mod f22_fill_outline_dash_tests;
 #[cfg(test)]
 mod f24_exit_animation_labels_tests;
+#[cfg(test)]
+mod file_page_tests;
 #[cfg(test)]
 mod fill_style_tests;
 #[cfg(test)]
@@ -1039,6 +1045,10 @@ pub struct UiState {
     pub ribbon: ribbon::RibbonState,
     /// The panels in a docking workspace (M30), when enabled.
     pub dock: dock::DockState,
+    /// The Course Map and opened-slide tabs under the ribbon.
+    pub doc_tabs: doc_tabs::DocTabs,
+    /// The File page, opened from the ribbon's File tab.
+    pub file_page: file_page::FilePage,
     /// Transient Course map state.
     pub course_map: CourseMapState,
     /// Cached per-revision / per-media-count lists for the Properties panel.
@@ -1479,6 +1489,8 @@ impl Editor {
                 story_view: false,
                 ribbon: ribbon::RibbonState::default(),
                 dock: dock::DockState::default(),
+                doc_tabs: doc_tabs::DocTabs::default(),
+                file_page: file_page::FilePage::default(),
                 course_map: CourseMapState::default(),
                 properties_lists: PropertiesListCache::default(),
                 media_refs_cache: MediaRefsCache::default(),
@@ -1820,6 +1832,7 @@ impl Editor {
         self.ui.media_library = media_library::MediaLibraryState::default();
         self.ui.story_view = false;
         self.ui.course_map = CourseMapState::default();
+        self.ui.doc_tabs = doc_tabs::DocTabs::default();
         self.ui.publish.open = false;
         self.ui.publish.phase = PublishPhase::Idle;
         self.ui.publish.status = None;
@@ -4721,14 +4734,33 @@ impl Editor {
             return requests;
         }
 
-        // 1. Top menu bar (panel fill, hairline below)
+        // The File page covers the window until an action or Esc closes it.
+        if self.ui.ribbon.visible && self.ui.file_page.open {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(p.app))
+                .show(ui, |ui| file_page::show(self, ui, &mut requests));
+            requests.append(&mut self.pending_requests);
+            return requests;
+        }
+        if !self.ui.ribbon.visible {
+            self.ui.file_page.open = false;
+        }
+
+        // 1. Top menu bar (panel fill, hairline below); the ribbon replaces it.
+        let menu_h = if self.ui.ribbon.visible {
+            0.0
+        } else {
+            TOP_BAR_HEIGHT
+        };
         let menu_bar = Panel::top("editor_menu_bar")
-            .exact_size(TOP_BAR_HEIGHT)
+            .exact_size(menu_h)
             .resizable(false)
             .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
-            .show_separator_line(true)
+            .show_separator_line(menu_h > 0.0)
             .show(ui, |ui| {
-                menu::show_menu_bar(self, ui, &mut requests);
+                if menu_h > 0.0 {
+                    menu::show_menu_bar(self, ui, &mut requests);
+                }
             });
 
         // 1b. The ribbon (M30, the default), or the older flat toolbar when the
@@ -4752,8 +4784,22 @@ impl Editor {
                     toolbar::show_toolbar(self, ui, &mut requests);
                 })
         };
-        let top_bottom = top_panel.response.rect.max.y;
-        let top_h = top_panel.response.rect.height();
+        // 1c. Document tabs (Course Map, opened slides) under the ribbon.
+        let doc_tabs_h = if self.ui.ribbon.visible {
+            Panel::top("editor_doc_tabs")
+                .exact_size(doc_tabs::DOC_TABS_H)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
+                .show_separator_line(false)
+                .show(ui, |ui| doc_tabs::show(self, ui))
+                .response
+                .rect
+                .height()
+        } else {
+            0.0
+        };
+        let top_bottom = top_panel.response.rect.max.y + doc_tabs_h;
+        let top_h = top_panel.response.rect.height() + doc_tabs_h;
         // Dialogs open below the toolbar or the ribbon.
         dialog::set_top_inset(ui.ctx(), top_bottom);
 
@@ -4788,10 +4834,7 @@ impl Editor {
                     .dock
                     .rect(dock::Panel::Slides)
                     .unwrap_or(egui::Rect::NOTHING),
-                self.ui
-                    .dock
-                    .inspector_rect()
-                    .unwrap_or(egui::Rect::NOTHING),
+                self.ui.dock.inspector_rect().unwrap_or(egui::Rect::NOTHING),
             );
         } else {
             // 3. Bottom timeline panel. Keep at least 200 px of canvas above it.
@@ -4801,7 +4844,7 @@ impl Editor {
                 self.ui.timeline.tab_rects.clear();
             } else {
                 let content_h = ui.ctx().content_rect().height();
-                let chrome_h = TOP_BAR_HEIGHT + top_h + STATUS_BAR_HEIGHT;
+                let chrome_h = menu_h + top_h + STATUS_BAR_HEIGHT;
                 let max_by_canvas =
                     (content_h - chrome_h - 200.0).max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
                 let max_panel_h = (content_h * timeline::TIMELINE_PANEL_MAX_FRACTION)
