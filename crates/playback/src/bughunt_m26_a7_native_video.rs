@@ -27,11 +27,14 @@ fn a7_10_native_playback_backend_rejects_hostile_bytes_safely() {
         backend.seek("v", 0);
         backend.seek("v", 5000);
 
-        // macOS can take a little over 3 s to reject plain text as a video, so allow 10 s;
-        // a real hang still fails.
+        // The first AVFoundation asset load in a fresh macOS process pays
+        // one-time codec/plugin init (~12-13 s on this machine, even for a
+        // valid MP4), while subsequent payloads finish in milliseconds. Allow
+        // 30 s per payload so cold init never flakes; a real hang still fails.
+        let timeout = Duration::from_secs(30);
         let start = Instant::now();
         let mut finished = false;
-        while start.elapsed() < Duration::from_secs(10) {
+        while start.elapsed() < timeout {
             if backend.video_error("v").is_some() || !backend.take_ended().is_empty() {
                 finished = true;
                 break;
@@ -39,9 +42,6 @@ fn a7_10_native_playback_backend_rejects_hostile_bytes_safely() {
             std::thread::sleep(Duration::from_millis(20));
         }
         backend.stop_all();
-        assert!(
-            finished || start.elapsed() < Duration::from_secs(10),
-            "payload {idx} hung"
-        );
+        assert!(finished, "payload {idx} hung after {:?}", start.elapsed());
     }
 }
