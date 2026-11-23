@@ -17,6 +17,9 @@ coursecraft-format.workspace = true
 coursecraft-playback.workspace = true
 coursecraft-spell.workspace = true
 egui.workspace = true
+craft-ui.workspace = true
+craft-i18n.workspace = true
+log.workspace = true
 serde_json.workspace = true
 
 [lints]
