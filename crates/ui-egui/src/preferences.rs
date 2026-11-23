@@ -1,4 +1,5 @@
-//! Preferences window: autosave interval, appearance and the default slide size.
+//! Preferences window: autosave interval, spelling, versions, appearance,
+//! interface language and the default slide size.
 //!
 //! The window holds a view of the saved settings. Every change applies at once
 //! and goes to the app as an [`EditorRequest`], which saves it.
@@ -7,6 +8,7 @@ use crate::dialog::Dialog;
 use coursecraft_render::ThemePref;
 use egui::DragValue;
 
+use crate::i18n::{self, I18N};
 use crate::slide_size_dialog::PRESETS;
 use crate::{Editor, EditorRequest};
 
@@ -74,54 +76,70 @@ pub fn show_preferences_window(
     let mut open = true;
     let before = editor.ui.prefs.clone();
     let mut theme = editor.theme_pref;
-    Dialog::new("Preferences")
+    let mut language = editor.language.clone();
+    let autosave = tl!("Autosave every");
+    let versions = tl!("Versions to keep");
+    // Keyed by the English title, so the window keeps its place when the language changes.
+    Dialog::new(tl!("Preferences"))
+        .id(egui::Id::unique(("coursecraft_dialog", "Preferences")))
         .open(&mut open)
         .width(440.0)
         .show(ctx, |ui| {
             let prefs = &mut editor.ui.prefs;
-            let form = crate::dialog::Form::new(ui, &["Autosave every", "Versions to keep"]);
-            form.row(ui, "Autosave every", |ui, _| {
+            let form = crate::dialog::Form::new(ui, &[autosave, versions]);
+            form.row(ui, autosave, |ui, _| {
                 ui.add(
                     DragValue::new(&mut prefs.autosave_minutes)
                         .range(0..=MAX_AUTOSAVE_MINUTES)
-                        .suffix(" min"),
+                        .suffix(format!(" {}", tl!("min"))),
                 );
             });
-            ui.small("0 turns autosave off.");
+            ui.small(tl!("0 turns autosave off."));
             ui.separator();
-            ui.label("Writing");
+            ui.label(tl!("Writing"));
             ui.checkbox(
                 &mut prefs.spell_check_as_you_type,
-                "Check spelling as you type",
+                tl!("Check spelling as you type"),
             );
             ui.separator();
-            form.row(ui, "Versions to keep", |ui, _| {
+            form.row(ui, versions, |ui, _| {
                 ui.add(
                     DragValue::new(&mut prefs.versions_to_keep)
                         .range(0..=MAX_VERSIONS_TO_KEEP)
-                        .suffix(" per file"),
+                        .suffix(format!(" {}", tl!("per file"))),
                 );
             });
-            ui.small("Each save keeps the file it replaced. 0 turns versions off.");
+            ui.small(tl!(
+                "Each save keeps the file it replaced. 0 turns versions off."
+            ));
             ui.separator();
-            ui.label("Appearance");
+            ui.label(tl!("Appearance"));
             for (pref, label) in [
                 (ThemePref::System, "System"),
                 (ThemePref::Light, "Light"),
                 (ThemePref::Dark, "Dark"),
             ] {
-                if ui.radio(theme == pref, label).clicked() {
+                if ui.radio(theme == pref, tl!(label)).clicked() {
                     theme = pref;
                 }
             }
             ui.separator();
-            ui.label("Default slide size for new courses");
+            language_picker(ui, &mut language);
+            ui.separator();
+            ui.label(tl!("Default slide size for new courses"));
             for (label, w, h) in PRESETS {
-                if ui.radio(prefs.default_slide == (w, h), label).clicked() {
+                if ui
+                    .radio(prefs.default_slide == (w, h), tl!(label))
+                    .clicked()
+                {
                     prefs.default_slide = (w, h);
                 }
             }
         });
+    if language != editor.language {
+        editor.set_language(&language);
+        requests.push(EditorRequest::SetLanguage(editor.language.clone()));
+    }
     if theme != editor.theme_pref {
         editor.theme_pref = theme;
         requests.push(EditorRequest::SetTheme(theme));
@@ -137,5 +155,43 @@ pub fn show_preferences_window(
     }
     if !open {
         editor.ui.prefs.open = false;
+    }
+}
+
+/// Preferences › Language: Automatic (the system language) or one language the
+/// build offers, each named in itself.
+fn language_picker(ui: &mut egui::Ui, setting: &mut String) {
+    ui.label(tl!("Language"));
+    let languages = I18N.languages();
+    let auto = tl!("Automatic (system)");
+    let selected = if setting.as_str() == i18n::AUTO {
+        auto.to_owned()
+    } else {
+        I18N.from_code(setting)
+            .map_or_else(|| setting.clone(), |lang| I18N.name(lang).to_owned())
+    };
+    egui::ComboBox::from_id_salt("preferences_language")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            if ui
+                .selectable_label(setting.as_str() == i18n::AUTO, auto)
+                .clicked()
+            {
+                *setting = i18n::AUTO.to_owned();
+            }
+            for lang in &languages {
+                let code = I18N.code(*lang);
+                if ui
+                    .selectable_label(setting.as_str() == code, I18N.name(*lang))
+                    .clicked()
+                {
+                    *setting = code.to_owned();
+                }
+            }
+        });
+    if languages.len() <= 1 {
+        ui.small(tl!(
+            "This build has no translations yet, so the interface is in English."
+        ));
     }
 }

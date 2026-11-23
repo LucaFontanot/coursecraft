@@ -37,9 +37,12 @@ craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "<rev>", ver
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "<rev>", version = "=0.1.0" }
 ```
 
+Today's rev is `63196e66f3033a6623eb629af95a104d26986725`, the one DeckCraft pins.
+
 **egui fork.** craft-libs is built and tested against storytold's egui fork. CourseCraft adopts
-DeckCraft's `[patch.crates-io]` block (egui, eframe, egui-winit, egui-wgpu, egui_extras,
-egui_kittest, epaint, emath, ecolor, epaint_default_fonts, winit) on the same rev DeckCraft uses,
+DeckCraft's `[patch.crates-io]` block on the same rev DeckCraft uses, limited to the crates in
+our graph (egui, eframe, egui-winit, egui-wgpu, epaint, emath, ecolor, epaint_default_fonts,
+winit; add egui_extras or egui_kittest when we start using them),
 so the editor runs on what craft-ui was tested with. This changes the player and render crates'
 egui too: run the full gate and `cargo xtask wasm`, and compare the player in a browser before and
 after.
@@ -160,7 +163,8 @@ Each step is one commit, `cargo xtask ci` green, docs status updated in the same
 
 0. Foundation: add `craft-ui` and `craft-i18n` (pinned rev), the egui fork patch, the
    `build.rs` that embeds `CRAFT_I18N`, the `tl!` macro and the Preferences › Language setting.
-   Gate and web player checked before and after the fork.
+   Gate and web player checked before and after the fork. **Built**, except the web player check
+   in a browser.
 1. Workspace on `craft-ui` docking and panes with today's panels inside; then port the ribbon
    widgets and draw the tab strip + Home from `spec.rs`, side by side with the old toolbar behind
    a View › Ribbon toggle.

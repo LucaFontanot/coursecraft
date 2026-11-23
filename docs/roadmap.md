@@ -327,7 +327,10 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    with `craft-i18n`, both from `storytold/craft-libs`, pinned to one rev, with DeckCraft's egui
    fork patch. `build.rs` embeds the craft-i18n catalogs when `CRAFT_I18N_DIR` is set (English
    otherwise); `tl!` for every interface string; Preferences › Language. See
-   `docs/ui/implementation.md` § 0 and `docs/ui/localization.md`.
+   `docs/ui/implementation.md` § 0 and `docs/ui/localization.md`. **Built (2026-11-23):**
+   craft-libs `63196e66`, the fork patch, `crates/ui-egui/build.rs`, `crates/ui-egui/src/i18n.rs`
+   and the Language picker; the Preferences window is the first one drawn through `tl!`. Still
+   open: the before/after look at the web player in a browser.
 1. Workspace on `craft-ui` docking and panes with today's panels inside. Ribbon drawn from one
    declarative spec (`crates/ui-egui/src/ribbon/spec.rs`), ribbon widgets ported from DeckCraft
    onto `craft-ui`; Home first, beside the old toolbar.

@@ -1494,3 +1494,16 @@ fn into_arc_media_preserves_entries_without_extra_vec_copies() {
     assert_eq!(arcs[1].0, "two.mp3");
     assert_eq!(&*arcs[1].1, &[4, 5]);
 }
+
+#[test]
+fn language_preference_round_trips_and_defaults_to_auto() {
+    let dir = scratch_dir("prefs-language");
+    std::fs::write(dir.join("prefs.json"), "{\"recent\": []}").unwrap();
+    assert_eq!(load_prefs(&dir).language, "auto");
+    let prefs = Prefs {
+        language: "fr".to_owned(),
+        ..Prefs::default()
+    };
+    save_prefs(&dir, &prefs).expect("save prefs");
+    assert_eq!(load_prefs(&dir).language, "fr");
+}

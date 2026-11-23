@@ -22,32 +22,34 @@
   `locales/<locale>/common.tsv` (strings shared by all Craft apps) and
   `locales/<locale>/coursecraft.tsv` (CourseCraft's own). 49 locales exist for other apps;
   CourseCraft has none yet.
-- They are an **optional build input**, never a Cargo dependency. `apps/coursecraft/build.rs`
-  (or the UI crate's) reads `CRAFT_I18N_DIR` and writes one static into `OUT_DIR`:
+- They are an **optional build input**, never a Cargo dependency. `crates/ui-egui/build.rs`
+  reads `CRAFT_I18N_DIR` and writes one static into `OUT_DIR`:
   `pub static CRAFT_I18N: &craft_i18n::Embedded`, one entry per locale that has a
   `coursecraft.tsv`. Unset, it is empty and the app is English only; that is how CI and
   contributors build. Releases set `CRAFT_I18N_DIR` and `CRAFT_I18N_REQUIRED=1` so a release
-  never ships English-only by accident. Recipe: craft-i18n `docs/integration.md` (follow it
-  exactly: absolute paths, `{:?}` quoting, rerun-if lines; wasm embeds the same locales).
+  never ships English-only by accident. A relative path is a warning (an error when required).
+  Recipe: craft-i18n `docs/integration.md` (absolute paths, `{:?}` quoting, rerun-if lines; wasm
+  embeds the same locales).
 - At start-up the UI builds one `I18n` from `CRAFT_I18N` and **CourseCraft's own list of offered
   languages**. Only offered languages appear in the picker; an embedded locale that is not offered
   still serves as a fallback (`pt` for `pt-br`).
 - Lookup falls back `pt-br` app → `pt-br` shared → `pt` app → `pt` shared → English. A missing
   translation shows the English; nothing fails.
 
+The code is `crates/ui-egui/src/i18n.rs`:
+
+- `I18N`: the one `craft_i18n::I18n`, built on first use from `CRAFT_I18N` and `OFFERED`;
+  catalog problems are logged.
+- `current()` / `set_current(lang)`: the language of the drawing thread. `Editor::show` sets it
+  at the start of every frame from `Editor::language`, so a change applies on the next frame.
+- `resolve(setting)`: `"auto"` → `I18N.system_lang()`, a known code → that language, anything
+  else → English. `normalize` keeps unknown codes, so a setting made by a build with more
+  languages survives one with fewer.
+- `tl!("…")`: `I18N.t(current(), "…")`, exported from the crate for the app's own strings.
+
 ```rust
-// crates/ui-egui/src/i18n.rs
-include!(concat!(env!("OUT_DIR"), "/craft_i18n.rs")); // pub static CRAFT_I18N
-
-pub static I18N: LazyLock<craft_i18n::I18n> = LazyLock::new(|| {
-    let (i18n, problems) = craft_i18n::I18n::new(CRAFT_I18N, OFFERED);
-    problems.iter().for_each(|p| log::warn!("translation catalog: {p}"));
-    i18n
-});
-
-thread_local! { static CURRENT: Cell<craft_i18n::Lang> = const { Cell::new(craft_i18n::Lang::EN) }; }
-
-macro_rules! tl { ($s:expr) => { $crate::i18n::I18N.t($crate::i18n::CURRENT.get(), $s) }; }
+ui.label(tl!("Language"));
+let title = tl!("Preferences");
 ```
 
 ## Rules for code
@@ -86,16 +88,19 @@ macro_rules! tl { ($s:expr) => { $crate::i18n::I18N.t($crate::i18n::CURRENT.get(
 
 ## Language setting
 
-Preferences › General › **Language**: "Automatic (system)" (default, `I18N.system_lang()`) or one
+Preferences › **Language** (built): "Automatic (system)" (default, `I18N.system_lang()`) or one
 offered language (`I18N.languages()`, names from `I18N.name(lang)` in their own language). Saved
-as a code (`"auto"`, `"fr"`). Changing it redraws the UI at once; no restart. The web editor
-follows the browser language when set to Automatic.
+as a code (`"auto"`, `"fr"`) in `prefs.json` › `language`. Changing it redraws the UI at once; no
+restart. A build with no catalogs offers only English and says so under the picker. The web
+editor follows the browser language when set to Automatic and does not save the choice yet.
+Dialog windows keep an id made from the English title, so they keep their place across languages.
 
 ## Testing
 
-- **Pseudo locale:** `Lang::PSEUDO` marks every looked-up string (debug builds). A test draws every
-  ribbon tab, contextual tab, panel and dialog in the pseudo locale and fails if any visible text
-  is unmarked, which finds strings that skipped `tl!`.
+- **Pseudo locale:** `Lang::PSEUDO` marks every looked-up string as `⟦…⟧`; debug builds accept
+  the setting `"pseudo"`. `crates/ui-egui/src/i18n_tests.rs` draws a surface in it and fails on
+  unmarked text. Today it covers the Preferences window; each surface moved onto `tl!` joins the
+  test, until it draws every ribbon tab, contextual tab, panel and dialog.
 - **`I18N.looked_up()`** lists the English source texts the app used; with `CRAFT_I18N_DIR` set,
   the build prints which have no translation and which translations are no longer used. The report
   never fails the build.

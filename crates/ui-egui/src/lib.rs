@@ -19,6 +19,7 @@
 pub use coursecraft_render::IndexFontProvider;
 pub use coursecraft_render::SystemFontProvider;
 
+// First, so `tl!` reads as defined before every other module.
 pub mod ai_settings;
 pub mod alt_text;
 pub mod audio_ai;
@@ -37,6 +38,8 @@ pub mod export_dialog;
 pub(crate) mod eyedropper;
 pub mod find;
 pub mod fonts;
+#[macro_use]
+pub mod i18n;
 #[cfg(test)]
 mod scroll_audit;
 
@@ -171,6 +174,8 @@ mod guard_tests;
 mod h7_video_revisit_tests;
 #[cfg(test)]
 mod history_tests;
+#[cfg(test)]
+mod i18n_tests;
 #[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
@@ -520,6 +525,8 @@ pub enum EditorRequest {
     /// Delete the saved crash note: it was reported or dismissed.
     DiscardCrashNote,
     SetTheme(coursecraft_render::ThemePref),
+    /// Preferences › Language: `"auto"` or a language code, to save.
+    SetLanguage(String),
     /// Save the autosave interval, the number of file versions to keep and the
     /// default slide size for new courses.
     SetPreferences {
@@ -1153,6 +1160,8 @@ pub struct Editor {
     pub automation_enabled: bool,
     pub automation_port: Option<u16>,
     pub theme_pref: coursecraft_render::ThemePref,
+    /// Interface language setting: [`i18n::AUTO`] or a code (docs/ui/localization.md).
+    pub language: String,
     /// Timeline playback (authoring-only: no runtime, no document writes).
     pub timeline_playback: timeline_playback::TimelinePlayback,
     /// Session revision the timeline playback last saw; a change stops Play.
@@ -1478,6 +1487,7 @@ impl Editor {
             automation_enabled: true,
             automation_port: None,
             theme_pref: coursecraft_render::ThemePref::Dark,
+            language: i18n::AUTO.to_owned(),
             timeline_playback: timeline_playback::TimelinePlayback::create_default(),
             timeline_last_revision: initial_revision,
             timeline_mono_ms: 0,
@@ -1503,6 +1513,12 @@ impl Editor {
     /// Set the user's active theme preference.
     pub fn set_theme_pref(&mut self, pref: coursecraft_render::ThemePref) {
         self.theme_pref = pref;
+    }
+
+    /// Set the saved interface language: [`i18n::AUTO`] or a code. Applies from
+    /// the next frame; an unknown code shows English but is kept.
+    pub fn set_language(&mut self, setting: &str) {
+        self.language = i18n::normalize(setting);
     }
 
     /// Update recent files list shown in the File menu.
@@ -4203,6 +4219,8 @@ impl Editor {
         #[cfg(test)]
         crate::guard_counters::begin_frame();
         self.ui.current_time = ui.input(|i| i.time);
+        // Strings are looked up on the drawing thread in the saved language.
+        i18n::set_current(i18n::resolve(&self.language));
         self.media_cache.begin_frame();
         widgets::begin_press_guard(ui.ctx());
         // Pick mode owns the pointer and Escape before anything else sees them.

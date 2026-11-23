@@ -235,6 +235,13 @@ pub struct Prefs {
     /// Words added to the personal dictionary.
     #[serde(default)]
     pub spell_words: Vec<String>,
+    /// Interface language: `"auto"` follows the system, else a language code.
+    #[serde(default = "default_language")]
+    pub language: String,
+}
+
+fn default_language() -> String {
+    coursecraft_ui_egui::i18n::AUTO.to_owned()
 }
 
 /// Largest autosave interval, in minutes.
@@ -303,6 +310,7 @@ impl Default for Prefs {
             default_slide: SlidePreset::default(),
             spell_check_as_you_type: true,
             spell_words: Vec::new(),
+            language: default_language(),
         }
     }
 }

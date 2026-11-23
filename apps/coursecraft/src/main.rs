@@ -376,6 +376,7 @@ impl EditorApp {
         );
         editor.set_automation_enabled(prefs.automation_enabled);
         editor.set_theme_pref(prefs.theme.into());
+        editor.set_language(&prefs.language);
         editor.set_coach_marks_done(prefs.coach_marks_done);
         editor.set_preferences(prefs.autosave_minutes_clamped(), prefs.default_slide.size());
         editor.set_versions_to_keep(prefs.versions_to_keep_clamped());
@@ -1358,6 +1359,14 @@ impl EditorApp {
                 if let Some(ref dir) = self.config_dir {
                     let _ = prefs::save_prefs(dir, &self.prefs);
                 }
+            }
+            EditorRequest::SetLanguage(setting) => {
+                self.editor.set_language(&setting);
+                self.prefs.language.clone_from(&self.editor.language);
+                if let Some(ref dir) = self.config_dir {
+                    let _ = prefs::save_prefs(dir, &self.prefs);
+                }
+                ctx.request_repaint();
             }
             EditorRequest::SetTheme(theme_pref) => {
                 self.prefs.theme = theme_pref.into();
@@ -3272,6 +3281,10 @@ impl EditorApp {
                                 ctx.request_repaint();
                             }
                         });
+                    }
+                    EditorRequest::SetLanguage(setting) => {
+                        self.editor.set_language(&setting);
+                        ui.ctx().request_repaint();
                     }
                     EditorRequest::SetTheme(theme_pref) => {
                         self.editor.set_theme_pref(theme_pref);
