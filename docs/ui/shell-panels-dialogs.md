@@ -22,7 +22,7 @@ Top to bottom:
 | QAT: Save, Undo, Redo, Customize ▾ | yes | Save, Undo, Redo left of the ribbon tab strip (`ribbon/mod.rs`) | 🟡 | Customize: right-click a ribbon button → Add to QAT (as DeckCraft); move into the title bar |
 | Title `name* - App` | yes | window title | 🟡 | add the `*` |
 | Menu bar | none | File, Edit, Arrange, Project, View, Help (Insert hidden while the ribbon is on) | — | **remove** once every item has a ribbon home (ribbon.md › File, Help) |
-| Flat toolbar | none | `toolbar.rs`, drawn only when Preferences › Interface › Ribbon is off | — | its buttons are on Home, Insert, Slides and View; the Format/Animate/Slide/Course switch is the Inspector's own tab row; delete the code with the menu bar (step 4) |
+| Flat toolbar | none | `toolbar.rs`, drawn only when Preferences › Interface › Ribbon is off | — | its buttons are on Home, Insert, Slides and View; Format, Animate, Slide and Course are dock panels (a tab row in the fixed Inspector when docking is off); delete the code with the menu bar (step 4) |
 | Collapse ribbon (Ctrl+F1, double-click a tab) | yes | click or double-click the open tab, Ctrl+F1 | ✅ | |
 | File page = start screen (left action column, Recent with thumbnails, news) | yes | `welcome.rs` | 🟡 | restyle as the File page; reachable from the File tab |
 | Tooltips: name, shortcut, one sentence | yes | partial | 🟡 | every ribbon control, from the registry |

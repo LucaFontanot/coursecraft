@@ -345,7 +345,8 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    tooltip; the shared New Slide ▾ menu. **Insert, Slides and View built (2026-11-23)**, with a
    quick access toolbar (Save, Undo, Redo), Ctrl+F1, and groups that shrink to one button when
    the window is narrow. The ribbon replaces the flat toolbar and the menu bar's Insert menu;
-   the Inspector switches its Format, Animate, Slide and Course tabs itself. Design, Transitions,
+   Format, Animate, Slide and Course are dock panels of their own, and the AI controls have
+   their own tab. Design, Transitions,
    Animations and Help followed: their buttons open the dialog or inspector that does the work
    until the galleries are wired. Still open: the File page and the galleries.
 3. Contextual tabs (Drawing, Picture, Button, Audio/Video, Table, Question Tools) and modes (Slide

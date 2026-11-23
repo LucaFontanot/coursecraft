@@ -2406,7 +2406,8 @@ fn link_at_char(runs: &[TextRun], cursor_char: usize) -> Option<coursecraft_cour
 }
 
 /// Render the segmented inspector panel (Format · Animate · Slide · Course).
-pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
+pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui, docked: Option<InspectorTab>) {
+    let tab = docked.unwrap_or(editor.ui.inspector_tab);
     let selection_changed = editor.ui.properties.last_synced_selection != editor.selection;
     editor.ui.properties.sync(
         &editor.session.course,
@@ -2455,6 +2456,13 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
             8,
         ))
         .show(ui, |ui| {
+            // Docked, the dock tab names the inspector and switches it.
+            if docked.is_some() {
+                if tab == InspectorTab::Format {
+                    ui.horizontal(|ui| show_arrange_icons(editor, ui, &mut actions_to_run));
+                }
+                return;
+            }
             if editor.ui.ribbon.visible {
                 inspector_tabs(editor, ui);
                 if editor.ui.inspector_tab == InspectorTab::Format
@@ -2481,7 +2489,7 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
     // 2. ScrollArea with panel padding
     let avail_w = ui.available_width();
     let mut scroll = egui::ScrollArea::vertical()
-        .id_salt("properties_panel_scroll")
+        .id_salt(("properties_panel_scroll", tab.name()))
         .max_width(avail_w)
         .auto_shrink([false, false]);
     if selection_changed {
@@ -2501,7 +2509,7 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
                     .spacing()
                     .text_edit_width
                     .min((inner_w - LABEL_COL_WIDTH - 16.0).max(40.0));
-                match editor.ui.inspector_tab {
+                match tab {
                     InspectorTab::Format => show_format_tab(editor, ui, &mut actions_to_run),
                     InspectorTab::Animate => show_animate_tab(editor, ui, &mut actions_to_run),
                     InspectorTab::Slide => show_slide_tab(editor, ui, &mut actions_to_run),

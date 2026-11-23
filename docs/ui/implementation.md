@@ -193,8 +193,12 @@ Each step is one commit, `cargo xtask ci` green, docs status updated in the same
    Insert menu (hidden while the ribbon is on); `spec_tests.rs` checks that every Insert-menu
    command and every toolbar button has a ribbon home. Where the toolbar's other pieces went:
    Undo and Redo to a quick access toolbar (Save, Undo, Redo) left of the tab strip; Map to
-   View › Course Map; the Format / Animate / Slide / Course switch to a tab row in the
-   Inspector's own header, which shows names when they fit and icons otherwise. Narrow windows
+   View › Course Map; Format, Animate, Slide and Course became four dock panels, tabbed
+   together where the Inspector was, so each can be moved, split off, floated or closed (View ›
+   Panels). A ribbon button or a new selection that picks an inspector opens its panel and brings
+   it forward; clicking a panel's tab makes it the current inspector. With docking off, the fixed
+   Inspector keeps a tab row in its header (names when they fit, icons otherwise). The AI
+   controls have their own AI tab before Help. Narrow windows
    (§ 4) shrink groups from the right to one button that opens the group in a popup; each
    group's width is measured when it is last drawn whole. Design, Transitions, Animations and
    Help are built too: their controls open the dialog or inspector that does the work (theme

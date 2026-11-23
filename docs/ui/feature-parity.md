@@ -275,7 +275,7 @@ Counted from the tables below; recount when a row changes.
 | Quick access toolbar | Save, Undo, Redo left of the tab strip; Customize to come | 🟡 | M30 |
 | Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |
 | View tabs for open slides | — | ⛔ | M30 |
-| Undock / float / redock panels | docked by default (`dock.rs`, craft-ui docking): move, tab, float, close and reopen (View › Panels); the arrangement is saved in the preferences; Preferences › Interface turns it off | ✅ | — |
+| Undock / float / redock panels | docked by default (`dock.rs`, craft-ui docking): move, tab, float, close and reopen (View › Panels), the four inspectors included; the arrangement is saved in the preferences; Preferences › Interface turns it off | ✅ | — |
 | Reset panel layout | View › Panels › Reset Panel Layout | ✅ | — |
 | Slide-flow arrows in the Scenes panel | — | ⛔ | M30 |
 | Comments tab | — | ⛔ needs review workflow | — |

@@ -277,7 +277,7 @@ Not shown except Slide Master; proposal.
 | | Grid | K | `view.set` `{grid}` | ✅ |
 | | Guides | K | `view.set` `{guides}` | ✅ |
 | | Snap to Grid / Snap to Guides | K | `view.set` | ✅ |
-| Panels | Timeline, States, Notes, Triggers, Layers, Scenes | K | `ui:panel.toggle` | 🟡 (Slides, Timeline, Inspector; the others are tabs inside the timeline panel) |
+| Panels | Timeline, States, Notes, Triggers, Layers, Scenes | K | `ui:panel.toggle` | 🟡 (Slides, Timeline, and the Format, Animate, Slide and Course inspectors, each its own panel; the others are tabs inside the timeline panel) |
 | | Reset Panels | S | `ui:panel.reset` | ✅ |
 | Theme | Light / Dark | T | `ui:theme` | ✅ (Light, Dark, Match System) |
 | Publish | Preview | LS | | ✅ |

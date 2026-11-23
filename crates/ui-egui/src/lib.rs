@@ -4279,13 +4279,15 @@ impl Editor {
     }
 
     /// The Inspector's contents (Format, Animate, Slide, Course).
-    pub(crate) fn inspector_body(&mut self, ui: &mut Ui) {
+    /// The inspector: `docked` names the one inspector a dock panel draws; `None`
+    /// draws the fixed panel, which switches between all four.
+    pub(crate) fn inspector_body(&mut self, ui: &mut Ui, docked: Option<InspectorTab>) {
         // A child that doesn't report overflow: a wide row must not grow the
         // panel, which would push the rest of the window off screen.
         let rect = ui.available_rect_before_wrap();
         let mut content = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         content.set_clip_rect(rect.intersect(ui.clip_rect()));
-        properties::show_properties_panel(self, &mut content);
+        properties::show_properties_panel(self, &mut content, docked);
         ui.allocate_rect(rect, egui::Sense::hover());
     }
 
@@ -4788,7 +4790,7 @@ impl Editor {
                     .unwrap_or(egui::Rect::NOTHING),
                 self.ui
                     .dock
-                    .rect(dock::Panel::Inspector)
+                    .inspector_rect()
                     .unwrap_or(egui::Rect::NOTHING),
             );
         } else {
@@ -4854,7 +4856,7 @@ impl Editor {
                 .resizable(true)
                 .frame(egui::Frame::NONE.fill(p.panel))
                 .show_separator_line(true)
-                .show(ui, |ui| self.inspector_body(ui));
+                .show(ui, |ui| self.inspector_body(ui, None));
             coach::set_chrome_rects(
                 ui.ctx(),
                 top_panel.response.rect,

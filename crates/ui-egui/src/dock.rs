@@ -18,7 +18,7 @@ use craft_ui::layout::{SplitAxis, SplitSize};
 use egui::{Rect, Ui, vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::Editor;
+use crate::{Editor, InspectorTab};
 
 /// One dockable part of the editor window. Stable ids, saved in the preferences.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -27,25 +27,69 @@ pub enum Panel {
     Slides,
     Canvas,
     Timeline,
-    Inspector,
+    /// The four inspectors, each a panel of its own (they start as tabs of one
+    /// group where the single Inspector used to be).
+    Format,
+    Animate,
+    #[serde(rename = "slide_inspector")]
+    SlideInspector,
+    #[serde(rename = "course_inspector")]
+    CourseInspector,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 4] = [
+    pub const ALL: [Panel; 7] = [
         Panel::Slides,
         Panel::Canvas,
         Panel::Timeline,
-        Panel::Inspector,
+        Panel::Format,
+        Panel::Animate,
+        Panel::SlideInspector,
+        Panel::CourseInspector,
     ];
+
+    /// The inspector panels, in their tab order.
+    pub const INSPECTORS: [Panel; 4] = [
+        Panel::Format,
+        Panel::Animate,
+        Panel::SlideInspector,
+        Panel::CourseInspector,
+    ];
+
+    /// The inspector this panel draws, if it is one.
+    #[must_use]
+    pub fn inspector(self) -> Option<InspectorTab> {
+        match self {
+            Panel::Format => Some(InspectorTab::Format),
+            Panel::Animate => Some(InspectorTab::Animate),
+            Panel::SlideInspector => Some(InspectorTab::Slide),
+            Panel::CourseInspector => Some(InspectorTab::Course),
+            Panel::Slides | Panel::Canvas | Panel::Timeline => None,
+        }
+    }
+
+    /// The panel that draws `tab`.
+    #[must_use]
+    pub fn for_inspector(tab: InspectorTab) -> Panel {
+        match tab {
+            InspectorTab::Format => Panel::Format,
+            InspectorTab::Animate => Panel::Animate,
+            InspectorTab::Slide => Panel::SlideInspector,
+            InspectorTab::Course => Panel::CourseInspector,
+        }
+    }
 
     /// English tab label, looked up through `tl!` when drawn.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Panel::Slides => "Slides",
-            Panel::Canvas => "Slide",
+            Panel::Canvas => "Canvas",
             Panel::Timeline => "Timeline",
-            Panel::Inspector => "Inspector",
+            Panel::Format => "Format",
+            Panel::Animate => "Animate",
+            Panel::SlideInspector => "Slide",
+            Panel::CourseInspector => "Course",
         }
     }
 
@@ -58,7 +102,12 @@ impl Panel {
                 ..Permissions::PROTECTED
             },
             // View › Panels reopens them.
-            Panel::Slides | Panel::Timeline | Panel::Inspector => Permissions::default(),
+            Panel::Slides
+            | Panel::Timeline
+            | Panel::Format
+            | Panel::Animate
+            | Panel::SlideInspector
+            | Panel::CourseInspector => Permissions::default(),
         }
     }
 
@@ -67,7 +116,9 @@ impl Panel {
             Panel::Slides => vec2(180.0, 160.0),
             Panel::Canvas => vec2(320.0, 200.0),
             Panel::Timeline => vec2(320.0, crate::timeline::TIMELINE_PANEL_MIN_HEIGHT),
-            Panel::Inspector => vec2(260.0, 200.0),
+            Panel::Format | Panel::Animate | Panel::SlideInspector | Panel::CourseInspector => {
+                vec2(260.0, 200.0)
+            }
         };
         PanelLimits {
             min,
@@ -84,6 +135,10 @@ pub struct DockState {
     pub workspace: Workspace<Panel>,
     /// Where each panel's body was drawn last frame.
     pub rects: Vec<(Panel, Rect)>,
+    /// The inspector last brought forward: when `ui.inspector_tab` moves away
+    /// from it (a ribbon button, a new selection), that panel is opened and
+    /// activated.
+    pub shown_inspector: InspectorTab,
 }
 
 impl Default for DockState {
@@ -92,6 +147,7 @@ impl Default for DockState {
             enabled: true,
             workspace: Workspace::new(default_layout()),
             rects: Vec::new(),
+            shown_inspector: InspectorTab::default(),
         }
     }
 }
@@ -103,6 +159,15 @@ impl DockState {
         self.rects
             .iter()
             .find(|(p, _)| *p == panel)
+            .map(|(_, r)| *r)
+    }
+
+    /// Where the first drawn inspector panel was drawn last frame.
+    #[must_use]
+    pub fn inspector_rect(&self) -> Option<Rect> {
+        self.rects
+            .iter()
+            .find(|(p, _)| p.inspector().is_some())
             .map(|(_, r)| *r)
     }
 }
@@ -188,7 +253,7 @@ pub fn default_layout() -> Layout<Panel> {
     let inspector = Node::Dock {
         side: Side::End,
         columns: vec![Column::new(
-            vec![group(Panel::Inspector)],
+            vec![Group::new(Panel::INSPECTORS.to_vec(), 0)],
             crate::PROPERTIES_PANEL_WIDTH,
         )],
     };
@@ -231,7 +296,11 @@ impl DockContent<Panel> for Content<'_> {
         match panel {
             Panel::Slides => self.editor.slides_body(ui),
             Panel::Canvas => self.editor.canvas_body(ui),
-            Panel::Inspector => self.editor.inspector_body(ui),
+            Panel::Format | Panel::Animate | Panel::SlideInspector | Panel::CourseInspector => {
+                if let Some(tab) = panel.inspector() {
+                    self.editor.inspector_body(ui, Some(tab));
+                }
+            }
             Panel::Timeline => {
                 if self.editor.ui.master_view {
                     ui.add_space(8.0);
@@ -259,6 +328,7 @@ impl DockContent<Panel> for Content<'_> {
 /// Draw the docked panels into `ui` (the space between the top and bottom bars)
 /// and apply the user's layout changes.
 pub fn show(editor: &mut Editor, ui: &mut Ui) {
+    reveal_inspector(editor);
     let style = DockStyle::from_ui(ui);
     let layout = editor.ui.dock.workspace.layout.clone();
     let mut content = Content {
@@ -273,6 +343,7 @@ pub fn show(editor: &mut Editor, ui: &mut Ui) {
     );
     let Content { editor, rects } = content;
     editor.ui.dock.rects = rects;
+    follow_activated_inspector(editor, &output.actions);
     apply(editor, output.actions);
     if let Some(err) = output.error {
         log::debug!("dock gesture refused: {err:?}");
@@ -310,6 +381,34 @@ fn record_timeline(editor: &mut Editor, ui: &Ui) {
             && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
         {
             editor.ui.timeline.focused = rect.contains(pos);
+        }
+    }
+}
+
+/// Bring the inspector `ui.inspector_tab` names forward when it changed since
+/// the last frame: opened if closed, then made the active tab of its group.
+pub fn reveal_inspector(editor: &mut Editor) {
+    let tab = editor.ui.inspector_tab;
+    if editor.ui.dock.shown_inspector == tab {
+        return;
+    }
+    editor.ui.dock.shown_inspector = tab;
+    let panel = Panel::for_inspector(tab);
+    if !is_open(editor, panel) {
+        set_open(editor, panel, true);
+    }
+    apply(editor, vec![Action::Activate { panel }]);
+}
+
+/// A click on an inspector's dock tab makes it the current inspector, so the
+/// ribbon and the selection follow the user's choice.
+fn follow_activated_inspector(editor: &mut Editor, actions: &[Action<Panel>]) {
+    for action in actions {
+        if let Action::Activate { panel } = action
+            && let Some(tab) = panel.inspector()
+        {
+            editor.ui.inspector_tab = tab;
+            editor.ui.dock.shown_inspector = tab;
         }
     }
 }
