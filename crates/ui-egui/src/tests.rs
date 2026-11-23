@@ -18936,3 +18936,241 @@ fn resources_glossary_sort_button_and_order_controls_follow_ui_rules() {
         Some("Glossary is already sorted A–Z")
     );
 }
+
+#[test]
+fn timeline_show_all_and_unlock_all_dispatch_single_undo_batches() {
+    let mut h = TestHarness::new_with_size(two_scene_course(), (1440.0, 900.0));
+    let slide_id = h.editor.selection.slide.clone();
+    // Ensure at least 3 objects exist on the active slide.
+    for i in 0..3 {
+        h.editor.run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                "frame": { "x": 100.0 + i as f32 * 40.0, "y": 100.0, "w": 60.0, "h": 40.0 }
+            }),
+        );
+        assert!(h.editor.ui.last_error.is_none());
+    }
+    let obj_ids: Vec<String> = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .expect("slide")
+        .objects
+        .iter()
+        .map(|o| o.id.clone())
+        .collect();
+    assert!(obj_ids.len() >= 3);
+    let hide_ids = obj_ids[0..3].to_vec();
+    let lock_ids = obj_ids[0..2].to_vec();
+
+    // Hide 3 objects and lock 2 objects.
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": slide_id, "objects": hide_ids, "hidden": true }),
+    );
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": slide_id, "objects": lock_ids, "locked": true }),
+    );
+    h.idle_frame();
+
+    // "Show all (3)" appears in the Timeline header and unhides all 3 in 1 undo step.
+    let show_all_pos = h
+        .find_text_containing("Show all (3)")
+        .expect("Show all (3) button");
+    h.click_at(show_all_pos);
+    h.idle_frame();
+
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert!(
+        slide.objects.iter().all(|o| !o.editor_hidden),
+        "all objects must be unhidden after clicking Show all (3)"
+    );
+    assert!(
+        h.find_text_containing("Show all (").is_none(),
+        "Show all button must disappear when no hidden objects remain"
+    );
+
+    // Ctrl+Z restores all 3 hidden objects in 1 undo step.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert_eq!(
+        slide.objects.iter().filter(|o| o.editor_hidden).count(),
+        3,
+        "1 undo step must restore all 3 hidden objects"
+    );
+
+    // Re-unhide via Show all (3), then test "Unlock all (2)".
+    let show_all_pos = h
+        .find_text_containing("Show all (3)")
+        .expect("Show all (3) button");
+    h.click_at(show_all_pos);
+    h.idle_frame();
+
+    let unlock_all_pos = h
+        .find_text_containing("Unlock all (2)")
+        .expect("Unlock all (2) button");
+    h.click_at(unlock_all_pos);
+    h.idle_frame();
+
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert!(
+        slide.objects.iter().all(|o| !o.locked),
+        "all objects must be unlocked after clicking Unlock all (2)"
+    );
+    assert!(
+        h.find_text_containing("Unlock all (").is_none(),
+        "Unlock all button must disappear when no locked objects remain"
+    );
+
+    // Ctrl+Z restores both locked objects in 1 undo step.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert_eq!(
+        slide.objects.iter().filter(|o| o.locked).count(),
+        2,
+        "1 undo step must restore both locked objects"
+    );
+}
+
+#[test]
+fn view_menu_show_all_and_unlock_all_disabled_tooltips_and_batch_undo() {
+    let mut h = TestHarness::new_with_size(two_scene_course(), (1440.0, 900.0));
+    let find_widget_for_text = |h: &mut TestHarness, label: &str| {
+        let pos = h.find_text(label).expect("label position");
+        h.last_widgets
+            .iter()
+            .find(|n| {
+                n.role == egui::Role::Button
+                    && (n.label.as_deref() == Some(label) || n.bounds.contains(pos))
+            })
+            .cloned()
+            .expect("widget node")
+    };
+    let slide_id = h.editor.selection.slide.clone();
+    for i in 0..2 {
+        h.editor.run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+                "frame": { "x": 80.0 + i as f32 * 50.0, "y": 80.0, "w": 60.0, "h": 40.0 }
+            }),
+        );
+        assert!(h.editor.ui.last_error.is_none());
+    }
+
+    // Open View menu when no objects are hidden or locked -> both items disabled with tooltips.
+    let view_menu = h.find_text("View").expect("View menu");
+    h.click_at(view_menu);
+    h.idle_frame();
+
+    let show_item = find_widget_for_text(&mut h, "Show all hidden objects");
+    assert!(
+        show_item.disabled,
+        "Show all hidden objects must be disabled when none hidden"
+    );
+    h.advance_time(1.0);
+    h.idle_frame();
+    assert_eq!(
+        h.probe_tooltip(show_item.bounds.center()).as_deref(),
+        Some("No hidden objects on this slide")
+    );
+
+    let unlock_item = find_widget_for_text(&mut h, "Unlock all objects");
+    assert!(
+        unlock_item.disabled,
+        "Unlock all objects must be disabled when none locked"
+    );
+    assert_eq!(
+        h.probe_tooltip(unlock_item.bounds.center()).as_deref(),
+        Some("No locked objects on this slide")
+    );
+
+    // Close menu, hide and lock 2 objects, then test View menu batch actions.
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+
+    let obj_ids: Vec<String> = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .expect("slide")
+        .objects
+        .iter()
+        .take(2)
+        .map(|o| o.id.clone())
+        .collect();
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": slide_id, "objects": obj_ids, "hidden": true }),
+    );
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": slide_id, "objects": obj_ids, "locked": true }),
+    );
+    h.idle_frame();
+
+    let view_menu = h.find_text("View").expect("View menu");
+    h.click_at(view_menu);
+    h.idle_frame();
+    let show_item = find_widget_for_text(&mut h, "Show all hidden objects");
+    assert!(!show_item.disabled);
+    h.click_at(show_item.bounds.center());
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .filter(|o| o.editor_hidden)
+            .count(),
+        0
+    );
+
+    let view_menu = h.find_text("View").expect("View menu");
+    h.click_at(view_menu);
+    h.idle_frame();
+    let unlock_item = find_widget_for_text(&mut h, "Unlock all objects");
+    assert!(!unlock_item.disabled);
+    h.click_at(unlock_item.bounds.center());
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .filter(|o| o.locked)
+            .count(),
+        0
+    );
+
+    // Single undo restores both locked objects.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .filter(|o| o.locked)
+            .count(),
+        2
+    );
+}

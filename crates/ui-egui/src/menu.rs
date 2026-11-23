@@ -838,6 +838,44 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                     serde_json::json!({ "show_guides": show_guides }),
                 );
             }
+            ui.separator();
+            let (hidden_ids, locked_ids) =
+                crate::timeline::hidden_and_locked_ids(&editor.session.course, &editor.selection);
+            if ui
+                .add_enabled(
+                    !hidden_ids.is_empty(),
+                    Button::new("Show all hidden objects"),
+                )
+                .on_disabled_hover_text("No hidden objects on this slide")
+                .clicked()
+            {
+                let slide_id = editor.selection.slide.clone();
+                editor.run(
+                    "object.hide_in_editor",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "objects": hidden_ids,
+                        "hidden": false,
+                    }),
+                );
+                ui.close();
+            }
+            if ui
+                .add_enabled(!locked_ids.is_empty(), Button::new("Unlock all objects"))
+                .on_disabled_hover_text("No locked objects on this slide")
+                .clicked()
+            {
+                let slide_id = editor.selection.slide.clone();
+                editor.run(
+                    "object.lock",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "objects": locked_ids,
+                        "locked": false,
+                    }),
+                );
+                ui.close();
+            }
         });
 
         // 3. Help menu
