@@ -1936,22 +1936,22 @@ fn d6_11_master_view_guards_for_clipboard_vs_duplicate() {
     clipboard::copy(&mut h.editor);
     assert_eq!(
         h.editor.ui.status_message.as_ref().map(|(m, _)| m.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
     clipboard::cut(&mut h.editor);
     assert_eq!(
         h.editor.ui.status_message.as_ref().map(|(m, _)| m.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
     clipboard::paste_text(&mut h.editor, "hello");
     assert_eq!(
         h.editor.ui.status_message.as_ref().map(|(m, _)| m.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
     assert!(!h.editor.paste_image_png(&make_tiny_png()));
     assert_eq!(
         h.editor.ui.status_message.as_ref().map(|(m, _)| m.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
 
     // Ctrl+D on master shape works cleanly and undoes

@@ -7203,8 +7203,8 @@ fn toolbar_normal_width_labels_and_actions() {
 
     // At >= 1100 px width, toolbar labels are laid out
     assert!(
-        harness.find_text("Add slide").is_some(),
-        "Add slide button label"
+        harness.find_text("New slide").is_some(),
+        "New slide button label"
     );
     assert!(
         harness.find_text("Preview").is_some(),
@@ -7270,8 +7270,8 @@ fn toolbar_narrow_width_drops_labels_icon_only() {
 
     // Below 1100 px, toolbar labels are dropped to prevent clipping
     assert!(
-        harness.find_text("Add slide").is_none(),
-        "Add slide label should be dropped at 1024 px width"
+        harness.find_text("New slide").is_none(),
+        "New slide label should be dropped at 1024 px width"
     );
 
     // But icons are still rendered and interactive
@@ -11498,7 +11498,7 @@ fn entering_and_leaving_master_view_restores_the_slide_and_hides_tabs() {
             .tab_rects
             .contains_key("Question")
     );
-    assert!(harness.find_text("Close Master View").is_some());
+    assert!(harness.find_text("Close slide masters").is_some());
 
     harness.editor.leave_master_view();
     harness.idle_frame();
@@ -11661,8 +11661,8 @@ fn project_menu_opens_ai_settings() {
     harness.click_at(project);
     harness.idle_frame();
     let item = harness
-        .find_text_last("AI Settings…")
-        .expect("AI Settings menu item");
+        .find_text_last("AI settings…")
+        .expect("AI settings menu item");
     harness.click_at(item);
     harness.idle_frame();
 
@@ -16275,7 +16275,7 @@ fn record_narration_is_refused_in_master_view() {
             .status_message
             .as_ref()
             .map(|(message, _)| message.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
 }
 
@@ -16952,8 +16952,8 @@ fn record_narration_opens_from_the_insert_menu() {
     harness.click_at(insert);
     harness.idle_frame();
     let item = harness
-        .find_text_last("Record Narration…")
-        .expect("Record Narration menu item");
+        .find_text_last("Record narration…")
+        .expect("Record narration menu item");
     harness.click_at(item);
     harness.idle_frame();
     assert!(harness.editor.ui.record_narration.open);
@@ -16978,8 +16978,8 @@ fn record_narration_opens_from_the_toolbar_media_popup() {
     harness.click_at(media_btn);
     harness.idle_frame();
     let item = harness
-        .find_text("Record Narration…")
-        .expect("Record Narration… in Media popup");
+        .find_text("Record narration…")
+        .expect("Record narration… in Media popup");
     harness.click_at(item);
     harness.idle_frame();
     assert!(harness.editor.ui.record_narration.open);
@@ -17145,7 +17145,7 @@ fn view_menu_toggles_rulers_grid_snap_and_guides() {
             (|e: &Editor| e.session.course.editor.show_rulers) as fn(&Editor) -> bool,
         ),
         ("Grid", |e: &Editor| e.session.course.editor.show_grid),
-        ("Snap to Grid", |e: &Editor| {
+        ("Snap to grid", |e: &Editor| {
             e.session.course.editor.snap_to_grid
         }),
         ("Guides", |e: &Editor| e.session.course.editor.show_guides),
@@ -18141,7 +18141,7 @@ fn version_history_menu_item_is_disabled_without_a_file_and_opens_with_one() {
     let file = h.find_text("File").expect("File menu");
     h.click_at(file);
     h.idle_frame();
-    let item = h.find_text("Version History…").expect("menu item");
+    let item = h.find_text("Version history…").expect("menu item");
     let requests = click_collect(&mut h, item);
     assert!(
         !requests
@@ -18153,12 +18153,12 @@ fn version_history_menu_item_is_disabled_without_a_file_and_opens_with_one() {
     // A saved project enables it and the click raises the request.
     h.editor.set_project_has_file(true);
     h.idle_frame();
-    if h.find_text("Version History…").is_none() {
+    if h.find_text("Version history…").is_none() {
         let file = h.find_text("File").expect("File menu");
         h.click_at(file);
         h.idle_frame();
     }
-    let item = h.find_text("Version History…").expect("menu item");
+    let item = h.find_text("Version history…").expect("menu item");
     let requests = click_collect(&mut h, item);
     assert!(
         requests
@@ -18215,7 +18215,7 @@ fn folder_menu_items_raise_requests_and_history_says_git_is_the_history() {
     let file = h.find_text("File").expect("File menu");
     h.click_at(file);
     h.idle_frame();
-    let open = h.find_text("Open Folder…").expect("Open Folder item");
+    let open = h.find_text("Open folder…").expect("Open folder item");
     let requests = click_collect(&mut h, open);
     assert!(
         requests
@@ -18223,14 +18223,14 @@ fn folder_menu_items_raise_requests_and_history_says_git_is_the_history() {
             .any(|r| matches!(r, EditorRequest::OpenFolder))
     );
 
-    if h.find_text("Save As Project Folder (for git)…").is_none() {
+    if h.find_text("Save as project folder (for git)…").is_none() {
         let file = h.find_text("File").expect("File menu");
         h.click_at(file);
         h.idle_frame();
     }
     let save = h
-        .find_text("Save As Project Folder (for git)…")
-        .expect("Save As Project Folder item");
+        .find_text("Save as project folder (for git)…")
+        .expect("Save as project folder item");
     let requests = click_collect(&mut h, save);
     assert!(
         requests
@@ -19366,7 +19366,7 @@ fn m31_04_file_menu_hints_and_compound_shortcut_formatting() {
         ("New", "Ctrl+N"),
         ("Open…", "Ctrl+O"),
         ("Save", "Ctrl+S"),
-        ("Save As…", "Ctrl+Shift+S"),
+        ("Save as…", "Ctrl+Shift+S"),
     ] {
         assert!(
             h.find_text(label).is_some(),

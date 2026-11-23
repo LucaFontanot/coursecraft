@@ -170,8 +170,8 @@ fn project_menu_opens_the_window() {
     h.click_at(project);
     h.idle_frame();
     let item = h
-        .find_text_last("Suggest Alt Text…")
-        .expect("Suggest Alt Text menu item");
+        .find_text_last("Suggest alt text…")
+        .expect("Suggest alt text menu item");
     h.click_at(item);
     h.idle_frame();
     assert!(h.editor.ui.alt.open);

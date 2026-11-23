@@ -75,8 +75,8 @@ fn insert_menu_opens_course_from_document() {
     h.click_at(insert);
     h.idle_frame();
     let item = h
-        .find_text_last("Course from Document…")
-        .expect("Course from Document menu item");
+        .find_text_last("Course from document…")
+        .expect("Course from document menu item");
     h.click_at(item);
     h.idle_frame();
 

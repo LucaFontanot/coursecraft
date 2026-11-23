@@ -249,7 +249,7 @@ pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
             shortcut: "Ctrl+N / Ctrl+O",
         },
         ShortcutRow {
-            action: "Save / Save As",
+            action: "Save / Save as",
             shortcut: "Ctrl+S / Ctrl+Shift+S",
         },
         ShortcutRow {
@@ -303,7 +303,7 @@ pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
             shortcut: "Ctrl+= / Ctrl+-",
         },
         ShortcutRow {
-            action: "Preview this slide / from the start",
+            action: "Preview this slide / whole course",
             shortcut: "F12 / Shift+F12",
         },
     ];
@@ -354,7 +354,7 @@ pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
             items: arrange_items,
         },
         ShortcutGroup {
-            category: "View & Canvas",
+            category: "View & canvas",
             items: view_items,
         },
         ShortcutGroup {

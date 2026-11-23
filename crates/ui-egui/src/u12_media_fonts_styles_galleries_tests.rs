@@ -179,8 +179,8 @@ fn t9_2_media_library_kind_combo_long_filename_and_disabled_tooltips() {
         .probe_tooltip(insert_pos)
         .expect("Disabled 'Insert on slide' in Master View must show tooltip");
     assert!(
-        insert_tip.contains("Master View"),
-        "Expected Master View tooltip, got: {insert_tip}"
+        insert_tip.contains("slide masters"),
+        "Expected slide masters tooltip, got: {insert_tip}"
     );
 
     let del_unused_pos = h.find_text("Delete unused").expect("Delete unused");

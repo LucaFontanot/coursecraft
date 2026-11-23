@@ -236,7 +236,7 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
             ui.painter().text(
                 close_rect.center(),
                 Align2::CENTER_CENTER,
-                "Close Master View",
+                "Close slide masters",
                 FontId::new(
                     coursecraft_render::SIZE_BODY,
                     egui::FontFamily::Name("inter-bold".into()),
@@ -763,7 +763,7 @@ pub fn show_new_slide_popup(ui: &mut Ui, editor: &mut Editor) {
                             );
                             ui.close();
                         }
-                        if crate::quiet_button(ui, "Remove", crate::QuietTone::Danger, true)
+                        if crate::quiet_button(ui, "Delete", crate::QuietTone::Danger, true)
                             .clicked()
                         {
                             add = Some((
@@ -956,7 +956,7 @@ fn show_slide_menu_items(
     }
     ui.separator();
 
-    if ui.button("Save as Template").clicked() {
+    if ui.button("Save as template").clicked() {
         *action_to_run = Some(("template.save", serde_json::json!({ "slide": slide_id })));
         ui.close();
     }

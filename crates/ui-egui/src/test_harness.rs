@@ -1764,7 +1764,7 @@ mod tests {
         let file_pos = h.find_text("File").expect("File menu");
         h.click_at(file_pos);
         h.idle_frame();
-        let save_as_pos = h.find_text_last("Save As…").expect("Save As menu item");
+        let save_as_pos = h.find_text_last("Save as…").expect("Save as menu item");
         let reqs = h.click_at_requests(save_as_pos);
         assert!(reqs.iter().any(|r| matches!(r, EditorRequest::SaveAs)));
     }

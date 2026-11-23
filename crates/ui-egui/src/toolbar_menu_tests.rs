@@ -22,6 +22,18 @@ fn widget_with_label(h: &TestHarness, needle: &str) -> crate::test_harness::Widg
         .unwrap_or_else(|| panic!("expected widget with label containing {needle:?}"))
 }
 
+fn toolbar_widget_with_label(h: &TestHarness, needle: &str) -> crate::test_harness::WidgetNode {
+    let toolbar_bottom = crate::TOP_BAR_HEIGHT + crate::toolbar::TOOLBAR_HEIGHT;
+    h.last_widgets
+        .iter()
+        .find(|w| {
+            w.bounds.center().y <= toolbar_bottom
+                && w.label.as_deref().is_some_and(|l| l.contains(needle))
+        })
+        .cloned()
+        .unwrap_or_else(|| panic!("expected toolbar widget with label containing {needle:?}"))
+}
+
 #[test]
 fn desktop_toolbar_fits_without_overlap_when_publish_is_visible() {
     for mode in [ThemeMode::Dark, ThemeMode::Light] {
@@ -40,32 +52,36 @@ fn desktop_toolbar_fits_without_overlap_when_publish_is_visible() {
                 "expected 0 layout findings at ({w}, {h_px}) {mode:?}, got: {toolbar_findings:?}"
             );
 
+            let toolbar_bottom = crate::TOP_BAR_HEIGHT + crate::toolbar::TOOLBAR_HEIGHT;
             let left_bounds: Vec<_> = [
-                "Add slide to course",
+                "New slide",
                 "More slide options",
-                "Preview current slide",
+                "Preview this slide",
                 "More preview options",
                 "Publish course",
                 "Course map",
-                "Format Painter",
+                "Format painter",
                 "Select an object to copy its format",
             ]
             .iter()
             .filter_map(|needle| {
                 h.last_widgets
                     .iter()
-                    .find(|w| w.label.as_deref().is_some_and(|l| l.contains(needle)))
+                    .find(|w| {
+                        w.bounds.center().y <= toolbar_bottom
+                            && w.label.as_deref().is_some_and(|l| l.contains(needle))
+                    })
                     .map(|w| (needle, w.bounds))
             })
             .collect();
             let center_bounds: Vec<_> = [
-                "Insert Text Box",
-                "Insert Shape",
-                "Insert Image",
-                "Insert Media",
-                "Insert Button",
-                "Insert Question",
-                "Insert Trigger",
+                "Insert text box",
+                "Insert shape",
+                "Insert image",
+                "Insert media",
+                "Insert button",
+                "Insert question",
+                "Insert trigger",
             ]
             .iter()
             .filter_map(|needle| {
@@ -78,10 +94,10 @@ fn desktop_toolbar_fits_without_overlap_when_publish_is_visible() {
             let right_bounds: Vec<_> = [
                 "Undo",
                 "Redo",
-                "Format Inspector",
-                "Animate Inspector",
-                "Slide Inspector",
-                "Course Inspector",
+                "Format inspector",
+                "Animate inspector",
+                "Slide inspector",
+                "Course inspector",
             ]
             .iter()
             .filter_map(|needle| {
@@ -129,25 +145,25 @@ fn toolbar_collapses_to_icon_only_at_minimum_width_with_tooltips() {
         );
 
         assert!(
-            h.find_text("Add slide").is_none(),
-            "expected 'Add slide' label to collapse to icon-only at {size:?} scale {scale}"
+            h.find_text("New slide").is_none(),
+            "expected 'New slide' label to collapse to icon-only at {size:?} scale {scale}"
         );
 
         for needle in [
-            "Add slide to course",
-            "Preview current slide",
+            "New slide",
+            "Preview this slide",
             "Publish course",
             "Course map",
-            "Format Painter",
-            "Insert Text Box",
-            "Insert Shape",
-            "Insert Image",
-            "Insert Media",
-            "Insert Button",
-            "Insert Question",
-            "Insert Trigger",
+            "Format painter",
+            "Insert text box",
+            "Insert shape",
+            "Insert image",
+            "Insert media",
+            "Insert button",
+            "Insert question",
+            "Insert trigger",
         ] {
-            let w = widget_with_label(&h, needle);
+            let w = toolbar_widget_with_label(&h, needle);
             assert!(
                 w.bounds.width() >= 36.0 && w.bounds.height() >= 44.0,
                 "toolbar button {needle:?} hit target {:?} smaller than 36x44 at {size:?} scale {scale}",
@@ -192,7 +208,7 @@ fn master_view_disables_unavailable_toolbar_buttons_with_tooltip() {
     h.layout_report(2);
 
     for label in [
-        "Add slide",
+        "New slide",
         "Preview",
         "Map",
         "Paint",
@@ -206,12 +222,12 @@ fn master_view_disables_unavailable_toolbar_buttons_with_tooltip() {
         let tip = h.probe_tooltip(pos);
         assert_eq!(
             tip.as_deref(),
-            Some("Not available in Master View"),
-            "expected 'Not available in Master View' tooltip on {label:?}, got {tip:?}"
+            Some("Not available in slide masters"),
+            "expected 'Not available in slide masters' tooltip on {label:?}, got {tip:?}"
         );
     }
 
-    let map_widget = widget_with_label(&h, "Not available in Master View");
+    let map_widget = widget_with_label(&h, "Not available in slide masters");
     assert!(
         map_widget.disabled,
         "disabled toolbar buttons must expose disabled state"
@@ -262,9 +278,9 @@ fn toolbar_carets_meet_hit_target_and_popups_clamp_and_close_on_escape() {
     for (needle, expected_item) in [
         ("More slide options", "New scene"),
         ("More preview options", "Preview this slide"),
-        ("Insert Shape", "Rectangle"),
-        ("Insert Media", "Video…"),
-        ("Insert Question", "Multiple Choice"),
+        ("Insert shape", "Rectangle"),
+        ("Insert media", "Video…"),
+        ("Insert question", "Multiple Choice"),
     ] {
         let w = widget_with_label(&h, needle);
         h.click_at(w.bounds.center());
@@ -314,7 +330,7 @@ fn menu_bar_disabled_items_show_reason_tooltip_when_nothing_selected() {
     h.click_at(arrange_pos);
     h.idle_frame();
 
-    for item in ["Group", "Ungroup", "Align Left", "Bring forward"] {
+    for item in ["Group", "Ungroup", "Align left", "Bring forward"] {
         let pos = h
             .find_text(item)
             .unwrap_or_else(|| panic!("expected {item:?} in Arrange menu"));
@@ -397,4 +413,138 @@ fn menu_shortcuts_render_without_missing_glyphs_and_pass_contrast() {
             }
         }
     }
+}
+
+/// L-02: Menus, toolbar, and navigator use canonical sentence-case names (`M32-01`, `M32-02`).
+#[test]
+fn menus_toolbar_and_navigator_use_canonical_sentence_case_names() {
+    let mut h =
+        TestHarness::new_with_config(sample_course(), (1280.0, 800.0), ThemeMode::Dark, 1.0, true);
+    h.layout_report(2);
+
+    // Toolbar uses "New slide" (never "Add slide").
+    assert!(
+        h.find_text("New slide").is_some(),
+        "toolbar must render canonical 'New slide' label"
+    );
+    assert!(
+        h.find_text("Add slide").is_none(),
+        "toolbar must not render legacy 'Add slide' label"
+    );
+
+    // Preview caret dropdown uses "Preview this slide" and "Preview whole course".
+    let preview_caret = widget_with_label(&h, "More preview options");
+    h.click_at(preview_caret.bounds.center());
+    h.idle_frame();
+    h.idle_frame();
+    assert!(
+        h.find_text("Preview this slide").is_some(),
+        "Preview dropdown must show 'Preview this slide'"
+    );
+    assert!(
+        h.find_text("Preview whole course").is_some(),
+        "Preview dropdown must show 'Preview whole course'"
+    );
+    assert!(
+        h.find_text("Preview from the start").is_none(),
+        "Preview dropdown must not show legacy 'Preview from the start'"
+    );
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+
+    // View menu shows "Slide masters" (never "Slide Masters" / "Master View").
+    let view_pos = h.find_text("View").expect("View menu");
+    h.click_at(view_pos);
+    h.idle_frame();
+    assert!(
+        h.find_text("Slide masters").is_some(),
+        "View menu must show 'Slide masters'"
+    );
+    assert!(
+        h.find_text("Slide Masters").is_none(),
+        "View menu must not show Title Case 'Slide Masters'"
+    );
+    assert!(
+        h.find_text_containing("Master View").is_none(),
+        "View menu must not mention 'Master View'"
+    );
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+
+    // Edit menu uses "Select all" and "Check spelling…".
+    let edit_pos = h.find_text("Edit").expect("Edit menu");
+    h.click_at(edit_pos);
+    h.idle_frame();
+    assert!(
+        h.find_text("Select all").is_some(),
+        "Edit menu must show 'Select all'"
+    );
+    assert!(
+        h.find_text("Check spelling…").is_some(),
+        "Edit menu must show 'Check spelling…'"
+    );
+    assert!(
+        h.find_text("Select All").is_none(),
+        "Edit menu must not show Title Case 'Select All'"
+    );
+    assert!(
+        h.find_text("Check Spelling…").is_none(),
+        "Edit menu must not show Title Case 'Check Spelling…'"
+    );
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+
+    // File menu must not have duplicate "Course Properties".
+    let file_pos = h.find_text("File").expect("File menu");
+    h.click_at(file_pos);
+    h.idle_frame();
+    assert!(
+        h.find_text("Course Properties").is_none(),
+        "File menu must not contain duplicate 'Course Properties'"
+    );
+    assert!(
+        h.find_text("Open folder…").is_some(),
+        "File menu must show sentence-case 'Open folder…'"
+    );
+    assert!(
+        h.find_text("Save as…").is_some(),
+        "File menu must show sentence-case 'Save as…'"
+    );
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+
+    // Project menu has canonical "Course settings…".
+    let project_pos = h.find_text("Project").expect("Project menu");
+    h.click_at(project_pos);
+    h.idle_frame();
+    assert!(
+        h.find_text("Course settings…").is_some(),
+        "Project menu must show 'Course settings…'"
+    );
+    assert!(
+        h.find_text("AI settings…").is_some(),
+        "Project menu must show 'AI settings…'"
+    );
+    assert!(
+        h.find_text("Suggest alt text…").is_some(),
+        "Project menu must show 'Suggest alt text…'"
+    );
+    assert!(
+        h.find_text("Save as template").is_some(),
+        "Project menu must show 'Save as template'"
+    );
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+
+    // Entering Slide masters shows "Close slide masters" (never "Close Master View").
+    h.editor.enter_master_view();
+    h.idle_frame();
+    assert!(
+        h.find_text("Close slide masters").is_some(),
+        "navigator must show 'Close slide masters'"
+    );
+    assert!(
+        h.find_text("Close Master View").is_none(),
+        "navigator must not show legacy 'Close Master View'"
+    );
 }

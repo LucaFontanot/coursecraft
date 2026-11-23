@@ -161,7 +161,7 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
             .is_some_and(|src| insert_kind(kind_for(src)));
         let insert = ui.add_enabled(insertable && has_slide, Button::new("Insert on slide"));
         let insert = if editor.ui.master_view {
-            insert.on_disabled_hover_text("Not available in Master View")
+            insert.on_disabled_hover_text("Not available in slide masters")
         } else if !has_slide {
             insert.on_disabled_hover_text("Select a slide first")
         } else if !insertable {

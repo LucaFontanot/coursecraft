@@ -150,7 +150,7 @@ impl Editor {
     /// Open the narration window with an empty field.
     pub fn open_speech_dialog(&mut self) {
         if self.ui.master_view {
-            self.set_status("Not available in Master View");
+            self.set_status("Not available in slide masters");
             return;
         }
         self.ui.speech = SpeechState {
@@ -163,7 +163,7 @@ impl Editor {
     /// Open the narration window filled with a slide's notes.
     pub fn open_narration_from_notes(&mut self, slide_id: &str) {
         if self.ui.master_view {
-            self.set_status("Not available in Master View");
+            self.set_status("Not available in slide masters");
             return;
         }
         let Some(slide) = self.session.course.slide(slide_id) else {

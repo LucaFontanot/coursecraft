@@ -60,7 +60,7 @@ impl Editor {
     /// Open the Record Narration window and refresh the microphone list.
     pub fn open_record_narration(&mut self) {
         if self.ui.master_view {
-            self.set_status("Not available in Master View");
+            self.set_status("Not available in slide masters");
             return;
         }
         close_record_narration(self);
@@ -378,7 +378,7 @@ fn stop_take_playback(editor: &mut Editor) {
 #[cfg(not(target_arch = "wasm32"))]
 fn use_take(editor: &mut Editor) -> bool {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return false;
     }
     let slide = editor.selection.slide.clone();

@@ -765,7 +765,7 @@ impl PlacementTool {
     #[must_use]
     pub fn name(&self) -> String {
         match self {
-            Self::TextBox => "Text Box".to_owned(),
+            Self::TextBox => "Text box".to_owned(),
             Self::Button => "Button".to_owned(),
             Self::Shape(kind) => shape_label(*kind).to_owned(),
             Self::Draw(tool) => tool.label().to_owned(),
@@ -2439,7 +2439,7 @@ impl Editor {
     /// changing the course in Master View or when no slide is selected.
     pub fn paste_image_png(&mut self, png_bytes: &[u8]) -> bool {
         if self.ui.master_view {
-            self.set_status("Not available in Master View");
+            self.set_status("Not available in slide masters");
             return false;
         }
         let slide_id = self.selection.slide.clone();
