@@ -1920,6 +1920,38 @@ fn check_cues(cx: &mut Ctx<'_>, cues: &[crate::Cue], timeline_ms: u32, p: &str) 
     }
 }
 
+fn object_completely_outside_slide(frame: crate::Rect, rotation: f32, slide: crate::Size) -> bool {
+    if ![frame.x, frame.y, frame.w, frame.h, rotation]
+        .iter()
+        .all(|v| v.is_finite())
+        || frame.w < 0.0
+        || frame.h < 0.0
+    {
+        return false;
+    }
+    let sw = slide.w as f32;
+    let sh = slide.h as f32;
+    let cx = frame.x + frame.w * 0.5;
+    let cy = frame.y + frame.h * 0.5;
+    let hw = frame.w * 0.5;
+    let hh = frame.h * 0.5;
+    let (sin, cos) = rotation.to_radians().sin_cos();
+    let corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)];
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (lx, ly) in corners {
+        let x = cx + lx * cos - ly * sin;
+        let y = cy + lx * sin + ly * cos;
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    max_x <= 0.0 || min_x >= sw || max_y <= 0.0 || min_y >= sh
+}
+
 fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
     let f = o.frame;
     if ![f.x, f.y, f.w, f.h].iter().all(|v| v.is_finite()) || f.w < 0.0 || f.h < 0.0 {
@@ -1941,6 +1973,22 @@ fn check_object(cx: &mut Ctx<'_>, o: &Object, timeline_ms: u32, p: &str) {
         cx.err(
             format!("{p}/rotation"),
             "rotation must be a finite number of degrees in 0..360",
+        );
+    }
+    if !matches!(o.kind, ObjectKind::Audio { .. })
+        && o.panel.is_none()
+        && object_completely_outside_slide(f, o.rotation, cx.course.slide_size)
+    {
+        let label = if o.name.trim().is_empty() {
+            o.id.as_str()
+        } else {
+            o.name.as_str()
+        };
+        let sw = cx.course.slide_size.w;
+        let sh = cx.course.slide_size.h;
+        cx.warn(
+            format!("{p}/frame"),
+            format!("object {label:?} lies outside the {sw}×{sh} slide"),
         );
     }
     check_object_effects(cx, o, p);

@@ -5322,3 +5322,254 @@ fn check_course_does_not_warn_on_last_slide_or_slide_with_next_trigger() {
         "unexpected player bar warning: {issues:#?}"
     );
 }
+
+#[test]
+fn off_slide_object_warnings_cover_base_layer_master_and_exclusions() {
+    use crate::{Color, Issue, ObjectKind, Rect, ScrollBar, ShapeKind, Size};
+    let mut course = Course::from_json(HELLO).expect("hello course");
+    course.slide_size = Size { w: 640, h: 360 };
+    let layer_template = course.scenes[0].slides[1].layers[0].clone();
+    let master_template = course.scenes[0].slides[0].clone();
+    course.scenes.truncate(1);
+    course.scenes[0].slides.truncate(1);
+    // Clear existing objects so only our test objects are evaluated.
+    course.scenes[0].slides[0].objects.clear();
+    course.scenes[0].slides[0].layers.clear();
+    course.scenes[0].slides[0].triggers.clear();
+
+    let template = master_template.objects[0].clone();
+
+    let make_shape = |id: &str, frame: Rect, rotation: f32| {
+        let mut obj = template.clone();
+        obj.id = id.to_owned();
+        obj.name = id.to_owned();
+        obj.kind = ObjectKind::Shape {
+            shape: ShapeKind::Rectangle,
+            fill: Color("#2F6FEB".to_owned()),
+            fill_style: None,
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        };
+        obj.frame = frame;
+        obj.rotation = rotation;
+        obj.panel = None;
+        obj.group = None;
+        obj
+    };
+
+    // 0: completely outside to the right (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "off-right",
+        Rect {
+            x: 700.0,
+            y: 40.0,
+            w: 100.0,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 1: completely outside to the left (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "off-left",
+        Rect {
+            x: -100.0,
+            y: 40.0,
+            w: 100.0,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 2: completely outside above (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "off-top",
+        Rect {
+            x: 40.0,
+            y: -120.0,
+            w: 100.0,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 3: completely outside below (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "off-bottom",
+        Rect {
+            x: 40.0,
+            y: 360.0,
+            w: 100.0,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 4: partially overlapping left edge (0 warnings)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "partial-edge",
+        Rect {
+            x: -64.0,
+            y: 40.0,
+            w: 281.6,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 5: Audio completely outside (0 warnings)
+    let mut audio = make_shape(
+        "off-audio",
+        Rect {
+            x: -500.0,
+            y: -500.0,
+            w: 40.0,
+            h: 40.0,
+        },
+        0.0,
+    );
+    audio.kind = ObjectKind::Audio {
+        src: "media/welcome.mp3".to_owned(),
+        autoplay: false,
+        captions: None,
+        volume: 1.0,
+        trim: None,
+    };
+    course.scenes[0].slides[0].objects.push(audio);
+    // 6: ScrollPanel on slide + 7: ScrollPanel child completely outside (0 warnings)
+    let mut panel = make_shape(
+        "scroll-panel",
+        Rect {
+            x: 20.0,
+            y: 20.0,
+            w: 200.0,
+            h: 200.0,
+        },
+        0.0,
+    );
+    panel.kind = ObjectKind::ScrollPanel {
+        content_height: 1200.0,
+        bar: ScrollBar::Visible,
+    };
+    course.scenes[0].slides[0].objects.push(panel);
+    let mut panel_child = make_shape(
+        "panel-child",
+        Rect {
+            x: 30.0,
+            y: 900.0,
+            w: 150.0,
+            h: 40.0,
+        },
+        0.0,
+    );
+    panel_child.panel = Some("scroll-panel".to_owned());
+    course.scenes[0].slides[0].objects.push(panel_child);
+    // 8: unrotated frame is outside [-18, -6] x [100, 200], but rotated 45 deg
+    // its AABB reaches x > 0 so it touches the slide (0 warnings)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "rotated-touches",
+        Rect {
+            x: -18.0,
+            y: 100.0,
+            w: 12.0,
+            h: 100.0,
+        },
+        45.0,
+    ));
+    // 9: rotated object still completely outside (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "rotated-outside",
+        Rect {
+            x: -200.0,
+            y: 100.0,
+            w: 40.0,
+            h: 40.0,
+        },
+        45.0,
+    ));
+
+    // Layer object completely outside (warn)
+    let mut layer = layer_template;
+    layer.id = "layer-off".to_owned();
+    layer.name = "Layer".to_owned();
+    layer.objects = vec![make_shape(
+        "layer-off-obj",
+        Rect {
+            x: 800.0,
+            y: 40.0,
+            w: 80.0,
+            h: 60.0,
+        },
+        0.0,
+    )];
+    layer.triggers.clear();
+    course.scenes[0].slides[0].layers.push(layer);
+
+    // Master object completely outside (warn)
+    let mut master = master_template;
+    master.id = "m-test".to_owned();
+    master.title = "Master".to_owned();
+    master.objects = vec![make_shape(
+        "master-off-obj",
+        Rect {
+            x: 800.0,
+            y: 40.0,
+            w: 80.0,
+            h: 60.0,
+        },
+        0.0,
+    )];
+    master.triggers.clear();
+    master.layers.clear();
+    master.question = None;
+    master.draw = None;
+    master.master = None;
+    course.masters.push(master);
+
+    let issues = course.validate();
+    let off_slide: Vec<&Issue> = issues
+        .iter()
+        .filter(|i| i.message.contains("lies outside"))
+        .collect();
+    assert!(
+        off_slide.iter().all(|i| i.severity == Severity::Warning),
+        "all off-slide issues must be warnings: {off_slide:#?}"
+    );
+    let paths: Vec<&str> = off_slide.iter().map(|i| i.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "/scenes/0/slides/0/objects/0/frame",
+            "/scenes/0/slides/0/objects/1/frame",
+            "/scenes/0/slides/0/objects/2/frame",
+            "/scenes/0/slides/0/objects/3/frame",
+            "/scenes/0/slides/0/objects/9/frame",
+            "/scenes/0/slides/0/layers/0/objects/0/frame",
+            "/masters/0/objects/0/frame",
+        ],
+        "unexpected off-slide warnings: {off_slide:#?}"
+    );
+}
+
+#[test]
+fn all_bundled_examples_emit_zero_off_slide_warnings() {
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    for name in [
+        "hello-course",
+        "showcase",
+        "reference-course",
+        "rich-states",
+        "healthy-habits",
+    ] {
+        let path = examples.join(name).join("course.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let course =
+            Course::from_json(&text).unwrap_or_else(|e| panic!("failed to parse {name}: {e}"));
+        let off_slide: Vec<_> = course
+            .validate()
+            .into_iter()
+            .filter(|i| i.message.contains("lies outside"))
+            .collect();
+        assert!(
+            off_slide.is_empty(),
+            "{name} emitted unexpected off-slide warnings: {off_slide:#?}"
+        );
+    }
+}

@@ -504,6 +504,45 @@ fn docx_is_byte_identical_on_two_runs() {
     assert_eq!(first, second, "deterministic zip");
 }
 
+#[test]
+fn pdf_and_docx_export_succeed_at_all_aspect_presets_and_tiny() {
+    let sizes = [
+        (1920u32, 1080u32),
+        (1280, 720),
+        (1280, 800),
+        (960, 720),
+        (1024, 768),
+        (1080, 1080),
+        (1080, 1920),
+        (100, 100),
+    ];
+    let opts = ReviewOptions {
+        image_width: 240,
+        ..ReviewOptions::default()
+    };
+    for (w, h) in sizes {
+        let mut course = hello_course();
+        course.slide_size = coursecraft_course::Size { w, h };
+        let pages = review_pages(&course, &NoRenderMedia, &opts)
+            .unwrap_or_else(|e| panic!("review_pages failed at {w}x{h}: {e}"));
+        assert!(!pages.is_empty(), "expected pages at {w}x{h}");
+
+        let pdf = write_pdf(&course, &pages)
+            .unwrap_or_else(|e| panic!("write_pdf failed at {w}x{h}: {e}"));
+        assert!(check_pdf(&pdf) >= pages.len(), "PDF page count at {w}x{h}");
+
+        let docx = write_docx(&course, &pages)
+            .unwrap_or_else(|e| panic!("write_docx failed at {w}x{h}: {e}"));
+        let archive = zip::ZipArchive::new(std::io::Cursor::new(&docx))
+            .unwrap_or_else(|e| panic!("invalid docx zip at {w}x{h}: {e}"));
+        assert!(
+            archive.len() >= 4,
+            "expected docx entries at {w}x{h}, got {}",
+            archive.len()
+        );
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod encoder {
     use super::{NoMedia, hello_course};
@@ -569,5 +608,39 @@ mod encoder {
 
         assert!(matches!(error, ExportError::Cancelled));
         assert!(!out.exists(), "a cancelled export removes its partial file");
+    }
+
+    #[test]
+    fn mp4_export_succeeds_at_all_aspect_presets_and_tiny() {
+        let sizes = [
+            (1920u32, 1080u32),
+            (1280, 720),
+            (1280, 800),
+            (960, 720),
+            (1024, 768),
+            (1080, 1080),
+            (1080, 1920),
+            (100, 100),
+        ];
+        let dir = tempfile::tempdir().expect("temp dir");
+        let opts = Mp4Options {
+            width: 160,
+            fps: 5,
+            slide_tail_ms: 0,
+            max_total_ms: 60_000,
+        };
+        for (w, h) in sizes {
+            let mut course = hello_course();
+            course.slide_size = coursecraft_course::Size { w, h };
+            course.scenes.truncate(1);
+            course.scenes[0].slides.truncate(1);
+            course.scenes[0].slides[0].duration_ms = 200;
+            course.scenes[0].slides[0].triggers.clear();
+            let out = dir.path().join(format!("out_{w}x{h}.mp4"));
+            let report = export_mp4(&course, &NoMedia, &out, &opts, &mut |_| true)
+                .unwrap_or_else(|e| panic!("export_mp4 failed at {w}x{h}: {e}"));
+            assert!(out.is_file(), "MP4 missing at {w}x{h}");
+            assert!(report.frames > 0, "expected frames at {w}x{h}");
+        }
     }
 }

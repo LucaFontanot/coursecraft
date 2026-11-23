@@ -2227,8 +2227,13 @@ fn push_item(items: &mut Vec<DrawItem>, hit: Hit, rect: egui::Rect, visual: Visu
 #[must_use]
 pub fn question_prompt_rect(slide_w: f32, slide_h: f32) -> egui::Rect {
     let (slide_w, _slide_h) = finite_slide(slide_w, slide_h);
-    let prompt_w = (slide_w - 160.0).max(0.0);
-    egui::Rect::from_min_size(egui::pos2(80.0, 60.0), egui::vec2(prompt_w, 80.0))
+    let margin = if slide_w < 320.0 {
+        (slide_w * 0.1).min(80.0)
+    } else {
+        80.0
+    };
+    let prompt_w = (slide_w - 2.0 * margin).max(0.0);
+    egui::Rect::from_min_size(egui::pos2(margin, 60.0), egui::vec2(prompt_w, 80.0))
 }
 
 fn compose_question(view: &QuestionCompose<'_>, items: &mut Vec<DrawItem>) {
