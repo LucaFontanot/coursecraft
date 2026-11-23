@@ -564,7 +564,11 @@ impl PlayerFrame {
         let pointer_hovered = view.hovered_object().map(str::to_owned);
         let previous_hover = self.focus.hovered_object().map(str::to_owned);
         self.focus.set_drawer_view(self.drawer_view.clone());
-        let mut inputs = self.handle_keyboard(ui, player, show_menu, show_nav);
+        let mut inputs = if gated {
+            Vec::new()
+        } else {
+            self.handle_keyboard(ui, player, show_menu, show_nav)
+        };
         // Once the course has ended the card covers the slide and the strip is
         // hidden, so there is nothing left to focus.
         if !self.ended && !gated {
@@ -2671,10 +2675,11 @@ fn draw_start_gate(
         Color32::from_rgba_unmultiplied(0, 0, 0, 150),
     );
     let label_color = Color32::from_rgb(0xF2, 0xF2, 0xF5);
-    let label_galley = painter.layout_no_wrap(
+    let label_galley = painter.layout(
         course.chrome_string("startCourse").to_owned(),
         FontId::new(SIZE_TITLE, FontFamily::Name("inter-bold".into())),
         label_color,
+        (rect.width() - 32.0).max(60.0),
     );
     let diameter = START_BUTTON
         .min(rect.width() * 0.5)

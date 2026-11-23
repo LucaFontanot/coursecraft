@@ -2971,3 +2971,54 @@ fn no_gate_means_no_start_button() {
     assert!(!output.start);
     assert!(harness.frame.start_button_rect().is_none());
 }
+
+#[test]
+fn b09_start_gate_blocks_keyboard_shortcuts() {
+    let player = unstarted();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.awaiting_start = true;
+    harness.run(&player, Vec::new());
+
+    for k in [
+        egui::Key::C,
+        egui::Key::M,
+        egui::Key::ArrowRight,
+        egui::Key::ArrowLeft,
+    ] {
+        let output = harness.run(&player, vec![key(k)]);
+        assert!(!output.start, "{k:?} must not start the course");
+        assert!(
+            output.inputs.is_empty(),
+            "{k:?} must not emit inputs behind the start gate: {:?}",
+            output.inputs
+        );
+        assert!(
+            !harness.frame.captions_on,
+            "{k:?} must not toggle captions behind the start gate"
+        );
+        assert!(
+            !harness.frame.drawer_open,
+            "{k:?} must not open the drawer behind the start gate"
+        );
+    }
+}
+
+#[test]
+fn b10_start_gate_wraps_long_label_on_narrow_screen() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    course.strings.insert(
+        "startCourse".to_owned(),
+        "Start this interactive training module now".to_owned(),
+    );
+    let player = Player::new(&course).expect("player");
+    let mut harness = Harness::new(320.0, 568.0);
+    harness.frame.awaiting_start = true;
+    harness.run(&player, Vec::new());
+
+    let slide = harness.frame.slide_rect().expect("slide rect");
+    let button = harness.frame.start_button_rect().expect("start button");
+    assert!(
+        slide.contains_rect(button),
+        "start button {button:?} must stay completely inside slide {slide:?}"
+    );
+}

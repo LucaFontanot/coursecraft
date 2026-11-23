@@ -1161,3 +1161,80 @@ fn pub04_slide_image_and_media_srcs_collect_state_extras() {
         );
     }
 }
+
+#[test]
+fn b08_should_hide_dom_overlays_covers_gate_ended_drawer_and_lightbox() {
+    let raw = r##"{
+      "schema_version": 1,
+      "id": "c-b08",
+      "title": "B08",
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene",
+        "slides": [
+          {
+            "id": "s1",
+            "title": "One",
+            "objects": [{
+              "id": "btn",
+              "frame": { "x": 10, "y": 10, "w": 100, "h": 40 },
+              "kind": { "type": "button", "label": "Open" }
+            }],
+            "triggers": [{
+              "action": { "action": "lightbox_slide", "slide": "s2" },
+              "when": { "event": "click", "object": "btn" }
+            }]
+          },
+          { "id": "s2", "title": "Box" }
+        ]
+      }]
+    }"##;
+    let course: Course = serde_json::from_str(raw).expect("valid course");
+    let mut player = coursecraft_logic::Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+
+    let mut frame = coursecraft_render::PlayerFrame::new();
+    assert!(!crate::app::should_hide_dom_overlays(
+        &player, &frame, false
+    ));
+
+    frame.awaiting_start = true;
+    assert!(crate::app::should_hide_dom_overlays(&player, &frame, false));
+    frame.awaiting_start = false;
+
+    assert!(crate::app::should_hide_dom_overlays(&player, &frame, true));
+
+    let ctx = egui::Context::default();
+    let mut view = coursecraft_render::SlideView::new();
+    let mut toggle_drawer = |ctx: &egui::Context, frame: &mut coursecraft_render::PlayerFrame| {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1280.0, 720.0),
+            )),
+            events: vec![egui::Event::Key {
+                key: egui::Key::M,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+            ..Default::default()
+        };
+        let full = ctx.run_ui(raw, |ui| {
+            let _ = frame.show(ui, &player, &mut view, None);
+        });
+        full.drop_without_applying_deltas();
+    };
+    toggle_drawer(&ctx, &mut frame);
+    assert!(frame.drawer_open(), "expected drawer to open");
+    assert!(crate::app::should_hide_dom_overlays(&player, &frame, false));
+    toggle_drawer(&ctx, &mut frame);
+    assert!(!frame.drawer_open(), "expected drawer to close");
+
+    player.handle(&Input::Click {
+        object: "btn".to_owned(),
+    });
+    assert!(player.lightbox_open(), "expected lightbox to be open");
+    assert!(crate::app::should_hide_dom_overlays(&player, &frame, false));
+}

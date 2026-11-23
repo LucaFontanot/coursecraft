@@ -544,9 +544,22 @@ impl MediaDriver {
     /// Position the current slide's video elements over the slide, hiding videos
     /// whose object is not on screen (including those of slides left behind).
     pub fn layout_videos(&mut self, player: &Player<'_>, view: &SlideView) {
-        // A lightbox needs the dim backdrop above every DOM element, so all
-        // video elements (base and box) hide while one is open.
-        if player.lightbox_open() {
+        self.layout_videos_with_visibility(player, view, false);
+    }
+
+    /// Position the current slide's video elements over the slide, or hide all
+    /// laid-out videos when `hide_overlays` is true (e.g. behind the start
+    /// gate, drawer, ended card, or lightbox).
+    pub fn layout_videos_with_visibility(
+        &mut self,
+        player: &Player<'_>,
+        view: &SlideView,
+        hide_overlays: bool,
+    ) {
+        // A lightbox, start gate, open drawer, or ended card needs the UI
+        // above every DOM element, so all video elements (base and box) hide
+        // while active.
+        if hide_overlays || player.lightbox_open() {
             for vid in self.laid_out.drain() {
                 self.backend.layout_video(&vid, None);
             }
@@ -717,5 +730,76 @@ impl MediaSource for PlaybackMediaSource<'_> {
     }
     fn video_error(&self, object: &str) -> Option<&str> {
         self.backend.video_error(object)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::player_frame::PlayerFrame;
+    use coursecraft_course::Course;
+    use coursecraft_logic::{Input, Player};
+    use coursecraft_playback::NullBackend;
+    use egui::{Rect, pos2, vec2};
+
+    #[test]
+    fn b07_layout_videos_with_visibility_hides_laid_out_videos() {
+        let course = Course::from_json(
+            r#"{
+              "schema_version": 1,
+              "id": "b07-video-overlay",
+              "title": "B07",
+              "scenes": [{
+                "id": "sc1",
+                "title": "Scene",
+                "slides": [{
+                  "id": "s1",
+                  "title": "Slide",
+                  "duration_ms": 5000,
+                  "objects": [{
+                    "id": "vid1",
+                    "kind": { "type": "video", "src": "media/clip.mp4" },
+                    "frame": { "x": 100.0, "y": 80.0, "w": 640.0, "h": 360.0 }
+                  }]
+                }]
+              }]
+            }"#,
+        )
+        .expect("valid course");
+        let mut player = Player::new(&course).expect("player");
+        player.handle(&Input::Start);
+
+        let ctx = egui::Context::default();
+        let mut frame = PlayerFrame::new();
+        let mut view = SlideView::new();
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1280.0, 720.0))),
+            ..Default::default()
+        };
+        let full = ctx.run_ui(raw, |ui| {
+            let _ = frame.show(ui, &player, &mut view, None);
+        });
+        full.drop_without_applying_deltas();
+
+        let backend = NullBackend::new();
+        let mut driver = MediaDriver::new().with_backend(Box::new(backend.clone()));
+
+        driver.layout_videos_with_visibility(&player, &view, false);
+        assert!(
+            backend
+                .recorded_calls()
+                .iter()
+                .any(|call| call.starts_with("layout_video:vid1:Some(")),
+            "expected vid1 to be laid out when visible: {:?}",
+            backend.recorded_calls()
+        );
+
+        driver.layout_videos_with_visibility(&player, &view, true);
+        assert_eq!(
+            backend.recorded_calls().last().map(String::as_str),
+            Some("layout_video:vid1:None"),
+            "expected vid1 to be hidden when overlays are hidden: {:?}",
+            backend.recorded_calls()
+        );
     }
 }
