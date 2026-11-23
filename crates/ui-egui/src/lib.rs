@@ -40,6 +40,7 @@ pub mod find;
 pub mod fonts;
 #[macro_use]
 pub mod i18n;
+pub mod ribbon;
 #[cfg(test)]
 mod scroll_audit;
 
@@ -1028,6 +1029,8 @@ pub struct UiState {
     pub pending_remove_font: Option<(String, FontStyle)>,
     /// Course map replaces the slide editor in the centre.
     pub story_view: bool,
+    /// The ribbon (M30), drawn above the toolbar when visible.
+    pub ribbon: ribbon::RibbonState,
     /// Transient Course map state.
     pub course_map: CourseMapState,
     /// Cached per-revision / per-media-count lists for the Properties panel.
@@ -1463,6 +1466,7 @@ impl Editor {
                 font_facts: std::collections::HashMap::new(),
                 pending_remove_font: None,
                 story_view: false,
+                ribbon: ribbon::RibbonState::default(),
                 course_map: CourseMapState::default(),
                 properties_lists: PropertiesListCache::default(),
                 media_refs_cache: MediaRefsCache::default(),
@@ -4643,8 +4647,21 @@ impl Editor {
             .show(ui, |ui| {
                 toolbar::show_toolbar(self, ui, &mut requests);
             });
-        // Dialogs open below the toolbar.
-        dialog::set_top_inset(ui.ctx(), toolbar_panel.response.rect.max.y);
+        // 1c. The ribbon (M30), below the toolbar while both are shown.
+        let mut top_bottom = toolbar_panel.response.rect.max.y;
+        if self.ui.ribbon.visible {
+            let ribbon_panel = Panel::top("editor_ribbon")
+                .exact_size(ribbon::height(&self.ui.ribbon))
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
+                .show_separator_line(true)
+                .show(ui, |ui| {
+                    ribbon::show(self, ui, &mut requests);
+                });
+            top_bottom = ribbon_panel.response.rect.max.y;
+        }
+        // Dialogs open below the toolbar (and the ribbon).
+        dialog::set_top_inset(ui.ctx(), top_bottom);
 
         // 2. Bottom status bar (26 px, panel fill, hairline above)
         let status_bar = Panel::bottom("editor_status_bar")

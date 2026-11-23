@@ -167,7 +167,14 @@ Each step is one commit, `cargo xtask ci` green, docs status updated in the same
    in a browser.
 1. Workspace on `craft-ui` docking and panes with today's panels inside; then port the ribbon
    widgets and draw the tab strip + Home from `spec.rs`, side by side with the old toolbar behind
-   a View › Ribbon toggle.
+   a View › Ribbon toggle. **Ribbon built first** (it doesn't depend on docking): the tab strip,
+   Home (Slide and Course Map variants) and View › Ribbon, off by default. Controls whose
+   feature exists but needs the text-selection or inspector plumbing are drawn disabled with
+   "ribbon wiring (use the Format inspector)" until step 2. Icons use today's Phosphor subset;
+   Paste and Cut need better glyphs (clipboard, scissors) in the next re-subset. Still open: the
+   docking workspace. DeckCraft uses only `craft_ui::ComboBox`, not `craft_ui::docking`, so
+   CourseCraft is the first Craft app to adopt the docking module; plan it as its own commit
+   with the panel-rect tests updated.
 2. Fill every main tab from ribbon.md with the right `Action`s (most ✅ wire to existing commands;
    the rest are `NotYet`).
 3. Contextual tabs: Drawing Tools, Picture Tools, Audio/Video Tools, Table Tools, Question Tools;

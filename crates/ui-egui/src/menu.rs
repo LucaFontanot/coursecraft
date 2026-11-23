@@ -574,8 +574,6 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 ui.close();
             }
 
-            const FILE_OPS_DISABLED_MSG: &str =
-                "Opening and saving files is desktop-only in this version";
             let desktop_file_ops = editor.file_ops_available && !cfg!(target_arch = "wasm32");
 
             if editor.file_ops_available {
@@ -787,6 +785,10 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 ui.close();
             }
             ui.checkbox(&mut editor.ui.show_media_library, "Media library");
+            ui.checkbox(&mut editor.ui.ribbon.visible, tl!("Ribbon"))
+                .on_hover_text(tl!(
+                    "Show the new ribbon above the toolbar while it is being built."
+                ));
             ui.separator();
             ui.menu_button("Theme", |ui| {
                 let current = editor.theme_pref;
@@ -888,6 +890,64 @@ fn show_project_help_items(editor: &mut Editor, ui: &mut Ui) {
     }
 }
 
+/// Whether Cut, Copy and Paste can run now, each with its disabled reason.
+/// The Edit menu and the ribbon's Clipboard group share these rules.
+/// Why file and publish commands are disabled where there is no file system.
+pub(crate) const FILE_OPS_DISABLED_MSG: &str =
+    "Opening and saving files is desktop-only in this version";
+
+pub(crate) struct ClipboardRules {
+    pub cut: Result<(), &'static str>,
+    pub copy: Result<(), &'static str>,
+    pub paste: Result<(), &'static str>,
+}
+
+pub(crate) fn clipboard_rules(editor: &Editor) -> ClipboardRules {
+    let has_objects = editor.selection.object.is_some();
+    let has_slide = editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .is_some();
+    let navigator = editor.ui.last_active_area == crate::ActiveArea::Navigator;
+    if editor.ui.master_view {
+        let reason = Err("Not available in Master View");
+        return ClipboardRules {
+            cut: reason,
+            copy: reason,
+            paste: reason,
+        };
+    }
+    let can_cut_slide = editor.session.course.slides().count() > 1;
+    let cut = if (navigator && has_slide && can_cut_slide) || (!navigator && has_objects) {
+        Ok(())
+    } else if navigator {
+        Err("Can't cut the only slide")
+    } else {
+        Err("Select an object first")
+    };
+    let copy = if (navigator && has_slide) || (!navigator && has_objects) {
+        Ok(())
+    } else {
+        Err("Select something first")
+    };
+    let paste = if editor.ui.clipboard.is_some() || editor.file_ops_available {
+        Ok(())
+    } else {
+        Err("Nothing to paste")
+    };
+    ClipboardRules { cut, copy, paste }
+}
+
+/// Paste: through the system clipboard on the desktop, else the editor's own.
+pub(crate) fn paste_now(editor: &mut Editor, ctx: &egui::Context) {
+    if editor.file_ops_available {
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+    } else {
+        crate::clipboard::paste_private(editor);
+    }
+}
+
 fn show_edit_menu(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -920,67 +980,34 @@ fn show_edit_menu(
     }
     ui.separator();
 
-    let has_objects = editor.selection.object.is_some();
-    let has_slide = editor
-        .session
-        .course
-        .slide(&editor.selection.slide)
-        .is_some();
-    let navigator = editor.ui.last_active_area == crate::ActiveArea::Navigator;
-    let master_view = editor.ui.master_view;
-    let can_cut_slide = editor.session.course.slides().count() > 1;
-
-    let cut_enabled =
-        !master_view && ((navigator && has_slide && can_cut_slide) || (!navigator && has_objects));
+    let rules = clipboard_rules(editor);
     let cut = Button::new("Cut").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+X"));
     if ui
-        .add_enabled(cut_enabled, cut)
-        .on_disabled_hover_text(if master_view {
-            "Not available in Master View"
-        } else if navigator {
-            "Can't cut the only slide"
-        } else {
-            "Select an object first"
-        })
+        .add_enabled(rules.cut.is_ok(), cut)
+        .on_disabled_hover_text(rules.cut.err().unwrap_or_default())
         .clicked()
     {
         crate::clipboard::cut(editor);
         ui.close();
     }
 
-    let copy_enabled = !master_view && ((navigator && has_slide) || (!navigator && has_objects));
     let copy = Button::new("Copy").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+C"));
     if ui
-        .add_enabled(copy_enabled, copy)
-        .on_disabled_hover_text(if master_view {
-            "Not available in Master View"
-        } else {
-            "Select something first"
-        })
+        .add_enabled(rules.copy.is_ok(), copy)
+        .on_disabled_hover_text(rules.copy.err().unwrap_or_default())
         .clicked()
     {
         crate::clipboard::copy(editor);
         ui.close();
     }
 
-    let paste_enabled =
-        !master_view && (editor.ui.clipboard.is_some() || editor.file_ops_available);
     let paste = Button::new("Paste").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+V"));
     if ui
-        .add_enabled(paste_enabled, paste)
-        .on_disabled_hover_text(if master_view {
-            "Not available in Master View"
-        } else {
-            "Nothing to paste"
-        })
+        .add_enabled(rules.paste.is_ok(), paste)
+        .on_disabled_hover_text(rules.paste.err().unwrap_or_default())
         .clicked()
     {
-        if editor.file_ops_available {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-        } else {
-            crate::clipboard::paste_private(editor);
-        }
+        paste_now(editor, ui.ctx());
         ui.close();
     }
 
@@ -1006,6 +1033,16 @@ fn show_edit_menu(
             render_registry_menu_item(editor, ui, cmd, label, action_to_run);
         }
     }
+}
+
+/// The Arrange menu's entries (order, group, align, distribute), for the ribbon.
+pub(crate) fn arrange_menu_items(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    action_to_run: &mut Option<(&'static str, serde_json::Value)>,
+    requests: &mut Vec<EditorRequest>,
+) {
+    render_category_menu_items(editor, ui, "Arrange", action_to_run, requests);
 }
 
 fn render_category_menu_items(

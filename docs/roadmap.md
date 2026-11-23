@@ -333,7 +333,9 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    open: the before/after look at the web player in a browser.
 1. Workspace on `craft-ui` docking and panes with today's panels inside. Ribbon drawn from one
    declarative spec (`crates/ui-egui/src/ribbon/spec.rs`), ribbon widgets ported from DeckCraft
-   onto `craft-ui`; Home first, beside the old toolbar.
+   onto `craft-ui`; Home first, beside the old toolbar. **Ribbon part built (2026-11-23):**
+   `crates/ui-egui/src/ribbon/` (`spec.rs`, `widgets.rs`, `mod.rs`), View › Ribbon, Home in both
+   variants, the other tabs drawn with a "being built" note. Still open: the docking workspace.
 2. Every main tab (File, Home, Insert, Slides, Design, Transitions, Animations, View, Help) with
    built controls wired and the rest **drawn disabled** with a "Not available yet" or "Not planned"
    tooltip; the shared New Slide ▾ menu.

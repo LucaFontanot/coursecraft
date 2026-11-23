@@ -347,6 +347,73 @@ pub fn preview_slide(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
     requests.push(EditorRequest::Preview { slide: slide_id });
 }
 
+/// Preview ▾: this slide, the selected slides, or from the start. Shared by the
+/// toolbar and the ribbon.
+pub(crate) fn preview_menu(ui: &mut Ui, editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
+    let master_view = editor.ui.master_view;
+    if master_view {
+        ui.add_enabled(false, egui::Button::new("Not available in Master View"));
+        return;
+    }
+    if ui
+        .add(egui::Button::new("Preview this slide").shortcut_text("F12"))
+        .clicked()
+    {
+        preview_slide(editor, requests);
+        ui.close();
+    }
+    let selected_count = editor
+        .selection
+        .slide_ids()
+        .iter()
+        .filter(|id| editor.session.course.bank_slide(id).is_none())
+        .count();
+    if ui
+        .add_enabled(
+            selected_count >= 2,
+            egui::Button::new("Preview selected slides"),
+        )
+        .clicked()
+    {
+        let slide_id = editor.selection.slide.clone();
+        editor.open_preview_selected();
+        requests.push(EditorRequest::Preview { slide: slide_id });
+        ui.close();
+    }
+    if ui
+        .add(egui::Button::new("Preview from the start").shortcut_text("Shift+F12"))
+        .clicked()
+    {
+        editor.open_preview_at(None);
+        requests.push(EditorRequest::Preview {
+            slide: String::new(),
+        });
+        ui.close();
+    }
+}
+
+/// A click on a Format Painter button: click arms it once, double-click keeps it
+/// armed, a click while armed turns it off. Shared by the toolbar and the ribbon.
+pub(crate) fn format_painter_clicked(editor: &mut Editor, painter_resp: &egui::Response) {
+    if painter_resp.double_clicked() {
+        editor.arm_format_painter(true);
+        if let Some(p) = editor.ui.format_painter.as_mut() {
+            p.sticky = true;
+            p.just_double_clicked = true;
+        }
+    } else if painter_resp.clicked() {
+        if let Some(p) = editor.ui.format_painter.as_mut() {
+            if p.just_double_clicked {
+                p.just_double_clicked = false;
+            } else {
+                editor.ui.format_painter = None;
+            }
+        } else {
+            editor.arm_format_painter(false);
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Toolbar display
 // ----------------------------------------------------------------------------
@@ -451,47 +518,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         preview_slide(editor, requests);
     }
     let preview_caret = widgets::toolbar_caret_button(&mut left_ui, "More preview options");
-    egui::Popup::menu(&preview_caret).show(|ui| {
-        if master_view {
-            ui.add_enabled(false, egui::Button::new("Not available in Master View"));
-            return;
-        }
-        if ui
-            .add(egui::Button::new("Preview this slide").shortcut_text("F12"))
-            .clicked()
-        {
-            preview_slide(editor, requests);
-            ui.close();
-        }
-        let selected_count = editor
-            .selection
-            .slide_ids()
-            .iter()
-            .filter(|id| editor.session.course.bank_slide(id).is_none())
-            .count();
-        if ui
-            .add_enabled(
-                selected_count >= 2,
-                egui::Button::new("Preview selected slides"),
-            )
-            .clicked()
-        {
-            let slide_id = editor.selection.slide.clone();
-            editor.open_preview_selected();
-            requests.push(EditorRequest::Preview { slide: slide_id });
-            ui.close();
-        }
-        if ui
-            .add(egui::Button::new("Preview from the start").shortcut_text("Shift+F12"))
-            .clicked()
-        {
-            editor.open_preview_at(None);
-            requests.push(EditorRequest::Preview {
-                slide: String::new(),
-            });
-            ui.close();
-        }
-    });
+    egui::Popup::menu(&preview_caret).show(|ui| preview_menu(ui, editor, requests));
 
     if editor.file_ops_available {
         left_ui.add_space(coursecraft_render::SPACE_MD);
@@ -550,23 +577,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         painter_enabled,
         painter_tooltip,
     );
-    if painter_resp.double_clicked() {
-        editor.arm_format_painter(true);
-        if let Some(p) = editor.ui.format_painter.as_mut() {
-            p.sticky = true;
-            p.just_double_clicked = true;
-        }
-    } else if painter_resp.clicked() {
-        if let Some(p) = editor.ui.format_painter.as_mut() {
-            if p.just_double_clicked {
-                p.just_double_clicked = false;
-            } else {
-                editor.ui.format_painter = None;
-            }
-        } else {
-            editor.arm_format_painter(false);
-        }
-    }
+    format_painter_clicked(editor, &painter_resp);
 
     // 2. Right group: Undo, Redo, separator, and inspector toggles (Format, Animate, Slide, Course)
     let mut right_ui = ui.new_child(

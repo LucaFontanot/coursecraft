@@ -76,6 +76,11 @@ Project commands (below the start actions once a course is open):
 
 Shown when the Course Map view tab is active.
 
+> **In the code (M30 step 1):** both Home variants are drawn from `crates/ui-egui/src/ribbon/spec.rs`
+> behind View › Ribbon. The Status column is the feature's status. Built features that the
+> ribbon doesn't reach yet (text formatting, Apply Layout, Question Banks, Quick Styles, Shape
+> Fill/Outline/Effect) are drawn disabled with "Not available yet: ribbon wiring" until step 2.
+
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
 | Clipboard | Paste | LS | `slide.paste` | ✅ | pastes slides in the map |
