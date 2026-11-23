@@ -19677,45 +19677,6 @@ fn static_sentence_case_lint_for_dialogs_menus_toolbar_and_slides() {
 /// calls exist (`UX-08` / `M32-05`).
 #[test]
 fn every_add_enabled_has_disabled_reason() {
-    fn strip_cfg_test_modules(src: &str) -> String {
-        let lines: Vec<&str> = src.lines().collect();
-        let mut cut = lines.len();
-        for (idx, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("#[cfg(test)]") {
-                let rest = trimmed.trim_start_matches("#[cfg(test)]").trim();
-                if rest.starts_with("mod ")
-                    || rest.starts_with("pub mod ")
-                    || rest.starts_with("pub(crate) mod ")
-                {
-                    cut = idx;
-                    break;
-                }
-                if rest.is_empty() {
-                    let mut next = idx + 1;
-                    while next < lines.len() {
-                        let t = lines[next].trim();
-                        if t.is_empty() || t.starts_with("//") || t.starts_with("#[") {
-                            next += 1;
-                            continue;
-                        }
-                        if t.starts_with("mod ")
-                            || t.starts_with("pub mod ")
-                            || t.starts_with("pub(crate) mod ")
-                        {
-                            cut = idx;
-                        }
-                        break;
-                    }
-                    if cut != lines.len() {
-                        break;
-                    }
-                }
-            }
-        }
-        lines[..cut].join("\n")
-    }
-
     fn strip_comments_keep_lines(src: &str) -> String {
         let mut out = String::with_capacity(src.len());
         let bytes = src.as_bytes();
@@ -19802,63 +19763,214 @@ fn every_add_enabled_has_disabled_reason() {
         out
     }
 
-    fn find_matching_paren(src: &str, open_paren_idx: usize) -> Option<usize> {
-        let mut depth = 0usize;
-        let mut in_str = false;
-        let mut escaped = false;
-        for (rel, ch) in src[open_paren_idx..].char_indices() {
-            if in_str {
-                if escaped {
-                    escaped = false;
-                } else if ch == '\\' {
-                    escaped = true;
-                } else if ch == '"' {
-                    in_str = false;
+    fn strip_inline_cfg_test_modules(comment_free: &str) -> String {
+        let lines: Vec<&str> = comment_free.lines().collect();
+        let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+        let mut idx = 0usize;
+        while idx < lines.len() {
+            let trimmed = lines[idx].trim();
+            let mut inline_mod_start = None;
+            if trimmed.starts_with("#[cfg(test)]") {
+                let rest = trimmed.trim_start_matches("#[cfg(test)]").trim();
+                let is_mod_decl = |s: &str| {
+                    (s.starts_with("mod ")
+                        || s.starts_with("pub mod ")
+                        || s.starts_with("pub(crate) mod "))
+                        && !s.trim_end().ends_with(';')
+                };
+                if is_mod_decl(rest) {
+                    inline_mod_start = Some(idx);
+                } else if rest.is_empty() {
+                    let mut next = idx + 1;
+                    while next < lines.len() {
+                        let t = lines[next].trim();
+                        if t.is_empty() || t.starts_with("#[") {
+                            next += 1;
+                            continue;
+                        }
+                        if is_mod_decl(t) {
+                            inline_mod_start = Some(next);
+                        }
+                        break;
+                    }
+                }
+            }
+            if let Some(mod_line) = inline_mod_start {
+                while idx < mod_line {
+                    kept.push(String::new());
+                    idx += 1;
+                }
+                let mut depth = 0usize;
+                let mut opened = false;
+                while idx < lines.len() {
+                    let line = lines[idx];
+                    let bytes = line.as_bytes();
+                    let mut i = 0usize;
+                    let mut in_str = false;
+                    let mut in_char = false;
+                    let mut escaped = false;
+                    while i < bytes.len() {
+                        let b = bytes[i];
+                        if in_str {
+                            if escaped {
+                                escaped = false;
+                            } else if b == b'\\' {
+                                escaped = true;
+                            } else if b == b'"' {
+                                in_str = false;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                        if in_char {
+                            if escaped {
+                                escaped = false;
+                            } else if b == b'\\' {
+                                escaped = true;
+                            } else if b == b'\'' {
+                                in_char = false;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                        if b == b'"' {
+                            in_str = true;
+                        } else if b == b'\''
+                            && ((i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                                || (i + 3 < bytes.len()
+                                    && bytes[i + 1] == b'\\'
+                                    && bytes[i + 3] == b'\''))
+                        {
+                            in_char = true;
+                        } else if b == b'{' {
+                            depth += 1;
+                            opened = true;
+                        } else if b == b'}' && depth > 0 {
+                            depth -= 1;
+                        }
+                        i += 1;
+                    }
+                    kept.push(String::new());
+                    idx += 1;
+                    if opened && depth == 0 {
+                        break;
+                    }
                 }
                 continue;
             }
-            match ch {
-                '"' => in_str = true,
-                '(' => depth += 1,
-                ')' => {
+            kept.push(lines[idx].to_owned());
+            idx += 1;
+        }
+        kept.join("\n")
+    }
+
+    fn find_matching_paren(src: &str, open_paren_idx: usize) -> Option<usize> {
+        let bytes = src.as_bytes();
+        let mut depth = 0usize;
+        let mut in_str = false;
+        let mut in_char = false;
+        let mut escaped = false;
+        let mut i = open_paren_idx;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if in_str {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_char {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+                continue;
+            }
+            match b {
+                b'"' => in_str = true,
+                b'\''
+                    if (i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                        || (i + 3 < bytes.len()
+                            && bytes[i + 1] == b'\\'
+                            && bytes[i + 3] == b'\'') =>
+                {
+                    in_char = true;
+                }
+                b'(' => depth += 1,
+                b')' => {
                     depth = depth.saturating_sub(1);
                     if depth == 0 {
-                        return Some(open_paren_idx + rel);
+                        return Some(i);
                     }
                 }
                 _ => {}
             }
+            i += 1;
         }
         None
     }
 
     fn statement_end_after(src: &str, start_idx: usize) -> usize {
+        let bytes = src.as_bytes();
         let mut depth = 0usize;
         let mut in_str = false;
+        let mut in_char = false;
         let mut escaped = false;
-        for (rel, ch) in src[start_idx..].char_indices() {
+        let mut i = start_idx;
+        while i < bytes.len() {
+            let b = bytes[i];
             if in_str {
                 if escaped {
                     escaped = false;
-                } else if ch == '\\' {
+                } else if b == b'\\' {
                     escaped = true;
-                } else if ch == '"' {
+                } else if b == b'"' {
                     in_str = false;
                 }
+                i += 1;
                 continue;
             }
-            match ch {
-                '"' => in_str = true,
-                '(' | '[' | '{' => depth += 1,
-                ')' | ']' | '}' => {
+            if in_char {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+                continue;
+            }
+            match b {
+                b'"' => in_str = true,
+                b'\''
+                    if (i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                        || (i + 3 < bytes.len()
+                            && bytes[i + 1] == b'\\'
+                            && bytes[i + 3] == b'\'') =>
+                {
+                    in_char = true;
+                }
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
                     if depth == 0 {
-                        return start_idx + rel;
+                        return i;
                     }
                     depth -= 1;
                 }
-                ';' | ',' if depth == 0 => return start_idx + rel,
+                b';' | b',' if depth == 0 => return i,
                 _ => {}
             }
+            i += 1;
         }
         src.len()
     }
@@ -19883,6 +19995,109 @@ fn every_add_enabled_has_disabled_reason() {
         src[..byte_idx].bytes().filter(|&b| b == b'\n').count() + 1
     }
 
+    fn scan_source(file_name: &str, raw: &str) -> (usize, Vec<String>) {
+        let prod = strip_inline_cfg_test_modules(&strip_comments_keep_lines(raw));
+        let mut violations = Vec::new();
+        let mut checked = 0usize;
+
+        // 1. Forbid `ui.disable()` in production code.
+        let mut disable_offset = 0usize;
+        while let Some(pos) = prod[disable_offset..].find(".disable()") {
+            let abs = disable_offset + pos;
+            let line = line_number_at(&prod, abs);
+            violations.push(format!(
+                "{file_name}:{line}: forbidden `ui.disable()` in production code; use `add_enabled_ui` with `.on_disabled_hover_text(...)`"
+            ));
+            disable_offset = abs + ".disable()".len();
+        }
+
+        // 2. Check every `.add_enabled(` and `.add_enabled_ui(`.
+        for needle in [".add_enabled(", ".add_enabled_ui("] {
+            let is_ui_block = needle == ".add_enabled_ui(";
+            let mut offset = 0usize;
+            while let Some(pos) = prod[offset..].find(needle) {
+                let abs = offset + pos;
+                let open_paren = abs + needle.len() - 1;
+                offset = open_paren + 1;
+                checked += 1;
+
+                let Some(close_paren) = find_matching_paren(&prod, open_paren) else {
+                    let line = line_number_at(&prod, abs);
+                    violations.push(format!("{file_name}:{line}: unmatched paren in `{needle}`"));
+                    continue;
+                };
+
+                let after_call = close_paren + 1;
+                let stmt_end = statement_end_after(&prod, after_call);
+                let chain = &prod[after_call..stmt_end];
+                let inside = &prod[open_paren..=close_paren];
+
+                let mut has_reason = chain.contains(".on_disabled_hover_text(")
+                    || (is_ui_block && inside.contains(".on_disabled_hover_text("));
+
+                if !has_reason && let Some(var) = bound_var_before(&prod, abs) {
+                    let lookahead_end = prod
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .find(|&i| i >= (stmt_end + 800).min(prod.len()))
+                        .unwrap_or(prod.len());
+                    let lookahead_compact: String = prod[stmt_end..lookahead_end]
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .collect();
+                    let direct = format!("{var}.on_disabled_hover_text(");
+                    let chained = format!("{var}.on_hover_text(");
+                    if lookahead_compact.contains(&direct)
+                        || (lookahead_compact.contains(&chained)
+                            && lookahead_compact.contains(".on_disabled_hover_text("))
+                    {
+                        has_reason = true;
+                    }
+                }
+
+                if !has_reason {
+                    let line = line_number_at(&prod, abs);
+                    violations.push(format!(
+                        "{file_name}:{line}: `{needle}` is missing `.on_disabled_hover_text(...)`"
+                    ));
+                }
+            }
+        }
+
+        (checked, violations)
+    }
+
+    // Self-check: out-of-line `#[cfg(test)] mod foo;` (like lib.rs & main.rs) must NOT blind
+    // the scanner, inline `#[cfg(test)] mod tests { ... }` must be ignored, and char literals
+    // like `'"'` must not break paren matching.
+    let (_, synthetic_violations) = scan_source(
+        "synthetic.rs",
+        r#"
+#[cfg(test)]
+mod external_tests;
+
+fn prod(ui: &mut egui::Ui, ok: bool) {
+    #[cfg(test)]
+    let _c = '"';
+    ui.add_enabled(ok, egui::Button::new("Bare"));
+    ui.disable();
+}
+
+#[cfg(test)]
+mod tests {
+    fn ignored(ui: &mut egui::Ui) {
+        ui.disable();
+        ui.add_enabled(false, egui::Button::new("In test"));
+    }
+}
+"#,
+    );
+    assert_eq!(
+        synthetic_violations.len(),
+        2,
+        "guard self-check must catch prod violations after out-of-line #[cfg(test)] mod and ignore inline #[cfg(test)] mod tests, got: {synthetic_violations:?}"
+    );
+
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let dirs = [
         manifest.join("src"),
@@ -19891,6 +20106,7 @@ fn every_add_enabled_has_disabled_reason() {
     let mut violations = Vec::new();
     let mut scanned_files = 0usize;
     let mut checked_calls = 0usize;
+    let mut lib_rs_checked_calls = 0usize;
 
     for dir in &dirs {
         let entries = std::fs::read_dir(dir)
@@ -19913,78 +20129,22 @@ fn every_add_enabled_has_disabled_reason() {
             }
             scanned_files += 1;
             let raw = std::fs::read_to_string(&path).expect("read production source file");
-            let prod = strip_comments_keep_lines(&strip_cfg_test_modules(&raw));
-
-            // 1. Forbid `ui.disable()` in production code.
-            let mut disable_offset = 0usize;
-            while let Some(pos) = prod[disable_offset..].find(".disable()") {
-                let abs = disable_offset + pos;
-                let line = line_number_at(&prod, abs);
-                violations.push(format!(
-                    "{file_name}:{line}: forbidden `ui.disable()` in production code; use `add_enabled_ui` with `.on_disabled_hover_text(...)`"
-                ));
-                disable_offset = abs + ".disable()".len();
+            let (file_checked, file_violations) = scan_source(file_name, &raw);
+            if file_name == "lib.rs" {
+                lib_rs_checked_calls = file_checked;
             }
-
-            // 2. Check every `.add_enabled(` and `.add_enabled_ui(`.
-            for needle in [".add_enabled(", ".add_enabled_ui("] {
-                let is_ui_block = needle == ".add_enabled_ui(";
-                let mut offset = 0usize;
-                while let Some(pos) = prod[offset..].find(needle) {
-                    let abs = offset + pos;
-                    let open_paren = abs + needle.len() - 1;
-                    offset = open_paren + 1;
-                    checked_calls += 1;
-
-                    let Some(close_paren) = find_matching_paren(&prod, open_paren) else {
-                        let line = line_number_at(&prod, abs);
-                        violations
-                            .push(format!("{file_name}:{line}: unmatched paren in `{needle}`"));
-                        continue;
-                    };
-
-                    let after_call = close_paren + 1;
-                    let stmt_end = statement_end_after(&prod, after_call);
-                    let chain = &prod[after_call..stmt_end];
-                    let inside = &prod[open_paren..=close_paren];
-
-                    let mut has_reason = chain.contains(".on_disabled_hover_text(")
-                        || (is_ui_block && inside.contains(".on_disabled_hover_text("));
-
-                    if !has_reason && let Some(var) = bound_var_before(&prod, abs) {
-                        let lookahead_end = prod
-                            .char_indices()
-                            .map(|(i, _)| i)
-                            .find(|&i| i >= (stmt_end + 800).min(prod.len()))
-                            .unwrap_or(prod.len());
-                        let lookahead_compact: String = prod[stmt_end..lookahead_end]
-                            .chars()
-                            .filter(|c| !c.is_whitespace())
-                            .collect();
-                        let direct = format!("{var}.on_disabled_hover_text(");
-                        let chained = format!("{var}.on_hover_text(");
-                        if lookahead_compact.contains(&direct)
-                            || (lookahead_compact.contains(&chained)
-                                && lookahead_compact.contains(".on_disabled_hover_text("))
-                        {
-                            has_reason = true;
-                        }
-                    }
-
-                    if !has_reason {
-                        let line = line_number_at(&prod, abs);
-                        violations.push(format!(
-                            "{file_name}:{line}: `{needle}` is missing `.on_disabled_hover_text(...)`"
-                        ));
-                    }
-                }
-            }
+            checked_calls += file_checked;
+            violations.extend(file_violations);
         }
     }
 
     assert!(
         scanned_files >= 30,
         "expected >= 30 production files scanned, found {scanned_files}"
+    );
+    assert!(
+        lib_rs_checked_calls >= 1,
+        "lib.rs must be scanned past its out-of-line #[cfg(test)] mod declarations (expected quiet_button_enabled)"
     );
     assert!(
         checked_calls >= 60,
