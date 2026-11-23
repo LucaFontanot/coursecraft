@@ -2564,3 +2564,77 @@ fn m31_12_empty_state_src_builds_and_zips_with_base_image() {
     let zip_bytes = zip_package(&files).expect("zip builds cleanly");
     assert!(!zip_bytes.is_empty(), "zip output must be non-empty");
 }
+
+#[test]
+fn m31_20_package_zipper_matches_zip_package_across_chunk_sizes() {
+    // Mix of deflated text/wasm, precompressed media, and empty files, > 1 MiB total.
+    let mut big_wasm = Vec::with_capacity(600 * 1024);
+    for i in 0..(600 * 1024 / 4) {
+        big_wasm.extend_from_slice(&(i as u32).to_le_bytes());
+    }
+    let mut big_png = Vec::with_capacity(700 * 1024);
+    for i in 0..(700 * 1024) {
+        big_png.push((i % 251) as u8);
+    }
+    let files = vec![
+        PackageFile {
+            path: "course.json".to_string(),
+            bytes: br#"{"title":"Chunked"}"#.repeat(200),
+        },
+        PackageFile {
+            path: "coursecraft_player_bg.wasm".to_string(),
+            bytes: big_wasm,
+        },
+        PackageFile {
+            path: "empty.txt".to_string(),
+            bytes: Vec::new(),
+        },
+        PackageFile {
+            path: "index.html".to_string(),
+            bytes: b"<!doctype html><html></html>".to_vec(),
+        },
+        PackageFile {
+            path: "media/photo.png".to_string(),
+            bytes: big_png,
+        },
+    ];
+    let expected = zip_package(&files).expect("reference zip_package");
+    let expected_total: u64 = files.iter().map(|f| f.bytes.len() as u64).sum();
+
+    for chunk_size in [1024_usize, 64 * 1024, 256 * 1024] {
+        let mut zipper = PackageZipper::new(files.clone());
+        let mut steps = 0usize;
+        let mut prev_done = 0u64;
+        let result = loop {
+            steps += 1;
+            match zipper.step(chunk_size).expect("step") {
+                ZipStep::InProgress {
+                    bytes_done,
+                    bytes_total,
+                } => {
+                    assert_eq!(bytes_total, expected_total);
+                    assert!(bytes_done >= prev_done, "progress must be monotonic");
+                    assert!(bytes_done <= bytes_total);
+                    prev_done = bytes_done;
+                }
+                ZipStep::Done(bytes) => break bytes,
+            }
+        };
+        assert!(
+            steps > 1,
+            "multi-MB payload at chunk_size={chunk_size} must take > 1 step"
+        );
+        assert_eq!(
+            result, expected,
+            "PackageZipper output must be byte-identical to zip_package at chunk_size={chunk_size}"
+        );
+    }
+
+    // Empty package edge case.
+    let empty_expected = zip_package(&[]).expect("empty zip");
+    let mut empty_zipper = PackageZipper::new(Vec::new());
+    match empty_zipper.step(256 * 1024).expect("empty step") {
+        ZipStep::Done(bytes) => assert_eq!(bytes, empty_expected),
+        ZipStep::InProgress { .. } => panic!("empty package must finish in one step"),
+    }
+}

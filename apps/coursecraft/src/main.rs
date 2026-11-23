@@ -238,6 +238,20 @@ struct EditorApp {
     /// Unsaved-changes guard and pending action for the web editor.
     #[cfg(target_arch = "wasm32")]
     web_unsaved: web_state::WebUnsavedState,
+    /// Active frame-chunked web publish job.
+    #[cfg(target_arch = "wasm32")]
+    web_publish: Option<WebPublishJob>,
+}
+
+#[cfg(target_arch = "wasm32")]
+enum WebPublishJob {
+    Preparing {
+        standard: coursecraft_ui_egui::PublishStandard,
+    },
+    Zipping {
+        standard: coursecraft_ui_egui::PublishStandard,
+        zipper: coursecraft_publish::PackageZipper,
+    },
 }
 
 /// Whether a close request must be intercepted to ask about unsaved changes.
@@ -2885,6 +2899,7 @@ impl EditorApp {
 
         #[cfg(target_arch = "wasm32")]
         let web_modal_esc = {
+            self.step_web_publish(ui.ctx());
             let is_dirty = self.web_unsaved.is_dirty(self.editor.session.revision);
             let name = self.web_unsaved.file_name_display().to_owned();
             self.editor.set_title_info(name, is_dirty);
@@ -3382,31 +3397,10 @@ impl EditorApp {
                         self.perform_web_save();
                     }
                     EditorRequest::Publish { standard } => {
-                        self.editor.set_publish_busy();
-                        let pkg_standard = publish::package_standard(standard);
-                        let player = player_bundle::player_files();
-                        match publish::run_publish_bytes(
-                            &self.editor.session.course,
-                            &self.editor.media,
-                            pkg_standard,
-                            &player,
-                        ) {
-                            Ok(bytes) => {
-                                let stem = sanitize_filename_stem(
-                                    &self.editor.session.course.title,
-                                    "course",
-                                );
-                                let file_name = format!("{stem}-{}.zip", standard.file_stem());
-                                match web_download_bytes(&file_name, &bytes, "application/zip") {
-                                    Ok(()) => self
-                                        .editor
-                                        .set_publish_success(file_name, bytes.len() as u64),
-                                    Err(err) => self.editor.set_publish_failure(format!(
-                                        "Couldn't download {file_name}: {err}"
-                                    )),
-                                }
-                            }
-                            Err(err) => self.editor.set_publish_failure(err),
+                        if self.web_publish.is_none() {
+                            self.editor.set_publish_busy();
+                            self.web_publish = Some(WebPublishJob::Preparing { standard });
+                            ui.ctx().request_repaint();
                         }
                     }
                     EditorRequest::SaveImage { .. } => {
@@ -3666,6 +3660,7 @@ fn main() {
                         project_open_tx,
                         project_open_rx,
                         web_unsaved,
+                        web_publish: None,
                     }))
                 }),
             )
@@ -3678,6 +3673,71 @@ fn main() {
 
 #[cfg(target_arch = "wasm32")]
 impl EditorApp {
+    fn step_web_publish(&mut self, ctx: &egui::Context) {
+        const CHUNK_BYTES: usize = 256 * 1024;
+        let Some(job) = self.web_publish.take() else {
+            return;
+        };
+        match job {
+            WebPublishJob::Preparing { standard } => {
+                let pkg_standard = publish::package_standard(standard);
+                let player = player_bundle::player_files();
+                match publish::package_files_from(
+                    &self.editor.session.course,
+                    &self.editor.media,
+                    pkg_standard,
+                    &player,
+                ) {
+                    Ok(files) => {
+                        self.editor.set_publish_progress(Some(0.0));
+                        self.web_publish = Some(WebPublishJob::Zipping {
+                            standard,
+                            zipper: coursecraft_publish::PackageZipper::new(files),
+                        });
+                        ctx.request_repaint();
+                    }
+                    Err(err) => {
+                        self.editor.set_publish_failure(err);
+                    }
+                }
+            }
+            WebPublishJob::Zipping {
+                standard,
+                mut zipper,
+            } => match zipper.step(CHUNK_BYTES) {
+                Ok(coursecraft_publish::ZipStep::InProgress {
+                    bytes_done,
+                    bytes_total,
+                }) => {
+                    let progress = if bytes_total == 0 {
+                        1.0
+                    } else {
+                        bytes_done as f32 / bytes_total as f32
+                    };
+                    self.editor.set_publish_progress(Some(progress));
+                    self.web_publish = Some(WebPublishJob::Zipping { standard, zipper });
+                    ctx.request_repaint();
+                }
+                Ok(coursecraft_publish::ZipStep::Done(bytes)) => {
+                    let stem = sanitize_filename_stem(&self.editor.session.course.title, "course");
+                    let file_name = format!("{stem}-{}.zip", standard.file_stem());
+                    match web_download_bytes(&file_name, &bytes, "application/zip") {
+                        Ok(()) => self
+                            .editor
+                            .set_publish_success(file_name, bytes.len() as u64),
+                        Err(err) => self
+                            .editor
+                            .set_publish_failure(format!("Couldn't download {file_name}: {err}")),
+                    }
+                }
+                Err(err) => {
+                    self.editor
+                        .set_publish_failure(format!("Couldn't create the zip file: {err}"));
+                }
+            },
+        }
+    }
+
     fn guard_web_unsaved(&mut self, action: web_state::WebPendingAction, ctx: &egui::Context) {
         let rev = self.editor.session.revision;
         if let Some(ready) = self.web_unsaved.request_or_run(action, rev) {
