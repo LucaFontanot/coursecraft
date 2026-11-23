@@ -497,6 +497,7 @@ fn uiux_sweep_scale_2_and_fixtures() {
     let core_labels = [
         "inspector-format",
         "inspector-slide",
+        "inspector-course",
         "bottom-timeline",
         "bottom-states-1",
         "edit-state-mode",
@@ -505,6 +506,7 @@ fn uiux_sweep_scale_2_and_fixtures() {
         "bottom-variables",
         "course-map",
         "window-course-settings",
+        "window-slide-size",
         "window-theme",
         "window-publish",
         "window-find",

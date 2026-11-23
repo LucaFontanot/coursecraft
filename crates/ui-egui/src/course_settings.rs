@@ -275,6 +275,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                         "Course title",
                         "Course ID",
                         "Language",
+                        "Slide size",
                         "Logo",
                         "Navigation",
                         "Seekbar",
@@ -341,6 +342,17 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                     } else {
                         ui.colored_label(p.danger, "Use a tag such as en, fr or pt-BR.");
                     }
+                });
+
+                form.row(ui, "Slide size", |ui, _width| {
+                    let size = editor.session.course.slide_size;
+                    let ratio = crate::slide_size_dialog::format_aspect_ratio(size.w, size.h);
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} × {} px ({ratio})", size.w, size.h));
+                        if ui.button("Change…").clicked() {
+                            editor.open_slide_size_dialog();
+                        }
+                    });
                 });
 
                 if needs_result {

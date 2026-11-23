@@ -668,7 +668,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 editor.open_preferences();
                 ui.close();
             }
-            if ui.button("Slide Size…").clicked() {
+            if ui.button("Slide size…").clicked() {
                 editor.open_slide_size_dialog();
                 ui.close();
             }
@@ -778,6 +778,14 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 render_category_menu_items(editor, ui, category, &mut action_to_run, requests);
             });
         }
+
+        // Slide menu
+        ui.menu_button("Slide", |ui| {
+            if ui.button("Slide size…").clicked() {
+                editor.open_slide_size_dialog();
+                ui.close();
+            }
+        });
 
         // View menu (Theme preference selection)
         ui.menu_button("View", |ui| {

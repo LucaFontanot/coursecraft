@@ -128,11 +128,8 @@ fn set_multiline_text(harness: &mut TestHarness, label_pos: Pos2, text: &str) {
 }
 
 fn ensure_layers_panel_open(harness: &mut TestHarness) {
-    if harness.editor.ui.inspector_tab != crate::InspectorTab::Slide
-        && let Some(slide_tab) = harness.find_text("Slide")
-    {
-        harness.click_at(slide_tab);
-        harness.idle_frame();
+    if harness.editor.ui.inspector_tab != crate::InspectorTab::Slide {
+        click_inspector_tab(harness, "Slide");
     }
 }
 
@@ -1528,12 +1525,13 @@ fn topmost_in_inspector(harness: &mut TestHarness, label: &str) -> Option<Pos2> 
 }
 
 fn click_inspector_tab(harness: &mut TestHarness, tab: &str) {
-    // The tabs sit in the top toolbar.
+    // The tabs sit in the top toolbar above the right inspector panel.
+    let right_x = harness.right_panel_rect().min.x;
     let pos = harness
         .find_texts(tab)
         .into_iter()
+        .filter(|p| p.y < 80.0 && p.x >= right_x)
         .min_by(|a, b| a.y.total_cmp(&b.y))
-        .filter(|p| p.y < 80.0)
         .unwrap_or_else(|| panic!("{tab} tab"));
     harness.click_at(pos);
     harness.idle_frame();

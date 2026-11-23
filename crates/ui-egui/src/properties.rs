@@ -4283,6 +4283,16 @@ fn show_course_tab(
     inspector_row(ui, "Slides", |ui| {
         ui.label(format!("{slide_count} slides"));
     });
+    let slide_size = editor.session.course.slide_size;
+    let ratio = crate::slide_size_dialog::format_aspect_ratio(slide_size.w, slide_size.h);
+    inspector_row(ui, "Slide size", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("{} × {} px ({ratio})", slide_size.w, slide_size.h));
+            if ui.button("Change…").clicked() {
+                editor.open_slide_size_dialog();
+            }
+        });
+    });
     if let Some(q) = quiz {
         inspector_row(ui, "Pass mark", |ui| {
             ui.label(format!("{}%", q.passing_percent));

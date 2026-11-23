@@ -17138,7 +17138,7 @@ fn slide_size_dialog_opens_from_the_file_menu_and_apply_dispatches() {
     let file = h.find_text("File").expect("File menu");
     h.click_at(file);
     h.idle_frame();
-    let item = h.find_text("Slide Size…").expect("Slide Size item");
+    let item = h.find_text("Slide size…").expect("Slide size item");
     h.click_at(item);
     h.idle_frame();
     assert!(h.editor.ui.slide_size_dialog.open);
@@ -17641,6 +17641,143 @@ fn slide_size_dialog_preview_idle_frames_do_not_recompute() {
         h.idle_frame();
     }
     assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 3);
+}
+
+#[test]
+fn slide_size_dialog_opens_from_all_five_entry_points() {
+    let (mut h, _t) = lock_hide_setup();
+
+    // 1. File ▸ Slide size…
+    let file = h.find_text("File").expect("File menu");
+    h.click_at(file);
+    h.idle_frame();
+    let item = h.find_text("Slide size…").expect("File > Slide size…");
+    h.click_at(item);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "File menu must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.idle_frame();
+
+    // 2. Slide ▸ Slide size…
+    let slide_menu = h.find_text("Slide").expect("Slide menu");
+    h.click_at(slide_menu);
+    h.idle_frame();
+    let item = h.find_text("Slide size…").expect("Slide > Slide size…");
+    h.click_at(item);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Slide menu must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.idle_frame();
+
+    // 3. Course Inspector "Change…"
+    h.editor.ui.inspector_tab = crate::InspectorTab::Course;
+    h.idle_frame();
+    let change = h.find_text("Change…").expect("Course inspector Change…");
+    h.click_at(change);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Course inspector Change… must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.idle_frame();
+
+    // 4. Course Settings "Change…"
+    h.editor.ui.inspector_tab = crate::InspectorTab::Format;
+    h.editor.ui.show_course_settings_window = true;
+    h.idle_frame();
+    h.idle_frame();
+    let change = h.find_text("Change…").expect("Course settings Change…");
+    h.click_at(change);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Course settings Change… must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.editor.ui.show_course_settings_window = false;
+    h.idle_frame();
+
+    // 5. Status bar "1280 × 720 px" pill
+    let pill = h
+        .find_text("1280 × 720 px")
+        .expect("Status bar slide size pill");
+    h.click_at(pill);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Status bar pill must open Slide size"
+    );
+}
+
+#[test]
+fn check_course_off_slide_warning_navigates_to_stranded_object() {
+    let (mut h, _t) = lock_hide_setup();
+    let layer_res = h
+        .editor
+        .run(
+            "layer.add",
+            serde_json::json!({ "slide": "slide1", "name": "Stranded Layer" }),
+        )
+        .expect("layer.add");
+    let layer_id = layer_res["id"].as_str().expect("layer id").to_owned();
+    let obj_res = h
+        .editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": "slide1",
+                "layer": layer_id,
+                "name": "Stranded Box",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#3B82F6" },
+                "frame": { "x": 1000.0, "y": 100.0, "w": 150.0, "h": 80.0 }
+            }),
+        )
+        .expect("object.add");
+    let obj_id = obj_res["id"].as_str().expect("object id").to_owned();
+
+    h.editor
+        .run(
+            "course.set_slide_size",
+            serde_json::json!({ "w": 800, "h": 600, "mode": "keep" }),
+        )
+        .expect("resize keep");
+    h.editor.selection.slide = String::new();
+    h.editor.selection.layer = None;
+    h.editor.selection.clear_objects();
+    h.editor.refresh_validate_only();
+    let issue_label = h
+        .editor
+        .ui
+        .validation_issues
+        .iter()
+        .find(|i| i.message.contains("lies outside the 800×600 slide"))
+        .map(|i| format!("{} — {}", i.path, i.message))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected off-slide warning, got {:?}",
+                h.editor.ui.validation_issues
+            )
+        });
+    h.editor.ui.show_validation_window = true;
+    h.idle_frame();
+    h.idle_frame();
+
+    let warning_pos = h
+        .find_text(&issue_label)
+        .expect("off-slide warning row in Check Course");
+    h.click_at(warning_pos);
+    h.idle_frame();
+
+    assert_eq!(h.editor.selection.slide, "slide1");
+    assert_eq!(h.editor.selection.layer.as_deref(), Some(layer_id.as_str()));
+    assert_eq!(h.editor.selection.object.as_deref(), Some(obj_id.as_str()));
 }
 
 #[test]
