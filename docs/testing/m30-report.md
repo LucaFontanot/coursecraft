@@ -63,6 +63,6 @@
 
 ## 4. Release Gate & Performance (Driver-Run)
 
-- `cargo xtask build-player`: *Pending driver run.*
-- `cargo xtask ci`: *Pending driver run.*
-- `cargo xtask perf`: *Pending driver run.*
+- `cargo xtask build-player`: passed after S2, S8 and S12 (driver).
+- `cargo xtask ci`: passed at gates S2, S5, S8, S10 and S12 (driver); the native video test's timeout was raised from 3 s to 10 s because macOS takes about 3.1 s to reject plain text as a video.
+- `cargo xtask perf`: every editor timing test (8) and the 300-slide big-course test passed within budget.

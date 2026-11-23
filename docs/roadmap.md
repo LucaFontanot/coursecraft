@@ -315,6 +315,14 @@ From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Sugges
 - Contributions from Luca: seekbar behaviour and the web Play button.
 - Released as 0.4.0.
 
+## M30 Slide size, 0.4.0 fixes and polish ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m30-plan.md`; log: `docs/bug-hunt/2026-11-23-m30.md`; report: `docs/testing/m30-report.md`.
+
+- Slide size, from a tester request (PhilOB): a redesigned dialog (presets including Full HD and portrait, aspect lock, use as default for new courses, Scale to fit / Fill slide / Keep as is, live preview), resizing that scales everything including states and state items, a Check Course warning for objects left outside the slide, and the dialog reachable from the Slide menu, Course tab, Course settings and status bar.
+- Eight 0.4.0 bugs fixed (states, the web start gate, seekbar completion).
+- Glossary in Find and Replace, Spell Check and translation; sort the glossary A to Z; Timeline Show all and Unlock all.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
