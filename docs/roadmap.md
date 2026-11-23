@@ -319,7 +319,7 @@ From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Sugges
 
 A Storyline 360 author should find every command where they look for it. Plan and full inventory:
 `docs/ui/` (start at `docs/ui/README.md`), taken from public beginner tutorials. Feature-level
-status: `docs/ui/feature-parity.md` (2026-11-23: 103 built, 35 partly, 69 not yet, 12 not
+status: `docs/ui/feature-parity.md` (2026-11-23: 103 built, 39 partly, 65 not yet, 12 not
 planned). Clean-room: same tabs, groups and order; our own look and coined names. Hand checks:
 `docs/release-checklist.md` § 9.
 
@@ -335,7 +335,10 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    declarative spec (`crates/ui-egui/src/ribbon/spec.rs`), ribbon widgets ported from DeckCraft
    onto `craft-ui`; Home first, beside the old toolbar. **Ribbon part built (2026-11-23):**
    `crates/ui-egui/src/ribbon/` (`spec.rs`, `widgets.rs`, `mod.rs`), View › Ribbon, Home in both
-   variants, the other tabs drawn with a "being built" note. Still open: the docking workspace.
+   variants, the other tabs drawn with a "being built" note. **Docking built (2026-11-23):**
+   `crates/ui-egui/src/dock.rs` hosts slides, canvas, timeline and Inspector in a
+   `craft_ui::docking` workspace behind View › Docked Panels, with Reset Panel Layout. Still
+   open: saving the layout, closing and reopening panels, and making both the default.
 2. Every main tab (File, Home, Insert, Slides, Design, Transitions, Animations, View, Help) with
    built controls wired and the rest **drawn disabled** with a "Not available yet" or "Not planned"
    tooltip; the shared New Slide ▾ menu.

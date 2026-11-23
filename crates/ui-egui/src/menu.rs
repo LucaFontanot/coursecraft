@@ -785,6 +785,21 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 ui.close();
             }
             ui.checkbox(&mut editor.ui.show_media_library, "Media library");
+            ui.checkbox(&mut editor.ui.dock.enabled, tl!("Docked Panels"))
+                .on_hover_text(tl!(
+                    "Arrange the panels freely: drag tabs to dock, stack or float them."
+                ));
+            if ui
+                .add_enabled(
+                    editor.ui.dock.enabled,
+                    egui::Button::new(tl!("Reset Panel Layout")),
+                )
+                .clicked()
+            {
+                editor.ui.dock.workspace =
+                    craft_ui::docking::Workspace::new(crate::dock::default_layout());
+                ui.close();
+            }
             ui.checkbox(&mut editor.ui.ribbon.visible, tl!("Ribbon"))
                 .on_hover_text(tl!(
                     "Show the new ribbon above the toolbar while it is being built."

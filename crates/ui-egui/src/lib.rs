@@ -40,6 +40,7 @@ pub mod find;
 pub mod fonts;
 #[macro_use]
 pub mod i18n;
+pub mod dock;
 pub mod ribbon;
 #[cfg(test)]
 mod scroll_audit;
@@ -151,6 +152,8 @@ mod canvas_speed_tests;
 mod daily_fixes_tests;
 #[cfg(test)]
 mod dialog_reopen_tests;
+#[cfg(test)]
+mod dock_tests;
 #[cfg(test)]
 mod document_tests;
 #[cfg(test)]
@@ -1031,6 +1034,8 @@ pub struct UiState {
     pub story_view: bool,
     /// The ribbon (M30), drawn above the toolbar when visible.
     pub ribbon: ribbon::RibbonState,
+    /// The panels in a docking workspace (M30), when enabled.
+    pub dock: dock::DockState,
     /// Transient Course map state.
     pub course_map: CourseMapState,
     /// Cached per-revision / per-media-count lists for the Properties panel.
@@ -1467,6 +1472,7 @@ impl Editor {
                 pending_remove_font: None,
                 story_view: false,
                 ribbon: ribbon::RibbonState::default(),
+                dock: dock::DockState::default(),
                 course_map: CourseMapState::default(),
                 properties_lists: PropertiesListCache::default(),
                 media_refs_cache: MediaRefsCache::default(),
@@ -4217,6 +4223,42 @@ impl Editor {
         Self::paste_input_allowed(preview_has_focus, text_focus)
     }
 
+    /// The slides panel's contents (thumbnails, scenes).
+    pub(crate) fn slides_body(&mut self, ui: &mut Ui) {
+        let panel_rect = ui.available_rect_before_wrap();
+        slides::show_slides_panel(self, ui, panel_rect);
+    }
+
+    /// The Inspector's contents (Format, Animate, Slide, Course).
+    pub(crate) fn inspector_body(&mut self, ui: &mut Ui) {
+        // A child that doesn't report overflow: a wide row must not grow the
+        // panel, which would push the rest of the window off screen.
+        let rect = ui.available_rect_before_wrap();
+        let mut content = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        content.set_clip_rect(rect.intersect(ui.clip_rect()));
+        properties::show_properties_panel(self, &mut content);
+        ui.allocate_rect(rect, egui::Sense::hover());
+    }
+
+    /// The canvas with its layers strip, or the Course Map.
+    pub(crate) fn canvas_body(&mut self, ui: &mut Ui) {
+        if self.ui.story_view {
+            course_map::handle_map_keys(self, ui);
+            course_map::show_course_map(self, ui);
+        } else {
+            canvas::show_canvas_and_layers(self, ui);
+        }
+    }
+
+    /// The timeline's contents; its edits run as commands.
+    pub(crate) fn timeline_body(&mut self, ui: &mut Ui) {
+        let mut actions = Vec::new();
+        timeline::show_timeline_panel(self, ui, &mut actions);
+        for (cmd, params) in actions {
+            self.run(cmd, params);
+        }
+    }
+
     /// Display the editor UI inside `ui` and return any shell requests.
     #[allow(clippy::cognitive_complexity)]
     pub fn show(&mut self, ui: &mut Ui) -> Vec<EditorRequest> {
@@ -4682,102 +4724,99 @@ impl Editor {
             );
         });
 
-        // 3. Bottom timeline panel. Keep at least 200 px of canvas above it.
-        // Hidden in Master View, which edits slide masters without a timeline.
-        if self.ui.master_view {
-            self.ui.timeline.panel_rect = None;
-            self.ui.timeline.tab_rects.clear();
+        if self.ui.dock.enabled {
+            // 3–6 docked: slides, canvas, timeline and Inspector in one workspace.
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(p.panel))
+                .show(ui, |ui| dock::show(self, ui));
+            coach::set_chrome_rects(
+                ui.ctx(),
+                toolbar_panel.response.rect,
+                self.ui
+                    .dock
+                    .rect(dock::Panel::Slides)
+                    .unwrap_or(egui::Rect::NOTHING),
+                self.ui
+                    .dock
+                    .rect(dock::Panel::Inspector)
+                    .unwrap_or(egui::Rect::NOTHING),
+            );
         } else {
-            let content_h = ui.ctx().content_rect().height();
-            let chrome_h = TOP_BAR_HEIGHT + toolbar::TOOLBAR_HEIGHT + STATUS_BAR_HEIGHT;
-            let max_by_canvas =
-                (content_h - chrome_h - 200.0).max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
-            let max_panel_h = (content_h * timeline::TIMELINE_PANEL_MAX_FRACTION)
-                .min(max_by_canvas)
-                .max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
-            let initial_panel_h = self
-                .ui
-                .timeline
-                .panel_height
-                .clamp(timeline::TIMELINE_PANEL_MIN_HEIGHT, max_panel_h);
-            // The canvas/side panels are laid out after this panel and sit on top of the outer half
-            // of the default 5px resize grab zone, leaving only ~4px inside the panel. Widen it and
-            // keep the first `RESIZE_GRAB_PX` of the panel free of content so it is easy to hit.
-            let old_grab = ui.style().interaction.resize_grab_radius_side;
-            ui.style_mut().interaction.resize_grab_radius_side = timeline::PANEL_RESIZE_GRAB_PX;
-            let timeline_panel = Panel::bottom("editor_timeline_panel")
-                .default_size(initial_panel_h)
-                .size_range(timeline::TIMELINE_PANEL_MIN_HEIGHT..=max_panel_h)
-                .resizable(true)
-                .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
-                .show_separator_line(true)
-                .show(ui, |ui| {
-                    // A resizable panel otherwise shrinks to its content; always fill the
-                    // size the user picked (or the default).
-                    ui.set_min_height(ui.available_height());
-                    ui.add_space(timeline::PANEL_RESIZE_GRAB_PX - 2.0);
-                    let mut actions = Vec::new();
-                    timeline::show_timeline_panel(self, ui, &mut actions);
-                    for (cmd, params) in actions {
-                        self.run(cmd, params);
-                    }
-                });
-            ui.style_mut().interaction.resize_grab_radius_side = old_grab;
-            self.ui.timeline.panel_rect = Some(timeline_panel.response.rect);
-            self.ui.timeline.panel_height = timeline_panel.response.rect.height();
-            if ui.input(|i| i.pointer.primary_pressed())
-                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
-            {
-                self.ui.timeline.focused = timeline_panel.response.rect.contains(pos);
-            }
-        }
-
-        // 4. Left slides panel
-        let slides_panel = Panel::left("editor_slides_panel")
-            .default_size(220.0)
-            .size_range(180.0..=320.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(p.panel))
-            .show_separator_line(true)
-            .show(ui, |ui| {
-                let panel_rect = ui.available_rect_before_wrap();
-                slides::show_slides_panel(self, ui, panel_rect);
-            });
-
-        // 5. Right properties panel (Inspector: Format, Animate, Slide, Course)
-        let properties_panel = Panel::right("editor_properties_panel")
-            .default_size(PROPERTIES_PANEL_WIDTH)
-            .size_range(260.0..=400.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(p.panel))
-            .show_separator_line(true)
-            .show(ui, |ui| {
-                // A child that doesn't report overflow: a wide row must not grow the
-                // panel, which would push the rest of the window off screen.
-                let rect = ui.available_rect_before_wrap();
-                let mut content = ui.new_child(egui::UiBuilder::new().max_rect(rect));
-                content.set_clip_rect(rect.intersect(ui.clip_rect()));
-                properties::show_properties_panel(self, &mut content);
-                ui.allocate_rect(rect, egui::Sense::hover());
-            });
-        coach::set_chrome_rects(
-            ui.ctx(),
-            toolbar_panel.response.rect,
-            slides_panel.response.rect,
-            properties_panel.response.rect,
-        );
-
-        // 6. Central canvas and layers strip, or the course map.
-        egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(p.canvas))
-            .show(ui, |ui| {
-                if self.ui.story_view {
-                    course_map::handle_map_keys(self, ui);
-                    course_map::show_course_map(self, ui);
-                } else {
-                    canvas::show_canvas_and_layers(self, ui);
+            // 3. Bottom timeline panel. Keep at least 200 px of canvas above it.
+            // Hidden in Master View, which edits slide masters without a timeline.
+            if self.ui.master_view {
+                self.ui.timeline.panel_rect = None;
+                self.ui.timeline.tab_rects.clear();
+            } else {
+                let content_h = ui.ctx().content_rect().height();
+                let chrome_h = TOP_BAR_HEIGHT + toolbar::TOOLBAR_HEIGHT + STATUS_BAR_HEIGHT;
+                let max_by_canvas =
+                    (content_h - chrome_h - 200.0).max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
+                let max_panel_h = (content_h * timeline::TIMELINE_PANEL_MAX_FRACTION)
+                    .min(max_by_canvas)
+                    .max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
+                let initial_panel_h = self
+                    .ui
+                    .timeline
+                    .panel_height
+                    .clamp(timeline::TIMELINE_PANEL_MIN_HEIGHT, max_panel_h);
+                // The canvas/side panels are laid out after this panel and sit on top of the outer half
+                // of the default 5px resize grab zone, leaving only ~4px inside the panel. Widen it and
+                // keep the first `RESIZE_GRAB_PX` of the panel free of content so it is easy to hit.
+                let old_grab = ui.style().interaction.resize_grab_radius_side;
+                ui.style_mut().interaction.resize_grab_radius_side = timeline::PANEL_RESIZE_GRAB_PX;
+                let timeline_panel = Panel::bottom("editor_timeline_panel")
+                    .default_size(initial_panel_h)
+                    .size_range(timeline::TIMELINE_PANEL_MIN_HEIGHT..=max_panel_h)
+                    .resizable(true)
+                    .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
+                    .show_separator_line(true)
+                    .show(ui, |ui| {
+                        // A resizable panel otherwise shrinks to its content; always fill the
+                        // size the user picked (or the default).
+                        ui.set_min_height(ui.available_height());
+                        ui.add_space(timeline::PANEL_RESIZE_GRAB_PX - 2.0);
+                        self.timeline_body(ui);
+                    });
+                ui.style_mut().interaction.resize_grab_radius_side = old_grab;
+                self.ui.timeline.panel_rect = Some(timeline_panel.response.rect);
+                self.ui.timeline.panel_height = timeline_panel.response.rect.height();
+                if ui.input(|i| i.pointer.primary_pressed())
+                    && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+                {
+                    self.ui.timeline.focused = timeline_panel.response.rect.contains(pos);
                 }
-            });
+            }
+
+            // 4. Left slides panel
+            let slides_panel = Panel::left("editor_slides_panel")
+                .default_size(220.0)
+                .size_range(180.0..=320.0)
+                .resizable(true)
+                .frame(egui::Frame::NONE.fill(p.panel))
+                .show_separator_line(true)
+                .show(ui, |ui| self.slides_body(ui));
+
+            // 5. Right properties panel (Inspector: Format, Animate, Slide, Course)
+            let properties_panel = Panel::right("editor_properties_panel")
+                .default_size(PROPERTIES_PANEL_WIDTH)
+                .size_range(260.0..=400.0)
+                .resizable(true)
+                .frame(egui::Frame::NONE.fill(p.panel))
+                .show_separator_line(true)
+                .show(ui, |ui| self.inspector_body(ui));
+            coach::set_chrome_rects(
+                ui.ctx(),
+                toolbar_panel.response.rect,
+                slides_panel.response.rect,
+                properties_panel.response.rect,
+            );
+
+            // 6. Central canvas and layers strip, or the course map.
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(p.canvas))
+                .show(ui, |ui| self.canvas_body(ui));
+        }
 
         // Insert menu's shape gallery (search needs a real text field).
         shape_gallery::show_shape_gallery_window(self, ui.ctx());

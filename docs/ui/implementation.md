@@ -171,10 +171,16 @@ Each step is one commit, `cargo xtask ci` green, docs status updated in the same
    Home (Slide and Course Map variants) and View › Ribbon, off by default. Controls whose
    feature exists but needs the text-selection or inspector plumbing are drawn disabled with
    "ribbon wiring (use the Format inspector)" until step 2. Icons use today's Phosphor subset;
-   Paste and Cut need better glyphs (clipboard, scissors) in the next re-subset. Still open: the
-   docking workspace. DeckCraft uses only `craft_ui::ComboBox`, not `craft_ui::docking`, so
-   CourseCraft is the first Craft app to adopt the docking module; plan it as its own commit
-   with the panel-rect tests updated.
+   Paste and Cut need better glyphs (clipboard, scissors) in the next re-subset.
+   **Docking built** next (`dock.rs`, View › Docked Panels, off by default): slides and
+   Inspector in start and end docks, the protected canvas over the timeline between them; bodies
+   are the same `Editor::*_body` functions the fixed panels call, so both paths stay in step.
+   DeckCraft uses only `craft_ui::ComboBox`; CourseCraft is the first Craft app on
+   `craft_ui::docking`. It was chosen over `craft_ui::panes` (the suite's pick for Office-style
+   apps) because Storyline stacks panels (Triggers over Slide Layers) and tabs them (Timeline,
+   States, Notes), which panes cannot. Still open: saving the workspace in prefs (`serde`
+   feature), View toggles that close and reopen panels, the Triggers, Slide Layers, States and
+   Notes panels, and switching the default once the fixed-panel tests move over.
 2. Fill every main tab from ribbon.md with the right `Action`s (most ✅ wire to existing commands;
    the rest are `NotYet`).
 3. Contextual tabs: Drawing Tools, Picture Tools, Audio/Video Tools, Table Tools, Question Tools;

@@ -28,7 +28,7 @@ Top to bottom:
 | Tooltips: name, shortcut, one sentence | yes | partial | 🟡 | every ribbon control, from the registry |
 | View tabs row with open slides | yes | single canvas | ⛔ | open slides as tabs; Course Map is the first tab |
 | Device toggles in view row | yes | — | ⛔ | they set the preview device |
-| Panels undock / float / dock back | yes | fixed panels | ⛔ | egui windows; remember layout in UI state |
+| Panels undock / float / dock back | yes | View › Docked Panels (`dock.rs`) | 🟡 | craft-ui docking; save the workspace in prefs, add close/reopen |
 | Status bar: Slide n of m, size, theme | yes | `status.rs` | 🟡 | add size and theme name |
 | Status bar: view buttons, zoom %, slider, fit | yes | zoom in View | 🟡 | |
 

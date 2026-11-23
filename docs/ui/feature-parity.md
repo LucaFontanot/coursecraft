@@ -22,10 +22,10 @@
 | Animation, transitions, timeline | 10 | 3 | 9 | 0 |
 | Questions and quizzes | 9 | 3 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
-| Editor shell and panels | 8 | 6 | 8 | 0 |
+| Editor shell and panels | 8 | 10 | 4 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **103** | **35** | **69** | **12** |
+| **Total** | **103** | **39** | **65** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -271,12 +271,12 @@ Counted from the tables below; recount when a row changes.
 | Right-click menus complete (canvas, timeline, scenes) | | 🟡 | M30 |
 | Collapse panels | | 🟡 | M30 |
 | Slide Properties in the Course Map | | 🟡 | M30 |
-| **Tabbed ribbon** with contextual tabs | menu bar + toolbar | ⛔ | M30 |
+| **Tabbed ribbon** with contextual tabs | View › Ribbon: tab strip and Home (`ribbon/`); other tabs and contextual tabs to come | 🟡 | M30 |
 | Quick access toolbar | — | ⛔ | M30 |
-| Collapse ribbon | — | ⛔ | M30 |
+| Collapse ribbon | click the open tab (behind View › Ribbon) | 🟡 | M30 |
 | View tabs for open slides | — | ⛔ | M30 |
-| Undock / float / redock panels | — | ⛔ | M30 |
-| Reset panel layout | — | ⛔ | M30 |
+| Undock / float / redock panels | View › Docked Panels (`dock.rs`, craft-ui docking); not saved yet, no Close | 🟡 | M30 |
+| Reset panel layout | View › Reset Panel Layout (docked panels) | 🟡 | M30 |
 | Slide-flow arrows in the Scenes panel | — | ⛔ | M30 |
 | Comments tab | — | ⛔ needs review workflow | — |
 
