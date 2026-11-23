@@ -13,9 +13,9 @@ use std::mem::size_of;
 
 use coursecraft_course::{
     BackgroundAudio, BankDraw, Color, Course, EditorSettings, FontFace, GlossaryEntry, Layer,
-    MotionPath, NamedTextStyle, Object, ObjectKind, PlayerSettings, Question, QuizSettings,
-    Resource, RevisitMode, Size, Slide, SlideCue, SlidePlayerOverrides, StateDef, Theme,
-    Transition, Trigger, VariableDef,
+    MotionPath, NamedTextStyle, Object, ObjectKind, PlayerSettings, Question, QuestionBank,
+    QuizSettings, Resource, RevisitMode, Scene, Size, Slide, SlideCue, SlidePlayerOverrides,
+    StateDef, Theme, Transition, Trigger, VariableDef,
 };
 
 use crate::{EngineError, Result};
@@ -981,6 +981,1579 @@ impl CourseHeaderPatch {
     }
 }
 
+/// Reversible single-item structural edit on a `Vec<T>`.
+///
+/// Calling [`ListOp::apply`] transforms `after -> before` and turns `self`
+/// into its own exact inverse in place with zero clones and zero panics.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ListOp<T> {
+    /// One item inserted at `index` (applying removes it -> becomes `Remove`).
+    Insert { index: usize },
+    /// One item removed from `index` (applying inserts it -> becomes `Insert`).
+    Remove { index: usize, item: Box<T> },
+    /// One item moved from `from` to `to` (applying moves `to -> from` and swaps `from`/`to`).
+    Move { from: usize, to: usize },
+}
+
+impl<T> ListOp<T> {
+    /// Apply this list op in place, turning `self` into its own exact inverse.
+    ///
+    /// On `Err`, both `vec` and `self` are left untouched.
+    pub(crate) fn apply(&mut self, vec: &mut Vec<T>) -> Result<()> {
+        match self {
+            Self::Insert { index } => {
+                let index = *index;
+                if index >= vec.len() {
+                    return Err(EngineError::Invalid(format!(
+                        "undo delta list insert index {index} out of bounds for len {}",
+                        vec.len()
+                    )));
+                }
+                let removed = vec.remove(index);
+                *self = Self::Remove {
+                    index,
+                    item: Box::new(removed),
+                };
+                Ok(())
+            }
+            Self::Remove { index, .. } => {
+                let index = *index;
+                if index > vec.len() {
+                    return Err(EngineError::Invalid(format!(
+                        "undo delta list remove index {index} out of bounds for len {}",
+                        vec.len()
+                    )));
+                }
+                let prev = std::mem::replace(self, Self::Insert { index });
+                if let Self::Remove { item, .. } = prev {
+                    vec.insert(index, *item);
+                }
+                Ok(())
+            }
+            Self::Move { from, to } => {
+                if *from >= vec.len() || *to >= vec.len() {
+                    return Err(EngineError::Invalid(format!(
+                        "undo delta list move ({from} -> {to}) out of bounds for len {}",
+                        vec.len()
+                    )));
+                }
+                if *from != *to {
+                    let item = vec.remove(*to);
+                    vec.insert(*from, item);
+                    std::mem::swap(from, to);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn estimated_bytes(&self, item_bytes: impl FnOnce(&T) -> usize) -> usize {
+        let base = size_of::<Self>();
+        match self {
+            Self::Insert { .. } | Self::Move { .. } => base,
+            Self::Remove { item, .. } => base.saturating_add(item_bytes(item)),
+        }
+    }
+}
+
+/// Reversible structural change to a [`Course`]'s slide collections.
+///
+/// Every variant validates all bounds before mutating anything and transforms
+/// itself into its own exact inverse in place (zero clones, zero panics).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum StructuralOp {
+    SceneSlideInsert {
+        scene: usize,
+        index: usize,
+    },
+    SceneSlideRemove {
+        scene: usize,
+        index: usize,
+        slide: Box<Slide>,
+    },
+    SceneSlideMove {
+        from_scene: usize,
+        from_index: usize,
+        to_scene: usize,
+        to_index: usize,
+    },
+    SceneOp(ListOp<Scene>),
+    SceneMeta {
+        scene: usize,
+        id: Option<String>,
+        title: Option<String>,
+    },
+    MasterOp(ListOp<Slide>),
+    TemplateOp(ListOp<Slide>),
+    BankOp(ListOp<QuestionBank>),
+    BankMeta {
+        bank: usize,
+        id: Option<String>,
+        title: Option<String>,
+    },
+    BankSlideInsert {
+        bank: usize,
+        index: usize,
+    },
+    BankSlideRemove {
+        bank: usize,
+        index: usize,
+        slide: Box<Slide>,
+    },
+    BankSlideMove {
+        from_bank: usize,
+        from_index: usize,
+        to_bank: usize,
+        to_index: usize,
+    },
+}
+
+trait SlideGroup: PartialEq + Sized {
+    const KIND: &'static str;
+    fn id(&self) -> &str;
+    fn title(&self) -> &str;
+    fn slides(&self) -> &[Slide];
+    fn slides_mut(&mut self) -> &mut Vec<Slide>;
+    fn into_parts(self) -> (String, String, Vec<Slide>);
+    fn slide_loc(group: usize, slide: usize) -> SlideLoc;
+    fn meta_op(group: usize, id: Option<String>, title: Option<String>) -> StructuralOp;
+    fn list_op(op: ListOp<Self>) -> StructuralOp;
+    fn slide_insert_op(group: usize, index: usize) -> StructuralOp;
+    fn slide_remove_op(group: usize, index: usize, slide: Box<Slide>) -> StructuralOp;
+    fn slide_move_op(
+        from_group: usize,
+        from_index: usize,
+        to_group: usize,
+        to_index: usize,
+    ) -> StructuralOp;
+}
+
+impl SlideGroup for Scene {
+    const KIND: &'static str = "scene";
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn title(&self) -> &str {
+        &self.title
+    }
+    fn slides(&self) -> &[Slide] {
+        &self.slides
+    }
+    fn slides_mut(&mut self) -> &mut Vec<Slide> {
+        &mut self.slides
+    }
+    fn into_parts(self) -> (String, String, Vec<Slide>) {
+        let Self { id, title, slides } = self;
+        (id, title, slides)
+    }
+    fn slide_loc(group: usize, slide: usize) -> SlideLoc {
+        SlideLoc::SceneSlide {
+            scene: group,
+            slide,
+        }
+    }
+    fn meta_op(group: usize, id: Option<String>, title: Option<String>) -> StructuralOp {
+        StructuralOp::SceneMeta {
+            scene: group,
+            id,
+            title,
+        }
+    }
+    fn list_op(op: ListOp<Self>) -> StructuralOp {
+        StructuralOp::SceneOp(op)
+    }
+    fn slide_insert_op(group: usize, index: usize) -> StructuralOp {
+        StructuralOp::SceneSlideInsert {
+            scene: group,
+            index,
+        }
+    }
+    fn slide_remove_op(group: usize, index: usize, slide: Box<Slide>) -> StructuralOp {
+        StructuralOp::SceneSlideRemove {
+            scene: group,
+            index,
+            slide,
+        }
+    }
+    fn slide_move_op(
+        from_group: usize,
+        from_index: usize,
+        to_group: usize,
+        to_index: usize,
+    ) -> StructuralOp {
+        StructuralOp::SceneSlideMove {
+            from_scene: from_group,
+            from_index,
+            to_scene: to_group,
+            to_index,
+        }
+    }
+}
+
+impl SlideGroup for QuestionBank {
+    const KIND: &'static str = "bank";
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn title(&self) -> &str {
+        &self.title
+    }
+    fn slides(&self) -> &[Slide] {
+        &self.slides
+    }
+    fn slides_mut(&mut self) -> &mut Vec<Slide> {
+        &mut self.slides
+    }
+    fn into_parts(self) -> (String, String, Vec<Slide>) {
+        let Self { id, title, slides } = self;
+        (id, title, slides)
+    }
+    fn slide_loc(group: usize, slide: usize) -> SlideLoc {
+        SlideLoc::BankSlide { bank: group, slide }
+    }
+    fn meta_op(group: usize, id: Option<String>, title: Option<String>) -> StructuralOp {
+        StructuralOp::BankMeta {
+            bank: group,
+            id,
+            title,
+        }
+    }
+    fn list_op(op: ListOp<Self>) -> StructuralOp {
+        StructuralOp::BankOp(op)
+    }
+    fn slide_insert_op(group: usize, index: usize) -> StructuralOp {
+        StructuralOp::BankSlideInsert { bank: group, index }
+    }
+    fn slide_remove_op(group: usize, index: usize, slide: Box<Slide>) -> StructuralOp {
+        StructuralOp::BankSlideRemove {
+            bank: group,
+            index,
+            slide,
+        }
+    }
+    fn slide_move_op(
+        from_group: usize,
+        from_index: usize,
+        to_group: usize,
+        to_index: usize,
+    ) -> StructuralOp {
+        StructuralOp::BankSlideMove {
+            from_bank: from_group,
+            from_index,
+            to_bank: to_group,
+            to_index,
+        }
+    }
+}
+
+fn apply_grouped_slide_move<G: SlideGroup>(
+    groups: &mut [G],
+    from_group: &mut usize,
+    from_index: &mut usize,
+    to_group: &mut usize,
+    to_index: &mut usize,
+) -> Result<()> {
+    let kind = G::KIND;
+    let groups_len = groups.len();
+    if *from_group == *to_group {
+        let group = groups.get_mut(*to_group).ok_or_else(|| {
+            EngineError::Invalid(format!(
+                "undo delta {kind} index {to_group} out of bounds for len {groups_len}"
+            ))
+        })?;
+        let slides = group.slides_mut();
+        if *from_index >= slides.len() || *to_index >= slides.len() {
+            return Err(EngineError::Invalid(format!(
+                "undo delta {kind} slide move ({from_index} -> {to_index}) out of bounds for len {}",
+                slides.len()
+            )));
+        }
+        if *from_index != *to_index {
+            let slide = slides.remove(*to_index);
+            slides.insert(*from_index, slide);
+            std::mem::swap(from_index, to_index);
+        }
+        return Ok(());
+    }
+
+    let to_len = groups
+        .get(*to_group)
+        .map(|g| g.slides().len())
+        .ok_or_else(|| {
+            EngineError::Invalid(format!(
+                "undo delta target {kind} index {to_group} out of bounds for len {groups_len}"
+            ))
+        })?;
+    let from_len = groups
+        .get(*from_group)
+        .map(|g| g.slides().len())
+        .ok_or_else(|| {
+            EngineError::Invalid(format!(
+                "undo delta source {kind} index {from_group} out of bounds for len {groups_len}"
+            ))
+        })?;
+    if *to_index >= to_len {
+        return Err(EngineError::Invalid(format!(
+            "undo delta target {kind} slide index {to_index} out of bounds for len {to_len}"
+        )));
+    }
+    if *from_index > from_len {
+        return Err(EngineError::Invalid(format!(
+            "undo delta source {kind} slide index {from_index} out of bounds for len {from_len}"
+        )));
+    }
+
+    let Some(to_g) = groups.get_mut(*to_group) else {
+        return Err(EngineError::Invalid(format!(
+            "undo delta target {kind} index {to_group} missing"
+        )));
+    };
+    let slide = to_g.slides_mut().remove(*to_index);
+    let Some(from_g) = groups.get_mut(*from_group) else {
+        return Err(EngineError::Invalid(format!(
+            "undo delta source {kind} index {from_group} missing"
+        )));
+    };
+    from_g.slides_mut().insert(*from_index, slide);
+    std::mem::swap(from_group, to_group);
+    std::mem::swap(from_index, to_index);
+    Ok(())
+}
+
+impl StructuralOp {
+    /// Apply this structural op in place, turning `self` into its own exact inverse.
+    ///
+    /// On `Err`, both `course` and `self` are left untouched.
+    pub(crate) fn apply(&mut self, course: &mut Course) -> Result<()> {
+        match self {
+            Self::SceneSlideInsert { scene, index } => {
+                let scene = *scene;
+                let index = *index;
+                let scenes_len = course.scenes.len();
+                let s = course.scenes.get_mut(scene).ok_or_else(|| {
+                    EngineError::Invalid(format!(
+                        "undo delta scene index {scene} out of bounds for len {scenes_len}"
+                    ))
+                })?;
+                if index >= s.slides.len() {
+                    return Err(EngineError::Invalid(format!(
+                        "undo delta scene slide insert index {index} out of bounds for len {}",
+                        s.slides.len()
+                    )));
+                }
+                let removed = s.slides.remove(index);
+                *self = Self::SceneSlideRemove {
+                    scene,
+                    index,
+                    slide: Box::new(removed),
+                };
+                Ok(())
+            }
+            Self::SceneSlideRemove { scene, index, .. } => {
+                let scene = *scene;
+                let index = *index;
+                let scenes_len = course.scenes.len();
+                let s = course.scenes.get_mut(scene).ok_or_else(|| {
+                    EngineError::Invalid(format!(
+                        "undo delta scene index {scene} out of bounds for len {scenes_len}"
+                    ))
+                })?;
+                if index > s.slides.len() {
+                    return Err(EngineError::Invalid(format!(
+                        "undo delta scene slide remove index {index} out of bounds for len {}",
+                        s.slides.len()
+                    )));
+                }
+                let prev = std::mem::replace(self, Self::SceneSlideInsert { scene, index });
+                if let Self::SceneSlideRemove { slide, .. } = prev {
+                    s.slides.insert(index, *slide);
+                }
+                Ok(())
+            }
+            Self::SceneSlideMove {
+                from_scene,
+                from_index,
+                to_scene,
+                to_index,
+            } => apply_grouped_slide_move(
+                &mut course.scenes,
+                from_scene,
+                from_index,
+                to_scene,
+                to_index,
+            ),
+            Self::SceneOp(op) => op.apply(&mut course.scenes),
+            Self::SceneMeta {
+                scene,
+                id: p_id,
+                title: p_title,
+            } => {
+                let scenes_len = course.scenes.len();
+                let s = course.scenes.get_mut(*scene).ok_or_else(|| {
+                    EngineError::Invalid(format!(
+                        "undo delta scene index {scene} out of bounds for len {scenes_len}"
+                    ))
+                })?;
+                let Scene {
+                    id,
+                    title,
+                    slides: _,
+                } = s;
+                swap_if_some(p_id, id);
+                swap_if_some(p_title, title);
+                Ok(())
+            }
+            Self::MasterOp(op) => op.apply(&mut course.masters),
+            Self::TemplateOp(op) => op.apply(&mut course.templates),
+            Self::BankOp(op) => op.apply(&mut course.banks),
+            Self::BankMeta {
+                bank,
+                id: p_id,
+                title: p_title,
+            } => {
+                let banks_len = course.banks.len();
+                let b = course.banks.get_mut(*bank).ok_or_else(|| {
+                    EngineError::Invalid(format!(
+                        "undo delta bank index {bank} out of bounds for len {banks_len}"
+                    ))
+                })?;
+                let QuestionBank {
+                    id,
+                    title,
+                    slides: _,
+                } = b;
+                swap_if_some(p_id, id);
+                swap_if_some(p_title, title);
+                Ok(())
+            }
+            Self::BankSlideInsert { bank, index } => {
+                let bank = *bank;
+                let index = *index;
+                let banks_len = course.banks.len();
+                let b = course.banks.get_mut(bank).ok_or_else(|| {
+                    EngineError::Invalid(format!(
+                        "undo delta bank index {bank} out of bounds for len {banks_len}"
+                    ))
+                })?;
+                if index >= b.slides.len() {
+                    return Err(EngineError::Invalid(format!(
+                        "undo delta bank slide insert index {index} out of bounds for len {}",
+                        b.slides.len()
+                    )));
+                }
+                let removed = b.slides.remove(index);
+                *self = Self::BankSlideRemove {
+                    bank,
+                    index,
+                    slide: Box::new(removed),
+                };
+                Ok(())
+            }
+            Self::BankSlideRemove { bank, index, .. } => {
+                let bank = *bank;
+                let index = *index;
+                let banks_len = course.banks.len();
+                let b = course.banks.get_mut(bank).ok_or_else(|| {
+                    EngineError::Invalid(format!(
+                        "undo delta bank index {bank} out of bounds for len {banks_len}"
+                    ))
+                })?;
+                if index > b.slides.len() {
+                    return Err(EngineError::Invalid(format!(
+                        "undo delta bank slide remove index {index} out of bounds for len {}",
+                        b.slides.len()
+                    )));
+                }
+                let prev = std::mem::replace(self, Self::BankSlideInsert { bank, index });
+                if let Self::BankSlideRemove { slide, .. } = prev {
+                    b.slides.insert(index, *slide);
+                }
+                Ok(())
+            }
+            Self::BankSlideMove {
+                from_bank,
+                from_index,
+                to_bank,
+                to_index,
+            } => apply_grouped_slide_move(
+                &mut course.banks,
+                from_bank,
+                from_index,
+                to_bank,
+                to_index,
+            ),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let base = size_of::<Self>();
+        match self {
+            Self::SceneSlideInsert { .. }
+            | Self::SceneSlideMove { .. }
+            | Self::BankSlideInsert { .. }
+            | Self::BankSlideMove { .. } => base,
+            Self::SceneSlideRemove { slide, .. } | Self::BankSlideRemove { slide, .. } => {
+                base.saturating_add(estimate_slide(slide))
+            }
+            Self::SceneOp(op) => base.saturating_add(op.estimated_bytes(estimate_scene)),
+            Self::SceneMeta { id, title, .. } | Self::BankMeta { id, title, .. } => base
+                .saturating_add(estimate_opt_string(id))
+                .saturating_add(estimate_opt_string(title)),
+            Self::MasterOp(op) | Self::TemplateOp(op) => {
+                base.saturating_add(op.estimated_bytes(estimate_slide))
+            }
+            Self::BankOp(op) => base.saturating_add(op.estimated_bytes(estimate_bank)),
+        }
+    }
+}
+
+/// Multi-slide and/or header patch when collection structure matches.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CoursePatch {
+    pub(crate) header: Option<CourseHeaderPatch>,
+    pub(crate) slides: Vec<(SlideLoc, SlideDelta)>,
+}
+
+impl CoursePatch {
+    /// Apply all header and slide patches atomically, turning `self` into its inverse.
+    ///
+    /// On `Err`, both `course` and `self` are left untouched.
+    pub(crate) fn apply(&mut self, course: &mut Course) -> Result<()> {
+        for (loc, _) in &self.slides {
+            if slide_at(course, *loc).is_none() {
+                return Err(EngineError::Invalid(format!(
+                    "undo delta patch slide location {loc:?} out of bounds"
+                )));
+            }
+        }
+        if let Some(header) = self.header.as_mut() {
+            header.apply(course);
+        }
+        for i in 0..self.slides.len() {
+            let res = if let Some((loc, change)) = self.slides.get_mut(i) {
+                match slide_at_mut(course, *loc) {
+                    Some(slide) => change.apply(slide),
+                    None => Err(EngineError::Invalid(format!(
+                        "undo delta patch slide location {loc:?} out of bounds"
+                    ))),
+                }
+            } else {
+                Ok(())
+            };
+            if let Err(err) = res {
+                for j in (0..i).rev() {
+                    if let Some((loc, change)) = self.slides.get_mut(j)
+                        && let Some(slide) = slide_at_mut(course, *loc)
+                    {
+                        let _ = change.apply(slide);
+                    }
+                }
+                if let Some(header) = self.header.as_mut() {
+                    header.apply(course);
+                }
+                return Err(err);
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let mut total = size_of::<Self>();
+        if let Some(header) = &self.header {
+            total = total.saturating_add(header.estimated_bytes());
+        }
+        for (_, delta) in &self.slides {
+            total = total
+                .saturating_add(size_of::<SlideLoc>())
+                .saturating_add(delta.estimated_bytes());
+        }
+        total
+    }
+}
+
+/// Reversible top-level change to a [`Course`].
+///
+/// Calling [`CourseDelta::apply`] transforms `after -> before` and turns `self`
+/// into its own exact inverse in place with zero clones and zero panics.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum CourseDelta {
+    /// Single slide modified in place.
+    SlideChange { loc: SlideLoc, change: SlideDelta },
+    /// Course-header fields only (zero slides touched).
+    Header(Box<CourseHeaderPatch>),
+    /// Single structural edit on scenes, masters, templates, or banks.
+    Structural(Box<StructuralOp>),
+    /// Matching collection structure with multiple changed slides and/or header.
+    Patch(Box<CoursePatch>),
+    /// Ordered forward sub-transitions (applied in reverse on undo, reversed in place for redo).
+    Sequence(Vec<CourseDelta>),
+    /// Ultimate exact fallback for wholesale course rewrites.
+    FullCourse(Box<Course>),
+}
+
+impl CourseDelta {
+    /// Compute the smallest reversible delta that transforms `after` back into `before`.
+    /// Returns `None` when `before == *after`.
+    #[must_use]
+    pub(crate) fn diff(before: Course, after: &Course) -> Option<Self> {
+        if before == *after {
+            return None;
+        }
+
+        let scenes_plan = plan_group_collection(&before.scenes, &after.scenes);
+        let masters_plan = plan_flat_list(&before.masters, &after.masters, |s| s.id.as_str());
+        let templates_plan = plan_flat_list(&before.templates, &after.templates, |s| s.id.as_str());
+        let banks_plan = plan_group_collection(&before.banks, &after.banks);
+
+        if matches!(scenes_plan, GroupCollectionPlan::Wholesale)
+            || matches!(masters_plan, FlatListPlan::Wholesale)
+            || matches!(templates_plan, FlatListPlan::Wholesale)
+            || matches!(banks_plan, GroupCollectionPlan::Wholesale)
+        {
+            return Some(Self::FullCourse(Box::new(before)));
+        }
+
+        let all_identical = matches!(scenes_plan, GroupCollectionPlan::Identical)
+            && matches!(masters_plan, FlatListPlan::Identical)
+            && matches!(templates_plan, FlatListPlan::Identical)
+            && matches!(banks_plan, GroupCollectionPlan::Identical);
+
+        let all_in_place = is_all_in_place(scenes_plan, masters_plan, templates_plan, banks_plan);
+
+        // Case A wholesale threshold: check counts BEFORE consuming `before` (zero clones!).
+        if all_in_place && !all_identical {
+            let (total_slides, changed_slides) = count_matching_slides(&before, after);
+            if changed_slides > 1 && changed_slides.saturating_mul(2) > total_slides {
+                return Some(Self::FullCourse(Box::new(before)));
+            }
+        }
+
+        // Destructure `before` exhaustively into all 21 fields without `..` (M33-11).
+        let Course {
+            schema_version: b_schema_version,
+            id: b_id,
+            title: b_title,
+            slide_size: b_slide_size,
+            variables: b_variables,
+            scenes: b_scenes,
+            masters: b_masters,
+            templates: b_templates,
+            banks: b_banks,
+            start_slide: b_start_slide,
+            quiz: b_quiz,
+            player: b_player,
+            theme: b_theme,
+            language: b_language,
+            strings: b_strings,
+            fonts: b_fonts,
+            background_audio: b_background_audio,
+            text_styles: b_text_styles,
+            resources: b_resources,
+            glossary: b_glossary,
+            editor: b_editor,
+        } = before;
+
+        let header_snap = CourseHeaderSnapshot {
+            schema_version: b_schema_version,
+            id: b_id,
+            title: b_title,
+            slide_size: b_slide_size,
+            variables: b_variables,
+            start_slide: b_start_slide,
+            quiz: b_quiz,
+            player: b_player,
+            theme: b_theme,
+            language: b_language,
+            strings: b_strings,
+            fonts: b_fonts,
+            background_audio: b_background_audio,
+            text_styles: b_text_styles,
+            resources: b_resources,
+            glossary: b_glossary,
+            editor: b_editor,
+        };
+        let header_patch = CourseHeaderPatch::diff(header_snap, after);
+
+        if all_identical {
+            return header_patch.map(|p| Self::Header(Box::new(p)));
+        }
+
+        if all_in_place {
+            return build_in_place_delta(
+                header_patch,
+                b_scenes,
+                b_masters,
+                b_templates,
+                b_banks,
+                after,
+            );
+        }
+
+        // Case B: compact structural/metadata changes in forward sub-transition order.
+        let mut steps = Vec::new();
+        emit_group_steps(scenes_plan, b_scenes, &after.scenes, &mut steps);
+        emit_flat_slide_steps(
+            masters_plan,
+            b_masters,
+            &after.masters,
+            SlideLoc::Master,
+            StructuralOp::MasterOp,
+            &mut steps,
+        );
+        emit_flat_slide_steps(
+            templates_plan,
+            b_templates,
+            &after.templates,
+            SlideLoc::Template,
+            StructuralOp::TemplateOp,
+            &mut steps,
+        );
+        emit_group_steps(banks_plan, b_banks, &after.banks, &mut steps);
+        if let Some(patch) = header_patch {
+            steps.push(Self::Header(Box::new(patch)));
+        }
+
+        if steps.len() == 1 {
+            steps.pop()
+        } else if steps.is_empty() {
+            None
+        } else {
+            Some(Self::Sequence(steps))
+        }
+    }
+
+    /// Apply this delta in place, mutating `self` into its own exact inverse.
+    ///
+    /// On `Err`, both `course` and `self` are left untouched.
+    pub(crate) fn apply(&mut self, course: &mut Course) -> Result<()> {
+        match self {
+            Self::SlideChange { loc, change } => {
+                let slide = slide_at_mut(course, *loc).ok_or_else(|| {
+                    EngineError::Invalid(format!("undo delta slide location {loc:?} out of bounds"))
+                })?;
+                change.apply(slide)
+            }
+            Self::Header(patch) => {
+                patch.apply(course);
+                Ok(())
+            }
+            Self::Structural(op) => op.apply(course),
+            Self::Patch(patch) => patch.apply(course),
+            Self::Sequence(steps) => {
+                for i in (0..steps.len()).rev() {
+                    let res = match steps.get_mut(i) {
+                        Some(step) => step.apply(course),
+                        None => Ok(()),
+                    };
+                    if let Err(err) = res {
+                        for j in i.saturating_add(1)..steps.len() {
+                            if let Some(step) = steps.get_mut(j) {
+                                let _ = step.apply(course);
+                            }
+                        }
+                        return Err(err);
+                    }
+                }
+                steps.reverse();
+                Ok(())
+            }
+            Self::FullCourse(prev) => {
+                std::mem::swap(course, prev.as_mut());
+                Ok(())
+            }
+        }
+    }
+
+    /// Rough heap + stack footprint in bytes for memory-budget diagnostics.
+    #[must_use]
+    pub(crate) fn estimated_bytes(&self) -> usize {
+        let base = size_of::<Self>();
+        match self {
+            Self::SlideChange { change, .. } => base.saturating_add(change.estimated_bytes()),
+            Self::Header(patch) => base.saturating_add(patch.estimated_bytes()),
+            Self::Structural(op) => base.saturating_add(op.estimated_bytes()),
+            Self::Patch(patch) => base.saturating_add(patch.estimated_bytes()),
+            Self::Sequence(steps) => steps
+                .iter()
+                .fold(base, |acc, d| acc.saturating_add(d.estimated_bytes())),
+            Self::FullCourse(course) => base.saturating_add(estimate_course(course)),
+        }
+    }
+}
+
+// ------------------------------------------------------------------ structural diff planners
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlatListPlan {
+    Identical,
+    InPlace,
+    Insert { index: usize },
+    Remove { index: usize },
+    Move { from: usize, to: usize },
+    Wholesale,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupCollectionPlan {
+    Identical,
+    InPlaceNoMeta,
+    InPlaceWithMeta,
+    GroupInsert {
+        index: usize,
+    },
+    GroupRemove {
+        index: usize,
+    },
+    GroupMove {
+        from: usize,
+        to: usize,
+    },
+    SlideInsert {
+        group: usize,
+        index: usize,
+    },
+    SlideRemove {
+        group: usize,
+        index: usize,
+    },
+    SlideMove {
+        from_group: usize,
+        from_index: usize,
+        to_group: usize,
+        to_index: usize,
+    },
+    Wholesale,
+}
+
+fn ids_match_slice<T>(a: Option<&[T]>, b: Option<&[T]>, id_of: fn(&T) -> &str) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return false;
+    };
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| id_of(x) == id_of(y))
+}
+
+fn mapped_index_after_move(idx: usize, from: usize, to: usize) -> usize {
+    if idx == from {
+        to
+    } else if from < to && idx > from && idx <= to {
+        idx.saturating_sub(1)
+    } else if from > to && idx >= to && idx < from {
+        idx.saturating_add(1)
+    } else {
+        idx
+    }
+}
+
+fn plan_flat_list<T: PartialEq>(before: &[T], after: &[T], id_of: fn(&T) -> &str) -> FlatListPlan {
+    if before == after {
+        return FlatListPlan::Identical;
+    }
+    if before.len() == after.len() {
+        let mut first = None;
+        let mut last = 0;
+        for (i, (b, a)) in before.iter().zip(after.iter()).enumerate() {
+            if id_of(b) != id_of(a) {
+                if first.is_none() {
+                    first = Some(i);
+                }
+                last = i;
+            }
+        }
+        let Some(a) = first else {
+            return FlatListPlan::InPlace;
+        };
+        if a == last {
+            return FlatListPlan::InPlace;
+        }
+        let b = last;
+        if before.get(a).map(id_of) == after.get(b).map(id_of)
+            && ids_match_slice(before.get(a.saturating_add(1)..=b), after.get(a..b), id_of)
+        {
+            return FlatListPlan::Move { from: a, to: b };
+        }
+        if before.get(b).map(id_of) == after.get(a).map(id_of)
+            && ids_match_slice(before.get(a..b), after.get(a.saturating_add(1)..=b), id_of)
+        {
+            return FlatListPlan::Move { from: b, to: a };
+        }
+        return FlatListPlan::Wholesale;
+    }
+    if after.len() == before.len().saturating_add(1) && after.len() > before.len() {
+        let ins = before
+            .iter()
+            .zip(after.iter())
+            .position(|(b, a)| id_of(b) != id_of(a))
+            .unwrap_or(before.len());
+        if ids_match_slice(before.get(ins..), after.get(ins.saturating_add(1)..), id_of) {
+            return FlatListPlan::Insert { index: ins };
+        }
+        return FlatListPlan::Wholesale;
+    }
+    if before.len() == after.len().saturating_add(1) && before.len() > after.len() {
+        let rem = before
+            .iter()
+            .zip(after.iter())
+            .position(|(b, a)| id_of(b) != id_of(a))
+            .unwrap_or(after.len());
+        if rem < before.len()
+            && ids_match_slice(before.get(rem.saturating_add(1)..), after.get(rem..), id_of)
+        {
+            return FlatListPlan::Remove { index: rem };
+        }
+        return FlatListPlan::Wholesale;
+    }
+    FlatListPlan::Wholesale
+}
+
+fn slides_in_place_compatible(before: &[Slide], after: &[Slide]) -> bool {
+    matches!(
+        plan_flat_list(before, after, |s| s.id.as_str()),
+        FlatListPlan::Identical | FlatListPlan::InPlace
+    )
+}
+
+fn is_all_in_place(
+    scenes: GroupCollectionPlan,
+    masters: FlatListPlan,
+    templates: FlatListPlan,
+    banks: GroupCollectionPlan,
+) -> bool {
+    matches!(
+        scenes,
+        GroupCollectionPlan::Identical | GroupCollectionPlan::InPlaceNoMeta
+    ) && matches!(masters, FlatListPlan::Identical | FlatListPlan::InPlace)
+        && matches!(templates, FlatListPlan::Identical | FlatListPlan::InPlace)
+        && matches!(
+            banks,
+            GroupCollectionPlan::Identical | GroupCollectionPlan::InPlaceNoMeta
+        )
+}
+
+fn push_group_slide_diffs<G: SlideGroup>(
+    before: Vec<G>,
+    after: &[G],
+    out: &mut Vec<(SlideLoc, SlideDelta)>,
+) {
+    for (gi, (b_group, a_group)) in before.into_iter().zip(after.iter()).enumerate() {
+        let (_, _, b_slides) = b_group.into_parts();
+        for (si, (b_slide, a_slide)) in b_slides
+            .into_iter()
+            .zip(a_group.slides().iter())
+            .enumerate()
+        {
+            if let Some(delta) = SlideDelta::diff(b_slide, a_slide) {
+                out.push((G::slide_loc(gi, si), delta));
+            }
+        }
+    }
+}
+
+fn push_flat_slide_diffs(
+    before: Vec<Slide>,
+    after: &[Slide],
+    make_loc: fn(usize) -> SlideLoc,
+    out: &mut Vec<(SlideLoc, SlideDelta)>,
+) {
+    for (i, (b_slide, a_slide)) in before.into_iter().zip(after.iter()).enumerate() {
+        if let Some(delta) = SlideDelta::diff(b_slide, a_slide) {
+            out.push((make_loc(i), delta));
+        }
+    }
+}
+
+fn build_in_place_delta(
+    header_patch: Option<CourseHeaderPatch>,
+    b_scenes: Vec<Scene>,
+    b_masters: Vec<Slide>,
+    b_templates: Vec<Slide>,
+    b_banks: Vec<QuestionBank>,
+    after: &Course,
+) -> Option<CourseDelta> {
+    let mut changed = Vec::new();
+    push_group_slide_diffs(b_scenes, &after.scenes, &mut changed);
+    push_flat_slide_diffs(b_masters, &after.masters, SlideLoc::Master, &mut changed);
+    push_flat_slide_diffs(
+        b_templates,
+        &after.templates,
+        SlideLoc::Template,
+        &mut changed,
+    );
+    push_group_slide_diffs(b_banks, &after.banks, &mut changed);
+
+    if header_patch.is_none() && changed.len() == 1 {
+        return changed
+            .pop()
+            .map(|(loc, change)| CourseDelta::SlideChange { loc, change });
+    }
+    if header_patch.is_none() && changed.is_empty() {
+        return None;
+    }
+    Some(CourseDelta::Patch(Box::new(CoursePatch {
+        header: header_patch,
+        slides: changed,
+    })))
+}
+
+fn plan_group_collection<G: SlideGroup>(before: &[G], after: &[G]) -> GroupCollectionPlan {
+    if before == after {
+        return GroupCollectionPlan::Identical;
+    }
+    match plan_flat_list(before, after, G::id) {
+        FlatListPlan::Insert { index } => {
+            for (bi, b_g) in before.iter().enumerate() {
+                let ai = if bi < index { bi } else { bi.saturating_add(1) };
+                let Some(a_g) = after.get(ai) else {
+                    return GroupCollectionPlan::Wholesale;
+                };
+                if !slides_in_place_compatible(b_g.slides(), a_g.slides()) {
+                    return GroupCollectionPlan::Wholesale;
+                }
+            }
+            GroupCollectionPlan::GroupInsert { index }
+        }
+        FlatListPlan::Remove { index } => {
+            for (bi, b_g) in before.iter().enumerate() {
+                if bi == index {
+                    continue;
+                }
+                let ai = if bi < index { bi } else { bi.saturating_sub(1) };
+                let Some(a_g) = after.get(ai) else {
+                    return GroupCollectionPlan::Wholesale;
+                };
+                if !slides_in_place_compatible(b_g.slides(), a_g.slides()) {
+                    return GroupCollectionPlan::Wholesale;
+                }
+            }
+            GroupCollectionPlan::GroupRemove { index }
+        }
+        FlatListPlan::Move { from, to } => {
+            for (bi, b_g) in before.iter().enumerate() {
+                let ai = mapped_index_after_move(bi, from, to);
+                let Some(a_g) = after.get(ai) else {
+                    return GroupCollectionPlan::Wholesale;
+                };
+                if !slides_in_place_compatible(b_g.slides(), a_g.slides()) {
+                    return GroupCollectionPlan::Wholesale;
+                }
+            }
+            GroupCollectionPlan::GroupMove { from, to }
+        }
+        FlatListPlan::Wholesale => GroupCollectionPlan::Wholesale,
+        FlatListPlan::Identical | FlatListPlan::InPlace => plan_same_len_groups(before, after),
+    }
+}
+
+fn plan_same_len_groups<G: SlideGroup>(before: &[G], after: &[G]) -> GroupCollectionPlan {
+    let meta_changed = before
+        .iter()
+        .zip(after.iter())
+        .any(|(b, a)| b.id() != a.id() || b.title() != a.title());
+
+    let mut grew = Vec::new();
+    let mut shrank = Vec::new();
+    for (gi, (b_g, a_g)) in before.iter().zip(after.iter()).enumerate() {
+        let b_len = b_g.slides().len();
+        let a_len = a_g.slides().len();
+        if a_len == b_len {
+            continue;
+        }
+        if a_len == b_len.saturating_add(1) && a_len > b_len {
+            grew.push(gi);
+        } else if b_len == a_len.saturating_add(1) && b_len > a_len {
+            shrank.push(gi);
+        } else {
+            return GroupCollectionPlan::Wholesale;
+        }
+    }
+
+    match (grew.as_slice(), shrank.as_slice()) {
+        ([], []) => plan_groups_equal_slide_lens(before, after, meta_changed),
+        ([g], []) => plan_group_single_slide_insert(before, after, *g),
+        ([], [g]) => plan_group_single_slide_remove(before, after, *g),
+        ([to_g], [from_g]) => plan_group_cross_slide_move(before, after, *from_g, *to_g),
+        _ => GroupCollectionPlan::Wholesale,
+    }
+}
+
+fn plan_groups_equal_slide_lens<G: SlideGroup>(
+    before: &[G],
+    after: &[G],
+    meta_changed: bool,
+) -> GroupCollectionPlan {
+    let mut single_move = None;
+    for (gi, (b_g, a_g)) in before.iter().zip(after.iter()).enumerate() {
+        match plan_flat_list(b_g.slides(), a_g.slides(), |s| s.id.as_str()) {
+            FlatListPlan::Identical | FlatListPlan::InPlace => {}
+            FlatListPlan::Move { from, to } => {
+                if single_move.is_some() {
+                    return GroupCollectionPlan::Wholesale;
+                }
+                single_move = Some((gi, from, to));
+            }
+            FlatListPlan::Insert { .. } | FlatListPlan::Remove { .. } | FlatListPlan::Wholesale => {
+                return GroupCollectionPlan::Wholesale;
+            }
+        }
+    }
+    if let Some((g, from, to)) = single_move {
+        GroupCollectionPlan::SlideMove {
+            from_group: g,
+            from_index: from,
+            to_group: g,
+            to_index: to,
+        }
+    } else if meta_changed {
+        GroupCollectionPlan::InPlaceWithMeta
+    } else {
+        GroupCollectionPlan::InPlaceNoMeta
+    }
+}
+
+fn plan_group_single_slide_insert<G: SlideGroup>(
+    before: &[G],
+    after: &[G],
+    g: usize,
+) -> GroupCollectionPlan {
+    for (gi, (b_g, a_g)) in before.iter().zip(after.iter()).enumerate() {
+        if gi != g && !slides_in_place_compatible(b_g.slides(), a_g.slides()) {
+            return GroupCollectionPlan::Wholesale;
+        }
+    }
+    let (Some(b_g), Some(a_g)) = (before.get(g), after.get(g)) else {
+        return GroupCollectionPlan::Wholesale;
+    };
+    match plan_flat_list(b_g.slides(), a_g.slides(), |s| s.id.as_str()) {
+        FlatListPlan::Insert { index } => GroupCollectionPlan::SlideInsert { group: g, index },
+        _ => GroupCollectionPlan::Wholesale,
+    }
+}
+
+fn plan_group_single_slide_remove<G: SlideGroup>(
+    before: &[G],
+    after: &[G],
+    g: usize,
+) -> GroupCollectionPlan {
+    for (gi, (b_g, a_g)) in before.iter().zip(after.iter()).enumerate() {
+        if gi != g && !slides_in_place_compatible(b_g.slides(), a_g.slides()) {
+            return GroupCollectionPlan::Wholesale;
+        }
+    }
+    let (Some(b_g), Some(a_g)) = (before.get(g), after.get(g)) else {
+        return GroupCollectionPlan::Wholesale;
+    };
+    match plan_flat_list(b_g.slides(), a_g.slides(), |s| s.id.as_str()) {
+        FlatListPlan::Remove { index } => GroupCollectionPlan::SlideRemove { group: g, index },
+        _ => GroupCollectionPlan::Wholesale,
+    }
+}
+
+fn plan_group_cross_slide_move<G: SlideGroup>(
+    before: &[G],
+    after: &[G],
+    from_g: usize,
+    to_g: usize,
+) -> GroupCollectionPlan {
+    for (gi, (b_g, a_g)) in before.iter().zip(after.iter()).enumerate() {
+        if gi != to_g && gi != from_g && !slides_in_place_compatible(b_g.slides(), a_g.slides()) {
+            return GroupCollectionPlan::Wholesale;
+        }
+    }
+    let (Some(b_from), Some(a_from), Some(b_to), Some(a_to)) = (
+        before.get(from_g),
+        after.get(from_g),
+        before.get(to_g),
+        after.get(to_g),
+    ) else {
+        return GroupCollectionPlan::Wholesale;
+    };
+    let FlatListPlan::Remove { index: from_index } =
+        plan_flat_list(b_from.slides(), a_from.slides(), |s| s.id.as_str())
+    else {
+        return GroupCollectionPlan::Wholesale;
+    };
+    let FlatListPlan::Insert { index: to_index } =
+        plan_flat_list(b_to.slides(), a_to.slides(), |s| s.id.as_str())
+    else {
+        return GroupCollectionPlan::Wholesale;
+    };
+    let moved_id_matches = b_from.slides().get(from_index).map(|s| s.id.as_str())
+        == a_to.slides().get(to_index).map(|s| s.id.as_str());
+    if moved_id_matches {
+        GroupCollectionPlan::SlideMove {
+            from_group: from_g,
+            from_index,
+            to_group: to_g,
+            to_index,
+        }
+    } else {
+        GroupCollectionPlan::Wholesale
+    }
+}
+
+fn count_matching_slides(before: &Course, after: &Course) -> (usize, usize) {
+    let mut total = 0usize;
+    let mut changed = 0usize;
+    for (bs, as_) in before.scenes.iter().zip(after.scenes.iter()) {
+        for (b, a) in bs.slides.iter().zip(as_.slides.iter()) {
+            total = total.saturating_add(1);
+            if b != a {
+                changed = changed.saturating_add(1);
+            }
+        }
+    }
+    for (b, a) in before.masters.iter().zip(after.masters.iter()) {
+        total = total.saturating_add(1);
+        if b != a {
+            changed = changed.saturating_add(1);
+        }
+    }
+    for (b, a) in before.templates.iter().zip(after.templates.iter()) {
+        total = total.saturating_add(1);
+        if b != a {
+            changed = changed.saturating_add(1);
+        }
+    }
+    for (bb, ab) in before.banks.iter().zip(after.banks.iter()) {
+        for (b, a) in bb.slides.iter().zip(ab.slides.iter()) {
+            total = total.saturating_add(1);
+            if b != a {
+                changed = changed.saturating_add(1);
+            }
+        }
+    }
+    (total, changed)
+}
+
+fn emit_flat_slide_steps(
+    plan: FlatListPlan,
+    before: Vec<Slide>,
+    after: &[Slide],
+    make_loc: fn(usize) -> SlideLoc,
+    make_op: fn(ListOp<Slide>) -> StructuralOp,
+    steps: &mut Vec<CourseDelta>,
+) {
+    match plan {
+        FlatListPlan::Identical | FlatListPlan::Wholesale => {}
+        FlatListPlan::InPlace => {
+            for (i, (b, a)) in before.into_iter().zip(after.iter()).enumerate() {
+                if let Some(change) = SlideDelta::diff(b, a) {
+                    steps.push(CourseDelta::SlideChange {
+                        loc: make_loc(i),
+                        change,
+                    });
+                }
+            }
+        }
+        FlatListPlan::Insert { index } => {
+            for (i, b) in before.into_iter().enumerate() {
+                let ai = if i < index { i } else { i.saturating_add(1) };
+                if let Some(a) = after.get(ai)
+                    && let Some(change) = SlideDelta::diff(b, a)
+                {
+                    steps.push(CourseDelta::SlideChange {
+                        loc: make_loc(i),
+                        change,
+                    });
+                }
+            }
+            steps.push(CourseDelta::Structural(Box::new(make_op(ListOp::Insert {
+                index,
+            }))));
+        }
+        FlatListPlan::Remove { index } => {
+            let mut removed = None;
+            for (i, b) in before.into_iter().enumerate() {
+                if i == index {
+                    removed = Some(b);
+                } else {
+                    let ai = if i < index { i } else { i.saturating_sub(1) };
+                    if let Some(a) = after.get(ai)
+                        && let Some(change) = SlideDelta::diff(b, a)
+                    {
+                        steps.push(CourseDelta::SlideChange {
+                            loc: make_loc(i),
+                            change,
+                        });
+                    }
+                }
+            }
+            if let Some(item) = removed {
+                steps.push(CourseDelta::Structural(Box::new(make_op(ListOp::Remove {
+                    index,
+                    item: Box::new(item),
+                }))));
+            }
+        }
+        FlatListPlan::Move { from, to } => {
+            for (i, b) in before.into_iter().enumerate() {
+                let ai = mapped_index_after_move(i, from, to);
+                if let Some(a) = after.get(ai)
+                    && let Some(change) = SlideDelta::diff(b, a)
+                {
+                    steps.push(CourseDelta::SlideChange {
+                        loc: make_loc(i),
+                        change,
+                    });
+                }
+            }
+            steps.push(CourseDelta::Structural(Box::new(make_op(ListOp::Move {
+                from,
+                to,
+            }))));
+        }
+    }
+}
+
+fn emit_group_meta<G: SlideGroup>(
+    group_idx: usize,
+    b_id: String,
+    b_title: String,
+    a_group: &G,
+    steps: &mut Vec<CourseDelta>,
+) {
+    let mut meta_changed = false;
+    let id_patch = if b_id != a_group.id() {
+        meta_changed = true;
+        Some(b_id)
+    } else {
+        None
+    };
+    let title_patch = if b_title != a_group.title() {
+        meta_changed = true;
+        Some(b_title)
+    } else {
+        None
+    };
+    if meta_changed {
+        steps.push(CourseDelta::Structural(Box::new(G::meta_op(
+            group_idx,
+            id_patch,
+            title_patch,
+        ))));
+    }
+}
+
+fn emit_group_meta_and_slides<G: SlideGroup>(
+    group_idx: usize,
+    b_group: G,
+    a_group: &G,
+    steps: &mut Vec<CourseDelta>,
+) {
+    let (b_id, b_title, b_slides) = b_group.into_parts();
+    emit_group_meta(group_idx, b_id, b_title, a_group, steps);
+    for (si, (b, a)) in b_slides
+        .into_iter()
+        .zip(a_group.slides().iter())
+        .enumerate()
+    {
+        if let Some(change) = SlideDelta::diff(b, a) {
+            steps.push(CourseDelta::SlideChange {
+                loc: G::slide_loc(group_idx, si),
+                change,
+            });
+        }
+    }
+}
+
+fn emit_group_slide_insert<G: SlideGroup>(
+    before: Vec<G>,
+    after: &[G],
+    group: usize,
+    index: usize,
+    steps: &mut Vec<CourseDelta>,
+) {
+    for (gi, (b_g, a_g)) in before.into_iter().zip(after.iter()).enumerate() {
+        if gi != group {
+            emit_group_meta_and_slides(gi, b_g, a_g, steps);
+            continue;
+        }
+        let (b_id, b_title, b_slides) = b_g.into_parts();
+        emit_group_meta(gi, b_id, b_title, a_g, steps);
+        for (i, b) in b_slides.into_iter().enumerate() {
+            let ai = if i < index { i } else { i.saturating_add(1) };
+            if let Some(a) = a_g.slides().get(ai)
+                && let Some(change) = SlideDelta::diff(b, a)
+            {
+                steps.push(CourseDelta::SlideChange {
+                    loc: G::slide_loc(gi, i),
+                    change,
+                });
+            }
+        }
+    }
+    steps.push(CourseDelta::Structural(Box::new(G::slide_insert_op(
+        group, index,
+    ))));
+}
+
+fn emit_group_slide_remove<G: SlideGroup>(
+    before: Vec<G>,
+    after: &[G],
+    group: usize,
+    index: usize,
+    steps: &mut Vec<CourseDelta>,
+) {
+    let mut removed = None;
+    for (gi, (b_g, a_g)) in before.into_iter().zip(after.iter()).enumerate() {
+        if gi != group {
+            emit_group_meta_and_slides(gi, b_g, a_g, steps);
+            continue;
+        }
+        let (b_id, b_title, b_slides) = b_g.into_parts();
+        emit_group_meta(gi, b_id, b_title, a_g, steps);
+        for (i, b) in b_slides.into_iter().enumerate() {
+            if i == index {
+                removed = Some(b);
+            } else {
+                let ai = if i < index { i } else { i.saturating_sub(1) };
+                if let Some(a) = a_g.slides().get(ai)
+                    && let Some(change) = SlideDelta::diff(b, a)
+                {
+                    steps.push(CourseDelta::SlideChange {
+                        loc: G::slide_loc(gi, i),
+                        change,
+                    });
+                }
+            }
+        }
+    }
+    if let Some(slide) = removed {
+        steps.push(CourseDelta::Structural(Box::new(G::slide_remove_op(
+            group,
+            index,
+            Box::new(slide),
+        ))));
+    }
+}
+
+fn emit_group_slide_move<G: SlideGroup>(
+    before: Vec<G>,
+    after: &[G],
+    from_group: usize,
+    from_index: usize,
+    to_group: usize,
+    to_index: usize,
+    steps: &mut Vec<CourseDelta>,
+) {
+    for (gi, (b_g, a_g)) in before.into_iter().zip(after.iter()).enumerate() {
+        if gi != from_group && gi != to_group {
+            emit_group_meta_and_slides(gi, b_g, a_g, steps);
+            continue;
+        }
+        let (b_id, b_title, b_slides) = b_g.into_parts();
+        emit_group_meta(gi, b_id, b_title, a_g, steps);
+        for (i, b) in b_slides.into_iter().enumerate() {
+            let target = if from_group == to_group {
+                a_g.slides()
+                    .get(mapped_index_after_move(i, from_index, to_index))
+            } else if gi == from_group {
+                if i == from_index {
+                    after.get(to_group).and_then(|g| g.slides().get(to_index))
+                } else {
+                    let ai = if i < from_index {
+                        i
+                    } else {
+                        i.saturating_sub(1)
+                    };
+                    a_g.slides().get(ai)
+                }
+            } else {
+                let ai = if i < to_index { i } else { i.saturating_add(1) };
+                a_g.slides().get(ai)
+            };
+            if let Some(a) = target
+                && let Some(change) = SlideDelta::diff(b, a)
+            {
+                steps.push(CourseDelta::SlideChange {
+                    loc: G::slide_loc(gi, i),
+                    change,
+                });
+            }
+        }
+    }
+    steps.push(CourseDelta::Structural(Box::new(G::slide_move_op(
+        from_group, from_index, to_group, to_index,
+    ))));
+}
+
+fn emit_group_steps<G: SlideGroup>(
+    plan: GroupCollectionPlan,
+    before: Vec<G>,
+    after: &[G],
+    steps: &mut Vec<CourseDelta>,
+) {
+    match plan {
+        GroupCollectionPlan::Identical | GroupCollectionPlan::Wholesale => {}
+        GroupCollectionPlan::InPlaceNoMeta | GroupCollectionPlan::InPlaceWithMeta => {
+            for (gi, (b_g, a_g)) in before.into_iter().zip(after.iter()).enumerate() {
+                emit_group_meta_and_slides(gi, b_g, a_g, steps);
+            }
+        }
+        GroupCollectionPlan::GroupInsert { index } => {
+            for (bi, b_g) in before.into_iter().enumerate() {
+                let ai = if bi < index { bi } else { bi.saturating_add(1) };
+                if let Some(a_g) = after.get(ai) {
+                    emit_group_meta_and_slides(bi, b_g, a_g, steps);
+                }
+            }
+            steps.push(CourseDelta::Structural(Box::new(G::list_op(
+                ListOp::Insert { index },
+            ))));
+        }
+        GroupCollectionPlan::GroupRemove { index } => {
+            let mut removed = None;
+            for (bi, b_g) in before.into_iter().enumerate() {
+                if bi == index {
+                    removed = Some(b_g);
+                } else {
+                    let ai = if bi < index { bi } else { bi.saturating_sub(1) };
+                    if let Some(a_g) = after.get(ai) {
+                        emit_group_meta_and_slides(bi, b_g, a_g, steps);
+                    }
+                }
+            }
+            if let Some(item) = removed {
+                steps.push(CourseDelta::Structural(Box::new(G::list_op(
+                    ListOp::Remove {
+                        index,
+                        item: Box::new(item),
+                    },
+                ))));
+            }
+        }
+        GroupCollectionPlan::GroupMove { from, to } => {
+            for (bi, b_g) in before.into_iter().enumerate() {
+                let ai = mapped_index_after_move(bi, from, to);
+                if let Some(a_g) = after.get(ai) {
+                    emit_group_meta_and_slides(bi, b_g, a_g, steps);
+                }
+            }
+            steps.push(CourseDelta::Structural(Box::new(G::list_op(
+                ListOp::Move { from, to },
+            ))));
+        }
+        GroupCollectionPlan::SlideInsert { group, index } => {
+            emit_group_slide_insert(before, after, group, index, steps);
+        }
+        GroupCollectionPlan::SlideRemove { group, index } => {
+            emit_group_slide_remove(before, after, group, index, steps);
+        }
+        GroupCollectionPlan::SlideMove {
+            from_group,
+            from_index,
+            to_group,
+            to_index,
+        } => {
+            emit_group_slide_move(
+                before, after, from_group, from_index, to_group, to_index, steps,
+            );
+        }
+    }
+}
+
 // ------------------------------------------------------------------ size estimation
 
 fn estimate_vec_plain<T>(vec: &[T]) -> usize {
@@ -1141,15 +2714,78 @@ pub(crate) fn estimate_slide(slide: &Slide) -> usize {
         .saturating_add(slide.question.as_ref().map_or(0, estimate_question_heap))
 }
 
+fn estimate_scene(scene: &Scene) -> usize {
+    let slide_bytes = scene
+        .slides
+        .iter()
+        .fold(0usize, |acc, s| acc.saturating_add(estimate_slide(s)));
+    size_of::<Scene>()
+        .saturating_add(scene.id.capacity())
+        .saturating_add(scene.title.capacity())
+        .saturating_add(slide_bytes)
+}
+
+fn estimate_bank(bank: &QuestionBank) -> usize {
+    let slide_bytes = bank
+        .slides
+        .iter()
+        .fold(0usize, |acc, s| acc.saturating_add(estimate_slide(s)));
+    size_of::<QuestionBank>()
+        .saturating_add(bank.id.capacity())
+        .saturating_add(bank.title.capacity())
+        .saturating_add(slide_bytes)
+}
+
+fn estimate_course(course: &Course) -> usize {
+    let mut total = size_of::<Course>()
+        .saturating_add(course.id.capacity())
+        .saturating_add(course.title.capacity())
+        .saturating_add(estimate_vec_plain(&course.variables))
+        .saturating_add(estimate_opt_string(&course.start_slide))
+        .saturating_add(estimate_opt_string(&course.player.logo))
+        .saturating_add(course.theme.font.capacity())
+        .saturating_add(estimate_vec_plain(&course.theme.palette))
+        .saturating_add(estimate_opt_string(&course.language))
+        .saturating_add(estimate_vec_plain(&course.fonts))
+        .saturating_add(
+            course
+                .background_audio
+                .as_ref()
+                .map_or(0, |a| a.src.capacity()),
+        )
+        .saturating_add(estimate_vec_plain(&course.text_styles))
+        .saturating_add(estimate_vec_plain(&course.resources))
+        .saturating_add(estimate_vec_plain(&course.glossary))
+        .saturating_add(estimate_vec_plain(&course.editor.guides));
+    for (k, v) in &course.strings {
+        total = total
+            .saturating_add(k.capacity())
+            .saturating_add(v.capacity())
+            .saturating_add(size_of::<(String, String)>());
+    }
+    for s in &course.scenes {
+        total = total.saturating_add(estimate_scene(s));
+    }
+    for m in &course.masters {
+        total = total.saturating_add(estimate_slide(m));
+    }
+    for t in &course.templates {
+        total = total.saturating_add(estimate_slide(t));
+    }
+    for b in &course.banks {
+        total = total.saturating_add(estimate_bank(b));
+    }
+    total
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::Session;
     use coursecraft_course::{
-        Action, Autofit, Choice, Event, FontStyle, Guide, QuestionBank, QuestionKind, Rect,
-        ResourceTarget, Scoring, SeekMode, ShapeKind, SlideTarget, TextStyle, Timing,
-        TransitionEffect, Value,
+        Action, Autofit, Choice, Event, FontStyle, Guide, QuestionKind, Rect, ResourceTarget,
+        Scoring, SeekMode, ShapeKind, SlideTarget, TextStyle, Timing, TransitionEffect, Value,
     };
 
     fn sample_object(id: &str, x: f32) -> Object {
@@ -1828,6 +3464,542 @@ mod tests {
             );
             assert_eq!(slide_json(&slide), orig_json, "slide mutated on error");
             assert_eq!(delta, delta_before, "delta mutated on error");
+        }
+    }
+
+    fn named_slide(id: &str, title: &str) -> Slide {
+        let mut s = sample_slide();
+        s.id = id.to_owned();
+        s.title = title.to_owned();
+        s
+    }
+
+    fn multi_scene_course() -> Course {
+        let mut course = Session::blank("Structural Test").course;
+        course.scenes = vec![
+            Scene {
+                id: "sc1".to_owned(),
+                title: "Scene 1".to_owned(),
+                slides: vec![
+                    named_slide("s1", "Slide 1"),
+                    named_slide("s2", "Slide 2"),
+                    named_slide("s3", "Slide 3"),
+                ],
+            },
+            Scene {
+                id: "sc2".to_owned(),
+                title: "Scene 2".to_owned(),
+                slides: vec![named_slide("s4", "Slide 4"), named_slide("s5", "Slide 5")],
+            },
+        ];
+        course.masters = vec![named_slide("m1", "Master 1"), named_slide("m2", "Master 2")];
+        course.templates = vec![
+            named_slide("t1", "Template 1"),
+            named_slide("t2", "Template 2"),
+        ];
+        course.banks = vec![
+            QuestionBank {
+                id: "b1".to_owned(),
+                title: "Bank 1".to_owned(),
+                slides: vec![named_slide("bq1", "Bank Q1"), named_slide("bq2", "Bank Q2")],
+            },
+            QuestionBank {
+                id: "b2".to_owned(),
+                title: "Bank 2".to_owned(),
+                slides: vec![named_slide("bq3", "Bank Q3")],
+            },
+        ];
+        // Attach a master to s1 and jump triggers to s2 from s3 (same scene) and s4 (other scene).
+        course.scenes[0].slides[0].master = Some("m1".to_owned());
+        let jump_to_s2 = Trigger {
+            action: Action::JumpToSlide {
+                target: SlideTarget::Id("s2".to_owned()),
+            },
+            when: Event::TimelineEnds { layer: None },
+            condition: None,
+            disabled: false,
+        };
+        course.scenes[0].slides[2].triggers.push(jump_to_s2.clone());
+        course.scenes[1].slides[0].triggers.push(jump_to_s2);
+        course
+    }
+
+    fn assert_course_roundtrip(before: Course, mut after: Course) -> CourseDelta {
+        let before_json = before.to_json().unwrap();
+        let after_json = after.to_json().unwrap();
+        assert_ne!(before_json, after_json);
+
+        let mut delta = CourseDelta::diff(before, &after).expect("expected Some(CourseDelta)");
+        assert!(delta.estimated_bytes() > 0);
+        let returned = delta.clone();
+
+        delta.apply(&mut after).expect("course undo must succeed");
+        assert_eq!(
+            after.to_json().unwrap(),
+            before_json,
+            "course undo must restore exact JSON"
+        );
+
+        delta.apply(&mut after).expect("course redo must succeed");
+        assert_eq!(
+            after.to_json().unwrap(),
+            after_json,
+            "course redo must restore exact JSON"
+        );
+
+        returned
+    }
+
+    fn assert_compact_roundtrip(
+        base: &Course,
+        label: &str,
+        mutate: impl FnOnce(&mut Course),
+    ) -> CourseDelta {
+        let mut after = base.clone();
+        mutate(&mut after);
+        let delta = assert_course_roundtrip(base.clone(), after);
+        assert!(
+            !matches!(delta, CourseDelta::FullCourse(_)),
+            "{label} must be compact, got {delta:?}"
+        );
+        delta
+    }
+
+    /// U-04: Structural scene/slide/master/template/bank ops are compact (never `FullCourse`)
+    /// and roundtrip `undo -> redo` byte-identically.
+    #[test]
+    fn u_04_course_delta_structural_ops_are_compact_and_roundtrip() {
+        let base = multi_scene_course();
+        assert_eq!(CourseDelta::diff(base.clone(), &base), None);
+
+        // 1. Slide insert (start, middle, end)
+        for idx in [0usize, 1, 3] {
+            assert_compact_roundtrip(&base, "slide insert", |c| {
+                c.scenes[0]
+                    .slides
+                    .insert(idx, named_slide("s_new", "Inserted"));
+            });
+        }
+
+        // 2. Slide delete with cross-slide trigger cleanup in SAME scene (s3) AND OTHER scene (s4)
+        assert_compact_roundtrip(&base, "slide delete + trigger cleanup", |c| {
+            c.scenes[0].slides.remove(1); // remove s2
+            c.scenes[0].slides[1].triggers.clear(); // s3 (shifted to index 1)
+            c.scenes[1].slides[0].triggers.clear(); // s4 in scene 1
+            c.start_slide = Some("s1".to_owned());
+        });
+
+        // 3. Slide move within same scene (forward and backward)
+        assert_compact_roundtrip(&base, "same-scene slide move fwd", |c| {
+            let s = c.scenes[0].slides.remove(0);
+            c.scenes[0].slides.insert(2, s);
+        });
+        assert_compact_roundtrip(&base, "same-scene slide move bwd", |c| {
+            let s = c.scenes[0].slides.remove(2);
+            c.scenes[0].slides.insert(0, s);
+        });
+
+        // 4. Slide move across scenes (also modifying the moved slide and another slide)
+        assert_compact_roundtrip(&base, "cross-scene slide move", |c| {
+            let mut moved = c.scenes[0].slides.remove(1); // s2
+            moved.title = "Moved S2".to_owned();
+            c.scenes[1].slides.insert(1, moved);
+            c.scenes[0].slides[1].notes = "Sibling updated".to_owned();
+        });
+
+        // 5. Scene add, delete (with cross-scene trigger cleanup), move, and rename
+        assert_compact_roundtrip(&base, "scene add", |c| {
+            c.scenes.push(Scene {
+                id: "sc3".to_owned(),
+                title: "Scene 3".to_owned(),
+                slides: vec![named_slide("s6", "Slide 6")],
+            });
+        });
+        assert_compact_roundtrip(&base, "scene delete", |c| {
+            c.scenes.remove(0);
+            c.scenes[0].triggers_clear_for_test();
+        });
+        assert_compact_roundtrip(&base, "scene move", |c| {
+            let sc = c.scenes.remove(1);
+            c.scenes.insert(0, sc);
+        });
+        let rename_scene = assert_compact_roundtrip(&base, "scene rename", |c| {
+            c.scenes[0].title = "Renamed Scene 1".to_owned();
+        });
+        assert!(matches!(
+            rename_scene,
+            CourseDelta::Structural(ref op) if matches!(op.as_ref(), StructuralOp::SceneMeta { scene: 0, .. })
+        ));
+
+        // 6. Master add, delete (clearing slide.master on s1), and move
+        assert_compact_roundtrip(&base, "master add", |c| {
+            c.masters.push(named_slide("m3", "Master 3"));
+        });
+        assert_compact_roundtrip(&base, "master delete + slide.master clear", |c| {
+            c.masters.remove(0); // remove m1
+            c.scenes[0].slides[0].master = None;
+        });
+        assert_compact_roundtrip(&base, "master move", |c| {
+            c.masters.swap(0, 1);
+        });
+
+        // 7. Template add, delete, and move
+        assert_compact_roundtrip(&base, "template add", |c| {
+            c.templates.insert(0, named_slide("t0", "Template 0"));
+        });
+        assert_compact_roundtrip(&base, "template delete", |c| {
+            c.templates.remove(1);
+        });
+        assert_compact_roundtrip(&base, "template move", |c| {
+            c.templates.swap(0, 1);
+        });
+
+        // 8. Bank add, delete, rename, and bank slide add/remove/move (same & cross bank)
+        assert_compact_roundtrip(&base, "bank add", |c| {
+            c.banks.push(QuestionBank {
+                id: "b3".to_owned(),
+                title: "Bank 3".to_owned(),
+                slides: Vec::new(),
+            });
+        });
+        assert_compact_roundtrip(&base, "bank delete", |c| {
+            c.banks.remove(0);
+        });
+        let rename_bank = assert_compact_roundtrip(&base, "bank rename", |c| {
+            c.banks[0].title = "Renamed Bank".to_owned();
+        });
+        assert!(matches!(
+            rename_bank,
+            CourseDelta::Structural(ref op) if matches!(op.as_ref(), StructuralOp::BankMeta { bank: 0, .. })
+        ));
+        assert_compact_roundtrip(&base, "bank slide add", |c| {
+            c.banks[0].slides.insert(1, named_slide("bq_new", "New Q"));
+        });
+        assert_compact_roundtrip(&base, "bank slide remove", |c| {
+            c.banks[0].slides.remove(0);
+        });
+        assert_compact_roundtrip(&base, "bank slide move within bank", |c| {
+            c.banks[0].slides.swap(0, 1);
+        });
+        assert_compact_roundtrip(&base, "bank slide move across banks", |c| {
+            let moved = c.banks[0].slides.remove(1);
+            c.banks[1].slides.insert(0, moved);
+        });
+
+        // 9. Cross-collection slide move (scene -> bank) represented as Sequence of two StructuralOps
+        assert_compact_roundtrip(&base, "scene -> bank move", |c| {
+            let slide = c.scenes[1].slides.remove(1);
+            c.banks[1].slides.push(slide);
+        });
+    }
+
+    trait SceneTriggerTestExt {
+        fn triggers_clear_for_test(&mut self);
+    }
+
+    impl SceneTriggerTestExt for Scene {
+        fn triggers_clear_for_test(&mut self) {
+            for s in &mut self.slides {
+                s.triggers.clear();
+            }
+        }
+    }
+
+    /// U-05: Wholesale fallback when strictly more than 50% of slides change (6 of 10 slides).
+    #[test]
+    fn u_05_course_delta_wholesale_fallback_over_half_slides() {
+        let mut base = Session::blank("Wholesale Test").course;
+        base.scenes[0].slides = (0..10)
+            .map(|i| named_slide(&format!("s{i}"), &format!("Slide {i}")))
+            .collect();
+
+        // 1 slide changed -> SlideChange
+        let mut one = base.clone();
+        one.scenes[0].slides[3].objects[0].frame.x = 333.0;
+        let d_one = assert_course_roundtrip(base.clone(), one);
+        assert!(matches!(d_one, CourseDelta::SlideChange { .. }));
+
+        // 5 of 10 slides changed (exactly 50%, not strictly > 50%) -> Patch
+        let mut five = base.clone();
+        for i in 0..5 {
+            five.scenes[0].slides[i].title = format!("Edited {i}");
+        }
+        let d_five = assert_course_roundtrip(base.clone(), five);
+        assert!(matches!(d_five, CourseDelta::Patch(_)));
+
+        // 6 of 10 slides changed (> 50%) -> FullCourse
+        let mut six = base.clone();
+        for i in 0..6 {
+            six.scenes[0].slides[i].title = format!("Scaled {i}");
+        }
+        let d_six = assert_course_roundtrip(base.clone(), six);
+        assert!(
+            matches!(d_six, CourseDelta::FullCourse(_)),
+            "expected FullCourse when 6/10 slides changed, got {d_six:?}"
+        );
+
+        // Single-slide course with 1 slide edited must NOT fall back to FullCourse
+        let single_base = Session::blank("One Slide").course;
+        let mut single_after = single_base.clone();
+        single_after.scenes[0].slides[0].title = "Edited Single".to_owned();
+        let d_single = assert_course_roundtrip(single_base, single_after);
+        assert!(
+            matches!(d_single, CourseDelta::SlideChange { .. }),
+            "1-slide edit on 1-slide course should be SlideChange, got {d_single:?}"
+        );
+    }
+
+    /// U-06: Hostile out-of-bounds `CourseDelta::apply` returns `Err(Invalid)` with zero panics
+    /// and leaves both the course and the delta completely untouched (including partial Sequence/Patch unwind).
+    #[test]
+    fn u_06_course_delta_hostile_out_of_bounds_no_panic() {
+        let orig = multi_scene_course();
+        let orig_json = orig.to_json().unwrap();
+        let dummy_slide = Box::new(named_slide("hostile_s", "Hostile"));
+        let dummy_scene = Box::new(Scene {
+            id: "hostile_sc".to_owned(),
+            title: "Hostile Scene".to_owned(),
+            slides: Vec::new(),
+        });
+        let dummy_bank = Box::new(QuestionBank {
+            id: "hostile_b".to_owned(),
+            title: "Hostile Bank".to_owned(),
+            slides: Vec::new(),
+        });
+
+        let valid_header = CourseDelta::Header(Box::new(CourseHeaderPatch {
+            schema_version: None,
+            id: None,
+            title: Some("Mutated Before Failure".to_owned()),
+            slide_size: None,
+            variables: None,
+            start_slide: None,
+            quiz: None,
+            player: None,
+            theme: None,
+            language: None,
+            strings: None,
+            fonts: None,
+            background_audio: None,
+            text_styles: None,
+            resources: None,
+            glossary: None,
+            editor: None,
+        }));
+        let valid_slide_delta = SlideDelta::Fields(Box::new(SlideFieldPatch {
+            id: None,
+            title: Some("Mutated Slide".to_owned()),
+            duration_ms: None,
+            background: None,
+            triggers: None,
+            cue_points: None,
+            question: None,
+            draw: None,
+            transition: None,
+            notes: None,
+            master: None,
+            revisit: None,
+            player: None,
+        }));
+        let failing_slide_delta = SlideDelta::ObjectInserted {
+            layer: None,
+            index: 99,
+        };
+
+        let bad_deltas = vec![
+            // Out-of-bounds SlideChange locations
+            CourseDelta::SlideChange {
+                loc: SlideLoc::SceneSlide {
+                    scene: 99,
+                    slide: 0,
+                },
+                change: valid_slide_delta.clone(),
+            },
+            CourseDelta::SlideChange {
+                loc: SlideLoc::SceneSlide {
+                    scene: 0,
+                    slide: 99,
+                },
+                change: valid_slide_delta.clone(),
+            },
+            CourseDelta::SlideChange {
+                loc: SlideLoc::Master(99),
+                change: valid_slide_delta.clone(),
+            },
+            CourseDelta::SlideChange {
+                loc: SlideLoc::Template(99),
+                change: valid_slide_delta.clone(),
+            },
+            CourseDelta::SlideChange {
+                loc: SlideLoc::BankSlide { bank: 99, slide: 0 },
+                change: valid_slide_delta.clone(),
+            },
+            CourseDelta::SlideChange {
+                loc: SlideLoc::BankSlide { bank: 0, slide: 99 },
+                change: valid_slide_delta.clone(),
+            },
+            // Out-of-bounds StructuralOps
+            CourseDelta::Structural(Box::new(StructuralOp::SceneSlideInsert {
+                scene: 99,
+                index: 0,
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneSlideInsert {
+                scene: 0,
+                index: 3, // == len
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneSlideRemove {
+                scene: 0,
+                index: 4, // > len
+                slide: dummy_slide.clone(),
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneSlideMove {
+                from_scene: 0,
+                from_index: 0,
+                to_scene: 0,
+                to_index: 99,
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneSlideMove {
+                from_scene: 0,
+                from_index: 99, // > from_len
+                to_scene: 1,
+                to_index: 0,
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneSlideMove {
+                from_scene: 0,
+                from_index: 0,
+                to_scene: 1,
+                to_index: 2, // == to_len
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneSlideMove {
+                from_scene: 99,
+                from_index: 0,
+                to_scene: 1,
+                to_index: 0,
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneOp(ListOp::Insert { index: 2 }))),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneOp(ListOp::Remove {
+                index: 3,
+                item: dummy_scene,
+            }))),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneOp(ListOp::Move {
+                from: 0,
+                to: 99,
+            }))),
+            CourseDelta::Structural(Box::new(StructuralOp::SceneMeta {
+                scene: 99,
+                id: None,
+                title: Some("X".to_owned()),
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::MasterOp(ListOp::Insert {
+                index: 99,
+            }))),
+            CourseDelta::Structural(Box::new(StructuralOp::TemplateOp(ListOp::Remove {
+                index: 99,
+                item: dummy_slide.clone(),
+            }))),
+            CourseDelta::Structural(Box::new(StructuralOp::BankOp(ListOp::Remove {
+                index: 99,
+                item: dummy_bank,
+            }))),
+            CourseDelta::Structural(Box::new(StructuralOp::BankMeta {
+                bank: 99,
+                id: None,
+                title: Some("X".to_owned()),
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::BankSlideInsert {
+                bank: 0,
+                index: 2,
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::BankSlideRemove {
+                bank: 0,
+                index: 3,
+                slide: dummy_slide,
+            })),
+            CourseDelta::Structural(Box::new(StructuralOp::BankSlideMove {
+                from_bank: 0,
+                from_index: 99,
+                to_bank: 1,
+                to_index: 0,
+            })),
+            // Patch with valid header + valid first slide + failing second slide -> must unwind all!
+            CourseDelta::Patch(Box::new(CoursePatch {
+                header: Some(CourseHeaderPatch {
+                    schema_version: None,
+                    id: None,
+                    title: Some("Patched Title".to_owned()),
+                    slide_size: None,
+                    variables: None,
+                    start_slide: None,
+                    quiz: None,
+                    player: None,
+                    theme: None,
+                    language: None,
+                    strings: None,
+                    fonts: None,
+                    background_audio: None,
+                    text_styles: None,
+                    resources: None,
+                    glossary: None,
+                    editor: None,
+                }),
+                slides: vec![
+                    (
+                        SlideLoc::SceneSlide { scene: 0, slide: 0 },
+                        valid_slide_delta.clone(),
+                    ),
+                    (
+                        SlideLoc::SceneSlide { scene: 0, slide: 1 },
+                        failing_slide_delta.clone(),
+                    ),
+                ],
+            })),
+            // Patch with out-of-bounds SlideLoc -> must reject before touching header
+            CourseDelta::Patch(Box::new(CoursePatch {
+                header: None,
+                slides: vec![(SlideLoc::Master(99), valid_slide_delta.clone())],
+            })),
+            // Sequence where step 2 (last) succeeds, step 1 (second-to-last) fails -> must unwind step 2!
+            CourseDelta::Sequence(vec![
+                CourseDelta::SlideChange {
+                    loc: SlideLoc::SceneSlide { scene: 0, slide: 0 },
+                    change: valid_slide_delta,
+                },
+                CourseDelta::SlideChange {
+                    loc: SlideLoc::SceneSlide { scene: 0, slide: 1 },
+                    change: failing_slide_delta,
+                },
+                valid_header,
+            ]),
+            // Sequence where structural last step succeeds (removes s3), second-to-last fails -> must unwind structural op!
+            CourseDelta::Sequence(vec![
+                CourseDelta::Structural(Box::new(StructuralOp::SceneSlideInsert {
+                    scene: 99,
+                    index: 0,
+                })),
+                CourseDelta::Structural(Box::new(StructuralOp::SceneSlideInsert {
+                    scene: 0,
+                    index: 2,
+                })),
+            ]),
+        ];
+
+        for mut delta in bad_deltas {
+            let delta_before = delta.clone();
+            let mut course = orig.clone();
+            let res = delta.apply(&mut course);
+            assert!(
+                matches!(res, Err(EngineError::Invalid(_))),
+                "expected Err(Invalid), got {res:?} for {delta_before:?}"
+            );
+            assert_eq!(
+                course.to_json().unwrap(),
+                orig_json,
+                "course mutated on error for {delta_before:?}"
+            );
+            assert_eq!(
+                delta, delta_before,
+                "delta mutated on error for {delta_before:?}"
+            );
         }
     }
 }
