@@ -29,7 +29,10 @@ use std::collections::VecDeque;
 use coursecraft_course::{Course, PlayerSettings, SCHEMA_VERSION, Scene, Size, Slide, Theme};
 use serde_json::Value as Json;
 
-use crate::delta::CourseDelta;
+use crate::delta::{
+    CourseDelta, CourseHeaderPatch, CourseHeaderSnapshot, SlideDelta, SlideLoc, UndoScope,
+    slide_at, slide_at_mut,
+};
 pub use commands::registry;
 
 /// Undo steps kept per session.
@@ -39,6 +42,94 @@ fn clone_course_counted(course: &Course) -> Course {
     #[cfg(debug_assertions)]
     test_counts::note_full_course_clone();
     course.clone()
+}
+
+#[cfg(test)]
+thread_local! {
+    static VERIFY_SCOPE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn with_scope_verifier_disabled<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            VERIFY_SCOPE.set(self.0);
+        }
+    }
+    let prev = VERIFY_SCOPE.replace(false);
+    let _guard = Reset(prev);
+    f()
+}
+
+#[cfg(test)]
+fn verify_single_slide_isolation(before: &Course, after: &Course, loc: SlideLoc, label: &str) {
+    if !VERIFY_SCOPE.get() {
+        return;
+    }
+    let after_slide = slide_at(after, loc);
+    assert!(
+        after_slide.is_some(),
+        "scope isolation violation ({label}): slide at {loc:?} disappeared"
+    );
+    let mut expected = before.clone();
+    let slot = slide_at_mut(&mut expected, loc);
+    assert!(
+        slot.is_some(),
+        "scope isolation violation ({label}): slide at {loc:?} missing in before snapshot"
+    );
+    if let (Some(slot), Some(after_slide)) = (slot, after_slide) {
+        *slot = after_slide.clone();
+    }
+    assert_eq!(
+        *after, expected,
+        "scope isolation violation ({label}): SingleSlide command mutated state outside {loc:?}"
+    );
+}
+
+#[cfg(test)]
+fn verify_course_header_isolation(before: &Course, after: &Course, label: &str) {
+    if !VERIFY_SCOPE.get() {
+        return;
+    }
+    assert_eq!(
+        after.scenes, before.scenes,
+        "scope isolation violation ({label}): CourseHeader command mutated scenes"
+    );
+    assert_eq!(
+        after.masters, before.masters,
+        "scope isolation violation ({label}): CourseHeader command mutated masters"
+    );
+    assert_eq!(
+        after.templates, before.templates,
+        "scope isolation violation ({label}): CourseHeader command mutated templates"
+    );
+    assert_eq!(
+        after.banks, before.banks,
+        "scope isolation violation ({label}): CourseHeader command mutated banks"
+    );
+}
+
+fn same_slide_batch_loc(course: &Course, steps: &[(String, Json)]) -> Option<SlideLoc> {
+    let mut target_slide: Option<&str> = None;
+    for (id, params) in steps {
+        let cmd = registry().iter().find(|c| c.id == id.as_str())?;
+        if !cmd.mutates {
+            continue;
+        }
+        if cmd.scope() != UndoScope::SingleSlide {
+            return None;
+        }
+        let sid = params.get("slide").and_then(Json::as_str)?;
+        match target_slide {
+            None => target_slide = Some(sid),
+            Some(prev) if prev == sid => {}
+            Some(_) => return None,
+        }
+    }
+    let sid = target_slide?;
+    SlideLoc::find(course, sid)
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -76,6 +167,13 @@ pub struct Command {
     /// Mutating commands snapshot the course for undo and roll back on error.
     pub mutates: bool,
     pub run: fn(&mut Session, &Json) -> Result<Json>,
+}
+
+impl Command {
+    #[must_use]
+    pub(crate) fn scope(&self) -> UndoScope {
+        commands::undo_scope(self.id)
+    }
 }
 
 /// An open course being edited.
@@ -283,6 +381,132 @@ impl Session {
         if !cmd.mutates {
             return (cmd.run)(self, params);
         }
+        match cmd.scope() {
+            UndoScope::SingleSlide => {
+                if let Some(loc) = params
+                    .get("slide")
+                    .and_then(Json::as_str)
+                    .and_then(|sid| SlideLoc::find(&self.course, sid))
+                {
+                    return self.execute_single_slide(cmd, params, loc);
+                }
+                self.execute_full_course(cmd, params)
+            }
+            UndoScope::CourseHeader => self.execute_course_header(cmd, params),
+            UndoScope::FullCourse => self.execute_full_course(cmd, params),
+        }
+    }
+
+    fn execute_single_slide(
+        &mut self,
+        cmd: &Command,
+        params: &Json,
+        loc: SlideLoc,
+    ) -> Result<Json> {
+        let Some(before_slide) = slide_at(&self.course, loc).cloned() else {
+            return self.execute_full_course(cmd, params);
+        };
+        #[cfg(test)]
+        let verify_before = self.course.clone();
+        self.skip_undo = false;
+        self.validated_in_cmd = false;
+        let outcome = (cmd.run)(self, params);
+        let skip_undo = std::mem::take(&mut self.skip_undo);
+        match outcome {
+            Ok(v) => {
+                #[cfg(test)]
+                verify_single_slide_isolation(&verify_before, &self.course, loc, cmd.id);
+                let unchanged = skip_undo || slide_at(&self.course, loc) == Some(&before_slide);
+                if unchanged {
+                    return Ok(v);
+                }
+                if let Some(slide) = slide_at_mut(&mut self.course, loc) {
+                    connectors::reroute_connectors_in_slide(slide);
+                }
+                let delta = slide_at(&self.course, loc)
+                    .and_then(|after_slide| SlideDelta::diff(before_slide, after_slide))
+                    .map(|change| CourseDelta::SlideChange { loc, change });
+                #[cfg(test)]
+                assert!(
+                    delta.is_some() || self.course == verify_before,
+                    "shadow undo oracle: SlideDelta::diff returned None for changed slide ({})",
+                    cmd.id
+                );
+                if let Some(delta) = delta {
+                    self.commit_delta(
+                        delta,
+                        cmd.label.to_owned(),
+                        #[cfg(test)]
+                        verify_before,
+                    );
+                    if self.validated_in_cmd {
+                        self.valid_at_revision = Some((self.revision, true));
+                    }
+                }
+                Ok(v)
+            }
+            Err(e) => {
+                if let Some(slot) = slide_at_mut(&mut self.course, loc) {
+                    *slot = before_slide;
+                }
+                #[cfg(test)]
+                if VERIFY_SCOPE.get() {
+                    assert_eq!(
+                        self.course, verify_before,
+                        "scope isolation violation ({}): SingleSlide error rollback left course modified",
+                        cmd.id
+                    );
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn execute_course_header(&mut self, cmd: &Command, params: &Json) -> Result<Json> {
+        let before_header = CourseHeaderSnapshot::capture(&self.course);
+        #[cfg(test)]
+        let verify_before = self.course.clone();
+        self.skip_undo = false;
+        self.validated_in_cmd = false;
+        let outcome = (cmd.run)(self, params);
+        let skip_undo = std::mem::take(&mut self.skip_undo);
+        match outcome {
+            Ok(v) => {
+                #[cfg(test)]
+                verify_course_header_isolation(&verify_before, &self.course, cmd.id);
+                if skip_undo {
+                    return Ok(v);
+                }
+                let Some(patch) = CourseHeaderPatch::diff(before_header, &self.course) else {
+                    return Ok(v);
+                };
+                self.commit_delta(
+                    CourseDelta::Header(Box::new(patch)),
+                    cmd.label.to_owned(),
+                    #[cfg(test)]
+                    verify_before,
+                );
+                if self.validated_in_cmd {
+                    self.valid_at_revision = Some((self.revision, true));
+                }
+                Ok(v)
+            }
+            Err(e) => {
+                before_header.restore(&mut self.course);
+                #[cfg(test)]
+                if VERIFY_SCOPE.get() {
+                    assert_eq!(
+                        self.course, verify_before,
+                        "scope isolation violation ({}): CourseHeader error rollback left course modified",
+                        cmd.id
+                    );
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn execute_full_course(&mut self, cmd: &Command, params: &Json) -> Result<Json> {
         let snapshot = clone_course_counted(&self.course);
         self.skip_undo = false;
         self.validated_in_cmd = false;
@@ -369,6 +593,10 @@ impl Session {
             }
         }
 
+        if let Some(loc) = same_slide_batch_loc(&self.course, steps) {
+            return self.execute_batch_single_slide(name, steps, loc);
+        }
+
         let snapshot = clone_course_counted(&self.course);
         let mut results = Vec::with_capacity(steps.len());
         let mut any_changed = false;
@@ -391,27 +619,24 @@ impl Session {
                 }
             };
 
-            let step_snapshot = (name.is_none() && first_label.is_none() && cmd.mutates)
-                .then(|| clone_course_counted(&self.course));
             self.skip_undo = false;
             let outcome = (cmd.run)(self, params);
+            let skip_undo = std::mem::take(&mut self.skip_undo);
             if cmd.mutates {
                 self.valid_at_revision = None;
             }
-            // A step that changed nothing must not make an undo step on its own.
-            // Other steps in the batch still do.
-            if std::mem::take(&mut self.skip_undo) {
-                // Nothing to record for this step.
-            } else if cmd.mutates {
-                any_changed = true;
-                if let Some(before) = step_snapshot
-                    && self.course != before
-                {
-                    first_label = Some(cmd.label);
-                }
-            }
             match outcome {
-                Ok(res) => results.push(res),
+                Ok(res) => {
+                    // A step that changed nothing must not make an undo step on its own.
+                    // Other steps in the batch still do.
+                    if !skip_undo && cmd.mutates {
+                        any_changed = true;
+                        if name.is_none() && first_label.is_none() && self.course != snapshot {
+                            first_label = Some(cmd.label);
+                        }
+                    }
+                    results.push(res);
+                }
                 Err(e) => {
                     self.course = snapshot;
                     return Err(EngineError::BatchFailed {
@@ -443,6 +668,111 @@ impl Session {
                     label,
                     #[cfg(test)]
                     shadow_before,
+                );
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn execute_batch_single_slide(
+        &mut self,
+        name: Option<&str>,
+        steps: &[(String, Json)],
+        loc: SlideLoc,
+    ) -> Result<Vec<Json>> {
+        let Some(before_slide) = slide_at(&self.course, loc).cloned() else {
+            return Err(EngineError::NotFound(format!("slide at {loc:?} not found")));
+        };
+        #[cfg(test)]
+        let verify_before = self.course.clone();
+        let mut results = Vec::with_capacity(steps.len());
+        let mut any_changed = false;
+        let mut first_label: Option<&'static str> = None;
+
+        for (i, (id, params)) in steps.iter().enumerate() {
+            let cmd = registry()
+                .iter()
+                .find(|c| c.id == id.as_str())
+                .ok_or_else(|| EngineError::BatchFailed {
+                    step: i,
+                    command: id.clone(),
+                    error: Box::new(EngineError::UnknownCommand(id.clone())),
+                });
+            let cmd = match cmd {
+                Ok(c) => c,
+                Err(e) => {
+                    if let Some(slot) = slide_at_mut(&mut self.course, loc) {
+                        *slot = before_slide;
+                    }
+                    return Err(e);
+                }
+            };
+
+            self.skip_undo = false;
+            let outcome = (cmd.run)(self, params);
+            let skip_undo = std::mem::take(&mut self.skip_undo);
+            if cmd.mutates {
+                self.valid_at_revision = None;
+            }
+            match outcome {
+                Ok(res) => {
+                    if !skip_undo && cmd.mutates {
+                        any_changed = true;
+                        if name.is_none()
+                            && first_label.is_none()
+                            && slide_at(&self.course, loc) != Some(&before_slide)
+                        {
+                            first_label = Some(cmd.label);
+                        }
+                    }
+                    results.push(res);
+                }
+                Err(e) => {
+                    if let Some(slot) = slide_at_mut(&mut self.course, loc) {
+                        *slot = before_slide;
+                    }
+                    #[cfg(test)]
+                    if VERIFY_SCOPE.get() {
+                        assert_eq!(
+                            self.course, verify_before,
+                            "scope isolation violation (batch step {i} {id}): SingleSlide rollback left course modified"
+                        );
+                    }
+                    return Err(EngineError::BatchFailed {
+                        step: i,
+                        command: id.clone(),
+                        error: Box::new(e),
+                    });
+                }
+            }
+        }
+
+        #[cfg(test)]
+        verify_single_slide_isolation(&verify_before, &self.course, loc, "batch");
+
+        if any_changed && slide_at(&self.course, loc) != Some(&before_slide) {
+            if let Some(slide) = slide_at_mut(&mut self.course, loc) {
+                connectors::reroute_connectors_in_slide(slide);
+            }
+            let label = name
+                .map(str::to_owned)
+                .or_else(|| first_label.map(str::to_owned))
+                .unwrap_or_else(|| "Batch".to_owned());
+            let delta = slide_at(&self.course, loc)
+                .and_then(|after_slide| SlideDelta::diff(before_slide, after_slide))
+                .map(|change| CourseDelta::SlideChange { loc, change });
+            #[cfg(test)]
+            assert!(
+                delta.is_some() || self.course == verify_before,
+                "shadow undo oracle: SlideDelta::diff returned None for changed batch ({label})"
+            );
+            if let Some(delta) = delta {
+                self.commit_delta(
+                    delta,
+                    label,
+                    #[cfg(test)]
+                    verify_before,
                 );
             }
         }

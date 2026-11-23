@@ -302,6 +302,11 @@ fn test_counts_tracks_full_course_clones() {
     session
         .execute("course.set_title", &json!({ "title": "Renamed" }))
         .expect("course.set_title succeeds");
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+
+    session
+        .execute("slide.add", &json!({ "title": "Slide 2" }))
+        .expect("slide.add succeeds");
     assert_eq!(crate::test_counts::full_course_clones(), 1);
 
     crate::test_counts::reset();

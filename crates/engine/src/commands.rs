@@ -35,6 +35,19 @@ pub fn registry() -> &'static [Command] {
     REGISTRY
 }
 
+/// Pre-edit snapshot scope for command `id`.
+///
+/// Unknown or unannotated commands default to [`crate::delta::UndoScope::FullCourse`].
+#[must_use]
+pub(crate) fn undo_scope(id: &str) -> crate::delta::UndoScope {
+    use crate::delta::UndoScope;
+    match id {
+        "object.set_frame" | "object.update" | "text.set" => UndoScope::SingleSlide,
+        "course.set_title" => UndoScope::CourseHeader,
+        _ => UndoScope::FullCourse,
+    }
+}
+
 static REGISTRY: &[Command] = &[
     Command {
         id: "course.info",

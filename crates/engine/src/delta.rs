@@ -20,6 +20,16 @@ use coursecraft_course::{
 
 use crate::{EngineError, Result};
 
+/// Pre-edit snapshot scope declared for a command.
+///
+/// Unknown or unannotated commands default to [`UndoScope::FullCourse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UndoScope {
+    FullCourse,
+    SingleSlide,
+    CourseHeader,
+}
+
 /// Identifies one slide anywhere inside a [`Course`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SlideLoc {

@@ -11437,3 +11437,418 @@ fn undo_steps_and_redo_steps_unwind_atomically_on_mid_loop_delta_error() {
     assert_eq!(s.undo_names(), before_undo);
     assert_eq!(s.redo_names(), before_redo);
 }
+
+/// SC-01: Pilot `SingleSlide` (`object.set_frame`, `object.update`, `text.set`)
+/// and `CourseHeader` (`course.set_title`) commands execute and roll back with
+/// zero full-course clones and byte-identical undo/redo.
+#[test]
+fn sc_01_pilot_scoped_commands_zero_full_clones_and_isolated() {
+    let mut s = Session::blank("Pilot Scope");
+    ok(&mut s, "slide.add", json!({ "title": "Slide 2" }));
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "shape1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+            "frame": { "x": 10.0, "y": 20.0, "w": 100.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "text1",
+            "kind": { "type": "text", "text": "Hello" },
+            "frame": { "x": 10.0, "y": 100.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide2",
+            "id": "other_shape",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#993333" },
+            "frame": { "x": 5.0, "y": 5.0, "w": 50.0, "h": 50.0 }
+        }),
+    );
+
+    let success_cases = [
+        (
+            "object.set_frame",
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 45.0, "y": 55.0, "w": 120.0, "h": 70.0 }
+            }),
+        ),
+        (
+            "object.update",
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "Hero Box",
+                "description": "Primary callout",
+                "focus_order": 2
+            }),
+        ),
+        (
+            "text.set",
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "Updated copy"
+            }),
+        ),
+        ("course.set_title", json!({ "title": "Renamed Pilot" })),
+    ];
+
+    for (cmd, params) in &success_cases {
+        let before_json = s.course.to_json().expect("before json");
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        ok(&mut s, cmd, params.clone());
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "{cmd} must not clone the full course"
+        );
+
+        let after_json = s.course.to_json().expect("after json");
+        assert_ne!(after_json, before_json, "{cmd} should mutate course");
+
+        // Re-running with identical params is a no-op with 0 full-course clones
+        // and preserves any existing redo stack.
+        s.undo().expect("undo");
+        assert_eq!(
+            s.course.to_json().expect("undone json"),
+            before_json,
+            "undo of {cmd} must restore byte-identical JSON"
+        );
+        s.redo().expect("redo");
+        assert_eq!(
+            s.course.to_json().expect("redone json"),
+            after_json,
+            "redo of {cmd} must restore byte-identical JSON"
+        );
+
+        let rev_after = s.revision;
+        let undo_after = s.undo_len();
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+        ok(&mut s, cmd, params.clone());
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "no-op {cmd} must not clone the full course"
+        );
+        assert_eq!(s.revision, rev_after);
+        assert_eq!(s.undo_len(), undo_after);
+    }
+
+    // Verify no-op on both SingleSlide and CourseHeader preserves an active redo stack.
+    s.undo().expect("undo to populate redo");
+    assert!(s.can_redo());
+    let redo_before: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+    let current_title = s.course.title.clone();
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    ok(
+        &mut s,
+        "course.set_title",
+        json!({ "title": current_title }),
+    );
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": "slide1", "object": "text1", "text": "Updated copy" }),
+    );
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    assert_eq!(s.redo_names(), redo_before);
+    s.redo().expect("redo still works after scoped no-ops");
+
+    // Error rollback cases for each pilot command: 0 full-course clones and untouched course.
+    let error_cases = [
+        (
+            "object.set_frame",
+            json!({
+                "slide": "slide1",
+                "object": "missing_object",
+                "frame": { "x": 1.0, "y": 2.0, "w": 10.0, "h": 10.0 }
+            }),
+        ),
+        (
+            "object.update",
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "MustRollBack",
+                "initial_state": "   "
+            }),
+        ),
+        (
+            "text.set",
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "x".repeat(5000)
+            }),
+        ),
+        ("course.set_title", json!({ "title": "   " })),
+    ];
+
+    for (cmd, params) in &error_cases {
+        let before_json = s.course.to_json().expect("before error json");
+        let before_rev = s.revision;
+        let before_undo = s.undo_len();
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        let err = s.execute(cmd, params);
+        assert!(err.is_err(), "{cmd} error case must fail");
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "error rollback of {cmd} must not clone the full course"
+        );
+        assert_eq!(
+            s.course.to_json().expect("after error json"),
+            before_json,
+            "error rollback of {cmd} must leave course byte-identical"
+        );
+        assert_eq!(s.revision, before_rev);
+        assert_eq!(s.undo_len(), before_undo);
+    }
+}
+
+/// SC-02: Same-slide batch of `SingleSlide` edits takes zero full-course clones,
+/// commits one atomic undo step, and rolls back atomically on mid-batch error.
+#[test]
+fn sc_02_same_slide_batch_zero_full_clones_and_atomic_rollback() {
+    let mut seed = Session::blank("Same-Slide Batch");
+    ok(&mut seed, "slide.add", json!({ "title": "Slide 2" }));
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "shape1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "text1",
+            "kind": { "type": "text", "text": "Start" },
+            "frame": { "x": 10.0, "y": 80.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+
+    let mut s = Session::new(seed.course);
+    let before_json = s.course.to_json().expect("before batch json");
+
+    let steps = vec![
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 20.0, "y": 15.0, "w": 90.0, "h": 45.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "Step Two"
+            }),
+        ),
+        (
+            "text.set".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "Step Three"
+            }),
+        ),
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 60.0, "y": 30.0, "w": 110.0, "h": 55.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "description": "Batch caption"
+            }),
+        ),
+    ];
+
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    let results = s.execute_batch(&steps).expect("same-slide batch succeeds");
+    assert_eq!(results.len(), 5);
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        crate::test_counts::full_course_clones(),
+        0,
+        "same-slide batch must not clone the full course"
+    );
+    assert_eq!(s.undo_len(), 1);
+
+    let after_json = s.course.to_json().expect("after batch json");
+    assert_ne!(after_json, before_json);
+
+    s.undo().expect("undo batch");
+    assert_eq!(s.course.to_json().expect("undone batch json"), before_json);
+    s.redo().expect("redo batch");
+    assert_eq!(s.course.to_json().expect("redone batch json"), after_json);
+
+    // Failing 4th step rolls back steps 1-3 atomically with zero full-course clones.
+    let before_fail_json = s.course.to_json().expect("before fail json");
+    let before_fail_rev = s.revision;
+    let before_undo_names: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    let before_redo_names: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+
+    let failing_steps = vec![
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 150.0, "y": 150.0, "w": 80.0, "h": 40.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "Should Not Stick"
+            }),
+        ),
+        (
+            "text.set".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "Rolled back"
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "initial_state": "   "
+            }),
+        ),
+    ];
+
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    let err = s
+        .execute_batch(&failing_steps)
+        .expect_err("step 4 must fail");
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        crate::test_counts::full_course_clones(),
+        0,
+        "failed same-slide batch must not clone the full course"
+    );
+    assert!(
+        matches!(err, EngineError::BatchFailed { step: 3, .. }),
+        "expected BatchFailed at step 3, got {err:?}"
+    );
+    assert_eq!(
+        s.course.to_json().expect("after fail json"),
+        before_fail_json
+    );
+    assert_eq!(s.revision, before_fail_rev);
+    assert_eq!(s.undo_names(), before_undo_names);
+    assert_eq!(s.redo_names(), before_redo_names);
+}
+
+/// SC-03: Missing, non-string, or unknown `"slide"` param on a `SingleSlide`
+/// command falls back safely without panicking and leaves the course untouched.
+#[test]
+fn sc_03_single_slide_missing_or_unknown_slide_falls_back_safely() {
+    let mut s = Session::blank("SC-03 Fallback");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "shape1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+
+    let before_json = s.course.to_json().expect("before json");
+    let before_rev = s.revision;
+    let before_undo = s.undo_len();
+
+    let missing = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "object": "shape1",
+                "frame": { "x": 50.0, "y": 50.0, "w": 80.0, "h": 40.0 }
+            }),
+        )
+        .expect_err("missing slide must error");
+    assert!(
+        matches!(missing, EngineError::BadParams { .. }),
+        "{missing:?}"
+    );
+
+    let non_string = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "slide": 123,
+                "object": "shape1",
+                "frame": { "x": 50.0, "y": 50.0, "w": 80.0, "h": 40.0 }
+            }),
+        )
+        .expect_err("non-string slide must error");
+    assert!(
+        matches!(non_string, EngineError::BadParams { .. }),
+        "{non_string:?}"
+    );
+
+    let unknown = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "slide": "does-not-exist",
+                "object": "shape1",
+                "frame": { "x": 50.0, "y": 50.0, "w": 80.0, "h": 40.0 }
+            }),
+        )
+        .expect_err("unknown slide must error");
+    assert!(matches!(unknown, EngineError::NotFound(_)), "{unknown:?}");
+
+    assert_eq!(s.course.to_json().expect("after json"), before_json);
+    assert_eq!(s.revision, before_rev);
+    assert_eq!(s.undo_len(), before_undo);
+}
