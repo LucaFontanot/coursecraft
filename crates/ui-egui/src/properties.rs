@@ -59,7 +59,7 @@ pub struct PropertiesState {
     pub last_synced_revision: u64,
     pub last_synced_selection: crate::Selection,
     pub last_synced_editing_state: Option<String>,
-    pub extra_cache_key: (u64, String),
+    pub extra_cache_key: (u64, String, String, String, String),
     pub extra_name: String,
     pub extra_text: String,
     pub extra_alt: String,
@@ -340,7 +340,13 @@ impl Default for PropertiesState {
             last_synced_revision: u64::MAX,
             last_synced_selection: crate::Selection::default(),
             last_synced_editing_state: None,
-            extra_cache_key: (u64::MAX, String::new()),
+            extra_cache_key: (
+                u64::MAX,
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
             extra_name: String::new(),
             extra_text: String::new(),
             extra_alt: String::new(),
@@ -2705,8 +2711,19 @@ fn show_state_extra_properties(
     let mut replace_image_requested = false;
     let props = &mut editor.ui.properties;
     let rev = editor.session.revision;
-    if props.extra_cache_key.0 != rev || props.extra_cache_key.1 != extra.id {
-        props.extra_cache_key = (rev, extra.id.clone());
+    if props.extra_cache_key.0 != rev
+        || props.extra_cache_key.1 != slide_id
+        || props.extra_cache_key.2 != object_id
+        || props.extra_cache_key.3 != state_name
+        || props.extra_cache_key.4 != extra.id
+    {
+        props.extra_cache_key = (
+            rev,
+            slide_id.to_owned(),
+            object_id.to_owned(),
+            state_name.to_owned(),
+            extra.id.clone(),
+        );
         props.extra_name = extra.name.clone();
         props.extra_x = extra.frame.x;
         props.extra_y = extra.frame.y;
@@ -2783,13 +2800,15 @@ fn show_state_extra_properties(
             [w, coursecraft_render::CONTROL_COMPACT],
             egui::DragValue::new(&mut props.extra_x)
                 .speed(1.0)
-                .prefix("X "),
+                .prefix("X ")
+                .suffix(" px"),
         );
         let ry = ui.add_sized(
             [w, coursecraft_render::CONTROL_COMPACT],
             egui::DragValue::new(&mut props.extra_y)
                 .speed(1.0)
-                .prefix("Y "),
+                .prefix("Y ")
+                .suffix(" px"),
         );
         if rx.drag_stopped() || rx.lost_focus() || ry.drag_stopped() || ry.lost_focus() {
             frame_changed = true;
@@ -2802,14 +2821,16 @@ fn show_state_extra_properties(
             egui::DragValue::new(&mut props.extra_w)
                 .speed(1.0)
                 .range(1.0..=10000.0)
-                .prefix("W "),
+                .prefix("W ")
+                .suffix(" px"),
         );
         let rh = ui.add_sized(
             [w, coursecraft_render::CONTROL_COMPACT],
             egui::DragValue::new(&mut props.extra_h)
                 .speed(1.0)
                 .range(1.0..=10000.0)
-                .prefix("H "),
+                .prefix("H ")
+                .suffix(" px"),
         );
         if rw.drag_stopped() || rw.lost_focus() || rh.drag_stopped() || rh.lost_focus() {
             frame_changed = true;

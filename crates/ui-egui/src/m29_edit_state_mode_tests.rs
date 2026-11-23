@@ -514,3 +514,46 @@ fn s5_crop_mode_patches_state_in_edit_state_mode() {
         "reset_crop in edit-state mode must clear hover.crop"
     );
 }
+
+#[test]
+fn b05_renaming_active_state_in_states_tab_keeps_edit_state_mode() {
+    let mut course = course_with_objects();
+    course.slide_mut("s1").expect("s1").objects[0]
+        .states
+        .push(coursecraft_course::StateDef {
+            name: "active".to_owned(),
+            ..Default::default()
+        });
+
+    let mut h = TestHarness::new(course);
+    h.editor.ui.bottom_tab = crate::BottomTab::States;
+    h.editor.selection.set_many(["btn1".to_owned()]);
+    h.editor.enter_edit_state("s1", "btn1", "active");
+    h.idle_frame();
+
+    let label_pos = h.find_text("active").expect("active state card label");
+    h.double_click_at(label_pos);
+    h.idle_frame();
+    assert_eq!(h.editor.ui.states.renaming_state.as_deref(), Some("active"));
+
+    h.editor.ui.states.rename_buffer.clear();
+    h.type_text("chosen");
+    h.press(egui::Key::Enter, Modifiers::NONE);
+    h.idle_frame();
+    h.idle_frame();
+
+    assert_eq!(
+        h.editor
+            .ui
+            .editing_state
+            .as_ref()
+            .map(|s| s.state_name.as_str()),
+        Some("chosen"),
+        "renaming the active state in Edit-State Mode must keep Edit-State Mode active"
+    );
+    assert_eq!(
+        h.editor.ui.preview_state.as_deref(),
+        Some("chosen"),
+        "renaming the active state must update preview_state to the new name"
+    );
+}
