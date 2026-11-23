@@ -11371,12 +11371,21 @@ fn undo_estimated_bytes_tracks_undo_and_redo_deltas() {
 
     // Moving a delta from undo to redo keeps it accounted for in undo_estimated_bytes.
     s.undo().expect("undo move");
-    assert!(s.undo_estimated_bytes() > 0);
+    assert_eq!(s.undo_estimated_bytes(), after_move);
 
-    // A new edit clears redo so the moved-object delta is dropped.
+    // Undoing all steps empties undo; non-zero bytes prove redo deltas are counted.
+    s.undo().expect("undo add");
+    assert!(!s.can_undo());
+    assert!(s.can_redo());
+    let after_undo_all = s.undo_estimated_bytes();
+    assert!(after_undo_all > after_move);
+
+    // A new small edit clears redo so the larger object deltas are dropped.
     ok(&mut s, "course.set_title", json!({ "title": "Renamed" }));
     assert!(!s.can_redo());
-    assert!(s.undo_estimated_bytes() > 0);
+    let after_rename = s.undo_estimated_bytes();
+    assert!(after_rename > 0);
+    assert!(after_rename < after_undo_all);
 }
 
 #[test]
