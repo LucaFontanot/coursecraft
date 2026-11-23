@@ -6571,8 +6571,8 @@ fn insert_menu_creates_a_results_slide_and_selects_it() {
     harness.click_at(insert);
     harness.idle_frame();
     let item = harness
-        .find_text("Results Slide")
-        .expect("Results Slide menu item");
+        .find_text("Results slide")
+        .expect("Results slide menu item");
     harness.click_at(item);
     harness.idle_frame();
 
@@ -6608,8 +6608,8 @@ fn insert_menu_creates_a_certificate_slide_and_selects_it() {
     harness.click_at(insert);
     harness.idle_frame();
     let item = harness
-        .find_text("Certificate Slide")
-        .expect("Certificate Slide menu item");
+        .find_text("Certificate slide")
+        .expect("Certificate slide menu item");
     harness.click_at(item);
     harness.idle_frame();
 
@@ -9742,12 +9742,12 @@ fn menu_routes_open_the_variables_tab_and_course_settings() {
     harness.idle_frame();
     assert_eq!(harness.editor.ui.bottom_tab, BottomTab::Variables);
 
-    let file = harness.find_text("File").expect("File menu");
-    harness.click_at(file);
+    let project = harness.find_text("Project").expect("Project menu");
+    harness.click_at(project);
     harness.idle_frame();
     let properties = harness
-        .find_text_last("Course Properties")
-        .expect("Course Properties menu item");
+        .find_text_last("Course settings…")
+        .expect("Course settings menu item");
     harness.click_at(properties);
     harness.idle_frame();
     assert!(harness.editor.ui.show_course_settings_window);
@@ -9790,8 +9790,8 @@ fn edit_menu_delete_scene_opens_the_confirmation() {
     harness.click_at(edit);
     harness.idle_frame();
     let delete = harness
-        .find_text_last("Delete Scene")
-        .expect("Delete Scene menu item");
+        .find_text_last("Delete scene")
+        .expect("Delete scene menu item");
     harness.click_at(delete);
     harness.idle_frame();
     assert!(harness.editor.ui.pending_delete_scene.is_some());
@@ -18636,7 +18636,7 @@ fn edit_menu_shows_named_undo_and_redo() {
     harness.click_at(edit);
     harness.idle_frame();
     assert!(
-        harness.find_text_last("Undo Course Title").is_some(),
+        harness.find_text_last("Undo course title").is_some(),
         "Edit menu should show named Undo"
     );
     assert!(
@@ -18648,7 +18648,7 @@ fn edit_menu_shows_named_undo_and_redo() {
     harness.editor.run("edit.undo", serde_json::json!({}));
     harness.idle_frame();
     assert!(
-        harness.find_text_last("Redo Course Title").is_some(),
+        harness.find_text_last("Redo course title").is_some(),
         "Edit menu should show named Redo"
     );
 }

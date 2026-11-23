@@ -453,27 +453,27 @@ fn undo_names_follow_commands_and_move_with_undo_redo() {
     assert!(s.redo_names().is_empty());
 
     ok(&mut s, "course.set_title", json!({ "title": "B" }));
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
     assert!(s.redo_names().is_empty());
 
     // A no-change command adds no name.
     ok(&mut s, "course.set_title", json!({ "title": "B" }));
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
 
     ok(&mut s, "slide.add", json!({ "title": "Slide 2" }));
-    assert_eq!(s.undo_names(), vec!["New Slide", "Course Title"]);
+    assert_eq!(s.undo_names(), vec!["New slide", "Course title"]);
 
     s.undo().expect("undo 1");
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
-    assert_eq!(s.redo_names(), vec!["New Slide"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
+    assert_eq!(s.redo_names(), vec!["New slide"]);
 
     s.undo().expect("undo 2");
     assert!(s.undo_names().is_empty());
-    assert_eq!(s.redo_names(), vec!["Course Title", "New Slide"]);
+    assert_eq!(s.redo_names(), vec!["Course title", "New slide"]);
 
     s.redo().expect("redo 1");
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
-    assert_eq!(s.redo_names(), vec!["New Slide"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
+    assert_eq!(s.redo_names(), vec!["New slide"]);
 }
 
 #[test]
@@ -486,14 +486,14 @@ fn execute_batch_uses_first_changing_step_label_and_named_batch_overrides() {
         ("scene.add".to_string(), json!({ "title": "Scene 2" })),
     ];
     s.execute_batch(&steps).expect("batch");
-    assert_eq!(s.undo_names(), vec!["New Slide"]);
+    assert_eq!(s.undo_names(), vec!["New slide"]);
 
     s.execute_batch_named(
         "Import deck",
         &[("slide.add".to_string(), json!({ "title": "Slide 3" }))],
     )
     .expect("named batch");
-    assert_eq!(s.undo_names(), vec!["Import deck", "New Slide"]);
+    assert_eq!(s.undo_names(), vec!["Import deck", "New slide"]);
 }
 
 #[test]
@@ -10677,4 +10677,73 @@ fn course_find_and_replace_on_glossary_entries() {
     assert!(err.to_string().contains("glossary term is empty"), "{err}");
     assert_eq!(s.course.glossary[0].term, "Acme Token");
     assert_eq!(s.course.glossary[0].definition, "An Acme security token.");
+}
+
+/// L-01: Every command `label` and `menu` leaf in `REGISTRY` uses sentence case,
+/// with zero empty labels and the expected command count.
+#[test]
+fn registry_labels_and_menu_leaves_use_sentence_case() {
+    const ALLOWED_CAPS: &[&str] = &[
+        "CourseCraft",
+        "PowerPoint",
+        "PPTX",
+        "Word",
+        "PDF",
+        "MP4",
+        "CSV",
+        "XLIFF",
+        "SCORM",
+        "LTI",
+        "xAPI",
+        "cmi5",
+        "HTML5",
+        "AI",
+        "Lottie",
+        "GitHub",
+        "Inter",
+        "OK",
+        "ID",
+        "A–Z",
+        "Web",
+    ];
+
+    let check_phrase = |phrase: &str, context: &str| {
+        assert!(!phrase.trim().is_empty(), "{context}: empty label");
+        let first_char = phrase.chars().next().expect("non-empty phrase");
+        assert!(
+            first_char.is_uppercase(),
+            "{context}: {phrase:?} must start with an uppercase letter"
+        );
+        let tokens: Vec<&str> = phrase
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .filter(|t| !t.is_empty())
+            .collect();
+        for &token in tokens.iter().skip(1) {
+            let trimmed = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '–');
+            if trimmed.is_empty() || ALLOWED_CAPS.contains(&trimmed) {
+                continue;
+            }
+            assert!(
+                !trimmed.chars().any(char::is_uppercase),
+                "{context}: unexpected Title Case token {trimmed:?} in {phrase:?}"
+            );
+        }
+    };
+
+    let cmds = crate::registry();
+    assert_eq!(cmds.len(), 186, "unexpected registry command count");
+
+    for cmd in cmds {
+        check_phrase(cmd.label, &format!("label for {}", cmd.id));
+        if !cmd.menu.is_empty() {
+            let leaf = cmd.menu.rsplit('/').next().unwrap_or(cmd.menu);
+            check_phrase(leaf, &format!("menu leaf for {}", cmd.id));
+        }
+    }
+
+    let course_update = cmds
+        .iter()
+        .find(|c| c.id == "course.update")
+        .expect("course.update");
+    assert_eq!(course_update.menu, "Project/Course settings…");
 }

@@ -965,6 +965,36 @@ fn show_project_help_items(editor: &mut Editor, ui: &mut Ui) {
     }
 }
 
+fn format_undo_redo_label(prefix: &str, name: &str) -> String {
+    const KEEP_CAPS: &[&str] = &[
+        "AI",
+        "CSV",
+        "XLIFF",
+        "Lottie",
+        "PowerPoint",
+        "PDF",
+        "MP4",
+        "Word",
+        "SCORM",
+        "LTI",
+        "CourseCraft",
+    ];
+    let first_word = name
+        .split(|c: char| !c.is_alphanumeric())
+        .next()
+        .unwrap_or("");
+    if KEEP_CAPS.contains(&first_word) {
+        return format!("{prefix} {name}");
+    }
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_uppercase() => {
+            format!("{prefix} {}{}", first.to_ascii_lowercase(), chars.as_str())
+        }
+        _ => format!("{prefix} {name}"),
+    }
+}
+
 fn show_edit_menu(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -976,7 +1006,7 @@ fn show_edit_menu(
             let label = match id {
                 "edit.undo" => {
                     if let Some(name) = editor.session.undo_names().first() {
-                        dynamic_label = format!("Undo {name}");
+                        dynamic_label = format_undo_redo_label("Undo", name);
                         dynamic_label.as_str()
                     } else {
                         cmd.label
@@ -984,7 +1014,7 @@ fn show_edit_menu(
                 }
                 "edit.redo" => {
                     if let Some(name) = editor.session.redo_names().first() {
-                        dynamic_label = format!("Redo {name}");
+                        dynamic_label = format_undo_redo_label("Redo", name);
                         dynamic_label.as_str()
                     } else {
                         cmd.label
@@ -1869,10 +1899,6 @@ fn render_extra_category_items(
 
     if category == "Project" {
         ui.separator();
-        if ui.button("Course settings").clicked() {
-            editor.ui.show_course_settings_window = true;
-            ui.close();
-        }
         if ui.button("Theme…").clicked() {
             editor.ui.show_theme_window = true;
             ui.close();

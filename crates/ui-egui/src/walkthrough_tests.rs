@@ -252,8 +252,8 @@ fn configure_course_settings(harness: &mut TestHarness) {
     harness.click_at(proj);
     harness.idle_frame();
     let settings = harness
-        .find_text("Course settings")
-        .expect("Course Settings menu item");
+        .find_text("Course settings…")
+        .expect("Course settings menu item");
     harness.click_at(settings);
     // The window sizes itself over a few frames now that it holds more options.
     for _ in 0..4 {
@@ -502,7 +502,7 @@ fn build_tabs_slide(harness: &mut TestHarness) {
     let insert = harness.find_text("Insert").expect("Insert menu");
     harness.click_at(insert);
     harness.idle_frame();
-    let new_slide = harness.find_text("New Slide").expect("New Slide menu item");
+    let new_slide = harness.find_text("New slide").expect("New slide menu item");
     harness.click_at(new_slide);
     harness.idle_frame();
 
@@ -820,7 +820,7 @@ fn build_quiz_slide(harness: &mut TestHarness) {
     let insert = harness.find_text("Insert").expect("Insert menu");
     harness.click_at(insert);
     harness.idle_frame();
-    let new_slide = harness.find_text("New Slide").expect("New Slide menu item");
+    let new_slide = harness.find_text("New slide").expect("New slide menu item");
     harness.click_at(new_slide);
     harness.idle_frame();
 
@@ -1093,7 +1093,7 @@ fn build_results_slide(harness: &mut TestHarness) {
     let insert = harness.find_text("Insert").expect("Insert menu");
     harness.click_at(insert);
     harness.idle_frame();
-    let new_slide = harness.find_text("New Slide").expect("New Slide menu item");
+    let new_slide = harness.find_text("New slide").expect("New slide menu item");
     harness.click_at(new_slide);
     harness.idle_frame();
 

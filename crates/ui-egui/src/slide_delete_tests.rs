@@ -69,8 +69,8 @@ fn delete_slide_35_via_edit_menu_keeps_position_and_scroll() {
     h.click_at(edit_pos);
     h.idle_frame();
     let del_pos = h
-        .find_text_last("Delete Slide")
-        .expect("Delete Slide menu item");
+        .find_text_last("Delete slide")
+        .expect("Delete slide menu item");
     h.click_at(del_pos);
     h.idle_frame();
     h.idle_frame();
@@ -191,7 +191,7 @@ fn delete_slide_35_while_scrolled_to_top_scrolls_back_to_replacement() {
     let edit_pos = h.find_text("Edit").expect("Edit menu");
     h.click_at(edit_pos);
     h.idle_frame();
-    let del_pos = h.find_text_last("Delete Slide").expect("Delete Slide");
+    let del_pos = h.find_text_last("Delete slide").expect("Delete slide");
     h.click_at(del_pos);
     for _ in 0..40 {
         h.idle_frame();

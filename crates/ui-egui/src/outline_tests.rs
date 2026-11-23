@@ -144,8 +144,8 @@ fn insert_menu_opens_the_outline_dialog() {
     h.click_at(insert);
     h.idle_frame();
     let item = h
-        .find_text_last("Slides from Outline…")
-        .expect("Slides from Outline menu item");
+        .find_text_last("Slides from outline…")
+        .expect("Slides from outline menu item");
     h.click_at(item);
     h.idle_frame();
 

@@ -38,7 +38,7 @@ pub fn registry() -> &'static [Command] {
 static REGISTRY: &[Command] = &[
     Command {
         id: "course.info",
-        label: "Course Info",
+        label: "Course info",
         menu: "",
         shortcut: None,
         params: "{}",
@@ -47,7 +47,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.map",
-        label: "Course Map",
+        label: "Course map",
         menu: "",
         shortcut: None,
         params: "{}",
@@ -56,8 +56,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.validate",
-        label: "Check Course",
-        menu: "File/Check Course",
+        label: "Check course",
+        menu: "File/Check course",
         shortcut: None,
         params: "{}",
         mutates: false,
@@ -65,7 +65,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.audit",
-        label: "Accessibility Check",
+        label: "Accessibility check",
         menu: "",
         shortcut: None,
         params: "{}",
@@ -74,8 +74,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.update",
-        label: "Course Properties",
-        menu: "File/Course Properties",
+        label: "Course settings",
+        menu: "Project/Course settings…",
         shortcut: None,
         params: r#"{"title"?: string, "id"?: string, "start_slide"?: id|null, "language"?: string|null}"#,
         mutates: true,
@@ -83,7 +83,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.set_slide_size",
-        label: "Slide Size",
+        label: "Slide size",
         menu: "",
         shortcut: None,
         params: r#"{"w": number, "h": number, "mode": "scale"|"fill"|"keep"}"#,
@@ -92,7 +92,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.set_title",
-        label: "Course Title",
+        label: "Course title",
         menu: "",
         shortcut: None,
         params: r#"{"title": string}"#,
@@ -101,8 +101,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.set_player",
-        label: "Player Settings",
-        menu: "Project/Player Settings",
+        label: "Player settings",
+        menu: "Project/Player settings…",
         shortcut: None,
         params: r#"{"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}, "seekbar"?: "free"|"locked"|"until_timeline_ends"}"#,
         mutates: true,
@@ -110,8 +110,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.set_quiz",
-        label: "Quiz Settings",
-        menu: "Project/Quiz Settings",
+        label: "Quiz settings",
+        menu: "Project/Quiz settings…",
         shortcut: None,
         params: r#"{"passing_percent": 0..=100|null}"#,
         mutates: true,
@@ -119,7 +119,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.set_publish_settings",
-        label: "Publish Settings",
+        label: "Publish settings",
         menu: "",
         shortcut: None,
         params: r#"{"standard"?: string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}"#,
@@ -128,7 +128,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.set_background_audio",
-        label: "Set Background Audio",
+        label: "Set background audio",
         menu: "",
         shortcut: None,
         params: r#"{"src"?: string | null, "volume"?: number, "loop"?: bool}"#,
@@ -137,7 +137,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "theme.set_palette",
-        label: "Set Theme Palette",
+        label: "Set theme palette",
         menu: "",
         shortcut: None,
         params: r##"{"colors": [{"id"?: id, "name": string, "color": "#RRGGBB"}]}"##,
@@ -146,7 +146,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "theme.set_palette_color",
-        label: "Change Palette Colour",
+        label: "Change palette colour",
         menu: "",
         shortcut: None,
         params: r##"{"id": id, "color": "#RRGGBB", "recolor"?: bool}"##,
@@ -155,7 +155,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.recolor",
-        label: "Replace Colour",
+        label: "Replace colour",
         menu: "",
         shortcut: None,
         params: r##"{"from": "#RRGGBB", "to": "#RRGGBB"}"##,
@@ -164,7 +164,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "text_style.create",
-        label: "New Text Style",
+        label: "New text style",
         menu: "",
         shortcut: None,
         params: r#"{"name": string, "from_object"?: {"slide": id, "object": id}, "style"?: TextStyle, "paragraphs"?: Paragraph | null}"#,
@@ -173,7 +173,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "text_style.update",
-        label: "Update Text Style",
+        label: "Update text style",
         menu: "",
         shortcut: None,
         params: r#"{"id": id, "name"?: string, "style"?: TextStyle fields, "paragraphs"?: Paragraph | null}"#,
@@ -182,7 +182,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "text_style.delete",
-        label: "Delete Text Style",
+        label: "Delete text style",
         menu: "",
         shortcut: None,
         params: r#"{"id": id}"#,
@@ -191,7 +191,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "text_style.apply",
-        label: "Apply Text Style",
+        label: "Apply text style",
         menu: "",
         shortcut: None,
         params: r#"{"id": id, "slide": id, "objects": id[], "clear_overrides"?: bool}"#,
@@ -200,7 +200,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.add_finish_button",
-        label: "Add Finish Button",
+        label: "Add finish button",
         menu: "",
         shortcut: None,
         params: "{}",
@@ -209,7 +209,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.set_theme",
-        label: "Theme Settings",
+        label: "Theme settings",
         menu: "",
         shortcut: None,
         params: r#"{"accent"?: color, "background"?: color, "text"?: color, "font"?: string, "bar"?: color, "bar_text"?: color}"#,
@@ -218,7 +218,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.add_font",
-        label: "Add Font",
+        label: "Add font",
         menu: "",
         shortcut: None,
         params: r#"{"src": "fonts/<file>.ttf", "family": string, "style": "regular"|"bold"|"italic"|"bold_italic"}"#,
@@ -227,7 +227,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.remove_font",
-        label: "Remove Font",
+        label: "Remove font",
         menu: "",
         shortcut: None,
         params: r#"{"family": string, "style"?: style} or {"src": "fonts/<file>.ttf"}"#,
@@ -236,7 +236,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.export_xliff",
-        label: "Export Translation",
+        label: "Export translation",
         menu: "",
         shortcut: None,
         params: r#"{"target_language": string}"#,
@@ -245,7 +245,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.import_xliff",
-        label: "Import Translation",
+        label: "Import translation",
         menu: "",
         shortcut: None,
         params: r#"{"xliff": string}"#,
@@ -281,8 +281,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "scene.add",
-        label: "New Scene",
-        menu: "Insert/New Scene",
+        label: "New scene",
+        menu: "Insert/New scene",
         shortcut: None,
         params: r#"{"id"?: id, "title"?: string}"#,
         mutates: true,
@@ -290,7 +290,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "scene.update",
-        label: "Scene Properties",
+        label: "Scene properties",
         menu: "",
         shortcut: None,
         params: r#"{"scene": id, "title"?: string}"#,
@@ -299,8 +299,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "scene.delete",
-        label: "Delete Scene",
-        menu: "Edit/Delete Scene",
+        label: "Delete scene",
+        menu: "Edit/Delete scene",
         shortcut: None,
         params: r#"{"scene": id}"#,
         mutates: true,
@@ -308,8 +308,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.add",
-        label: "New Slide",
-        menu: "Insert/New Slide",
+        label: "New slide",
+        menu: "Insert/New slide",
         shortcut: Some("Ctrl+M"),
         params: r#"{"id"?: id, "scene"?: id, "after"?: slide id, "title"?: string}"#,
         mutates: true,
@@ -317,7 +317,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.update",
-        label: "Slide Properties",
+        label: "Slide properties",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "title"?: string, "duration_ms"?: u32, "revisit"?: "auto"|"reset"|"resume", "notes"?: string}"#,
@@ -326,8 +326,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.delete",
-        label: "Delete Slide",
-        menu: "Edit/Delete Slide",
+        label: "Delete slide",
+        menu: "Edit/Delete slide",
         shortcut: None,
         params: r#"{"slide": id}"#,
         mutates: true,
@@ -335,7 +335,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.move",
-        label: "Move Slide",
+        label: "Move slide",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "scene"?: id, "index": usize}"#,
@@ -344,7 +344,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.duplicate",
-        label: "Duplicate Slide",
+        label: "Duplicate slide",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "after"?: slide id}"#,
@@ -353,7 +353,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.paste",
-        label: "Paste Slide",
+        label: "Paste slide",
         menu: "",
         shortcut: None,
         params: r#"{"scene"?: id, "after"?: slide id, "slide": Slide}"#,
@@ -362,7 +362,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.set_duration",
-        label: "Slide Duration",
+        label: "Slide duration",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "ms": u32}"#,
@@ -371,7 +371,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.set_background",
-        label: "Slide Background",
+        label: "Slide background",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "background": color|null}"#,
@@ -380,7 +380,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.set_transition",
-        label: "Slide Transition",
+        label: "Slide transition",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "transition": Transition|null}"#,
@@ -389,7 +389,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.set_player_overrides",
-        label: "Slide Player Settings",
+        label: "Slide player settings",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_bar"?: bool|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}"#,
@@ -398,7 +398,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "master.add",
-        label: "New Master",
+        label: "New master",
         menu: "",
         shortcut: None,
         params: r#"{"title"?: string}"#,
@@ -407,7 +407,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "master.delete",
-        label: "Delete Master",
+        label: "Delete master",
         menu: "",
         shortcut: None,
         params: r#"{"master": id}"#,
@@ -416,7 +416,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.set_master",
-        label: "Apply Master",
+        label: "Apply master",
         menu: "",
         shortcut: None,
         params: r#"{"slides": id[], "master": id|null}"#,
@@ -425,7 +425,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "bank.create",
-        label: "New Question Bank",
+        label: "New question bank",
         menu: "",
         shortcut: None,
         params: r#"{"title"?: string}"#,
@@ -434,7 +434,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "bank.update",
-        label: "Question Bank Properties",
+        label: "Question bank properties",
         menu: "",
         shortcut: None,
         params: r#"{"bank": id, "title"?: string}"#,
@@ -443,7 +443,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "bank.delete",
-        label: "Delete Question Bank",
+        label: "Delete question bank",
         menu: "",
         shortcut: None,
         params: r#"{"bank": id}"#,
@@ -452,7 +452,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "bank.add_question",
-        label: "New Bank Question",
+        label: "New bank question",
         menu: "",
         shortcut: None,
         params: r#"{"bank": id, "kind"?: QuestionKind, "title"?: string}"#,
@@ -461,7 +461,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "bank.import_csv",
-        label: "Import Questions from CSV",
+        label: "Import questions from CSV",
         menu: "",
         shortcut: None,
         params: r#"{"csv": string, "bank"?: string}"#,
@@ -470,7 +470,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "bank.move_slide",
-        label: "Move Slide to Bank",
+        label: "Move slide to bank",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "bank": id, "index"?: usize}"#,
@@ -479,7 +479,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "bank.remove_slide",
-        label: "Remove Bank Slide",
+        label: "Remove bank slide",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id}"#,
@@ -488,7 +488,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "draw.insert",
-        label: "New Draw",
+        label: "New draw",
         menu: "",
         shortcut: None,
         params: r#"{"bank": id, "count": u32, "scene"?: id, "index"?: usize}"#,
@@ -497,7 +497,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "draw.update",
-        label: "Draw Properties",
+        label: "Draw properties",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "bank"?: id, "count"?: u32}"#,
@@ -506,7 +506,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.add_from_layout",
-        label: "New Slide from Layout",
+        label: "New slide from layout",
         menu: "",
         shortcut: None,
         params: r#"{"layout": "blank"|"title"|"title_content"|"two_columns"|"picture_text"|"question", "after"?: slide id, "scene"?: id, "master"?: id}"#,
@@ -515,8 +515,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.import_outline",
-        label: "Slides from Outline",
-        menu: "Insert/Slides from Outline…",
+        label: "Slides from outline",
+        menu: "Insert/Slides from outline…",
         shortcut: None,
         params: r#"{"outline": {"title"?: string|null, "scenes": [{"title": string, "slides": [{"title": string, "body"?: [string], "notes"?: string|null, "question"?: {"prompt": string, "choices": [{"text": string, "correct": bool}]}}]}]}, "after"?: slide id}"#,
         mutates: true,
@@ -524,7 +524,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "template.save",
-        label: "Save as Template",
+        label: "Save as template",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "title"?: string}"#,
@@ -533,7 +533,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "template.add_slide",
-        label: "New Slide from Template",
+        label: "New slide from template",
         menu: "",
         shortcut: None,
         params: r#"{"template": id, "after"?: slide id, "scene"?: id}"#,
@@ -542,7 +542,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "template.delete",
-        label: "Delete Template",
+        label: "Delete template",
         menu: "",
         shortcut: None,
         params: r#"{"template": id}"#,
@@ -551,8 +551,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "layer.add",
-        label: "New Layer",
-        menu: "Insert/New Layer",
+        label: "New layer",
+        menu: "Insert/New layer",
         shortcut: None,
         params: r#"{"id"?: id, "slide": id, "name"?: string}"#,
         mutates: true,
@@ -560,7 +560,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "layer.update",
-        label: "Layer Properties",
+        label: "Layer properties",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "layer": id, "name"?: string, "duration_ms"?: u32, "hide_other_layers"?: bool, "pause_base_timeline"?: bool, "prevent_base_clicks"?: bool, "hide_base_objects"?: bool, "hide_when_timeline_ends"?: bool, "allow_seek"?: "auto"|"yes"|"no", "revisit"?: "auto"|"reset"|"resume"}"#,
@@ -569,8 +569,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "layer.delete",
-        label: "Delete Layer",
-        menu: "Edit/Delete Layer",
+        label: "Delete layer",
+        menu: "Edit/Delete layer",
         shortcut: None,
         params: r#"{"slide": id, "layer": id}"#,
         mutates: true,
@@ -578,7 +578,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "layer.move",
-        label: "Move Layer",
+        label: "Move layer",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "layer": id, "to": usize}"#,
@@ -587,7 +587,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "layer.duplicate",
-        label: "Duplicate Layer",
+        label: "Duplicate layer",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "layer": id}"#,
@@ -596,7 +596,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.add",
-        label: "Insert Object",
+        label: "Insert object",
         menu: "",
         shortcut: None,
         params: r#"{"id"?: id, "slide": id, "layer"?: id, "kind": ObjectKind, "frame": Rect, "name"?: string, "timing"?: Timing}"#,
@@ -605,7 +605,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.update",
-        label: "Object Properties",
+        label: "Object properties",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "name"?: string, "kind"?: ObjectKind, "timing"?: Timing, "initial_state"?: string, "focus_order"?: u32|null, "decorative"?: bool, "description"?: string|null}"#,
@@ -614,8 +614,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.reorder",
-        label: "Reorder Object",
-        menu: "Arrange/Bring Forward",
+        label: "Reorder object",
+        menu: "Arrange/Bring forward",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index": usize}"#,
         mutates: true,
@@ -623,7 +623,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.align",
-        label: "Align Objects",
+        label: "Align objects",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "objects": id[], "edge": "left"|"center"|"right"|"top"|"middle"|"bottom", "to"?: "selection"|"slide"}"#,
@@ -632,7 +632,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.distribute",
-        label: "Distribute Objects",
+        label: "Distribute objects",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "objects": id[], "axis": "horizontal"|"vertical"}"#,
@@ -641,7 +641,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.match_size",
-        label: "Match Size",
+        label: "Match size",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "objects": id[], "dimension": "width"|"height"|"both"}"#,
@@ -686,7 +686,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_frame",
-        label: "Move/Resize Object",
+        label: "Move/resize object",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "frame": Rect}"#,
@@ -695,7 +695,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_rotation",
-        label: "Rotate Object",
+        label: "Rotate object",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "degrees": number}"#,
@@ -704,7 +704,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.flip",
-        label: "Flip Object",
+        label: "Flip object",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "axis": "horizontal"|"vertical"}"#,
@@ -713,7 +713,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.lock",
-        label: "Lock Object",
+        label: "Lock object",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "locked": bool}"#,
@@ -722,7 +722,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.hide_in_editor",
-        label: "Hide Object in Editor",
+        label: "Hide object in editor",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "hidden": bool}"#,
@@ -731,7 +731,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "view.set",
-        label: "Editor View Settings",
+        label: "Editor view settings",
         menu: "",
         shortcut: None,
         params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "base_slide_view"?: "show"|"dim"|"hide", "last_publish"?: {"standard": string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}}"#,
@@ -740,7 +740,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "view.guides.add",
-        label: "Add Guide",
+        label: "Add guide",
         menu: "",
         shortcut: None,
         params: r#"{"vertical": bool, "at": number}"#,
@@ -749,7 +749,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "view.guides.move",
-        label: "Move Guide",
+        label: "Move guide",
         menu: "",
         shortcut: None,
         params: r#"{"index": usize, "at": number}"#,
@@ -758,7 +758,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "view.guides.remove",
-        label: "Remove Guide",
+        label: "Remove guide",
         menu: "",
         shortcut: None,
         params: r#"{"index": usize}"#,
@@ -767,7 +767,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_opacity",
-        label: "Set Opacity",
+        label: "Set opacity",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "opacity": number}"#,
@@ -776,7 +776,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_outline_join",
-        label: "Set Outline Corners",
+        label: "Set outline corners",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "join": "miter"|"round"|"bevel"}"#,
@@ -785,7 +785,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_fill_style",
-        label: "Set Fill Style",
+        label: "Set fill style",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "fill_style": FillStyle|null}"#,
@@ -794,7 +794,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_shadow",
-        label: "Set Shadow",
+        label: "Set shadow",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "shadow": Shadow|null}"#,
@@ -803,7 +803,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_glow",
-        label: "Set Glow",
+        label: "Set glow",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "glow": Glow|null}"#,
@@ -812,7 +812,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.apply_style",
-        label: "Apply Style",
+        label: "Apply style",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "source_slide": id, "source": id, "objects": id[]}"#,
@@ -821,7 +821,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_drag",
-        label: "Set Drag",
+        label: "Set drag",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "drag": DragSpec|null}"#,
@@ -830,7 +830,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_lottie",
-        label: "Set Lottie Playback",
+        label: "Set Lottie playback",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "loop"?: bool, "autoplay"?: bool, "speed"?: number}"#,
@@ -839,7 +839,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_web_source",
-        label: "Set Web Source",
+        label: "Set web source",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "source": WebSource}"#,
@@ -848,7 +848,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_input",
-        label: "Set Input",
+        label: "Set input",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {variable?, placeholder?, multiline?, max_chars?, min?, max?, step?, orientation?, start_angle?, end_angle?, label?, options?}}"#,
@@ -857,7 +857,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_marker",
-        label: "Set Marker",
+        label: "Set marker",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {title?, body?, runs?, paragraphs?, icon?, color?}}"#,
@@ -866,7 +866,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_panel",
-        label: "Set Object Panel",
+        label: "Set object panel",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "panel": id|null}"#,
@@ -875,7 +875,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_scroll_panel",
-        label: "Set Scrolling Panel",
+        label: "Set scrolling panel",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {content_height?, bar?}}"#,
@@ -884,7 +884,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_timer",
-        label: "Set Timer",
+        label: "Set timer",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {duration_ms?, format?, autostart?, style?}}"#,
@@ -893,7 +893,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_meter",
-        label: "Set Progress Meter",
+        label: "Set progress meter",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {variable?, min?, max?, style?, show_value?}}"#,
@@ -902,7 +902,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_path",
-        label: "Edit Path Points",
+        label: "Edit path points",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "points": Point[], "start_glue"?: {object, site}|null, "end_glue"?: {object, site}|null}"#,
@@ -911,7 +911,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_crop",
-        label: "Crop Image",
+        label: "Crop image",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "crop": {x,y,w,h}|null, "frame"?: Rect}"#,
@@ -920,7 +920,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_captions",
-        label: "Set Captions",
+        label: "Set captions",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "captions": string|null}"#,
@@ -929,7 +929,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_media",
-        label: "Set Media Options",
+        label: "Set media options",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "volume"?: number, "trim"?: {"start_ms", "end_ms"?} | null}"#,
@@ -938,7 +938,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "video.add_cue",
-        label: "Add Cue Point",
+        label: "Add cue point",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "at_ms"?: number, "name"?: string, "pause"?: bool, "id"?: id}"#,
@@ -947,7 +947,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "video.set_cue",
-        label: "Edit Cue Point",
+        label: "Edit cue point",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "cue": id, "patch": {"at_ms"?: number, "name"?: string, "pause"?: bool}}"#,
@@ -956,7 +956,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "video.remove_cue",
-        label: "Delete Cue Point",
+        label: "Delete cue point",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "cue": id}"#,
@@ -965,7 +965,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "video.add_question_cue",
-        label: "Add Question at Cue",
+        label: "Add question at cue",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "at_ms"?: number, "name"?: string}"#,
@@ -974,7 +974,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.add_cue",
-        label: "Add Timeline Cue Point",
+        label: "Add timeline cue point",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}"#,
@@ -983,7 +983,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.set_cue",
-        label: "Edit Timeline Cue Point",
+        label: "Edit timeline cue point",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}"#,
@@ -992,7 +992,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "slide.remove_cue",
-        label: "Delete Timeline Cue Point",
+        label: "Delete timeline cue point",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "cue": id}"#,
@@ -1001,7 +1001,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.add_state",
-        label: "New State",
+        label: "New state",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": StateDef}"#,
@@ -1010,7 +1010,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.update_state",
-        label: "Update State",
+        label: "Update state",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": StateDef}"#,
@@ -1028,7 +1028,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.delete_state",
-        label: "Delete State",
+        label: "Delete state",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "name": string}"#,
@@ -1037,7 +1037,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.duplicate_state",
-        label: "Duplicate State",
+        label: "Duplicate state",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "name": string, "new_name"?: string}"#,
@@ -1046,7 +1046,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.rename_state",
-        label: "Rename State",
+        label: "Rename state",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "from": string, "to": string}"#,
@@ -1055,7 +1055,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.reorder_state",
-        label: "Reorder State",
+        label: "Reorder state",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "name": string, "index": usize}"#,
@@ -1064,7 +1064,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.state_add_extra",
-        label: "Add State Item",
+        label: "Add state item",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": string, "extra": StateExtra}"#,
@@ -1073,7 +1073,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.state_update_extra",
-        label: "Update State Item",
+        label: "Update state item",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": string, "extra": id, "patch": object}"#,
@@ -1082,7 +1082,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.state_delete_extra",
-        label: "Delete State Item",
+        label: "Delete state item",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": string, "extra": id}"#,
@@ -1091,7 +1091,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.state_reorder_extra",
-        label: "Reorder State Item",
+        label: "Reorder state item",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": string, "extra": id, "index": usize}"#,
@@ -1100,7 +1100,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.delete",
-        label: "Delete Object",
+        label: "Delete object",
         menu: "Edit/Delete",
         shortcut: Some("Delete"),
         params: r#"{"slide": id, "object": id}"#,
@@ -1109,7 +1109,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_animation",
-        label: "Set Animation",
+        label: "Set animation",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "which": "entrance"|"exit", "animation": Animation|null}"#,
@@ -1118,7 +1118,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.add_motion_path",
-        label: "Add Motion Path",
+        label: "Add motion path",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "points"?: Point[], "duration_ms"?: u32, "easing"?: Easing, "relative"?: bool}"#,
@@ -1127,7 +1127,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.update_motion_path",
-        label: "Update Motion Path",
+        label: "Update motion path",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "path": id, "points"?: Point[], "duration_ms"?: u32, "easing"?: Easing, "relative"?: bool}"#,
@@ -1136,7 +1136,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.remove_motion_path",
-        label: "Remove Motion Path",
+        label: "Remove motion path",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "path": id}"#,
@@ -1145,7 +1145,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "text.set",
-        label: "Set Text",
+        label: "Set text",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "text": string}"#,
@@ -1154,7 +1154,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "text.style_range",
-        label: "Style Text Range",
+        label: "Style text range",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "start": usize, "end": usize, "bold"?: bool, "italic"?: bool, "underline"?: bool, "strikethrough"?: bool, "baseline"?: "normal"|"superscript"|"subscript", "letter_spacing"?: number, "size"?: number, "color"?: string, "font"?: string}"#,
@@ -1163,7 +1163,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "text.set_paragraph",
-        label: "Set Paragraph Style",
+        label: "Set paragraph style",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "align"?: "left"|"center"|"right", "valign"?: "top"|"middle"|"bottom"}"#,
@@ -1172,7 +1172,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "text.set_paragraphs",
-        label: "Set Paragraph Formatting",
+        label: "Set paragraph formatting",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "start"?: usize, "end"?: usize, "list"?: "none"|"bullet"|"number", "level"?: 0..4, "line_spacing"?: 0.8..3, "space_before"?: 0..200, "space_after"?: 0..200}"#,
@@ -1181,7 +1181,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "text.set_link",
-        label: "Set Link",
+        label: "Set link",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "start"?: usize, "end"?: usize, "link": Link|null}"#,
@@ -1190,7 +1190,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "object.set_autofit",
-        label: "Set Autofit",
+        label: "Set autofit",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "autofit": "none"|"shrink"}"#,
@@ -1199,7 +1199,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.set_cell",
-        label: "Set Table Cell",
+        label: "Set table cell",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "row": usize, "column": usize, "text"?: string, "runs"?: TextRun[], "paragraphs"?: Paragraph[], "fill"?: Color|null, "valign"?: "top"|"middle"|"bottom"}"#,
@@ -1208,7 +1208,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.insert_row",
-        label: "Insert Table Row",
+        label: "Insert table row",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index"?: usize}"#,
@@ -1217,7 +1217,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.delete_row",
-        label: "Delete Table Row",
+        label: "Delete table row",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index": usize}"#,
@@ -1226,7 +1226,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.insert_column",
-        label: "Insert Table Column",
+        label: "Insert table column",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index"?: usize}"#,
@@ -1235,7 +1235,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.delete_column",
-        label: "Delete Table Column",
+        label: "Delete table column",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index": usize}"#,
@@ -1244,7 +1244,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.resize",
-        label: "Resize Table",
+        label: "Resize table",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "columns"?: number[], "rows"?: number[]}"#,
@@ -1253,7 +1253,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.merge",
-        label: "Merge Table Cells",
+        label: "Merge table cells",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "row": usize, "column": usize, "rows": usize, "columns": usize}"#,
@@ -1262,7 +1262,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.split",
-        label: "Split Table Cell",
+        label: "Split table cell",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "row": usize, "column": usize}"#,
@@ -1271,7 +1271,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.set_borders",
-        label: "Set Table Borders",
+        label: "Set table borders",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "outer"?: Outline|null, "inner"?: Outline|null}"#,
@@ -1280,7 +1280,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "table.set_header_row",
-        label: "Set Header Row",
+        label: "Set header row",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "object": id, "header_row": bool}"#,
@@ -1289,7 +1289,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "trigger.add",
-        label: "New Trigger",
+        label: "New trigger",
         menu: "Insert/Trigger",
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "trigger": Trigger, "index"?: usize}"#,
@@ -1298,7 +1298,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "trigger.update",
-        label: "Update Trigger",
+        label: "Update trigger",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "index": usize, "trigger": Trigger}"#,
@@ -1307,7 +1307,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "trigger.move",
-        label: "Move Trigger",
+        label: "Move trigger",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "from": usize, "to": usize}"#,
@@ -1316,7 +1316,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "trigger.delete",
-        label: "Delete Trigger",
+        label: "Delete trigger",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "index": usize}"#,
@@ -1325,7 +1325,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "resource.add",
-        label: "Add Resource",
+        label: "Add resource",
         menu: "",
         shortcut: None,
         params: r#"{"title": string, "target": {"kind": "url", "url": string}|{"kind": "file", "src": string}}"#,
@@ -1334,7 +1334,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "resource.update",
-        label: "Edit Resource",
+        label: "Edit resource",
         menu: "",
         shortcut: None,
         params: r#"{"id": id, "title"?: string, "target"?: {"kind": "url", "url": string}|{"kind": "file", "src": string}}"#,
@@ -1343,7 +1343,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "resource.remove",
-        label: "Remove Resource",
+        label: "Remove resource",
         menu: "",
         shortcut: None,
         params: r#"{"id": id}"#,
@@ -1352,7 +1352,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "resource.move",
-        label: "Move Resource",
+        label: "Move resource",
         menu: "",
         shortcut: None,
         params: r#"{"id": id, "to": usize}"#,
@@ -1361,7 +1361,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "glossary.add",
-        label: "Add Glossary Entry",
+        label: "Add glossary entry",
         menu: "",
         shortcut: None,
         params: r#"{"term": string, "definition"?: string}"#,
@@ -1370,7 +1370,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "glossary.update",
-        label: "Edit Glossary Entry",
+        label: "Edit glossary entry",
         menu: "",
         shortcut: None,
         params: r#"{"id": id, "term"?: string, "definition"?: string}"#,
@@ -1379,7 +1379,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "glossary.remove",
-        label: "Remove Glossary Entry",
+        label: "Remove glossary entry",
         menu: "",
         shortcut: None,
         params: r#"{"id": id}"#,
@@ -1388,7 +1388,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "glossary.move",
-        label: "Move Glossary Entry",
+        label: "Move glossary entry",
         menu: "",
         shortcut: None,
         params: r#"{"id": id, "to": usize}"#,
@@ -1406,7 +1406,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "variable.add",
-        label: "New Variable",
+        label: "New variable",
         menu: "Project/Variables",
         shortcut: None,
         params: r#"{"name": string, "value": bool|number|string}"#,
@@ -1415,7 +1415,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "variable.set_value",
-        label: "Set Variable Value",
+        label: "Set variable value",
         menu: "",
         shortcut: None,
         params: r#"{"name": string, "value": bool|number|string}"#,
@@ -1424,7 +1424,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "variable.delete",
-        label: "Delete Variable",
+        label: "Delete variable",
         menu: "",
         shortcut: None,
         params: r#"{"name": string}"#,
@@ -1451,8 +1451,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "results.insert",
-        label: "Results Slide",
-        menu: "Insert/Results Slide",
+        label: "Results slide",
+        menu: "Insert/Results slide",
         shortcut: None,
         params: r#"{"after"?: slide id}"#,
         mutates: true,
@@ -1460,8 +1460,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "certificate.insert",
-        label: "Certificate Slide",
-        menu: "Insert/Certificate Slide",
+        label: "Certificate slide",
+        menu: "Insert/Certificate slide",
         shortcut: None,
         params: r#"{"after"?: slide id}"#,
         mutates: true,
@@ -1469,7 +1469,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.add_submit_button",
-        label: "Add Submit Button",
+        label: "Add submit button",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id}"#,
@@ -1478,7 +1478,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.add_feedback_layers",
-        label: "Add Feedback Layers",
+        label: "Add feedback layers",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id}"#,
@@ -1487,7 +1487,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.add_try_again_layer",
-        label: "Add Try Again Layer",
+        label: "Add try again layer",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id}"#,
@@ -1496,7 +1496,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.set",
-        label: "Set Question",
+        label: "Set question",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "question": Question}"#,
@@ -1505,8 +1505,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.delete",
-        label: "Delete Question",
-        menu: "Edit/Delete Question",
+        label: "Delete question",
+        menu: "Edit/Delete question",
         shortcut: None,
         params: r#"{"slide": id}"#,
         mutates: true,
@@ -1514,7 +1514,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.set_kind",
-        label: "Set Question Kind",
+        label: "Set question kind",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "kind": QuestionKind}"#,
@@ -1523,7 +1523,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.add_accepted",
-        label: "Add Accepted Answer",
+        label: "Add accepted answer",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "text"?: string}"#,
@@ -1532,7 +1532,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.remove_accepted",
-        label: "Remove Accepted Answer",
+        label: "Remove accepted answer",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "index": number}"#,
@@ -1541,7 +1541,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.update_accepted",
-        label: "Update Accepted Answer",
+        label: "Update accepted answer",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "index": number, "text": string}"#,
@@ -1550,7 +1550,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.set_case_sensitive",
-        label: "Set Case Sensitive",
+        label: "Set case sensitive",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "case_sensitive": bool}"#,
@@ -1559,7 +1559,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.add_pair",
-        label: "Add Match Pair",
+        label: "Add match pair",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "left"?: string, "right"?: string}"#,
@@ -1568,7 +1568,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.remove_pair",
-        label: "Remove Match Pair",
+        label: "Remove match pair",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "id": string}"#,
@@ -1577,7 +1577,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.update_pair",
-        label: "Update Match Pair",
+        label: "Update match pair",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "id": string, "left"?: string, "right"?: string}"#,
@@ -1586,7 +1586,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.reorder_pair",
-        label: "Reorder Match Pair",
+        label: "Reorder match pair",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "id": string, "to": number}"#,
@@ -1595,7 +1595,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.reorder_sequence",
-        label: "Reorder Sequence Item",
+        label: "Reorder sequence item",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "id": string, "to": number}"#,
@@ -1604,7 +1604,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.set_hotspot_image",
-        label: "Set Hotspot Image",
+        label: "Set hotspot image",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "image": string}"#,
@@ -1613,7 +1613,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.add_region",
-        label: "Add Hotspot Region",
+        label: "Add hotspot region",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "shape"?: HotspotShape, "x"?: number, "y"?: number, "w"?: number, "h"?: number, "correct"?: bool}"#,
@@ -1622,7 +1622,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.update_region",
-        label: "Update Hotspot Region",
+        label: "Update hotspot region",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "id": string, "shape"?: HotspotShape, "x"?: number, "y"?: number, "w"?: number, "h"?: number, "correct"?: bool}"#,
@@ -1631,7 +1631,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.remove_region",
-        label: "Remove Hotspot Region",
+        label: "Remove hotspot region",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "id": string}"#,
@@ -1640,7 +1640,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.set_markers",
-        label: "Set Hotspot Markers",
+        label: "Set hotspot markers",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "markers": number}"#,
@@ -1649,7 +1649,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.add_drag_item",
-        label: "Add Drag Item",
+        label: "Add drag item",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "item": string, "target": string}"#,
@@ -1658,7 +1658,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.update_drag_item",
-        label: "Update Drag Item",
+        label: "Update drag item",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "item": string, "target": string}"#,
@@ -1667,7 +1667,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.remove_drag_item",
-        label: "Remove Drag Item",
+        label: "Remove drag item",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "item": string}"#,
@@ -1676,7 +1676,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.set_drop_targets",
-        label: "Set Drop Targets",
+        label: "Set drop targets",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "targets": [string]}"#,
@@ -1685,7 +1685,7 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "question.set_drag_options",
-        label: "Set Drag Options",
+        label: "Set drag options",
         menu: "",
         shortcut: None,
         params: r#"{"slide": id, "snap_to_center"?: bool, "return_if_wrong"?: bool, "one_per_target"?: bool}"#,
@@ -1694,8 +1694,8 @@ static REGISTRY: &[Command] = &[
     },
     Command {
         id: "course.find",
-        label: "Find and Replace",
-        menu: "Edit/Find and Replace…",
+        label: "Find and replace",
+        menu: "Edit/Find and replace…",
         shortcut: Some("Ctrl+F"),
         params: r#"{"query": string, "case"?: bool, "whole_word"?: bool}"#,
         mutates: false,
