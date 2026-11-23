@@ -1247,3 +1247,35 @@ fn course_strings_and_replace_cover_state_extra_text_runs_and_alt() {
     };
     assert_eq!(alt, "Forward icon");
 }
+
+#[test]
+fn m31_13_empty_state_src_warns_without_blocking_playback() {
+    let course = course_with_slide_object(serde_json::json!({
+        "id": "img-1",
+        "name": "Photo",
+        "frame": { "x": 100, "y": 100, "w": 200, "h": 100 },
+        "kind": { "type": "image", "src": "media/photo.png", "alt": "Photo" },
+        "states": [{
+            "name": "hover",
+            "src": ""
+        }]
+    }));
+    assert!(
+        course.is_playable(),
+        "empty state.src must warn, not block playback"
+    );
+    let issues = course.validate();
+    assert!(
+        issues.iter().all(|i| i.severity != Severity::Error),
+        "empty state.src must not emit errors: {issues:?}"
+    );
+    assert!(
+        issues.iter().any(|i| {
+            i.severity == Severity::Warning
+                && i.path.ends_with("/states/0/src")
+                && i.message.contains("hover")
+                && i.message.contains("Photo")
+        }),
+        "expected warning on /states/0/src for empty state.src: {issues:?}"
+    );
+}

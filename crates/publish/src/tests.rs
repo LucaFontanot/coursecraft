@@ -2493,3 +2493,74 @@ fn collect_used_font_faces_includes_fonts_used_only_in_state_extra_text() {
         "expected Rubik Regular in {faces:?}"
     );
 }
+
+#[test]
+fn m31_12_empty_state_src_builds_and_zips_with_base_image() {
+    let mut course = minimal_course("Empty state src");
+    course.scenes[0].slides[0].objects.push(Object {
+        id: "img1".into(),
+        name: "Photo".into(),
+        kind: ObjectKind::Image {
+            crop: None,
+            src: "photo.png".into(),
+            alt: "Photo".into(),
+            outline: None,
+            shape: None,
+        },
+        frame: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        },
+        timing: Timing::default(),
+        states: vec![StateDef {
+            name: "hover".into(),
+            fill: None,
+            text: None,
+            src: Some(String::new()),
+            ..Default::default()
+        }],
+        initial_state: "normal".into(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: None,
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+        locked: false,
+        editor_hidden: false,
+    });
+    assert!(
+        course.is_playable(),
+        "course with empty state.src must be playable"
+    );
+
+    let player_files = fake_player();
+    let course_json = course.to_json().expect("course json");
+    let media =
+        |src: &str| -> Option<Vec<u8>> { (src == "photo.png").then(|| b"png bytes".to_vec()) };
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &media,
+    };
+    let files = build_package(&input).expect("package builds with empty state.src");
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert!(
+        paths.contains(&"media/photo.png"),
+        "base image missing from {paths:?}"
+    );
+    let zip_bytes = zip_package(&files).expect("zip builds cleanly");
+    assert!(!zip_bytes.is_empty(), "zip output must be non-empty");
+}

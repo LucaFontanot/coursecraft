@@ -165,7 +165,9 @@ fn collect_object_media<'a>(obj: &'a Object, out: &mut Vec<MediaRef<'a>>) {
         _ => {}
     }
     for state in &obj.states {
-        if let Some(src) = &state.src {
+        if let Some(src) = &state.src
+            && !src.is_empty()
+        {
             out.push(MediaRef {
                 object_id: &obj.id,
                 src,
