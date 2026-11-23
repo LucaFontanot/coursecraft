@@ -426,6 +426,7 @@ fn compose_state_fill_overrides_on_tabs() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         }
     );
@@ -449,6 +450,7 @@ fn compose_state_fill_overrides_on_tabs() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         }
     );
@@ -624,6 +626,7 @@ fn make_dummy_item(hit: Hit, rect: Rect) -> DrawItem {
             text: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         },
         dimmed: false,
@@ -991,6 +994,7 @@ fn compose_with_hover_down_states_and_disabled() {
             fill_style: None,
             hover_fill: Some(Color32::from_rgb(0x33, 0x44, 0x55)),
             down_fill: Some(Color32::from_rgb(0x66, 0x77, 0x88)),
+            down_has_fill_style: false,
             disabled: false,
         }
     );
@@ -1010,6 +1014,7 @@ fn compose_with_hover_down_states_and_disabled() {
             text: None,
             hover_fill: Some(Color32::from_rgb(0xAA, 0xBB, 0xCC)),
             down_fill: None,
+            down_has_fill_style: false,
             disabled: true,
         }
     );
@@ -1204,6 +1209,7 @@ fn paint_button_hover_down_and_disabled_fills() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         },
         dimmed: false,
@@ -1230,6 +1236,7 @@ fn paint_button_hover_down_and_disabled_fills() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: true,
         },
         dimmed: false,
@@ -1716,6 +1723,7 @@ fn paint_smoke_dimmed_item_does_not_panic() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         },
         dimmed: true,
@@ -2902,6 +2910,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
                 fill_style: None,
                 hover_fill: None,
                 down_fill: None,
+                down_has_fill_style: false,
                 disabled: false,
             },
             dimmed: false,

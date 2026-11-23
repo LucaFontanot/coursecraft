@@ -7688,8 +7688,10 @@ fn object_patch_state(s: &mut Session, p: &Json) -> Result<Json> {
         })?;
 
     if reset_all {
+        let extras = std::mem::take(&mut target.extras);
         *target = StateDef {
             name: target.name.clone(),
+            extras,
             ..Default::default()
         };
     }

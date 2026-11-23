@@ -879,3 +879,225 @@ fn p08_slide_view_pointer_move_press_release_triggers_widened_overrides_and_clic
             .any(|i| matches!(i, Input::Click { object } if object == "shp-1"))
     );
 }
+
+// ---------------------------------------------------------------------------
+// B-02: Timer honours state.text_style (BUG-07a)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn b02_timer_honours_state_text_style() {
+    let course = single_object_course(serde_json::json!({
+        "id": "tmr-1",
+        "name": "Timer 1",
+        "frame": { "x": 100, "y": 100, "w": 220, "h": 80 },
+        "kind": {
+            "type": "timer",
+            "duration_ms": 60000,
+            "format": "mm_ss",
+            "style": {
+                "size": 20.0,
+                "color": "#111111",
+                "bold": false,
+                "align": "center",
+                "valign": "middle"
+            }
+        },
+        "states": [{
+            "name": "warning",
+            "text_style": {
+                "size": 36.0,
+                "color": "#FF0000",
+                "bold": true,
+                "align": "right",
+                "valign": "top"
+            }
+        }]
+    }));
+    let obj = &course.scenes[0].slides[0].objects[0];
+    let item =
+        compose_object_with_theme(obj, "warning", Some(&course.theme)).expect("composed timer");
+    match item.visual {
+        Visual::Timer {
+            runs,
+            align,
+            valign,
+            ..
+        } => {
+            assert_eq!(align, coursecraft_course::Align::Right);
+            assert_eq!(valign, coursecraft_course::VAlign::Top);
+            assert!(!runs.is_empty());
+            assert!((runs[0].size - 36.0).abs() < 0.01);
+            assert!(runs[0].bold);
+            assert_eq!(runs[0].color, Color32::from_rgb(0xFF, 0x00, 0x00));
+        }
+        other => panic!("expected Visual::Timer, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// B-03: Hover solid fill vs down fill_style / no down fill (BUG-06)
+// ---------------------------------------------------------------------------
+
+fn rgba_at(img: &crate::offscreen::RgbaImage, x: u32, y: u32) -> [u8; 4] {
+    let idx = ((y * img.width + x) * 4) as usize;
+    [
+        img.pixels[idx],
+        img.pixels[idx + 1],
+        img.pixels[idx + 2],
+        img.pixels[idx + 3],
+    ]
+}
+
+fn render_pressed_object_rgba(
+    obj_json: serde_json::Value,
+    obj_id: &str,
+) -> crate::offscreen::RgbaImage {
+    let course = single_object_course(obj_json);
+    let mut player = Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+    let items = crate::compose::compose_with_pointer(&player, Some(obj_id), Some(obj_id));
+    let screen_rect = Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 720.0));
+    let transform = crate::layout::SlideTransform::fit(screen_rect, course.slide_size)
+        .expect("valid transform");
+    let highlight = crate::paint::Highlight {
+        hovered: Some(crate::Hit::Object(obj_id.to_owned())),
+        pressed: Some(crate::Hit::Object(obj_id.to_owned())),
+    };
+    crate::offscreen::render_ui(
+        1280,
+        720,
+        1.0,
+        |_| {},
+        |ctx| {
+            ctx.root_ui(|ui| {
+                crate::paint::paint(
+                    ui.painter(),
+                    &transform,
+                    &items,
+                    highlight.clone(),
+                    None,
+                    None,
+                    None,
+                );
+            });
+        },
+    )
+    .expect("offscreen render")
+}
+
+#[test]
+fn b03_down_fill_style_wins_over_hover_solid_and_no_down_fill_keeps_hover_solid() {
+    // Case 1: hover has solid fill (#00FF00), down has gradient fill_style (#FF0000 -> #0000FF).
+    // Down defines a fill of its own -> gradient must render (distinct red/blue left/right pixels).
+    for (id, kind_json) in [
+        (
+            "shp-grad",
+            serde_json::json!({ "type": "shape", "shape": "rectangle", "fill": "#336699" }),
+        ),
+        (
+            "btn-grad",
+            serde_json::json!({ "type": "button", "label": "", "fill": "#336699" }),
+        ),
+    ] {
+        let img = render_pressed_object_rgba(
+            serde_json::json!({
+                "id": id,
+                "name": id,
+                "frame": { "x": 100, "y": 100, "w": 400, "h": 120 },
+                "kind": kind_json,
+                "states": [
+                    { "name": "hover", "fill": "#00FF00" },
+                    {
+                        "name": "down",
+                        "fill_style": {
+                            "type": "linear",
+                            "angle": 0.0,
+                            "stops": [
+                                { "position": 0.0, "color": "#FF0000" },
+                                { "position": 1.0, "color": "#0000FF" }
+                            ]
+                        }
+                    }
+                ]
+            }),
+            id,
+        );
+        let left = rgba_at(&img, 130, 160);
+        let right = rgba_at(&img, 470, 160);
+        assert_ne!(
+            left, right,
+            "{id}: gradient must produce distinct left/right pixels"
+        );
+        assert!(
+            left[0] > 180 && left[2] < 80,
+            "{id}: left pixel should be red, got {left:?}"
+        );
+        assert!(
+            right[2] > 180 && right[0] < 80,
+            "{id}: right pixel should be blue, got {right:?}"
+        );
+    }
+
+    // Case 2: hover has solid fill (#00FF00), down defines NO fill of its own (only opacity).
+    // Even if base has a gradient fill_style, hover solid fill (#00FF00) keeps showing.
+    for (id, kind_json) in [
+        (
+            "shp-hover-stays",
+            serde_json::json!({
+                "type": "shape",
+                "shape": "rectangle",
+                "fill": "#336699",
+                "fill_style": {
+                    "type": "linear",
+                    "angle": 0.0,
+                    "stops": [
+                        { "position": 0.0, "color": "#FF0000" },
+                        { "position": 1.0, "color": "#0000FF" }
+                    ]
+                }
+            }),
+        ),
+        (
+            "btn-hover-stays",
+            serde_json::json!({
+                "type": "button",
+                "label": "",
+                "fill": "#336699",
+                "fill_style": {
+                    "type": "linear",
+                    "angle": 0.0,
+                    "stops": [
+                        { "position": 0.0, "color": "#FF0000" },
+                        { "position": 1.0, "color": "#0000FF" }
+                    ]
+                }
+            }),
+        ),
+    ] {
+        let img = render_pressed_object_rgba(
+            serde_json::json!({
+                "id": id,
+                "name": id,
+                "frame": { "x": 100, "y": 100, "w": 400, "h": 120 },
+                "kind": kind_json,
+                "states": [
+                    { "name": "hover", "fill": "#00FF00" },
+                    { "name": "down", "opacity": 1.0 }
+                ]
+            }),
+            id,
+        );
+        let left = rgba_at(&img, 130, 160);
+        let right = rgba_at(&img, 470, 160);
+        assert_eq!(
+            left,
+            [0, 255, 0, 255],
+            "{id}: hover solid fill should keep showing on left"
+        );
+        assert_eq!(
+            right,
+            [0, 255, 0, 255],
+            "{id}: hover solid fill should keep showing on right"
+        );
+    }
+}

@@ -664,6 +664,55 @@ fn darken_color(color: Color32, amount: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
+/// Resolves `(effective_fill, solid_override)` for interactive button/shape fills.
+///
+/// While pressed, `down` wins if it defines a fill of its own (`down_fill` or
+/// `down_has_fill_style`); otherwise a solid `hover_fill` keeps showing while hovered.
+#[allow(clippy::too_many_arguments)]
+fn resolve_pointer_fill(
+    base_fill: Color32,
+    hover_fill: Option<Color32>,
+    down_fill: Option<Color32>,
+    down_has_fill_style: bool,
+    disabled: bool,
+    is_hovered: bool,
+    is_pressed: bool,
+    auto_hover_darken: bool,
+) -> (Color32, bool) {
+    if disabled {
+        return (base_fill, false);
+    }
+    if is_pressed {
+        let solid_override =
+            down_fill.is_some() || (!down_has_fill_style && is_hovered && hover_fill.is_some());
+        let effective = if down_has_fill_style {
+            base_fill
+        } else {
+            down_fill
+                .or(if is_hovered { hover_fill } else { None })
+                .unwrap_or_else(|| {
+                    if auto_hover_darken {
+                        darken_color(base_fill, 0.15)
+                    } else {
+                        base_fill
+                    }
+                })
+        };
+        return (effective, solid_override);
+    }
+    if is_hovered {
+        let effective = hover_fill.unwrap_or_else(|| {
+            if auto_hover_darken {
+                lighten_color(base_fill, 0.12)
+            } else {
+                base_fill
+            }
+        });
+        return (effective, hover_fill.is_some());
+    }
+    (base_fill, false)
+}
+
 fn draw_image_placeholder(
     slide_painter: &Painter,
     screen_rect: Rect,
@@ -1828,20 +1877,19 @@ pub fn paint_items(
                 fill_style,
                 hover_fill,
                 down_fill,
+                down_has_fill_style,
                 disabled,
             } => {
-                let effective_fill = if *disabled {
-                    *fill
-                } else if is_pressed {
-                    down_fill.unwrap_or_else(|| darken_color(*fill, 0.15))
-                } else if is_hovered {
-                    hover_fill.unwrap_or_else(|| lighten_color(*fill, 0.12))
-                } else {
-                    *fill
-                };
-                let solid_override = !disabled
-                    && ((is_pressed && down_fill.is_some())
-                        || (is_hovered && hover_fill.is_some()));
+                let (effective_fill, solid_override) = resolve_pointer_fill(
+                    *fill,
+                    *hover_fill,
+                    *down_fill,
+                    *down_has_fill_style,
+                    *disabled,
+                    is_hovered,
+                    is_pressed,
+                    true,
+                );
                 let (button_kind, button_adjust) = button_shape(screen_rect, scale);
                 if let Some(shadow) = &item.shadow {
                     paint_shape_effect(
@@ -1939,20 +1987,19 @@ pub fn paint_items(
                 text,
                 hover_fill,
                 down_fill,
+                down_has_fill_style,
                 disabled,
             } => {
-                let effective_fill = if *disabled {
-                    *fill
-                } else if is_pressed {
-                    down_fill.unwrap_or(*fill)
-                } else if is_hovered {
-                    hover_fill.unwrap_or(*fill)
-                } else {
-                    *fill
-                };
-                let solid_override = !disabled
-                    && ((is_pressed && down_fill.is_some())
-                        || (is_hovered && hover_fill.is_some()));
+                let (effective_fill, solid_override) = resolve_pointer_fill(
+                    *fill,
+                    *hover_fill,
+                    *down_fill,
+                    *down_has_fill_style,
+                    *disabled,
+                    is_hovered,
+                    is_pressed,
+                    false,
+                );
                 if let Some(shadow) = &item.shadow {
                     paint_shape_effect(
                         &item_painter,
