@@ -2,6 +2,22 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.4.3
+
+Big courses are now much lighter and faster, and the menus are tidier.
+
+**Faster, lighter editor** (measured on a 300-slide test course):
+- **Undo memory: about 250 times smaller.** Each edit used to keep a full copy of the course for undo; now it keeps only what changed. 200 edits used +392 MB before and +1.6 MB now; on a course full of pictures and objects, +1.9 GB before and well under 1 MB now.
+- **Editing is faster:** 200 edits took 397 ms before and 278 ms now (2.1 s → 1.1 s on the picture-heavy course), and undo or redo itself is instant.
+- **The slide list only draws what you can see.** It used to redraw all 300 thumbnails every frame; now it redraws none while you're just looking, and only the one slide you change. An idle frame takes about a third of the time it did.
+
+**Easier to find things:**
+- New **Preview** menu with Preview this slide, **Preview from here** (Cmd+F12 on macOS, Ctrl+F12 elsewhere), Preview selected slides and Preview whole course.
+- **File → Import** gathers PowerPoint, course from document, slides from outline, questions from a spreadsheet, translation (XLIFF), media files and fonts; **File → Export** sits next to it.
+- Tooltips show the keyboard shortcut for every button and menu item that has one.
+- Hovering a greyed-out button tells you why it's unavailable.
+- Labels use sentence case everywhere, and each action has one name in every place it appears.
+
 ## 0.4.2
 
 An urgent update that fixes ways to lose work, crashes and a wrong LMS result. Please update.

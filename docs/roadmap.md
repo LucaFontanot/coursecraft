@@ -331,6 +331,20 @@ Plan by Gemini 4 Neon: `docs/testing/m31-plan.md`; log: `docs/bug-hunt/2026-11-2
 - Save, Save As, Open and New shortcuts; MCP keeps a `.ccraft` file's media; no crashes on tiny slides, tall scroll panels or crossed clamp bounds; publish with an empty state picture; SCORM 1.2 never downgrades a reported pass or completion; Last visited slide never loops; the web editor asks before replacing unsaved changes and publishes without freezing the tab.
 - Released as 0.4.2.
 
+## M32 UI quick wins and a faster slide list ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m32-plan.md`; report: `docs/testing/m32-report.md`.
+
+- Sentence-case labels with one name per action; shortcuts in tooltips from one table; a reason on every disabled control; a Preview menu with Preview from here; File → Import and Export; the slide list composes only visible thumbnails and caches them by revision.
+- Released as 0.4.3.
+
+## M33 Undo that stores changes, not copies ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m33-plan.md`; report: `docs/testing/m33-report.md`.
+
+- Undo stores a delta per edit (one slide, the course settings, or the whole course when in doubt) instead of a full course copy; 140 commands annotated; a differential test checks every command against the old full-copy undo.
+- Released as 0.4.3.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
