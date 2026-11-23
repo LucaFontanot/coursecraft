@@ -10747,3 +10747,524 @@ fn registry_labels_and_menu_leaves_use_sentence_case() {
         .expect("course.update");
     assert_eq!(course_update.menu, "Project/Course settings…");
 }
+
+struct Df02LegacyOracle {
+    course: coursecraft_course::Course,
+    undo: Vec<(coursecraft_course::Course, String)>,
+    redo: Vec<(coursecraft_course::Course, String)>,
+    revision: u64,
+    history_truncated: bool,
+}
+
+impl Df02LegacyOracle {
+    fn new(course: coursecraft_course::Course) -> Self {
+        Self {
+            course,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            revision: 0,
+            history_truncated: false,
+        }
+    }
+
+    fn undo_names(&self) -> Vec<&str> {
+        self.undo.iter().rev().map(|(_, n)| n.as_str()).collect()
+    }
+
+    fn redo_names(&self) -> Vec<&str> {
+        self.redo.iter().rev().map(|(_, n)| n.as_str()).collect()
+    }
+
+    fn push_undo(&mut self, snapshot: coursecraft_course::Course, label: String) {
+        self.undo.push((snapshot, label));
+        if self.undo.len() > crate::MAX_HISTORY {
+            self.undo.remove(0);
+            self.history_truncated = true;
+        }
+        self.redo.clear();
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn execute(&mut self, id: &str, params: &Json) -> crate::Result<Json> {
+        if id == "edit.undo" {
+            return self.undo().map(|()| json!({}));
+        }
+        if id == "edit.redo" {
+            return self.redo().map(|()| json!({}));
+        }
+        let cmd = registry()
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| EngineError::UnknownCommand(id.to_owned()))?;
+        let snapshot = self.course.clone();
+        let mut tmp = Session::new(self.course.clone());
+        let val = tmp.execute(id, params)?;
+        if cmd.mutates && tmp.revision > 0 {
+            self.course = tmp.course;
+            self.push_undo(snapshot, cmd.label.to_owned());
+        }
+        Ok(val)
+    }
+
+    fn execute_batch_with_name(
+        &mut self,
+        name: Option<&str>,
+        steps: &[(String, Json)],
+    ) -> crate::Result<Vec<Json>> {
+        let snapshot = self.course.clone();
+        let mut tmp = Session::new(self.course.clone());
+        let vals = match name {
+            Some(label) => tmp.execute_batch_named(label, steps)?,
+            None => tmp.execute_batch(steps)?,
+        };
+        if tmp.revision > 0 {
+            let label = tmp
+                .undo_names()
+                .first()
+                .copied()
+                .unwrap_or("Batch")
+                .to_owned();
+            self.course = tmp.course;
+            self.push_undo(snapshot, label);
+        }
+        Ok(vals)
+    }
+
+    fn undo(&mut self) -> crate::Result<()> {
+        let (prev, name) = self.undo.pop().ok_or(EngineError::NothingTo("undo"))?;
+        let current = std::mem::replace(&mut self.course, prev);
+        self.redo.push((current, name));
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    fn redo(&mut self) -> crate::Result<()> {
+        let (next, name) = self.redo.pop().ok_or(EngineError::NothingTo("redo"))?;
+        let current = std::mem::replace(&mut self.course, next);
+        self.undo.push((current, name));
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    fn undo_steps(&mut self, n: usize) -> crate::Result<()> {
+        if n > self.undo.len() {
+            return Err(EngineError::NothingTo("undo"));
+        }
+        for _ in 0..n {
+            self.undo()?;
+        }
+        Ok(())
+    }
+
+    fn redo_steps(&mut self, n: usize) -> crate::Result<()> {
+        if n > self.redo.len() {
+            return Err(EngineError::NothingTo("redo"));
+        }
+        for _ in 0..n {
+            self.redo()?;
+        }
+        Ok(())
+    }
+}
+
+fn df_02_assert_parity(s: &Session, o: &Df02LegacyOracle, step: usize, op: &str) {
+    assert_eq!(
+        s.course.to_json().expect("session json"),
+        o.course.to_json().expect("oracle json"),
+        "step {step} ({op}): Course::to_json() mismatch"
+    );
+    assert_eq!(
+        s.undo_names(),
+        o.undo_names(),
+        "step {step} ({op}): undo_names mismatch"
+    );
+    assert_eq!(
+        s.redo_names(),
+        o.redo_names(),
+        "step {step} ({op}): redo_names mismatch"
+    );
+    assert_eq!(
+        s.revision, o.revision,
+        "step {step} ({op}): revision mismatch"
+    );
+    assert_eq!(
+        s.history_truncated(),
+        o.history_truncated,
+        "step {step} ({op}): history_truncated mismatch"
+    );
+}
+
+fn df_02_exec_both(s: &mut Session, o: &mut Df02LegacyOracle, id: &str, p: &Json) {
+    assert_eq!(s.execute(id, p).is_ok(), o.execute(id, p).is_ok());
+}
+
+fn df_02_phase1_single_slide(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    bucket: usize,
+) -> &'static str {
+    if bucket < 12 {
+        #[allow(clippy::cast_precision_loss)]
+        let x = 10.0 + ((step * 7) % 400) as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let y = 10.0 + ((step * 11) % 300) as f64;
+        let p = json!({
+            "slide": "slide1",
+            "object": "perm_shape",
+            "frame": { "x": x, "y": y, "w": 120.0, "h": 60.0 }
+        });
+        df_02_exec_both(s, o, "object.set_frame", &p);
+        "object.set_frame"
+    } else if bucket < 20 {
+        #[allow(clippy::cast_precision_loss)]
+        let x = 30.0 + ((step * 5) % 300) as f64;
+        let p = json!({
+            "slide": "slide1",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#557799" },
+            "frame": { "x": x, "y": 160.0, "w": 50.0, "h": 50.0 }
+        });
+        df_02_exec_both(s, o, "object.add", &p);
+        "object.add"
+    } else if bucket < 28 {
+        let removable = s.course.slide("slide1").and_then(|sl| {
+            sl.objects
+                .iter()
+                .rev()
+                .find(|obj| obj.id != "perm_shape" && obj.id != "perm_text")
+                .map(|obj| obj.id.clone())
+        });
+        if let Some(obj_id) = removable {
+            let p = json!({ "slide": "slide1", "object": obj_id });
+            df_02_exec_both(s, o, "object.delete", &p);
+            "object.delete"
+        } else {
+            let p = json!({
+                "slide": "slide1",
+                "object": "perm_text",
+                "text": format!("Step {step}")
+            });
+            df_02_exec_both(s, o, "text.set", &p);
+            "text.set"
+        }
+    } else {
+        let p = json!({
+            "slide": "slide1",
+            "object": "perm_text",
+            "text": format!("Copy step {step}")
+        });
+        df_02_exec_both(s, o, "text.set", &p);
+        "text.set"
+    }
+}
+
+fn df_02_phase1_step(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    bucket: usize,
+    counts: &mut [usize; 14],
+) -> &'static str {
+    if bucket < 36 {
+        counts[0] += 1;
+        return df_02_phase1_single_slide(s, o, step, bucket);
+    }
+    if bucket < 59 {
+        counts[1] += 1;
+        let (id, p) = if bucket < 45 {
+            (
+                "course.set_title",
+                json!({ "title": format!("Course {step}") }),
+            )
+        } else if bucket < 52 {
+            (
+                "glossary.add",
+                json!({
+                    "term": format!("Term{step}"),
+                    "definition": format!("Definition for step {step}")
+                }),
+            )
+        } else {
+            (
+                "variable.add",
+                json!({ "name": format!("v_{step}"), "value": step }),
+            )
+        };
+        df_02_exec_both(s, o, id, &p);
+        return id;
+    }
+    if bucket < 79 {
+        counts[2] += 1;
+        let (id, p) = if bucket < 67 {
+            (
+                "slide.add",
+                json!({ "scene": "scene1", "title": format!("Slide {step}") }),
+            )
+        } else if bucket < 74 {
+            let last_slide = s.course.scenes[0]
+                .slides
+                .last()
+                .map(|sl| sl.id.clone())
+                .expect("non-empty scene1");
+            (
+                "slide.move",
+                json!({ "slide": last_slide, "scene": "scene1", "index": 0 }),
+            )
+        } else {
+            ("scene.add", json!({ "title": format!("Scene {step}") }))
+        };
+        df_02_exec_both(s, o, id, &p);
+        return id;
+    }
+    df_02_phase1_batch_or_edge(s, o, step, bucket, counts)
+}
+
+fn df_02_phase1_batch_or_edge(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    bucket: usize,
+    counts: &mut [usize; 14],
+) -> &'static str {
+    if bucket < 88 {
+        counts[3] += 1;
+        #[allow(clippy::cast_precision_loss)]
+        let x = 25.0 + ((step * 13) % 350) as f64;
+        let steps = vec![
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": s.course.title.clone() }),
+            ),
+            (
+                "object.set_frame".to_owned(),
+                json!({
+                    "slide": "slide1",
+                    "object": "perm_shape",
+                    "frame": { "x": x, "y": 40.0, "w": 110.0, "h": 55.0 }
+                }),
+            ),
+            (
+                "text.set".to_owned(),
+                json!({
+                    "slide": "slide1",
+                    "object": "perm_text",
+                    "text": format!("Batch {step}")
+                }),
+            ),
+        ];
+        assert_eq!(
+            s.execute_batch(&steps).is_ok(),
+            o.execute_batch_with_name(None, &steps).is_ok()
+        );
+        "execute_batch"
+    } else if bucket < 96 {
+        counts[4] += 1;
+        let steps = vec![
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": format!("Named {step}") }),
+            ),
+            (
+                "text.set".to_owned(),
+                json!({
+                    "slide": "slide1",
+                    "object": "perm_text",
+                    "text": format!("Named text {step}")
+                }),
+            ),
+        ];
+        assert_eq!(
+            s.execute_batch_named("Named tweak", &steps).is_ok(),
+            o.execute_batch_with_name(Some("Named tweak"), &steps)
+                .is_ok()
+        );
+        "execute_batch_named"
+    } else if bucket < 98 {
+        counts[5] += 1;
+        let (cmd_id, p) = if step.is_multiple_of(2) {
+            (
+                "course.set_title",
+                json!({ "title": s.course.title.clone() }),
+            )
+        } else {
+            (
+                "course.replace",
+                json!({ "query": "__no_such_text__", "replacement": "x" }),
+            )
+        };
+        df_02_exec_both(s, o, cmd_id, &p);
+        "noop"
+    } else if bucket == 98 {
+        counts[6] += 1;
+        let p = json!({ "slide": "slide1", "object": "missing_obj" });
+        assert_eq!(
+            s.execute("object.delete", &p),
+            o.execute("object.delete", &p)
+        );
+        "failing_single"
+    } else {
+        counts[7] += 1;
+        let steps = vec![
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": "Rolled back title" }),
+            ),
+            (
+                "object.delete".to_owned(),
+                json!({ "slide": "slide1", "object": "missing_obj" }),
+            ),
+        ];
+        assert_eq!(
+            s.execute_batch(&steps),
+            o.execute_batch_with_name(None, &steps)
+        );
+        "failing_batch"
+    }
+}
+
+fn df_02_phase2_step(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    counts: &mut [usize; 14],
+) -> &'static str {
+    match step - 218 {
+        0 | 1 | 2 | 12 | 25 => {
+            counts[8] += 1;
+            assert_eq!(s.undo(), o.undo());
+            "undo"
+        }
+        3 | 13 | 26 => {
+            counts[9] += 1;
+            assert_eq!(s.redo(), o.redo());
+            "redo"
+        }
+        4 | 14 | 20 => {
+            counts[10] += 1;
+            assert_eq!(s.undo_steps(5), o.undo_steps(5));
+            "undo_steps_ok"
+        }
+        5 | 21 => {
+            counts[11] += 1;
+            let n = s.undo_len() + 1;
+            assert_eq!(s.undo_steps(n), Err(EngineError::NothingTo("undo")));
+            assert_eq!(o.undo_steps(n), Err(EngineError::NothingTo("undo")));
+            "undo_steps_oob"
+        }
+        6 | 15 | 22 => {
+            counts[12] += 1;
+            assert_eq!(s.redo_steps(3), o.redo_steps(3));
+            "redo_steps_ok"
+        }
+        7 | 23 => {
+            counts[13] += 1;
+            let n = s.redo_names().len() + 1;
+            assert_eq!(s.redo_steps(n), Err(EngineError::NothingTo("redo")));
+            assert_eq!(o.redo_steps(n), Err(EngineError::NothingTo("redo")));
+            "redo_steps_oob"
+        }
+        8 | 16 => {
+            counts[5] += 1;
+            let p = json!({ "query": "__never_present__", "replacement": "z" });
+            df_02_exec_both(s, o, "course.replace", &p);
+            "noop_preserves_redo"
+        }
+        9 | 17 => {
+            counts[6] += 1;
+            let p = json!({ "slide": "slide1", "object": "missing_obj" });
+            assert_eq!(
+                s.execute("object.delete", &p),
+                o.execute("object.delete", &p)
+            );
+            "failing_single_phase2"
+        }
+        10 | 18 => {
+            counts[7] += 1;
+            let steps = vec![
+                (
+                    "course.set_title".to_owned(),
+                    json!({ "title": "Will fail" }),
+                ),
+                (
+                    "object.delete".to_owned(),
+                    json!({ "slide": "slide1", "object": "missing_obj" }),
+                ),
+            ];
+            assert_eq!(
+                s.execute_batch(&steps),
+                o.execute_batch_with_name(None, &steps)
+            );
+            "failing_batch_phase2"
+        }
+        11 | 19 | 24 => {
+            counts[1] += 1;
+            let p = json!({ "title": format!("Post-undo {step}") });
+            df_02_exec_both(s, o, "course.set_title", &p);
+            "edit_clears_redo"
+        }
+        _ => {
+            counts[8] += 1;
+            assert_eq!(s.undo(), o.undo());
+            "undo_tail"
+        }
+    }
+}
+
+/// DF-02: 250-step deterministic pseudo-random mixed sequence verified step-by-step
+/// against a legacy full-snapshot undo/redo oracle, including MAX_HISTORY eviction,
+/// `undo_steps`/`redo_steps`, `skip_undo`, no-ops, batches, and rollbacks.
+#[test]
+fn df_02_differential_250_step_mixed_sequence_with_eviction() {
+    let mut seed = Session::blank("DF-02 Seed");
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "perm_shape",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 20.0, "y": 20.0, "w": 120.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "perm_text",
+            "kind": { "type": "text", "text": "Initial" },
+            "frame": { "x": 20.0, "y": 100.0, "w": 240.0, "h": 40.0 }
+        }),
+    );
+    ok(&mut seed, "slide.add", json!({ "title": "Seed Slide 2" }));
+
+    let initial_course = seed.course;
+    let mut s = Session::new(initial_course.clone());
+    let mut o = Df02LegacyOracle::new(initial_course);
+
+    let mut lcg: u64 = 0x5EED_DF02_0000_0001;
+    let mut counts = [0usize; 14];
+
+    for step in 0..250usize {
+        lcg = lcg
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let bucket = ((lcg >> 33) as usize) % 100;
+        let op_label = if step < 218 {
+            df_02_phase1_step(&mut s, &mut o, step, bucket, &mut counts)
+        } else {
+            df_02_phase2_step(&mut s, &mut o, step, &mut counts)
+        };
+        df_02_assert_parity(&s, &o, step, op_label);
+    }
+
+    assert!(
+        s.history_truncated(),
+        "MAX_HISTORY ({}) eviction must occur during DF-02",
+        crate::MAX_HISTORY
+    );
+    assert!(o.history_truncated);
+    for (idx, count) in counts.iter().enumerate() {
+        assert!(*count > 0, "DF-02 operation category {idx} never executed");
+    }
+}

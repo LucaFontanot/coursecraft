@@ -38,6 +38,58 @@ fn clone_course_counted(course: &Course) -> Course {
     course.clone()
 }
 
+#[cfg(test)]
+fn assert_delta_roundtrip(before: &Course, after: &Course, context: &str) {
+    let delta = crate::delta::CourseDelta::diff(before.clone(), after);
+    assert!(
+        delta.is_some(),
+        "shadow delta oracle: CourseDelta::diff returned None for {context}"
+    );
+    if let Some(mut delta) = delta {
+        let before_json = before.to_json();
+        let after_json = after.to_json();
+        assert!(
+            before_json.is_ok(),
+            "shadow delta oracle: before.to_json() failed for {context}: {before_json:?}"
+        );
+        assert!(
+            after_json.is_ok(),
+            "shadow delta oracle: after.to_json() failed for {context}: {after_json:?}"
+        );
+
+        let mut check = after.clone();
+        let undo_res = delta.apply(&mut check);
+        assert!(
+            undo_res.is_ok(),
+            "shadow delta oracle: undo apply failed for {context}: {undo_res:?}"
+        );
+        assert_eq!(
+            check, *before,
+            "shadow delta oracle: undo PartialEq mismatch for {context}"
+        );
+        assert_eq!(
+            check.to_json().ok(),
+            before_json.ok(),
+            "shadow delta oracle: undo JSON mismatch for {context}"
+        );
+
+        let redo_res = delta.apply(&mut check);
+        assert!(
+            redo_res.is_ok(),
+            "shadow delta oracle: redo apply failed for {context}: {redo_res:?}"
+        );
+        assert_eq!(
+            check, *after,
+            "shadow delta oracle: redo PartialEq mismatch for {context}"
+        );
+        assert_eq!(
+            check.to_json().ok(),
+            after_json.ok(),
+            "shadow delta oracle: redo JSON mismatch for {context}"
+        );
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum EngineError {
     #[error("unknown command {0:?}")]
@@ -246,6 +298,8 @@ impl Session {
             Ok(v) if unchanged => Ok(v),
             Ok(v) => {
                 reroute_connectors(&mut self.course);
+                #[cfg(test)]
+                assert_delta_roundtrip(&snapshot, &self.course, cmd.id);
                 self.undo.push((snapshot, cmd.label.to_owned()));
                 if self.undo.len() > MAX_HISTORY {
                     self.undo.remove(0);
@@ -370,6 +424,8 @@ impl Session {
                 .map(str::to_owned)
                 .or_else(|| first_label.map(str::to_owned))
                 .unwrap_or_else(|| "Batch".to_owned());
+            #[cfg(test)]
+            assert_delta_roundtrip(&snapshot, &self.course, &label);
             self.undo.push((snapshot, label));
             if self.undo.len() > MAX_HISTORY {
                 self.undo.remove(0);
