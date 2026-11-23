@@ -1956,11 +1956,12 @@ pub fn show_triggers_tab(
                                         });
 
                                         // Delete
-                                        if crate::widgets::icon_button_danger(
+                                        if crate::widgets::icon_button_danger_reason(
                                             ui,
                                             coursecraft_render::Icon::Trash,
                                             !form_open,
                                             "Delete trigger",
+                                            "Close the trigger editor first",
                                         )
                                         .clicked()
                                         {

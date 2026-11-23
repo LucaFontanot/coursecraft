@@ -585,7 +585,8 @@ fn t8_4_choice_delete_disabled_at_minimum_count_with_tooltip() {
         .probe_tooltip(trash_pos)
         .expect("Disabled Remove choice must show tooltip");
     assert!(
-        tip.to_ascii_lowercase().contains("at least 2")
+        tip.to_ascii_lowercase().contains("at least two")
+            || tip.to_ascii_lowercase().contains("at least 2")
             || tip.to_ascii_lowercase().contains("minimum"),
         "Disabled Remove choice tooltip should explain minimum choices, got '{tip}'"
     );

@@ -956,6 +956,7 @@ fn show_slide_menu_items(
     let can_up = slide_idx > 0;
     if ui
         .add_enabled(can_up, egui::Button::new("Move up"))
+        .on_disabled_hover_text("Slide is already at the top of this scene")
         .clicked()
     {
         *action_to_run = Some((
@@ -971,6 +972,7 @@ fn show_slide_menu_items(
     let can_down = slide_idx + 1 < total_in_scene;
     if ui
         .add_enabled(can_down, egui::Button::new("Move down"))
+        .on_disabled_hover_text("Slide is already at the bottom of this scene")
         .clicked()
     {
         *action_to_run = Some((
@@ -1010,6 +1012,7 @@ fn show_slide_menu_items(
             multi_selected && selected_count >= 2,
             egui::Button::new("Preview selected slides"),
         )
+        .on_disabled_hover_text("Select two or more slides to preview them")
         .clicked()
     {
         *slide_action = Some(SlideMenuAction::PreviewSelected);
@@ -2233,10 +2236,7 @@ pub fn show_scene_delete_dialog(editor: &mut Editor, ctx: &egui::Context) {
         }
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(true, egui::Button::new("Delete scene"))
-                .clicked()
-            {
+            if ui.button("Delete scene").clicked() {
                 delete = true;
             }
             if ui.button("Cancel").clicked() {

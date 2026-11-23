@@ -4040,94 +4040,98 @@ fn show_animate_tab(
     actions_to_run: &mut Vec<(&'static str, Json)>,
 ) {
     let p = coursecraft_render::palette(ui.ctx());
-    if editor.ui.editing_state.is_some() {
+    let state_edit_locked = editor.ui.editing_state.is_some();
+    if state_edit_locked {
         ui.label(RichText::new(crate::STATE_LOCK_TOOLTIP).color(p.text_secondary));
         ui.add_space(6.0);
-        ui.disable();
     }
 
-    if editor.selection.is_multi() {
-        let slide_id = editor.selection.slide.clone();
-        let ids = editor.selection.ids();
-        let props = &mut editor.ui.properties;
-        let mut entrance_action: Option<(&'static str, Json)> = None;
-        let mut exit_action: Option<(&'static str, Json)> = None;
-        show_anim_row(
-            ui,
-            "Entrance animation",
-            "entrance",
-            &mut props.entrance_effect,
-            &mut props.entrance_direction,
-            &mut props.entrance_duration_ms,
-            &mut props.entrance_easing,
-            &slide_id,
-            "",
-            &mut entrance_action,
-        );
-        inspector_separator(ui);
-        show_anim_row(
-            ui,
-            "Exit animation",
-            "exit",
-            &mut props.exit_effect,
-            &mut props.exit_direction,
-            &mut props.exit_duration_ms,
-            &mut props.exit_easing,
-            &slide_id,
-            "",
-            &mut exit_action,
-        );
-        if entrance_action.is_some() {
-            for id in &ids {
-                actions_to_run.push(animation_command(
-                    "entrance",
-                    &props.entrance_effect,
-                    props.entrance_direction,
-                    props.entrance_duration_ms,
-                    props.entrance_easing,
-                    &slide_id,
-                    id,
-                ));
-            }
-        }
-        if exit_action.is_some() {
-            for id in &ids {
-                actions_to_run.push(animation_command(
-                    "exit",
-                    &props.exit_effect,
-                    props.exit_direction,
-                    props.exit_duration_ms,
-                    props.exit_easing,
-                    &slide_id,
-                    id,
-                ));
-            }
-        }
-        inspector_separator(ui);
-    } else if editor.selection.object.is_some() {
-        show_animations_section(editor, ui, actions_to_run);
-        inspector_separator(ui);
-    } else {
-        ui.vertical_centered(|ui| {
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("Select an object to animate it")
-                    .color(p.text_secondary)
-                    .size(coursecraft_render::SIZE_BODY),
+    ui.add_enabled_ui(!state_edit_locked, |ui| {
+        if editor.selection.is_multi() {
+            let slide_id = editor.selection.slide.clone();
+            let ids = editor.selection.ids();
+            let props = &mut editor.ui.properties;
+            let mut entrance_action: Option<(&'static str, Json)> = None;
+            let mut exit_action: Option<(&'static str, Json)> = None;
+            show_anim_row(
+                ui,
+                "Entrance animation",
+                "entrance",
+                &mut props.entrance_effect,
+                &mut props.entrance_direction,
+                &mut props.entrance_duration_ms,
+                &mut props.entrance_easing,
+                &slide_id,
+                "",
+                &mut entrance_action,
             );
-            ui.add_space(8.0);
-        });
-        inspector_separator(ui);
-    }
-
-    inspector_section_header(ui, "Transition");
-    if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {
-        let mut action = None;
-        show_transition_section(&mut editor.ui.properties, slide, ui, &mut action);
-        if let Some(act) = action {
-            actions_to_run.push(act);
+            inspector_separator(ui);
+            show_anim_row(
+                ui,
+                "Exit animation",
+                "exit",
+                &mut props.exit_effect,
+                &mut props.exit_direction,
+                &mut props.exit_duration_ms,
+                &mut props.exit_easing,
+                &slide_id,
+                "",
+                &mut exit_action,
+            );
+            if entrance_action.is_some() {
+                for id in &ids {
+                    actions_to_run.push(animation_command(
+                        "entrance",
+                        &props.entrance_effect,
+                        props.entrance_direction,
+                        props.entrance_duration_ms,
+                        props.entrance_easing,
+                        &slide_id,
+                        id,
+                    ));
+                }
+            }
+            if exit_action.is_some() {
+                for id in &ids {
+                    actions_to_run.push(animation_command(
+                        "exit",
+                        &props.exit_effect,
+                        props.exit_direction,
+                        props.exit_duration_ms,
+                        props.exit_easing,
+                        &slide_id,
+                        id,
+                    ));
+                }
+            }
+            inspector_separator(ui);
+        } else if editor.selection.object.is_some() {
+            show_animations_section(editor, ui, actions_to_run);
+            inspector_separator(ui);
+        } else {
+            ui.vertical_centered(|ui| {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Select an object to animate it")
+                        .color(p.text_secondary)
+                        .size(coursecraft_render::SIZE_BODY),
+                );
+                ui.add_space(8.0);
+            });
+            inspector_separator(ui);
         }
-    }
+
+        inspector_section_header(ui, "Transition");
+        if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {
+            let mut action = None;
+            show_transition_section(&mut editor.ui.properties, slide, ui, &mut action);
+            if let Some(act) = action {
+                actions_to_run.push(act);
+            }
+        }
+    })
+    .response
+    .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
 }
 
 fn show_slide_tab(

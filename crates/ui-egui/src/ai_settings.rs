@@ -903,35 +903,49 @@ fn show_agent_row(editor: &mut Editor, ui: &mut Ui, index: usize) -> Option<(Age
                             }
                         }
                         AgentStatus::Found => {
-                            if crate::quiet_button(ui, "Connect", crate::QuietTone::Accent, can_act)
-                                .clicked()
+                            if crate::quiet_button_enabled(
+                                ui,
+                                "Connect",
+                                crate::QuietTone::Accent,
+                                can_act,
+                                "Wait for the current agent check to finish",
+                            )
+                            .clicked()
                             {
                                 clicked = Some(RowClick::Action(AgentAction::Connect));
                             }
                         }
                         AgentStatus::Connected => {
-                            if crate::quiet_button(
+                            if crate::quiet_button_enabled(
                                 ui,
                                 "Disconnect",
                                 crate::QuietTone::Danger,
                                 can_act,
+                                "Wait for the current agent check to finish",
                             )
                             .clicked()
                             {
                                 clicked = Some(RowClick::Action(AgentAction::Disconnect));
                             }
-                            if crate::quiet_button(ui, "Test", crate::QuietTone::Secondary, can_act)
-                                .clicked()
+                            if crate::quiet_button_enabled(
+                                ui,
+                                "Test",
+                                crate::QuietTone::Secondary,
+                                can_act,
+                                "Wait for the current agent check to finish",
+                            )
+                            .clicked()
                             {
                                 clicked = Some(RowClick::Action(AgentAction::Test));
                             }
                         }
                         AgentStatus::Problem(_) => {
-                            if crate::quiet_button(
+                            if crate::quiet_button_enabled(
                                 ui,
                                 "Try again",
                                 crate::QuietTone::Accent,
                                 can_act,
+                                "Wait for the current agent check to finish",
                             )
                             .clicked()
                             {

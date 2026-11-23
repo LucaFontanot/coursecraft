@@ -19671,3 +19671,329 @@ fn static_sentence_case_lint_for_dialogs_menus_toolbar_and_slides() {
         violations.join("\n")
     );
 }
+
+/// D-02: Static CI guard ensuring every `.add_enabled(` and `.add_enabled_ui(` call
+/// in production UI code attaches `.on_disabled_hover_text(` and zero `ui.disable()`
+/// calls exist (`UX-08` / `M32-05`).
+#[test]
+fn every_add_enabled_has_disabled_reason() {
+    fn strip_cfg_test_modules(src: &str) -> String {
+        let lines: Vec<&str> = src.lines().collect();
+        let mut cut = lines.len();
+        for (idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("#[cfg(test)]") {
+                let rest = trimmed.trim_start_matches("#[cfg(test)]").trim();
+                if rest.starts_with("mod ")
+                    || rest.starts_with("pub mod ")
+                    || rest.starts_with("pub(crate) mod ")
+                {
+                    cut = idx;
+                    break;
+                }
+                if rest.is_empty() {
+                    let mut next = idx + 1;
+                    while next < lines.len() {
+                        let t = lines[next].trim();
+                        if t.is_empty() || t.starts_with("//") || t.starts_with("#[") {
+                            next += 1;
+                            continue;
+                        }
+                        if t.starts_with("mod ")
+                            || t.starts_with("pub mod ")
+                            || t.starts_with("pub(crate) mod ")
+                        {
+                            cut = idx;
+                        }
+                        break;
+                    }
+                    if cut != lines.len() {
+                        break;
+                    }
+                }
+            }
+        }
+        lines[..cut].join("\n")
+    }
+
+    fn strip_comments_keep_lines(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let bytes = src.as_bytes();
+        let mut i = 0usize;
+        let mut in_str = false;
+        let mut in_char = false;
+        let mut escaped = false;
+        let mut block_depth = 0usize;
+
+        while i < bytes.len() {
+            let b = bytes[i];
+            if block_depth > 0 {
+                if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    block_depth += 1;
+                    out.push_str("  ");
+                    i += 2;
+                } else if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    block_depth -= 1;
+                    out.push_str("  ");
+                    i += 2;
+                } else {
+                    out.push(if b == b'\n' { '\n' } else { ' ' });
+                    i += 1;
+                }
+                continue;
+            }
+            if in_str {
+                out.push(b as char);
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_char {
+                out.push(b as char);
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+                continue;
+            }
+            if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    out.push(' ');
+                    i += 1;
+                }
+                continue;
+            }
+            if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                block_depth = 1;
+                out.push_str("  ");
+                i += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_str = true;
+                out.push('"');
+                i += 1;
+                continue;
+            }
+            // Only enter char literal if it looks like `'x'` or `'\x'`, not a lifetime `'a`.
+            if b == b'\''
+                && ((i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                    || (i + 3 < bytes.len() && bytes[i + 1] == b'\\' && bytes[i + 3] == b'\''))
+            {
+                in_char = true;
+                out.push('\'');
+                i += 1;
+                continue;
+            }
+            let ch = src[i..].chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+        out
+    }
+
+    fn find_matching_paren(src: &str, open_paren_idx: usize) -> Option<usize> {
+        let mut depth = 0usize;
+        let mut in_str = false;
+        let mut escaped = false;
+        for (rel, ch) in src[open_paren_idx..].char_indices() {
+            if in_str {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_str = false;
+                }
+                continue;
+            }
+            match ch {
+                '"' => in_str = true,
+                '(' => depth += 1,
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(open_paren_idx + rel);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn statement_end_after(src: &str, start_idx: usize) -> usize {
+        let mut depth = 0usize;
+        let mut in_str = false;
+        let mut escaped = false;
+        for (rel, ch) in src[start_idx..].char_indices() {
+            if in_str {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_str = false;
+                }
+                continue;
+            }
+            match ch {
+                '"' => in_str = true,
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => {
+                    if depth == 0 {
+                        return start_idx + rel;
+                    }
+                    depth -= 1;
+                }
+                ';' | ',' if depth == 0 => return start_idx + rel,
+                _ => {}
+            }
+        }
+        src.len()
+    }
+
+    fn bound_var_before(src: &str, call_idx: usize) -> Option<&str> {
+        let prefix = &src[..call_idx];
+        let stmt_start = prefix.rfind([';', '{', '}']).map_or(0, |p| p + 1);
+        let stmt = prefix[stmt_start..].trim_start();
+        let after_let = stmt.strip_prefix("let ")?.trim_start();
+        let after_mut = after_let
+            .strip_prefix("mut ")
+            .unwrap_or(after_let)
+            .trim_start();
+        let ident_end = after_mut
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(after_mut.len());
+        let ident = &after_mut[..ident_end];
+        if ident.is_empty() { None } else { Some(ident) }
+    }
+
+    fn line_number_at(src: &str, byte_idx: usize) -> usize {
+        src[..byte_idx].bytes().filter(|&b| b == b'\n').count() + 1
+    }
+
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dirs = [
+        manifest.join("src"),
+        manifest.join("../../apps/coursecraft/src"),
+    ];
+    let mut violations = Vec::new();
+    let mut scanned_files = 0usize;
+    let mut checked_calls = 0usize;
+
+    for dir in &dirs {
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if file_name == "tests.rs"
+                || file_name == "test_harness.rs"
+                || file_name.ends_with("_tests.rs")
+                || file_name.starts_with("bughunt_")
+            {
+                continue;
+            }
+            scanned_files += 1;
+            let raw = std::fs::read_to_string(&path).expect("read production source file");
+            let prod = strip_comments_keep_lines(&strip_cfg_test_modules(&raw));
+
+            // 1. Forbid `ui.disable()` in production code.
+            let mut disable_offset = 0usize;
+            while let Some(pos) = prod[disable_offset..].find(".disable()") {
+                let abs = disable_offset + pos;
+                let line = line_number_at(&prod, abs);
+                violations.push(format!(
+                    "{file_name}:{line}: forbidden `ui.disable()` in production code; use `add_enabled_ui` with `.on_disabled_hover_text(...)`"
+                ));
+                disable_offset = abs + ".disable()".len();
+            }
+
+            // 2. Check every `.add_enabled(` and `.add_enabled_ui(`.
+            for needle in [".add_enabled(", ".add_enabled_ui("] {
+                let is_ui_block = needle == ".add_enabled_ui(";
+                let mut offset = 0usize;
+                while let Some(pos) = prod[offset..].find(needle) {
+                    let abs = offset + pos;
+                    let open_paren = abs + needle.len() - 1;
+                    offset = open_paren + 1;
+                    checked_calls += 1;
+
+                    let Some(close_paren) = find_matching_paren(&prod, open_paren) else {
+                        let line = line_number_at(&prod, abs);
+                        violations
+                            .push(format!("{file_name}:{line}: unmatched paren in `{needle}`"));
+                        continue;
+                    };
+
+                    let after_call = close_paren + 1;
+                    let stmt_end = statement_end_after(&prod, after_call);
+                    let chain = &prod[after_call..stmt_end];
+                    let inside = &prod[open_paren..=close_paren];
+
+                    let mut has_reason = chain.contains(".on_disabled_hover_text(")
+                        || (is_ui_block && inside.contains(".on_disabled_hover_text("));
+
+                    if !has_reason && let Some(var) = bound_var_before(&prod, abs) {
+                        let lookahead_end = prod
+                            .char_indices()
+                            .map(|(i, _)| i)
+                            .find(|&i| i >= (stmt_end + 800).min(prod.len()))
+                            .unwrap_or(prod.len());
+                        let lookahead_compact: String = prod[stmt_end..lookahead_end]
+                            .chars()
+                            .filter(|c| !c.is_whitespace())
+                            .collect();
+                        let direct = format!("{var}.on_disabled_hover_text(");
+                        let chained = format!("{var}.on_hover_text(");
+                        if lookahead_compact.contains(&direct)
+                            || (lookahead_compact.contains(&chained)
+                                && lookahead_compact.contains(".on_disabled_hover_text("))
+                        {
+                            has_reason = true;
+                        }
+                    }
+
+                    if !has_reason {
+                        let line = line_number_at(&prod, abs);
+                        violations.push(format!(
+                            "{file_name}:{line}: `{needle}` is missing `.on_disabled_hover_text(...)`"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        scanned_files >= 30,
+        "expected >= 30 production files scanned, found {scanned_files}"
+    );
+    assert!(
+        checked_calls >= 60,
+        "expected >= 60 add_enabled/add_enabled_ui calls checked, found {checked_calls}"
+    );
+    assert!(
+        violations.is_empty(),
+        "disabled-control guard violations ({}):\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}

@@ -682,7 +682,10 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             if desktop_file_ops {
                 ui.menu_button("Open recent", |ui| {
                     if editor.recent_files.is_empty() {
-                        ui.add_enabled(false, Button::new("(No recent files)"));
+                        let p = coursecraft_render::palette(ui.ctx());
+                        ui.label(
+                            coursecraft_render::small("No recent files").color(p.text_disabled),
+                        );
                     } else {
                         for (idx, full_path) in editor.recent_files.iter().enumerate() {
                             let name = std::path::Path::new(full_path)

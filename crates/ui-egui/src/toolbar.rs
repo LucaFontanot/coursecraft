@@ -421,7 +421,11 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             if master_view {
-                ui.add_enabled(false, egui::Button::new("Not available in slide masters"));
+                let p = coursecraft_render::palette(ui.ctx());
+                ui.label(
+                    coursecraft_render::small("Not available in slide masters")
+                        .color(p.text_disabled),
+                );
                 return;
             }
             crate::slides::show_new_slide_popup(ui, editor);
@@ -433,6 +437,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
             let can_add_layer = !editor.selection.slide.is_empty();
             if ui
                 .add_enabled(can_add_layer, egui::Button::new("New layer"))
+                .on_disabled_hover_text("Select a slide first")
                 .clicked()
             {
                 add_new_layer(editor);
@@ -625,8 +630,14 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     let can_redo = editor.session.can_redo();
     let redo_tooltip =
         tooltip_with_shortcut(right_ui.ctx(), "Redo", shortcut_for_command("edit.redo"));
-    if widgets::icon_button_enabled(&mut right_ui, Icon::ArrowClockwise, can_redo, &redo_tooltip)
-        .clicked()
+    if widgets::icon_button_enabled_reason(
+        &mut right_ui,
+        Icon::ArrowClockwise,
+        can_redo,
+        &redo_tooltip,
+        "Nothing to redo",
+    )
+    .clicked()
         && let Some(p) = crate::menu::adapter(editor, "edit.redo")
     {
         editor.run("edit.redo", p);
@@ -636,11 +647,12 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     let can_undo = editor.session.can_undo();
     let undo_tooltip =
         tooltip_with_shortcut(right_ui.ctx(), "Undo", shortcut_for_command("edit.undo"));
-    if widgets::icon_button_enabled(
+    if widgets::icon_button_enabled_reason(
         &mut right_ui,
         Icon::ArrowCounterClockwise,
         can_undo,
         &undo_tooltip,
+        "Nothing to undo",
     )
     .clicked()
         && let Some(p) = crate::menu::adapter(editor, "edit.undo")
@@ -729,7 +741,8 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     );
     egui::Popup::menu(&media_resp).show(|ui| {
         if !non_visual_enabled {
-            ui.add_enabled(false, egui::Button::new(media_tooltip));
+            let p = coursecraft_render::palette(ui.ctx());
+            ui.label(coursecraft_render::small(media_tooltip).color(p.text_disabled));
             return;
         }
         if ui.button("Video…").clicked() {

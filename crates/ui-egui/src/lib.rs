@@ -388,9 +388,9 @@ pub use welcome::{
 };
 pub use widgets::{
     COMBO_MIN_POPUP_HEIGHT, COMBO_MIN_WIDTH, IconTone, icon_button, icon_button_danger,
-    icon_button_enabled, icon_toggle, mixed_toggle, modal_backdrop_color, styled_combo,
-    toolbar_button, toolbar_button_active, toolbar_button_enabled, toolbar_caret_button,
-    toolbar_primary_button, toolbar_toggle,
+    icon_button_danger_reason, icon_button_enabled, icon_button_enabled_reason, icon_toggle,
+    mixed_toggle, modal_backdrop_color, styled_combo, toolbar_button, toolbar_button_active,
+    toolbar_button_enabled, toolbar_caret_button, toolbar_primary_button, toolbar_toggle,
 };
 
 use coursecraft_course::{Course, FontStyle, ShapeKind, shape_label};
@@ -1186,6 +1186,19 @@ pub enum QuietTone {
 ///
 /// A disabled button is painted in `text_disabled`, never highlights and does not sense clicks.
 pub fn quiet_button(ui: &mut Ui, text: &str, tone: QuietTone, enabled: bool) -> egui::Response {
+    quiet_button_enabled(ui, text, tone, enabled, "Not available right now")
+}
+
+/// A quiet text button with an explicit disabled hover reason.
+///
+/// Wraps the button in [`Ui::add_enabled_ui`] so `.on_disabled_hover_text` fires reliably in egui.
+pub fn quiet_button_enabled(
+    ui: &mut Ui,
+    text: &str,
+    tone: QuietTone,
+    enabled: bool,
+    disabled_reason: &str,
+) -> egui::Response {
     let p = coursecraft_render::palette(ui.ctx());
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
@@ -1197,35 +1210,38 @@ pub fn quiet_button(ui: &mut Ui, text: &str, tone: QuietTone, enabled: bool) -> 
         galley.size().x + 2.0 * pad_x,
         coursecraft_render::CONTROL_COMPACT,
     );
-    let sense = if enabled {
-        egui::Sense::click()
-    } else {
-        egui::Sense::hover()
-    };
-    let (rect, resp) = ui.allocate_exact_size(size, sense);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text.to_owned()));
-    if ui.is_rect_visible(rect) {
-        let hovered = enabled && resp.hovered();
-        let color = if !enabled {
-            p.text_disabled
-        } else {
-            match (tone, hovered) {
-                (QuietTone::Accent, _) => p.accent_text,
-                (QuietTone::Secondary, true) => p.text,
-                (QuietTone::Danger, true) => p.danger,
-                (QuietTone::Secondary | QuietTone::Danger, false) => p.text_secondary,
+    let resp = ui
+        .add_enabled_ui(enabled, |ui| {
+            let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+            resp.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, enabled, text.to_owned())
+            });
+            if ui.is_rect_visible(rect) {
+                let hovered = enabled && resp.hovered();
+                let color = if !enabled {
+                    p.text_disabled
+                } else {
+                    match (tone, hovered) {
+                        (QuietTone::Accent, _) => p.accent_text,
+                        (QuietTone::Secondary, true) => p.text,
+                        (QuietTone::Danger, true) => p.danger,
+                        (QuietTone::Secondary | QuietTone::Danger, false) => p.text_secondary,
+                    }
+                };
+                if hovered {
+                    ui.painter().rect_filled(
+                        rect,
+                        egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+                        p.hover,
+                    );
+                }
+                let pos = egui::pos2(rect.left() + pad_x, rect.center().y - galley.size().y * 0.5);
+                ui.painter().galley(pos, galley, color);
             }
-        };
-        if hovered {
-            ui.painter().rect_filled(
-                rect,
-                egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
-                p.hover,
-            );
-        }
-        let pos = egui::pos2(rect.left() + pad_x, rect.center().y - galley.size().y * 0.5);
-        ui.painter().galley(pos, galley, color);
-    }
+            resp
+        })
+        .inner
+        .on_disabled_hover_text(disabled_reason);
     if enabled {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {

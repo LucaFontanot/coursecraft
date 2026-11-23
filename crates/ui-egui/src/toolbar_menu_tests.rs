@@ -1247,3 +1247,434 @@ fn menu_items_show_shortcut_tooltips_matching_shortcut_groups() {
         h.idle_frame();
     }
 }
+
+/// D-01: Every audited disabled control paints an explanatory hover reason
+/// (never empty and never just repeating the button label) (`UX-08` / `M32-05`).
+#[test]
+fn disabled_controls_show_explanatory_hover_reasons() {
+    let mut failures: Vec<String> = Vec::new();
+    let mut assert_reason = |name: &str, label: &str, tip: Option<String>, expected: &str| match tip
+    {
+        None => failures.push(format!("{name}: missing disabled hover tooltip")),
+        Some(tip) => {
+            if tip.trim().is_empty() {
+                failures.push(format!("{name}: disabled tooltip must not be empty"));
+            } else if tip.trim() == label.trim() {
+                failures.push(format!("{name}: disabled tooltip repeats label {label:?}"));
+            } else if tip != expected {
+                failures.push(format!("{name}: got {tip:?}, expected {expected:?}"));
+            }
+        }
+    };
+
+    // 1. Disabled Undo / Redo on fresh course.
+    let mut h =
+        TestHarness::new_with_config(sample_course(), (1280.0, 800.0), ThemeMode::Dark, 1.0, true);
+    h.idle_frame();
+    h.idle_frame();
+
+    let undo_w = toolbar_widget_with_label(&h, "Undo");
+    assert!(undo_w.disabled, "Undo should start disabled");
+    assert_reason(
+        "toolbar Undo",
+        "Undo",
+        h.probe_tooltip(undo_w.bounds.center()),
+        "Nothing to undo",
+    );
+
+    let redo_w = toolbar_widget_with_label(&h, "Redo");
+    assert!(redo_w.disabled, "Redo should start disabled");
+    assert_reason(
+        "toolbar Redo",
+        "Redo",
+        h.probe_tooltip(redo_w.bounds.center()),
+        "Nothing to redo",
+    );
+
+    // 2. Disabled "New layer" in Add slide caret popup when no slide is selected (empty course).
+    let empty_course_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "empty-slide-disabled-test",
+        "title": "Empty Course",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": []
+        }]
+    });
+    let empty_course = Course::from_json(&empty_course_json.to_string()).expect("empty course");
+    let mut h_empty =
+        TestHarness::new_with_config(empty_course, (1280.0, 800.0), ThemeMode::Dark, 1.0, true);
+    h_empty.idle_frame();
+    assert!(
+        h_empty.editor.selection.slide.is_empty(),
+        "empty course should have no selected slide"
+    );
+    let caret_w = toolbar_widget_with_label(&h_empty, "More slide options");
+    h_empty.click_at(caret_w.bounds.center());
+    h_empty.idle_frame();
+    h_empty.idle_frame();
+    let new_layer_pos = h_empty
+        .find_text_last("New layer")
+        .expect("New layer item in Add slide caret popup");
+    h_empty.hover_at(new_layer_pos);
+    assert_reason(
+        "toolbar New layer",
+        "New layer",
+        h_empty.probe_tooltip(new_layer_pos),
+        "Select a slide first",
+    );
+    h_empty.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h_empty.idle_frame();
+
+    // 3. Slide context menu: Move up, Move down, and Preview selected slides on a 1-slide scene.
+    let one_slide_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "one-slide-disabled-test",
+        "title": "One Slide",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Only Slide",
+                "duration_ms": 5000,
+                "objects": [
+                    {
+                        "id": "drag1",
+                        "name": "Card A",
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                        "frame": { "x": 100, "y": 100, "w": 160, "h": 80 }
+                    },
+                    {
+                        "id": "drop1",
+                        "name": "Zone 1",
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#669933" },
+                        "frame": { "x": 400, "y": 100, "w": 200, "h": 120 }
+                    }
+                ],
+                "triggers": [
+                    {
+                        "when": { "event": "timeline_starts" },
+                        "action": { "action": "pause_timeline" }
+                    }
+                ]
+            }]
+        }]
+    });
+    let course = Course::from_json(&one_slide_json.to_string()).expect("valid course");
+    let mut h_one =
+        TestHarness::new_with_config(course, (1280.0, 800.0), ThemeMode::Dark, 1.0, true);
+    h_one.idle_frame();
+    let thumb_rect =
+        crate::slide_thumbnail_rect(&h_one.editor.session.course, h_one.left_panel_rect(), "s1")
+            .expect("thumbnail rect for s1");
+    h_one.right_click_at(thumb_rect.center());
+    h_one.idle_frame();
+    h_one.idle_frame();
+    for (item, expected) in [
+        ("Move up", "Slide is already at the top of this scene"),
+        ("Move down", "Slide is already at the bottom of this scene"),
+        (
+            "Preview selected slides",
+            "Select two or more slides to preview them",
+        ),
+    ] {
+        let pos = h_one
+            .find_text_last(item)
+            .unwrap_or_else(|| panic!("expected slide context menu item {item:?}"));
+        h_one.hover_at(pos);
+        assert_reason(
+            &format!("slide menu {item}"),
+            item,
+            h_one.probe_tooltip(pos),
+            expected,
+        );
+    }
+    h_one.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h_one.idle_frame();
+
+    // 4. Question reorder / remove icon buttons (MultipleChoice with 2 choices).
+    let mut mc_json = one_slide_json.clone();
+    mc_json["scenes"][0]["slides"][0]["question"] = serde_json::json!({
+        "kind": "multiple_choice",
+        "prompt": "Pick one",
+        "choices": [
+            { "id": "c1", "text": "First", "correct": true, "points": 10 },
+            { "id": "c2", "text": "Second", "correct": false, "points": 0 }
+        ]
+    });
+    let mc_course = Course::from_json(&mc_json.to_string()).expect("valid mc course");
+    let mut h_mc =
+        TestHarness::new_with_config(mc_course, (1280.0, 960.0), ThemeMode::Dark, 1.0, true);
+    h_mc.editor.ui.bottom_tab = crate::BottomTab::Question;
+    h_mc.idle_frame();
+    h_mc.idle_frame();
+
+    for (label, expected) in [
+        ("Move up", "Already first"),
+        ("Move down", "Already last"),
+        ("Remove choice", "At least two choices are required"),
+    ] {
+        let w = h_mc
+            .last_widgets
+            .iter()
+            .find(|w| w.disabled && w.label.as_deref() == Some(label))
+            .cloned()
+            .unwrap_or_else(|| panic!("expected disabled question icon button {label:?}"));
+        assert_reason(
+            &format!("question {label}"),
+            label,
+            h_mc.probe_tooltip(w.bounds.center()),
+            expected,
+        );
+    }
+
+    // 5. Required drag-and-drop drop-target checkbox & Remove item button.
+    let mut dd_json = one_slide_json;
+    dd_json["scenes"][0]["slides"][0]["question"] = serde_json::json!({
+        "kind": "drag_drop",
+        "prompt": "Match",
+        "choices": [],
+        "drag_items": [{ "item": "drag1", "target": "drop1" }],
+        "drop_targets": ["drop1"]
+    });
+    let dd_course = Course::from_json(&dd_json.to_string()).expect("valid dd course");
+    let mut h_dd =
+        TestHarness::new_with_config(dd_course, (1280.0, 1200.0), ThemeMode::Dark, 1.0, true);
+    h_dd.editor.ui.inspector_tab = crate::InspectorTab::Slide;
+    h_dd.idle_frame();
+    h_dd.idle_frame();
+
+    let remove_item_w = h_dd
+        .last_widgets
+        .iter()
+        .find(|w| w.disabled && w.label.as_deref() == Some("Remove item"))
+        .cloned()
+        .expect("expected disabled Remove item button");
+    assert_reason(
+        "drag-drop Remove item",
+        "Remove item",
+        h_dd.probe_tooltip(remove_item_w.bounds.center()),
+        "At least one drag item is required",
+    );
+
+    let req_cb = h_dd
+        .last_widgets
+        .iter()
+        .find(|w| w.disabled && w.label.as_deref() == Some("Zone 1"))
+        .cloned()
+        .expect("expected disabled required drop-target checkbox for Zone 1");
+    assert_reason(
+        "drag-drop required drop-target checkbox",
+        "Zone 1",
+        h_dd.probe_tooltip(req_cb.bounds.center()),
+        "Required because a drag item targets this object",
+    );
+
+    // 6. Trigger delete icon button while trigger editor form is open.
+    // The trigger editor opens as a modal Dialog whose backdrop scrim sits above
+    // the bottom panel in the full editor; render `show_triggers_tab` directly
+    // with `trigger_form` open so we can probe the disabled Delete button hover.
+    {
+        let mut trig_editor = crate::Editor::new(h_one.editor.session.course.clone());
+        trig_editor.selection.slide = "s1".to_owned();
+        let slide_ref = trig_editor.session.course.slide("s1").expect("s1");
+        trig_editor.ui.trigger_form = Some(crate::triggers::TriggerFormState::new_for_owner(
+            slide_ref,
+            None,
+            &trig_editor.session.course,
+        ));
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        coursecraft_render::apply_style(&ctx, ThemeMode::Dark);
+        let screen = egui::Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1000.0, 320.0));
+        let mut t = 0.0_f64;
+        let mut run_trig = |events: Vec<egui::Event>, time: f64| {
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                time: Some(time),
+                ..Default::default()
+            };
+            let mut layers = Vec::new();
+            let output = ctx.run_ui(raw, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let mut actions = Vec::new();
+                    crate::triggers::show_triggers_tab(&mut trig_editor, ui, &mut actions);
+                });
+                layers = crate::test_harness::capture_layers(ui.ctx());
+            });
+            let nodes = crate::test_harness::extract_widget_nodes(
+                output.platform_output.accesskit_update.as_ref(),
+            );
+            output.drop_without_applying_deltas();
+            (nodes, layers)
+        };
+        let (_, init_layers) = run_trig(Vec::new(), t);
+        t += 0.016;
+        // Find the first trigger row text and hover it to reveal row action buttons.
+        let mut hover_row = None;
+        for (_, shapes) in &init_layers {
+            for c in shapes {
+                if let egui::Shape::Text(txt) = &c.shape
+                    && txt.galley.text().contains("Pause")
+                {
+                    hover_row = Some(txt.pos + txt.galley.size() * 0.5);
+                }
+            }
+        }
+        let hover_row = hover_row.expect("trigger row text in standalone triggers tab");
+        let (nodes, _) = run_trig(vec![egui::Event::PointerMoved(hover_row)], t);
+        t += 0.016;
+        let (nodes2, _) = run_trig(Vec::new(), t);
+        let del_w = nodes2
+            .into_iter()
+            .chain(nodes)
+            .find(|w| w.disabled && w.label.as_deref() == Some("Delete trigger"))
+            .expect("expected disabled Delete trigger icon button while form is open");
+        let pos = del_w.bounds.center();
+        t += 0.016;
+        let _ = run_trig(vec![egui::Event::PointerMoved(pos)], t);
+        t += 0.016;
+        let _ = run_trig(Vec::new(), t);
+        t += 1.0;
+        let _ = run_trig(Vec::new(), t);
+        t += 0.016;
+        let (_, layers) = run_trig(Vec::new(), t);
+        let mut texts = Vec::new();
+        for (layer, shapes) in &layers {
+            if layer.order == egui::Order::Tooltip {
+                for c in shapes {
+                    if let egui::Shape::Text(txt) = &c.shape {
+                        texts.push(txt.galley.text().to_owned());
+                    }
+                }
+            }
+        }
+        let tip = {
+            let joined = texts.join(" ").trim().to_owned();
+            (!joined.is_empty()).then_some(joined)
+        };
+        assert_reason(
+            "trigger Delete trigger",
+            "Delete trigger",
+            tip,
+            "Close the trigger editor first",
+        );
+    }
+
+    // 7. Busy Publish dialog standard radio button.
+    h_one.editor.open_publish_dialog();
+    h_one.editor.ui.publish.phase = crate::publish::PublishPhase::Busy;
+    h_one.idle_frame();
+    h_one.idle_frame();
+    let radio_pos = h_one
+        .find_text("SCORM 1.2")
+        .expect("SCORM 1.2 radio button in busy Publish dialog");
+    assert_reason(
+        "busy publish standard radio",
+        "SCORM 1.2",
+        h_one.probe_tooltip(radio_pos),
+        "Wait for publishing to finish",
+    );
+    h_one.editor.ui.publish.open = false;
+    h_one.editor.ui.publish.phase = crate::publish::PublishPhase::Idle;
+    h_one.idle_frame();
+
+    // 8. Edit-State Animate tab.
+    let _ = h_one.editor.run(
+        "object.add_state",
+        serde_json::json!({
+            "slide": "s1",
+            "object": "drag1",
+            "state": { "name": "hover", "opacity": 0.8 }
+        }),
+    );
+    h_one.editor.selection.set_many(["drag1"]);
+    h_one.editor.enter_edit_state("s1", "drag1", "hover");
+    h_one.editor.ui.inspector_tab = crate::InspectorTab::Animate;
+    h_one.idle_frame();
+    h_one.idle_frame();
+    let right_rect = h_one.right_panel_rect();
+    let anim_pos = h_one
+        .find_text_in("Entrance animation", right_rect)
+        .expect("Entrance animation heading in Animate tab");
+    assert_reason(
+        "Edit-State Animate tab",
+        "Entrance animation",
+        h_one.probe_tooltip(anim_pos),
+        crate::STATE_LOCK_TOOLTIP,
+    );
+
+    // 9. Disabled quiet_button_enabled fires `.on_disabled_hover_text(...)` (RISK-08).
+    {
+        let ctx = egui::Context::default();
+        coursecraft_render::apply_style(&ctx, ThemeMode::Dark);
+        let screen = egui::Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(400.0, 200.0));
+        let mut t = 0.0_f64;
+        let run_quiet = |events: Vec<egui::Event>, time: f64| {
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                time: Some(time),
+                ..Default::default()
+            };
+            let mut btn_rect = egui::Rect::NOTHING;
+            let mut layers = Vec::new();
+            let output = ctx.run_ui(raw, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let resp = crate::quiet_button_enabled(
+                        ui,
+                        "Connect",
+                        crate::QuietTone::Accent,
+                        false,
+                        "Wait for the current agent check to finish",
+                    );
+                    btn_rect = resp.rect;
+                });
+                layers = crate::test_harness::capture_layers(ui.ctx());
+            });
+            output.drop_without_applying_deltas();
+            (btn_rect, layers)
+        };
+        let (btn_rect, _) = run_quiet(Vec::new(), t);
+        t += 0.016;
+        let _ = run_quiet(vec![egui::Event::PointerMoved(btn_rect.center())], t);
+        t += 0.016;
+        let _ = run_quiet(Vec::new(), t);
+        t += 1.0;
+        let _ = run_quiet(Vec::new(), t);
+        t += 0.016;
+        let (_, layers) = run_quiet(Vec::new(), t);
+        let mut texts = Vec::new();
+        for (layer, shapes) in &layers {
+            if layer.order == egui::Order::Tooltip {
+                for c in shapes {
+                    if let egui::Shape::Text(txt) = &c.shape {
+                        texts.push(txt.galley.text().to_owned());
+                    }
+                }
+            }
+        }
+        let tip = {
+            let joined = texts.join(" ").trim().to_owned();
+            (!joined.is_empty()).then_some(joined)
+        };
+        assert_reason(
+            "quiet_button_enabled Connect",
+            "Connect",
+            tip,
+            "Wait for the current agent check to finish",
+        );
+    }
+
+    assert!(
+        failures.is_empty(),
+        "disabled-control hover failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
