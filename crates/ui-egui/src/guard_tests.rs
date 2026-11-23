@@ -87,6 +87,11 @@ fn idle_frames_do_no_counted_work() {
         0,
         "settled thumbnails are not redrawn"
     );
+    assert_eq!(
+        gc::thumbnail_composes(),
+        0,
+        "idle frames compose no thumbnails"
+    );
     assert_eq!(picture_decodes(), 0, "no new picture is decoded while idle");
 }
 
@@ -543,5 +548,247 @@ fn perf02_fifty_object_stateful_slide_bounded_work() {
         picture_decodes(),
         0,
         "vector/text stateful objects decode zero pictures"
+    );
+}
+
+/// A multi-scene course matching `perf_tests.rs` scale (10 scenes × 30 slides
+/// for `n = 300`, 6 objects per slide).
+fn many_slide_course(n: usize) -> Course {
+    let scene_count = 10usize;
+    let per_scene = n.div_ceil(scene_count);
+    let mut scenes = Vec::new();
+    for scene in 0..scene_count {
+        let start = scene * per_scene;
+        let end = (start + per_scene).min(n);
+        if start >= end {
+            break;
+        }
+        let mut slides = Vec::with_capacity(end - start);
+        for i in start..end {
+            slides.push(format!(
+                r##"{{"id":"s-{i}","title":"Slide {i}","duration_ms":3000,"objects":[
+                {{"id":"t{i}","kind":{{"type":"text","text":"Slide {i} title","style":{{"size":44,"bold":true}}}},"frame":{{"x":60,"y":40,"w":1100,"h":80}}}},
+                {{"id":"a{i}","kind":{{"type":"text","text":"First paragraph of body text."}},"frame":{{"x":60,"y":140,"w":500,"h":160}}}},
+                {{"id":"b{i}","kind":{{"type":"text","text":"Second paragraph of body text."}},"frame":{{"x":60,"y":320,"w":500,"h":160}}}},
+                {{"id":"p{i}","kind":{{"type":"image","src":"img/p{i}.png","alt":"Test picture"}},"frame":{{"x":600,"y":140,"w":560,"h":340}}}},
+                {{"id":"h{i}","kind":{{"type":"shape","shape":"rounded_rectangle","fill":"#2E8B57"}},"frame":{{"x":60,"y":520,"w":200,"h":80}}}},
+                {{"id":"btn{i}","kind":{{"type":"button","label":"Next"}},"frame":{{"x":1000,"y":600,"w":200,"h":60}}}}]}}"##
+            ));
+        }
+        scenes.push(format!(
+            r#"{{"id":"sc{scene}","title":"Scene {scene}","slides":[{}]}}"#,
+            slides.join(",")
+        ));
+    }
+    let json = format!(
+        r#"{{"schema_version":1,"id":"many-{n}","title":"Many Slides","slide_size":{{"w":1280,"h":720}},"scenes":[{}]}}"#,
+        scenes.join(",")
+    );
+    Course::from_json(&json).expect("generated many-slide course parses")
+}
+
+/// SL-01: Twenty idle frames on a settled 300-slide course perform zero
+/// thumbnail composes and zero thumbnail redraws.
+#[test]
+fn idle_frames_do_zero_thumbnail_composes() {
+    let mut h = TestHarness::new(many_slide_course(300));
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    for _ in 0..20 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::thumbnail_composes(),
+        0,
+        "idle frames on a 300-slide course must compose zero thumbnails"
+    );
+    assert_eq!(
+        gc::thumbnail_redraws(),
+        0,
+        "idle frames on a 300-slide course must redraw zero thumbnails"
+    );
+}
+
+/// SL-02: Nudging one object on slide 0 of a 300-slide course recomposes
+/// exactly that one slide's thumbnail, not all visible rows or all 300 slides.
+#[test]
+fn moving_object_composes_only_one_thumbnail() {
+    let mut h = TestHarness::new(many_slide_course(300));
+    h.editor.selection.slide = "s-0".into();
+    h.editor.selection.object = Some("t0".into());
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    h.press(Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(
+        gc::thumbnail_composes(),
+        1,
+        "nudging one object should compose only the edited slide's thumbnail"
+    );
+}
+
+/// SL-03: Scrolling a 300-slide navigator composes only the newly visible rows
+/// (1..=10), and scrolling back to already-cached rows at the same revision
+/// performs zero thumbnail composes.
+#[test]
+fn scrolling_300_slide_list_composes_only_visible_rows() {
+    let mut h = TestHarness::new(many_slide_course(300));
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+    let list_pos = h.find_text("Slide 1").unwrap_or_else(|| pos2(90.0, 300.0));
+    h.frame(vec![Event::PointerMoved(list_pos)]);
+    let top = h.editor.ui.slides_scroll_y;
+
+    reset_counts();
+    h.frame(vec![wheel(-2000.0)]);
+    // egui's ScrollArea updates its offset after the inner closure runs; render
+    // the next frame so the newly scrolled-in rows are actually composed.
+    let _ = h.idle_frame();
+    let after_down = h.editor.ui.slides_scroll_y;
+    assert!(
+        after_down > top,
+        "downward wheel should scroll the 300-slide list (top={top}, after={after_down})"
+    );
+    assert!(
+        h.find_text("Slide 1").is_none(),
+        "Slide 1 should be scrolled out of view after scrolling down (top={top}, after={after_down})"
+    );
+    let down_composes = gc::thumbnail_composes();
+    assert!(
+        (1..=10).contains(&down_composes),
+        "scrolling down should compose only newly visible rows (1..=10), got {down_composes}"
+    );
+
+    // Let egui's smooth-scroll animation finish before measuring the return scroll.
+    for _ in 0..20 {
+        let prev = h.editor.ui.slides_scroll_y;
+        let _ = h.idle_frame();
+        if (h.editor.ui.slides_scroll_y - prev).abs() < 0.01 {
+            break;
+        }
+    }
+
+    // Scrolling back up to the top at the same revision hits the ThumbnailCache.
+    reset_counts();
+    h.frame(vec![wheel(6000.0)]);
+    let _ = h.idle_frame();
+    let after_up = h.editor.ui.slides_scroll_y;
+    assert!(
+        after_up <= top + 1.0,
+        "upward wheel should return to the top (top={top}, after={after_up})"
+    );
+    assert!(
+        h.find_text("Slide 1").is_some(),
+        "Slide 1 should be visible again after scrolling back up (top={top}, after={after_up})"
+    );
+    assert_eq!(
+        gc::thumbnail_composes(),
+        0,
+        "scrolling back to already-cached top rows at the same revision must compose zero thumbnails"
+    );
+}
+
+/// SL-04: Editing a slide master or the course theme invalidates dependent
+/// visible thumbnails, while changing selection between already-visible slides
+/// without scrolling composes zero thumbnails.
+#[test]
+fn editing_master_or_theme_invalidates_visible_thumbnails() {
+    let json = r##"{
+        "schema_version": 1,
+        "id": "master-theme-cache",
+        "title": "Master Theme Cache",
+        "slide_size": { "w": 1280, "h": 720 },
+        "masters": [{
+            "id": "m1",
+            "title": "Main master",
+            "objects": [{
+                "id": "m-banner",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#1D4ED8" },
+                "frame": { "x": 0, "y": 0, "w": 1280, "h": 80 }
+            }]
+        }],
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [
+                {
+                    "id": "s-0",
+                    "title": "Slide 0",
+                    "master": "m1",
+                    "objects": [{
+                        "id": "t0",
+                        "kind": { "type": "text", "text": "Uses master" },
+                        "frame": { "x": 80, "y": 140, "w": 400, "h": 80 }
+                    }]
+                },
+                {
+                    "id": "s-1",
+                    "title": "Slide 1",
+                    "objects": [{
+                        "id": "t1",
+                        "kind": { "type": "text", "text": "Plain slide" },
+                        "frame": { "x": 80, "y": 140, "w": 400, "h": 80 }
+                    }]
+                }
+            ]
+        }]
+    }"##;
+    let course = Course::from_json(json).expect("master/theme test course parses");
+    let mut h = TestHarness::new(course);
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+
+    // 1. Editing an object on master `m1` invalidates visible slide `s-0`.
+    reset_counts();
+    let res = h.editor.run(
+        "object.update",
+        serde_json::json!({
+            "slide": "m1",
+            "object": "m-banner",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#DC2626" }
+        }),
+    );
+    assert!(res.is_some(), "updating object on master m1 should succeed");
+    let _ = h.idle_frame();
+    assert!(
+        gc::thumbnail_composes() >= 1,
+        "editing master m1 must recompose dependent visible thumbnails, got {}",
+        gc::thumbnail_composes()
+    );
+
+    // 2. Changing course theme background invalidates visible thumbnails.
+    for _ in 0..2 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    let res = h.editor.run(
+        "course.set_theme",
+        serde_json::json!({ "background": "#102030" }),
+    );
+    assert!(res.is_some(), "course.set_theme should succeed");
+    let _ = h.idle_frame();
+    assert!(
+        gc::thumbnail_composes() >= 1,
+        "changing course theme background must recompose visible thumbnails, got {}",
+        gc::thumbnail_composes()
+    );
+
+    // 3. Changing slide selection between two already-visible slides without
+    // scrolling composes zero thumbnails.
+    for _ in 0..2 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    h.editor.selection.slide = "s-1".into();
+    let _ = h.idle_frame();
+    assert_eq!(
+        gc::thumbnail_composes(),
+        0,
+        "selecting another already-visible slide must compose zero thumbnails"
     );
 }
