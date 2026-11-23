@@ -77,11 +77,12 @@ impl ResourceBuffers {
     }
 
     /// Draw the section and collect what the author asked for.
-    pub fn show(&mut self, ui: &mut Ui) -> ResourceActions {
+    pub fn show(&mut self, ui: &mut Ui, open: bool) -> ResourceActions {
         let mut actions = ResourceActions::default();
         egui::CollapsingHeader::new(egui::RichText::new("Resources & glossary").heading())
             .id_salt("course_settings_resources")
             .default_open(false)
+            .open(open.then_some(true))
             .show(ui, |ui| self.rows(ui, &mut actions));
         actions
     }

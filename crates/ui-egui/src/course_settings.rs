@@ -179,6 +179,7 @@ pub struct CourseSettingsState {
     pub show_captions: bool,
     pub logo: Option<String>,
     pub resources: crate::resources_ui::ResourceBuffers,
+    pub open_resources: bool,
     pub navigation: NavMode,
     pub next_requires: NextRequirement,
     pub seekbar: SeekbarBehaviour,
@@ -634,7 +635,8 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
 
                 ui.add_space(8.0);
                 ui.separator();
-                resource_actions = editor.ui.course_settings.resources.show(ui);
+                let open_resources = std::mem::take(&mut editor.ui.course_settings.open_resources);
+                resource_actions = editor.ui.course_settings.resources.show(ui, open_resources);
             });
             dialog.footer(|ui| {
                 ui.add_space(coursecraft_render::SPACE_SM);

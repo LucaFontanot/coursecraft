@@ -18737,3 +18737,43 @@ fn exit_animations_play_in_preview_with_slide_transition() {
     assert!(player.sample_object("txt").is_none());
     assert!(player.sample_object("shape2").is_none());
 }
+
+#[test]
+fn find_glossary_hit_opens_course_settings_with_resources_expanded() {
+    let mut session = coursecraft_engine::Session::blank("Glossary Find");
+    session
+        .execute(
+            "glossary.add",
+            &serde_json::json!({
+                "id": "g1",
+                "term": "Telemetry",
+                "definition": "Automated measurement of remote course events."
+            }),
+        )
+        .expect("add glossary");
+    let mut harness = TestHarness::new(session.course);
+    harness.idle_frame();
+    harness.press(Key::F, egui::Modifiers::COMMAND);
+    harness.type_text("Telemetry");
+    harness.idle_frame();
+
+    let hit_pos = harness
+        .find_text_last("Telemetry")
+        .expect("glossary hit in Find & Replace");
+    harness.click_at(hit_pos);
+    harness.idle_frame();
+
+    assert!(
+        harness.editor.ui.show_course_settings_window,
+        "clicking a glossary hit should open Course Settings"
+    );
+    let cs_pos = harness
+        .find_text("Course settings")
+        .expect("Course settings title");
+    harness.scroll_over(egui::pos2(cs_pos.x, cs_pos.y + 200.0), -600.0);
+    harness.idle_frame();
+    assert!(
+        harness.find_text("Add term").is_some(),
+        "Resources & glossary section should be expanded so Add term is visible"
+    );
+}

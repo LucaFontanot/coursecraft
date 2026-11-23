@@ -438,6 +438,9 @@ pub(crate) fn go_to(editor: &mut Editor, hit: &Hit) {
                 None,
             );
         }
+    } else if hit.field.starts_with("glossary/") {
+        editor.ui.show_course_settings_window = true;
+        editor.ui.course_settings.open_resources = true;
     } else {
         editor.ui.inspector_tab = InspectorTab::Course;
     }

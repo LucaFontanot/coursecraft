@@ -10549,3 +10549,49 @@ fn text_style_range_toggles_cleanly_and_undo_restores_exact_runs() {
         assert_eq!(after_undo, baseline_runs, "undo must restore exact runs");
     }
 }
+
+#[test]
+fn course_find_and_replace_on_glossary_entries() {
+    let mut s = Session::blank("Glossary Replace");
+    ok(
+        &mut s,
+        "glossary.add",
+        json!({
+            "id": "g1",
+            "term": "Acme Token",
+            "definition": "An Acme security token."
+        }),
+    );
+
+    let found = ok(&mut s, "course.find", json!({ "query": "Acme" }));
+    assert_eq!(found["hits"].as_array().unwrap().len(), 2);
+
+    let replaced = ok(
+        &mut s,
+        "course.replace",
+        json!({ "query": "Acme", "replacement": "CourseCraft" }),
+    );
+    assert_eq!(replaced["replaced"], 2);
+    assert_eq!(s.course.glossary[0].term, "CourseCraft Token");
+    assert_eq!(
+        s.course.glossary[0].definition,
+        "An CourseCraft security token."
+    );
+
+    // One undo step restores both term and definition.
+    s.undo().unwrap();
+    assert_eq!(s.course.glossary[0].term, "Acme Token");
+    assert_eq!(s.course.glossary[0].definition, "An Acme security token.");
+
+    // RISK-09: replacing a glossary term with "" would violate validation, so it must fail
+    // cleanly without mutating the course.
+    let err = s
+        .execute(
+            "course.replace",
+            &json!({ "query": "Acme Token", "replacement": "" }),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("glossary term is empty"), "{err}");
+    assert_eq!(s.course.glossary[0].term, "Acme Token");
+    assert_eq!(s.course.glossary[0].definition, "An Acme security token.");
+}

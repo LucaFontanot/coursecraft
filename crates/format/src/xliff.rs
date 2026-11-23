@@ -554,6 +554,22 @@ fn collect_units(course: &Course) -> Vec<ExportUnit<'_>> {
             collect_object_units(&mut units, "master", &master.id, object);
         }
     }
+    for entry in &course.glossary {
+        if !entry.term.is_empty() {
+            units.push(ExportUnit {
+                id: format!("glossary/{}/term", entry.id),
+                text: &entry.term,
+                runs: None,
+            });
+        }
+        if !entry.definition.is_empty() {
+            units.push(ExportUnit {
+                id: format!("glossary/{}/definition", entry.id),
+                text: &entry.definition,
+                runs: None,
+            });
+        }
+    }
     for (key, _) in CHROME_STRINGS {
         let text = course.chrome_string(key);
         if !text.is_empty() {
@@ -1281,6 +1297,23 @@ fn current_text(course: &Course, id: &str) -> Option<String> {
             .find(|scene| scene.id == scene_id)
             .map(|scene| scene.title.clone());
     }
+    if let Some(rest) = id.strip_prefix("glossary/") {
+        if let Some(glossary_id) = rest.strip_suffix("/term") {
+            return course
+                .glossary
+                .iter()
+                .find(|entry| entry.id == glossary_id)
+                .map(|entry| entry.term.clone());
+        }
+        if let Some(glossary_id) = rest.strip_suffix("/definition") {
+            return course
+                .glossary
+                .iter()
+                .find(|entry| entry.id == glossary_id)
+                .map(|entry| entry.definition.clone());
+        }
+        return None;
+    }
     if let Some(rest) = id.strip_prefix("master/") {
         let (master_id, field) = rest.split_once('/')?;
         let master = course
@@ -1503,6 +1536,31 @@ fn set_text(course: &mut Course, id: &str, target: &ParsedText) -> bool {
         };
         scene.title = target.text();
         return true;
+    }
+    if let Some(rest) = id.strip_prefix("glossary/") {
+        if let Some(glossary_id) = rest.strip_suffix("/term") {
+            let Some(entry) = course
+                .glossary
+                .iter_mut()
+                .find(|entry| entry.id == glossary_id)
+            else {
+                return false;
+            };
+            entry.term = target.text();
+            return true;
+        }
+        if let Some(glossary_id) = rest.strip_suffix("/definition") {
+            let Some(entry) = course
+                .glossary
+                .iter_mut()
+                .find(|entry| entry.id == glossary_id)
+            else {
+                return false;
+            };
+            entry.definition = target.text();
+            return true;
+        }
+        return false;
     }
     if let Some(rest) = id.strip_prefix("master/") {
         let Some((master_id, field)) = rest.split_once('/') else {
