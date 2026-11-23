@@ -1396,6 +1396,15 @@ static REGISTRY: &[Command] = &[
         run: glossary_move,
     },
     Command {
+        id: "glossary.sort",
+        label: "Sort glossary",
+        menu: "",
+        shortcut: None,
+        params: r#"{}"#,
+        mutates: true,
+        run: glossary_sort,
+    },
+    Command {
         id: "variable.add",
         label: "New Variable",
         menu: "Project/Variables",
@@ -9246,6 +9255,31 @@ fn glossary_move(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(C, "`to` is past the end of the list"));
     }
     move_to(&mut s.course.glossary, index, to);
+    Ok(Json::Null)
+}
+
+fn glossary_cmp(
+    a: &coursecraft_course::GlossaryEntry,
+    b: &coursecraft_course::GlossaryEntry,
+) -> std::cmp::Ordering {
+    a.term
+        .to_lowercase()
+        .cmp(&b.term.to_lowercase())
+        .then_with(|| a.term.cmp(&b.term))
+        .then_with(|| a.id.cmp(&b.id))
+}
+
+fn glossary_sort(s: &mut Session, _p: &Json) -> Result<Json> {
+    let already_sorted = s
+        .course
+        .glossary
+        .windows(2)
+        .all(|w| glossary_cmp(&w[0], &w[1]) != std::cmp::Ordering::Greater);
+    if already_sorted {
+        s.skip_undo = true;
+        return Ok(Json::Null);
+    }
+    s.course.glossary.sort_by(glossary_cmp);
     Ok(Json::Null)
 }
 

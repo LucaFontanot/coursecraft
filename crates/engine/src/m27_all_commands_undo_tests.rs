@@ -267,6 +267,11 @@ fn fixture_session() -> Session {
             term: "xAPI".into(),
             definition: "Experience API".into(),
         },
+        GlossaryEntry {
+            id: "gloss3".into(),
+            term: "AICC".into(),
+            definition: "Aviation Industry CBT Committee".into(),
+        },
     ];
     c.editor.guides = vec![
         Guide {
@@ -1403,6 +1408,7 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         ),
         ("glossary.remove", json!({ "id": "gloss1" })),
         ("glossary.move", json!({ "id": "gloss2", "to": 0 })),
+        ("glossary.sort", json!({})),
         (
             "variable.add",
             json!({ "name": "score_flag", "value": false }),

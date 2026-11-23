@@ -389,6 +389,7 @@ glossary.add         -                        -          {"term": string, "defin
 glossary.update      -                        -          {"id": id, "term"?: string, "definition"?: string}
 glossary.remove      -                        -          {"id": id}
 glossary.move        -                        -          {"id": id, "to": usize}
+glossary.sort        -                        -          {}
 variable.add         Project/Variables        -          {"name": string, "value": bool|number|string}
 variable.set_value   -                        -          {"name": string, "value": bool|number|string}
 variable.delete      -                        -          {"name": string}

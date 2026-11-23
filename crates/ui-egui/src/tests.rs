@@ -18777,3 +18777,162 @@ fn find_glossary_hit_opens_course_settings_with_resources_expanded() {
         "Resources & glossary section should be expanded so Add term is visible"
     );
 }
+
+#[test]
+fn resources_glossary_sort_button_and_order_controls_follow_ui_rules() {
+    // C-06: "Sort A–Z" button dispatches glossary.sort, disables with tooltip when < 2 terms
+    // or already sorted, and ↑/↓/✕ buttons are >= 24×24 pt with disabled tooltips.
+    let mut session = coursecraft_engine::Session::blank("Glossary UI");
+    session
+        .execute(
+            "glossary.add",
+            &serde_json::json!({ "term": "OnlyOne", "definition": "Single entry." }),
+        )
+        .expect("add single glossary term");
+
+    let mut harness = TestHarness::new_with_size(session.course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    harness.editor.ui.course_settings.open_resources = true;
+    for _ in 0..3 {
+        harness.idle_frame();
+    }
+    let cs_pos = harness
+        .find_text("Course settings")
+        .expect("Course settings title");
+    harness.scroll_over(egui::pos2(cs_pos.x, cs_pos.y + 200.0), -600.0);
+    harness.idle_frame();
+
+    let find_widget_for_text = |h: &mut TestHarness, label: &str| {
+        h.last_widgets
+            .iter()
+            .find(|n| n.label.as_deref() == Some(label))
+            .cloned()
+            .unwrap_or_else(|| panic!("missing widget for {label:?}"))
+    };
+
+    // With < 2 terms, "Sort A–Z" is disabled with explanatory tooltip.
+    let sort_btn = find_widget_for_text(&mut harness, "Sort A–Z");
+    assert!(
+        sort_btn.disabled,
+        "Sort A–Z must be disabled with < 2 terms"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(sort_btn.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Add at least two terms to sort"),
+        "unexpected tooltip for < 2 terms: {tip:?}"
+    );
+
+    // Replace with 3 unsorted terms: ["Zebra", "alpha", "Beta"].
+    let mut s2 = coursecraft_engine::Session::blank("Glossary Unsorted");
+    for term in ["Zebra", "alpha", "Beta"] {
+        s2.execute("glossary.add", &serde_json::json!({ "term": term }))
+            .expect("add term");
+    }
+    let mut harness = TestHarness::new_with_size(s2.course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    harness.editor.ui.course_settings.open_resources = true;
+    for _ in 0..3 {
+        harness.idle_frame();
+    }
+    let cs_pos = harness
+        .find_text("Course settings")
+        .expect("Course settings title");
+    harness.scroll_over(egui::pos2(cs_pos.x, cs_pos.y + 200.0), -600.0);
+    harness.idle_frame();
+
+    // Check ↑/↓/✕ button sizes (>= 24×24 pt) and disabled tooltips on first ↑ / last ↓.
+    let mut up_buttons: Vec<_> = harness
+        .last_widgets
+        .iter()
+        .filter(|n| n.label.as_deref() == Some("↑"))
+        .cloned()
+        .collect();
+    up_buttons.sort_by(|a, b| a.bounds.min.y.total_cmp(&b.bounds.min.y));
+    assert_eq!(up_buttons.len(), 3, "expected 3 ↑ buttons");
+    for btn in &up_buttons {
+        assert!(
+            btn.bounds.width() >= 24.0 && btn.bounds.height() >= 24.0,
+            "↑ button must be >= 24×24 pt, got {:?}",
+            btn.bounds.size()
+        );
+    }
+    assert!(up_buttons[0].disabled, "first ↑ button must be disabled");
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    assert_eq!(
+        harness
+            .probe_tooltip(up_buttons[0].bounds.center())
+            .as_deref(),
+        Some("Already at the top")
+    );
+
+    let mut down_buttons: Vec<_> = harness
+        .last_widgets
+        .iter()
+        .filter(|n| n.label.as_deref() == Some("↓"))
+        .cloned()
+        .collect();
+    down_buttons.sort_by(|a, b| a.bounds.min.y.total_cmp(&b.bounds.min.y));
+    assert_eq!(down_buttons.len(), 3, "expected 3 ↓ buttons");
+    for btn in &down_buttons {
+        assert!(
+            btn.bounds.width() >= 24.0 && btn.bounds.height() >= 24.0,
+            "↓ button must be >= 24×24 pt, got {:?}",
+            btn.bounds.size()
+        );
+    }
+    assert!(down_buttons[2].disabled, "last ↓ button must be disabled");
+    assert_eq!(
+        harness
+            .probe_tooltip(down_buttons[2].bounds.center())
+            .as_deref(),
+        Some("Already at the bottom")
+    );
+
+    let remove_buttons: Vec<_> = harness
+        .last_widgets
+        .iter()
+        .filter(|n| n.label.as_deref() == Some("✕"))
+        .cloned()
+        .collect();
+    assert_eq!(remove_buttons.len(), 3, "expected 3 ✕ buttons");
+    for btn in &remove_buttons {
+        assert!(
+            btn.bounds.width() >= 24.0 && btn.bounds.height() >= 24.0,
+            "✕ button must be >= 24×24 pt, got {:?}",
+            btn.bounds.size()
+        );
+    }
+
+    // "Sort A–Z" is enabled and clicking it sorts the glossary via glossary.sort.
+    let sort_btn = find_widget_for_text(&mut harness, "Sort A–Z");
+    assert!(!sort_btn.disabled, "Sort A–Z must be enabled when unsorted");
+    harness.click_at(sort_btn.bounds.center());
+    harness.idle_frame();
+
+    let terms: Vec<&str> = harness
+        .editor
+        .session
+        .course
+        .glossary
+        .iter()
+        .map(|g| g.term.as_str())
+        .collect();
+    assert_eq!(terms, vec!["alpha", "Beta", "Zebra"]);
+
+    // After sorting, "Sort A–Z" is disabled with the already-sorted tooltip.
+    let sort_btn = find_widget_for_text(&mut harness, "Sort A–Z");
+    assert!(
+        sort_btn.disabled,
+        "Sort A–Z must be disabled once already sorted"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    assert_eq!(
+        harness.probe_tooltip(sort_btn.bounds.center()).as_deref(),
+        Some("Glossary is already sorted A–Z")
+    );
+}

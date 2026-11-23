@@ -9288,6 +9288,53 @@ fn glossary_commands_add_update_move_remove_with_undo() {
 }
 
 #[test]
+fn glossary_sort_sorts_case_insensitively_with_undo_and_skips_when_already_sorted() {
+    // C-05: glossary.sort sorts ["Zebra", "alpha", "Beta"] -> ["alpha", "Beta", "Zebra"]
+    // in one undo step, and sets skip_undo = true when already sorted.
+    let mut s = Session::blank("Glossary Sort");
+    ok(&mut s, "glossary.add", json!({ "term": "Zebra" }));
+    ok(&mut s, "glossary.add", json!({ "term": "alpha" }));
+    ok(&mut s, "glossary.add", json!({ "term": "Beta" }));
+
+    let before: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(before, vec!["Zebra", "alpha", "Beta"]);
+
+    ok(&mut s, "glossary.sort", json!({}));
+    let sorted: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(sorted, vec!["alpha", "Beta", "Zebra"]);
+
+    // Sorting an already-sorted list is a no-op with skip_undo = true,
+    // so edit.undo still undoes the earlier sort in one step.
+    ok(&mut s, "glossary.sort", json!({}));
+    assert_eq!(
+        s.course
+            .glossary
+            .iter()
+            .map(|g| g.term.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "Beta", "Zebra"]
+    );
+
+    s.undo().unwrap();
+    let undone: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(undone, vec!["Zebra", "alpha", "Beta"]);
+
+    s.redo().unwrap();
+    let redone: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(redone, vec!["alpha", "Beta", "Zebra"]);
+
+    // On a fresh already-sorted session, glossary.sort pushes nothing to the undo stack.
+    let mut s2 = Session::blank("Already Sorted");
+    ok(&mut s2, "glossary.add", json!({ "term": "Alpha" }));
+    ok(&mut s2, "glossary.add", json!({ "term": "Beta" }));
+    s2.execute("glossary.sort", &json!({})).unwrap();
+    assert_eq!(s2.course.glossary.len(), 2);
+    // Undoing now undoes the second glossary.add rather than an empty sort step.
+    s2.undo().unwrap();
+    assert_eq!(s2.course.glossary.len(), 1);
+}
+
+#[test]
 fn course_set_player_toggles_the_transcript() {
     let mut s = Session::blank("Title");
     assert!(!s.course.player.show_transcript);
