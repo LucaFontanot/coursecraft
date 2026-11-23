@@ -377,7 +377,7 @@ On entry the runtime does the following:
 
 Variables, answers and visited slides are never reset by any of these.
 
-`jump_to_slide next` on the last slide and `previous` on the first slide do nothing. `jump_to_slide last_visited` pops the most recent slide from the runtime-only `visit_history` (at most 50 entries; never in `suspend_data`, so after a resume `visit_history` starts empty and `last_visited` acts like `previous`) and enters it without pushing the current slide back onto `visit_history`. `jump_to_slide { scene }` jumps to the first slide of that scene.
+`jump_to_slide next` on the last slide and `previous` on the first slide do nothing. `jump_to_slide last_visited` pops entries from the runtime-only `visit_history` (at most 50 entries; never in `suspend_data`, so after a resume `visit_history` starts empty and `last_visited` acts like `previous`) until it finds a slide currently in play order different from the current slide — discarding any missing or same-slide entries along the way — and enters it without pushing the current slide back onto `visit_history`, falling back to `previous` if none remain. `jump_to_slide { scene }` jumps to the first slide of that scene.
 
 ## Variables
 
