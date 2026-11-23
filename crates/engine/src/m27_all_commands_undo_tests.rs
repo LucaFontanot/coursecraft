@@ -1822,3 +1822,100 @@ fn df_01_all_mutating_commands_byte_identical_delta_oracle() {
         failures.join("\n")
     );
 }
+
+/// SC-01: Every annotated `SingleSlide` and `CourseHeader` command in `REGISTRY`
+/// must mutate only within its declared scope (enforced by the `#[cfg(test)]`
+/// scope-isolation verifier and shadow differential oracle), perform zero
+/// full-course clones, and round-trip undo/redo with byte-identical JSON.
+#[test]
+fn sc_01_all_annotated_commands_isolated_and_zero_full_clones() {
+    use crate::delta::UndoScope;
+
+    let mut annotated_count = 0usize;
+    for cmd in registry() {
+        let scope = cmd.scope();
+        if scope != UndoScope::FullCourse {
+            annotated_count += 1;
+            assert!(
+                cmd.mutates,
+                "command {} is annotated {:?} but has mutates == false",
+                cmd.id, scope
+            );
+        }
+    }
+    assert!(
+        annotated_count >= 130,
+        "expected at least 130 commands annotated as SingleSlide or CourseHeader, found {annotated_count}"
+    );
+
+    let cases = command_cases();
+    let mut failures = Vec::new();
+
+    for &(id, ref params) in &cases {
+        let cmd = registry()
+            .iter()
+            .find(|c| c.id == id)
+            .expect("command registered");
+        let scope = cmd.scope();
+
+        let mut s = fixture_session();
+        let before = s.course.clone();
+        let before_json = before.to_json().expect("before json");
+
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        if let Err(e) = s.execute(id, params) {
+            failures.push(format!("{id} ({scope:?}): execute failed: {e:?}"));
+            continue;
+        }
+
+        #[cfg(debug_assertions)]
+        if scope != UndoScope::FullCourse {
+            let clones = crate::test_counts::full_course_clones();
+            if clones != 0 {
+                failures.push(format!(
+                    "{id} ({scope:?}): expected 0 full-course clones, got {clones}"
+                ));
+                continue;
+            }
+        }
+
+        let after = s.course.clone();
+        let after_json = after.to_json().expect("after json");
+        if after == before || after_json == before_json {
+            failures.push(format!("{id} ({scope:?}): command did not mutate course"));
+            continue;
+        }
+
+        if let Err(e) = s.execute("edit.undo", &json!({})) {
+            failures.push(format!("{id} ({scope:?}): edit.undo failed: {e:?}"));
+            continue;
+        }
+        let undo_json = s.course.to_json().expect("undo json");
+        if s.course != before || undo_json != before_json {
+            failures.push(format!(
+                "{id} ({scope:?}): edit.undo did not restore byte-identical JSON"
+            ));
+            continue;
+        }
+
+        if let Err(e) = s.execute("edit.redo", &json!({})) {
+            failures.push(format!("{id} ({scope:?}): edit.redo failed: {e:?}"));
+            continue;
+        }
+        let redo_json = s.course.to_json().expect("redo json");
+        if s.course != after || redo_json != after_json {
+            failures.push(format!(
+                "{id} ({scope:?}): edit.redo did not restore byte-identical JSON"
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "SC-01 failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
