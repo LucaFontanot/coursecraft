@@ -2517,12 +2517,12 @@ fn show_arrange_icons(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
         for (icon, label, edge) in [
-            (Icon::TextAlignLeft, "Align Left", "left"),
-            (Icon::TextAlignCenter, "Align Center", "center"),
-            (Icon::TextAlignRight, "Align Right", "right"),
-            (Icon::ArrowUp, "Align Top", "top"),
-            (Icon::ArrowsDownUp, "Align Middle", "middle"),
-            (Icon::ArrowDown, "Align Bottom", "bottom"),
+            (Icon::TextAlignLeft, "Align left", "left"),
+            (Icon::TextAlignCenter, "Align center", "center"),
+            (Icon::TextAlignRight, "Align right", "right"),
+            (Icon::ArrowUp, "Align top", "top"),
+            (Icon::ArrowsDownUp, "Align middle", "middle"),
+            (Icon::ArrowDown, "Align bottom", "bottom"),
         ] {
             let params = crate::menu::align_params(editor, edge);
             let enabled = !state_edit_locked && params.is_some();
@@ -2552,8 +2552,8 @@ fn show_arrange_icons(
         );
         egui::Popup::menu(&more).show(|ui| {
             for (label, axis) in [
-                ("Distribute Horizontally", "horizontal"),
-                ("Distribute Vertically", "vertical"),
+                ("Distribute horizontally", "horizontal"),
+                ("Distribute vertically", "vertical"),
             ] {
                 let params = crate::menu::distribute_params(editor, axis);
                 let enabled = params.is_some();
@@ -2568,7 +2568,7 @@ fn show_arrange_icons(
                 }
             }
             ui.separator();
-            for (label, dimension) in [("Match Width", "width"), ("Match Height", "height")] {
+            for (label, dimension) in [("Match width", "width"), ("Match height", "height")] {
                 let params = crate::menu::match_size_params(editor, dimension);
                 let enabled = params.is_some();
                 if ui
@@ -2791,7 +2791,7 @@ fn show_state_extra_properties(
     });
 
     inspector_separator(ui);
-    inspector_section_header(ui, "Position & Size");
+    inspector_section_header(ui, "Position & size");
 
     let mut frame_changed = false;
     inspector_row(ui, "X / Y", |ui| {
@@ -10364,7 +10364,7 @@ pub fn show_animations_section(
         &mut action_to_run,
     );
     inspector_separator(ui);
-    inspector_section_header(ui, "Motion Paths");
+    inspector_section_header(ui, "Motion paths");
     if crate::quiet_button(ui, "+ Add motion path", crate::QuietTone::Accent, true).clicked() {
         action_to_run = Some((
             "object.add_motion_path",

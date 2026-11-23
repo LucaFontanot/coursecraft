@@ -796,7 +796,7 @@ impl Preview {
     /// Render validation error messages when the course cannot be previewed.
     fn show_errors(&self, ui: &mut Ui) {
         let p = coursecraft_render::palette(ui.ctx());
-        ui.heading("Course Validation Errors");
+        ui.heading("Course validation errors");
         ui.label("This course cannot be previewed because it has validation errors:");
         ui.add_space(8.0);
         ScrollArea::vertical().show(ui, |ui| {

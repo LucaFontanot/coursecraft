@@ -14395,7 +14395,7 @@ fn trigger_form_shows_the_key_picker_and_filtered_object_lists() {
     }
     harness.idle_frame();
     harness.idle_frame();
-    assert!(harness.find_text("Draggable Object").is_some());
+    assert!(harness.find_text("Draggable object").is_some());
     assert!(harness.find_text("Target").is_some());
 
     {
@@ -19617,6 +19617,17 @@ fn static_sentence_case_lint_for_dialogs_menus_toolbar_and_slides() {
                         &mut violations,
                     );
                 }
+            }
+        }
+
+        if file_name == "properties.rs" {
+            for heading in collect_nth_string_arg_after(&prod, "inspector_section_header(", 1) {
+                button_count += 1;
+                check_sentence_case(
+                    &heading,
+                    "properties.rs inspector_section_header",
+                    &mut violations,
+                );
             }
         }
     }

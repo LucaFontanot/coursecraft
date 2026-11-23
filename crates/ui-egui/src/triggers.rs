@@ -2361,7 +2361,7 @@ const TRIGGER_ROW_LABELS: &[&str] = &[
     "Variable",
     "Operator",
     "Value",
-    "Media Object",
+    "Media object",
     "Status",
     "URL",
     "Path",
@@ -2372,7 +2372,7 @@ const TRIGGER_ROW_LABELS: &[&str] = &[
     "Cue",
     "Key",
     "Object (optional)",
-    "Draggable Object",
+    "Draggable object",
     "Object A",
     "Object B",
     "Animation",
@@ -2676,7 +2676,7 @@ fn render_action_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide,
             }
         }
         ActionTag::PlayMedia | ActionTag::PauseMedia | ActionTag::StopMedia => {
-            trigger_row(ui, "Media Object", |ui| {
+            trigger_row(ui, "Media object", |ui| {
                 tall_combo(ui, "action_media_obj_combo")
                     .selected_text(media_object_label(slide, &form.media_object))
                     .show_ui(ui, |ui| {
@@ -3035,7 +3035,7 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
             });
         }
         EventKindTag::MediaEnds => {
-            trigger_row(ui, "Media Object", |ui| {
+            trigger_row(ui, "Media object", |ui| {
                 tall_combo(ui, "event_media_ends_obj_combo")
                     .selected_text(media_object_label(slide, &form.event_object))
                     .show_ui(ui, |ui| {
@@ -3156,7 +3156,7 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                     .map(|object| object.id.clone())
                     .unwrap_or_default();
             }
-            trigger_row(ui, "Draggable Object", |ui| {
+            trigger_row(ui, "Draggable object", |ui| {
                 tall_combo(ui, "event_dropped_on_obj_combo")
                     .selected_text(object_label(slide, &form.event_object))
                     .show_ui(ui, |ui| {
