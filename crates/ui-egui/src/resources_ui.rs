@@ -41,6 +41,19 @@ pub struct ResourceActions {
     pub pick_file: Option<String>,
 }
 
+fn is_glossary_sorted(rows: &[GlossaryRow]) -> bool {
+    rows.windows(2).all(|w| {
+        let a = &w[0];
+        let b = &w[1];
+        a.term
+            .to_lowercase()
+            .cmp(&b.term.to_lowercase())
+            .then_with(|| a.term.cmp(&b.term))
+            .then_with(|| a.id.cmp(&b.id))
+            != std::cmp::Ordering::Greater
+    })
+}
+
 fn committed(response: &Response, ui: &Ui) -> bool {
     response.lost_focus() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
 }
@@ -77,11 +90,12 @@ impl ResourceBuffers {
     }
 
     /// Draw the section and collect what the author asked for.
-    pub fn show(&mut self, ui: &mut Ui) -> ResourceActions {
+    pub fn show(&mut self, ui: &mut Ui, open: bool) -> ResourceActions {
         let mut actions = ResourceActions::default();
         egui::CollapsingHeader::new(egui::RichText::new("Resources & glossary").heading())
             .id_salt("course_settings_resources")
             .default_open(false)
+            .open(open.then_some(true))
             .show(ui, |ui| self.rows(ui, &mut actions));
         actions
     }
@@ -107,11 +121,30 @@ impl ResourceBuffers {
         for (index, row) in self.glossary.iter_mut().enumerate() {
             show_glossary_row(ui, row, index, count, actions);
         }
-        if ui.button("Add term").clicked() {
-            actions
-                .runs
-                .push(("glossary.add", json!({ "term": "New term" })));
-        }
+        ui.horizontal(|ui| {
+            if ui.button("Add term").clicked() {
+                actions
+                    .runs
+                    .push(("glossary.add", json!({ "term": "New term" })));
+            }
+            let sorted = is_glossary_sorted(&self.glossary);
+            let can_sort = self.glossary.len() >= 2 && !sorted;
+            let sort_tooltip = if self.glossary.len() < 2 {
+                "Add at least two terms to sort"
+            } else if sorted {
+                "Glossary is already sorted A–Z"
+            } else {
+                "Sort glossary terms alphabetically (A–Z)"
+            };
+            if ui
+                .add_enabled(can_sort, egui::Button::new("Sort A–Z"))
+                .on_hover_text(sort_tooltip)
+                .on_disabled_hover_text(sort_tooltip)
+                .clicked()
+            {
+                actions.runs.push(("glossary.sort", json!({})));
+            }
+        });
     }
 }
 
@@ -128,9 +161,11 @@ fn order_buttons(
     } else {
         ("glossary.move", "glossary.remove")
     };
+    let min_btn = egui::vec2(24.0, 24.0);
     if ui
-        .add_enabled(index > 0, egui::Button::new("↑"))
+        .add_enabled(index > 0, egui::Button::new("↑").min_size(min_btn))
         .on_hover_text("Move up")
+        .on_disabled_hover_text("Already at the top")
         .clicked()
     {
         actions
@@ -138,15 +173,23 @@ fn order_buttons(
             .push((move_id, json!({ "id": id, "to": index.saturating_sub(1) })));
     }
     if ui
-        .add_enabled(index.saturating_add(1) < count, egui::Button::new("↓"))
+        .add_enabled(
+            index.saturating_add(1) < count,
+            egui::Button::new("↓").min_size(min_btn),
+        )
         .on_hover_text("Move down")
+        .on_disabled_hover_text("Already at the bottom")
         .clicked()
     {
         actions
             .runs
             .push((move_id, json!({ "id": id, "to": index.saturating_add(1) })));
     }
-    if ui.button("✕").on_hover_text("Remove").clicked() {
+    if ui
+        .add(egui::Button::new("✕").min_size(min_btn))
+        .on_hover_text("Remove")
+        .clicked()
+    {
         actions.runs.push((remove_id, json!({ "id": id })));
     }
 }
@@ -172,9 +215,8 @@ fn show_resource_row(
             ));
         }
         let mut is_file = row.is_file;
-        egui::ComboBox::from_id_salt(("resource_kind", index))
+        crate::widgets::styled_combo(ui, ("resource_kind", index), 60.0)
             .selected_text(if is_file { "File" } else { "Link" })
-            .width(60.0)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut is_file, false, "Link");
                 ui.selectable_value(&mut is_file, true, "File");

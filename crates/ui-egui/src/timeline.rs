@@ -401,6 +401,53 @@ fn bleed_separator(ui: &mut Ui) {
     ui.add_space(ui.spacing().item_spacing.y);
 }
 
+/// Hidden and locked object IDs on the active slide or layer.
+pub(crate) fn hidden_and_locked_ids(
+    course: &Course,
+    selection: &crate::Selection,
+) -> (Vec<String>, Vec<String>) {
+    let Some(slide) = course.slide(&selection.slide) else {
+        return (Vec::new(), Vec::new());
+    };
+    let objs = match selection.layer.as_deref().and_then(|lid| slide.layer(lid)) {
+        Some(layer) => layer.objects.as_slice(),
+        None if selection.layer.is_some() => &[],
+        None => slide.objects.as_slice(),
+    };
+    let hidden_ids = objs
+        .iter()
+        .filter(|o| o.editor_hidden)
+        .map(|o| o.id.clone())
+        .collect();
+    let locked_ids = objs
+        .iter()
+        .filter(|o| o.locked)
+        .map(|o| o.id.clone())
+        .collect();
+    (hidden_ids, locked_ids)
+}
+
+fn timeline_header_quick_button(
+    ui: &mut Ui,
+    icon: coursecraft_render::Icon,
+    label: &str,
+    tooltip: &str,
+) -> egui::Response {
+    let p = coursecraft_render::palette(ui.ctx());
+    let btn = egui::Button::new(
+        coursecraft_render::icon_text(icon, label)
+            .color(p.accent_text)
+            .size(coursecraft_render::SIZE_BODY),
+    )
+    .fill(Color32::TRANSPARENT)
+    .stroke(Stroke::NONE)
+    .corner_radius(coursecraft_render::RADIUS_SM as u8)
+    .min_size(vec2(0.0, coursecraft_render::CONTROL_COMPACT));
+    ui.add(btn)
+        .on_hover_text(tooltip)
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn render_timeline_header(
     editor: &mut Editor,
@@ -502,6 +549,49 @@ fn render_timeline_header(
         }
         let readout = format_timeline_readout(editor.ui.timeline.playhead_ms, owner_duration);
         ui.label(RichText::new(readout).color(p.text_secondary));
+
+        let (hidden_ids, locked_ids) =
+            hidden_and_locked_ids(&editor.session.course, &editor.selection);
+        if !hidden_ids.is_empty() {
+            let label = format!("Show all ({})", hidden_ids.len());
+            if timeline_header_quick_button(
+                ui,
+                coursecraft_render::Icon::Eye,
+                &label,
+                "Show all hidden objects on this slide",
+            )
+            .clicked()
+            {
+                actions.push((
+                    "object.hide_in_editor",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "objects": hidden_ids,
+                        "hidden": false,
+                    }),
+                ));
+            }
+        }
+        if !locked_ids.is_empty() {
+            let label = format!("Unlock all ({})", locked_ids.len());
+            if timeline_header_quick_button(
+                ui,
+                coursecraft_render::Icon::LockOpen,
+                &label,
+                "Unlock all locked objects on this slide",
+            )
+            .clicked()
+            {
+                actions.push((
+                    "object.lock",
+                    serde_json::json!({
+                        "slide": slide_id,
+                        "objects": locked_ids,
+                        "locked": false,
+                    }),
+                ));
+            }
+        }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut duration_s = editor.ui.timeline.duration_ms as f64 / 1000.0;

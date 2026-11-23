@@ -179,7 +179,7 @@ fn a6_3_shapes_gallery_filtered_close_reopens_full_size() {
 fn a6_4_sweep_other_dialogs_reopen_full_size() {
     let cases: [(&str, &str, &str); 6] = [
         ("Insert", "Web object…", "Insert web object"),
-        ("File", "Slide Size…", "Slide size"),
+        ("File", "Slide size…", "Slide size"),
         ("Project", "Theme…", "Theme"),
         ("Project", "Course settings", "Course settings"),
         ("File", "Publish…", "Publish course"),

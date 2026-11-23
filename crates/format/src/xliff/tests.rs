@@ -962,3 +962,39 @@ fn shape_text_exports_and_imports_like_text_object_text() {
         other => panic!("unexpected shape {other:?}"),
     }
 }
+
+#[test]
+fn glossary_entries_export_and_import() {
+    let json = serde_json::json!({
+        "schema_version": 1,
+        "id": "glossary-xliff",
+        "title": "Glossary XLIFF",
+        "scenes": [{
+            "id": "sc",
+            "title": "Scene",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide",
+                "objects": []
+            }]
+        }],
+        "glossary": [{
+            "id": "g1",
+            "term": "Latency",
+            "definition": "Time between request and response."
+        }]
+    });
+    let course = Course::from_json(&json.to_string()).expect("valid glossary course");
+    let doc = export_doc(&course, "fr");
+    assert!(doc.units.iter().any(|u| u.id == "glossary/g1/term"));
+    assert!(doc.units.iter().any(|u| u.id == "glossary/g1/definition"));
+
+    let translated_doc = pseudo_doc(&doc);
+    let (translated, report) = apply_xliff(&course, &translated_doc);
+    assert_eq!(report.applied, doc.units.len());
+    assert_eq!(translated.glossary[0].term, "[xx]Latency[/xx]");
+    assert_eq!(
+        translated.glossary[0].definition,
+        "[xx]Time between request and response.[/xx]"
+    );
+}

@@ -179,6 +179,7 @@ pub struct CourseSettingsState {
     pub show_captions: bool,
     pub logo: Option<String>,
     pub resources: crate::resources_ui::ResourceBuffers,
+    pub open_resources: bool,
     pub navigation: NavMode,
     pub next_requires: NextRequirement,
     pub seekbar: SeekbarBehaviour,
@@ -275,6 +276,7 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                         "Course title",
                         "Course ID",
                         "Language",
+                        "Slide size",
                         "Logo",
                         "Navigation",
                         "Seekbar",
@@ -341,6 +343,17 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                     } else {
                         ui.colored_label(p.danger, "Use a tag such as en, fr or pt-BR.");
                     }
+                });
+
+                form.row(ui, "Slide size", |ui, _width| {
+                    let size = editor.session.course.slide_size;
+                    let ratio = crate::slide_size_dialog::format_aspect_ratio(size.w, size.h);
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} × {} px ({ratio})", size.w, size.h));
+                        if ui.button("Change…").clicked() {
+                            editor.open_slide_size_dialog();
+                        }
+                    });
                 });
 
                 if needs_result {
@@ -470,24 +483,34 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                 });
                 form.row(ui, "Seekbar", |ui, _| {
                     let mut mode = editor.ui.course_settings.seekbar;
-                    crate::widgets::styled_combo(
-                        ui,
-                        "course_seekbar_behaviour",
-                        crate::widgets::COMBO_MIN_WIDTH,
-                    )
-                    .selected_text(seekbar_label(mode))
-                    .show_ui(ui, |ui| {
-                        for choice in [
-                            SeekbarBehaviour::Free,
-                            SeekbarBehaviour::Locked,
-                            SeekbarBehaviour::UntilTimelineEnds,
-                        ] {
-                            ui.selectable_value(&mut mode, choice, seekbar_label(choice))
-                                .on_hover_text(seekbar_hint(choice));
-                        }
-                    })
-                    .response
-                    .on_hover_text(seekbar_hint(mode));
+                    let seekbar_enabled = editor.ui.course_settings.show_bar
+                        && editor.ui.course_settings.show_seekbar;
+                    let disabled_tip = if !editor.ui.course_settings.show_bar {
+                        BAR_OFF_TOOLTIP
+                    } else {
+                        "Turn \"Show seekbar\" on to use this"
+                    };
+                    ui.add_enabled_ui(seekbar_enabled, |ui| {
+                        crate::widgets::styled_combo(
+                            ui,
+                            "course_seekbar_behaviour",
+                            crate::widgets::COMBO_MIN_WIDTH,
+                        )
+                        .selected_text(seekbar_label(mode))
+                        .show_ui(ui, |ui| {
+                            for choice in [
+                                SeekbarBehaviour::Free,
+                                SeekbarBehaviour::Locked,
+                                SeekbarBehaviour::UntilTimelineEnds,
+                            ] {
+                                ui.selectable_value(&mut mode, choice, seekbar_label(choice))
+                                    .on_hover_text(seekbar_hint(choice));
+                            }
+                        })
+                        .response
+                        .on_hover_text(seekbar_hint(mode))
+                        .on_disabled_hover_text(disabled_tip);
+                    });
                     if mode != editor.ui.course_settings.seekbar {
                         editor.ui.course_settings.seekbar = mode;
                         update_player = true;
@@ -612,7 +635,8 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
 
                 ui.add_space(8.0);
                 ui.separator();
-                resource_actions = editor.ui.course_settings.resources.show(ui);
+                let open_resources = std::mem::take(&mut editor.ui.course_settings.open_resources);
+                resource_actions = editor.ui.course_settings.resources.show(ui, open_resources);
             });
             dialog.footer(|ui| {
                 ui.add_space(coursecraft_render::SPACE_SM);

@@ -581,7 +581,9 @@ impl Playing {
 
     /// Update backend video layout positions for the current slide's videos.
     pub fn layout_videos(&mut self) {
-        self.media.layout_videos(&self.player, &self.view);
+        let hide = should_hide_dom_overlays(&self.player, &self.frame, self.ended);
+        self.media
+            .layout_videos_with_visibility(&self.player, &self.view, hide);
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1255,6 +1257,22 @@ impl Playing {
         };
         playing.poll_media_time(Some(ui.ctx()), dt_ms);
         #[cfg(target_arch = "wasm32")]
-        playing.web_objects.layout(&playing.player, &playing.view);
+        {
+            let hide = should_hide_dom_overlays(&playing.player, &playing.frame, playing.ended);
+            playing
+                .web_objects
+                .layout(&playing.player, &playing.view, hide);
+        }
     }
+}
+
+/// Returns `true` when DOM overlays (HTML `<video>` and `<iframe>` web objects)
+/// must be hidden so they do not cover the start gate, outline drawer, ended
+/// card, or lightbox.
+pub(crate) fn should_hide_dom_overlays(
+    player: &Player<'_>,
+    frame: &PlayerFrame,
+    ended: bool,
+) -> bool {
+    frame.awaiting_start || ended || frame.drawer_open() || player.lightbox_open()
 }

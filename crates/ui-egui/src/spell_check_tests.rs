@@ -368,3 +368,28 @@ fn check_spelling_change_all_and_add_to_dictionary() {
         "an added word is no longer reported"
     );
 }
+
+#[test]
+fn spell_check_flags_misspelled_words_in_glossary_definitions() {
+    let mut session = coursecraft_engine::Session::blank("Glossary Spell");
+    session
+        .execute(
+            "glossary.add",
+            &serde_json::json!({
+                "id": "g1",
+                "term": "Widget",
+                "definition": "A teh widget definition."
+            }),
+        )
+        .expect("add glossary");
+    let mut editor = Editor::new(session.course);
+    let issues = spell_check::collect_issues(&mut editor);
+    assert!(
+        issues.iter().any(|issue| {
+            issue.item.location.field.starts_with("glossary/")
+                && issue.item.location.field.ends_with("/definition")
+                && issue.misspelling.word == "teh"
+        }),
+        "expected misspelled word in glossary definition: {issues:?}"
+    );
+}

@@ -236,6 +236,28 @@ fn walk_course<S: StringSink>(course: &Course, out: &mut S) {
             walk_slide(out, slide, &place);
         }
     }
+    for entry in &course.glossary {
+        out.emit(
+            Location {
+                slide: None,
+                object: None,
+                layer: None,
+                field: format!("glossary/{}/term", entry.id),
+            },
+            || format!("Glossary ▸ {} ▸ Term", entry.term),
+            &entry.term,
+        );
+        out.emit(
+            Location {
+                slide: None,
+                object: None,
+                layer: None,
+                field: format!("glossary/{}/definition", entry.id),
+            },
+            || format!("Glossary ▸ {} ▸ Definition", entry.term),
+            &entry.definition,
+        );
+    }
 }
 
 fn slide_location(
@@ -509,6 +531,23 @@ pub fn string_mut<'a>(course: &'a mut Course, location: &Location) -> Option<Str
         None => {
             if field == "course/title" {
                 return Some(StringTarget::Plain(&mut course.title));
+            }
+            if let Some(rest) = field.strip_prefix("glossary/") {
+                if let Some(glossary_id) = rest.strip_suffix("/term") {
+                    let entry = course
+                        .glossary
+                        .iter_mut()
+                        .find(|entry| entry.id == glossary_id)?;
+                    return Some(StringTarget::Plain(&mut entry.term));
+                }
+                if let Some(glossary_id) = rest.strip_suffix("/definition") {
+                    let entry = course
+                        .glossary
+                        .iter_mut()
+                        .find(|entry| entry.id == glossary_id)?;
+                    return Some(StringTarget::Plain(&mut entry.definition));
+                }
+                return None;
             }
             let scene_id = field.strip_prefix("scene/")?.strip_suffix("/title")?;
             let scene = course
@@ -1390,5 +1429,86 @@ mod tests {
         assert_eq!(outcome.replaced, 0);
         assert_eq!(outcome.skipped, 1);
         assert_eq!(edited, text);
+    }
+
+    #[test]
+    fn glossary_strings_walk_find_replace_and_protect_vars() {
+        let mut course: Course = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "id": "glossary-walk",
+            "title": "Glossary Walk",
+            "slide_size": { "w": 1280, "h": 720 },
+            "scenes": [{
+                "id": "sc1",
+                "title": "Scene 1",
+                "slides": [{
+                    "id": "s1",
+                    "title": "Slide 1",
+                    "objects": []
+                }]
+            }],
+            "glossary": [{
+                "id": "g1",
+                "term": "CourseCraft Widget",
+                "definition": "A reusable Widget for %WidgetName%."
+            }]
+        }))
+        .expect("valid course");
+
+        let items = course_strings(&course);
+        assert!(items.iter().any(|item| {
+            item.location.slide.is_none()
+                && item.location.field == "glossary/g1/term"
+                && item.text == "CourseCraft Widget"
+        }));
+        assert!(items.iter().any(|item| {
+            item.location.slide.is_none()
+                && item.location.field == "glossary/g1/definition"
+                && item.text == "A reusable Widget for %WidgetName%."
+        }));
+
+        let (hits, _) = find_in_course(&course, "Widget", true, false);
+        assert_eq!(hits.len(), 3, "expected term and definition hits: {hits:?}");
+        assert!(hits.iter().any(|h| h.field == "glossary/g1/term"));
+        assert!(hits.iter().any(|h| h.field == "glossary/g1/definition"));
+
+        let term_loc = Location {
+            slide: None,
+            object: None,
+            layer: None,
+            field: "glossary/g1/term".to_owned(),
+        };
+        let def_loc = Location {
+            slide: None,
+            object: None,
+            layer: None,
+            field: "glossary/g1/definition".to_owned(),
+        };
+
+        let term_outcome = replace_in_target(
+            string_mut(&mut course, &term_loc).expect("term target"),
+            "Widget",
+            "Gadget",
+            true,
+            false,
+            100,
+        );
+        assert_eq!(term_outcome.replaced, 1);
+        assert_eq!(course.glossary[0].term, "CourseCraft Gadget");
+
+        let def_outcome = replace_in_target(
+            string_mut(&mut course, &def_loc).expect("definition target"),
+            "Widget",
+            "Gadget",
+            true,
+            false,
+            100,
+        );
+        assert_eq!(def_outcome.replaced, 1);
+        assert_eq!(def_outcome.skipped, 1, "must protect %WidgetName%");
+        assert_eq!(
+            course.glossary[0].definition,
+            "A reusable Gadget for %WidgetName%."
+        );
     }
 }

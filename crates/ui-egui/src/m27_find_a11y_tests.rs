@@ -393,7 +393,7 @@ fn d11_5_clicking_hits_across_all_10_target_scopes() {
         )
         .expect("marker");
 
-    // 10. Glossary term/definition (not indexed by course.find, which covers the 9 scopes above).
+    // 10. Glossary term/definition
     h.editor
         .run(
             "glossary.add",
@@ -428,7 +428,7 @@ fn d11_5_clicking_hits_across_all_10_target_scopes() {
         .map(|p| egui::pos2(p.x, p.y + 220.0))
         .expect("Find and Replace window");
     for (idx, (snippet, expected_slide, expected_obj, field)) in snippets.iter().enumerate() {
-        if idx == 5 {
+        if idx == 5 || idx == 8 {
             h.scroll_over(list_pos, -160.0);
             h.idle_frame();
         }
@@ -454,6 +454,9 @@ fn d11_5_clicking_hits_across_all_10_target_scopes() {
             }
         } else if field.starts_with("scene/") {
             assert_eq!(h.editor.selection.slide, "s1");
+        } else if field.starts_with("glossary/") {
+            assert!(h.editor.ui.show_course_settings_window);
+            h.editor.ui.show_course_settings_window = false;
         } else {
             assert_eq!(h.editor.ui.inspector_tab, InspectorTab::Course);
         }

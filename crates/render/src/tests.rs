@@ -426,6 +426,7 @@ fn compose_state_fill_overrides_on_tabs() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         }
     );
@@ -449,6 +450,7 @@ fn compose_state_fill_overrides_on_tabs() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         }
     );
@@ -624,6 +626,7 @@ fn make_dummy_item(hit: Hit, rect: Rect) -> DrawItem {
             text: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         },
         dimmed: false,
@@ -991,6 +994,7 @@ fn compose_with_hover_down_states_and_disabled() {
             fill_style: None,
             hover_fill: Some(Color32::from_rgb(0x33, 0x44, 0x55)),
             down_fill: Some(Color32::from_rgb(0x66, 0x77, 0x88)),
+            down_has_fill_style: false,
             disabled: false,
         }
     );
@@ -1010,6 +1014,7 @@ fn compose_with_hover_down_states_and_disabled() {
             text: None,
             hover_fill: Some(Color32::from_rgb(0xAA, 0xBB, 0xCC)),
             down_fill: None,
+            down_has_fill_style: false,
             disabled: true,
         }
     );
@@ -1204,6 +1209,7 @@ fn paint_button_hover_down_and_disabled_fills() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         },
         dimmed: false,
@@ -1230,6 +1236,7 @@ fn paint_button_hover_down_and_disabled_fills() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: true,
         },
         dimmed: false,
@@ -1716,6 +1723,7 @@ fn paint_smoke_dimmed_item_does_not_panic() {
             fill_style: None,
             hover_fill: None,
             down_fill: None,
+            down_has_fill_style: false,
             disabled: false,
         },
         dimmed: true,
@@ -2902,6 +2910,7 @@ fn paint_without_install_fonts_falls_back_without_panic() {
                 fill_style: None,
                 hover_fill: None,
                 down_fill: None,
+                down_has_fill_style: false,
                 disabled: false,
             },
             dimmed: false,
@@ -8585,4 +8594,121 @@ fn underline_segments_cover_only_underlined_chars_and_stay_continuous() {
         assert!((segs1[0].0[1].x - expected_right).abs() < 0.5);
     });
     out.textures_delta.clear();
+}
+
+#[test]
+fn question_and_player_and_offscreen_succeed_across_all_aspect_presets_and_tiny() {
+    use crate::media::{MediaCache, MediaFetch, MediaSource};
+    use crate::offscreen::{RenderOptions, render_slide_rgba, render_ui};
+    use crate::player_frame::PlayerFrame;
+    use crate::view::SlideView;
+
+    struct NoMedia;
+    impl MediaSource for NoMedia {
+        fn get(&self, _src: &str) -> MediaFetch {
+            MediaFetch::Missing
+        }
+    }
+
+    let sizes = [
+        (1920u32, 1080u32),
+        (1280, 720),
+        (1280, 800),
+        (960, 720),
+        (1024, 768),
+        (1080, 1080),
+        (1080, 1920),
+        (100, 100),
+    ];
+
+    for (w, h) in sizes {
+        let prompt_rect = crate::compose::question_prompt_rect(w as f32, h as f32);
+        assert!(
+            prompt_rect.min.x.is_finite()
+                && prompt_rect.min.y.is_finite()
+                && prompt_rect.width().is_finite()
+                && prompt_rect.height().is_finite(),
+            "prompt rect must be finite at {w}x{h}: {prompt_rect:?}"
+        );
+        assert!(
+            prompt_rect.width() > 0.0 && prompt_rect.height() > 0.0,
+            "prompt rect must be non-zero at {w}x{h}: {prompt_rect:?}"
+        );
+        if w >= 320 {
+            assert_eq!(
+                prompt_rect,
+                Rect::from_min_size(pos2(80.0, 60.0), vec2(w as f32 - 160.0, 80.0)),
+                "width >= 320 must keep 80px margin at {w}x{h}"
+            );
+        }
+
+        let mut course = Course::from_json(HELLO_JSON).expect("hello course");
+        course.slide_size = Size { w, h };
+
+        let mut player = Player::new(&course).expect("player");
+        player.handle(&Input::Start);
+        player.handle(&Input::GoTo {
+            slide: "s-quiz".to_owned(),
+        });
+
+        let items = compose(&player);
+        assert!(
+            !items.is_empty(),
+            "compose should emit items on s-quiz at {w}x{h}"
+        );
+        for item in &items {
+            assert!(
+                item.rect.min.x.is_finite()
+                    && item.rect.min.y.is_finite()
+                    && item.rect.max.x.is_finite()
+                    && item.rect.max.y.is_finite(),
+                "draw item rect must be finite at {w}x{h}: {:?}",
+                item.rect
+            );
+            if matches!(
+                item.visual,
+                Visual::Prompt { .. } | Visual::ChoiceRow { .. }
+            ) {
+                assert!(
+                    item.rect.width() > 0.0 && item.rect.height() > 0.0,
+                    "question item rect must be non-zero at {w}x{h}: {:?}",
+                    item.rect
+                );
+            }
+        }
+
+        let mut frame = PlayerFrame::new();
+        frame.reduced_motion = true;
+        let mut view = SlideView::new();
+        view.set_reduced_motion(true);
+        let mut cache = MediaCache::new();
+        let media = NoMedia;
+        let ui_img = render_ui(
+            w.max(200),
+            h.max(200),
+            1.0,
+            |_ctx| {},
+            |ctx| {
+                ctx.root_ui(|ui| {
+                    frame.show(ui, &player, &mut view, Some((&mut cache, &media)));
+                });
+            },
+        )
+        .unwrap_or_else(|e| panic!("PlayerFrame render_ui failed at {w}x{h}: {e}"));
+        assert!(!ui_img.pixels.is_empty(), "empty ui image at {w}x{h}");
+
+        let slide_img = render_slide_rgba(
+            &course,
+            "s-quiz",
+            &RenderOptions {
+                width: w,
+                ..RenderOptions::default()
+            },
+            &media,
+        )
+        .unwrap_or_else(|e| panic!("render_slide_rgba failed at {w}x{h}: {e}"));
+        assert_eq!(slide_img.width, w);
+        assert_eq!(slide_img.height, h);
+        assert_eq!(slide_img.pixels.len(), (w * h * 4) as usize);
+    }
 }

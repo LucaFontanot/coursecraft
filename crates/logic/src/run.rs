@@ -3100,6 +3100,9 @@ impl<'c> Player<'c> {
                 ended: next.ended,
                 paused,
             };
+            if self.st.epoch == epoch && !self.st.exited {
+                self.note_timeline_completed();
+            }
         } else if target < old {
             self.st.base = Clock {
                 ms: target,

@@ -239,6 +239,7 @@ pub enum Visual {
         fill_style: Option<ResolvedFill>,
         hover_fill: Option<egui::Color32>,
         down_fill: Option<egui::Color32>,
+        down_has_fill_style: bool,
         disabled: bool,
     },
     Shape {
@@ -250,6 +251,7 @@ pub enum Visual {
         text: Option<ResolvedShapeText>,
         hover_fill: Option<egui::Color32>,
         down_fill: Option<egui::Color32>,
+        down_has_fill_style: bool,
         disabled: bool,
     },
     Image {
@@ -1446,6 +1448,47 @@ pub(crate) fn compose_object_with_runtime_and_timer(
     )
 }
 
+fn resolve_timer_visual(
+    duration_ms: u32,
+    format: coursecraft_course::TimerFormat,
+    style: &TextStyle,
+    state_overrides: &ResolvedStateOverrides<'_>,
+    (default_txt_color, default_btn_color, theme_font): (
+        egui::Color32,
+        egui::Color32,
+        Option<&str>,
+    ),
+    opts: ComposeOpts,
+) -> Visual {
+    let remaining = opts.timer_remaining_ms.unwrap_or(duration_ms);
+    let text = format_timer_text(remaining, format);
+    let resolved_style = state_overrides.text_style.unwrap_or(style);
+    let style_color = if state_overrides.text_style.is_some() {
+        parse_color(&resolved_style.color).unwrap_or(default_txt_color)
+    } else {
+        state_overrides
+            .fill
+            .and_then(parse_color)
+            .unwrap_or_else(|| parse_color(&resolved_style.color).unwrap_or(default_txt_color))
+    };
+    let runs = resolve_text_runs(
+        &text,
+        resolved_style,
+        &[],
+        None,
+        style_color,
+        default_btn_color,
+        theme_font,
+    );
+    Visual::Timer {
+        runs,
+        align: resolved_style.align,
+        valign: resolved_style.valign,
+        format,
+        authoring: opts.authoring,
+    }
+}
+
 fn compose_object_opts(
     object: &Object,
     current_state: &str,
@@ -1477,6 +1520,11 @@ fn compose_object_opts(
         .find(|s| s.name == "down" && s.fill_style.is_none())
         .and_then(|s| s.fill.as_ref())
         .and_then(parse_color);
+
+    let down_has_fill_style = object
+        .states
+        .iter()
+        .any(|s| s.name == "down" && s.fill_style.is_some());
 
     let visual = match &object.kind {
         ObjectKind::Text {
@@ -1543,6 +1591,7 @@ fn compose_object_opts(
                 },
                 hover_fill,
                 down_fill,
+                down_has_fill_style,
                 disabled,
             }
         }
@@ -1585,6 +1634,7 @@ fn compose_object_opts(
                 text,
                 hover_fill,
                 down_fill,
+                down_has_fill_style,
                 disabled,
             }
         }
@@ -1771,30 +1821,18 @@ fn compose_object_opts(
             format,
             style,
             ..
-        } => {
-            let remaining = opts.timer_remaining_ms.unwrap_or(*duration_ms);
-            let text = format_timer_text(remaining, *format);
-            let style_color = state_overrides
-                .fill
-                .and_then(parse_color)
-                .unwrap_or_else(|| parse_color(&style.color).unwrap_or(default_txt_color));
-            let runs = resolve_text_runs(
-                &text,
-                style,
-                &[],
-                None,
-                style_color,
+        } => resolve_timer_visual(
+            *duration_ms,
+            *format,
+            style,
+            &state_overrides,
+            (
+                default_txt_color,
                 default_btn_color,
                 theme.map(|t| t.font.as_str()),
-            );
-            Visual::Timer {
-                runs,
-                align: style.align,
-                valign: style.valign,
-                format: *format,
-                authoring: opts.authoring,
-            }
-        }
+            ),
+            opts,
+        ),
         ObjectKind::ProgressMeter {
             min,
             max,
@@ -2041,6 +2079,7 @@ fn compose_state_extra(
                 text: resolved_text,
                 hover_fill: None,
                 down_fill: None,
+                down_has_fill_style: false,
                 disabled,
             }
         }
@@ -2227,8 +2266,13 @@ fn push_item(items: &mut Vec<DrawItem>, hit: Hit, rect: egui::Rect, visual: Visu
 #[must_use]
 pub fn question_prompt_rect(slide_w: f32, slide_h: f32) -> egui::Rect {
     let (slide_w, _slide_h) = finite_slide(slide_w, slide_h);
-    let prompt_w = (slide_w - 160.0).max(0.0);
-    egui::Rect::from_min_size(egui::pos2(80.0, 60.0), egui::vec2(prompt_w, 80.0))
+    let margin = if slide_w < 320.0 {
+        (slide_w * 0.1).min(80.0)
+    } else {
+        80.0
+    };
+    let prompt_w = (slide_w - 2.0 * margin).max(0.0);
+    egui::Rect::from_min_size(egui::pos2(margin, 60.0), egui::vec2(prompt_w, 80.0))
 }
 
 fn compose_question(view: &QuestionCompose<'_>, items: &mut Vec<DrawItem>) {
@@ -2813,6 +2857,7 @@ pub fn compose_with_pointer(
                     text: None,
                     hover_fill: None,
                     down_fill: None,
+                    down_has_fill_style: false,
                     disabled: true,
                 },
                 dimmed: label.dimmed,

@@ -9317,6 +9317,50 @@ fn seekbar_unlocks_when_the_timeline_ends_and_stays_unlocked_on_return() {
 }
 
 #[test]
+fn b11_free_seekbar_forward_seek_to_end_records_timeline_completion() {
+    let course = nav_course(serde_json::json!({
+        "seekbar": "free",
+        "next_requires": { "kind": "timeline_ends" }
+    }));
+    let mut p = Player::new(&course).unwrap();
+    p.handle(&Input::Start);
+    assert!(!p.can_next());
+
+    let fx_end = p.handle(&Input::PlayerSeek { ms: 2000 });
+    assert!(!warned(&fx_end));
+    assert!(p.can_next());
+
+    let fx_back = p.handle(&Input::PlayerSeek { ms: 500 });
+    assert!(!warned(&fx_back));
+    assert!(
+        p.can_next(),
+        "scrubbing back after seeking to the end must keep Next unlocked"
+    );
+
+    let fx_next = p.handle(&Input::Next);
+    assert!(!warned(&fx_next));
+    assert_eq!(p.current_slide().unwrap().id, "s2");
+}
+
+#[test]
+fn b11_locked_and_until_timeline_ends_refuse_forward_seek_to_end() {
+    for seekbar in ["locked", "until_timeline_ends"] {
+        let course = nav_course(serde_json::json!({
+            "seekbar": seekbar,
+            "next_requires": { "kind": "timeline_ends" }
+        }));
+        let mut p = Player::new(&course).unwrap();
+        p.handle(&Input::Start);
+        assert!(!p.can_next());
+
+        let fx = p.handle(&Input::PlayerSeek { ms: 2000 });
+        assert!(warned(&fx), "{seekbar} seekbar must refuse seek to end");
+        assert_eq!(p.slide_elapsed_ms(), 0);
+        assert!(!p.can_next(), "{seekbar} seekbar must keep Next locked");
+    }
+}
+
+#[test]
 fn seekbar_setting_round_trips_and_defaults_to_free() {
     let course = nav_course(serde_json::json!({}));
     assert_eq!(

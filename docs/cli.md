@@ -325,7 +325,7 @@ object.set_fill_style -                       -          {"slide": id, "object"?
 object.set_shadow    -                        -          {"slide": id, "object"?: id, "objects"?: id[], "shadow": Shadow|null}
 object.set_glow      -                        -          {"slide": id, "object"?: id, "objects"?: id[], "glow": Glow|null}
 object.apply_style    -                        -          {"slide": id, "source_slide": id, "source": id, "objects": id[]}
-course.set_slide_size  -                       -          {"w": number, "h": number, "mode": "scale"|"keep"}
+course.set_slide_size  -                       -          {"w": number, "h": number, "mode": "scale"|"fill"|"keep"}
 object.set_drag      -                        -          {"slide": id, "object"?: id, "objects"?: id[], "drag": DragSpec|null}
 object.set_drag      -                        -          {"slide": id, "object"?: id, "objects"?: id[], "drag": DragSpec|null}
 object.set_lottie    -                        -          {"slide": id, "object"?: id, "objects"?: id[], "loop"?: bool, "autoplay"?: bool, "speed"?: number}
@@ -389,6 +389,7 @@ glossary.add         -                        -          {"term": string, "defin
 glossary.update      -                        -          {"id": id, "term"?: string, "definition"?: string}
 glossary.remove      -                        -          {"id": id}
 glossary.move        -                        -          {"id": id, "to": usize}
+glossary.sort        -                        -          {}
 variable.add         Project/Variables        -          {"name": string, "value": bool|number|string}
 variable.set_value   -                        -          {"name": string, "value": bool|number|string}
 variable.delete      -                        -          {"name": string}

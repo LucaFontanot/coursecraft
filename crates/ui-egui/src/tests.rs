@@ -4447,6 +4447,76 @@ fn course_settings_player_bar_switch_disables_bar_options_and_updates_course() {
 }
 
 #[test]
+fn b12_course_settings_seekbar_combo_disabled_with_tooltip_when_bar_or_seekbar_off() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new_with_size(course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    for _ in 0..5 {
+        harness.idle_frame();
+    }
+
+    let find_seekbar_combo = |h: &mut TestHarness| {
+        let row_y = h.find_text_last("Seekbar").expect("Seekbar label").y;
+        let combo_pos = h
+            .find_texts("Free")
+            .into_iter()
+            .min_by_key(|p| ((p.y - row_y).abs() * 10.0) as i32)
+            .expect("Seekbar combo text");
+        h.last_widgets
+            .iter()
+            .find(|n| n.bounds.contains(combo_pos))
+            .cloned()
+            .expect("Seekbar combo widget")
+    };
+
+    assert!(!find_seekbar_combo(&mut harness).disabled);
+
+    // Turning off "Show seekbar" disables the Seekbar combo with an explanatory tooltip.
+    let show_seekbar_toggle = harness
+        .find_text_last("Show seekbar")
+        .expect("Show seekbar toggle");
+    harness.click_at(show_seekbar_toggle);
+    harness.idle_frame();
+    assert!(!harness.editor.session.course.player.show_seekbar);
+
+    let combo = find_seekbar_combo(&mut harness);
+    assert!(
+        combo.disabled,
+        "Seekbar combo must be disabled when show_seekbar is false"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(combo.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Turn \"Show seekbar\" on to use this"),
+        "disabled Seekbar combo must explain show_seekbar is off, got {tip:?}"
+    );
+
+    // Turning off "Player bar" also disables the Seekbar combo with the player bar tooltip.
+    let bar_toggle = harness
+        .find_text_last("Player bar")
+        .expect("Player bar toggle");
+    harness.click_at(bar_toggle);
+    harness.idle_frame();
+    assert!(!harness.editor.session.course.player.show_bar);
+
+    let combo = find_seekbar_combo(&mut harness);
+    assert!(
+        combo.disabled,
+        "Seekbar combo must be disabled when show_bar is false"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(combo.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Turn the player bar on to use this"),
+        "disabled Seekbar combo must explain player bar is off, got {tip:?}"
+    );
+}
+
+#[test]
 fn slide_properties_player_bar_override_updates_slide() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
@@ -17138,12 +17208,15 @@ fn slide_size_dialog_opens_from_the_file_menu_and_apply_dispatches() {
     let file = h.find_text("File").expect("File menu");
     h.click_at(file);
     h.idle_frame();
-    let item = h.find_text("Slide Size…").expect("Slide Size item");
+    let item = h.find_text("Slide size…").expect("Slide size item");
     h.click_at(item);
     h.idle_frame();
     assert!(h.editor.ui.slide_size_dialog.open);
 
-    let preset = h.find_text("4:3 (960 x 720)").expect("4:3 preset");
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let preset = h.find_text("4:3 Standard (960 × 720)").expect("4:3 preset");
     h.click_at(preset);
     h.idle_frame();
     assert_eq!(
@@ -17172,6 +17245,609 @@ fn slide_size_dialog_disables_apply_out_of_range() {
     state.w = 1280;
     state.h = 4321;
     assert!(!state.valid());
+}
+
+#[test]
+fn slide_size_dialog_preset_combo_and_custom_switching() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+
+    // Select 16:9 Full HD (1920 × 1080) -> ratio "16:9"
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    // Esc while combo popup is open closes only the popup, not the dialog (popup-first).
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.open);
+
+    // Reopen combo and pick Full HD.
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
+    h.click_at(fhd);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1920, 1080)
+    );
+    assert!(
+        h.find_text("16:9").is_some(),
+        "ratio badge should show 16:9"
+    );
+
+    // Select 9:16 Portrait (1080 × 1920).
+    let combo = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let portrait = h
+        .find_text("9:16 Portrait (1080 × 1920)")
+        .expect("Portrait preset");
+    h.click_at(portrait);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1080, 1920)
+    );
+
+    // Typing a custom width switches combo label to "Custom".
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("1500");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.w, 1500);
+    assert!(
+        h.find_text("Custom").is_some(),
+        "combo label must switch to Custom"
+    );
+}
+
+#[test]
+fn slide_size_dialog_aspect_lock_keeps_and_updates_ratio() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.lock_aspect);
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1280, 720)
+    );
+
+    // With lock ON at 1280x720, changing W to 1920 updates H to 1080.
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("1920");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1920, 1080)
+    );
+
+    // Changing H to 900 updates W to 1600.
+    let h_label = h.find_text("H").expect("H label");
+    h.click_at(egui::Pos2::new(h_label.x + 30.0, h_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("900");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1600, 900)
+    );
+
+    // Uncheck lock -> W changes independently.
+    let lock = h
+        .find_text("Lock aspect ratio")
+        .expect("Lock aspect ratio checkbox");
+    h.click_at(lock);
+    h.idle_frame();
+    assert!(!h.editor.ui.slide_size_dialog.lock_aspect);
+
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("1000");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1000, 900)
+    );
+
+    // Re-checking lock captures the new 10:9 ratio.
+    let lock = h
+        .find_text("Lock aspect ratio")
+        .expect("Lock aspect ratio checkbox");
+    h.click_at(lock);
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.lock_aspect);
+
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("2000");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (2000, 1800)
+    );
+}
+
+#[test]
+fn slide_size_dialog_use_as_default_emits_request_and_disables_when_already_default() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+
+    // At 1280x720 (already default), button is disabled with explanatory tooltip.
+    let btn_pos = h
+        .find_text("Use as default for new courses")
+        .expect("Use as default button");
+    let tip = h
+        .probe_tooltip(btn_pos)
+        .expect("disabled default button should explain why");
+    assert!(
+        tip.contains("Already the default"),
+        "unexpected tooltip: {tip}"
+    );
+
+    // Switch to 1920x1080 and click "Use as default for new courses".
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
+    h.click_at(fhd);
+    h.idle_frame();
+
+    let btn_pos = h
+        .find_text("Use as default for new courses")
+        .expect("Use as default button");
+    let mut requests = Vec::new();
+    h.frame(vec![Event::PointerMoved(btn_pos)]);
+    for pressed in [true, false] {
+        requests.extend(h.frame(vec![Event::PointerButton {
+            pos: btn_pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }]));
+    }
+    h.idle_frame();
+    assert_eq!(h.editor.ui.prefs.default_slide, (1920, 1080));
+    assert!(
+        requests.iter().any(|r| matches!(
+            r,
+            EditorRequest::SetPreferences {
+                default_slide: (1920, 1080),
+                ..
+            }
+        )),
+        "expected SetPreferences request, got {requests:?}"
+    );
+    assert!(
+        h.find_text("Saved as default").is_some(),
+        "expected Saved as default confirmation"
+    );
+    h.hover_at(egui::Pos2::ZERO);
+    h.idle_frame();
+    let btn_pos = h
+        .find_text("Use as default for new courses")
+        .expect("Use as default button");
+    let tip = h
+        .probe_tooltip(btn_pos)
+        .expect("button should now be disabled with tooltip");
+    assert!(
+        tip.contains("Already the default"),
+        "unexpected tooltip: {tip}"
+    );
+}
+
+#[test]
+fn slide_size_dialog_content_modes_dispatch_and_undo() {
+    let (mut h, _t) = lock_hide_setup();
+    let orig_size = h.editor.session.course.slide_size;
+    let slide_id = h.editor.selection.slide.clone();
+    let orig_frames: Vec<_> = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .expect("slide")
+        .objects
+        .iter()
+        .map(|o| (o.id.clone(), o.frame))
+        .collect();
+
+    for (radio_label, target_label, expected_size, check_enter) in [
+        (
+            "Scale to fit",
+            "4:3 Standard (960 × 720)",
+            (960, 720),
+            false,
+        ),
+        (
+            "Fill slide",
+            "9:16 Portrait (1080 × 1920)",
+            (1080, 1920),
+            false,
+        ),
+        (
+            "Keep as is",
+            "16:9 Full HD (1920 × 1080)",
+            (1920, 1080),
+            true,
+        ),
+    ] {
+        h.editor.open_slide_size_dialog();
+        h.idle_frame();
+        let current_label = crate::slide_size_dialog::PRESETS
+            .iter()
+            .find(|p| {
+                (p.w, p.h)
+                    == (
+                        h.editor.session.course.slide_size.w,
+                        h.editor.session.course.slide_size.h,
+                    )
+            })
+            .expect("current preset")
+            .label;
+        let combo = h.find_text(current_label).expect("preset combo");
+        h.click_at(combo);
+        h.idle_frame();
+        let target = h.find_text(target_label).expect("target preset");
+        h.click_at(target);
+        h.idle_frame();
+
+        let radio = h.find_text(radio_label).expect("mode radio");
+        h.click_at(radio);
+        h.idle_frame();
+
+        if check_enter {
+            h.press(Key::Enter, Modifiers::NONE);
+        } else {
+            let apply = h.find_text("Apply").expect("Apply button");
+            h.click_at(apply);
+        }
+        h.idle_frame();
+
+        assert!(!h.editor.ui.slide_size_dialog.open);
+        let size = h.editor.session.course.slide_size;
+        assert_eq!((size.w, size.h), expected_size);
+
+        // Undo restores prior course size and frames.
+        h.press(Key::Z, Modifiers::COMMAND);
+        h.idle_frame();
+        assert_eq!(h.editor.session.course.slide_size, orig_size);
+        let restored_frames: Vec<_> = h
+            .editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .map(|o| (o.id.clone(), o.frame))
+            .collect();
+        assert_eq!(restored_frames, orig_frames);
+    }
+}
+
+#[test]
+fn slide_size_dialog_live_preview_and_course_wide_impact_counts() {
+    let (mut h, _t) = lock_hide_setup();
+    // Add an object on the current slide that sits at (900, 500) so it is inside 1280x720
+    // but completely outside 640x360 when keeping positions.
+    h.editor.run(
+        "object.add",
+        serde_json::json!({
+            "slide": h.editor.selection.slide,
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 900.0, "y": 500.0, "w": 120.0, "h": 80.0 }
+        }),
+    );
+    assert!(
+        h.editor.ui.last_error.is_none(),
+        "unexpected error adding object: {:?}",
+        h.editor.ui.last_error
+    );
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+
+    // 1) 1280x720 -> 1920x1080 (scale): reports "0 outside" and 150%.
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
+    h.click_at(fhd);
+    h.idle_frame();
+    assert!(
+        h.find_text_containing("0 outside").is_some(),
+        "expected '0 outside' for 1280x720 -> 1920x1080 (scale)"
+    );
+    assert!(
+        h.find_text_containing("150%").is_some(),
+        "expected '150%' scale hint for 1280x720 -> 1920x1080 (scale)"
+    );
+
+    // 2) 1280x720 -> 1080x1080 (scale): reports margin hint.
+    let combo = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let square = h
+        .find_text("1:1 Square (1080 × 1080)")
+        .expect("Square preset");
+    h.click_at(square);
+    h.idle_frame();
+    assert!(
+        h.find_text_containing("Adds top/bottom margins").is_some(),
+        "expected margin hint for 1280x720 -> 1080x1080 (scale)"
+    );
+
+    // 3) 1280x720 -> 640x360 (keep): reports exact off-slide object count across the course.
+    let keep = h.find_text("Keep as is").expect("Keep as is radio");
+    h.click_at(keep);
+    h.idle_frame();
+    let lock = h
+        .find_text("Lock aspect ratio")
+        .expect("Lock aspect ratio checkbox");
+    h.click_at(lock);
+    h.idle_frame();
+    h.editor.ui.slide_size_dialog.w = 640;
+    h.editor.ui.slide_size_dialog.h = 360;
+    h.idle_frame();
+
+    let expected_outside = h
+        .editor
+        .session
+        .course
+        .slides()
+        .chain(h.editor.session.course.masters.iter())
+        .chain(h.editor.session.course.templates.iter())
+        .chain(
+            h.editor
+                .session
+                .course
+                .banks
+                .iter()
+                .flat_map(|b| b.slides.iter()),
+        )
+        .flat_map(|s| {
+            s.objects
+                .iter()
+                .chain(s.layers.iter().flat_map(|l| l.objects.iter()))
+        })
+        .filter(|o| {
+            !matches!(o.kind, ObjectKind::Audio { .. })
+                && o.panel.is_none()
+                && (o.frame.x + o.frame.w <= 0.0
+                    || o.frame.x >= 640.0
+                    || o.frame.y + o.frame.h <= 0.0
+                    || o.frame.y >= 360.0)
+        })
+        .count();
+    assert!(
+        expected_outside >= 1,
+        "expected at least 1 off-slide object at 640x360"
+    );
+    let needle = format!("{expected_outside} outside");
+    assert!(
+        h.find_text_containing(&needle).is_some(),
+        "expected '{needle}' in preview impact summary"
+    );
+}
+
+#[test]
+fn slide_size_dialog_preview_idle_frames_do_not_recompute() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 1);
+
+    for _ in 0..5 {
+        h.idle_frame();
+    }
+    assert_eq!(
+        h.editor.ui.slide_size_dialog.impact_recomputes, 1,
+        "idle frames must not recompute course-wide impact"
+    );
+
+    h.editor.ui.slide_size_dialog.mode = crate::slide_size_dialog::ResizeModeChoice::Fill;
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 2);
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 2);
+
+    h.editor.ui.slide_size_dialog.w = 1920;
+    h.editor.ui.slide_size_dialog.h = 1080;
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 3);
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 3);
+}
+
+#[test]
+fn slide_size_dialog_opens_from_all_five_entry_points() {
+    let (mut h, _t) = lock_hide_setup();
+
+    // 1. File ▸ Slide size…
+    let file = h.find_text("File").expect("File menu");
+    h.click_at(file);
+    h.idle_frame();
+    let item = h.find_text("Slide size…").expect("File > Slide size…");
+    h.click_at(item);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "File menu must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.idle_frame();
+
+    // 2. Slide ▸ Slide size…
+    let slide_menu = h.find_text("Slide").expect("Slide menu");
+    h.click_at(slide_menu);
+    h.idle_frame();
+    let item = h.find_text("Slide size…").expect("Slide > Slide size…");
+    h.click_at(item);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Slide menu must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.idle_frame();
+
+    // 3. Course Inspector "Change…"
+    h.editor.ui.inspector_tab = crate::InspectorTab::Course;
+    h.idle_frame();
+    let change = h.find_text("Change…").expect("Course inspector Change…");
+    h.click_at(change);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Course inspector Change… must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.idle_frame();
+
+    // 4. Course Settings "Change…"
+    h.editor.ui.inspector_tab = crate::InspectorTab::Format;
+    h.editor.ui.show_course_settings_window = true;
+    h.idle_frame();
+    h.idle_frame();
+    let change = h.find_text("Change…").expect("Course settings Change…");
+    h.click_at(change);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Course settings Change… must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.editor.ui.show_course_settings_window = false;
+    h.idle_frame();
+
+    // 5. Status bar "1280 × 720 px" pill
+    let pill = h
+        .find_text("1280 × 720 px")
+        .expect("Status bar slide size pill");
+    h.click_at(pill);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Status bar pill must open Slide size"
+    );
+}
+
+#[test]
+fn check_course_off_slide_warning_navigates_to_stranded_object() {
+    let (mut h, _t) = lock_hide_setup();
+    let layer_res = h
+        .editor
+        .run(
+            "layer.add",
+            serde_json::json!({ "slide": "slide1", "name": "Stranded Layer" }),
+        )
+        .expect("layer.add");
+    let layer_id = layer_res["id"].as_str().expect("layer id").to_owned();
+    let obj_res = h
+        .editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": "slide1",
+                "layer": layer_id,
+                "name": "Stranded Box",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#3B82F6" },
+                "frame": { "x": 1000.0, "y": 100.0, "w": 150.0, "h": 80.0 }
+            }),
+        )
+        .expect("object.add");
+    let obj_id = obj_res["id"].as_str().expect("object id").to_owned();
+
+    h.editor
+        .run(
+            "course.set_slide_size",
+            serde_json::json!({ "w": 800, "h": 600, "mode": "keep" }),
+        )
+        .expect("resize keep");
+    h.editor.selection.slide = String::new();
+    h.editor.selection.layer = None;
+    h.editor.selection.clear_objects();
+    h.editor.refresh_validate_only();
+    let issue_label = h
+        .editor
+        .ui
+        .validation_issues
+        .iter()
+        .find(|i| i.message.contains("lies outside the 800×600 slide"))
+        .map(|i| format!("{} — {}", i.path, i.message))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected off-slide warning, got {:?}",
+                h.editor.ui.validation_issues
+            )
+        });
+    h.editor.ui.show_validation_window = true;
+    h.idle_frame();
+    h.idle_frame();
+
+    let warning_pos = h
+        .find_text(&issue_label)
+        .expect("off-slide warning row in Check Course");
+    h.click_at(warning_pos);
+    h.idle_frame();
+
+    assert_eq!(h.editor.selection.slide, "slide1");
+    assert_eq!(h.editor.selection.layer.as_deref(), Some(layer_id.as_str()));
+    assert_eq!(h.editor.selection.object.as_deref(), Some(obj_id.as_str()));
 }
 
 #[test]
@@ -17218,6 +17894,20 @@ fn inspector_strikethrough_button_styles_the_text() {
 }
 
 #[test]
+fn format_aspect_ratio_unit_matrix() {
+    use crate::slide_size_dialog::format_aspect_ratio;
+    assert_eq!(format_aspect_ratio(1920, 1080), "16:9");
+    assert_eq!(format_aspect_ratio(1280, 720), "16:9");
+    assert_eq!(format_aspect_ratio(1280, 800), "16:10");
+    assert_eq!(format_aspect_ratio(960, 720), "4:3");
+    assert_eq!(format_aspect_ratio(1080, 1080), "1:1");
+    assert_eq!(format_aspect_ratio(1080, 1920), "9:16");
+    assert_eq!(format_aspect_ratio(1500, 900), "5:3");
+    assert_eq!(format_aspect_ratio(1001, 700), "1.43:1");
+    assert_eq!(format_aspect_ratio(0, 720), "—");
+}
+
+#[test]
 fn preferences_open_from_the_menu_and_changes_are_requested() {
     let (mut h, _t) = lock_hide_setup();
     let file = h.find_text("File").expect("File menu");
@@ -17227,12 +17917,20 @@ fn preferences_open_from_the_menu_and_changes_are_requested() {
     h.click_at(item);
     h.idle_frame();
     assert!(h.editor.ui.prefs.open);
-    let square = h.find_text("1:1 (1080 x 1080)").expect("preset");
+    // Open the default slide size combo and select 16:9 Full HD (1920 × 1080).
+    let combo = h
+        .find_text("16:9 HD (1280 × 720)")
+        .expect("default slide combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
     let mut requests = Vec::new();
-    h.frame(vec![Event::PointerMoved(square)]);
+    h.frame(vec![Event::PointerMoved(fhd)]);
     for pressed in [true, false] {
         requests.extend(h.frame(vec![Event::PointerButton {
-            pos: square,
+            pos: fhd,
             button: PointerButton::Primary,
             pressed,
             modifiers: Modifiers::NONE,
@@ -17241,10 +17939,16 @@ fn preferences_open_from_the_menu_and_changes_are_requested() {
     assert!(requests.iter().any(|r| matches!(
         r,
         EditorRequest::SetPreferences {
-            default_slide: (1080, 1080),
+            default_slide: (1920, 1080),
             ..
         }
     )));
+
+    // Verify set_preferences accepts custom sizes and the combo shows "Custom".
+    h.editor.set_preferences(1, (1440, 900));
+    h.idle_frame();
+    assert_eq!(h.editor.ui.prefs.default_slide, (1440, 900));
+    assert!(h.find_text("Custom").is_some());
 }
 
 #[test]
@@ -18032,4 +18736,441 @@ fn exit_animations_play_in_preview_with_slide_transition() {
     player.handle(&coursecraft_logic::Input::Tick { ms: 500 });
     assert!(player.sample_object("txt").is_none());
     assert!(player.sample_object("shape2").is_none());
+}
+
+#[test]
+fn find_glossary_hit_opens_course_settings_with_resources_expanded() {
+    let mut session = coursecraft_engine::Session::blank("Glossary Find");
+    session
+        .execute(
+            "glossary.add",
+            &serde_json::json!({
+                "id": "g1",
+                "term": "Telemetry",
+                "definition": "Automated measurement of remote course events."
+            }),
+        )
+        .expect("add glossary");
+    let mut harness = TestHarness::new(session.course);
+    harness.idle_frame();
+    harness.press(Key::F, egui::Modifiers::COMMAND);
+    harness.type_text("Telemetry");
+    harness.idle_frame();
+
+    let hit_pos = harness
+        .find_text_last("Telemetry")
+        .expect("glossary hit in Find & Replace");
+    harness.click_at(hit_pos);
+    harness.idle_frame();
+
+    assert!(
+        harness.editor.ui.show_course_settings_window,
+        "clicking a glossary hit should open Course Settings"
+    );
+    let cs_pos = harness
+        .find_text("Course settings")
+        .expect("Course settings title");
+    harness.scroll_over(egui::pos2(cs_pos.x, cs_pos.y + 200.0), -600.0);
+    harness.idle_frame();
+    assert!(
+        harness.find_text("Add term").is_some(),
+        "Resources & glossary section should be expanded so Add term is visible"
+    );
+}
+
+#[test]
+fn resources_glossary_sort_button_and_order_controls_follow_ui_rules() {
+    // C-06: "Sort A–Z" button dispatches glossary.sort, disables with tooltip when < 2 terms
+    // or already sorted, and ↑/↓/✕ buttons are >= 24×24 pt with disabled tooltips.
+    let mut session = coursecraft_engine::Session::blank("Glossary UI");
+    session
+        .execute(
+            "glossary.add",
+            &serde_json::json!({ "term": "OnlyOne", "definition": "Single entry." }),
+        )
+        .expect("add single glossary term");
+
+    let mut harness = TestHarness::new_with_size(session.course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    harness.editor.ui.course_settings.open_resources = true;
+    for _ in 0..3 {
+        harness.idle_frame();
+    }
+    let cs_pos = harness
+        .find_text("Course settings")
+        .expect("Course settings title");
+    harness.scroll_over(egui::pos2(cs_pos.x, cs_pos.y + 200.0), -600.0);
+    harness.idle_frame();
+
+    let find_widget_for_text = |h: &mut TestHarness, label: &str| {
+        h.last_widgets
+            .iter()
+            .find(|n| n.label.as_deref() == Some(label))
+            .cloned()
+            .unwrap_or_else(|| panic!("missing widget for {label:?}"))
+    };
+
+    // With < 2 terms, "Sort A–Z" is disabled with explanatory tooltip.
+    let sort_btn = find_widget_for_text(&mut harness, "Sort A–Z");
+    assert!(
+        sort_btn.disabled,
+        "Sort A–Z must be disabled with < 2 terms"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(sort_btn.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Add at least two terms to sort"),
+        "unexpected tooltip for < 2 terms: {tip:?}"
+    );
+
+    // Replace with 3 unsorted terms: ["Zebra", "alpha", "Beta"].
+    let mut s2 = coursecraft_engine::Session::blank("Glossary Unsorted");
+    for term in ["Zebra", "alpha", "Beta"] {
+        s2.execute("glossary.add", &serde_json::json!({ "term": term }))
+            .expect("add term");
+    }
+    let mut harness = TestHarness::new_with_size(s2.course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    harness.editor.ui.course_settings.open_resources = true;
+    for _ in 0..3 {
+        harness.idle_frame();
+    }
+    let cs_pos = harness
+        .find_text("Course settings")
+        .expect("Course settings title");
+    harness.scroll_over(egui::pos2(cs_pos.x, cs_pos.y + 200.0), -600.0);
+    harness.idle_frame();
+
+    // Check ↑/↓/✕ button sizes (>= 24×24 pt) and disabled tooltips on first ↑ / last ↓.
+    let mut up_buttons: Vec<_> = harness
+        .last_widgets
+        .iter()
+        .filter(|n| n.label.as_deref() == Some("↑"))
+        .cloned()
+        .collect();
+    up_buttons.sort_by(|a, b| a.bounds.min.y.total_cmp(&b.bounds.min.y));
+    assert_eq!(up_buttons.len(), 3, "expected 3 ↑ buttons");
+    for btn in &up_buttons {
+        assert!(
+            btn.bounds.width() >= 24.0 && btn.bounds.height() >= 24.0,
+            "↑ button must be >= 24×24 pt, got {:?}",
+            btn.bounds.size()
+        );
+    }
+    assert!(up_buttons[0].disabled, "first ↑ button must be disabled");
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    assert_eq!(
+        harness
+            .probe_tooltip(up_buttons[0].bounds.center())
+            .as_deref(),
+        Some("Already at the top")
+    );
+
+    let mut down_buttons: Vec<_> = harness
+        .last_widgets
+        .iter()
+        .filter(|n| n.label.as_deref() == Some("↓"))
+        .cloned()
+        .collect();
+    down_buttons.sort_by(|a, b| a.bounds.min.y.total_cmp(&b.bounds.min.y));
+    assert_eq!(down_buttons.len(), 3, "expected 3 ↓ buttons");
+    for btn in &down_buttons {
+        assert!(
+            btn.bounds.width() >= 24.0 && btn.bounds.height() >= 24.0,
+            "↓ button must be >= 24×24 pt, got {:?}",
+            btn.bounds.size()
+        );
+    }
+    assert!(down_buttons[2].disabled, "last ↓ button must be disabled");
+    assert_eq!(
+        harness
+            .probe_tooltip(down_buttons[2].bounds.center())
+            .as_deref(),
+        Some("Already at the bottom")
+    );
+
+    let remove_buttons: Vec<_> = harness
+        .last_widgets
+        .iter()
+        .filter(|n| n.label.as_deref() == Some("✕"))
+        .cloned()
+        .collect();
+    assert_eq!(remove_buttons.len(), 3, "expected 3 ✕ buttons");
+    for btn in &remove_buttons {
+        assert!(
+            btn.bounds.width() >= 24.0 && btn.bounds.height() >= 24.0,
+            "✕ button must be >= 24×24 pt, got {:?}",
+            btn.bounds.size()
+        );
+    }
+
+    // "Sort A–Z" is enabled and clicking it sorts the glossary via glossary.sort.
+    let sort_btn = find_widget_for_text(&mut harness, "Sort A–Z");
+    assert!(!sort_btn.disabled, "Sort A–Z must be enabled when unsorted");
+    harness.click_at(sort_btn.bounds.center());
+    harness.idle_frame();
+
+    let terms: Vec<&str> = harness
+        .editor
+        .session
+        .course
+        .glossary
+        .iter()
+        .map(|g| g.term.as_str())
+        .collect();
+    assert_eq!(terms, vec!["alpha", "Beta", "Zebra"]);
+
+    // After sorting, "Sort A–Z" is disabled with the already-sorted tooltip.
+    let sort_btn = find_widget_for_text(&mut harness, "Sort A–Z");
+    assert!(
+        sort_btn.disabled,
+        "Sort A–Z must be disabled once already sorted"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    assert_eq!(
+        harness.probe_tooltip(sort_btn.bounds.center()).as_deref(),
+        Some("Glossary is already sorted A–Z")
+    );
+}
+
+#[test]
+fn timeline_show_all_and_unlock_all_dispatch_single_undo_batches() {
+    let mut h = TestHarness::new_with_size(two_scene_course(), (1440.0, 900.0));
+    let slide_id = h.editor.selection.slide.clone();
+    // Ensure at least 3 objects exist on the active slide.
+    for i in 0..3 {
+        h.editor.run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                "frame": { "x": 100.0 + i as f32 * 40.0, "y": 100.0, "w": 60.0, "h": 40.0 }
+            }),
+        );
+        assert!(h.editor.ui.last_error.is_none());
+    }
+    let obj_ids: Vec<String> = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .expect("slide")
+        .objects
+        .iter()
+        .map(|o| o.id.clone())
+        .collect();
+    assert!(obj_ids.len() >= 3);
+    let hide_ids = obj_ids[0..3].to_vec();
+    let lock_ids = obj_ids[0..2].to_vec();
+
+    // Hide 3 objects and lock 2 objects.
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": slide_id, "objects": hide_ids, "hidden": true }),
+    );
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": slide_id, "objects": lock_ids, "locked": true }),
+    );
+    h.idle_frame();
+
+    // "Show all (3)" appears in the Timeline header and unhides all 3 in 1 undo step.
+    let show_all_pos = h
+        .find_text_containing("Show all (3)")
+        .expect("Show all (3) button");
+    h.click_at(show_all_pos);
+    h.idle_frame();
+
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert!(
+        slide.objects.iter().all(|o| !o.editor_hidden),
+        "all objects must be unhidden after clicking Show all (3)"
+    );
+    assert!(
+        h.find_text_containing("Show all (").is_none(),
+        "Show all button must disappear when no hidden objects remain"
+    );
+
+    // Ctrl+Z restores all 3 hidden objects in 1 undo step.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert_eq!(
+        slide.objects.iter().filter(|o| o.editor_hidden).count(),
+        3,
+        "1 undo step must restore all 3 hidden objects"
+    );
+
+    // Re-unhide via Show all (3), then test "Unlock all (2)".
+    let show_all_pos = h
+        .find_text_containing("Show all (3)")
+        .expect("Show all (3) button");
+    h.click_at(show_all_pos);
+    h.idle_frame();
+
+    let unlock_all_pos = h
+        .find_text_containing("Unlock all (2)")
+        .expect("Unlock all (2) button");
+    h.click_at(unlock_all_pos);
+    h.idle_frame();
+
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert!(
+        slide.objects.iter().all(|o| !o.locked),
+        "all objects must be unlocked after clicking Unlock all (2)"
+    );
+    assert!(
+        h.find_text_containing("Unlock all (").is_none(),
+        "Unlock all button must disappear when no locked objects remain"
+    );
+
+    // Ctrl+Z restores both locked objects in 1 undo step.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert_eq!(
+        slide.objects.iter().filter(|o| o.locked).count(),
+        2,
+        "1 undo step must restore both locked objects"
+    );
+}
+
+#[test]
+fn view_menu_show_all_and_unlock_all_disabled_tooltips_and_batch_undo() {
+    let mut h = TestHarness::new_with_size(two_scene_course(), (1440.0, 900.0));
+    let find_widget_for_text = |h: &mut TestHarness, label: &str| {
+        let pos = h.find_text(label).expect("label position");
+        h.last_widgets
+            .iter()
+            .find(|n| {
+                n.role == egui::Role::Button
+                    && (n.label.as_deref() == Some(label) || n.bounds.contains(pos))
+            })
+            .cloned()
+            .expect("widget node")
+    };
+    let slide_id = h.editor.selection.slide.clone();
+    for i in 0..2 {
+        h.editor.run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+                "frame": { "x": 80.0 + i as f32 * 50.0, "y": 80.0, "w": 60.0, "h": 40.0 }
+            }),
+        );
+        assert!(h.editor.ui.last_error.is_none());
+    }
+
+    // Open View menu when no objects are hidden or locked -> both items disabled with tooltips.
+    let view_menu = h.find_text("View").expect("View menu");
+    h.click_at(view_menu);
+    h.idle_frame();
+
+    let show_item = find_widget_for_text(&mut h, "Show all hidden objects");
+    assert!(
+        show_item.disabled,
+        "Show all hidden objects must be disabled when none hidden"
+    );
+    h.advance_time(1.0);
+    h.idle_frame();
+    assert_eq!(
+        h.probe_tooltip(show_item.bounds.center()).as_deref(),
+        Some("No hidden objects on this slide")
+    );
+
+    let unlock_item = find_widget_for_text(&mut h, "Unlock all objects");
+    assert!(
+        unlock_item.disabled,
+        "Unlock all objects must be disabled when none locked"
+    );
+    assert_eq!(
+        h.probe_tooltip(unlock_item.bounds.center()).as_deref(),
+        Some("No locked objects on this slide")
+    );
+
+    // Close menu, hide and lock 2 objects, then test View menu batch actions.
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+
+    let obj_ids: Vec<String> = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .expect("slide")
+        .objects
+        .iter()
+        .take(2)
+        .map(|o| o.id.clone())
+        .collect();
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": slide_id, "objects": obj_ids, "hidden": true }),
+    );
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": slide_id, "objects": obj_ids, "locked": true }),
+    );
+    h.idle_frame();
+
+    let view_menu = h.find_text("View").expect("View menu");
+    h.click_at(view_menu);
+    h.idle_frame();
+    let show_item = find_widget_for_text(&mut h, "Show all hidden objects");
+    assert!(!show_item.disabled);
+    h.click_at(show_item.bounds.center());
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .filter(|o| o.editor_hidden)
+            .count(),
+        0
+    );
+
+    let view_menu = h.find_text("View").expect("View menu");
+    h.click_at(view_menu);
+    h.idle_frame();
+    let unlock_item = find_widget_for_text(&mut h, "Unlock all objects");
+    assert!(!unlock_item.disabled);
+    h.click_at(unlock_item.bounds.center());
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .filter(|o| o.locked)
+            .count(),
+        0
+    );
+
+    // Single undo restores both locked objects.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .filter(|o| o.locked)
+            .count(),
+        2
+    );
 }

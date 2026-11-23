@@ -2817,6 +2817,13 @@ fn panic_hunt() {
         json!({ "name": "", "value": null }),
         json!({ "name": "x y", "value": [] }),
         json!({ "slide": "slide1", "question": { "kind": "multiple_choice", "prompt": "", "choices": [] } }),
+        json!({ "w": 1e308, "h": -5, "mode": "scale" }),
+        json!({ "w": 1e308, "h": -5, "mode": "fill" }),
+        json!({ "w": 7680, "h": 4320, "mode": "scale" }),
+        json!({ "w": 7680, "h": 4320, "mode": "fill" }),
+        json!({ "w": 100, "h": 4320, "mode": "fill" }),
+        json!({ "w": 7680, "h": 4320, "mode": 123 }),
+        json!({ "w": 0, "h": 0, "mode": "keep" }),
     ];
     for cmd in registry() {
         for p in &hostile {
@@ -8233,6 +8240,51 @@ fn set_slide_size_scale_uses_one_factor_and_centres_everything() {
 }
 
 #[test]
+fn set_slide_size_fill_uses_max_factor_and_centres_overhang() {
+    // A-01: 1280x720 -> 1000x1000 with "fill" uses factor = max(1000/1280, 1000/720) = 1000/720.
+    let mut s = sized_course();
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 0, "y": 0, "w": 1280, "h": 720 }
+        }),
+    );
+    let before = s.course.to_json().unwrap();
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 1000, "h": 1000, "mode": "fill" }),
+    );
+    let f = (1000.0_f32 / 1280.0_f32).max(1000.0_f32 / 720.0_f32);
+    let dx = (1000.0 - 1280.0 * f) / 2.0;
+    let dy = (1000.0 - 720.0 * f) / 2.0;
+    assert!(dx < 0.0);
+    assert!(dy.abs() < 0.001);
+
+    let slide = s.course.slide("slide1").unwrap();
+    let bg = slide.object("bg").unwrap().0;
+    assert_eq!(bg.frame.x, dx.round());
+    assert_eq!(bg.frame.y, 0.0);
+    assert_eq!(bg.frame.w, (1280.0 * f).round());
+    assert_eq!(bg.frame.h, 1000.0);
+    let left_overhang = -bg.frame.x;
+    let right_overhang = bg.frame.x + bg.frame.w - 1000.0;
+    assert!((left_overhang - right_overhang).abs() <= 1.0);
+
+    let t = slide.object("t").unwrap().0;
+    assert_eq!(t.frame.x, (100.0 * f + dx).round());
+    assert_eq!(t.frame.y, (200.0 * f).round());
+    assert_eq!(t.frame.w, (400.0 * f).round());
+    assert_no_errors(&s);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+}
+
+#[test]
 fn set_slide_size_checks_bounds_mode_and_noop() {
     let mut s = sized_course();
     for p in [
@@ -8265,6 +8317,646 @@ fn set_slide_size_checks_bounds_mode_and_noop() {
         json!({ "w": 7680, "h": 4320, "mode": "scale" }),
     );
     assert_no_errors(&s);
+}
+
+fn build_test_state_with_all_extras() -> coursecraft_course::StateDef {
+    let base_text_style = coursecraft_course::TextStyle {
+        size: 20.0,
+        letter_spacing: 4.0,
+        insets: Some(coursecraft_course::TextInsets {
+            left: 4.0,
+            top: 6.0,
+            right: 8.0,
+            bottom: 10.0,
+        }),
+        ..coursecraft_course::TextStyle::default()
+    };
+    let base_runs = vec![coursecraft_course::TextRun {
+        text: "Hi".to_owned(),
+        bold: None,
+        italic: None,
+        underline: None,
+        strikethrough: None,
+        baseline: None,
+        letter_spacing: Some(2.0),
+        size: Some(16.0),
+        color: None,
+        link: None,
+        font: None,
+    }];
+    let base_paragraphs = vec![coursecraft_course::Paragraph {
+        space_before: 10.0,
+        space_after: 20.0,
+        bullet_size: Some(12.0),
+        ..coursecraft_course::Paragraph::default()
+    }];
+    let base_outline = coursecraft_course::Outline {
+        color: coursecraft_course::Color("#112233".to_owned()),
+        width: 4.0,
+        dash: coursecraft_course::DashStyle::Solid,
+        dash_pattern: None,
+        join: coursecraft_course::LineJoin::Miter,
+        miter_limit: None,
+    };
+    let base_shadow = coursecraft_course::Shadow {
+        color: coursecraft_course::Color("#00000080".to_owned()),
+        offset_x: 6.0,
+        offset_y: -8.0,
+        blur: 12.0,
+    };
+    let base_glow = coursecraft_course::Glow {
+        color: coursecraft_course::Color("#FFCC00".to_owned()),
+        size: 10.0,
+    };
+    let base_shape_text = coursecraft_course::ShapeText {
+        text: "Hi".to_owned(),
+        style: base_text_style.clone(),
+        runs: base_runs.clone(),
+        paragraphs: base_paragraphs.clone(),
+        autofit: coursecraft_course::Autofit::None,
+    };
+    let path_struct = coursecraft_course::Path {
+        points: vec![
+            coursecraft_course::PathPoint { x: 0.0, y: 0.0 },
+            coursecraft_course::PathPoint { x: 1.0, y: 1.0 },
+        ],
+        style: coursecraft_course::PathStyle::Straight,
+        closed: true,
+        subpaths: vec![],
+        fill: Some(coursecraft_course::Color("#AABBCC".to_owned())),
+        fill_style: None,
+        outline: base_outline.clone(),
+        start_end: coursecraft_course::LineEnd::None,
+        end_end: coursecraft_course::LineEnd::None,
+        connector: None,
+        start_glue: None,
+        end_glue: None,
+        text: Some(base_shape_text.clone()),
+    };
+    coursecraft_course::StateDef {
+        name: "Hover".to_owned(),
+        outline: Some(base_outline.clone()),
+        text_style: Some(base_text_style.clone()),
+        runs: Some(base_runs.clone()),
+        paragraphs: Some(base_paragraphs.clone()),
+        shadow: Some(base_shadow.clone()),
+        glow: Some(base_glow.clone()),
+        extras: vec![
+            coursecraft_course::StateExtra {
+                id: "ex_shape".to_owned(),
+                name: "Badge".to_owned(),
+                kind: coursecraft_course::StateExtraKind::Shape {
+                    shape: coursecraft_course::ShapeKind::Ellipse,
+                    fill: coursecraft_course::Color("#FF0000".to_owned()),
+                    fill_style: None,
+                    outline: Some(base_outline.clone()),
+                    text: Some(base_shape_text),
+                    adjust: vec![],
+                },
+                frame: coursecraft_course::Rect {
+                    x: -10.0,
+                    y: -20.0,
+                    w: 40.0,
+                    h: 30.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: Some(base_shadow),
+                glow: Some(base_glow),
+            },
+            coursecraft_course::StateExtra {
+                id: "ex_img".to_owned(),
+                name: "Icon".to_owned(),
+                kind: coursecraft_course::StateExtraKind::Image {
+                    src: "media/icon.png".to_owned(),
+                    alt: String::new(),
+                    crop: None,
+                    outline: Some(base_outline.clone()),
+                    shape: None,
+                },
+                frame: coursecraft_course::Rect {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 24.0,
+                    h: 24.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: None,
+                glow: None,
+            },
+            coursecraft_course::StateExtra {
+                id: "ex_txt".to_owned(),
+                name: "Tag".to_owned(),
+                kind: coursecraft_course::StateExtraKind::Text {
+                    text: "Hi".to_owned(),
+                    style: base_text_style,
+                    runs: base_runs,
+                    paragraphs: base_paragraphs,
+                    autofit: coursecraft_course::Autofit::None,
+                    outline: Some(base_outline),
+                },
+                frame: coursecraft_course::Rect {
+                    x: 0.0,
+                    y: 4.0,
+                    w: 60.0,
+                    h: 20.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: None,
+                glow: None,
+            },
+            coursecraft_course::StateExtra {
+                id: "ex_path".to_owned(),
+                name: "Arrow".to_owned(),
+                kind: coursecraft_course::StateExtraKind::Path { path: path_struct },
+                frame: coursecraft_course::Rect {
+                    x: 8.0,
+                    y: 12.0,
+                    w: 50.0,
+                    h: 50.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: None,
+                glow: None,
+            },
+        ],
+        ..coursecraft_course::StateDef::default()
+    }
+}
+
+fn assert_scaled_state_def(st: &coursecraft_course::StateDef) {
+    assert_eq!(st.outline.as_ref().unwrap().width, 6.0);
+    let ts = st.text_style.as_ref().unwrap();
+    assert_eq!(ts.size, 30.0);
+    assert_eq!(ts.letter_spacing, 6.0);
+    let ins = ts.insets.unwrap();
+    assert_eq!(
+        (ins.left, ins.top, ins.right, ins.bottom),
+        (6.0, 9.0, 12.0, 15.0)
+    );
+    assert_eq!(st.runs.as_ref().unwrap()[0].size, Some(24.0));
+    assert_eq!(st.runs.as_ref().unwrap()[0].letter_spacing, Some(3.0));
+    assert_eq!(st.paragraphs.as_ref().unwrap()[0].space_before, 15.0);
+    assert_eq!(st.paragraphs.as_ref().unwrap()[0].space_after, 30.0);
+    assert_eq!(st.paragraphs.as_ref().unwrap()[0].bullet_size, Some(18.0));
+    let sh = st.shadow.as_ref().unwrap();
+    assert_eq!((sh.offset_x, sh.offset_y, sh.blur), (9.0, -12.0, 18.0));
+    assert_eq!(st.glow.as_ref().unwrap().size, 15.0);
+}
+
+fn assert_scaled_state_extras(extras: &[coursecraft_course::StateExtra]) {
+    let ex0 = &extras[0];
+    assert_eq!(
+        ex0.frame,
+        coursecraft_course::Rect {
+            x: -15.0,
+            y: -30.0,
+            w: 60.0,
+            h: 45.0
+        }
+    );
+    assert_eq!(ex0.shadow.as_ref().unwrap().blur, 18.0);
+    assert_eq!(ex0.glow.as_ref().unwrap().size, 15.0);
+    if let coursecraft_course::StateExtraKind::Shape { outline, text, .. } = &ex0.kind {
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+        let t = text.as_ref().unwrap();
+        assert_eq!(t.style.size, 30.0);
+        assert_eq!(t.runs[0].letter_spacing, Some(3.0));
+        assert_eq!(t.paragraphs[0].bullet_size, Some(18.0));
+    } else {
+        panic!("expected shape extra");
+    }
+    if let coursecraft_course::StateExtraKind::Image { outline, .. } = &extras[1].kind {
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+    } else {
+        panic!("expected image extra");
+    }
+    if let coursecraft_course::StateExtraKind::Text {
+        style,
+        runs,
+        paragraphs,
+        outline,
+        ..
+    } = &extras[2].kind
+    {
+        assert_eq!(style.size, 30.0);
+        assert_eq!(style.letter_spacing, 6.0);
+        assert_eq!(runs[0].size, Some(24.0));
+        assert_eq!(paragraphs[0].bullet_size, Some(18.0));
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+    } else {
+        panic!("expected text extra");
+    }
+    if let coursecraft_course::StateExtraKind::Path { path } = &extras[3].kind {
+        assert_eq!(path.outline.width, 6.0);
+        assert_eq!(path.text.as_ref().unwrap().style.size, 30.0);
+    } else {
+        panic!("expected path extra");
+    }
+}
+
+fn assert_scaled_state_and_extras(st: &coursecraft_course::StateDef) {
+    assert_scaled_state_def(st);
+    assert_scaled_state_extras(&st.extras);
+}
+
+#[test]
+fn set_slide_size_scale_scales_states_and_state_extras() {
+    // A-02 (scale mode): rich-states fixture + synthetic fixture covering StateDef & all 4 StateExtraKind variants.
+    let rich_json = include_str!("../../../examples/rich-states/course.json");
+    let rich_course = coursecraft_course::Course::from_json(rich_json).unwrap();
+    let mut rich = Session::new(rich_course);
+    let rich_before = rich.course.to_json().unwrap();
+    ok(
+        &mut rich,
+        "course.set_slide_size",
+        json!({ "w": 1920, "h": 1080, "mode": "scale" }),
+    );
+    assert_no_errors(&rich);
+    rich.undo().unwrap();
+    assert_eq!(rich.course.to_json().unwrap(), rich_before);
+
+    // Non-16:9 target (1280x720 -> 1920x1620 => factor=1.5, dy=270.0) verifies parent-relative
+    // StateExtra.frame scales by factor without adding +dy.
+    let mut s = sized_course();
+    s.course.scenes[0].slides[0].objects[0]
+        .states
+        .push(build_test_state_with_all_extras());
+    let before = s.course.to_json().unwrap();
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 1920, "h": 1620, "mode": "scale" }),
+    );
+    let st = &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t")
+        .unwrap()
+        .0
+        .states[0];
+    assert_scaled_state_and_extras(st);
+    assert_no_errors(&s);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+
+    // "fill" mode on 1280x720 -> 1440x1080 => factor=max(1.125, 1.5)=1.5, dx=-240.0, dy=0.0.
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 1440, "h": 1080, "mode": "fill" }),
+    );
+    let st_fill = &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t")
+        .unwrap()
+        .0
+        .states[0];
+    assert_scaled_state_and_extras(st_fill);
+    assert_no_errors(&s);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+}
+
+fn populate_missed_base_fields(s: &mut Session, crop: coursecraft_course::CropRect) {
+    let outline = coursecraft_course::Outline {
+        color: coursecraft_course::Color("#112233".to_owned()),
+        width: 4.0,
+        dash: coursecraft_course::DashStyle::Solid,
+        dash_pattern: None,
+        join: coursecraft_course::LineJoin::Miter,
+        miter_limit: None,
+    };
+    let text_style = coursecraft_course::TextStyle {
+        size: 20.0,
+        letter_spacing: 4.0,
+        insets: Some(coursecraft_course::TextInsets {
+            left: 2.0,
+            top: 4.0,
+            right: 6.0,
+            bottom: 8.0,
+        }),
+        ..coursecraft_course::TextStyle::default()
+    };
+    let runs = vec![coursecraft_course::TextRun {
+        text: "Ab".to_owned(),
+        bold: None,
+        italic: None,
+        underline: None,
+        strikethrough: None,
+        baseline: None,
+        letter_spacing: Some(2.0),
+        size: Some(16.0),
+        color: None,
+        link: None,
+        font: None,
+    }];
+    let paragraphs = vec![coursecraft_course::Paragraph {
+        space_before: 8.0,
+        space_after: 12.0,
+        bullet_size: Some(14.0),
+        ..coursecraft_course::Paragraph::default()
+    }];
+    if let ObjectKind::Text {
+        style,
+        runs: r,
+        paragraphs: p,
+        outline: o,
+        ..
+    } = &mut s.course.scenes[0].slides[0].objects[0].kind
+    {
+        *style = text_style.clone();
+        *r = runs.clone();
+        *p = paragraphs.clone();
+        *o = Some(outline.clone());
+    }
+    let slide = &mut s.course.scenes[0].slides[0];
+    let mut base_obj = slide.objects[0].clone();
+    base_obj.shadow = None;
+    base_obj.motion_paths.clear();
+    slide.objects.push(coursecraft_course::Object {
+        id: "img1".to_owned(),
+        name: "Image".to_owned(),
+        kind: ObjectKind::Image {
+            src: "media/a.png".to_owned(),
+            alt: String::new(),
+            crop: Some(crop),
+            outline: Some(outline.clone()),
+            shape: None,
+        },
+        frame: coursecraft_course::Rect {
+            x: 10.0,
+            y: 10.0,
+            w: 100.0,
+            h: 100.0,
+        },
+        ..base_obj.clone()
+    });
+    slide.objects.push(coursecraft_course::Object {
+        id: "path1".to_owned(),
+        name: "Path".to_owned(),
+        kind: ObjectKind::Path {
+            path: coursecraft_course::Path {
+                points: vec![
+                    coursecraft_course::PathPoint { x: 0.0, y: 0.0 },
+                    coursecraft_course::PathPoint { x: 1.0, y: 1.0 },
+                ],
+                style: coursecraft_course::PathStyle::Straight,
+                closed: true,
+                subpaths: vec![],
+                fill: Some(coursecraft_course::Color("#112233".to_owned())),
+                fill_style: None,
+                outline,
+                start_end: coursecraft_course::LineEnd::None,
+                end_end: coursecraft_course::LineEnd::None,
+                connector: None,
+                start_glue: None,
+                end_glue: None,
+                text: Some(coursecraft_course::ShapeText {
+                    text: "Ab".to_owned(),
+                    style: text_style.clone(),
+                    runs: runs.clone(),
+                    paragraphs: paragraphs.clone(),
+                    autofit: coursecraft_course::Autofit::None,
+                }),
+            },
+        },
+        frame: coursecraft_course::Rect {
+            x: 10.0,
+            y: 10.0,
+            w: 100.0,
+            h: 100.0,
+        },
+        ..base_obj.clone()
+    });
+    slide.objects.push(coursecraft_course::Object {
+        id: "timer1".to_owned(),
+        name: "Timer".to_owned(),
+        kind: ObjectKind::Timer {
+            duration_ms: 10_000,
+            format: coursecraft_course::TimerFormat::MmSs,
+            autostart: true,
+            style: text_style.clone(),
+        },
+        frame: coursecraft_course::Rect {
+            x: 10.0,
+            y: 10.0,
+            w: 100.0,
+            h: 40.0,
+        },
+        ..base_obj.clone()
+    });
+    slide.objects.push(coursecraft_course::Object {
+        id: "marker1".to_owned(),
+        name: "Marker".to_owned(),
+        kind: ObjectKind::Marker {
+            title: "M".to_owned(),
+            body: "Ab".to_owned(),
+            runs,
+            paragraphs: paragraphs.clone(),
+            icon: coursecraft_course::MarkerIcon::Info,
+            color: None,
+        },
+        frame: coursecraft_course::Rect {
+            x: 10.0,
+            y: 10.0,
+            w: 32.0,
+            h: 32.0,
+        },
+        ..base_obj
+    });
+    s.course
+        .text_styles
+        .push(coursecraft_course::NamedTextStyle {
+            id: "body".to_owned(),
+            name: "Body".to_owned(),
+            style: text_style,
+            paragraphs: Some(paragraphs[0].clone()),
+        });
+}
+
+fn assert_scaled_missed_base_fields(s: &Session, crop: coursecraft_course::CropRect) {
+    let sl = s.course.slide("slide1").unwrap();
+    if let ObjectKind::Text {
+        style,
+        runs,
+        paragraphs,
+        outline,
+        ..
+    } = &sl.object("t").unwrap().0.kind
+    {
+        assert_eq!(style.letter_spacing, 6.0);
+        let ins = style.insets.unwrap();
+        assert_eq!(
+            (ins.left, ins.top, ins.right, ins.bottom),
+            (3.0, 6.0, 9.0, 12.0)
+        );
+        assert_eq!(runs[0].letter_spacing, Some(3.0));
+        assert_eq!(paragraphs[0].bullet_size, Some(21.0));
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+    } else {
+        panic!("expected text");
+    }
+    if let ObjectKind::Image {
+        crop: c, outline, ..
+    } = &sl.object("img1").unwrap().0.kind
+    {
+        assert_eq!(c.unwrap(), crop);
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+    } else {
+        panic!("expected image");
+    }
+    assert_scaled_path_timer_marker_and_named(s, sl);
+}
+
+fn assert_scaled_path_timer_marker_and_named(s: &Session, sl: &coursecraft_course::Slide) {
+    if let ObjectKind::Path { path } = &sl.object("path1").unwrap().0.kind {
+        let pt = path.text.as_ref().unwrap();
+        assert_eq!(pt.style.size, 30.0);
+        assert_eq!(pt.style.letter_spacing, 6.0);
+        assert_eq!(pt.runs[0].letter_spacing, Some(3.0));
+        assert_eq!(pt.paragraphs[0].bullet_size, Some(21.0));
+    } else {
+        panic!("expected path");
+    }
+    if let ObjectKind::Timer { style, .. } = &sl.object("timer1").unwrap().0.kind {
+        assert_eq!(style.size, 30.0);
+        assert_eq!(style.letter_spacing, 6.0);
+        assert_eq!(style.insets.unwrap().left, 3.0);
+    } else {
+        panic!("expected timer");
+    }
+    if let ObjectKind::Marker {
+        runs, paragraphs, ..
+    } = &sl.object("marker1").unwrap().0.kind
+    {
+        assert_eq!(runs[0].size, Some(24.0));
+        assert_eq!(runs[0].letter_spacing, Some(3.0));
+        assert_eq!(paragraphs[0].bullet_size, Some(21.0));
+    } else {
+        panic!("expected marker");
+    }
+    let named = &s.course.text_styles[0];
+    assert_eq!(named.style.letter_spacing, 6.0);
+    assert_eq!(named.style.insets.unwrap().bottom, 12.0);
+    assert_eq!(named.paragraphs.as_ref().unwrap().bullet_size, Some(21.0));
+}
+
+#[test]
+fn set_slide_size_scale_scales_previously_missed_base_fields() {
+    // A-03: Text.outline, Image.outline (crop untouched), Path.text, Timer.style,
+    // Marker.runs/paragraphs, TextStyle.{letter_spacing, insets}, TextRun.letter_spacing,
+    // Paragraph.bullet_size, and NamedTextStyle.{letter_spacing, insets, bullet_size}.
+    for mode in ["scale", "fill"] {
+        let mut s = sized_course();
+        let crop = coursecraft_course::CropRect {
+            x: 0.1,
+            y: 0.2,
+            w: 0.5,
+            h: 0.6,
+        };
+        populate_missed_base_fields(&mut s, crop);
+        ok(
+            &mut s,
+            "course.set_slide_size",
+            json!({ "w": 1920, "h": 1080, "mode": mode }),
+        );
+        assert_scaled_missed_base_fields(&s, crop);
+        assert_no_errors(&s);
+    }
+}
+
+#[test]
+fn set_slide_size_extreme_aspects_and_clamps_stay_valid() {
+    // A-04 (scale, fill, and keep modes + RISK-02 clamps)
+    for (w, h) in [(100, 4320), (7680, 100)] {
+        for mode in ["scale", "fill", "keep"] {
+            let mut s = sized_course();
+            let before = s.course.to_json().unwrap();
+            ok(
+                &mut s,
+                "course.set_slide_size",
+                json!({ "w": w, "h": h, "mode": mode }),
+            );
+            assert_no_errors(&s);
+            s.undo().unwrap();
+            assert_eq!(s.course.to_json().unwrap(), before);
+        }
+    }
+
+    // Extreme scale factor (100x100 -> 7680x4320, factor = 43.2) clamps frame w/h, coords, motion points, and guides.
+    let mut s = sized_course();
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 100, "h": 100, "mode": "scale" }),
+    );
+    s.course.scenes[0].slides[0].objects[0].frame = coursecraft_course::Rect {
+        x: 90_000.0,
+        y: -90_000.0,
+        w: 90_000.0,
+        h: 90_000.0,
+    };
+    s.course.scenes[0].slides[0].objects[0].motion_paths[0].points = vec![
+        coursecraft_course::Point {
+            x: 90_000.0,
+            y: -90_000.0,
+        },
+        coursecraft_course::Point {
+            x: 95_000.0,
+            y: 95_000.0,
+        },
+    ];
+    s.course.editor.guides.push(coursecraft_course::Guide {
+        vertical: true,
+        at: 90_000.0,
+    });
+    let before = s.course.to_json().unwrap();
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 7680, "h": 4320, "mode": "scale" }),
+    );
+    assert_no_errors(&s);
+    let obj = s.course.slide("slide1").unwrap().object("t").unwrap().0;
+    assert_eq!(obj.frame.x, 100_000.0);
+    assert_eq!(obj.frame.y, -100_000.0);
+    assert_eq!(obj.frame.w, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
+    assert_eq!(obj.frame.h, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
+    assert_eq!(obj.motion_paths[0].points[0].x, 100_000.0);
+    assert_eq!(obj.motion_paths[0].points[0].y, -100_000.0);
+    assert_eq!(s.course.editor.guides[0].at, 100_000.0);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+
+    // Extreme "fill" factor (100x100 -> 7680x4320, factor = 76.8) also clamps and round-trips.
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 7680, "h": 4320, "mode": "fill" }),
+    );
+    assert_no_errors(&s);
+    let obj_fill = s.course.slide("slide1").unwrap().object("t").unwrap().0;
+    assert_eq!(obj_fill.frame.x, 100_000.0);
+    assert_eq!(obj_fill.frame.y, -100_000.0);
+    assert_eq!(obj_fill.frame.w, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
+    assert_eq!(obj_fill.frame.h, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
 }
 
 #[test]
@@ -8593,6 +9285,53 @@ fn glossary_commands_add_update_move_remove_with_undo() {
     assert_eq!(s.course.glossary.len(), 1);
     s.undo().unwrap();
     assert_eq!(s.course.glossary.len(), 2);
+}
+
+#[test]
+fn glossary_sort_sorts_case_insensitively_with_undo_and_skips_when_already_sorted() {
+    // C-05: glossary.sort sorts ["Zebra", "alpha", "Beta"] -> ["alpha", "Beta", "Zebra"]
+    // in one undo step, and sets skip_undo = true when already sorted.
+    let mut s = Session::blank("Glossary Sort");
+    ok(&mut s, "glossary.add", json!({ "term": "Zebra" }));
+    ok(&mut s, "glossary.add", json!({ "term": "alpha" }));
+    ok(&mut s, "glossary.add", json!({ "term": "Beta" }));
+
+    let before: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(before, vec!["Zebra", "alpha", "Beta"]);
+
+    ok(&mut s, "glossary.sort", json!({}));
+    let sorted: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(sorted, vec!["alpha", "Beta", "Zebra"]);
+
+    // Sorting an already-sorted list is a no-op with skip_undo = true,
+    // so edit.undo still undoes the earlier sort in one step.
+    ok(&mut s, "glossary.sort", json!({}));
+    assert_eq!(
+        s.course
+            .glossary
+            .iter()
+            .map(|g| g.term.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "Beta", "Zebra"]
+    );
+
+    s.undo().unwrap();
+    let undone: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(undone, vec!["Zebra", "alpha", "Beta"]);
+
+    s.redo().unwrap();
+    let redone: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(redone, vec!["alpha", "Beta", "Zebra"]);
+
+    // On a fresh already-sorted session, glossary.sort pushes nothing to the undo stack.
+    let mut s2 = Session::blank("Already Sorted");
+    ok(&mut s2, "glossary.add", json!({ "term": "Alpha" }));
+    ok(&mut s2, "glossary.add", json!({ "term": "Beta" }));
+    s2.execute("glossary.sort", &json!({})).unwrap();
+    assert_eq!(s2.course.glossary.len(), 2);
+    // Undoing now undoes the second glossary.add rather than an empty sort step.
+    s2.undo().unwrap();
+    assert_eq!(s2.course.glossary.len(), 1);
 }
 
 #[test]
@@ -9856,4 +10595,50 @@ fn text_style_range_toggles_cleanly_and_undo_restores_exact_runs() {
         };
         assert_eq!(after_undo, baseline_runs, "undo must restore exact runs");
     }
+}
+
+#[test]
+fn course_find_and_replace_on_glossary_entries() {
+    let mut s = Session::blank("Glossary Replace");
+    ok(
+        &mut s,
+        "glossary.add",
+        json!({
+            "id": "g1",
+            "term": "Acme Token",
+            "definition": "An Acme security token."
+        }),
+    );
+
+    let found = ok(&mut s, "course.find", json!({ "query": "Acme" }));
+    assert_eq!(found["hits"].as_array().unwrap().len(), 2);
+
+    let replaced = ok(
+        &mut s,
+        "course.replace",
+        json!({ "query": "Acme", "replacement": "CourseCraft" }),
+    );
+    assert_eq!(replaced["replaced"], 2);
+    assert_eq!(s.course.glossary[0].term, "CourseCraft Token");
+    assert_eq!(
+        s.course.glossary[0].definition,
+        "An CourseCraft security token."
+    );
+
+    // One undo step restores both term and definition.
+    s.undo().unwrap();
+    assert_eq!(s.course.glossary[0].term, "Acme Token");
+    assert_eq!(s.course.glossary[0].definition, "An Acme security token.");
+
+    // RISK-09: replacing a glossary term with "" would violate validation, so it must fail
+    // cleanly without mutating the course.
+    let err = s
+        .execute(
+            "course.replace",
+            &json!({ "query": "Acme Token", "replacement": "" }),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("glossary term is empty"), "{err}");
+    assert_eq!(s.course.glossary[0].term, "Acme Token");
+    assert_eq!(s.course.glossary[0].definition, "An Acme security token.");
 }

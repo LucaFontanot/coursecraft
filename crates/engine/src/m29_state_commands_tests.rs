@@ -547,6 +547,64 @@ fn patch_state_reset_all_clears_overrides_and_undoes_in_one_step() {
 }
 
 #[test]
+fn b01_patch_state_reset_all_preserves_state_extras_and_undoes_cleanly() {
+    let mut s = Session::blank("Reset All Preserves Extras");
+    add_button(&mut s, "btn");
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "state": {
+                "name": "hover",
+                "fill": "#112233",
+                "glow": { "color": "#FFAA00", "size": 8.0 },
+                "clear_shadow": true,
+                "extras": [
+                    {
+                        "id": "ex1",
+                        "name": "Badge",
+                        "kind": { "type": "shape", "shape": "ellipse", "fill": "#FF0000" },
+                        "frame": { "x": 10.0, "y": -10.0, "w": 24.0, "h": 24.0 }
+                    },
+                    {
+                        "id": "ex2",
+                        "name": "Tag",
+                        "kind": { "type": "text", "text": "New" },
+                        "frame": { "x": 40.0, "y": 0.0, "w": 50.0, "h": 20.0 }
+                    }
+                ]
+            }
+        }),
+    );
+    let before = s.course.clone();
+    ok(
+        &mut s,
+        "object.patch_state",
+        json!({
+            "slide": "slide1",
+            "object": "btn",
+            "name": "hover",
+            "reset_all": true,
+            "patch": {}
+        }),
+    );
+    let (obj, _) = s.course.slide("slide1").unwrap().object("btn").unwrap();
+    let hover = &obj.states[0];
+    assert_eq!(hover.name, "hover");
+    assert!(hover.fill.is_none());
+    assert!(hover.glow.is_none());
+    assert!(!hover.clear_shadow);
+    assert_eq!(hover.extras.len(), 2);
+    assert_eq!(hover.extras[0].id, "ex1");
+    assert_eq!(hover.extras[1].id, "ex2");
+
+    s.undo().unwrap();
+    assert_eq!(s.course, before);
+}
+
+#[test]
 fn patch_state_rejects_unknown_key_and_mutual_exclusion_without_mutating_course() {
     let mut s = Session::blank("Patch Refusal");
     add_button(&mut s, "btn");

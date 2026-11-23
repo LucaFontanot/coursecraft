@@ -1115,7 +1115,12 @@ fn show_state_card(
                                 }),
                             ));
                             if editor.ui.preview_state.as_deref() == Some(state_name) {
-                                editor.ui.preview_state = Some(trimmed);
+                                editor.ui.preview_state = Some(trimmed.clone());
+                            }
+                            if let Some(session) = editor.ui.editing_state.as_mut()
+                                && session.state_name == state_name
+                            {
+                                session.state_name = trimmed;
                             }
                             editor.ui.states.renaming_state = None;
                         }

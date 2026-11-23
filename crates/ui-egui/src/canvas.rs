@@ -2254,7 +2254,7 @@ fn flip_point_2d(pt: Pos2, center: Pos2, flip_h: bool, flip_v: bool) -> Pos2 {
     )
 }
 
-fn state_extra_world_geometry(
+pub(crate) fn state_extra_world_geometry(
     parent: &Object,
     state_name: &str,
     extra: &coursecraft_course::StateExtra,
@@ -2326,7 +2326,7 @@ fn world_to_extra_rotation(parent: &Object, state_name: &str, world_rot: f32) ->
     coursecraft_course::normalize_rotation(flip_sign * (world_rot - parent_rot))
 }
 
-fn pick_state_extra(editor: &Editor, slide_pos: Pos2) -> Option<(String, Rect, f32)> {
+pub(crate) fn pick_state_extra(editor: &Editor, slide_pos: Pos2) -> Option<(String, Rect, f32)> {
     let session = editor.ui.editing_state.as_ref()?;
     let slide = editor.session.course.slide(&session.slide_id)?;
     let (parent, _) = slide.object(&session.object_id)?;
@@ -2361,12 +2361,17 @@ fn selected_state_extra_geometry(editor: &Editor) -> Option<(String, Rect, f32)>
 /// Create the object with `frame` through the same command a click uses.
 fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
     if let Some(session) = editor.ui.editing_state.clone() {
-        let Some(parent_frame) = editor
+        let Some((extra_frame, extra_rot)) = editor
             .session
             .course
             .slide(&session.slide_id)
             .and_then(|s| s.object(&session.object_id))
-            .map(|(o, _)| o.frame)
+            .map(|(parent, _)| {
+                (
+                    world_to_extra_frame(parent, &session.state_name, frame),
+                    world_to_extra_rotation(parent, &session.state_name, 0.0),
+                )
+            })
         else {
             return;
         };
@@ -2399,10 +2404,6 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
             ),
             _ => return,
         };
-        let rel_x = (frame.min.x - parent_frame.x).round();
-        let rel_y = (frame.min.y - parent_frame.y).round();
-        let w = frame.width().round().max(1.0);
-        let h = frame.height().round().max(1.0);
         if let Some(res) = editor.run(
             "object.state_add_extra",
             serde_json::json!({
@@ -2412,7 +2413,8 @@ fn place_object(editor: &mut Editor, tool: &PlacementTool, frame: Rect) {
                 "extra": {
                     "name": extra_name,
                     "kind": kind,
-                    "frame": { "x": rel_x, "y": rel_y, "w": w, "h": h },
+                    "frame": extra_frame,
+                    "rotation": extra_rot,
                 }
             }),
         ) && let Some(id) = res.get("id").and_then(serde_json::Value::as_str)
@@ -2856,12 +2858,18 @@ fn commit_draw(
     };
     let name = next_draw_name(editor, tool.base_name());
     if let Some(session) = editor.ui.editing_state.clone() {
-        let Some(parent_frame) = editor
+        let world_rect = Rect::from_min_size(pos2(frame.x, frame.y), vec2(frame.w, frame.h));
+        let Some((extra_frame, extra_rot)) = editor
             .session
             .course
             .slide(&session.slide_id)
             .and_then(|s| s.object(&session.object_id))
-            .map(|(o, _)| o.frame)
+            .map(|(parent, _)| {
+                (
+                    world_to_extra_frame(parent, &session.state_name, world_rect),
+                    world_to_extra_rotation(parent, &session.state_name, 0.0),
+                )
+            })
         else {
             editor.ui.placement_tool = None;
             editor.ui.draw = None;
@@ -2889,12 +2897,8 @@ fn commit_draw(
                 "extra": {
                     "name": name,
                     "kind": kind_json,
-                    "frame": {
-                        "x": (frame.x - parent_frame.x).round(),
-                        "y": (frame.y - parent_frame.y).round(),
-                        "w": frame.w.round().max(1.0),
-                        "h": frame.h.round().max(1.0),
-                    }
+                    "frame": extra_frame,
+                    "rotation": extra_rot,
                 }
             }),
         );
@@ -3976,6 +3980,14 @@ fn start_drag_if_pressed(
     }
 }
 
+pub(crate) fn apply_rotate_preview(items: &mut [DrawItem], object_id: &str, rotation: f32) {
+    for item in items.iter_mut() {
+        if item.hit == Hit::Object(object_id.to_owned()) && !item.is_state_extra {
+            item.rotation = rotation;
+        }
+    }
+}
+
 #[allow(clippy::cognitive_complexity)]
 fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTransform, ui: &Ui) {
     let Some(drag) = editor.ui.canvas_drag.clone() else {
@@ -4357,11 +4369,7 @@ fn process_active_drag(editor: &mut Editor, items: &mut [DrawItem], t: &SlideTra
                 }
             }
         } else {
-            for item in items.iter_mut() {
-                if item.hit == Hit::Object(drag.object_id.clone()) {
-                    item.rotation = rotation;
-                }
-            }
+            apply_rotate_preview(items, &drag.object_id, rotation);
         }
         return;
     }
@@ -5843,7 +5851,10 @@ fn update_inline_edit_buffer(
     state.buffer = buffer.to_owned();
 }
 
-fn inline_edit_slide_rect(object: &coursecraft_course::Object, edit: &InlineEdit) -> Option<Rect> {
+pub(crate) fn inline_edit_slide_rect(
+    object: &coursecraft_course::Object,
+    edit: &InlineEdit,
+) -> Option<Rect> {
     if let (Some(state_name), Some(extra_id)) =
         (edit.state_name.as_deref(), edit.extra_id.as_deref())
     {
@@ -5852,21 +5863,20 @@ fn inline_edit_slide_rect(object: &coursecraft_course::Object, edit: &InlineEdit
             .iter()
             .find(|s| s.name == state_name)
             .and_then(|s| s.extras.iter().find(|e| e.id == extra_id))?;
-        let origin_x = object.frame.x + extra.frame.x;
-        let origin_y = object.frame.y + extra.frame.y;
+        let (world_rect, _world_rot) = state_extra_world_geometry(object, state_name, extra);
         return Some(match &extra.kind {
             coursecraft_course::StateExtraKind::Shape { shape, adjust, .. }
                 if coursecraft_course::shape_allows_text(*shape) =>
             {
                 let (x, y, w, h) = coursecraft_render::shape_text_rect(
                     *shape,
-                    extra.frame.w,
-                    extra.frame.h,
+                    world_rect.width(),
+                    world_rect.height(),
                     adjust,
                 );
-                Rect::from_min_size(pos2(origin_x + x, origin_y + y), vec2(w, h))
+                Rect::from_min_size(pos2(world_rect.min.x + x, world_rect.min.y + y), vec2(w, h))
             }
-            _ => Rect::from_min_size(pos2(origin_x, origin_y), vec2(extra.frame.w, extra.frame.h)),
+            _ => world_rect,
         });
     }
     Some(match (&object.kind, edit.cell) {
