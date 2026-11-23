@@ -17,6 +17,8 @@
 mod commands;
 mod connectors;
 mod slide_size;
+#[cfg(debug_assertions)]
+pub mod test_counts;
 
 pub use connectors::reroute_connectors;
 
@@ -27,6 +29,12 @@ pub use commands::registry;
 
 /// Undo steps kept per session.
 pub const MAX_HISTORY: usize = 200;
+
+fn clone_course_counted(course: &Course) -> Course {
+    #[cfg(debug_assertions)]
+    test_counts::note_full_course_clone();
+    course.clone()
+}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum EngineError {
@@ -224,7 +232,7 @@ impl Session {
         if !cmd.mutates {
             return (cmd.run)(self, params);
         }
-        let snapshot = self.course.clone();
+        let snapshot = clone_course_counted(&self.course);
         self.skip_undo = false;
         self.validated_in_cmd = false;
         let outcome = (cmd.run)(self, params);
@@ -300,7 +308,7 @@ impl Session {
             }
         }
 
-        let snapshot = self.course.clone();
+        let snapshot = clone_course_counted(&self.course);
         let mut results = Vec::with_capacity(steps.len());
         let mut any_changed = false;
         let mut first_label: Option<&'static str> = None;
@@ -323,7 +331,7 @@ impl Session {
             };
 
             let step_snapshot = (name.is_none() && first_label.is_none() && cmd.mutates)
-                .then(|| self.course.clone());
+                .then(|| clone_course_counted(&self.course));
             self.skip_undo = false;
             let outcome = (cmd.run)(self, params);
             if cmd.mutates {
@@ -443,3 +451,5 @@ mod styles_tests;
 mod tests;
 #[cfg(test)]
 mod u21_publish_settings_tests;
+#[cfg(test)]
+mod undo_perf_tests;
