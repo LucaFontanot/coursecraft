@@ -11338,3 +11338,93 @@ fn df_02_differential_250_step_mixed_sequence_with_eviction() {
         assert!(*count > 0, "DF-02 operation category {idx} never executed");
     }
 }
+
+#[test]
+fn undo_estimated_bytes_tracks_undo_and_redo_deltas() {
+    let mut s = Session::blank("Bytes");
+    assert_eq!(s.undo_estimated_bytes(), 0);
+
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "rect1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    let after_add = s.undo_estimated_bytes();
+    assert!(after_add > 0);
+
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "rect1",
+            "frame": { "x": 50.0, "y": 20.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    let after_move = s.undo_estimated_bytes();
+    assert!(after_move > after_add);
+
+    // Moving a delta from undo to redo keeps it accounted for in undo_estimated_bytes.
+    s.undo().expect("undo move");
+    assert!(s.undo_estimated_bytes() > 0);
+
+    // A new edit clears redo so the moved-object delta is dropped.
+    ok(&mut s, "course.set_title", json!({ "title": "Renamed" }));
+    assert!(!s.can_redo());
+    assert!(s.undo_estimated_bytes() > 0);
+}
+
+#[test]
+fn undo_steps_and_redo_steps_unwind_atomically_on_mid_loop_delta_error() {
+    let mut s = Session::blank("Atomic Unwind");
+    ok(&mut s, "course.set_title", json!({ "title": "One" }));
+    ok(&mut s, "course.set_title", json!({ "title": "Two" }));
+    ok(&mut s, "course.set_title", json!({ "title": "Three" }));
+
+    // Corrupt the second step from the top (index 1) so step 0 succeeds and step 1 fails.
+    let bad_delta = crate::delta::CourseDelta::SlideChange {
+        loc: crate::delta::SlideLoc::SceneSlide {
+            scene: 99,
+            slide: 0,
+        },
+        change: crate::delta::SlideDelta::ObjectInserted {
+            layer: None,
+            index: 0,
+        },
+    };
+    let saved_good = std::mem::replace(&mut s.undo[1].0, bad_delta.clone());
+
+    let before_course = s.course.clone();
+    let before_rev = s.revision;
+    let before_undo: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    let before_redo: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+
+    let err = s.undo_steps(3).expect_err("corrupted mid-loop undo fails");
+    assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    assert_eq!(s.course, before_course);
+    assert_eq!(s.revision, before_rev);
+    assert_eq!(s.undo_names(), before_undo);
+    assert_eq!(s.redo_names(), before_redo);
+
+    // Restore good delta, undo all 3, then test redo_steps mid-loop unwind.
+    s.undo[1].0 = saved_good;
+    s.undo_steps(3).expect("valid undo_steps(3)");
+    s.redo[1].0 = bad_delta;
+
+    let before_course = s.course.clone();
+    let before_rev = s.revision;
+    let before_undo: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    let before_redo: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+
+    let err = s.redo_steps(3).expect_err("corrupted mid-loop redo fails");
+    assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    assert_eq!(s.course, before_course);
+    assert_eq!(s.revision, before_rev);
+    assert_eq!(s.undo_names(), before_undo);
+    assert_eq!(s.redo_names(), before_redo);
+}

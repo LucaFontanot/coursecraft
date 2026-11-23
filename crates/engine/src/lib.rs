@@ -24,9 +24,12 @@ pub mod test_counts;
 
 pub use connectors::reroute_connectors;
 
+use std::collections::VecDeque;
+
 use coursecraft_course::{Course, PlayerSettings, SCHEMA_VERSION, Scene, Size, Slide, Theme};
 use serde_json::Value as Json;
 
+use crate::delta::CourseDelta;
 pub use commands::registry;
 
 /// Undo steps kept per session.
@@ -36,58 +39,6 @@ fn clone_course_counted(course: &Course) -> Course {
     #[cfg(debug_assertions)]
     test_counts::note_full_course_clone();
     course.clone()
-}
-
-#[cfg(test)]
-fn assert_delta_roundtrip(before: &Course, after: &Course, context: &str) {
-    let delta = crate::delta::CourseDelta::diff(before.clone(), after);
-    assert!(
-        delta.is_some(),
-        "shadow delta oracle: CourseDelta::diff returned None for {context}"
-    );
-    if let Some(mut delta) = delta {
-        let before_json = before.to_json();
-        let after_json = after.to_json();
-        assert!(
-            before_json.is_ok(),
-            "shadow delta oracle: before.to_json() failed for {context}: {before_json:?}"
-        );
-        assert!(
-            after_json.is_ok(),
-            "shadow delta oracle: after.to_json() failed for {context}: {after_json:?}"
-        );
-
-        let mut check = after.clone();
-        let undo_res = delta.apply(&mut check);
-        assert!(
-            undo_res.is_ok(),
-            "shadow delta oracle: undo apply failed for {context}: {undo_res:?}"
-        );
-        assert_eq!(
-            check, *before,
-            "shadow delta oracle: undo PartialEq mismatch for {context}"
-        );
-        assert_eq!(
-            check.to_json().ok(),
-            before_json.ok(),
-            "shadow delta oracle: undo JSON mismatch for {context}"
-        );
-
-        let redo_res = delta.apply(&mut check);
-        assert!(
-            redo_res.is_ok(),
-            "shadow delta oracle: redo apply failed for {context}: {redo_res:?}"
-        );
-        assert_eq!(
-            check, *after,
-            "shadow delta oracle: redo PartialEq mismatch for {context}"
-        );
-        assert_eq!(
-            check.to_json().ok(),
-            after_json.ok(),
-            "shadow delta oracle: redo JSON mismatch for {context}"
-        );
-    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -130,8 +81,12 @@ pub struct Command {
 /// An open course being edited.
 pub struct Session {
     pub course: Course,
-    undo: Vec<(Course, String)>,
-    redo: Vec<(Course, String)>,
+    undo: VecDeque<(CourseDelta, String)>,
+    redo: VecDeque<(CourseDelta, String)>,
+    #[cfg(test)]
+    shadow_undo: VecDeque<(Course, String)>,
+    #[cfg(test)]
+    shadow_redo: VecDeque<(Course, String)>,
     /// Bumped on every successful mutating command (UI caches key off this).
     pub revision: u64,
     /// Set by a mutating command that changed nothing (for example a replace
@@ -154,8 +109,12 @@ impl Session {
     pub fn new(course: Course) -> Self {
         Self {
             course,
-            undo: Vec::new(),
-            redo: Vec::new(),
+            undo: VecDeque::new(),
+            redo: VecDeque::new(),
+            #[cfg(test)]
+            shadow_undo: VecDeque::new(),
+            #[cfg(test)]
+            shadow_redo: VecDeque::new(),
             revision: 0,
             skip_undo: false,
             history_truncated: false,
@@ -250,6 +209,44 @@ impl Session {
             .collect()
     }
 
+    /// Estimated heap + stack bytes retained across the undo and redo stacks.
+    #[must_use]
+    pub fn undo_estimated_bytes(&self) -> usize {
+        self.undo
+            .iter()
+            .chain(self.redo.iter())
+            .fold(0usize, |acc, (delta, _)| {
+                acc.saturating_add(delta.estimated_bytes())
+            })
+    }
+
+    fn commit_delta(
+        &mut self,
+        delta: CourseDelta,
+        label: String,
+        #[cfg(test)] shadow_before: Course,
+    ) {
+        #[cfg(test)]
+        let shadow_label = label.clone();
+        self.undo.push_back((delta, label));
+        if self.undo.len() > MAX_HISTORY {
+            self.undo.pop_front();
+            self.history_truncated = true;
+        }
+        self.redo.clear();
+        self.revision = self.revision.wrapping_add(1);
+        #[cfg(test)]
+        {
+            self.shadow_undo.push_back((shadow_before, shadow_label));
+            if self.shadow_undo.len() > MAX_HISTORY {
+                self.shadow_undo.pop_front();
+            }
+            self.shadow_redo.clear();
+            assert_eq!(self.shadow_undo.len(), self.undo.len());
+            assert_eq!(self.shadow_redo.len(), self.redo.len());
+        }
+    }
+
     /// Whether the course currently passes validation without errors.
     ///
     /// Caches the result per [`Session::revision`] so consecutive commands on an
@@ -299,16 +296,24 @@ impl Session {
             Ok(v) => {
                 reroute_connectors(&mut self.course);
                 #[cfg(test)]
-                assert_delta_roundtrip(&snapshot, &self.course, cmd.id);
-                self.undo.push((snapshot, cmd.label.to_owned()));
-                if self.undo.len() > MAX_HISTORY {
-                    self.undo.remove(0);
-                    self.history_truncated = true;
-                }
-                self.redo.clear();
-                self.revision = self.revision.wrapping_add(1);
-                if self.validated_in_cmd {
-                    self.valid_at_revision = Some((self.revision, true));
+                let shadow_before = snapshot.clone();
+                let delta = CourseDelta::diff(snapshot, &self.course);
+                #[cfg(test)]
+                assert!(
+                    delta.is_some() || self.course == shadow_before,
+                    "shadow undo oracle: CourseDelta::diff returned None for changed course ({})",
+                    cmd.id
+                );
+                if let Some(delta) = delta {
+                    self.commit_delta(
+                        delta,
+                        cmd.label.to_owned(),
+                        #[cfg(test)]
+                        shadow_before,
+                    );
+                    if self.validated_in_cmd {
+                        self.valid_at_revision = Some((self.revision, true));
+                    }
                 }
                 Ok(v)
             }
@@ -425,32 +430,111 @@ impl Session {
                 .or_else(|| first_label.map(str::to_owned))
                 .unwrap_or_else(|| "Batch".to_owned());
             #[cfg(test)]
-            assert_delta_roundtrip(&snapshot, &self.course, &label);
-            self.undo.push((snapshot, label));
-            if self.undo.len() > MAX_HISTORY {
-                self.undo.remove(0);
-                self.history_truncated = true;
+            let shadow_before = snapshot.clone();
+            let delta = CourseDelta::diff(snapshot, &self.course);
+            #[cfg(test)]
+            assert!(
+                delta.is_some() || self.course == shadow_before,
+                "shadow undo oracle: CourseDelta::diff returned None for changed batch ({label})"
+            );
+            if let Some(delta) = delta {
+                self.commit_delta(
+                    delta,
+                    label,
+                    #[cfg(test)]
+                    shadow_before,
+                );
             }
-            self.redo.clear();
-            self.revision = self.revision.wrapping_add(1);
         }
 
         Ok(results)
     }
 
     pub fn undo(&mut self) -> Result<()> {
-        let (prev, name) = self.undo.pop().ok_or(EngineError::NothingTo("undo"))?;
-        let current = std::mem::replace(&mut self.course, prev);
-        self.redo.push((current, name));
+        let (mut delta, name) = self.undo.pop_back().ok_or(EngineError::NothingTo("undo"))?;
+        #[cfg(test)]
+        let current_before_undo = self.course.clone();
+        if let Err(err) = delta.apply(&mut self.course) {
+            self.undo.push_back((delta, name));
+            return Err(err);
+        }
+        #[cfg(test)]
+        {
+            let shadow_entry = self.shadow_undo.pop_back();
+            assert!(
+                shadow_entry.is_some(),
+                "shadow undo oracle underflow during undo"
+            );
+            if let Some((shadow_prev, shadow_name)) = shadow_entry {
+                assert_eq!(
+                    shadow_name, name,
+                    "shadow undo oracle label mismatch during undo"
+                );
+                assert_eq!(
+                    self.course, shadow_prev,
+                    "shadow undo oracle PartialEq mismatch during undo ({name})"
+                );
+                let actual_json = self.course.to_json();
+                let expected_json = shadow_prev.to_json();
+                assert!(
+                    actual_json.is_ok() && expected_json.is_ok(),
+                    "shadow undo oracle JSON serialization failed during undo ({name})"
+                );
+                assert_eq!(
+                    actual_json.ok(),
+                    expected_json.ok(),
+                    "shadow undo oracle JSON mismatch during undo ({name})"
+                );
+                self.shadow_redo
+                    .push_back((current_before_undo, shadow_name));
+            }
+        }
+        self.redo.push_back((delta, name));
         self.valid_at_revision = None;
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
 
     pub fn redo(&mut self) -> Result<()> {
-        let (next, name) = self.redo.pop().ok_or(EngineError::NothingTo("redo"))?;
-        let current = std::mem::replace(&mut self.course, next);
-        self.undo.push((current, name));
+        let (mut delta, name) = self.redo.pop_back().ok_or(EngineError::NothingTo("redo"))?;
+        #[cfg(test)]
+        let current_before_redo = self.course.clone();
+        if let Err(err) = delta.apply(&mut self.course) {
+            self.redo.push_back((delta, name));
+            return Err(err);
+        }
+        #[cfg(test)]
+        {
+            let shadow_entry = self.shadow_redo.pop_back();
+            assert!(
+                shadow_entry.is_some(),
+                "shadow redo oracle underflow during redo"
+            );
+            if let Some((shadow_next, shadow_name)) = shadow_entry {
+                assert_eq!(
+                    shadow_name, name,
+                    "shadow redo oracle label mismatch during redo"
+                );
+                assert_eq!(
+                    self.course, shadow_next,
+                    "shadow redo oracle PartialEq mismatch during redo ({name})"
+                );
+                let actual_json = self.course.to_json();
+                let expected_json = shadow_next.to_json();
+                assert!(
+                    actual_json.is_ok() && expected_json.is_ok(),
+                    "shadow redo oracle JSON serialization failed during redo ({name})"
+                );
+                assert_eq!(
+                    actual_json.ok(),
+                    expected_json.ok(),
+                    "shadow redo oracle JSON mismatch during redo ({name})"
+                );
+                self.shadow_undo
+                    .push_back((current_before_redo, shadow_name));
+            }
+        }
+        self.undo.push_back((delta, name));
         self.valid_at_revision = None;
         self.revision = self.revision.wrapping_add(1);
         Ok(())
@@ -462,8 +546,17 @@ impl Session {
         if n > self.undo.len() {
             return Err(EngineError::NothingTo("undo"));
         }
-        for _ in 0..n {
-            self.undo()?;
+        let saved_revision = self.revision;
+        let saved_valid = self.valid_at_revision;
+        for done in 0..n {
+            if let Err(err) = self.undo() {
+                for _ in 0..done {
+                    let _ = self.redo();
+                }
+                self.revision = saved_revision;
+                self.valid_at_revision = saved_valid;
+                return Err(err);
+            }
         }
         Ok(())
     }
@@ -474,8 +567,17 @@ impl Session {
         if n > self.redo.len() {
             return Err(EngineError::NothingTo("redo"));
         }
-        for _ in 0..n {
-            self.redo()?;
+        let saved_revision = self.revision;
+        let saved_valid = self.valid_at_revision;
+        for done in 0..n {
+            if let Err(err) = self.redo() {
+                for _ in 0..done {
+                    let _ = self.undo();
+                }
+                self.revision = saved_revision;
+                self.valid_at_revision = saved_valid;
+                return Err(err);
+            }
         }
         Ok(())
     }
