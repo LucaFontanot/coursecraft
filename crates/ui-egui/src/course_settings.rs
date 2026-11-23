@@ -482,24 +482,34 @@ pub fn show_course_settings_window(editor: &mut crate::Editor, ctx: &egui::Conte
                 });
                 form.row(ui, "Seekbar", |ui, _| {
                     let mut mode = editor.ui.course_settings.seekbar;
-                    crate::widgets::styled_combo(
-                        ui,
-                        "course_seekbar_behaviour",
-                        crate::widgets::COMBO_MIN_WIDTH,
-                    )
-                    .selected_text(seekbar_label(mode))
-                    .show_ui(ui, |ui| {
-                        for choice in [
-                            SeekbarBehaviour::Free,
-                            SeekbarBehaviour::Locked,
-                            SeekbarBehaviour::UntilTimelineEnds,
-                        ] {
-                            ui.selectable_value(&mut mode, choice, seekbar_label(choice))
-                                .on_hover_text(seekbar_hint(choice));
-                        }
-                    })
-                    .response
-                    .on_hover_text(seekbar_hint(mode));
+                    let seekbar_enabled = editor.ui.course_settings.show_bar
+                        && editor.ui.course_settings.show_seekbar;
+                    let disabled_tip = if !editor.ui.course_settings.show_bar {
+                        BAR_OFF_TOOLTIP
+                    } else {
+                        "Turn \"Show seekbar\" on to use this"
+                    };
+                    ui.add_enabled_ui(seekbar_enabled, |ui| {
+                        crate::widgets::styled_combo(
+                            ui,
+                            "course_seekbar_behaviour",
+                            crate::widgets::COMBO_MIN_WIDTH,
+                        )
+                        .selected_text(seekbar_label(mode))
+                        .show_ui(ui, |ui| {
+                            for choice in [
+                                SeekbarBehaviour::Free,
+                                SeekbarBehaviour::Locked,
+                                SeekbarBehaviour::UntilTimelineEnds,
+                            ] {
+                                ui.selectable_value(&mut mode, choice, seekbar_label(choice))
+                                    .on_hover_text(seekbar_hint(choice));
+                            }
+                        })
+                        .response
+                        .on_hover_text(seekbar_hint(mode))
+                        .on_disabled_hover_text(disabled_tip);
+                    });
                     if mode != editor.ui.course_settings.seekbar {
                         editor.ui.course_settings.seekbar = mode;
                         update_player = true;

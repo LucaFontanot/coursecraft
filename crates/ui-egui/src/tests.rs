@@ -4447,6 +4447,76 @@ fn course_settings_player_bar_switch_disables_bar_options_and_updates_course() {
 }
 
 #[test]
+fn b12_course_settings_seekbar_combo_disabled_with_tooltip_when_bar_or_seekbar_off() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new_with_size(course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    for _ in 0..5 {
+        harness.idle_frame();
+    }
+
+    let find_seekbar_combo = |h: &mut TestHarness| {
+        let row_y = h.find_text_last("Seekbar").expect("Seekbar label").y;
+        let combo_pos = h
+            .find_texts("Free")
+            .into_iter()
+            .min_by_key(|p| ((p.y - row_y).abs() * 10.0) as i32)
+            .expect("Seekbar combo text");
+        h.last_widgets
+            .iter()
+            .find(|n| n.bounds.contains(combo_pos))
+            .cloned()
+            .expect("Seekbar combo widget")
+    };
+
+    assert!(!find_seekbar_combo(&mut harness).disabled);
+
+    // Turning off "Show seekbar" disables the Seekbar combo with an explanatory tooltip.
+    let show_seekbar_toggle = harness
+        .find_text_last("Show seekbar")
+        .expect("Show seekbar toggle");
+    harness.click_at(show_seekbar_toggle);
+    harness.idle_frame();
+    assert!(!harness.editor.session.course.player.show_seekbar);
+
+    let combo = find_seekbar_combo(&mut harness);
+    assert!(
+        combo.disabled,
+        "Seekbar combo must be disabled when show_seekbar is false"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(combo.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Turn \"Show seekbar\" on to use this"),
+        "disabled Seekbar combo must explain show_seekbar is off, got {tip:?}"
+    );
+
+    // Turning off "Player bar" also disables the Seekbar combo with the player bar tooltip.
+    let bar_toggle = harness
+        .find_text_last("Player bar")
+        .expect("Player bar toggle");
+    harness.click_at(bar_toggle);
+    harness.idle_frame();
+    assert!(!harness.editor.session.course.player.show_bar);
+
+    let combo = find_seekbar_combo(&mut harness);
+    assert!(
+        combo.disabled,
+        "Seekbar combo must be disabled when show_bar is false"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(combo.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Turn the player bar on to use this"),
+        "disabled Seekbar combo must explain player bar is off, got {tip:?}"
+    );
+}
+
+#[test]
 fn slide_properties_player_bar_override_updates_slide() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
