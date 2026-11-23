@@ -11852,3 +11852,139 @@ fn sc_03_single_slide_missing_or_unknown_slide_falls_back_safely() {
     assert_eq!(s.revision, before_rev);
     assert_eq!(s.undo_len(), before_undo);
 }
+
+/// SingleSlide lookup must match `Course::slide_mut` precedence (scenes -> banks
+/// -> masters, never templates), even on malformed courses where a bank slide
+/// shares an id with a master or template.
+#[test]
+fn sc_03_single_slide_matches_course_slide_mut_precedence_with_duplicate_ids() {
+    let mut seed = Session::blank("Duplicate ID Precedence");
+    ok(&mut seed, "master.add", json!({ "id": "dup_bank_master" }));
+    let bank_id = ok(&mut seed, "bank.create", json!({ "title": "B1" }))["id"]
+        .as_str()
+        .expect("bank id")
+        .to_owned();
+    let bank_slide_id = ok(
+        &mut seed,
+        "bank.add_question",
+        json!({ "bank": bank_id, "title": "Bank Slide" }),
+    )["id"]
+        .as_str()
+        .expect("bank slide id")
+        .to_owned();
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": bank_slide_id,
+            "id": "bank_shape",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+
+    // Construct a malformed course where the bank slide has the same id as the
+    // master AND a template, plus a template-only id.
+    let mut course = seed.course;
+    let mut tpl = course.scenes[0].slides[0].clone();
+    tpl.id = "dup_bank_master".into();
+    course.templates.push(tpl);
+    let mut tpl_only = course.scenes[0].slides[0].clone();
+    tpl_only.id = "template_only".into();
+    course.templates.push(tpl_only);
+    course.banks[0].slides[0].id = "dup_bank_master".into();
+
+    let mut s = Session::new(course);
+    let before_json = s.course.to_json().expect("before json");
+
+    // SingleSlide edit must target the bank slide (matching Course::slide_mut),
+    // take 0 full-course clones, pass scope isolation, and undo/redo cleanly.
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "dup_bank_master",
+            "object": "bank_shape",
+            "frame": { "x": 75.0, "y": 85.0, "w": 90.0, "h": 50.0 }
+        }),
+    );
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    assert_eq!(s.undo_len(), 1);
+    let after_json = s.course.to_json().expect("after json");
+    assert_ne!(after_json, before_json);
+
+    s.undo().expect("undo bank edit");
+    assert_eq!(s.course.to_json().expect("undone json"), before_json);
+    s.redo().expect("redo bank edit");
+    assert_eq!(s.course.to_json().expect("redone json"), after_json);
+
+    // Partial-mutation error on the bank slide must roll back the bank slide.
+    let before_err_json = s.course.to_json().expect("before err json");
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    let err = s
+        .execute(
+            "object.update",
+            &json!({
+                "slide": "dup_bank_master",
+                "object": "bank_shape",
+                "name": "ShouldRollBack",
+                "initial_state": "   "
+            }),
+        )
+        .expect_err("invalid initial_state must fail");
+    assert!(matches!(err, EngineError::BadParams { .. }), "{err:?}");
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    assert_eq!(s.course.to_json().expect("after err json"), before_err_json);
+
+    // Same-slide batch targeting the bank slide must also match slide_mut.
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    s.execute_batch(&[
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "dup_bank_master",
+                "object": "bank_shape",
+                "frame": { "x": 120.0, "y": 130.0, "w": 90.0, "h": 50.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "dup_bank_master",
+                "object": "bank_shape",
+                "name": "Batch Bank Shape"
+            }),
+        ),
+    ])
+    .expect("same-slide batch on bank slide");
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    s.undo().expect("undo batch");
+    assert_eq!(
+        s.course.to_json().expect("undone batch json"),
+        before_err_json
+    );
+
+    // Template-only id is not editable via Course::slide_mut and falls back cleanly.
+    let tpl_err = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "slide": "template_only",
+                "object": "bank_shape",
+                "frame": { "x": 1.0, "y": 2.0, "w": 10.0, "h": 10.0 }
+            }),
+        )
+        .expect_err("template slide is not editable");
+    assert!(matches!(tpl_err, EngineError::NotFound(_)), "{tpl_err:?}");
+    assert_eq!(
+        s.course.to_json().expect("after template err json"),
+        before_err_json
+    );
+}

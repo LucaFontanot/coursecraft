@@ -129,7 +129,7 @@ fn same_slide_batch_loc(course: &Course, steps: &[(String, Json)]) -> Option<Sli
         }
     }
     let sid = target_slide?;
-    SlideLoc::find(course, sid)
+    SlideLoc::find_editable(course, sid)
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -386,7 +386,7 @@ impl Session {
                 if let Some(loc) = params
                     .get("slide")
                     .and_then(Json::as_str)
-                    .and_then(|sid| SlideLoc::find(&self.course, sid))
+                    .and_then(|sid| SlideLoc::find_editable(&self.course, sid))
                 {
                     return self.execute_single_slide(cmd, params, loc);
                 }

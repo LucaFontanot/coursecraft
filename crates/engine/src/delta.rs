@@ -67,6 +67,32 @@ impl SlideLoc {
         }
         None
     }
+
+    /// Locate an editable slide by id in the exact precedence order used by
+    /// [`Course::slide_mut`]: scenes, then banks, then masters (never templates).
+    #[must_use]
+    pub(crate) fn find_editable(course: &Course, slide_id: &str) -> Option<Self> {
+        for (scene_idx, scene) in course.scenes.iter().enumerate() {
+            if let Some(slide_idx) = scene.slides.iter().position(|s| s.id == slide_id) {
+                return Some(Self::SceneSlide {
+                    scene: scene_idx,
+                    slide: slide_idx,
+                });
+            }
+        }
+        for (bank_idx, bank) in course.banks.iter().enumerate() {
+            if let Some(slide_idx) = bank.slides.iter().position(|s| s.id == slide_id) {
+                return Some(Self::BankSlide {
+                    bank: bank_idx,
+                    slide: slide_idx,
+                });
+            }
+        }
+        if let Some(idx) = course.masters.iter().position(|s| s.id == slide_id) {
+            return Some(Self::Master(idx));
+        }
+        None
+    }
 }
 
 /// Borrow the slide at `loc`, returning `None` if any index is out of range.
