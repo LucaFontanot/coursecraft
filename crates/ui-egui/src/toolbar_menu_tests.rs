@@ -548,3 +548,316 @@ fn menus_toolbar_and_navigator_use_canonical_sentence_case_names() {
         "navigator must not show legacy 'Close Master View'"
     );
 }
+
+fn open_file_submenu(h: &mut TestHarness, submenu: &str) {
+    let file_pos = h.find_text("File").expect("File menu");
+    h.click_at(file_pos);
+    h.idle_frame();
+    let sub_pos = h
+        .find_text_last(submenu)
+        .unwrap_or_else(|| panic!("{submenu:?} submenu under File"));
+    h.click_at(sub_pos);
+    h.idle_frame();
+}
+
+/// I-01: `File ▸ Import ▸` lists all 7 import actions in order and each triggers its
+/// expected `EditorRequest` or dialog (`M32-08`).
+#[test]
+fn file_import_menu_lists_all_seven_items_in_order_and_triggers_actions() {
+    let mut h =
+        TestHarness::new_with_config(sample_course(), (1280.0, 800.0), ThemeMode::Dark, 1.0, true);
+    h.idle_frame();
+
+    let expected_items = [
+        "PowerPoint (.pptx)…",
+        "Course from document…",
+        "Slides from outline…",
+        "Questions from spreadsheet (CSV)…",
+        "Translation (XLIFF)…",
+        "Media files…",
+        "Font…",
+    ];
+
+    open_file_submenu(&mut h, "Import");
+    let mut prev_y = f32::NEG_INFINITY;
+    for label in expected_items {
+        let pos = h
+            .find_text_last(label)
+            .unwrap_or_else(|| panic!("expected {label:?} in File ▸ Import"));
+        assert!(
+            pos.y > prev_y,
+            "expected {label:?} (y={}) below previous item (y={prev_y})",
+            pos.y
+        );
+        prev_y = pos.y;
+    }
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+
+    // 1. PowerPoint (.pptx)… -> PickPptx
+    open_file_submenu(&mut h, "Import");
+    let pos = h
+        .find_text_last("PowerPoint (.pptx)…")
+        .expect("PowerPoint (.pptx)…");
+    let reqs = h.click_at_requests(pos);
+    assert!(
+        reqs.iter()
+            .any(|r| matches!(r, crate::EditorRequest::PickPptx)),
+        "expected PickPptx request, got {reqs:?}"
+    );
+
+    // 2. Course from document… -> opens document dialog
+    open_file_submenu(&mut h, "Import");
+    let pos = h
+        .find_text_last("Course from document…")
+        .expect("Course from document…");
+    h.click_at(pos);
+    h.idle_frame();
+    assert!(
+        h.editor.document_dialog_open_for_test(),
+        "expected Course from document dialog to open"
+    );
+    h.editor.ui.document.open = false;
+    h.idle_frame();
+
+    // 3. Slides from outline… -> opens outline dialog
+    open_file_submenu(&mut h, "Import");
+    let pos = h
+        .find_text_last("Slides from outline…")
+        .expect("Slides from outline…");
+    h.click_at(pos);
+    h.idle_frame();
+    assert!(
+        h.editor.outline_dialog_open_for_test(),
+        "expected Slides from outline dialog to open"
+    );
+    h.editor.ui.show_outline_dialog = false;
+    h.idle_frame();
+
+    // 4. Questions from spreadsheet (CSV)… -> ImportQuestionsCsv
+    open_file_submenu(&mut h, "Import");
+    let pos = h
+        .find_text_last("Questions from spreadsheet (CSV)…")
+        .expect("Questions from spreadsheet (CSV)…");
+    let reqs = h.click_at_requests(pos);
+    assert!(
+        reqs.iter()
+            .any(|r| matches!(r, crate::EditorRequest::ImportQuestionsCsv)),
+        "expected ImportQuestionsCsv request, got {reqs:?}"
+    );
+
+    // 5. Translation (XLIFF)… -> ImportTranslation
+    open_file_submenu(&mut h, "Import");
+    let pos = h
+        .find_text_last("Translation (XLIFF)…")
+        .expect("Translation (XLIFF)…");
+    let reqs = h.click_at_requests(pos);
+    assert!(
+        reqs.iter()
+            .any(|r| matches!(r, crate::EditorRequest::ImportTranslation)),
+        "expected ImportTranslation request, got {reqs:?}"
+    );
+
+    // 6. Media files… -> PickMediaFiles
+    open_file_submenu(&mut h, "Import");
+    let pos = h.find_text_last("Media files…").expect("Media files…");
+    let reqs = h.click_at_requests(pos);
+    assert!(
+        reqs.iter()
+            .any(|r| matches!(r, crate::EditorRequest::PickMediaFiles)),
+        "expected PickMediaFiles request, got {reqs:?}"
+    );
+
+    // 7. Font… -> PickFonts
+    open_file_submenu(&mut h, "Import");
+    let pos = h.find_text_last("Font…").expect("Font…");
+    let reqs = h.click_at_requests(pos);
+    assert!(
+        reqs.iter()
+            .any(|r| matches!(r, crate::EditorRequest::PickFonts)),
+        "expected PickFonts request, got {reqs:?}"
+    );
+
+    // File ▸ Export ▸ Translation (XLIFF)… -> opens export translation dialog
+    open_file_submenu(&mut h, "Export");
+    let pos = h
+        .find_text_last("Translation (XLIFF)…")
+        .expect("Export Translation (XLIFF)…");
+    h.click_at(pos);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.show_export_translation,
+        "expected Export translation dialog to open"
+    );
+}
+
+/// I-02: Old scattered import/export duplicates are gone from `File` and `Insert`,
+/// and `File ▸ Export ▸` contains `Translation (XLIFF)…` (`M32-08`).
+#[test]
+fn old_scattered_import_and_export_duplicates_are_removed() {
+    let mut h =
+        TestHarness::new_with_config(sample_course(), (1280.0, 800.0), ThemeMode::Dark, 1.0, true);
+    h.idle_frame();
+
+    // Top-level File has no scattered duplicates and keeps Manage fonts….
+    let file_pos = h.find_text("File").expect("File menu");
+    h.click_at(file_pos);
+    h.idle_frame();
+    for removed in [
+        "Import PowerPoint…",
+        "Import translation…",
+        "Export translation…",
+        "Add font…",
+        "Slides from outline…",
+    ] {
+        assert!(
+            h.find_text(removed).is_none(),
+            "top-level File menu must not contain legacy duplicate {removed:?}"
+        );
+    }
+    assert!(
+        h.find_text_last("Manage fonts…").is_some(),
+        "top-level File menu must keep 'Manage fonts…'"
+    );
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+
+    // Insert menu has neither Slides from outline… nor Course from document….
+    let insert_pos = h.find_text("Insert").expect("Insert menu");
+    h.click_at(insert_pos);
+    h.idle_frame();
+    for removed in ["Slides from outline…", "Course from document…"] {
+        assert!(
+            h.find_text(removed).is_none(),
+            "Insert menu must not contain moved import {removed:?}"
+        );
+    }
+    h.press(egui::Key::Escape, egui::Modifiers::NONE);
+    h.idle_frame();
+
+    // File ▸ Export ▸ has Translation (XLIFF)… after Word for review….
+    open_file_submenu(&mut h, "Export");
+    let word_pos = h
+        .find_text_last("Word for review…")
+        .expect("Word for review… in File ▸ Export");
+    let xliff_pos = h
+        .find_text_last("Translation (XLIFF)…")
+        .expect("Translation (XLIFF)… in File ▸ Export");
+    assert!(
+        xliff_pos.y > word_pos.y,
+        "expected Translation (XLIFF)… (y={}) after Word for review… (y={})",
+        xliff_pos.y,
+        word_pos.y
+    );
+}
+
+/// I-03: In web mode (`file_ops_available = false`), desktop-only Import and Export
+/// items are disabled with tooltips while browser-safe imports stay enabled (`M32-08`).
+#[test]
+fn web_mode_disables_desktop_only_import_and_export_items_with_tooltips() {
+    let mut h = TestHarness::new_with_config(
+        sample_course(),
+        (1280.0, 800.0),
+        ThemeMode::Dark,
+        1.0,
+        false,
+    );
+    h.idle_frame();
+
+    // Desktop-only items in File ▸ Import are disabled with desktop-only tooltips.
+    for label in ["Translation (XLIFF)…", "Media files…"] {
+        open_file_submenu(&mut h, "Import");
+        let pos = h
+            .find_text_last(label)
+            .unwrap_or_else(|| panic!("expected disabled {label:?} in File ▸ Import"));
+        h.hover_at(pos);
+        let tip = h.probe_tooltip(pos);
+        assert!(
+            tip.as_deref().is_some_and(|t| t.contains("desktop-only")),
+            "expected desktop-only tooltip for {label:?}, got {tip:?}"
+        );
+        let reqs = h.click_at_requests(pos);
+        assert!(
+            reqs.is_empty(),
+            "clicking disabled {label:?} must not emit requests: {reqs:?}"
+        );
+        h.press(egui::Key::Escape, egui::Modifiers::NONE);
+        h.idle_frame();
+    }
+
+    // Browser-safe imports stay enabled in web mode.
+    open_file_submenu(&mut h, "Import");
+    let pptx_pos = h
+        .find_text_last("PowerPoint (.pptx)…")
+        .expect("PowerPoint (.pptx)…");
+    let reqs = h.click_at_requests(pptx_pos);
+    assert!(
+        reqs.iter()
+            .any(|r| matches!(r, crate::EditorRequest::PickPptx)),
+        "PowerPoint (.pptx)… must remain enabled in web mode"
+    );
+
+    open_file_submenu(&mut h, "Import");
+    let doc_pos = h
+        .find_text_last("Course from document…")
+        .expect("Course from document…");
+    h.click_at(doc_pos);
+    h.idle_frame();
+    assert!(
+        h.editor.document_dialog_open_for_test(),
+        "Course from document… must remain enabled in web mode"
+    );
+    h.editor.ui.document.open = false;
+    h.idle_frame();
+
+    open_file_submenu(&mut h, "Import");
+    let outline_pos = h
+        .find_text_last("Slides from outline…")
+        .expect("Slides from outline…");
+    h.click_at(outline_pos);
+    h.idle_frame();
+    assert!(
+        h.editor.outline_dialog_open_for_test(),
+        "Slides from outline… must remain enabled in web mode"
+    );
+    h.editor.ui.show_outline_dialog = false;
+    h.idle_frame();
+
+    open_file_submenu(&mut h, "Import");
+    let csv_pos = h
+        .find_text_last("Questions from spreadsheet (CSV)…")
+        .expect("Questions from spreadsheet (CSV)…");
+    let reqs = h.click_at_requests(csv_pos);
+    assert!(
+        reqs.iter()
+            .any(|r| matches!(r, crate::EditorRequest::ImportQuestionsCsv)),
+        "Questions from spreadsheet (CSV)… must remain enabled in web mode"
+    );
+
+    open_file_submenu(&mut h, "Import");
+    let font_pos = h.find_text_last("Font…").expect("Font…");
+    let reqs = h.click_at_requests(font_pos);
+    assert!(
+        reqs.iter()
+            .any(|r| matches!(r, crate::EditorRequest::PickFonts)),
+        "Font… must remain enabled in web mode"
+    );
+
+    // File ▸ Export ▸ Translation (XLIFF)… is disabled with desktop-only tooltip in web mode.
+    open_file_submenu(&mut h, "Export");
+    let export_xliff_pos = h
+        .find_text_last("Translation (XLIFF)…")
+        .expect("Translation (XLIFF)… in File ▸ Export");
+    h.hover_at(export_xliff_pos);
+    let tip = h.probe_tooltip(export_xliff_pos);
+    assert!(
+        tip.as_deref().is_some_and(|t| t.contains("desktop-only")),
+        "expected desktop-only tooltip for Export Translation (XLIFF)…, got {tip:?}"
+    );
+    h.click_at(export_xliff_pos);
+    h.idle_frame();
+    assert!(
+        !h.editor.ui.show_export_translation,
+        "clicking disabled Export Translation (XLIFF)… must not open the dialog"
+    );
+}

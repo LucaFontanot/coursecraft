@@ -711,43 +711,45 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
 
             ui.separator();
 
-            if ui.button("Import PowerPoint…").clicked() {
-                requests.push(EditorRequest::PickPptx);
-                ui.close();
-            }
             ui.menu_button("Import", |ui| {
-                if ui.button("Questions from CSV…").clicked() {
+                if ui.button("PowerPoint (.pptx)…").clicked() {
+                    requests.push(EditorRequest::PickPptx);
+                    ui.close();
+                }
+                if ui.button("Course from document…").clicked() {
+                    editor.open_document_dialog();
+                    ui.close();
+                }
+                if ui.button("Slides from outline…").clicked() {
+                    editor.open_outline_dialog();
+                    ui.close();
+                }
+                if ui.button("Questions from spreadsheet (CSV)…").clicked() {
                     requests.push(EditorRequest::ImportQuestionsCsv);
                     ui.close();
                 }
-            });
-
-            if ui.button("Add font…").clicked() {
-                requests.push(EditorRequest::PickFonts);
-                ui.close();
-            }
-            if ui.button("Manage fonts…").clicked() {
-                editor.ui.show_fonts_window = true;
-                ui.close();
-            }
-
-            if desktop_file_ops {
-                if ui.button("Export translation…").clicked() {
-                    editor.ui.show_export_translation = true;
-                    ui.close();
-                }
-                if ui.button("Import translation…").clicked() {
+                if ui
+                    .add_enabled(desktop_file_ops, Button::new("Translation (XLIFF)…"))
+                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG)
+                    .clicked()
+                {
                     requests.push(EditorRequest::ImportTranslation);
                     ui.close();
                 }
-            } else {
-                ui.add_enabled(false, Button::new("Export translation…"))
-                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG);
-                ui.add_enabled(false, Button::new("Import translation…"))
-                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG);
-            }
-
-            ui.separator();
+                ui.separator();
+                if ui
+                    .add_enabled(desktop_file_ops, Button::new("Media files…"))
+                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG)
+                    .clicked()
+                {
+                    requests.push(EditorRequest::PickMediaFiles);
+                    ui.close();
+                }
+                if ui.button("Font…").clicked() {
+                    requests.push(EditorRequest::PickFonts);
+                    ui.close();
+                }
+            });
 
             ui.menu_button("Export", |ui| {
                 if ui.button("Video (MP4)…").clicked() {
@@ -762,7 +764,20 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                     editor.open_export_review(crate::ReviewFormat::Word);
                     ui.close();
                 }
+                if ui
+                    .add_enabled(desktop_file_ops, Button::new("Translation (XLIFF)…"))
+                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG)
+                    .clicked()
+                {
+                    editor.ui.show_export_translation = true;
+                    ui.close();
+                }
             });
+
+            if ui.button("Manage fonts…").clicked() {
+                editor.ui.show_fonts_window = true;
+                ui.close();
+            }
 
             ui.separator();
 
@@ -782,7 +797,9 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
 
             // Registry items under File/
             for cmd in registry() {
-                if let Some(sub) = cmd.menu.strip_prefix("File/") {
+                if let Some(sub) = cmd.menu.strip_prefix("File/")
+                    && !sub.starts_with("Import/")
+                {
                     render_registry_menu_item(editor, ui, cmd, sub, &mut action_to_run);
                 }
             }
@@ -2036,11 +2053,6 @@ fn render_extra_category_items(
         }
         if ui.button("Narration from text…").clicked() {
             editor.open_speech_dialog();
-            ui.close();
-        }
-        ui.separator();
-        if ui.button("Course from document…").clicked() {
-            editor.open_document_dialog();
             ui.close();
         }
     }

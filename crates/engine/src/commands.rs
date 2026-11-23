@@ -516,7 +516,7 @@ static REGISTRY: &[Command] = &[
     Command {
         id: "course.import_outline",
         label: "Slides from outline",
-        menu: "Insert/Slides from outline…",
+        menu: "File/Import/Slides from outline…",
         shortcut: None,
         params: r#"{"outline": {"title"?: string|null, "scenes": [{"title": string, "slides": [{"title": string, "body"?: [string], "notes"?: string|null, "question"?: {"prompt": string, "choices": [{"text": string, "correct": bool}]}}]}]}, "after"?: slide id}"#,
         mutates: true,

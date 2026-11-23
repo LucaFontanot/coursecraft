@@ -134,7 +134,7 @@ courses/old.ccraft     failed: step 0 (course.recolor): ...
 
 **Recipes** for agents are in `docs/recipes/`: [build-from-pdf](recipes/build-from-pdf.md), [accessibility-fix](recipes/accessibility-fix.md), [translate-and-check](recipes/translate-and-check.md), [rebrand-many](recipes/rebrand-many.md).
 
-**`import-questions`** reads a CSV with a header row (case-insensitive, any order): `type` (`multiple_choice`, `multiple_response`, `true_false`, `fill_in`), `question`, `choice1` to `choice10`, `correct` (choice numbers such as `2` or `1;3`; `true` or `false`; or accepted answers separated by `;` for fill-in), and optional `feedback_correct`, `feedback_incorrect`, `points`. Each row becomes a question slide in a new bank, or in the bank named by `--bank`. If any row is wrong nothing is imported and every problem is listed with its row number (the header is row 1). The file may be up to 5 MB and 2,000 rows. The app has File, Import, Questions from CSV.
+**`import-questions`** reads a CSV with a header row (case-insensitive, any order): `type` (`multiple_choice`, `multiple_response`, `true_false`, `fill_in`), `question`, `choice1` to `choice10`, `correct` (choice numbers such as `2` or `1;3`; `true` or `false`; or accepted answers separated by `;` for fill-in), and optional `feedback_correct`, `feedback_incorrect`, `points`. Each row becomes a question slide in a new bank, or in the bank named by `--bank`. If any row is wrong nothing is imported and every problem is listed with its row number (the header is row 1). The file may be up to 5 MB and 2,000 rows. The app has File, Import, Questions from spreadsheet (CSV)…
 
 **`diff`** lists one line per change, grouped by slide in course order. It matches slides, objects, layers, variables and the rest by id, so moving a slide shows as a move. When both sides have media (a `.ccraft`, or a `media/` folder beside `course.json`) it also reports files added, removed or with different content.
 
@@ -291,7 +291,7 @@ bank.remove_slide    -                        -          {"slide": id}
 draw.insert          -                        -          {"bank": id, "count": u32, "scene"?: id, "index"?: usize}
 draw.update          -                        -          {"slide": id, "bank"?: id, "count"?: u32}
 slide.add_from_layout -                        -          {"layout": "blank"|"title"|"title_content"|"two_columns"|"picture_text"|"question", "after"?: slide id, "scene"?: id, "master"?: id}
-course.import_outline Insert/Slides from outline… -          {"outline": {"title"?: string|null, "scenes": [{"title": string, "slides": [{"title": string, "body"?: [string], "notes"?: string|null, "question"?: {"prompt": string, "choices": [{"text": string, "correct": bool}]}}]}]}, "after"?: slide id}
+course.import_outline File/Import/Slides from outline… -          {"outline": {"title"?: string|null, "scenes": [{"title": string, "slides": [{"title": string, "body"?: [string], "notes"?: string|null, "question"?: {"prompt": string, "choices": [{"text": string, "correct": bool}]}}]}]}, "after"?: slide id}
 template.save        -                        -          {"slide": id, "title"?: string}
 template.add_slide   -                        -          {"template": id, "after"?: slide id, "scene"?: id}
 template.delete      -                        -          {"template": id}

@@ -66,13 +66,16 @@ fn start_generation(harness: &mut TestHarness) -> Vec<EditorRequest> {
 }
 
 #[test]
-fn insert_menu_opens_course_from_document() {
+fn file_import_menu_opens_course_from_document() {
     let mut h = harness();
     h.idle_frame();
     assert!(!h.editor.document_dialog_open_for_test());
 
-    let insert = h.find_text("Insert").expect("Insert menu");
-    h.click_at(insert);
+    let file = h.find_text("File").expect("File menu");
+    h.click_at(file);
+    h.idle_frame();
+    let import = h.find_text_last("Import").expect("Import submenu");
+    h.click_at(import);
     h.idle_frame();
     let item = h
         .find_text_last("Course from document…")
