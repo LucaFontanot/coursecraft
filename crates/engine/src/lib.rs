@@ -16,6 +16,8 @@
 
 mod commands;
 mod connectors;
+#[allow(dead_code)]
+mod delta;
 mod slide_size;
 #[cfg(debug_assertions)]
 pub mod test_counts;
