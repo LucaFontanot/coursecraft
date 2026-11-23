@@ -86,7 +86,7 @@ static REGISTRY: &[Command] = &[
         label: "Slide Size",
         menu: "",
         shortcut: None,
-        params: r#"{"w": number, "h": number, "mode": "scale"|"keep"}"#,
+        params: r#"{"w": number, "h": number, "mode": "scale"|"fill"|"keep"}"#,
         mutates: true,
         run: course_set_slide_size,
     },
@@ -1885,15 +1885,16 @@ fn course_set_slide_size(s: &mut Session, p: &Json) -> Result<Json> {
     let w: u32 = req(C, p, "w")?;
     let h: u32 = req(C, p, "h")?;
     let mode: String = req(C, p, "mode")?;
-    let scale = match mode.as_str() {
-        "scale" => true,
-        "keep" => false,
-        _ => return Err(bad(C, "`mode` must be \"scale\" or \"keep\"")),
+    let mode = match mode.as_str() {
+        "scale" => crate::slide_size::ResizeMode::Scale,
+        "fill" => crate::slide_size::ResizeMode::Fill,
+        "keep" => crate::slide_size::ResizeMode::Keep,
+        _ => return Err(bad(C, "`mode` must be \"scale\", \"fill\", or \"keep\"")),
     };
     if !crate::slide_size::size_in_bounds(w, h) {
         return Err(bad(C, "size must be 100..=7680 wide and 100..=4320 high"));
     }
-    if !crate::slide_size::set_slide_size(&mut s.course, w, h, scale) {
+    if !crate::slide_size::set_slide_size(&mut s.course, w, h, mode) {
         s.skip_undo = true;
     }
     keep_valid(s, was_valid)?;

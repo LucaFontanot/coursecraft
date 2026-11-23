@@ -1628,3 +1628,31 @@ fn d5_1_all_mutating_commands_undo_redo_round_trip() {
         failures.join("\n")
     );
 }
+
+#[test]
+fn set_slide_size_fill_undo_redo_and_cli_docs_sync() {
+    // A-05: course.set_slide_size ("fill") undo/redo + docs/cli.md sync.
+    let cli_md = include_str!("../../../docs/cli.md");
+    assert!(
+        cli_md.contains(r#""mode": "scale"|"fill"|"keep""#),
+        "docs/cli.md must document course.set_slide_size with scale|fill|keep"
+    );
+
+    let mut s = Session::blank("Slide Size Fill Undo");
+    let before = s.course.clone();
+    s.execute(
+        "course.set_slide_size",
+        &json!({ "w": 1000, "h": 1000, "mode": "fill" }),
+    )
+    .expect("course.set_slide_size fill");
+    let after = s.course.clone();
+    assert_ne!(after, before);
+    assert!(validation_errors(&after).is_empty());
+
+    s.execute("edit.undo", &json!({})).expect("undo");
+    assert_eq!(s.course, before);
+    s.execute("edit.redo", &json!({})).expect("redo");
+    assert_eq!(s.course, after);
+    s.execute("edit.undo", &json!({})).expect("second undo");
+    assert_eq!(s.course, before);
+}

@@ -310,20 +310,36 @@ fn scale_slide(slide: &mut Slide, m: Map) {
     }
 }
 
+/// How `set_slide_size` handles existing slide content when dimensions change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResizeMode {
+    /// Uniformly fit the old canvas inside the new size, adding margins if the aspect changes.
+    Scale,
+    /// Uniformly fill the new size edge-to-edge; edges may extend past the slide.
+    Fill,
+    /// Change only `course.slide_size`, leaving all objects, guides, and styles untouched.
+    Keep,
+}
+
 /// Check the requested size against the bounds.
 pub(crate) fn size_in_bounds(w: u32, h: u32) -> bool {
     (MIN_SIDE..=MAX_W).contains(&w) && (MIN_SIDE..=MAX_H).contains(&h)
 }
 
-/// Change the slide size. With `scale`, content follows by one uniform factor
-/// and is centred. Returns false when nothing changed.
-pub(crate) fn set_slide_size(course: &mut Course, w: u32, h: u32, scale: bool) -> bool {
+/// Change the slide size according to `mode`. Returns false when nothing changed.
+pub(crate) fn set_slide_size(course: &mut Course, w: u32, h: u32, mode: ResizeMode) -> bool {
     let old = course.slide_size;
     if old.w == w && old.h == h {
         return false;
     }
-    if scale && old.w > 0 && old.h > 0 {
-        let factor = (w as f32 / old.w as f32).min(h as f32 / old.h as f32);
+    if mode != ResizeMode::Keep && old.w > 0 && old.h > 0 {
+        let sx = w as f32 / old.w as f32;
+        let sy = h as f32 / old.h as f32;
+        let factor = match mode {
+            ResizeMode::Scale => sx.min(sy),
+            ResizeMode::Fill => sx.max(sy),
+            ResizeMode::Keep => 1.0,
+        };
         if factor.is_finite() && factor > 0.0 {
             let m = Map {
                 factor,

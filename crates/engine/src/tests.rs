@@ -2818,6 +2818,10 @@ fn panic_hunt() {
         json!({ "name": "x y", "value": [] }),
         json!({ "slide": "slide1", "question": { "kind": "multiple_choice", "prompt": "", "choices": [] } }),
         json!({ "w": 1e308, "h": -5, "mode": "scale" }),
+        json!({ "w": 1e308, "h": -5, "mode": "fill" }),
+        json!({ "w": 7680, "h": 4320, "mode": "scale" }),
+        json!({ "w": 7680, "h": 4320, "mode": "fill" }),
+        json!({ "w": 100, "h": 4320, "mode": "fill" }),
         json!({ "w": 7680, "h": 4320, "mode": 123 }),
         json!({ "w": 0, "h": 0, "mode": "keep" }),
     ];
@@ -8236,6 +8240,51 @@ fn set_slide_size_scale_uses_one_factor_and_centres_everything() {
 }
 
 #[test]
+fn set_slide_size_fill_uses_max_factor_and_centres_overhang() {
+    // A-01: 1280x720 -> 1000x1000 with "fill" uses factor = max(1000/1280, 1000/720) = 1000/720.
+    let mut s = sized_course();
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 0, "y": 0, "w": 1280, "h": 720 }
+        }),
+    );
+    let before = s.course.to_json().unwrap();
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 1000, "h": 1000, "mode": "fill" }),
+    );
+    let f = (1000.0_f32 / 1280.0_f32).max(1000.0_f32 / 720.0_f32);
+    let dx = (1000.0 - 1280.0 * f) / 2.0;
+    let dy = (1000.0 - 720.0 * f) / 2.0;
+    assert!(dx < 0.0);
+    assert!(dy.abs() < 0.001);
+
+    let slide = s.course.slide("slide1").unwrap();
+    let bg = slide.object("bg").unwrap().0;
+    assert_eq!(bg.frame.x, dx.round());
+    assert_eq!(bg.frame.y, 0.0);
+    assert_eq!(bg.frame.w, (1280.0 * f).round());
+    assert_eq!(bg.frame.h, 1000.0);
+    let left_overhang = -bg.frame.x;
+    let right_overhang = bg.frame.x + bg.frame.w - 1000.0;
+    assert!((left_overhang - right_overhang).abs() <= 1.0);
+
+    let t = slide.object("t").unwrap().0;
+    assert_eq!(t.frame.x, (100.0 * f + dx).round());
+    assert_eq!(t.frame.y, (200.0 * f).round());
+    assert_eq!(t.frame.w, (400.0 * f).round());
+    assert_no_errors(&s);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+}
+
+#[test]
 fn set_slide_size_checks_bounds_mode_and_noop() {
     let mut s = sized_course();
     for p in [
@@ -8562,6 +8611,25 @@ fn set_slide_size_scale_scales_states_and_state_extras() {
     assert_no_errors(&s);
     s.undo().unwrap();
     assert_eq!(s.course.to_json().unwrap(), before);
+
+    // "fill" mode on 1280x720 -> 1440x1080 => factor=max(1.125, 1.5)=1.5, dx=-240.0, dy=0.0.
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 1440, "h": 1080, "mode": "fill" }),
+    );
+    let st_fill = &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t")
+        .unwrap()
+        .0
+        .states[0];
+    assert_scaled_state_and_extras(st_fill);
+    assert_no_errors(&s);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
 }
 
 fn populate_missed_base_fields(s: &mut Session, crop: coursecraft_course::CropRect) {
@@ -8793,28 +8861,30 @@ fn set_slide_size_scale_scales_previously_missed_base_fields() {
     // A-03: Text.outline, Image.outline (crop untouched), Path.text, Timer.style,
     // Marker.runs/paragraphs, TextStyle.{letter_spacing, insets}, TextRun.letter_spacing,
     // Paragraph.bullet_size, and NamedTextStyle.{letter_spacing, insets, bullet_size}.
-    let mut s = sized_course();
-    let crop = coursecraft_course::CropRect {
-        x: 0.1,
-        y: 0.2,
-        w: 0.5,
-        h: 0.6,
-    };
-    populate_missed_base_fields(&mut s, crop);
-    ok(
-        &mut s,
-        "course.set_slide_size",
-        json!({ "w": 1920, "h": 1080, "mode": "scale" }),
-    );
-    assert_scaled_missed_base_fields(&s, crop);
-    assert_no_errors(&s);
+    for mode in ["scale", "fill"] {
+        let mut s = sized_course();
+        let crop = coursecraft_course::CropRect {
+            x: 0.1,
+            y: 0.2,
+            w: 0.5,
+            h: 0.6,
+        };
+        populate_missed_base_fields(&mut s, crop);
+        ok(
+            &mut s,
+            "course.set_slide_size",
+            json!({ "w": 1920, "h": 1080, "mode": mode }),
+        );
+        assert_scaled_missed_base_fields(&s, crop);
+        assert_no_errors(&s);
+    }
 }
 
 #[test]
 fn set_slide_size_extreme_aspects_and_clamps_stay_valid() {
-    // A-04 (scale and keep modes + RISK-02 clamps)
+    // A-04 (scale, fill, and keep modes + RISK-02 clamps)
     for (w, h) in [(100, 4320), (7680, 100)] {
-        for mode in ["scale", "keep"] {
+        for mode in ["scale", "fill", "keep"] {
             let mut s = sized_course();
             let before = s.course.to_json().unwrap();
             ok(
@@ -8870,6 +8940,21 @@ fn set_slide_size_extreme_aspects_and_clamps_stay_valid() {
     assert_eq!(obj.motion_paths[0].points[0].x, 100_000.0);
     assert_eq!(obj.motion_paths[0].points[0].y, -100_000.0);
     assert_eq!(s.course.editor.guides[0].at, 100_000.0);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+
+    // Extreme "fill" factor (100x100 -> 7680x4320, factor = 76.8) also clamps and round-trips.
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 7680, "h": 4320, "mode": "fill" }),
+    );
+    assert_no_errors(&s);
+    let obj_fill = s.course.slide("slide1").unwrap().object("t").unwrap().0;
+    assert_eq!(obj_fill.frame.x, 100_000.0);
+    assert_eq!(obj_fill.frame.y, -100_000.0);
+    assert_eq!(obj_fill.frame.w, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
+    assert_eq!(obj_fill.frame.h, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
     s.undo().unwrap();
     assert_eq!(s.course.to_json().unwrap(), before);
 }
