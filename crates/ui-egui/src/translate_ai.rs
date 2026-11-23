@@ -637,8 +637,11 @@ pub fn show_translate_window(
                         ui.label(RichText::new("Target").strong());
                     });
 
-                    let avail_table_height =
-                        (ui.available_height() - 48.0).clamp(40.0, table_height);
+                    let avail_table_height = coursecraft_course::safe_clamp(
+                        ui.available_height() - 48.0,
+                        40.0,
+                        table_height,
+                    );
                     ScrollArea::vertical()
                         .id_salt("translate_review_rows")
                         .max_height(avail_table_height)

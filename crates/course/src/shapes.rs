@@ -1758,7 +1758,7 @@ pub fn clamp_adjust(kind: ShapeKind, values: &[f32]) -> Vec<f32> {
             let max = spec.max.get(i).copied().unwrap_or(default);
             let raw = values.get(i).copied().unwrap_or(default);
             let value = if raw.is_finite() { raw } else { default };
-            value.clamp(min.min(max), max.max(min))
+            crate::safe_clamp(value, min.min(max), max.max(min))
         })
         .collect()
 }
@@ -1897,5 +1897,18 @@ mod tests {
                 category.label()
             );
         }
+    }
+
+    #[test]
+    fn m31_11_clamp_adjust_and_safe_clamp_handle_hostile_bounds() {
+        let clamped = clamp_adjust(
+            ShapeKind::RoundedRectangle,
+            &[f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0, 99.0],
+        );
+        assert!(clamped.iter().all(|v| v.is_finite()));
+        assert_eq!(crate::safe_clamp(5.0, 20.0, 10.0), 10.0);
+        assert_eq!(crate::safe_clamp(5.0, f32::NAN, 10.0), 10.0);
+        assert_eq!(crate::safe_clamp(5.0, 10.0, f32::NAN), 10.0);
+        assert_eq!(crate::safe_clamp(5.0, f32::NAN, f32::NAN), 0.0);
     }
 }

@@ -2411,12 +2411,12 @@ fn hotspot_rect(player: &Player<'_>) -> Option<Rect> {
 
 fn clamp_point(rect: Rect, x: f32, y: f32) -> (f32, f32) {
     let x = if x.is_finite() {
-        x.clamp(rect.left(), rect.right())
+        coursecraft_course::safe_clamp(x, rect.left(), rect.right())
     } else {
         rect.center().x
     };
     let y = if y.is_finite() {
-        y.clamp(rect.top(), rect.bottom())
+        coursecraft_course::safe_clamp(y, rect.top(), rect.bottom())
     } else {
         rect.center().y
     };

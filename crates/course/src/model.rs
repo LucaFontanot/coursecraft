@@ -1372,7 +1372,7 @@ fn finite_clamp(value: f32, min: f32, max: f32, fallback: f32) -> f32 {
     if value.is_nan() {
         fallback
     } else {
-        value.clamp(min, max)
+        safe_clamp(value, min, max)
     }
 }
 

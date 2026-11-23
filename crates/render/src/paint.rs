@@ -3712,7 +3712,7 @@ fn paint_marker(
     } else {
         0.0
     };
-    let card_width = (content_width + pad * 2.0).clamp(0.0, max_width);
+    let card_width = coursecraft_course::safe_clamp(content_width + pad * 2.0, 0.0, max_width);
     let card_height = title_height + separator + body_height + pad * 2.0;
     if !card_width.is_finite() || !card_height.is_finite() {
         return;
@@ -3725,7 +3725,8 @@ fn paint_marker(
         if left >= slide_rect.left() {
             card_x = left;
         } else {
-            card_x = (screen_rect.center().x - card_width * 0.5).clamp(
+            card_x = coursecraft_course::safe_clamp(
+                screen_rect.center().x - card_width * 0.5,
                 slide_rect.left(),
                 (slide_rect.right() - card_width).max(slide_rect.left()),
             );
@@ -3737,7 +3738,8 @@ fn paint_marker(
             };
         }
     }
-    card_y = card_y.clamp(
+    card_y = coursecraft_course::safe_clamp(
+        card_y,
         slide_rect.top(),
         (slide_rect.bottom() - card_height).max(slide_rect.top()),
     );

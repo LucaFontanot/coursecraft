@@ -838,8 +838,16 @@ impl Preview {
             let initial = self.remembered_size.map_or_else(
                 || {
                     egui::vec2(
-                        PREVIEW_DEFAULT_WIDTH.clamp(min_size.x, max_size.x),
-                        PREVIEW_DEFAULT_HEIGHT.clamp(min_size.y, max_size.y),
+                        coursecraft_course::safe_clamp(
+                            PREVIEW_DEFAULT_WIDTH,
+                            min_size.x,
+                            max_size.x,
+                        ),
+                        coursecraft_course::safe_clamp(
+                            PREVIEW_DEFAULT_HEIGHT,
+                            min_size.y,
+                            max_size.y,
+                        ),
                     )
                 },
                 |sz| clamp_preview_size(sz, min_size, max_size),
@@ -1062,7 +1070,11 @@ impl Preview {
                         let (slide_width, side_width) = if is_log_visible || is_vars_visible {
                             let max_side = (avail.x - LOG_GAP - 80.0).max(0.0);
                             let min_side = 240.0_f32.min(max_side);
-                            let sw = (avail.x * 0.35).clamp(min_side, 400.0_f32.min(max_side));
+                            let sw = coursecraft_course::safe_clamp(
+                                avail.x * 0.35,
+                                min_side,
+                                400.0_f32.min(max_side),
+                            );
                             ((avail.x - sw - LOG_GAP).max(1.0), Some(sw))
                         } else {
                             (avail.x.max(1.0), None)
@@ -1416,8 +1428,8 @@ fn preview_size_limits(bounds: Rect) -> (egui::Vec2, egui::Vec2) {
 
 fn clamp_preview_size(size: egui::Vec2, min_size: egui::Vec2, max_size: egui::Vec2) -> egui::Vec2 {
     egui::vec2(
-        size.x.clamp(min_size.x, max_size.x),
-        size.y.clamp(min_size.y, max_size.y),
+        coursecraft_course::safe_clamp(size.x, min_size.x, max_size.x),
+        coursecraft_course::safe_clamp(size.y, min_size.y, max_size.y),
     )
 }
 
@@ -1430,8 +1442,8 @@ fn clamp_preview_rect(
     let size = clamp_preview_size(rect.size(), min_size, max_size);
     let max_left = (bounds.max.x - size.x).max(bounds.min.x);
     let max_top = (bounds.max.y - size.y).max(bounds.min.y);
-    let min_x = rect.min.x.clamp(bounds.min.x, max_left);
-    let min_y = rect.min.y.clamp(bounds.min.y, max_top);
+    let min_x = coursecraft_course::safe_clamp(rect.min.x, bounds.min.x, max_left);
+    let min_y = coursecraft_course::safe_clamp(rect.min.y, bounds.min.y, max_top);
     Rect::from_min_size(egui::pos2(min_x, min_y), size)
 }
 
@@ -1590,4 +1602,40 @@ fn handle_resize_grips(
         });
     ctx.move_to_top(grip_area.response.layer_id);
     updated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn m31_11_clamp_preview_size_and_rect_handle_hostile_bounds() {
+        let inverted = clamp_preview_size(
+            egui::vec2(400.0, 300.0),
+            egui::vec2(500.0, 400.0),
+            egui::vec2(100.0, 100.0),
+        );
+        assert_eq!(inverted, egui::vec2(100.0, 100.0));
+
+        let nan_bounds = clamp_preview_size(
+            egui::vec2(f32::NAN, f32::INFINITY),
+            egui::vec2(f32::NAN, 10.0),
+            egui::vec2(100.0, f32::NAN),
+        );
+        assert!(nan_bounds.x.is_finite() && nan_bounds.y.is_finite());
+
+        let _ = clamp_preview_rect(
+            Rect::NOTHING,
+            Rect::NOTHING,
+            egui::vec2(300.0, 200.0),
+            egui::vec2(100.0, 100.0),
+        );
+        let rect = clamp_preview_rect(
+            Rect::NOTHING,
+            Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(50.0, 50.0)),
+            egui::vec2(300.0, 200.0),
+            egui::vec2(100.0, 100.0),
+        );
+        assert_eq!(rect.size(), egui::vec2(100.0, 100.0));
+    }
 }

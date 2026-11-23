@@ -692,9 +692,11 @@ fn input_value_at(item: &DrawItem, slide_pos: Pos2) -> Option<Value> {
             }
             #[allow(clippy::cast_precision_loss)]
             let count = options.len() as f32;
-            let row = ((slide_pos.y - item.rect.top()) / item.rect.height() * count)
-                .floor()
-                .clamp(0.0, count - 1.0);
+            let row = coursecraft_course::safe_clamp(
+                ((slide_pos.y - item.rect.top()) / item.rect.height() * count).floor(),
+                0.0,
+                count - 1.0,
+            );
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let index = row as usize;
             options
@@ -777,8 +779,8 @@ fn clamp_draggable(drag: &mut ItemDrag) {
     let max_x = (bounds.right() - size.x).max(bounds.left());
     let max_y = (bounds.bottom() - size.y).max(bounds.top());
     let mut new_min = drag.origin.min + delta;
-    new_min.x = new_min.x.clamp(bounds.left(), max_x);
-    new_min.y = new_min.y.clamp(bounds.top(), max_y);
+    new_min.x = coursecraft_course::safe_clamp(new_min.x, bounds.left(), max_x);
+    new_min.y = coursecraft_course::safe_clamp(new_min.y, bounds.top(), max_y);
     drag.current = drag.press + (new_min - drag.origin.min);
 }
 

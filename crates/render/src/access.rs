@@ -759,7 +759,7 @@ fn content_node(
                     _ => None,
                 })
                 .unwrap_or(*min);
-            let now = if raw.is_finite() {
+            let now = if raw.is_finite() && min.is_finite() && max.is_finite() {
                 raw.clamp(min.min(*max), min.max(*max))
             } else {
                 *min

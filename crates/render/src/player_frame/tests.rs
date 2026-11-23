@@ -3022,3 +3022,13 @@ fn b10_start_gate_wraps_long_label_on_narrow_screen() {
         "start button {button:?} must stay completely inside slide {slide:?}"
     );
 }
+
+#[test]
+fn m31_11_slider_value_handles_inverted_and_nan_bounds() {
+    let normal = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 20.0));
+    let _ = super::slider_value(egui::Rect::NOTHING, 10.0, 100.0, 0.0, 0.0);
+    let v = super::slider_value(normal, 50.0, 100.0, 10.0, 4.0);
+    assert!(v.is_finite());
+    let nan_bound = super::slider_value(normal, 50.0, f32::NAN, 10.0, 4.0);
+    assert!(nan_bound.is_finite());
+}
