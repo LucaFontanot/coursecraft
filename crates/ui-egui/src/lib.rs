@@ -3333,6 +3333,24 @@ impl Editor {
         self.preview = Some(preview);
     }
 
+    /// Open the in-editor full-course preview starting at `slide_id`.
+    ///
+    /// Falls back to the whole course from its start slide if `slide_id` is empty
+    /// or refers to a question bank slide.
+    pub fn open_preview_from(&mut self, slide_id: &str) {
+        self.exit_edit_state();
+        let is_scene_slide = !slide_id.is_empty()
+            && self.session.course.bank_slide(slide_id).is_none()
+            && self.session.course.play_slide(slide_id).is_some();
+        let mut preview = if is_scene_slide {
+            Preview::new_from_slide(&self.session.course, slide_id)
+        } else {
+            Preview::new(&self.session.course, None)
+        };
+        preview.set_initial_size(self.ui.preview_size);
+        self.preview = Some(preview);
+    }
+
     /// Open the in-editor course preview window restricted to the given slide IDs.
     ///
     /// Bank slides are ignored; if no scene slides remain, opens the whole course.
@@ -4583,8 +4601,8 @@ impl Editor {
         if self.ui.master_view && self.ui.bottom_tab == BottomTab::States {
             self.ui.bottom_tab = BottomTab::Timeline;
         }
-        // F12 previews this slide and Shift+F12 the course from the start,
-        // like the toolbar's Preview button and its menu.
+        // F12 previews this slide, Ctrl+F12 (Cmd+F12 on macOS) previews from here,
+        // and Shift+F12 previews the whole course, like the Preview menu and toolbar.
         if !self.ui.show_welcome
             && self.preview.is_none()
             && !self.ui.master_view
@@ -4595,6 +4613,10 @@ impl Editor {
                 requests.push(EditorRequest::Preview {
                     slide: String::new(),
                 });
+            } else if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F12)) {
+                let slide_id = self.selection.slide.clone();
+                self.open_preview_from(&slide_id);
+                requests.push(EditorRequest::Preview { slide: slide_id });
             } else if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F12)) {
                 toolbar::preview_slide(self, &mut requests);
             }

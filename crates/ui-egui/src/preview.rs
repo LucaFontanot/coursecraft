@@ -524,6 +524,22 @@ impl Preview {
         }
     }
 
+    /// Create a full-course preview starting at `slide_id` (not a partial subset).
+    ///
+    /// If `slide_id` is empty or does not refer to a play-order slide (e.g. a bank slide),
+    /// starts from the course's normal start slide.
+    #[must_use]
+    pub fn new_from_slide(course: &Course, slide_id: &str) -> Self {
+        let mut course_clone = course.clone();
+        if !slide_id.is_empty()
+            && course.bank_slide(slide_id).is_none()
+            && course.play_slide(slide_id).is_some()
+        {
+            course_clone.start_slide = Some(slide_id.to_owned());
+        }
+        Self::new_subset(&course_clone, None)
+    }
+
     /// Create a new preview for the given course, optionally restricted to a subset of slide IDs.
     #[must_use]
     pub fn new_subset(course: &Course, subset: Option<&[String]>) -> Self {

@@ -207,6 +207,13 @@ fn master_view_disables_unavailable_toolbar_buttons_with_tooltip() {
     h.editor.ui.master_view = true;
     h.layout_report(2);
 
+    let toolbar_rect = egui::Rect::from_min_max(
+        pos2(0.0, crate::TOP_BAR_HEIGHT),
+        pos2(
+            1280.0,
+            crate::TOP_BAR_HEIGHT + crate::toolbar::TOOLBAR_HEIGHT,
+        ),
+    );
     for label in [
         "New slide",
         "Preview",
@@ -217,7 +224,7 @@ fn master_view_disables_unavailable_toolbar_buttons_with_tooltip() {
         "Trigger",
     ] {
         let pos = h
-            .find_text(label)
+            .find_text_in(label, toolbar_rect)
             .unwrap_or_else(|| panic!("expected toolbar button {label:?}"));
         let tip = h.probe_tooltip(pos);
         assert_eq!(
@@ -860,4 +867,133 @@ fn web_mode_disables_desktop_only_import_and_export_items_with_tooltips() {
         !h.editor.ui.show_export_translation,
         "clicking disabled Export Translation (XLIFF)… must not open the dialog"
     );
+}
+
+/// P-01: Top-level `Preview` menu (before `Help`) and toolbar Preview caret popup share
+/// `show_preview_menu_items` with identical labels, shortcuts, and disabled reasons (`M32-06`).
+#[test]
+fn preview_menu_and_toolbar_caret_share_items_shortcuts_and_disabled_reasons() {
+    let mut h =
+        TestHarness::new_with_config(sample_course(), (1280.0, 800.0), ThemeMode::Dark, 1.0, true);
+    h.layout_report(2);
+
+    let menu_bar_rect =
+        egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1280.0, crate::TOP_BAR_HEIGHT));
+    let preview_menu_pos = h
+        .find_text_in("Preview", menu_bar_rect)
+        .expect("top-level Preview menu");
+    let help_menu_pos = h
+        .find_text_in("Help", menu_bar_rect)
+        .expect("top-level Help menu");
+    assert!(
+        preview_menu_pos.x < help_menu_pos.x,
+        "Preview menu (x={}) must appear before Help menu (x={})",
+        preview_menu_pos.x,
+        help_menu_pos.x
+    );
+
+    let expected_shortcuts = [
+        (
+            "Preview this slide",
+            Some(crate::menu::shortcut_label(&h.ctx, "F12")),
+        ),
+        (
+            "Preview from here",
+            Some(crate::menu::shortcut_label(&h.ctx, "Ctrl+F12")),
+        ),
+        ("Preview selected slides", None),
+        (
+            "Preview whole course",
+            Some(crate::menu::shortcut_label(&h.ctx, "Shift+F12")),
+        ),
+    ];
+
+    // Check normal state in both the top-level Preview menu and toolbar Preview caret popup.
+    for open_via_menu in [true, false] {
+        let source = if open_via_menu {
+            "Preview menu"
+        } else {
+            "toolbar Preview caret"
+        };
+        if open_via_menu {
+            h.click_at(preview_menu_pos);
+        } else {
+            let caret = widget_with_label(&h, "More preview options");
+            h.click_at(caret.bounds.center());
+        }
+        h.idle_frame();
+        h.idle_frame();
+
+        let mut prev_y = f32::NEG_INFINITY;
+        for (label, sc) in &expected_shortcuts {
+            let pos = h
+                .find_text_last(label)
+                .unwrap_or_else(|| panic!("{source} missing {label:?}"));
+            assert!(
+                pos.y > prev_y,
+                "{source} item {label:?} (y={}) should appear below previous (y={prev_y})",
+                pos.y
+            );
+            prev_y = pos.y;
+            if let Some(hint) = sc {
+                assert!(
+                    h.find_text_last(hint).is_some(),
+                    "{source} missing shortcut hint {hint:?} for {label:?}"
+                );
+            }
+        }
+
+        // Only 1 slide is selected, so "Preview selected slides" is disabled with reason.
+        let sel_pos = h
+            .find_text_last("Preview selected slides")
+            .expect("Preview selected slides");
+        h.hover_at(sel_pos);
+        let tip = h.probe_tooltip(sel_pos);
+        assert_eq!(
+            tip.as_deref(),
+            Some("Select two or more slides to preview them"),
+            "{source}: expected disabled reason on 'Preview selected slides', got {tip:?}"
+        );
+
+        h.press(egui::Key::Escape, egui::Modifiers::NONE);
+        h.idle_frame();
+    }
+
+    // In slide masters mode, both menus disable all 4 items with "Not available in slide masters".
+    h.editor.enter_master_view();
+    h.layout_report(2);
+    for open_via_menu in [true, false] {
+        let source = if open_via_menu {
+            "Preview menu (masters)"
+        } else {
+            "toolbar Preview caret (masters)"
+        };
+        if open_via_menu {
+            let pos = h
+                .find_text_in("Preview", menu_bar_rect)
+                .expect("Preview menu in masters");
+            h.click_at(pos);
+        } else {
+            let caret = widget_with_label(&h, "More preview options");
+            h.click_at(caret.bounds.center());
+        }
+        h.idle_frame();
+        h.idle_frame();
+
+        for (label, _) in &expected_shortcuts {
+            let pos = h
+                .find_text_last(label)
+                .unwrap_or_else(|| panic!("{source} missing {label:?}"));
+            h.hover_at(pos);
+            let tip = h.probe_tooltip(pos);
+            assert_eq!(
+                tip.as_deref(),
+                Some("Not available in slide masters"),
+                "{source}: expected masters disabled reason on {label:?}, got {tip:?}"
+            );
+        }
+
+        h.press(egui::Key::Escape, egui::Modifiers::NONE);
+        h.idle_frame();
+    }
 }

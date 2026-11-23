@@ -386,3 +386,348 @@ fn partial_preview_only_requests_media_for_subset_slides() {
         "unselected slide media must not be requested: {reqs:?}"
     );
 }
+
+fn four_slide_course_with_bank() -> Course {
+    let json = r#"{
+        "schema_version": 1,
+        "id": "preview-from-here-test",
+        "title": "Preview From Here Test",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [
+            {
+                "id": "sc1",
+                "title": "Main",
+                "slides": [
+                    {
+                        "id": "s1",
+                        "title": "Slide One",
+                        "duration_ms": 5000,
+                        "objects": [
+                            {
+                                "id": "txt_s1",
+                                "kind": { "type": "text", "text": "Slide One Body" },
+                                "frame": { "x": 80, "y": 60, "w": 300, "h": 50 }
+                            }
+                        ]
+                    },
+                    {
+                        "id": "s2",
+                        "title": "Slide Two",
+                        "duration_ms": 5000,
+                        "objects": [
+                            {
+                                "id": "txt_s2",
+                                "kind": { "type": "text", "text": "Slide Two Body" },
+                                "frame": { "x": 80, "y": 60, "w": 300, "h": 50 }
+                            }
+                        ]
+                    },
+                    {
+                        "id": "s3",
+                        "title": "Slide Three",
+                        "duration_ms": 5000,
+                        "objects": [
+                            {
+                                "id": "txt_s3",
+                                "kind": { "type": "text", "text": "Slide Three Body" },
+                                "frame": { "x": 80, "y": 60, "w": 300, "h": 50 }
+                            }
+                        ]
+                    },
+                    {
+                        "id": "s4",
+                        "title": "Slide Four",
+                        "duration_ms": 5000,
+                        "objects": [
+                            {
+                                "id": "txt_s4",
+                                "kind": { "type": "text", "text": "Slide Four Body" },
+                                "frame": { "x": 80, "y": 60, "w": 300, "h": 50 }
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
+        "banks": [
+            {
+                "id": "b1",
+                "title": "Bank One",
+                "slides": [
+                    {
+                        "id": "bs1",
+                        "title": "Bank Slide",
+                        "duration_ms": 5000,
+                        "question": {
+                            "kind": "multiple_choice",
+                            "prompt": "Bank question?",
+                            "choices": [
+                                { "id": "a", "text": "Choice A", "correct": true },
+                                { "id": "b", "text": "Choice B" }
+                            ],
+                            "attempts": 1
+                        },
+                        "triggers": [
+                            {
+                                "when": { "event": "submit" },
+                                "action": { "action": "submit_question" }
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }"#;
+    let course = Course::from_json(json).expect("valid 4-slide course with bank");
+    let errors: Vec<_> = course
+        .validate()
+        .into_iter()
+        .filter(|i| i.severity == coursecraft_course::Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "fixture should have no errors: {errors:?}"
+    );
+    course
+}
+
+fn open_top_preview_menu(harness: &mut TestHarness) {
+    let menu_bar = egui::Rect::from_min_max(
+        egui::pos2(0.0, 0.0),
+        egui::pos2(harness.screen_rect.max.x, crate::TOP_BAR_HEIGHT),
+    );
+    let pos = harness
+        .find_text_in("Preview", menu_bar)
+        .expect("top-level Preview menu");
+    harness.click_at(pos);
+    harness.idle_frame();
+    harness.idle_frame();
+}
+
+/// P-02: "Preview from here" via top-level Preview menu and `Ctrl+F12` starts on slide 2,
+/// runs as a full preview (`is_partial_preview() == false`), advances to slide 3 with no
+/// end-of-preview popup, and restarts back to slide 2 (`M32-07`).
+#[test]
+fn preview_from_here_starts_at_selected_slide_advances_and_restarts_there() {
+    let mut harness = TestHarness::new(four_slide_course_with_bank());
+    harness.editor.selection.slide = "s2".into();
+    harness.idle_frame();
+
+    // 1. Trigger via Preview ▸ Preview from here
+    open_top_preview_menu(&mut harness);
+    let from_here = harness
+        .find_text_last("Preview from here")
+        .expect("Preview from here menu item");
+    harness.click_at(from_here);
+    harness.idle_frame();
+    harness.idle_frame();
+
+    let preview = harness.editor.preview.as_ref().expect("preview open");
+    assert!(!preview.is_partial_preview());
+    assert!(harness.find_text("2 / 4").is_some());
+    assert!(harness.find_text_last("Slide Two Body").is_some());
+
+    // Clicking Next advances to slide 3 with no end-of-preview popup.
+    let next_btn = harness
+        .find_icon_last(coursecraft_render::Icon::CaretRight)
+        .expect("next button");
+    harness.click_at(next_btn);
+    harness.idle_frame();
+    assert!(
+        harness
+            .editor
+            .preview
+            .as_ref()
+            .is_some_and(|p| !p.end_of_preview_popup)
+    );
+    assert!(
+        harness
+            .find_text("This is the end of the preview")
+            .is_none()
+    );
+    assert!(harness.find_text("3 / 4").is_some());
+    assert!(harness.find_text_last("Slide Three Body").is_some());
+
+    // Clicking Restart returns to slide 2 (not slide 1).
+    let restart_btn = harness
+        .find_icon_last(coursecraft_render::Icon::ArrowClockwise)
+        .expect("restart button");
+    harness.click_at(restart_btn);
+    harness.idle_frame();
+    assert!(harness.find_text("2 / 4").is_some());
+    assert!(harness.find_text_last("Slide Two Body").is_some());
+
+    // Close preview.
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(harness.editor.preview.is_none());
+
+    // 2. Trigger via Ctrl+F12 (Modifiers::COMMAND + Key::F12)
+    harness.press(Key::F12, Modifiers::COMMAND);
+    harness.idle_frame();
+    harness.idle_frame();
+
+    let preview = harness
+        .editor
+        .preview
+        .as_ref()
+        .expect("preview open via Ctrl+F12");
+    assert!(!preview.is_partial_preview());
+    assert!(harness.find_text("2 / 4").is_some());
+    assert!(harness.find_text_last("Slide Two Body").is_some());
+
+    let next_btn = harness
+        .find_icon_last(coursecraft_render::Icon::CaretRight)
+        .expect("next button");
+    harness.click_at(next_btn);
+    harness.idle_frame();
+    assert!(
+        harness
+            .editor
+            .preview
+            .as_ref()
+            .is_some_and(|p| !p.end_of_preview_popup)
+    );
+    assert!(harness.find_text("3 / 4").is_some());
+
+    if let Some(preview) = harness.editor.preview.as_mut() {
+        preview.restart();
+    }
+    harness.idle_frame();
+    assert!(harness.find_text("2 / 4").is_some());
+    assert!(harness.find_text_last("Slide Two Body").is_some());
+}
+
+/// P-03: Preview menu opens the right scope for "Preview this slide", "Preview selected slides",
+/// and "Preview whole course"; bank slides disable current-slide modes with a clear reason;
+/// slide masters disables all four modes with "Not available in slide masters" (`M32-06`).
+#[test]
+fn preview_menu_modes_and_bank_and_slide_masters_disabled_reasons() {
+    let mut harness = TestHarness::new(four_slide_course_with_bank());
+    harness.editor.selection.slide = "s2".into();
+    harness.idle_frame();
+
+    // 1. Preview this slide
+    open_top_preview_menu(&mut harness);
+    let item = harness
+        .find_text_last("Preview this slide")
+        .expect("Preview this slide");
+    harness.click_at(item);
+    harness.idle_frame();
+    harness.idle_frame();
+    assert!(
+        harness
+            .editor
+            .preview
+            .as_ref()
+            .is_some_and(Preview::is_partial_preview)
+    );
+    assert!(harness.find_text("1 / 1").is_some());
+    assert!(harness.find_text_last("Slide Two Body").is_some());
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(harness.editor.preview.is_none());
+
+    // 2. Preview selected slides (s2 and s4)
+    harness.editor.selection.slide = "s2".into();
+    harness.editor.selection.also_slides = vec!["s4".into()];
+    harness.idle_frame();
+    open_top_preview_menu(&mut harness);
+    let item = harness
+        .find_text_last("Preview selected slides")
+        .expect("Preview selected slides");
+    harness.click_at(item);
+    harness.idle_frame();
+    harness.idle_frame();
+    assert!(
+        harness
+            .editor
+            .preview
+            .as_ref()
+            .is_some_and(Preview::is_partial_preview)
+    );
+    assert!(harness.find_text("1 / 2").is_some());
+    assert!(harness.find_text_last("Slide Two Body").is_some());
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(harness.editor.preview.is_none());
+
+    // 3. Preview whole course
+    harness.editor.selection.also_slides.clear();
+    harness.idle_frame();
+    open_top_preview_menu(&mut harness);
+    let item = harness
+        .find_text_last("Preview whole course")
+        .expect("Preview whole course");
+    harness.click_at(item);
+    harness.idle_frame();
+    harness.idle_frame();
+    assert!(
+        harness
+            .editor
+            .preview
+            .as_ref()
+            .is_some_and(|p| !p.is_partial_preview())
+    );
+    assert!(harness.find_text("1 / 4").is_some());
+    assert!(harness.find_text_last("Slide One Body").is_some());
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.idle_frame();
+    assert!(harness.editor.preview.is_none());
+
+    // 4. Question bank slide disables "Preview this slide" and "Preview from here"
+    harness.editor.selection.slide = "bs1".into();
+    harness.editor.selection.also_slides.clear();
+    harness.idle_frame();
+    for label in ["Preview this slide", "Preview from here"] {
+        open_top_preview_menu(&mut harness);
+        let pos = harness
+            .find_text_last(label)
+            .unwrap_or_else(|| panic!("expected {label:?} in Preview menu"));
+        harness.hover_at(pos);
+        let tip = harness.probe_tooltip(pos);
+        assert_eq!(
+            tip.as_deref(),
+            Some("Question bank slides can't be previewed directly"),
+            "expected bank-slide disabled reason for {label:?}, got {tip:?}"
+        );
+        harness.click_at(pos);
+        harness.idle_frame();
+        assert!(
+            harness.editor.preview.is_none(),
+            "clicking disabled {label:?} on a bank slide must not open preview"
+        );
+        harness.press(Key::Escape, Modifiers::NONE);
+        harness.idle_frame();
+    }
+
+    // 5. Slide masters mode disables all 4 items with "Not available in slide masters"
+    harness.editor.enter_master_view();
+    harness.idle_frame();
+    for label in [
+        "Preview this slide",
+        "Preview from here",
+        "Preview selected slides",
+        "Preview whole course",
+    ] {
+        open_top_preview_menu(&mut harness);
+        let pos = harness
+            .find_text_last(label)
+            .unwrap_or_else(|| panic!("expected {label:?} in Preview menu (masters)"));
+        harness.hover_at(pos);
+        let tip = harness.probe_tooltip(pos);
+        assert_eq!(
+            tip.as_deref(),
+            Some("Not available in slide masters"),
+            "expected slide-masters disabled reason for {label:?}, got {tip:?}"
+        );
+        harness.click_at(pos);
+        harness.idle_frame();
+        assert!(
+            harness.editor.preview.is_none(),
+            "clicking disabled {label:?} in slide masters must not open preview"
+        );
+        harness.press(Key::Escape, Modifiers::NONE);
+        harness.idle_frame();
+    }
+}

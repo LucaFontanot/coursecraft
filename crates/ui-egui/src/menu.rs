@@ -110,7 +110,7 @@ fn format_single_shortcut(
         }
         "escape" | "esc" => "Esc".to_owned(),
         _ => {
-            if key_part.len() == 1 {
+            if key_part.len() == 1 || is_function_key(key_part) {
                 key_part.to_ascii_uppercase()
             } else {
                 return trimmed.to_owned();
@@ -172,6 +172,15 @@ fn format_single_shortcut(
         mods.push(&key_str);
         mods.join("+")
     }
+}
+
+fn is_function_key(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix(['f', 'F']) else {
+        return false;
+    };
+    (1..=2).contains(&rest.len())
+        && rest.bytes().all(|b| b.is_ascii_digit())
+        && rest.parse::<u8>().is_ok_and(|n| (1..=20).contains(&n))
 }
 
 /// Parse a shortcut string such as `"Ctrl+Z"`, `"Ctrl+Y"`, `"Ctrl+M"`, `"Delete"`.
@@ -926,7 +935,12 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             }
         });
 
-        // 3. Help menu
+        // 3. Preview menu
+        ui.menu_button("Preview", |ui| {
+            show_preview_menu_items(editor, ui, requests);
+        });
+
+        // 4. Help menu
         ui.menu_button("Help", |ui| {
             if ui.button("Keyboard shortcuts").clicked() {
                 editor.ui.show_shortcuts_dialog = true;
@@ -957,6 +971,92 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
         } else {
             editor.run(cmd, params);
         }
+    }
+}
+
+/// Shared menu items for both the top-level **Preview** menu and the toolbar's
+/// Preview caret popup.
+pub(crate) fn show_preview_menu_items(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    requests: &mut Vec<EditorRequest>,
+) {
+    let master_view = editor.ui.master_view;
+    let slide_id = editor.selection.slide.clone();
+    let slide_empty = slide_id.is_empty();
+    let on_bank_slide = !slide_empty && editor.session.course.bank_slide(&slide_id).is_some();
+
+    let can_preview_current = !master_view && !on_bank_slide && !slide_empty;
+    let current_disabled_reason = if master_view {
+        "Not available in slide masters"
+    } else if on_bank_slide {
+        "Question bank slides can't be previewed directly"
+    } else {
+        "Select a slide first"
+    };
+
+    if ui
+        .add_enabled(
+            can_preview_current,
+            Button::new("Preview this slide").shortcut_text(shortcut_label(ui.ctx(), "F12")),
+        )
+        .on_disabled_hover_text(current_disabled_reason)
+        .clicked()
+    {
+        crate::toolbar::preview_slide(editor, requests);
+        ui.close();
+    }
+
+    if ui
+        .add_enabled(
+            can_preview_current,
+            Button::new("Preview from here").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+F12")),
+        )
+        .on_disabled_hover_text(current_disabled_reason)
+        .clicked()
+    {
+        editor.open_preview_from(&slide_id);
+        requests.push(EditorRequest::Preview { slide: slide_id });
+        ui.close();
+    }
+
+    let selected_non_bank_count = editor
+        .selection
+        .slide_ids()
+        .iter()
+        .filter(|id| !id.is_empty() && editor.session.course.bank_slide(id).is_none())
+        .count();
+    let can_preview_selected = !master_view && selected_non_bank_count >= 2;
+    let selected_disabled_reason = if master_view {
+        "Not available in slide masters"
+    } else {
+        "Select two or more slides to preview them"
+    };
+    if ui
+        .add_enabled(can_preview_selected, Button::new("Preview selected slides"))
+        .on_disabled_hover_text(selected_disabled_reason)
+        .clicked()
+    {
+        let slide = editor.selection.slide.clone();
+        editor.open_preview_selected();
+        requests.push(EditorRequest::Preview { slide });
+        ui.close();
+    }
+
+    if ui
+        .add_enabled(
+            !master_view,
+            Button::new("Preview whole course")
+                .shortcut_text(shortcut_label(ui.ctx(), "Shift+F12")),
+        )
+        .on_disabled_hover_text("Not available in slide masters")
+        .clicked()
+    {
+        editor.open_preview_at(None);
+        requests.push(EditorRequest::Preview {
+            slide: String::new(),
+        });
+        ui.close();
     }
 }
 

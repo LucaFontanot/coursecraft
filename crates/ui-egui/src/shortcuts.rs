@@ -303,8 +303,12 @@ pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
             shortcut: "Ctrl+= / Ctrl+-",
         },
         ShortcutRow {
-            action: "Preview this slide / whole course",
-            shortcut: "F12 / Shift+F12",
+            action: "Preview this slide / from here",
+            shortcut: "F12 / Ctrl+F12",
+        },
+        ShortcutRow {
+            action: "Preview whole course",
+            shortcut: "Shift+F12",
         },
     ];
 

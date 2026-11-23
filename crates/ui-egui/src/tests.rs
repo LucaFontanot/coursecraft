@@ -4184,6 +4184,31 @@ fn test_shortcut_formatting_both_platforms_and_fallbacks() {
 }
 
 #[test]
+fn test_function_key_shortcut_formatting_both_platforms() {
+    let all_glyphs = |_| true;
+    let no_glyphs = |_| false;
+    assert_eq!(menu::format_shortcut("F12", true, all_glyphs), "F12");
+    assert_eq!(menu::format_shortcut("Ctrl+F12", true, all_glyphs), "⌘F12");
+    assert_eq!(menu::format_shortcut("Shift+F12", true, all_glyphs), "⇧F12");
+    assert_eq!(
+        menu::format_shortcut("Ctrl+F12", true, no_glyphs),
+        "Cmd+F12"
+    );
+    assert_eq!(
+        menu::format_shortcut("Shift+F12", true, no_glyphs),
+        "Shift+F12"
+    );
+    assert_eq!(
+        menu::format_shortcut("Ctrl+F12", false, all_glyphs),
+        "Ctrl+F12"
+    );
+    assert_eq!(
+        menu::format_shortcut("Shift+F12", false, all_glyphs),
+        "Shift+F12"
+    );
+}
+
+#[test]
 fn bottom_panel_is_resizable_and_bounded() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
@@ -7238,8 +7263,8 @@ fn toolbar_normal_width_labels_and_actions() {
     harness.idle_frame();
     assert_eq!(harness.editor.ui.inspector_tab, crate::InspectorTab::Course);
 
-    // Clicking Preview dispatches preview request
-    let preview_pos = harness.find_text("Preview").expect("Preview button");
+    // Clicking Preview dispatches preview request (find_text_last skips the top-level Preview menu)
+    let preview_pos = harness.find_text_last("Preview").expect("Preview button");
     let reqs = harness.frame(vec![
         egui::Event::PointerMoved(preview_pos),
         egui::Event::PointerButton {

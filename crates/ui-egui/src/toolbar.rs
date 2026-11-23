@@ -452,45 +452,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     }
     let preview_caret = widgets::toolbar_caret_button(&mut left_ui, "More preview options");
     egui::Popup::menu(&preview_caret).show(|ui| {
-        if master_view {
-            ui.add_enabled(false, egui::Button::new("Not available in slide masters"));
-            return;
-        }
-        if ui
-            .add(egui::Button::new("Preview this slide").shortcut_text("F12"))
-            .clicked()
-        {
-            preview_slide(editor, requests);
-            ui.close();
-        }
-        let selected_count = editor
-            .selection
-            .slide_ids()
-            .iter()
-            .filter(|id| editor.session.course.bank_slide(id).is_none())
-            .count();
-        if ui
-            .add_enabled(
-                selected_count >= 2,
-                egui::Button::new("Preview selected slides"),
-            )
-            .clicked()
-        {
-            let slide_id = editor.selection.slide.clone();
-            editor.open_preview_selected();
-            requests.push(EditorRequest::Preview { slide: slide_id });
-            ui.close();
-        }
-        if ui
-            .add(egui::Button::new("Preview whole course").shortcut_text("Shift+F12"))
-            .clicked()
-        {
-            editor.open_preview_at(None);
-            requests.push(EditorRequest::Preview {
-                slide: String::new(),
-            });
-            ui.close();
-        }
+        crate::menu::show_preview_menu_items(editor, ui, requests);
     });
 
     if editor.file_ops_available {
