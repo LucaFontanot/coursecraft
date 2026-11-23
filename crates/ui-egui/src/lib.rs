@@ -4771,7 +4771,7 @@ impl Editor {
         // Theme dialog window
         theme_dialog::show_theme_dialog_window(self, ui.ctx());
         text_styles_ui::show_manage_styles_window(self, ui.ctx());
-        slide_size_dialog::show_slide_size_dialog(self, ui.ctx());
+        slide_size_dialog::show_slide_size_dialog(self, ui.ctx(), &mut requests);
         preferences::show_preferences_window(self, ui.ctx(), &mut requests);
         version_history::show_version_history_window(self, ui.ctx(), &mut requests);
         report::show_report_windows(self, ui.ctx(), &mut requests);

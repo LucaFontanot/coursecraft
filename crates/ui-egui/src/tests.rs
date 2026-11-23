@@ -17143,6 +17143,9 @@ fn slide_size_dialog_opens_from_the_file_menu_and_apply_dispatches() {
     h.idle_frame();
     assert!(h.editor.ui.slide_size_dialog.open);
 
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
     let preset = h.find_text("4:3 Standard (960 × 720)").expect("4:3 preset");
     h.click_at(preset);
     h.idle_frame();
@@ -17172,6 +17175,331 @@ fn slide_size_dialog_disables_apply_out_of_range() {
     state.w = 1280;
     state.h = 4321;
     assert!(!state.valid());
+}
+
+#[test]
+fn slide_size_dialog_preset_combo_and_custom_switching() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+
+    // Select 16:9 Full HD (1920 × 1080) -> ratio "16:9"
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    // Esc while combo popup is open closes only the popup, not the dialog (popup-first).
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.open);
+
+    // Reopen combo and pick Full HD.
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
+    h.click_at(fhd);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1920, 1080)
+    );
+    assert!(
+        h.find_text("16:9").is_some(),
+        "ratio badge should show 16:9"
+    );
+
+    // Select 9:16 Portrait (1080 × 1920).
+    let combo = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let portrait = h
+        .find_text("9:16 Portrait (1080 × 1920)")
+        .expect("Portrait preset");
+    h.click_at(portrait);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1080, 1920)
+    );
+
+    // Typing a custom width switches combo label to "Custom".
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("1500");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.w, 1500);
+    assert!(
+        h.find_text("Custom").is_some(),
+        "combo label must switch to Custom"
+    );
+}
+
+#[test]
+fn slide_size_dialog_aspect_lock_keeps_and_updates_ratio() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.lock_aspect);
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1280, 720)
+    );
+
+    // With lock ON at 1280x720, changing W to 1920 updates H to 1080.
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("1920");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1920, 1080)
+    );
+
+    // Changing H to 900 updates W to 1600.
+    let h_label = h.find_text("H").expect("H label");
+    h.click_at(egui::Pos2::new(h_label.x + 30.0, h_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("900");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1600, 900)
+    );
+
+    // Uncheck lock -> W changes independently.
+    let lock = h
+        .find_text("Lock aspect ratio")
+        .expect("Lock aspect ratio checkbox");
+    h.click_at(lock);
+    h.idle_frame();
+    assert!(!h.editor.ui.slide_size_dialog.lock_aspect);
+
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("1000");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1000, 900)
+    );
+
+    // Re-checking lock captures the new 10:9 ratio.
+    let lock = h
+        .find_text("Lock aspect ratio")
+        .expect("Lock aspect ratio checkbox");
+    h.click_at(lock);
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.lock_aspect);
+
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("2000");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (2000, 1800)
+    );
+}
+
+#[test]
+fn slide_size_dialog_use_as_default_emits_request_and_disables_when_already_default() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+
+    // At 1280x720 (already default), button is disabled with explanatory tooltip.
+    let btn_pos = h
+        .find_text("Use as default for new courses")
+        .expect("Use as default button");
+    let tip = h
+        .probe_tooltip(btn_pos)
+        .expect("disabled default button should explain why");
+    assert!(
+        tip.contains("Already the default"),
+        "unexpected tooltip: {tip}"
+    );
+
+    // Switch to 1920x1080 and click "Use as default for new courses".
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
+    h.click_at(fhd);
+    h.idle_frame();
+
+    let btn_pos = h
+        .find_text("Use as default for new courses")
+        .expect("Use as default button");
+    let mut requests = Vec::new();
+    h.frame(vec![Event::PointerMoved(btn_pos)]);
+    for pressed in [true, false] {
+        requests.extend(h.frame(vec![Event::PointerButton {
+            pos: btn_pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }]));
+    }
+    h.idle_frame();
+    assert_eq!(h.editor.ui.prefs.default_slide, (1920, 1080));
+    assert!(
+        requests.iter().any(|r| matches!(
+            r,
+            EditorRequest::SetPreferences {
+                default_slide: (1920, 1080),
+                ..
+            }
+        )),
+        "expected SetPreferences request, got {requests:?}"
+    );
+    assert!(
+        h.find_text("Saved as default").is_some(),
+        "expected Saved as default confirmation"
+    );
+    h.hover_at(egui::Pos2::ZERO);
+    h.idle_frame();
+    let btn_pos = h
+        .find_text("Use as default for new courses")
+        .expect("Use as default button");
+    let tip = h
+        .probe_tooltip(btn_pos)
+        .expect("button should now be disabled with tooltip");
+    assert!(
+        tip.contains("Already the default"),
+        "unexpected tooltip: {tip}"
+    );
+}
+
+#[test]
+fn slide_size_dialog_content_modes_dispatch_and_undo() {
+    let (mut h, _t) = lock_hide_setup();
+    let orig_size = h.editor.session.course.slide_size;
+    let slide_id = h.editor.selection.slide.clone();
+    let orig_frames: Vec<_> = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .expect("slide")
+        .objects
+        .iter()
+        .map(|o| (o.id.clone(), o.frame))
+        .collect();
+
+    for (radio_label, target_label, expected_size, check_enter) in [
+        (
+            "Scale to fit",
+            "4:3 Standard (960 × 720)",
+            (960, 720),
+            false,
+        ),
+        (
+            "Fill slide",
+            "9:16 Portrait (1080 × 1920)",
+            (1080, 1920),
+            false,
+        ),
+        (
+            "Keep as is",
+            "16:9 Full HD (1920 × 1080)",
+            (1920, 1080),
+            true,
+        ),
+    ] {
+        h.editor.open_slide_size_dialog();
+        h.idle_frame();
+        let current_label = crate::slide_size_dialog::PRESETS
+            .iter()
+            .find(|p| {
+                (p.w, p.h)
+                    == (
+                        h.editor.session.course.slide_size.w,
+                        h.editor.session.course.slide_size.h,
+                    )
+            })
+            .expect("current preset")
+            .label;
+        let combo = h.find_text(current_label).expect("preset combo");
+        h.click_at(combo);
+        h.idle_frame();
+        let target = h.find_text(target_label).expect("target preset");
+        h.click_at(target);
+        h.idle_frame();
+
+        let radio = h.find_text(radio_label).expect("mode radio");
+        h.click_at(radio);
+        h.idle_frame();
+
+        if check_enter {
+            h.press(Key::Enter, Modifiers::NONE);
+        } else {
+            let apply = h.find_text("Apply").expect("Apply button");
+            h.click_at(apply);
+        }
+        h.idle_frame();
+
+        assert!(!h.editor.ui.slide_size_dialog.open);
+        let size = h.editor.session.course.slide_size;
+        assert_eq!((size.w, size.h), expected_size);
+
+        // Undo restores prior course size and frames.
+        h.press(Key::Z, Modifiers::COMMAND);
+        h.idle_frame();
+        assert_eq!(h.editor.session.course.slide_size, orig_size);
+        let restored_frames: Vec<_> = h
+            .editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .map(|o| (o.id.clone(), o.frame))
+            .collect();
+        assert_eq!(restored_frames, orig_frames);
+    }
 }
 
 #[test]
