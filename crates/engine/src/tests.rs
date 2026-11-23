@@ -11988,3 +11988,133 @@ fn sc_03_single_slide_matches_course_slide_mut_precedence_with_duplicate_ids() {
         before_err_json
     );
 }
+
+fn assert_u07_repeated_move_merge(s: &mut Session) {
+    let pre_first_json = s.course.to_json().expect("pre first json");
+    for step in 1..=5 {
+        ok(
+            s,
+            "object.set_frame",
+            json!({
+                "slide": "slide1",
+                "object": "box1",
+                "frame": {
+                    "x": 10.0 + (step as f64) * 20.0,
+                    "y": 10.0 + (step as f64) * 10.0,
+                    "w": 80.0,
+                    "h": 40.0
+                }
+            }),
+        );
+    }
+    assert_eq!(s.undo_len(), 5);
+    let post_fifth_json = s.course.to_json().expect("post fifth json");
+    assert_ne!(pre_first_json, post_fifth_json);
+
+    let rev_before_merge = s.revision;
+    for _ in 0..4 {
+        assert!(s.merge_last_two_undos(Some("Move object")));
+    }
+    assert_eq!(
+        s.revision, rev_before_merge,
+        "merging must not bump revision"
+    );
+    assert_eq!(s.undo_len(), 1);
+    assert_eq!(s.undo_names(), vec!["Move object"]);
+    assert!(!s.merge_last_two_undos(Some("Too few")));
+
+    s.undo().expect("undo merged moves");
+    assert_eq!(s.course.to_json().expect("undone json"), pre_first_json);
+    s.redo().expect("redo merged moves");
+    assert_eq!(s.course.to_json().expect("redone json"), post_fifth_json);
+}
+
+fn assert_u07_mixed_merge_preserves_label_and_redo(s2: &mut Session) {
+    let mixed_before_json = s2.course.to_json().expect("mixed before json");
+    ok(
+        s2,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "box1",
+            "frame": { "x": 220.0, "y": 140.0, "w": 95.0, "h": 55.0 }
+        }),
+    );
+    let older_label = s2.undo_names()[0].to_owned();
+    ok(
+        s2,
+        "course.set_title",
+        json!({ "title": "Renamed After Move" }),
+    );
+    let mixed_after_json = s2.course.to_json().expect("mixed after json");
+    assert_ne!(mixed_before_json, mixed_after_json);
+
+    // Push a third edit and undo it so redo stack is non-empty when merging.
+    ok(
+        s2,
+        "course.set_title",
+        json!({ "title": "Temporary Redo Title" }),
+    );
+    s2.undo().expect("undo third edit to populate redo");
+    let expected_redo_names: Vec<String> = s2.redo_names().into_iter().map(str::to_owned).collect();
+    assert_eq!(expected_redo_names.len(), 1);
+    let rev_before_mixed_merge = s2.revision;
+
+    assert!(s2.merge_last_two_undos(None));
+    assert_eq!(s2.revision, rev_before_mixed_merge);
+    assert_eq!(s2.undo_len(), 1);
+    assert_eq!(s2.undo_names(), vec![older_label.as_str()]);
+    assert_eq!(
+        s2.redo_names(),
+        expected_redo_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        "merging must not clear redo"
+    );
+
+    s2.undo().expect("undo merged mixed");
+    assert_eq!(
+        s2.course.to_json().expect("undone mixed json"),
+        mixed_before_json
+    );
+    s2.redo().expect("redo merged mixed");
+    assert_eq!(
+        s2.course.to_json().expect("redone mixed json"),
+        mixed_after_json
+    );
+}
+
+/// U-07: `Session::merge_last_two_undos` returns `false` when `< 2` steps exist,
+/// merges repeated `object.set_frame` edits into one step with custom label,
+/// preserves `revision` and `redo`, and merges mixed edits keeping older label
+/// when `label = None` with byte-identical `undo()` / `redo()`.
+#[test]
+fn u_07_session_merge_last_two_undos_roundtrip() {
+    let mut s = Session::blank("U-07 Merge");
+    let rev0 = s.revision;
+    assert!(!s.merge_last_two_undos(Some("Nope")));
+    assert_eq!(s.revision, rev0);
+    assert_eq!(s.undo_len(), 0);
+
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    let rev1 = s.revision;
+    assert!(!s.merge_last_two_undos(None));
+    assert_eq!(s.revision, rev1);
+    assert_eq!(s.undo_len(), 1);
+
+    let mut s_moves = Session::new(s.course);
+    assert_u07_repeated_move_merge(&mut s_moves);
+
+    let mut s_mixed = Session::new(s_moves.course);
+    assert_u07_mixed_merge_preserves_label_and_redo(&mut s_mixed);
+}

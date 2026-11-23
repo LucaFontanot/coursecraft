@@ -1818,6 +1818,84 @@ impl CourseDelta {
             Self::FullCourse(course) => base.saturating_add(estimate_course(course)),
         }
     }
+
+    /// Merge two consecutive undo deltas (`older` for `S0 -> S1`, `newer` for `S1 -> S2`)
+    /// into one reversible delta for `S0 -> S2`.
+    ///
+    /// Collapses repeated in-place edits on the same object, slide, or full course in O(1)
+    /// space by keeping `older`'s `S0` state and dropping the intermediate `S1` state.
+    /// Mixed edits compose into a flat [`CourseDelta::Sequence`] in forward order.
+    #[must_use]
+    pub(crate) fn merge(older: Self, newer: Self) -> Self {
+        if can_collapse_drop_newer(&older, &newer) {
+            return older;
+        }
+        let mut steps = Vec::new();
+        push_merged_step(&mut steps, older);
+        push_merged_step(&mut steps, newer);
+        if steps.len() == 1
+            && let Some(single) = steps.pop()
+        {
+            return single;
+        }
+        Self::Sequence(steps)
+    }
+}
+
+fn can_collapse_drop_newer(older: &CourseDelta, newer: &CourseDelta) -> bool {
+    match (older, newer) {
+        (
+            CourseDelta::SlideChange {
+                loc: l1,
+                change:
+                    SlideDelta::ObjectModified {
+                        layer: ly1,
+                        index: i1,
+                        ..
+                    },
+            },
+            CourseDelta::SlideChange {
+                loc: l2,
+                change:
+                    SlideDelta::ObjectModified {
+                        layer: ly2,
+                        index: i2,
+                        ..
+                    },
+            },
+        ) => (l1, ly1, i1) == (l2, ly2, i2),
+        (
+            CourseDelta::SlideChange {
+                loc: l1,
+                change: SlideDelta::FullSlide(_),
+            },
+            CourseDelta::SlideChange {
+                loc: l2,
+                change: SlideDelta::FullSlide(_),
+            },
+        ) => l1 == l2,
+        (CourseDelta::FullCourse(_), CourseDelta::FullCourse(_)) => true,
+        _ => false,
+    }
+}
+
+fn push_merged_step(steps: &mut Vec<CourseDelta>, delta: CourseDelta) {
+    match delta {
+        CourseDelta::Sequence(nested) => {
+            for item in nested {
+                push_merged_step(steps, item);
+            }
+        }
+        other => {
+            if steps
+                .last()
+                .is_some_and(|prev| can_collapse_drop_newer(prev, &other))
+            {
+                return;
+            }
+            steps.push(other);
+        }
+    }
 }
 
 // ------------------------------------------------------------------ structural diff planners
@@ -4037,5 +4115,195 @@ mod tests {
                 "delta mutated on error for {delta_before:?}"
             );
         }
+    }
+
+    fn assert_u07_object_modified_collapse(s0: &Course, s0_json: &str) {
+        let mut cur = s0.clone();
+        let mut deltas = Vec::new();
+        for step in 1..=5 {
+            let prev = cur.clone();
+            cur.scenes[0].slides[0].objects[0].frame.x = 100.0 + (step as f32) * 15.0;
+            cur.scenes[0].slides[0].objects[0].frame.y = 50.0 + (step as f32) * 7.5;
+            let d = CourseDelta::diff(prev, &cur).expect("object move must produce delta");
+            assert!(
+                matches!(
+                    d,
+                    CourseDelta::SlideChange {
+                        change: SlideDelta::ObjectModified { .. },
+                        ..
+                    }
+                ),
+                "expected ObjectModified, got {d:?}"
+            );
+            deltas.push(d);
+        }
+        let s5_json = cur.to_json().unwrap();
+        assert_ne!(s0_json, s5_json);
+
+        let first_bytes = deltas[0].estimated_bytes();
+        let mut iter = deltas.into_iter();
+        let first = iter.next().unwrap();
+        let mut merged = iter.fold(first, CourseDelta::merge);
+        assert!(
+            matches!(
+                merged,
+                CourseDelta::SlideChange {
+                    change: SlideDelta::ObjectModified { .. },
+                    ..
+                }
+            ),
+            "5 merged ObjectModified deltas must collapse to 1 ObjectModified, got {merged:?}"
+        );
+        assert_eq!(
+            merged.estimated_bytes(),
+            first_bytes,
+            "merged ObjectModified must stay constant size (1 delta, not 5x)"
+        );
+
+        merged.apply(&mut cur).expect("undo merged moves");
+        assert_eq!(cur.to_json().unwrap(), s0_json);
+        merged.apply(&mut cur).expect("redo merged moves");
+        assert_eq!(cur.to_json().unwrap(), s5_json);
+    }
+
+    fn assert_u07_full_slide_collapse(s0: &Course, s0_json: &str) {
+        let mut fs1 = s0.clone();
+        fs1.scenes[0].slides[0].objects[0].frame.x = 200.0;
+        fs1.scenes[0].slides[0].objects[1].frame.x = 300.0;
+        let d_fs1 = CourseDelta::diff(s0.clone(), &fs1).unwrap();
+        assert!(matches!(
+            d_fs1,
+            CourseDelta::SlideChange {
+                change: SlideDelta::FullSlide(_),
+                ..
+            }
+        ));
+        let fs1_bytes = d_fs1.estimated_bytes();
+
+        let mut fs2 = fs1.clone();
+        fs2.scenes[0].slides[0].objects[0].frame.x = 400.0;
+        fs2.scenes[0].slides[0].objects[1].frame.x = 500.0;
+        let d_fs2 = CourseDelta::diff(fs1, &fs2).unwrap();
+        assert!(matches!(
+            d_fs2,
+            CourseDelta::SlideChange {
+                change: SlideDelta::FullSlide(_),
+                ..
+            }
+        ));
+
+        let mut merged = CourseDelta::merge(d_fs1, d_fs2);
+        assert!(matches!(
+            merged,
+            CourseDelta::SlideChange {
+                change: SlideDelta::FullSlide(_),
+                ..
+            }
+        ));
+        assert_eq!(merged.estimated_bytes(), fs1_bytes);
+        let fs2_json = fs2.to_json().unwrap();
+        merged.apply(&mut fs2).expect("undo merged FullSlide");
+        assert_eq!(fs2.to_json().unwrap(), s0_json);
+        merged.apply(&mut fs2).expect("redo merged FullSlide");
+        assert_eq!(fs2.to_json().unwrap(), fs2_json);
+    }
+
+    fn bump_all_slide_titles(course: &mut Course, suffix: &str) {
+        for scene in &mut course.scenes {
+            for slide in &mut scene.slides {
+                slide.title.push_str(suffix);
+            }
+        }
+        for slide in &mut course.masters {
+            slide.title.push_str(suffix);
+        }
+        for bank in &mut course.banks {
+            for slide in &mut bank.slides {
+                slide.title.push_str(suffix);
+            }
+        }
+    }
+
+    fn assert_u07_full_course_collapse(s0: &Course, s0_json: &str) {
+        let mut fc1 = s0.clone();
+        bump_all_slide_titles(&mut fc1, " v1");
+        let d_fc1 = CourseDelta::diff(s0.clone(), &fc1).unwrap();
+        assert!(matches!(d_fc1, CourseDelta::FullCourse(_)));
+        let fc1_bytes = d_fc1.estimated_bytes();
+
+        let mut fc2 = fc1.clone();
+        bump_all_slide_titles(&mut fc2, " v2");
+        let d_fc2 = CourseDelta::diff(fc1, &fc2).unwrap();
+        assert!(matches!(d_fc2, CourseDelta::FullCourse(_)));
+
+        let mut merged = CourseDelta::merge(d_fc1, d_fc2);
+        assert!(matches!(merged, CourseDelta::FullCourse(_)));
+        assert_eq!(merged.estimated_bytes(), fc1_bytes);
+        let fc2_json = fc2.to_json().unwrap();
+        merged.apply(&mut fc2).expect("undo merged FullCourse");
+        assert_eq!(fc2.to_json().unwrap(), s0_json);
+        merged.apply(&mut fc2).expect("redo merged FullCourse");
+        assert_eq!(fc2.to_json().unwrap(), fc2_json);
+    }
+
+    fn assert_u07_mixed_sequence_merge(s0: &Course, s0_json: &str) {
+        let mut m1 = s0.clone();
+        m1.scenes[0].slides[0].objects[0].frame.x = 777.0;
+        let dm1 = CourseDelta::diff(s0.clone(), &m1).unwrap();
+        assert!(matches!(
+            dm1,
+            CourseDelta::SlideChange {
+                change: SlideDelta::ObjectModified { .. },
+                ..
+            }
+        ));
+
+        let mut m2 = m1.clone();
+        m2.title = "Merged Header Title".to_owned();
+        let dm2 = CourseDelta::diff(m1, &m2).unwrap();
+        assert!(matches!(dm2, CourseDelta::Header(_)));
+
+        let mut m3 = m2.clone();
+        m3.scenes[0].slides[0]
+            .objects
+            .push(sample_object("merged_new_obj", 420.0));
+        let dm3 = CourseDelta::diff(m2, &m3).unwrap();
+        assert!(matches!(
+            dm3,
+            CourseDelta::SlideChange {
+                change: SlideDelta::ObjectInserted { .. },
+                ..
+            }
+        ));
+        let m3_json = m3.to_json().unwrap();
+
+        let mut merged = CourseDelta::merge(CourseDelta::merge(dm1, dm2), dm3);
+        match &merged {
+            CourseDelta::Sequence(steps) => {
+                assert_eq!(steps.len(), 3);
+                assert!(
+                    steps.iter().all(|s| !matches!(s, CourseDelta::Sequence(_))),
+                    "merged Sequence must stay flat"
+                );
+            }
+            other => panic!("expected flat Sequence for mixed merge, got {other:?}"),
+        }
+
+        merged.apply(&mut m3).expect("undo merged mixed");
+        assert_eq!(m3.to_json().unwrap(), s0_json);
+        merged.apply(&mut m3).expect("redo merged mixed");
+        assert_eq!(m3.to_json().unwrap(), m3_json);
+    }
+
+    /// U-07: `CourseDelta::merge` collapses repeated same-object/same-slide/full-course edits
+    /// in constant space and composes mixed edits into a flat reversible `Sequence`.
+    #[test]
+    fn u_07_delta_merge_collapses_same_object_and_sequences_mixed() {
+        let s0 = multi_scene_course();
+        let s0_json = s0.to_json().unwrap();
+        assert_u07_object_modified_collapse(&s0, &s0_json);
+        assert_u07_full_slide_collapse(&s0, &s0_json);
+        assert_u07_full_course_collapse(&s0, &s0_json);
+        assert_u07_mixed_sequence_merge(&s0, &s0_json);
     }
 }
