@@ -7,7 +7,10 @@ use crate::dialog::Dialog;
 use coursecraft_render::ThemePref;
 use egui::DragValue;
 
-use crate::slide_size_dialog::PRESETS;
+use crate::slide_size_dialog::{
+    DEFAULT_SLIDE_SIZE, PRESETS, SLIDE_H_RANGE, SLIDE_W_RANGE, format_aspect_ratio,
+    is_valid_slide_size,
+};
 use crate::{Editor, EditorRequest};
 
 /// Autosave interval bounds in minutes. 0 turns autosave off.
@@ -34,7 +37,7 @@ impl Default for PrefsState {
             open: false,
             autosave_minutes: 1,
             versions_to_keep: 10,
-            default_slide: (PRESETS[0].1, PRESETS[0].2),
+            default_slide: DEFAULT_SLIDE_SIZE,
             spell_check_as_you_type: true,
         }
     }
@@ -44,10 +47,10 @@ impl Editor {
     /// Show the saved settings in the window.
     pub fn set_preferences(&mut self, autosave_minutes: u32, default_slide: (u32, u32)) {
         self.ui.prefs.autosave_minutes = autosave_minutes.min(MAX_AUTOSAVE_MINUTES);
-        self.ui.prefs.default_slide = if PRESETS.iter().any(|p| (p.1, p.2) == default_slide) {
+        self.ui.prefs.default_slide = if is_valid_slide_size(default_slide.0, default_slide.1) {
             default_slide
         } else {
-            (PRESETS[0].1, PRESETS[0].2)
+            DEFAULT_SLIDE_SIZE
         };
     }
 
@@ -116,11 +119,46 @@ pub fn show_preferences_window(
             }
             ui.separator();
             ui.label("Default slide size for new courses");
-            for (label, w, h) in PRESETS {
-                if ui.radio(prefs.default_slide == (w, h), label).clicked() {
-                    prefs.default_slide = (w, h);
-                }
-            }
+            let selected_preset = PRESETS.iter().find(|p| (p.w, p.h) == prefs.default_slide);
+            let selected_label = selected_preset.map_or("Custom", |p| p.label);
+            crate::widgets::styled_combo(ui, "prefs_default_slide_combo", 240.0)
+                .selected_text(selected_label)
+                .show_ui(ui, |ui| {
+                    for preset in PRESETS {
+                        if ui
+                            .selectable_label(
+                                prefs.default_slide == (preset.w, preset.h),
+                                preset.label,
+                            )
+                            .clicked()
+                        {
+                            prefs.default_slide = (preset.w, preset.h);
+                        }
+                    }
+                    let is_custom = selected_preset.is_none();
+                    if ui.selectable_label(is_custom, "Custom").clicked() && !is_custom {
+                        prefs.default_slide.0 = prefs.default_slide.0.saturating_add(1).min(7680);
+                    }
+                });
+            ui.horizontal(|ui| {
+                ui.label("W");
+                ui.add(
+                    DragValue::new(&mut prefs.default_slide.0)
+                        .range(SLIDE_W_RANGE)
+                        .suffix(" px"),
+                );
+                ui.label("×");
+                ui.label("H");
+                ui.add(
+                    DragValue::new(&mut prefs.default_slide.1)
+                        .range(SLIDE_H_RANGE)
+                        .suffix(" px"),
+                );
+                ui.small(format_aspect_ratio(
+                    prefs.default_slide.0,
+                    prefs.default_slide.1,
+                ));
+            });
         });
     if theme != editor.theme_pref {
         editor.theme_pref = theme;

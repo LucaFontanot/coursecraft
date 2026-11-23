@@ -228,7 +228,7 @@ pub struct Prefs {
     pub versions_to_keep: u32,
     /// Slide size of a new course.
     #[serde(default)]
-    pub default_slide: SlidePreset,
+    pub default_slide: DefaultSlideSize,
     /// Underline misspellings while editing text.
     #[serde(default = "default_true")]
     pub spell_check_as_you_type: bool,
@@ -288,6 +288,110 @@ impl SlidePreset {
     }
 }
 
+/// Default slide size for new courses (16:9 HD).
+pub const DEFAULT_SLIDE_SIZE: (u32, u32) = (1280, 720);
+
+/// Allowed slide width range in pixels.
+pub const SLIDE_W_RANGE: std::ops::RangeInclusive<u32> = 100..=7680;
+
+/// Allowed slide height range in pixels.
+pub const SLIDE_H_RANGE: std::ops::RangeInclusive<u32> = 100..=4320;
+
+/// Backward-compatible default slide size stored in `prefs.json`.
+///
+/// Accepts both legacy [`SlidePreset`] strings (`"wide16x9"`, `"wide16x10"`,
+/// `"standard4x3"`, `"square"`) and `{ "w": u32, "h": u32 }` custom sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefaultSlideSize {
+    pub w: u32,
+    pub h: u32,
+}
+
+impl Default for DefaultSlideSize {
+    fn default() -> Self {
+        Self {
+            w: DEFAULT_SLIDE_SIZE.0,
+            h: DEFAULT_SLIDE_SIZE.1,
+        }
+    }
+}
+
+impl From<SlidePreset> for DefaultSlideSize {
+    fn from(preset: SlidePreset) -> Self {
+        let (w, h) = preset.size();
+        Self { w, h }
+    }
+}
+
+impl DefaultSlideSize {
+    /// Construct a [`DefaultSlideSize`] if `(w, h)` is within `100..=7680` × `100..=4320`.
+    #[must_use]
+    pub fn from_valid_size((w, h): (u32, u32)) -> Option<Self> {
+        if SLIDE_W_RANGE.contains(&w) && SLIDE_H_RANGE.contains(&h) {
+            Some(Self { w, h })
+        } else {
+            None
+        }
+    }
+
+    /// Width and height in pixels.
+    #[must_use]
+    pub fn size(self) -> (u32, u32) {
+        (self.w, self.h)
+    }
+}
+
+impl Serialize for DefaultSlideSize {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let Some(preset) = SlidePreset::from_size(self.size()) {
+            preset.serialize(serializer)
+        } else {
+            #[derive(Serialize)]
+            struct RawSize {
+                w: u32,
+                h: u32,
+            }
+            RawSize {
+                w: self.w,
+                h: self.h,
+            }
+            .serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DefaultSlideSize {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let Ok(val) = serde_json::Value::deserialize(deserializer) else {
+            return Ok(Self::default());
+        };
+        if let Some(s) = val.as_str() {
+            if let Ok(preset) =
+                serde_json::from_value::<SlidePreset>(serde_json::Value::String(s.to_owned()))
+            {
+                return Ok(Self::from(preset));
+            }
+            return Ok(Self::default());
+        }
+        if let Some(obj) = val.as_object() {
+            let w = obj
+                .get("w")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok());
+            let h = obj
+                .get("h")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok());
+            if let (Some(w), Some(h)) = (w, h)
+                && let Some(valid) = Self::from_valid_size((w, h))
+            {
+                return Ok(valid);
+            }
+        }
+        Ok(Self::default())
+    }
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Self {
@@ -300,7 +404,7 @@ impl Default for Prefs {
             speech_source: SpeechSourcePref::default(),
             autosave_minutes: default_autosave_minutes(),
             versions_to_keep: default_versions_to_keep(),
-            default_slide: SlidePreset::default(),
+            default_slide: DefaultSlideSize::default(),
             spell_check_as_you_type: true,
             spell_words: Vec::new(),
         }

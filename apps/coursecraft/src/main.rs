@@ -1351,8 +1351,8 @@ impl EditorApp {
                 self.prefs.versions_to_keep = versions_to_keep.min(prefs::MAX_VERSIONS_TO_KEEP);
                 self.prefs.spell_check_as_you_type = spell_check_as_you_type;
                 self.prefs.spell_words = spell_words;
-                if let Some(preset) = prefs::SlidePreset::from_size(default_slide) {
-                    self.prefs.default_slide = preset;
+                if let Some(size) = prefs::DefaultSlideSize::from_valid_size(default_slide) {
+                    self.prefs.default_slide = size;
                 }
                 self.autosaver.interval_minutes = Some(self.prefs.autosave_minutes_clamped());
                 if let Some(ref dir) = self.config_dir {

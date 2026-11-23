@@ -17143,7 +17143,7 @@ fn slide_size_dialog_opens_from_the_file_menu_and_apply_dispatches() {
     h.idle_frame();
     assert!(h.editor.ui.slide_size_dialog.open);
 
-    let preset = h.find_text("4:3 (960 x 720)").expect("4:3 preset");
+    let preset = h.find_text("4:3 Standard (960 × 720)").expect("4:3 preset");
     h.click_at(preset);
     h.idle_frame();
     assert_eq!(
@@ -17218,6 +17218,20 @@ fn inspector_strikethrough_button_styles_the_text() {
 }
 
 #[test]
+fn format_aspect_ratio_unit_matrix() {
+    use crate::slide_size_dialog::format_aspect_ratio;
+    assert_eq!(format_aspect_ratio(1920, 1080), "16:9");
+    assert_eq!(format_aspect_ratio(1280, 720), "16:9");
+    assert_eq!(format_aspect_ratio(1280, 800), "16:10");
+    assert_eq!(format_aspect_ratio(960, 720), "4:3");
+    assert_eq!(format_aspect_ratio(1080, 1080), "1:1");
+    assert_eq!(format_aspect_ratio(1080, 1920), "9:16");
+    assert_eq!(format_aspect_ratio(1500, 900), "5:3");
+    assert_eq!(format_aspect_ratio(1001, 700), "1.43:1");
+    assert_eq!(format_aspect_ratio(0, 720), "—");
+}
+
+#[test]
 fn preferences_open_from_the_menu_and_changes_are_requested() {
     let (mut h, _t) = lock_hide_setup();
     let file = h.find_text("File").expect("File menu");
@@ -17227,12 +17241,20 @@ fn preferences_open_from_the_menu_and_changes_are_requested() {
     h.click_at(item);
     h.idle_frame();
     assert!(h.editor.ui.prefs.open);
-    let square = h.find_text("1:1 (1080 x 1080)").expect("preset");
+    // Open the default slide size combo and select 16:9 Full HD (1920 × 1080).
+    let combo = h
+        .find_text("16:9 HD (1280 × 720)")
+        .expect("default slide combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
     let mut requests = Vec::new();
-    h.frame(vec![Event::PointerMoved(square)]);
+    h.frame(vec![Event::PointerMoved(fhd)]);
     for pressed in [true, false] {
         requests.extend(h.frame(vec![Event::PointerButton {
-            pos: square,
+            pos: fhd,
             button: PointerButton::Primary,
             pressed,
             modifiers: Modifiers::NONE,
@@ -17241,10 +17263,16 @@ fn preferences_open_from_the_menu_and_changes_are_requested() {
     assert!(requests.iter().any(|r| matches!(
         r,
         EditorRequest::SetPreferences {
-            default_slide: (1080, 1080),
+            default_slide: (1920, 1080),
             ..
         }
     )));
+
+    // Verify set_preferences accepts custom sizes and the combo shows "Custom".
+    h.editor.set_preferences(1, (1440, 900));
+    h.idle_frame();
+    assert_eq!(h.editor.ui.prefs.default_slide, (1440, 900));
+    assert!(h.find_text("Custom").is_some());
 }
 
 #[test]

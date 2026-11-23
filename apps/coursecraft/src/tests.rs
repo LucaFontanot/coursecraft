@@ -1374,27 +1374,89 @@ fn finished_export_sets_the_status() {
 
 #[test]
 fn preferences_round_trip_and_bad_values_fall_back() {
-    use crate::prefs::SlidePreset;
+    use crate::prefs::{DefaultSlideSize, SlidePreset};
     let dir = scratch_dir("prefs-m16");
     let prefs = Prefs {
         autosave_minutes: 5,
-        default_slide: SlidePreset::Standard4x3,
+        default_slide: DefaultSlideSize::from(SlidePreset::Standard4x3),
         ..Prefs::default()
     };
     save_prefs(&dir, &prefs).unwrap();
     let loaded = load_prefs(&dir);
     assert_eq!(loaded.autosave_minutes, 5);
-    assert_eq!(loaded.default_slide, SlidePreset::Standard4x3);
+    assert_eq!(loaded.default_slide.size(), (960, 720));
 
     // Old files without the keys load with defaults; broken files too.
     std::fs::write(dir.join("prefs.json"), "{\"recent\": []}").unwrap();
     let old = load_prefs(&dir);
     assert_eq!(old.autosave_minutes, 1);
-    assert_eq!(old.default_slide, SlidePreset::Wide16x9);
+    assert_eq!(old.default_slide.size(), (1280, 720));
     std::fs::write(dir.join("prefs.json"), "{ not json").unwrap();
     assert_eq!(load_prefs(&dir), Prefs::default());
     std::fs::write(dir.join("prefs.json"), "{\"autosave_minutes\": 9999}").unwrap();
     assert_eq!(load_prefs(&dir).autosave_minutes_clamped(), 60);
+}
+
+#[test]
+fn preferences_default_slide_backward_compatible_and_custom_sizes() {
+    use crate::prefs::DefaultSlideSize;
+    let dir = scratch_dir("prefs-m30-a09");
+
+    // Legacy preset strings load accurately.
+    for (legacy, expected) in [
+        ("wide16x9", (1280, 720)),
+        ("standard4x3", (960, 720)),
+        ("wide16x10", (1280, 800)),
+        ("square", (1080, 1080)),
+    ] {
+        std::fs::write(
+            dir.join("prefs.json"),
+            format!("{{\"default_slide\": \"{legacy}\"}}"),
+        )
+        .unwrap();
+        assert_eq!(load_prefs(&dir).default_slide.size(), expected);
+    }
+
+    // Full HD, Portrait, and Custom sizes save and reload.
+    for custom in [(1920, 1080), (1080, 1920), (1600, 900)] {
+        let prefs = Prefs {
+            default_slide: DefaultSlideSize::from_valid_size(custom).expect("valid custom size"),
+            ..Prefs::default()
+        };
+        save_prefs(&dir, &prefs).unwrap();
+        assert_eq!(load_prefs(&dir).default_slide.size(), custom);
+    }
+
+    // Out-of-range size falls back cleanly to (1280, 720).
+    std::fs::write(
+        dir.join("prefs.json"),
+        "{\"default_slide\": {\"w\": 50, \"h\": 99999}}",
+    )
+    .unwrap();
+    assert_eq!(load_prefs(&dir).default_slide.size(), (1280, 720));
+}
+
+#[test]
+fn preferences_default_slide_hostile_inputs_never_panic() {
+    let dir = scratch_dir("prefs-m30-fz03");
+    let hostile_payloads = [
+        "{\"default_slide\": {\"w\": -10, \"h\": 720}}",
+        "{\"default_slide\": {\"w\": 0, \"h\": 0}}",
+        "{\"default_slide\": {\"w\": 999999, \"h\": 720}}",
+        "{\"default_slide\": 12345}",
+        "{\"default_slide\": true}",
+        "{\"default_slide\": [1920, 1080]}",
+        "{\"default_slide\": \"unknownPreset\"}",
+        "{\"default_slide\": {\"w\": \"1920\", \"h\": \"1080\"}}",
+    ];
+    for payload in hostile_payloads {
+        std::fs::write(dir.join("prefs.json"), payload).unwrap();
+        assert_eq!(
+            load_prefs(&dir).default_slide.size(),
+            (1280, 720),
+            "hostile payload must fall back to 1280x720: {payload}"
+        );
+    }
 }
 
 #[test]
@@ -1446,13 +1508,24 @@ fn autosave_interval_is_respected_and_zero_turns_it_off() {
 
 #[test]
 fn a_new_course_uses_the_default_slide_size() {
-    use crate::prefs::SlidePreset;
+    use crate::prefs::{DefaultSlideSize, SlidePreset};
     let prefs = Prefs {
-        default_slide: SlidePreset::Square,
+        default_slide: DefaultSlideSize::from(SlidePreset::Square),
         ..Prefs::default()
     };
     let course = prefs.blank_course();
     assert_eq!((course.slide_size.w, course.slide_size.h), (1080, 1080));
+
+    let custom_prefs = Prefs {
+        default_slide: DefaultSlideSize { w: 1600, h: 900 },
+        ..Prefs::default()
+    };
+    let custom_course = custom_prefs.blank_course();
+    assert_eq!(
+        (custom_course.slide_size.w, custom_course.slide_size.h),
+        (1600, 900)
+    );
+
     let default = Prefs::default().blank_course();
     assert_eq!((default.slide_size.w, default.slide_size.h), (1280, 720));
 }
