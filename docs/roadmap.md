@@ -362,7 +362,9 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
 7. Settings panels (`docs/ui/panels.md`): every ↘ launcher opens a closable dock panel with all
    the settings of its category, in place of Storyline's dialogs. M30 builds the registry, the
    launcher wiring and Grid and Guides; the category panels follow in M31–M35, then
-   customization (sections, pinning, workspaces).
+   customization (sections, pinning, workspaces). **Built (2026-11-23):** the registry, every
+   launcher opening a panel, saved layouts that survive new panels, and the Text panel (Font ↘,
+   Paragraph ↘), which also opens by itself when text editing starts on the canvas.
 
 The milestones after M30 switch the disabled buttons on, one area at a time. Each one moves rows
 in `docs/ui/feature-parity.md` to ✅ and flips the matching `NotYet` actions in the ribbon spec.

@@ -9,6 +9,14 @@ use coursecraft_course::Course;
 
 const HELLO_COURSE: &str = include_str!("../../../examples/hello-course/course.json");
 
+/// The panels of the default layout: all but the settings panels, which open
+/// on demand.
+fn laid_out() -> impl Iterator<Item = Panel> {
+    Panel::ALL
+        .into_iter()
+        .filter(|p| crate::panels::family(*p) != crate::panels::Family::Settings)
+}
+
 fn docked() -> TestHarness {
     let course = Course::from_json(HELLO_COURSE).expect("hello course parses");
     let mut h = TestHarness::new_with_size(course, (1600.0, 900.0));
@@ -31,7 +39,7 @@ fn default_layout_is_valid_and_has_every_panel_once() {
         .into_iter()
         .copied()
         .collect();
-    for panel in Panel::ALL {
+    for panel in laid_out() {
         assert_eq!(
             panels.iter().filter(|p| **p == panel).count(),
             1,
@@ -189,7 +197,7 @@ fn reset_reopens_every_panel() {
         dock::set_open(&mut h.editor, panel, false);
     }
     dock::reset(&mut h.editor);
-    for panel in Panel::ALL {
+    for panel in laid_out() {
         assert!(dock::is_open(&h.editor, panel), "{panel:?}");
     }
 }
@@ -215,7 +223,7 @@ fn a_bad_saved_layout_falls_back_to_the_default() {
     ] {
         let workspace = dock::load_workspace(Some(&saved));
         assert_eq!(workspace.validate(), Ok(()));
-        for panel in Panel::ALL {
+        for panel in laid_out() {
             assert!(workspace.layout.contains(&panel), "{panel:?} after {saved}");
         }
     }

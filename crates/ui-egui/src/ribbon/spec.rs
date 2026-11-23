@@ -159,6 +159,9 @@ pub enum UiAction {
     SnapToGuides,
     /// Show or hide a dock panel.
     Panel(crate::dock::Panel),
+    /// A ↘ launcher: open a panel (a settings panel at one of its sections)
+    /// and bring it forward. Never closes it.
+    PanelAt(crate::dock::Panel, Option<crate::panels::Section>),
     ResetPanels,
     ThemeLight,
     ThemeDark,
@@ -438,7 +441,10 @@ const HOME_SLIDE: &[Group] = &[
     Group {
         id: "font",
         label: "Font",
-        launcher: Some(NotYet("the Font dialog")),
+        launcher: Some(Ui(UiAction::PanelAt(
+            crate::dock::Panel::Text,
+            Some(crate::panels::Section::Font),
+        ))),
         items: &[
             item(
                 "font.text_styles",
@@ -561,7 +567,10 @@ const HOME_SLIDE: &[Group] = &[
     Group {
         id: "paragraph",
         label: "Paragraph",
-        launcher: Some(NotYet("the Paragraph dialog")),
+        launcher: Some(Ui(UiAction::PanelAt(
+            crate::dock::Panel::Text,
+            Some(crate::panels::Section::Paragraph),
+        ))),
         items: &[
             item(
                 "paragraph.bullets",
@@ -655,7 +664,7 @@ const HOME_SLIDE: &[Group] = &[
     Group {
         id: "drawing",
         label: "Drawing",
-        launcher: Some(Ui(UiAction::FormatInspector)),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Format, None))),
         items: &[
             split(
                 "drawing.arrange",
@@ -1534,6 +1543,16 @@ const VIEW: &[Group] = &[
             ),
             helped(
                 item(
+                    "view.panel_text",
+                    "Text",
+                    Icon::TextT,
+                    Small,
+                    Ui(UiAction::Panel(crate::dock::Panel::Text)),
+                ),
+                "Every text setting: font, paragraph, text box. Opens by itself when you edit text.",
+            ),
+            helped(
+                item(
                     "view.reset_panels",
                     "Reset Panels",
                     Icon::ArrowCounterClockwise,
@@ -1634,7 +1653,10 @@ const DESIGN: &[Group] = &[
     Group {
         id: "design.background",
         label: "Background",
-        launcher: Some(Ui(UiAction::SlideInspector)),
+        launcher: Some(Ui(UiAction::PanelAt(
+            crate::dock::Panel::SlideInspector,
+            None,
+        ))),
         items: &[
             item(
                 "design.background_styles",
@@ -1785,7 +1807,7 @@ const ANIMATIONS: &[Group] = &[
     Group {
         id: "animations.size",
         label: "Size and Position",
-        launcher: Some(Ui(UiAction::FormatInspector)),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Format, None))),
         items: &[item(
             "animations.size_position",
             "Size and Position",

@@ -153,7 +153,7 @@ Shown when the Course Map view tab is active.
 | | Highlight | SS | `text.style_range` `{highlight}` (new field) | ⛔ | text runs have no highlight colour yet |
 | | Font Color | SS | `text.style_range` `{color}` | ✅ | theme colours + eyedropper (`eyedropper.rs`) |
 | | Spelling | S | `ui:spellCheck` | ✅ | `spell_check.rs` |
-| | ↘ Font | — | `ui:panel.text#font` (new) | ⛔ | opens the Text panel ([panels.md](panels.md)) |
+| | ↘ Font | — | `UiAction::PanelAt(Text, Font)` | ✅ | opens the Text settings panel at Font ([panels.md](panels.md)) |
 | Paragraph ↘ | Bullets | SS | `text.set_paragraph` `{bullet}` | ✅ | ▾ bullet symbols |
 | | Numbering | SS | `text.set_paragraph` `{numbering}` | 🟡 | verify numbering styles |
 | | Decrease / Increase Indent | S | `text.set_paragraph` `{indent}` | ✅ | |
@@ -162,13 +162,13 @@ Shown when the Course Map view tab is active.
 | | Text Direction | SS | — | ⛔ | horizontal, rotate 90°/270°, stacked |
 | | Align Text | SS | `object.update` `{v_align}` | 🟡 | top / middle / bottom; verify field |
 | | Find / Replace | SS | `course.find`, `course.replace` | ✅ | `find.rs` |
-| | ↘ Paragraph | — | `ui:panel.text#paragraph` (new) | ⛔ | opens the Text panel ([panels.md](panels.md)) |
+| | ↘ Paragraph | — | `UiAction::PanelAt(Text, Paragraph)` | ✅ | opens the Text settings panel at Paragraph |
 | Drawing ↘ | Arrange | LS | `object.reorder`, `object.align`, `object.distribute`, `object.group` | ✅ | ▾ Order, Group, Align, Rotate (as Edit › Order/Align) |
 | | Quick Styles | LS | `object.apply_style` | ✅ | |
 | | Shape Fill | SS | `object.set_fill_style` | ✅ | |
 | | Shape Outline | SS | `object.update` `{outline}` | ✅ | |
 | | Shape Effect | SS | `object.set_shadow`, `object.set_glow` | 🟡 | Shadow ✅, Glow ✅, Reflection ⛔, Soft Edges ⛔ |
-| | ↘ Format Shape | — | `ui:inspector.format` | ✅ | opens the Format inspector |
+| | ↘ Format Shape | — | `UiAction::PanelAt(Format)` | ✅ | opens the Format inspector panel until the Shape Style panel exists |
 | Publish | Player / Preview / Publish | | as Course Map | ✅ | |
 
 ## Insert
@@ -287,7 +287,7 @@ Not shown except Slide Master; proposal.
 | | Grid | K | `view.set` `{grid}` | ✅ |
 | | Guides | K | `view.set` `{guides}` | ✅ |
 | | Snap to Grid / Snap to Guides | K | `view.set` | ✅ |
-| Panels | Timeline, States, Notes, Triggers, Layers, Scenes | K | `ui:panel.toggle` | 🟡 (Slides, Timeline, and the Format, Animate, Slide and Course inspectors, each its own panel; the others are tabs inside the timeline panel) |
+| Panels | Timeline, States, Notes, Triggers, Layers, Scenes | K | `ui:panel.toggle` | 🟡 (Slides, Timeline, the Format, Animate, Slide and Course inspectors, and the Text settings panel, each its own panel; the others are tabs inside the timeline panel) |
 | | Reset Panels | S | `ui:panel.reset` | ✅ |
 | Theme | Light / Dark | T | `ui:theme` | ✅ (Light, Dark, Match System) |
 | Publish | Preview | LS | | ✅ |

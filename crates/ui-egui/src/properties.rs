@@ -181,6 +181,12 @@ pub struct PropertiesState {
     pub line_spacing_seen: f32,
     /// Whether the custom line-spacing DragValue inside the ComboBox popup was interacted with.
     pub line_spacing_editing: bool,
+    /// Space before and after the paragraph (Text panel), as typed, and the
+    /// value last read from the course.
+    pub space_before: f32,
+    pub space_before_seen: f32,
+    pub space_after: f32,
+    pub space_after_seen: f32,
     /// Snapshot of active canvas inline-edit `(slide, object, selection_range, cursor_pos)`.
     pub inline_selection: Option<crate::InlineEditSelection>,
     /// Pending style overrides toggled at a caret (no selection), applied to the next typed chars.
@@ -457,6 +463,10 @@ impl Default for PropertiesState {
             line_spacing_custom: 1.0,
             line_spacing_seen: f32::NAN,
             line_spacing_editing: false,
+            space_before: 0.0,
+            space_before_seen: f32::NAN,
+            space_after: 0.0,
+            space_after_seen: f32::NAN,
             inline_selection: None,
             pending_caret_style: None,
             add_font_requested: false,
@@ -713,6 +723,8 @@ impl PropertiesState {
         self.text_size_seen = f32::NAN;
         self.text_letter_spacing_seen = f32::NAN;
         self.line_spacing_seen = f32::NAN;
+        self.space_before_seen = f32::NAN;
+        self.space_after_seen = f32::NAN;
 
         if let Some(ref obj_id) = selection.object
             && let Some((obj, _)) = slide.object(obj_id)
@@ -2406,8 +2418,9 @@ fn link_at_char(runs: &[TextRun], cursor_char: usize) -> Option<coursecraft_cour
 }
 
 /// Render the segmented inspector panel (Format · Animate · Slide · Course).
-pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui, docked: Option<InspectorTab>) {
-    let tab = docked.unwrap_or(editor.ui.inspector_tab);
+/// Bring the shared inspector state up to date for this frame: the selection,
+/// the canvas text selection, spelling. Returns whether the selection changed.
+fn prepare(editor: &mut Editor, ui: &Ui) -> bool {
     let selection_changed = editor.ui.properties.last_synced_selection != editor.selection;
     editor.ui.properties.sync(
         &editor.session.course,
@@ -2444,6 +2457,12 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui, docked: Option<In
     props.spell_add.clear();
     props.spell_ignore.clear();
 
+    selection_changed
+}
+
+pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui, docked: Option<InspectorTab>) {
+    let tab = docked.unwrap_or(editor.ui.inspector_tab);
+    let selection_changed = prepare(editor, ui);
     let mut actions_to_run: Vec<(&'static str, Json)> = Vec::new();
     let p = coursecraft_render::palette(ui.ctx());
 
@@ -2519,6 +2538,270 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui, docked: Option<In
         ui.add_space(coursecraft_render::PANEL_MARGIN);
     });
 
+    finish(editor, actions_to_run);
+}
+
+/// The Text settings panel (`docs/ui/panels.md`): Font, Paragraph and Text Box
+/// for the selected text box or shape text. It holds every text setting the
+/// Format inspector has, through the same controls, and the ones only this
+/// panel has (space before and after a paragraph). A setting not built yet is
+/// drawn disabled with its reason.
+pub fn show_text_panel(editor: &mut Editor, ui: &mut Ui) {
+    prepare(editor, ui);
+    let mut actions_to_run: Vec<(&'static str, Json)> = Vec::new();
+    let avail_w = ui.available_width();
+    egui::ScrollArea::vertical()
+        .id_salt("text_panel_scroll")
+        .max_width(avail_w)
+        // In a floating window the space is whatever the window is sized to.
+        .max_height(ui.available_height())
+        // A launcher's jump to a section lands at once, not over several frames.
+        .animated(false)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.add_space(coursecraft_render::PANEL_MARGIN);
+            let inner_w = (avail_w - 2.0 * coursecraft_render::PANEL_MARGIN).max(40.0);
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::symmetric(
+                    coursecraft_render::PANEL_MARGIN as i8,
+                    0,
+                ))
+                .show(ui, |ui| {
+                    ui.set_max_width(inner_w);
+                    ui.spacing_mut().text_edit_width = ui
+                        .spacing()
+                        .text_edit_width
+                        .min((inner_w - LABEL_COL_WIDTH - 16.0).max(40.0));
+                    text_panel_sections(editor, ui, &mut actions_to_run);
+                });
+            ui.add_space(coursecraft_render::PANEL_MARGIN);
+        });
+    finish(editor, actions_to_run);
+}
+
+/// The text the Text panel edits, with any state being edited applied.
+struct TextTarget<'a> {
+    style: std::borrow::Cow<'a, TextStyle>,
+    base_style: std::borrow::Cow<'a, TextStyle>,
+    runs: &'a [TextRun],
+    paragraphs: &'a [Paragraph],
+    text: &'a str,
+    autofit: Option<Autofit>,
+    /// Shape text that has no text yet: the paragraph controls wait for some.
+    empty_shape: bool,
+}
+
+/// A row for a setting that is not built yet: drawn disabled with its reason.
+fn not_yet_row(ui: &mut Ui, label: &str, feature: &str) {
+    inspector_row(ui, label, |ui| {
+        ui.add_enabled_ui(false, |ui| ui.label(tl!("Not available yet")))
+            .response
+            .on_disabled_hover_text(format!("{} {feature}", tl!("Not available yet:")));
+    });
+}
+
+fn text_panel_sections(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+) {
+    use crate::panels::{Section, section_header};
+    use std::borrow::Cow;
+
+    let focus = &mut editor.ui.panels;
+    let props = &mut editor.ui.properties;
+    let lists = &editor.ui.properties_lists;
+    let system_fonts = editor.ui.system_fonts.as_deref();
+    let mut font_requests: Vec<crate::EditorRequest> = Vec::new();
+    let mut action_to_run: Option<(&'static str, Json)> = None;
+
+    let slide = editor.session.course.slide(&editor.selection.slide);
+    let obj = if editor.selection.is_multi() {
+        None
+    } else {
+        slide.and_then(|slide| {
+            editor
+                .selection
+                .object
+                .as_ref()
+                .and_then(|id| slide.object(id))
+                .map(|(obj, _)| obj)
+        })
+    };
+    let state = obj.and_then(|obj| {
+        editor
+            .ui
+            .editing_state
+            .as_ref()
+            .filter(|s| s.slide_id == editor.selection.slide && s.object_id == obj.id)
+            .and_then(|s| obj.states.iter().find(|st| st.name == s.state_name))
+    });
+    let state_ctx = match (slide, obj, state) {
+        (Some(slide), Some(obj), Some(state)) => Some(StateEditCtx {
+            slide_id: &slide.id,
+            object_id: &obj.id,
+            state_name: &state.name,
+            state,
+        }),
+        _ => None,
+    };
+    let target = obj.and_then(|obj| match &obj.kind {
+        ObjectKind::Text {
+            text,
+            style,
+            runs,
+            paragraphs,
+            autofit,
+            ..
+        } => {
+            let mut eff = state
+                .and_then(|s| s.text_style.as_ref())
+                .unwrap_or(style)
+                .clone();
+            if let Some(state) = state
+                && state.text_style.is_none()
+                && let Some(c) = &state.fill
+            {
+                eff.color = c.clone();
+            }
+            Some(TextTarget {
+                style: Cow::Owned(eff),
+                base_style: Cow::Borrowed(style),
+                runs: state.and_then(|s| s.runs.as_deref()).unwrap_or(runs),
+                paragraphs: state
+                    .and_then(|s| s.paragraphs.as_deref())
+                    .unwrap_or(paragraphs),
+                text: state.and_then(|s| s.text.as_deref()).unwrap_or(text),
+                autofit: Some(state.and_then(|s| s.autofit).unwrap_or(*autofit)),
+                empty_shape: false,
+            })
+        }
+        ObjectKind::Shape {
+            shape, fill, text, ..
+        } if coursecraft_course::shape_allows_text(*shape) => {
+            let fill = state.and_then(|s| s.fill.as_ref()).unwrap_or(fill);
+            let (base, runs, paragraphs, body, autofit): (Cow<'_, TextStyle>, _, _, &str, _) =
+                match text {
+                    Some(t) => (
+                        Cow::Borrowed(&t.style),
+                        t.runs.as_slice(),
+                        t.paragraphs.as_slice(),
+                        t.text.as_str(),
+                        Some(t.autofit),
+                    ),
+                    None => (
+                        Cow::Owned(default_shape_text_style(fill)),
+                        &[][..],
+                        &[][..],
+                        "",
+                        None,
+                    ),
+                };
+            Some(TextTarget {
+                style: match state.and_then(|s| s.text_style.as_ref()) {
+                    Some(style) => Cow::Borrowed(style),
+                    None => base.clone(),
+                },
+                base_style: base,
+                runs: state.and_then(|s| s.runs.as_deref()).unwrap_or(runs),
+                paragraphs: state
+                    .and_then(|s| s.paragraphs.as_deref())
+                    .unwrap_or(paragraphs),
+                text: state.and_then(|s| s.text.as_deref()).unwrap_or(body),
+                autofit: state.and_then(|s| s.autofit).or(autofit),
+                empty_shape: text.is_none(),
+            })
+        }
+        _ => None,
+    });
+    let route = |action: (&'static str, Json), target: &TextTarget<'_>| match &state_ctx {
+        Some(ctx) => route_text_set_to_state(action, ctx, &target.base_style),
+        None => action,
+    };
+
+    if target.is_none() {
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(tl!(
+                "Select a text box, or a shape that holds text, to change its text."
+            ))
+            .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+        );
+    }
+    // The ids keep this panel's text box apart from the Format inspector's,
+    // which may be on screen at the same time.
+    let prefix = if obj.is_some_and(|o| matches!(o.kind, ObjectKind::Shape { .. })) {
+        "shape@text_panel"
+    } else {
+        "text@text_panel"
+    };
+
+    section_header(focus, ui, Section::Font);
+    if let (Some(target), Some(slide), Some(obj)) = (&target, slide, obj) {
+        {
+            if let Some(action) = show_text_controls(
+                ui,
+                props,
+                &slide.id,
+                &obj.id,
+                &target.style,
+                target.runs,
+                target.text,
+                prefix,
+                &lists.font_families,
+                None,
+                target.autofit,
+                system_fonts,
+                &mut font_requests,
+            ) {
+                action_to_run = Some(route(action, target));
+            }
+        }
+    }
+    not_yet_row(ui, tl!("Caps"), tl!("all caps and small caps"));
+    not_yet_row(ui, tl!("Highlight"), tl!("text highlight colour"));
+    not_yet_row(ui, tl!("Underline"), tl!("underline styles"));
+
+    section_header(focus, ui, Section::Paragraph);
+    match (&target, slide, obj) {
+        (Some(target), Some(slide), Some(obj)) if !target.empty_shape => {
+            if let Some(action) = show_paragraph_controls(
+                ui,
+                props,
+                &slide.id,
+                &obj.id,
+                target.runs,
+                target.paragraphs,
+                &lists.slides,
+                target.text,
+                prefix,
+                None,
+                true,
+            ) {
+                action_to_run = Some(route(action, target));
+            }
+        }
+        (Some(_), _, _) => {
+            ui.label(
+                RichText::new(tl!("Type some text first."))
+                    .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+            );
+        }
+        _ => {}
+    }
+    not_yet_row(ui, tl!("Tab stops"), tl!("tab stops"));
+
+    section_header(focus, ui, Section::TextBox);
+    not_yet_row(ui, tl!("Columns"), tl!("text columns"));
+
+    editor.pending_requests.append(&mut font_requests);
+    if let Some(action) = action_to_run {
+        actions_to_run.push(action);
+    }
+}
+
+/// Run what the inspector or a settings panel asked for this frame.
+fn finish(editor: &mut Editor, mut actions_to_run: Vec<(&'static str, Json)>) {
     let spell_add = std::mem::take(&mut editor.ui.properties.spell_add);
     for word in spell_add {
         editor.add_spell_word(&word);
@@ -5042,6 +5325,7 @@ fn show_paragraph_controls(
     current_text: &str,
     id_prefix: &str,
     cell: Option<(usize, usize)>,
+    full: bool,
 ) -> Option<(&'static str, Json)> {
     let mut action_to_run = None;
     let text_edit_id = egui::Id::unique(("prop_text_body", id_prefix));
@@ -5196,6 +5480,42 @@ fn show_paragraph_controls(
             action_to_run = Some(("text.set_paragraphs", params));
         }
     });
+
+    if full {
+        let before = current_paragraph.space_before;
+        let after = current_paragraph.space_after;
+        for (label, key, value) in [
+            ("Space before", "space_before", before),
+            ("Space after", "space_after", after),
+        ] {
+            let (buf, seen) = if key == "space_before" {
+                (&mut props.space_before, &mut props.space_before_seen)
+            } else {
+                (&mut props.space_after, &mut props.space_after_seen)
+            };
+            if seen.is_nan() || (value - *seen).abs() > 0.001 {
+                *buf = value;
+                *seen = value;
+            }
+            inspector_row(ui, tl!(label), |ui| {
+                let r = ui.add(
+                    DragValue::new(buf)
+                        .speed(0.5)
+                        .range(0.0..=200.0)
+                        .suffix(" px"),
+                );
+                let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (r.drag_stopped() || r.lost_focus() || enter)
+                    && buf.is_finite()
+                    && (*buf - value).abs() > 0.001
+                {
+                    let mut params = paragraph_base();
+                    params[key] = serde_json::json!(*buf);
+                    action_to_run = Some(("text.set_paragraphs", params));
+                }
+            });
+        }
+    }
 
     inspector_row(ui, "Link", |ui| {
         if ui.button("Link…").clicked() {
@@ -6302,6 +6622,7 @@ fn show_table_controls(
             &cell.text,
             "table_cell",
             Some((row, column)),
+            false,
         ) {
             actions.push(action);
         }
@@ -9397,6 +9718,7 @@ fn show_object_properties(
                 eff_text,
                 "text",
                 None,
+                false,
             ) {
                 action_to_run = Some(match state_ctx_ref {
                     Some(ctx) => route_text_set_to_state(action, ctx, style),
@@ -9429,6 +9751,7 @@ fn show_object_properties(
                 eff_text,
                 "shape",
                 None,
+                false,
             ) {
                 action_to_run = Some(match state_ctx_ref {
                     Some(ctx) => route_text_set_to_state(action, ctx, &text.style),

@@ -135,7 +135,7 @@ New Slide ▸, New Scene, Apply Layout ▸, Duplicate, Delete, Rename, Move to S
 | Insert Question | New Slide › Graded/Survey/Custom | `toolbar::insert_question` | 🟡 same dialog, question tiles |
 | Player Properties | Home › Player | `course_settings.rs` | 🟡 own ribbon (Features, Menu, Resources, Glossary, Colors & Effects, Text Labels, Other) and live preview |
 | Publish | Home › Publish | `publish.rs` | 🟡 left list: Share for Review 🚫, Web ✅, Video ✅, Word ✅, LMS (SCORM 1.2, SCORM 2004, cmi5, xAPI) ✅; Properties links (Player, Quality, Publish scope, Tracking) |
-| Font, Paragraph | ↘ launchers | — | ⛔ the Text settings panel ([panels.md](panels.md) step 2) |
+| Font, Paragraph | ↘ launchers | Text settings panel (`panels.rs`) | 🟡 caps, highlight, underline styles, tab stops, columns to come ([panels.md](panels.md)) |
 | Size and Position | ↘ launcher, context menu | inspector | ⛔ the Size and Position panel ([panels.md](panels.md) step 3) |
 | Find and Replace | Home › Find / Replace | `find.rs` | ✅ |
 | Characters, Photos, Illustrations, Videos | Insert › Library | — | 🚫 |

@@ -1,7 +1,7 @@
 # Settings panels: what the ↘ launcher opens
 
-> Part of [the ribbon plan](README.md). **Status:** planned. **Written:** 2026-11-23. Status marks
-> as in README. Long-term plan: it starts in M30 and grows with every milestone after it.
+> Part of [the ribbon plan](README.md). **Status:** step 1 built, step 2 (Text) partly built.
+> **Written:** 2026-11-23. Status marks as in README. Long-term plan: it starts in M30 and grows with every milestone after it.
 
 In Storyline the ↘ in a group's caption opens a modal dialog (Font, Paragraph, Size and Position,
 Format Shape). CourseCraft opens a **dock panel** instead: the same settings, and more, in a panel
@@ -17,7 +17,9 @@ Why a panel and not a dialog:
   screen.
 - It closes. Nothing is on screen that the author did not ask for.
 
-## Today (2026-11-23)
+## Before this plan (2026-11-23)
+
+What there was when the plan was written. What is built since is under [Order of work](#order-of-work).
 
 ### Dock panels
 
@@ -52,7 +54,7 @@ Every other group has no ↘.
 ## Categories
 
 Every panel belongs to one of three families. View › Panels lists them in this order, one heading
-per family.
+per family. In the code: `crates/ui-egui/src/panels.rs`, `family()`.
 
 | Family | What it is | Panels |
 |---|---|---|
@@ -108,6 +110,13 @@ Layers and Notes move from the Timeline panel to Workspace panels of their own, 
 8. **Every change is an engine command.** Panels dispatch; undo works as everywhere else.
 9. **A saved layout survives new panels.** A panel the saved layout does not know opens at its
    default place; a name the build does not know is dropped. The layout never resets for that.
+10. **The work opens its panel.** When the author starts work that needs a settings panel, that
+    panel opens by itself and comes to the front, at the right section: editing text on the
+    canvas opens Text at Font. Only the start of the work counts: a panel the author closes while
+    working stays closed until the next start. Docked panels only: with docking off the fixed
+    inspector already holds the controls, and a window opening by itself would cover the canvas
+    being worked on (a launcher still floats it). Each new panel adds its trigger to
+    `panels::wanted` (a table cell to Table, a motion path to Animation, a state to States).
 
 ## Customization (later)
 
@@ -142,8 +151,8 @@ The panels are the base for the customization testers ask for. In order:
 
 | Step | What | Closes |
 |---|---|---|
-| 1 | Registry, `PanelAt`, the tolerant layout loader, View › Panels by family, the tests above; Format/Slide launchers move to `PanelAt` | the infrastructure |
-| 2 | **Text** panel; Font ↘ and Paragraph ↘ switch on | Font and Paragraph dialogs (M31) |
+| 1 ✅ | Registry (`panels.rs`: families, sections), `UiAction::PanelAt`, the tolerant layout loader (`dock::forget_unknown_panels`), View › Panels in family order, opening by itself (rule 10), floating windows with docking off, `panels_tests.rs`; every launcher moved to `PanelAt` | the infrastructure |
+| 2 🟡 | **Text** panel (Font, Paragraph, Text Box sections); Font ↘ and Paragraph ↘ switched on; space before and after a paragraph (only in this panel). Still disabled: caps, highlight, underline styles, tab stops, columns. Still to do: the Format inspector's text rows in quick mode, a ↘ on its Text header | Font and Paragraph dialogs (M31) |
 | 3 | **Size and Position** and **Shape Style**; Drawing ↘ and the contextual launchers | Size and Position dialog, Format Shape (M31) |
 | 4 | **Layers**, **Notes**, **Triggers**, **States**, **Variables**, **Question** as panels of their own | shell step 6 (M33) |
 | 5 | **Animation** and **Transition** | M34 |

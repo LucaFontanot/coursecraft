@@ -15,17 +15,17 @@
 |---|---|---|---|---|
 | Project and file | 7 | 2 | 1 | 2 |
 | Structure: scenes, slides, masters | 8 | 3 | 7 | 0 |
-| Text | 12 | 3 | 9 | 0 |
+| Text | 12 | 4 | 8 | 0 |
 | Shapes, pictures and buttons | 13 | 5 | 11 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
 | Animation, transitions, timeline | 10 | 3 | 9 | 0 |
 | Questions and quizzes | 9 | 3 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
-| Editor shell and panels | 12 | 8 | 2 | 0 |
+| Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **106** | **38** | **63** | **12** |
+| **Total** | **106** | **40** | **62** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -93,7 +93,7 @@ Counted from the tables below; recount when a row changes.
 | Change case | — | ⛔ | M31 |
 | Highlight colour | — | ⛔ needs model field | M31 |
 | Text direction (rotate, stacked) | — | ⛔ | M31 |
-| Font and Paragraph dialogs | — | ⛔ | M31 |
+| Font and Paragraph settings (Storyline's dialogs) | Text settings panel (`panels.rs`, from Font ↘ and Paragraph ↘): every text control, space before and after; caps, highlight, underline styles, tab stops and columns drawn disabled | 🟡 | M31 |
 | Slide number field | — | ⛔ | M31 |
 | Symbol picker | — | ⛔ | M31 |
 | Insert variable reference | — | ⛔ variables exist | M31 |
@@ -272,6 +272,7 @@ Counted from the tables below; recount when a row changes.
 | Collapse panels | | 🟡 | M30 |
 | Slide Properties in the Course Map | | 🟡 | M30 |
 | **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab and the File page, replacing the menu bar; the galleries (themes, transitions, animations) and the contextual tabs to come | 🟡 | M30 |
+| Settings panels from the ↘ launchers, opening by themselves for the work in hand | `panels.rs` (`docs/ui/panels.md`): Text; the other categories to come | 🟡 | M30–M35 |
 | Quick access toolbar | Save, Undo, Redo, Undo History left of the tab strip; Customize to come | 🟡 | M30 |
 | Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |
 | View tabs for open slides | `doc_tabs.rs`: a Course Map tab, then a tab per opened slide (× closes it), under the ribbon | ✅ | — |

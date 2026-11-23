@@ -35,10 +35,13 @@ pub enum Panel {
     SlideInspector,
     #[serde(rename = "course_inspector")]
     CourseInspector,
+    /// Settings panels (`crate::panels`): opened by a ↘ launcher or by the
+    /// work that needs them, not part of the default layout.
+    Text,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 7] = [
+    pub const ALL: [Panel; 8] = [
         Panel::Slides,
         Panel::Canvas,
         Panel::Timeline,
@@ -46,6 +49,7 @@ impl Panel {
         Panel::Animate,
         Panel::SlideInspector,
         Panel::CourseInspector,
+        Panel::Text,
     ];
 
     /// The inspector panels, in their tab order.
@@ -64,7 +68,7 @@ impl Panel {
             Panel::Animate => Some(InspectorTab::Animate),
             Panel::SlideInspector => Some(InspectorTab::Slide),
             Panel::CourseInspector => Some(InspectorTab::Course),
-            Panel::Slides | Panel::Canvas | Panel::Timeline => None,
+            Panel::Slides | Panel::Canvas | Panel::Timeline | Panel::Text => None,
         }
     }
 
@@ -90,6 +94,7 @@ impl Panel {
             Panel::Animate => "Animate",
             Panel::SlideInspector => "Slide",
             Panel::CourseInspector => "Course",
+            Panel::Text => "Text",
         }
     }
 
@@ -107,7 +112,8 @@ impl Panel {
             | Panel::Format
             | Panel::Animate
             | Panel::SlideInspector
-            | Panel::CourseInspector => Permissions::default(),
+            | Panel::CourseInspector
+            | Panel::Text => Permissions::default(),
         }
     }
 
@@ -116,9 +122,11 @@ impl Panel {
             Panel::Slides => vec2(180.0, 160.0),
             Panel::Canvas => vec2(320.0, 200.0),
             Panel::Timeline => vec2(320.0, crate::timeline::TIMELINE_PANEL_MIN_HEIGHT),
-            Panel::Format | Panel::Animate | Panel::SlideInspector | Panel::CourseInspector => {
-                vec2(260.0, 200.0)
-            }
+            Panel::Format
+            | Panel::Animate
+            | Panel::SlideInspector
+            | Panel::CourseInspector
+            | Panel::Text => vec2(260.0, 200.0),
         };
         PanelLimits {
             min,
@@ -201,7 +209,9 @@ pub fn load_workspace(saved: Option<&serde_json::Value>) -> Workspace<Panel> {
     let Some(value) = saved else {
         return default;
     };
-    match serde_json::from_value::<Workspace<Panel>>(value.clone()) {
+    let mut value = value.clone();
+    forget_unknown_panels(&mut value);
+    match serde_json::from_value::<Workspace<Panel>>(value) {
         Ok(mut workspace) if workspace.version <= Workspace::<Panel>::VERSION => {
             workspace.reconcile(|_| true, |p: &Panel| p.permissions(), &default);
             workspace
@@ -213,6 +223,63 @@ pub fn load_workspace(saved: Option<&serde_json::Value>) -> Workspace<Panel> {
     }
 }
 
+/// The saved id of every panel this build knows.
+fn known_ids() -> Vec<serde_json::Value> {
+    Panel::ALL
+        .iter()
+        .filter_map(|p| serde_json::to_value(p).ok())
+        .collect()
+}
+
+/// Drop the panels this build does not know (a layout saved by a newer
+/// version) so the rest of the layout still loads: they leave their tab
+/// groups, a closed one is forgotten, and a place recorded against one is
+/// dropped. A group left empty fails validation and the default is used.
+pub fn forget_unknown_panels(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    let known = known_ids();
+    // Panel ids are snake_case; craft-ui's own enums (sides, placements) are
+    // PascalCase, so a lowercase string that is not a known id is a panel.
+    let unknown = |v: &Value| {
+        v.as_str().is_some_and(|s| {
+            s.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+                && s.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        }) && !known.contains(v)
+    };
+    fn mentions(v: &Value, unknown: &dyn Fn(&Value) -> bool) -> bool {
+        match v {
+            Value::Object(map) => map.values().any(|v| mentions(v, unknown)),
+            Value::Array(items) => items.iter().any(|v| mentions(v, unknown)),
+            other => unknown(other),
+        }
+    }
+    fn walk(v: &mut Value, unknown: &dyn Fn(&Value) -> bool) {
+        match v {
+            Value::Object(map) => {
+                if let Some(Value::Array(panels)) = map.get_mut("panels") {
+                    panels.retain(|p| !unknown(p));
+                    let last = panels.len().saturating_sub(1);
+                    if let Some(active) = map.get_mut("active")
+                        && active.as_u64().is_some_and(|a| a as usize > last)
+                    {
+                        *active = Value::from(last);
+                    }
+                }
+                if let Some(Value::Array(hidden)) = map.get_mut("hidden") {
+                    hidden.retain(|entry| !mentions(entry, unknown));
+                }
+                for (_, child) in map.iter_mut() {
+                    walk(child, unknown);
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|v| walk(v, unknown)),
+            _ => {}
+        }
+    }
+    walk(value, &unknown);
+}
+
 /// Whether `panel` is shown in the workspace.
 #[must_use]
 pub fn is_open(editor: &Editor, panel: Panel) -> bool {
@@ -222,7 +289,7 @@ pub fn is_open(editor: &Editor, panel: Panel) -> bool {
 /// Show or hide one panel (View › Panels). Shown panels come back where they
 /// were closed; the canvas can't be hidden.
 pub fn set_open(editor: &mut Editor, panel: Panel, open: bool) {
-    let fallback = Some(Panel::Canvas).filter(|p| *p != panel);
+    let fallback = default_anchor(editor, panel);
     if let Err(err) = editor
         .ui
         .dock
@@ -230,6 +297,28 @@ pub fn set_open(editor: &mut Editor, panel: Panel, open: bool) {
         .set_visible(panel, open, fallback, |p: &Panel| p.permissions())
     {
         log::debug!("panel {panel:?} not changed: {err:?}");
+    }
+}
+
+/// Where a panel with no recorded place opens: a settings panel joins the
+/// first open inspector's group as a tab, any other panel goes beside the canvas.
+fn default_anchor(editor: &Editor, panel: Panel) -> Option<Panel> {
+    let inspector = (crate::panels::family(panel) == crate::panels::Family::Settings)
+        .then(|| {
+            Panel::INSPECTORS
+                .into_iter()
+                .find(|p| *p != panel && is_open(editor, *p))
+        })
+        .flatten();
+    inspector.or(Some(Panel::Canvas).filter(|p| *p != panel))
+}
+
+/// Open `panel` if it is closed, then make it the active tab of its group.
+pub fn reveal(editor: &mut Editor, panel: Panel) {
+    if is_open(editor, panel) {
+        apply(editor, vec![Action::Activate { panel }]);
+    } else {
+        set_open(editor, panel, true);
     }
 }
 
@@ -301,6 +390,7 @@ impl DockContent<Panel> for Content<'_> {
                     self.editor.inspector_body(ui, Some(tab));
                 }
             }
+            Panel::Text => crate::panels::body(self.editor, ui, *panel),
             Panel::Timeline => {
                 if self.editor.ui.master_view {
                     ui.add_space(8.0);
@@ -329,6 +419,7 @@ impl DockContent<Panel> for Content<'_> {
 /// and apply the user's layout changes.
 pub fn show(editor: &mut Editor, ui: &mut Ui) {
     reveal_inspector(editor);
+    crate::panels::follow_work(editor);
     let style = DockStyle::from_ui(ui);
     let layout = editor.ui.dock.workspace.layout.clone();
     let mut content = Content {

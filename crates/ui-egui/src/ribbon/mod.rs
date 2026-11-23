@@ -275,6 +275,12 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
         | UiAction::CheckUpdates
         | UiAction::ConnectAgent
         | UiAction::AiSettings => Ok(()),
+        UiAction::PanelAt(..) => Ok(()),
+        UiAction::Panel(panel)
+            if crate::panels::family(panel) == crate::panels::Family::Settings =>
+        {
+            Ok(())
+        }
         UiAction::Panel(_) | UiAction::ResetPanels => {
             if editor.ui.dock.enabled {
                 Ok(())
@@ -388,6 +394,7 @@ fn run_ui(
         ),
         UiAction::SnapToGuides => editor.ui.snap_to_guides = !editor.ui.snap_to_guides,
         UiAction::Panel(panel) => toggle_panel(editor, panel),
+        UiAction::PanelAt(panel, section) => crate::panels::open_at(editor, panel, section),
         UiAction::ResetPanels => crate::dock::reset(editor),
         UiAction::ThemeLight => set_theme(editor, ThemePref::Light, requests),
         UiAction::ThemeDark => set_theme(editor, ThemePref::Dark, requests),
@@ -429,8 +436,11 @@ fn view_toggle(editor: &mut Editor, key: &str, on: bool) {
 }
 
 fn toggle_panel(editor: &mut Editor, panel: crate::dock::Panel) {
-    let open = crate::dock::is_open(editor, panel);
-    crate::dock::set_open(editor, panel, !open);
+    if crate::panels::is_shown(editor, panel) {
+        crate::panels::close(editor, panel);
+    } else {
+        crate::panels::open_at(editor, panel, None);
+    }
 }
 
 fn set_theme(editor: &mut Editor, pref: ThemePref, requests: &mut Vec<EditorRequest>) {
@@ -459,7 +469,7 @@ fn ui_selected(editor: &Editor, action: UiAction) -> bool {
         UiAction::Guides => view.show_guides,
         UiAction::SnapToGrid => view.snap_to_grid,
         UiAction::SnapToGuides => editor.ui.snap_to_guides,
-        UiAction::Panel(panel) => editor.ui.dock.enabled && crate::dock::is_open(editor, panel),
+        UiAction::Panel(panel) => crate::panels::is_shown(editor, panel),
         UiAction::ThemeLight => editor.theme_pref == ThemePref::Light,
         UiAction::ThemeDark => editor.theme_pref == ThemePref::Dark,
         UiAction::ThemeSystem => editor.theme_pref == ThemePref::System,

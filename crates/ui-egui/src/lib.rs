@@ -43,6 +43,7 @@ pub mod i18n;
 pub mod doc_tabs;
 pub mod dock;
 pub mod file_page;
+pub mod panels;
 pub mod ribbon;
 #[cfg(test)]
 mod scroll_audit;
@@ -218,6 +219,8 @@ mod m29_state_extras_ui_tests;
 mod m29_states_tab_tests;
 #[cfg(test)]
 mod outline_tests;
+#[cfg(test)]
+mod panels_tests;
 #[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
@@ -1047,6 +1050,9 @@ pub struct UiState {
     pub dock: dock::DockState,
     /// The Course Map and opened-slide tabs under the ribbon.
     pub doc_tabs: doc_tabs::DocTabs,
+    /// The settings panels: the section a launcher asked for, the panel the
+    /// work in hand needs, the floating ones when docking is off.
+    pub panels: panels::PanelsState,
     /// The File page, opened from the ribbon's File tab.
     pub file_page: file_page::FilePage,
     /// Transient Course map state.
@@ -1490,6 +1496,7 @@ impl Editor {
                 ribbon: ribbon::RibbonState::default(),
                 dock: dock::DockState::default(),
                 doc_tabs: doc_tabs::DocTabs::default(),
+                panels: panels::PanelsState::default(),
                 file_page: file_page::FilePage::default(),
                 course_map: CourseMapState::default(),
                 properties_lists: PropertiesListCache::default(),
@@ -4822,6 +4829,9 @@ impl Editor {
             );
         });
 
+        if !self.ui.dock.enabled {
+            panels::show_floating(self, ui.ctx());
+        }
         if self.ui.dock.enabled {
             // 3–6 docked: slides, canvas, timeline and Inspector in one workspace.
             egui::CentralPanel::default()
