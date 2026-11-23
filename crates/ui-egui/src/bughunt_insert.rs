@@ -342,3 +342,187 @@ fn freeform_question_insert_works_when_the_first_variable_is_a_boolean() {
         harness.editor.ui.last_error
     );
 }
+
+#[test]
+fn m31_08_ui_inserts_on_tiny_and_huge_slides() {
+    let slide_sizes = [(1u32, 1u32), (10, 10), (8192, 8192)];
+    let mut problems = Vec::new();
+
+    for (w, h) in slide_sizes {
+        let mut start = coursecraft_engine::Session::blank("Tiny/Huge").course;
+        start.slide_size = coursecraft_course::Size { w, h };
+        let slide = first_slide_id(&start);
+        let mut harness = TestHarness::new_with_size(start.clone(), (1280.0, 800.0));
+        harness.editor.selection.slide = slide.clone();
+        harness.editor.selection.clear_objects();
+        harness.idle_frame();
+
+        type SingleInsert = fn(&mut Editor) -> Option<String>;
+        let single_inserts: [(&str, SingleInsert); 9] = [
+            ("text_entry", crate::input_insert::insert_text_entry),
+            ("slider", crate::input_insert::insert_slider),
+            ("dial", crate::input_insert::insert_dial),
+            ("checkbox", crate::input_insert::insert_checkbox),
+            ("radio_group", crate::input_insert::insert_radio_group),
+            ("marker", crate::interaction_insert::insert_marker),
+            ("timer", crate::interaction_insert::insert_timer),
+            (
+                "progress_meter",
+                crate::interaction_insert::insert_progress_meter,
+            ),
+            (
+                "scroll_panel",
+                crate::interaction_insert::insert_scroll_panel,
+            ),
+        ];
+        for (name, insert) in single_inserts {
+            if insert(&mut harness.editor).is_none() {
+                problems.push(format!("{name} on {w}x{h}: returned None"));
+            }
+            harness.idle_frame();
+            if !harness.editor.session.course.is_playable() {
+                problems.push(format!("{name} on {w}x{h}: course became unplayable"));
+            }
+            undo(&mut harness);
+        }
+
+        for (name, insert) in [
+            (
+                "tabs",
+                crate::interaction_insert::insert_tabs as fn(&mut Editor) -> Option<Vec<String>>,
+            ),
+            ("accordion", crate::interaction_insert::insert_accordion),
+        ] {
+            if insert(&mut harness.editor).is_none() {
+                problems.push(format!("{name} on {w}x{h}: returned None"));
+            }
+            harness.idle_frame();
+            undo(&mut harness);
+        }
+
+        {
+            let id = crate::web_insert::insert_web_object(
+                &mut harness.editor,
+                coursecraft_course::WebSource::Url {
+                    url: "https://example.com".to_owned(),
+                },
+            );
+            if id.is_none() {
+                problems.push(format!("web_object on {w}x{h}: returned None"));
+            }
+            harness.idle_frame();
+            undo(&mut harness);
+        }
+
+        {
+            let before = object_ids(&harness.editor.session.course, &slide).len();
+            toolbar::insert_table(&mut harness.editor);
+            harness.idle_frame();
+            let after = object_ids(&harness.editor.session.course, &slide).len();
+            if after <= before {
+                problems.push(format!("table on {w}x{h}: no object added"));
+            }
+            undo(&mut harness);
+        }
+
+        for (name, arm) in [
+            ("text_box", toolbar::insert_text_box as fn(&mut Editor)),
+            ("button", toolbar::insert_button),
+            ("rectangle", toolbar::insert_rectangle),
+            ("rounded_rectangle", toolbar::insert_rounded_rectangle),
+            ("ellipse", toolbar::insert_ellipse),
+        ] {
+            let added = place(&mut harness, arm);
+            if added.is_empty() {
+                problems.push(format!("{name} on {w}x{h}: place added nothing"));
+            }
+            undo(&mut harness);
+        }
+
+        {
+            toolbar::insert_question(&mut harness.editor, QuestionKind::MultipleChoice);
+            harness.idle_frame();
+            if harness
+                .editor
+                .session
+                .course
+                .slide(&slide)
+                .is_none_or(|s| s.question.is_none())
+            {
+                problems.push(format!("question on {w}x{h}: question not inserted"));
+            }
+
+            let before = harness.editor.session.course.slides().count();
+            toolbar::insert_results_slide(&mut harness.editor);
+            harness.idle_frame();
+            if harness.editor.session.course.slides().count() <= before {
+                problems.push(format!("results_slide on {w}x{h}: slide not inserted"));
+            }
+            undo(&mut harness);
+            undo(&mut harness);
+            harness.editor.selection.slide = slide.clone();
+        }
+
+        {
+            let before = harness.editor.session.course.slides().count();
+            toolbar::insert_certificate_slide(&mut harness.editor);
+            harness.idle_frame();
+            if harness.editor.session.course.slides().count() <= before {
+                problems.push(format!("certificate_slide on {w}x{h}: slide not inserted"));
+            }
+            undo(&mut harness);
+            harness.editor.selection.slide = slide.clone();
+        }
+    }
+
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+#[test]
+fn m31_09_scroll_panel_fit_to_content_with_tall_frame_does_not_panic() {
+    let start = course("examples/healthy-habits/course.json");
+    let slide = first_slide_id(&start);
+    let mut harness = TestHarness::new_with_size(start, (1280.0, 1200.0));
+    harness.editor.selection.slide = slide.clone();
+    harness.idle_frame();
+
+    let panel_id = crate::interaction_insert::insert_scroll_panel(&mut harness.editor)
+        .expect("insert_scroll_panel");
+    harness
+        .editor
+        .session
+        .course
+        .slide_mut(&slide)
+        .and_then(|s| s.objects.iter_mut().find(|o| o.id == panel_id))
+        .expect("scroll panel")
+        .frame
+        .h = 25_000.0;
+
+    harness.editor.selection.set_many([panel_id.clone()]);
+    harness.editor.ui.inspector_tab = InspectorTab::Format;
+    harness.idle_frame();
+    harness.idle_frame();
+
+    let btn = harness
+        .find_text("Fit to content")
+        .expect("Fit to content button in Format inspector");
+    harness.click_at(btn);
+    harness.idle_frame();
+
+    let (obj, _) = harness
+        .editor
+        .session
+        .course
+        .slide(&slide)
+        .and_then(|s| s.object(&panel_id))
+        .expect("scroll panel object");
+    match &obj.kind {
+        coursecraft_course::ObjectKind::ScrollPanel { content_height, .. } => {
+            assert!(
+                *content_height <= coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT,
+                "content_height {content_height} exceeded MAX_SCROLL_CONTENT_HEIGHT"
+            );
+        }
+        other => panic!("expected ScrollPanel, got {other:?}"),
+    }
+}

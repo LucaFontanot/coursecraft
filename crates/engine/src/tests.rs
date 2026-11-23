@@ -2838,6 +2838,42 @@ fn panic_hunt() {
             }
         }
     }
+
+    // M31-10: tiny and huge slide sizes across all insert commands.
+    let insert_cmds: &[(&str, serde_json::Value)] = &[
+        (
+            "object.add",
+            json!({
+                "slide": "slide1",
+                "kind": { "type": "rectangle" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+            }),
+        ),
+        ("question.insert", json!({ "slide": "slide1" })),
+        (
+            "interaction.insert",
+            json!({ "slide": "slide1", "kind": "tabs" }),
+        ),
+        (
+            "interaction.insert",
+            json!({ "slide": "slide1", "kind": "accordion" }),
+        ),
+        ("results.insert", json!({ "after": "slide1" })),
+        ("certificate.insert", json!({ "after": "slide1" })),
+    ];
+    for (w, h) in [(1u32, 1u32), (10, 10), (8192, 8192)] {
+        for (cmd_id, params) in insert_cmds {
+            let mut s = Session::blank("T");
+            s.course.slide_size = coursecraft_course::Size { w, h };
+            let before = s.course.clone();
+            if s.execute(cmd_id, params).is_err() {
+                assert_eq!(
+                    s.course, before,
+                    "{cmd_id} on {w}x{h} changed the course on error"
+                );
+            }
+        }
+    }
 }
 
 #[test]

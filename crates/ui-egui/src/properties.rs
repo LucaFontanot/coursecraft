@@ -7152,10 +7152,15 @@ fn show_scroll_panel_controls(
     actions: &mut Vec<(&'static str, Json)>,
 ) {
     inspector_row(ui, "Content height", |ui| {
+        let lo = coursecraft_course::safe_clamp(
+            frame_height,
+            0.0,
+            coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT,
+        );
         let r = ui.add(
             DragValue::new(&mut props.scroll_content_height)
                 .speed(1.0)
-                .range(frame_height..=coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT)
+                .range(lo..=coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT)
                 .suffix(" px"),
         );
         props.scroll_content_height_rect = Some(r.rect);
@@ -7186,7 +7191,8 @@ fn show_scroll_panel_controls(
         }
     });
     if ui.button("Fit to content").clicked() {
-        let height = fit_height.clamp(
+        let height = coursecraft_course::safe_clamp(
+            fit_height,
             frame_height.max(0.0),
             coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT,
         );
