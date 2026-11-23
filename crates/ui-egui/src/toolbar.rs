@@ -11,6 +11,8 @@ use coursecraft_course::ShapeKind;
 use coursecraft_render::Icon;
 use egui::{Align, Layout, Rect, Ui, UiBuilder, pos2, vec2};
 
+use crate::menu::tooltip_with_shortcut;
+use crate::shortcuts::{ShortcutAction, shortcut_for_action, shortcut_for_command};
 use crate::{DrawTool, Editor, EditorRequest, InspectorTab, PlacementTool, widgets};
 
 pub const TOOLBAR_HEIGHT: f32 = 52.0;
@@ -393,17 +395,22 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     let master_view = editor.ui.master_view;
 
+    let add_slide_tooltip = if master_view {
+        "Not available in slide masters".to_owned()
+    } else {
+        tooltip_with_shortcut(
+            left_ui.ctx(),
+            "New slide",
+            shortcut_for_command("slide.add"),
+        )
+    };
     let add_slide_resp = widgets::toolbar_button_enabled(
         &mut left_ui,
         Icon::Plus,
         "New slide",
         false,
         !master_view,
-        if master_view {
-            "Not available in slide masters"
-        } else {
-            "New slide"
-        },
+        &add_slide_tooltip,
     );
     if add_slide_resp.clicked() {
         add_new_slide(editor);
@@ -435,17 +442,22 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     left_ui.add_space(coursecraft_render::SPACE_MD);
 
+    let preview_tooltip = if master_view {
+        "Not available in slide masters".to_owned()
+    } else {
+        tooltip_with_shortcut(
+            left_ui.ctx(),
+            "Preview this slide",
+            Some(shortcut_for_action(ShortcutAction::PreviewThisSlide)),
+        )
+    };
     let preview_resp = widgets::toolbar_button_enabled(
         &mut left_ui,
         Icon::Play,
         "Preview",
         false,
         !master_view,
-        if master_view {
-            "Not available in slide masters"
-        } else {
-            "Preview this slide (F12)"
-        },
+        &preview_tooltip,
     );
     if preview_resp.clicked() {
         preview_slide(editor, requests);
@@ -457,11 +469,16 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     if editor.file_ops_available {
         left_ui.add_space(coursecraft_render::SPACE_MD);
+        let publish_tooltip = tooltip_with_shortcut(
+            left_ui.ctx(),
+            "Publish course",
+            Some(shortcut_for_action(ShortcutAction::Publish)),
+        );
         let publish_resp = widgets::toolbar_primary_button(
             &mut left_ui,
             Icon::UploadSimple,
             "Publish",
-            "Publish course",
+            &publish_tooltip,
         );
         if publish_resp.clicked() {
             editor.open_publish_dialog();
@@ -470,11 +487,14 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     // Course map toggle: the course map replaces the slide editor.
     left_ui.add_space(coursecraft_render::SPACE_MD);
-    let story_sc = crate::menu::shortcut_label(left_ui.ctx(), "Ctrl+Shift+M");
     let map_tooltip = if master_view {
         "Not available in slide masters".to_owned()
     } else {
-        format!("Course map ({story_sc})")
+        tooltip_with_shortcut(
+            left_ui.ctx(),
+            "Course map",
+            Some(shortcut_for_action(ShortcutAction::CourseMap)),
+        )
     };
     if widgets::toolbar_button_enabled(
         &mut left_ui,
@@ -496,13 +516,17 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     let painter_enabled =
         !master_view && !state_edit_locked && (painter_armed || editor.can_arm_format_painter());
     let painter_tooltip = if state_edit_locked {
-        crate::STATE_LOCK_TOOLTIP
+        crate::STATE_LOCK_TOOLTIP.to_owned()
     } else if master_view {
-        "Not available in slide masters"
+        "Not available in slide masters".to_owned()
     } else if !painter_enabled {
-        "Select an object to copy its format"
+        "Select an object to copy its format".to_owned()
     } else {
-        "Format painter"
+        tooltip_with_shortcut(
+            left_ui.ctx(),
+            "Format painter",
+            Some(shortcut_for_action(ShortcutAction::FormatPainter)),
+        )
     };
     let painter_resp = widgets::toolbar_button_enabled(
         &mut left_ui,
@@ -510,7 +534,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         "Paint",
         painter_armed,
         painter_enabled,
-        painter_tooltip,
+        &painter_tooltip,
     );
     if painter_resp.double_clicked() {
         editor.arm_format_painter(true);
@@ -599,8 +623,8 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     // Redo button
     let can_redo = editor.session.can_redo();
-    let redo_sc = crate::menu::shortcut_label(right_ui.ctx(), "Ctrl+Y");
-    let redo_tooltip = format!("Redo ({redo_sc})");
+    let redo_tooltip =
+        tooltip_with_shortcut(right_ui.ctx(), "Redo", shortcut_for_command("edit.redo"));
     if widgets::icon_button_enabled(&mut right_ui, Icon::ArrowClockwise, can_redo, &redo_tooltip)
         .clicked()
         && let Some(p) = crate::menu::adapter(editor, "edit.redo")
@@ -610,8 +634,8 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     // Undo button
     let can_undo = editor.session.can_undo();
-    let undo_sc = crate::menu::shortcut_label(right_ui.ctx(), "Ctrl+Z");
-    let undo_tooltip = format!("Undo ({undo_sc})");
+    let undo_tooltip =
+        tooltip_with_shortcut(right_ui.ctx(), "Undo", shortcut_for_command("edit.undo"));
     if widgets::icon_button_enabled(
         &mut right_ui,
         Icon::ArrowCounterClockwise,

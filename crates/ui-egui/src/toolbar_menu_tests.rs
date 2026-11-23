@@ -997,3 +997,253 @@ fn preview_menu_and_toolbar_caret_share_items_shortcuts_and_disabled_reasons() {
         h.idle_frame();
     }
 }
+
+/// SC-01: Toolbar buttons with shortcuts display their platform-formatted shortcut in
+/// their tooltip from the single shared shortcut table (`M32-04`).
+#[test]
+fn toolbar_buttons_with_shortcuts_show_formatted_shortcut_in_tooltip() {
+    use crate::menu::{shortcut_label, tooltip_with_shortcut};
+    use crate::shortcuts::{ShortcutAction, shortcut_for_action, shortcut_for_command};
+
+    let mut h =
+        TestHarness::new_with_config(sample_course(), (1280.0, 800.0), ThemeMode::Dark, 1.0, true);
+    h.idle_frame();
+
+    // Perform two edits and undo one so both Undo and Redo are enabled.
+    let first_slide = h.editor.session.course.scenes[0].slides[0].id.clone();
+    let first_obj = h.editor.session.course.scenes[0].slides[0].objects[0]
+        .id
+        .clone();
+    h.editor.selection.slide = first_slide.clone();
+    h.editor.selection.set_many([first_obj.as_str()]);
+    h.editor.run(
+        "slide.update",
+        serde_json::json!({ "slide": first_slide, "title": "First edit" }),
+    );
+    h.editor.run(
+        "slide.update",
+        serde_json::json!({ "slide": first_slide, "title": "Second edit" }),
+    );
+    assert!(h.editor.session.undo().is_ok());
+    assert!(h.editor.session.can_undo());
+    assert!(h.editor.session.can_redo());
+    h.layout_report(2);
+
+    let cases: [(&str, &str); 7] = [
+        (
+            "New slide",
+            shortcut_for_command("slide.add").expect("slide.add shortcut"),
+        ),
+        (
+            "Preview this slide",
+            shortcut_for_action(ShortcutAction::PreviewThisSlide),
+        ),
+        (
+            "Publish course",
+            shortcut_for_action(ShortcutAction::Publish),
+        ),
+        ("Course map", shortcut_for_action(ShortcutAction::CourseMap)),
+        (
+            "Format painter",
+            shortcut_for_action(ShortcutAction::FormatPainter),
+        ),
+        (
+            "Undo",
+            shortcut_for_command("edit.undo").expect("edit.undo shortcut"),
+        ),
+        (
+            "Redo",
+            shortcut_for_command("edit.redo").expect("edit.redo shortcut"),
+        ),
+    ];
+
+    for (base_label, raw_sc) in cases {
+        let w = toolbar_widget_with_label(&h, base_label);
+        let tip = h
+            .probe_tooltip(w.bounds.center())
+            .unwrap_or_else(|| panic!("expected tooltip for toolbar button {base_label:?}"));
+        let formatted = shortcut_label(&h.ctx, raw_sc);
+        let expected = tooltip_with_shortcut(&h.ctx, base_label, Some(raw_sc));
+        assert!(
+            tip.contains(&formatted),
+            "toolbar tooltip {tip:?} for {base_label:?} must contain formatted shortcut {formatted:?}"
+        );
+        assert_eq!(
+            tip, expected,
+            "toolbar tooltip for {base_label:?} should match tooltip_with_shortcut"
+        );
+
+        // Verify both macOS and non-macOS formatting for every toolbar shortcut.
+        let mac_fmt = format_shortcut(raw_sc, true, |_| true);
+        let win_fmt = format_shortcut(raw_sc, false, |_| true);
+        assert!(!mac_fmt.is_empty(), "empty mac format for {raw_sc:?}");
+        assert!(!win_fmt.is_empty(), "empty non-mac format for {raw_sc:?}");
+        if raw_sc.contains("Ctrl+") {
+            assert!(
+                mac_fmt.contains('⌘'),
+                "mac format {mac_fmt:?} for {raw_sc:?} should contain ⌘"
+            );
+            assert!(
+                win_fmt.contains("Ctrl+"),
+                "non-mac format {win_fmt:?} for {raw_sc:?} should contain Ctrl+"
+            );
+        }
+    }
+}
+
+/// SC-02: Opening `File`, `Edit`, `View`, `Preview`, and `Help` menus and hovering
+/// shortcutted items shows tooltips matching the formatted shortcuts in
+/// `build_shortcut_groups()` (`M32-04`).
+#[test]
+fn menu_items_show_shortcut_tooltips_matching_shortcut_groups() {
+    use crate::menu::shortcut_label;
+    use crate::shortcuts::{
+        ShortcutAction, build_shortcut_groups, shortcut_for_action, shortcut_for_command,
+    };
+
+    let mut h =
+        TestHarness::new_with_config(sample_course(), (1280.0, 800.0), ThemeMode::Dark, 1.0, true);
+    h.idle_frame();
+
+    // Ensure Edit actions (Undo, Redo, Cut, Copy, Paste, Duplicate, Delete) are enabled.
+    let first_slide = h.editor.session.course.scenes[0].slides[0].id.clone();
+    let first_obj = h.editor.session.course.scenes[0].slides[0].objects[0]
+        .id
+        .clone();
+    h.editor.selection.slide = first_slide.clone();
+    h.editor.selection.set_many([first_obj.as_str()]);
+    h.editor.run(
+        "slide.update",
+        serde_json::json!({ "slide": first_slide, "title": "Step 1" }),
+    );
+    h.editor.run(
+        "slide.update",
+        serde_json::json!({ "slide": first_slide, "title": "Step 2" }),
+    );
+    assert!(h.editor.session.undo().is_ok());
+    crate::clipboard::copy(&mut h.editor);
+    h.idle_frame();
+
+    // Collect every individual formatted shortcut token from build_shortcut_groups().
+    let group_shortcuts: std::collections::BTreeSet<String> = build_shortcut_groups()
+        .into_iter()
+        .flat_map(|g| g.items)
+        .flat_map(|row| {
+            row.shortcut
+                .split(" / ")
+                .map(|part| shortcut_label(&h.ctx, part))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    let menu_bar_rect =
+        egui::Rect::from_min_max(pos2(0.0, 0.0), pos2(1280.0, crate::TOP_BAR_HEIGHT));
+
+    let menu_cases: [(&str, &[(&str, &str)]); 5] = [
+        (
+            "File",
+            &[
+                ("New", shortcut_for_action(ShortcutAction::NewCourse)),
+                ("Open…", shortcut_for_action(ShortcutAction::OpenCourse)),
+                ("Save", shortcut_for_action(ShortcutAction::Save)),
+                ("Save as…", shortcut_for_action(ShortcutAction::SaveAs)),
+                (
+                    "Preferences…",
+                    shortcut_for_action(ShortcutAction::Preferences),
+                ),
+                ("Publish…", shortcut_for_action(ShortcutAction::Publish)),
+            ],
+        ),
+        (
+            "Edit",
+            &[
+                ("Undo", "Ctrl+Z"),
+                ("Redo", "Ctrl+Y"),
+                ("Cut", shortcut_for_action(ShortcutAction::Cut)),
+                ("Copy", shortcut_for_action(ShortcutAction::Copy)),
+                ("Paste", shortcut_for_action(ShortcutAction::Paste)),
+                ("Select all", shortcut_for_action(ShortcutAction::SelectAll)),
+                (
+                    "Check spelling…",
+                    shortcut_for_action(ShortcutAction::CheckSpelling),
+                ),
+                ("Duplicate", "Ctrl+D"),
+                ("Delete", "Delete"),
+                ("Find and replace…", "Ctrl+F"),
+            ],
+        ),
+        (
+            "View",
+            &[
+                ("Course map", shortcut_for_action(ShortcutAction::CourseMap)),
+                ("Zoom to fit", shortcut_for_action(ShortcutAction::ZoomFit)),
+                ("Zoom in", shortcut_for_action(ShortcutAction::ZoomIn)),
+                ("Zoom out", shortcut_for_action(ShortcutAction::ZoomOut)),
+            ],
+        ),
+        (
+            "Preview",
+            &[
+                (
+                    "Preview this slide",
+                    shortcut_for_action(ShortcutAction::PreviewThisSlide),
+                ),
+                (
+                    "Preview from here",
+                    shortcut_for_action(ShortcutAction::PreviewFromHere),
+                ),
+                (
+                    "Preview whole course",
+                    shortcut_for_action(ShortcutAction::PreviewWholeCourse),
+                ),
+            ],
+        ),
+        (
+            "Help",
+            &[(
+                "Keyboard shortcuts",
+                shortcut_for_action(ShortcutAction::KeyboardShortcuts),
+            )],
+        ),
+    ];
+
+    // Confirm registry commands match the table too.
+    assert_eq!(shortcut_for_command("edit.undo"), Some("Ctrl+Z"));
+    assert_eq!(shortcut_for_command("edit.redo"), Some("Ctrl+Y"));
+    assert_eq!(shortcut_for_command("object.duplicate"), Some("Ctrl+D"));
+    assert_eq!(shortcut_for_command("object.delete"), Some("Delete"));
+    assert_eq!(shortcut_for_command("course.find"), Some("Ctrl+F"));
+
+    for (menu_name, items) in menu_cases {
+        let menu_pos = h
+            .find_text_in(menu_name, menu_bar_rect)
+            .unwrap_or_else(|| panic!("missing top-level menu {menu_name:?}"));
+        h.click_at(menu_pos);
+        h.idle_frame();
+        h.idle_frame();
+
+        for &(label, raw_sc) in items {
+            let expected_sc = shortcut_label(&h.ctx, raw_sc);
+            assert!(
+                group_shortcuts.contains(&expected_sc),
+                "formatted shortcut {expected_sc:?} (from {raw_sc:?} on {menu_name} ▸ {label}) must appear in build_shortcut_groups(): {group_shortcuts:?}"
+            );
+
+            let item_pos = h
+                .find_text_last(label)
+                .or_else(|| h.find_text_containing(label))
+                .unwrap_or_else(|| panic!("missing item {label:?} in {menu_name} menu"));
+            h.hover_at(item_pos);
+            let tip = h
+                .probe_tooltip(item_pos)
+                .unwrap_or_else(|| panic!("missing hover tooltip for {menu_name} ▸ {label}"));
+            assert!(
+                tip.contains(&expected_sc),
+                "{menu_name} ▸ {label} tooltip {tip:?} must contain formatted shortcut {expected_sc:?}"
+            );
+        }
+
+        h.press(egui::Key::Escape, egui::Modifiers::NONE);
+        h.idle_frame();
+    }
+}

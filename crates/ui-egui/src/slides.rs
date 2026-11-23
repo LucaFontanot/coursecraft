@@ -869,9 +869,15 @@ fn show_slide_menu_items(
     action_to_run: &mut Option<(&'static str, Json)>,
     slide_action: &mut Option<SlideMenuAction>,
 ) {
-    let new_after = egui::Button::new("New slide after")
-        .shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+M"));
-    if ui.add(new_after).clicked() {
+    if crate::menu::menu_button(
+        ui,
+        "New slide after",
+        crate::shortcuts::shortcut_for_command("slide.add"),
+        true,
+        None,
+    )
+    .clicked()
+    {
         *action_to_run = Some((
             "slide.add",
             serde_json::json!({
@@ -886,9 +892,16 @@ fn show_slide_menu_items(
         *action_to_run = Some(("slide.duplicate", serde_json::json!({ "slide": slide_id })));
         ui.close();
     }
-    if ui
-        .add(egui::Button::new("Rename").shortcut_text("F2"))
-        .clicked()
+    if crate::menu::menu_button(
+        ui,
+        "Rename",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::RenameSlide,
+        )),
+        true,
+        None,
+    )
+    .clicked()
     {
         *slide_action = Some(SlideMenuAction::Rename(slide_id.to_owned()));
         ui.close();
@@ -896,28 +909,44 @@ fn show_slide_menu_items(
     ui.separator();
 
     let can_cut = total_slides > 1;
-    let cut =
-        egui::Button::new("Cut").shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+X"));
-    if ui
-        .add_enabled(can_cut, cut)
-        .on_disabled_hover_text("A course needs at least one slide")
-        .clicked()
+    if crate::menu::menu_button(
+        ui,
+        "Cut",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Cut,
+        )),
+        can_cut,
+        Some("A course needs at least one slide"),
+    )
+    .clicked()
     {
         *slide_action = Some(SlideMenuAction::Cut(slide_id.to_owned()));
         ui.close();
     }
-    let copy =
-        egui::Button::new("Copy").shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+C"));
-    if ui.add(copy).clicked() {
+    if crate::menu::menu_button(
+        ui,
+        "Copy",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Copy,
+        )),
+        true,
+        None,
+    )
+    .clicked()
+    {
         *slide_action = Some(SlideMenuAction::Copy(slide_id.to_owned()));
         ui.close();
     }
-    let paste =
-        egui::Button::new("Paste").shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+V"));
-    if ui
-        .add_enabled(can_paste, paste)
-        .on_disabled_hover_text("Nothing copied yet")
-        .clicked()
+    if crate::menu::menu_button(
+        ui,
+        "Paste",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Paste,
+        )),
+        can_paste,
+        Some("Nothing copied yet"),
+    )
+    .clicked()
     {
         *slide_action = Some(SlideMenuAction::Paste);
         ui.close();
@@ -1114,9 +1143,15 @@ fn show_scene_header_menu(
         *scene_to_rename = Some(scene_id.to_owned());
         ui.close();
     }
-    let new_slide = egui::Button::new("New slide")
-        .shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+M"));
-    if ui.add(new_slide).clicked() {
+    if crate::menu::menu_button(
+        ui,
+        "New slide",
+        crate::shortcuts::shortcut_for_command("slide.add"),
+        true,
+        None,
+    )
+    .clicked()
+    {
         *action_to_run = Some((
             "slide.add",
             serde_json::json!({
@@ -1156,12 +1191,16 @@ fn show_slides_empty_menu(editor: &mut Editor, ui: &mut Ui) {
         ui.close();
     }
     let can_paste = editor.ui.clipboard.is_some();
-    let paste =
-        egui::Button::new("Paste").shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+V"));
-    if ui
-        .add_enabled(can_paste, paste)
-        .on_disabled_hover_text("Nothing copied yet")
-        .clicked()
+    if crate::menu::menu_button(
+        ui,
+        "Paste",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Paste,
+        )),
+        can_paste,
+        Some("Nothing copied yet"),
+    )
+    .clicked()
     {
         crate::clipboard::paste_private(editor);
         ui.close();

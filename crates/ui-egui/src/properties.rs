@@ -3441,8 +3441,15 @@ fn show_multi_properties(
         });
 
         inspector_row(ui, "Style", |ui| {
+            let bold_tip = crate::menu::tooltip_with_shortcut(
+                ui.ctx(),
+                "Bold",
+                Some(crate::shortcuts::shortcut_for_action(
+                    crate::shortcuts::ShortcutAction::Bold,
+                )),
+            );
             let bold = props.multi_bold;
-            if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), bold, "Bold (Ctrl+B)")
+            if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), bold, &bold_tip)
                 .clicked()
             {
                 let value = bold != Some(true);
@@ -3465,14 +3472,16 @@ fn show_multi_properties(
                     }
                 }
             }
+            let italic_tip = crate::menu::tooltip_with_shortcut(
+                ui.ctx(),
+                "Italic",
+                Some(crate::shortcuts::shortcut_for_action(
+                    crate::shortcuts::ShortcutAction::Italic,
+                )),
+            );
             let italic = props.multi_italic;
-            if crate::widgets::mixed_toggle(
-                ui,
-                RichText::new("I").italics(),
-                italic,
-                "Italic (Ctrl+I)",
-            )
-            .clicked()
+            if crate::widgets::mixed_toggle(ui, RichText::new("I").italics(), italic, &italic_tip)
+                .clicked()
             {
                 let value = italic != Some(true);
                 for object in &objects {
@@ -3494,12 +3503,19 @@ fn show_multi_properties(
                     }
                 }
             }
+            let underline_tip = crate::menu::tooltip_with_shortcut(
+                ui.ctx(),
+                "Underline",
+                Some(crate::shortcuts::shortcut_for_action(
+                    crate::shortcuts::ShortcutAction::Underline,
+                )),
+            );
             let underline = props.multi_underline;
             if crate::widgets::mixed_toggle(
                 ui,
                 RichText::new("U").underline(),
                 underline,
-                "Underline (Ctrl+U)",
+                &underline_tip,
             )
             .clicked()
             {
@@ -4579,7 +4595,14 @@ fn show_text_controls(
         };
     inspector_row(ui, "Style", |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), tri_bold, "Bold (Ctrl+B)")
+        let bold_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Bold",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Bold,
+            )),
+        );
+        if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), tri_bold, &bold_tip)
             .clicked()
         {
             let next = tri_bold != Some(true);
@@ -4598,13 +4621,15 @@ fn show_text_controls(
                 ));
             }
         }
-        if crate::widgets::mixed_toggle(
-            ui,
-            RichText::new("I").italics(),
-            tri_italic,
-            "Italic (Ctrl+I)",
-        )
-        .clicked()
+        let italic_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Italic",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Italic,
+            )),
+        );
+        if crate::widgets::mixed_toggle(ui, RichText::new("I").italics(), tri_italic, &italic_tip)
+            .clicked()
         {
             let next = tri_italic != Some(true);
             if let TextStyleTarget::Caret(pos) = target {
@@ -4622,11 +4647,18 @@ fn show_text_controls(
                 ));
             }
         }
+        let underline_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Underline",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Underline,
+            )),
+        );
         if crate::widgets::mixed_toggle(
             ui,
             RichText::new("U").underline(),
             tri_underline,
-            "Underline (Ctrl+U)",
+            &underline_tip,
         )
         .clicked()
         {
@@ -6914,33 +6946,54 @@ fn show_timer_controls(
     });
     inspector_row(ui, "Style", |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
+        let bold_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Bold",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Bold,
+            )),
+        );
         if crate::widgets::mixed_toggle(
             ui,
             RichText::new("B").strong(),
             Some(props.text_bold),
-            "Bold (Ctrl+B)",
+            &bold_tip,
         )
         .clicked()
         {
             props.text_bold = !props.text_bold;
             action_to_run = Some(commit(props));
         }
+        let italic_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Italic",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Italic,
+            )),
+        );
         if crate::widgets::mixed_toggle(
             ui,
             RichText::new("I").italics(),
             Some(props.text_italic),
-            "Italic (Ctrl+I)",
+            &italic_tip,
         )
         .clicked()
         {
             props.text_italic = !props.text_italic;
             action_to_run = Some(commit(props));
         }
+        let underline_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Underline",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Underline,
+            )),
+        );
         if crate::widgets::mixed_toggle(
             ui,
             RichText::new("U").underline(),
             Some(props.text_underline),
-            "Underline (Ctrl+U)",
+            &underline_tip,
         )
         .clicked()
         {

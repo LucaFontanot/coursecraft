@@ -322,3 +322,51 @@ fn font_size_undo_redo_restores_value() {
     h.idle_frame();
     assert!((title_size_and_spacing(&h).0 - 60.0).abs() < 0.01);
 }
+
+/// SC-03: Inspector Bold/Italic/Underline tooltips use platform-aware shortcut
+/// formatting (`⌘B`/`⌘I`/`⌘U` or `Cmd+B` on macOS; `Ctrl+B`/`Ctrl+I`/`Ctrl+U` on
+/// Windows) from the shared shortcut table (`M32-04`).
+#[test]
+fn inspector_bold_italic_underline_tooltips_follow_platform_shortcuts() {
+    let mut h = TestHarness::new(hello());
+    select_title(&mut h);
+    let panel = h.right_panel_rect();
+
+    // macOS formatting
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.idle_frame();
+    h.idle_frame();
+    for (btn, sym, fallback) in [
+        ("B", "⌘B", "Cmd+B"),
+        ("I", "⌘I", "Cmd+I"),
+        ("U", "⌘U", "Cmd+U"),
+    ] {
+        let pos = h
+            .find_text_in(btn, panel)
+            .unwrap_or_else(|| panic!("missing {btn} button in Format inspector"));
+        let tip = h
+            .probe_tooltip(pos)
+            .unwrap_or_else(|| panic!("missing macOS tooltip for {btn}"));
+        assert!(
+            tip.contains(sym) || tip.contains(fallback),
+            "macOS {btn} tooltip {tip:?} must contain {sym:?} or {fallback:?}"
+        );
+    }
+
+    // Windows formatting
+    h.ctx.set_os(egui::os::OperatingSystem::Windows);
+    h.idle_frame();
+    h.idle_frame();
+    for (btn, expected) in [("B", "Ctrl+B"), ("I", "Ctrl+I"), ("U", "Ctrl+U")] {
+        let pos = h
+            .find_text_in(btn, panel)
+            .unwrap_or_else(|| panic!("missing {btn} button in Format inspector"));
+        let tip = h
+            .probe_tooltip(pos)
+            .unwrap_or_else(|| panic!("missing Windows tooltip for {btn}"));
+        assert!(
+            tip.contains(expected),
+            "Windows {btn} tooltip {tip:?} must contain {expected:?}"
+        );
+    }
+}
