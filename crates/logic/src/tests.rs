@@ -11183,3 +11183,224 @@ fn every_exit_effect_with_and_without_transition_and_entrance_exit() {
         }
     }
 }
+
+#[test]
+fn m31_17_last_visited_after_bank_redraw_drains_stale_entries_and_never_loops() {
+    use coursecraft_course::SlideTarget;
+
+    let mut c = course_with_draw(10, 2, "draw1");
+    // Add btn-back (LastVisited) to s-intro, every bank slide, and a trailing s-results slide.
+    let back_btn: Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-back",
+        "kind": { "type": "button", "label": "Back" },
+        "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+    }))
+    .expect("btn-back");
+    let back_trigger = Trigger {
+        action: Action::JumpToSlide {
+            target: SlideTarget::LastVisited,
+        },
+        when: Event::Click {
+            object: "btn-back".into(),
+        },
+        condition: None,
+        disabled: false,
+    };
+
+    for slide in &mut c.scenes[0].slides {
+        slide.objects.push(back_btn.clone());
+        slide.triggers.push(back_trigger.clone());
+        if slide.id == "s-results" {
+            slide.objects.push(
+                serde_json::from_value::<Object>(serde_json::json!({
+                    "id": "btn-retry",
+                    "kind": { "type": "button", "label": "Retry" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 40.0 }
+                }))
+                .expect("btn-retry"),
+            );
+            slide.triggers.push(Trigger {
+                action: Action::RetryQuiz,
+                when: Event::Click {
+                    object: "btn-retry".into(),
+                },
+                condition: None,
+                disabled: false,
+            });
+        }
+    }
+    for slide in &mut c.banks[0].slides {
+        slide.objects.push(back_btn.clone());
+        slide.triggers.push(back_trigger.clone());
+    }
+
+    let mut p = Player::with_draw_seed(&c, 1).expect("player");
+    p.handle(&Input::Start);
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-intro"));
+
+    // Visit s-intro -> s-tabs -> bank1 -> bank2 -> s-results.
+    p.handle(&Input::Next);
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-tabs"));
+    p.handle(&Input::Next);
+    let q1 = p.current_slide().expect("q1").id.clone();
+    p.handle(&Input::Next);
+    let q2 = p.current_slide().expect("q2").id.clone();
+    p.handle(&Input::Next);
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-results"));
+    assert_eq!(
+        p.state().visit_history,
+        vec![
+            "s-intro".to_owned(),
+            "s-tabs".to_owned(),
+            q1.clone(),
+            q2.clone()
+        ]
+    );
+
+    // Retry quiz redraws the bank (replacing q1/q2) and enters the first redrawn slide.
+    p.handle(&click("btn-retry"));
+    let q3 = p.current_slide().expect("q3").id.clone();
+    assert_ne!(q3, q1);
+    assert_ne!(q3, q2);
+    assert!(p.slide_position(&q1).is_none(), "old q1 must be gone");
+    assert!(p.slide_position(&q2).is_none(), "old q2 must be gone");
+
+    // LastVisited #1 on q3 -> pops "s-results", enters s-results.
+    let fx1 = p.handle(&click("btn-back"));
+    assert!(has(&fx1, &slide_entered("s-results")));
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-results"));
+
+    // LastVisited #2 on s-results -> drains stale q2, q1, pops "s-tabs", enters s-tabs.
+    let fx2 = p.handle(&click("btn-back"));
+    assert!(has(&fx2, &slide_entered("s-tabs")));
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-tabs"));
+    assert_eq!(p.state().visit_history, vec!["s-intro".to_owned()]);
+
+    // LastVisited #3 on s-tabs -> pops "s-intro", enters s-intro, drains history to [].
+    let fx3 = p.handle(&click("btn-back"));
+    assert!(has(&fx3, &slide_entered("s-intro")));
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-intro"));
+    assert!(
+        p.state().visit_history.is_empty(),
+        "stale entries must be drained, got {:?}",
+        p.state().visit_history
+    );
+
+    // LastVisited #4 on s-intro (index 0) -> does NOT re-enter s-intro.
+    let fx4 = p.handle(&click("btn-back"));
+    assert!(
+        !fx4.iter().any(|e| matches!(e, Effect::SlideEntered { .. })),
+        "LastVisited on slide 0 with empty history must not loop/re-enter, got {fx4:?}"
+    );
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-intro"));
+}
+
+#[test]
+fn m31_17_last_visited_skips_self_duplicates_and_handles_preview_subset() {
+    use coursecraft_course::SlideTarget;
+
+    let mut c = course_with_draw(10, 1, "draw1");
+    let back_btn: Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-back",
+        "kind": { "type": "button", "label": "Back" },
+        "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+    }))
+    .expect("btn-back");
+    let back_trigger = Trigger {
+        action: Action::JumpToSlide {
+            target: SlideTarget::LastVisited,
+        },
+        when: Event::Click {
+            object: "btn-back".into(),
+        },
+        condition: None,
+        disabled: false,
+    };
+    for slide in &mut c.scenes[0].slides {
+        slide.objects.push(back_btn.clone());
+        slide.triggers.clear();
+        slide.triggers.push(back_trigger.clone());
+        if slide.id == "s-results" {
+            slide.objects.push(
+                serde_json::from_value::<Object>(serde_json::json!({
+                    "id": "btn-retry",
+                    "kind": { "type": "button", "label": "Retry" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 40.0 }
+                }))
+                .expect("btn-retry"),
+            );
+            slide.triggers.push(Trigger {
+                action: Action::RetryQuiz,
+                when: Event::Click {
+                    object: "btn-retry".into(),
+                },
+                condition: None,
+                disabled: false,
+            });
+        }
+    }
+    for slide in &mut c.banks[0].slides {
+        slide.objects.push(back_btn.clone());
+        slide.triggers.clear();
+        slide.triggers.push(back_trigger.clone());
+    }
+
+    // Case 1: consecutive/self-matching entries in visit_history are skipped until a different slide.
+    let mut p2 = Player::with_draw_seed(&c, 1).expect("player2");
+    p2.handle(&Input::Start);
+    p2.handle(&Input::Jump {
+        slide: "s-results".into(),
+    });
+    p2.handle(&Input::Jump {
+        slide: "s-intro".into(),
+    });
+    p2.handle(&Input::Jump {
+        slide: "s-tabs".into(),
+    });
+    p2.handle(&Input::Next); // q1
+    let q1_id = p2.current_slide().expect("q1").id.clone();
+    p2.handle(&Input::Jump {
+        slide: "s-results".into(),
+    });
+    p2.handle(&click("btn-retry")); // removes q1_id, pushes "s-results", enters q2.
+    let q2_id = p2.current_slide().expect("q2").id.clone();
+    assert_ne!(q1_id, q2_id);
+
+    // LastVisited on q2 -> pops "s-results", enters s-results.
+    let fx_q2 = p2.handle(&click("btn-back"));
+    assert!(has(&fx_q2, &slide_entered("s-results")));
+    // LastVisited on s-results -> drains missing q1_id, pops "s-tabs", enters s-tabs.
+    let fx_back = p2.handle(&click("btn-back"));
+    assert!(has(&fx_back, &slide_entered("s-tabs")));
+    assert_eq!(p2.current_slide().map(|s| s.id.as_str()), Some("s-tabs"));
+    assert_eq!(
+        p2.state().visit_history,
+        vec![
+            "s-intro".to_owned(),
+            "s-results".to_owned(),
+            "s-intro".to_owned()
+        ]
+    );
+    // Next LastVisited from s-tabs pops "s-intro" and enters s-intro.
+    let fx_intro1 = p2.handle(&click("btn-back"));
+    assert!(has(&fx_intro1, &slide_entered("s-intro")));
+    // Next LastVisited from s-intro pops "s-results" and enters s-results.
+    let fx_res = p2.handle(&click("btn-back"));
+    assert!(has(&fx_res, &slide_entered("s-results")));
+    // Next LastVisited from s-results pops "s-intro" and enters s-intro, draining history.
+    let fx_intro2 = p2.handle(&click("btn-back"));
+    assert!(has(&fx_intro2, &slide_entered("s-intro")));
+    assert!(p2.state().visit_history.is_empty());
+
+    // Case 2: preview subset with single slide hits preview boundary on LastVisited at index 0.
+    let mut prev =
+        Player::with_preview_subset(&c, 0, &["s-intro".to_owned()]).expect("preview subset");
+    prev.handle(&Input::Start);
+    let fx_prev = prev.handle(&click("btn-back"));
+    assert!(
+        !fx_prev
+            .iter()
+            .any(|e| matches!(e, Effect::SlideEntered { .. }))
+    );
+    assert!(prev.preview_boundary_hit);
+}

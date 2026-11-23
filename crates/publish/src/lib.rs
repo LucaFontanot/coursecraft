@@ -165,7 +165,9 @@ fn collect_object_media<'a>(obj: &'a Object, out: &mut Vec<MediaRef<'a>>) {
         _ => {}
     }
     for state in &obj.states {
-        if let Some(src) = &state.src {
+        if let Some(src) = &state.src
+            && !src.is_empty()
+        {
             out.push(MediaRef {
                 object_id: &obj.id,
                 src,
@@ -654,6 +656,116 @@ pub fn zip_package_to<W: std::io::Write + std::io::Seek>(
     }
     writer.finish()?;
     Ok(())
+}
+
+/// Progress or completion from [`PackageZipper::step`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ZipStep {
+    /// More bytes remain to be written.
+    InProgress { bytes_done: u64, bytes_total: u64 },
+    /// Archive finished; contains the complete zip bytes.
+    Done(Vec<u8>),
+}
+
+/// Incremental zip writer that writes a bounded number of input bytes per
+/// [`step`](Self::step) call so callers on single-threaded targets (such as the
+/// web editor) can yield between animation frames.
+///
+/// Produces bytes identical to [`zip_package`].
+pub struct PackageZipper {
+    files: Vec<PackageFile>,
+    writer: Option<zip::ZipWriter<std::io::Cursor<Vec<u8>>>>,
+    file_index: usize,
+    file_offset: usize,
+    bytes_done: u64,
+    bytes_total: u64,
+}
+
+impl PackageZipper {
+    /// Start zipping `files` incrementally.
+    #[must_use]
+    pub fn new(files: Vec<PackageFile>) -> Self {
+        let capacity = files
+            .iter()
+            .map(|f| f.bytes.len().saturating_add(128))
+            .fold(1 << 16, usize::saturating_add);
+        let bytes_total = files.iter().map(|f| f.bytes.len() as u64).sum();
+        let writer = Some(zip::ZipWriter::new(std::io::Cursor::new(
+            Vec::with_capacity(capacity),
+        )));
+        Self {
+            files,
+            writer,
+            file_index: 0,
+            file_offset: 0,
+            bytes_done: 0,
+            bytes_total,
+        }
+    }
+
+    /// Write up to `max_bytes` of input file data (at least 1 byte) and return
+    /// either [`ZipStep::InProgress`] or [`ZipStep::Done`].
+    ///
+    /// # Errors
+    /// Returns [`PublishError::Zip`] if writing, compressing, or finishing fails,
+    /// or if called again after [`ZipStep::Done`].
+    pub fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
+        let mut budget = max_bytes.max(1);
+        let Some(writer) = self.writer.as_mut() else {
+            return Err(PublishError::Zip("zipper already finished".to_string()));
+        };
+
+        while self.file_index < self.files.len() && budget > 0 {
+            let Some(file) = self.files.get(self.file_index) else {
+                break;
+            };
+            if self.file_offset == 0 {
+                writer.start_file(&file.path, coursecraft_format::zip_options_for(&file.path))?;
+            }
+            if file.bytes.is_empty() {
+                self.file_index += 1;
+                self.file_offset = 0;
+                continue;
+            }
+            if !coursecraft_format::is_precompressed(&file.path) {
+                // DeflateEncoder's block boundaries depend on input slice size,
+                // so deflated entries are written whole to stay byte-identical
+                // to `zip_package`.
+                writer.write_all(&file.bytes)?;
+                self.bytes_done = self.bytes_done.saturating_add(file.bytes.len() as u64);
+                budget = budget.saturating_sub(file.bytes.len());
+                self.file_index += 1;
+                self.file_offset = 0;
+                continue;
+            }
+            let remaining = file.bytes.len().saturating_sub(self.file_offset);
+            let take = remaining.min(budget);
+            let end = self.file_offset.saturating_add(take);
+            if let Some(chunk) = file.bytes.get(self.file_offset..end) {
+                writer.write_all(chunk)?;
+            }
+            self.file_offset = end;
+            self.bytes_done = self.bytes_done.saturating_add(take as u64);
+            budget = budget.saturating_sub(take);
+            if self.file_offset >= file.bytes.len() {
+                self.file_index += 1;
+                self.file_offset = 0;
+            }
+        }
+
+        if self.file_index >= self.files.len() {
+            let Some(writer) = self.writer.take() else {
+                return Err(PublishError::Zip("zipper already finished".to_string()));
+            };
+            let cursor = writer.finish()?;
+            return Ok(ZipStep::Done(cursor.into_inner()));
+        }
+
+        Ok(ZipStep::InProgress {
+            bytes_done: self.bytes_done,
+            bytes_total: self.bytes_total,
+        })
+    }
 }
 
 /// Outcome of looking up an installed font face for auto-embedding at publish.

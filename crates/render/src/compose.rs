@@ -3103,9 +3103,9 @@ fn moved_label_rect(
     };
     let max_x = (slide_w - size.x).max(0.0);
     let max_y = (slide_h - size.y).max(0.0);
-    let x = (centre_x - size.x * 0.5).clamp(0.0, max_x);
+    let x = coursecraft_course::safe_clamp(centre_x - size.x * 0.5, 0.0, max_x);
     Some(egui::Rect::from_min_size(
-        egui::pos2(x, top.clamp(0.0, max_y)),
+        egui::pos2(x, coursecraft_course::safe_clamp(top, 0.0, max_y)),
         size,
     ))
 }

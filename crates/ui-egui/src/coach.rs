@@ -130,7 +130,10 @@ pub fn show_coach_marks(editor: &mut Editor, ui: &mut Ui) {
     let max_x = (screen.max.x - popover_w - caret_pad).max(min_x);
     let min_y = screen.min.y + caret_pad;
     let max_y = (screen.max.y - est_h - caret_pad).max(min_y);
-    let popover_pos = pos2(raw_pos.x.clamp(min_x, max_x), raw_pos.y.clamp(min_y, max_y));
+    let popover_pos = pos2(
+        coursecraft_course::safe_clamp(raw_pos.x, min_x, max_x),
+        coursecraft_course::safe_clamp(raw_pos.y, min_y, max_y),
+    );
 
     let mut advance = false;
     let mut skip = !egui::Popup::is_any_open(ui.ctx())

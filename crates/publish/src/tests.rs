@@ -2493,3 +2493,148 @@ fn collect_used_font_faces_includes_fonts_used_only_in_state_extra_text() {
         "expected Rubik Regular in {faces:?}"
     );
 }
+
+#[test]
+fn m31_12_empty_state_src_builds_and_zips_with_base_image() {
+    let mut course = minimal_course("Empty state src");
+    course.scenes[0].slides[0].objects.push(Object {
+        id: "img1".into(),
+        name: "Photo".into(),
+        kind: ObjectKind::Image {
+            crop: None,
+            src: "photo.png".into(),
+            alt: "Photo".into(),
+            outline: None,
+            shape: None,
+        },
+        frame: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        },
+        timing: Timing::default(),
+        states: vec![StateDef {
+            name: "hover".into(),
+            fill: None,
+            text: None,
+            src: Some(String::new()),
+            ..Default::default()
+        }],
+        initial_state: "normal".into(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: None,
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+        locked: false,
+        editor_hidden: false,
+    });
+    assert!(
+        course.is_playable(),
+        "course with empty state.src must be playable"
+    );
+
+    let player_files = fake_player();
+    let course_json = course.to_json().expect("course json");
+    let media =
+        |src: &str| -> Option<Vec<u8>> { (src == "photo.png").then(|| b"png bytes".to_vec()) };
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &media,
+    };
+    let files = build_package(&input).expect("package builds with empty state.src");
+    let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+    assert!(
+        paths.contains(&"media/photo.png"),
+        "base image missing from {paths:?}"
+    );
+    let zip_bytes = zip_package(&files).expect("zip builds cleanly");
+    assert!(!zip_bytes.is_empty(), "zip output must be non-empty");
+}
+
+#[test]
+fn m31_20_package_zipper_matches_zip_package_across_chunk_sizes() {
+    // Mix of deflated text/wasm, precompressed media, and empty files, > 1 MiB total.
+    let mut big_wasm = Vec::with_capacity(600 * 1024);
+    for i in 0..(600 * 1024 / 4) {
+        big_wasm.extend_from_slice(&(i as u32).to_le_bytes());
+    }
+    let mut big_png = Vec::with_capacity(700 * 1024);
+    for i in 0..(700 * 1024) {
+        big_png.push((i % 251) as u8);
+    }
+    let files = vec![
+        PackageFile {
+            path: "course.json".to_string(),
+            bytes: br#"{"title":"Chunked"}"#.repeat(200),
+        },
+        PackageFile {
+            path: "coursecraft_player_bg.wasm".to_string(),
+            bytes: big_wasm,
+        },
+        PackageFile {
+            path: "empty.txt".to_string(),
+            bytes: Vec::new(),
+        },
+        PackageFile {
+            path: "index.html".to_string(),
+            bytes: b"<!doctype html><html></html>".to_vec(),
+        },
+        PackageFile {
+            path: "media/photo.png".to_string(),
+            bytes: big_png,
+        },
+    ];
+    let expected = zip_package(&files).expect("reference zip_package");
+    let expected_total: u64 = files.iter().map(|f| f.bytes.len() as u64).sum();
+
+    for chunk_size in [1024_usize, 64 * 1024, 256 * 1024] {
+        let mut zipper = PackageZipper::new(files.clone());
+        let mut steps = 0usize;
+        let mut prev_done = 0u64;
+        let result = loop {
+            steps += 1;
+            match zipper.step(chunk_size).expect("step") {
+                ZipStep::InProgress {
+                    bytes_done,
+                    bytes_total,
+                } => {
+                    assert_eq!(bytes_total, expected_total);
+                    assert!(bytes_done >= prev_done, "progress must be monotonic");
+                    assert!(bytes_done <= bytes_total);
+                    prev_done = bytes_done;
+                }
+                ZipStep::Done(bytes) => break bytes,
+            }
+        };
+        assert!(
+            steps > 1,
+            "multi-MB payload at chunk_size={chunk_size} must take > 1 step"
+        );
+        assert_eq!(
+            result, expected,
+            "PackageZipper output must be byte-identical to zip_package at chunk_size={chunk_size}"
+        );
+    }
+
+    // Empty package edge case.
+    let empty_expected = zip_package(&[]).expect("empty zip");
+    let mut empty_zipper = PackageZipper::new(Vec::new());
+    match empty_zipper.step(256 * 1024).expect("empty step") {
+        ZipStep::Done(bytes) => assert_eq!(bytes, empty_expected),
+        ZipStep::InProgress { .. } => panic!("empty package must finish in one step"),
+    }
+}

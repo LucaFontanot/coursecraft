@@ -1296,8 +1296,11 @@ fn notice_layout(ui: &Ui, full: Rect, player: &Player<'_>, text: &str) -> Option
     let content = text_height.max(NOTICE_BUTTON).max(ICON_TOOLBAR).max(1.0);
     let height = (NOTICE_ACCENT + NOTICE_PAD + content + NOTICE_PAD).min(full.height().max(0.0));
     let rect = Rect::from_min_size(full.min, vec2(full.width(), height));
-    let close_top = (full.top() + NOTICE_ACCENT + NOTICE_PAD + (content - NOTICE_BUTTON) * 0.5)
-        .clamp(full.top(), (rect.bottom() - NOTICE_BUTTON).max(full.top()));
+    let close_top = coursecraft_course::safe_clamp(
+        full.top() + NOTICE_ACCENT + NOTICE_PAD + (content - NOTICE_BUTTON) * 0.5,
+        full.top(),
+        (rect.bottom() - NOTICE_BUTTON).max(full.top()),
+    );
     let close = Rect::from_min_size(
         Pos2::new(close_left, close_top),
         vec2(NOTICE_BUTTON, NOTICE_BUTTON),
@@ -2139,9 +2142,12 @@ fn draw_speed_popup(
     let pad = 4.0_f32.min(((full.width() - width) * 0.5).max(0.0));
     let min_x = full.left() + pad;
     let max_x = (full.right() - width - pad).max(min_x);
-    let x = (anchor.center().x - width * 0.5).clamp(min_x, max_x);
-    let y =
-        (anchor.top() - 6.0 - height).clamp(full.top(), (full.bottom() - height).max(full.top()));
+    let x = coursecraft_course::safe_clamp(anchor.center().x - width * 0.5, min_x, max_x);
+    let y = coursecraft_course::safe_clamp(
+        anchor.top() - 6.0 - height,
+        full.top(),
+        (full.bottom() - height).max(full.top()),
+    );
     let popup = Rect::from_min_size(Pos2::new(x, y), vec2(width, height));
     let painter = ui.ctx().layer_painter(egui::LayerId::new(
         egui::Order::Tooltip,
@@ -2483,7 +2489,11 @@ fn draw_slider(
         painter.rect_filled(fill, CornerRadius::same(2), fill_color);
     }
     let center = Pos2::new(
-        (track.left() + track.width() * fraction).clamp(rect.left(), rect.right()),
+        coursecraft_course::safe_clamp(
+            track.left() + track.width() * fraction,
+            rect.left(),
+            rect.right(),
+        ),
         rect.center().y,
     );
     let radius = if hovered { handle_hover } else { handle };
@@ -2498,7 +2508,7 @@ fn slider_value(rect: Rect, x: f32, min: f32, max: f32, inset: f32) -> f32 {
         return min;
     }
     let fraction = ((x - left) / width).clamp(0.0, 1.0);
-    (min + (max - min) * fraction).clamp(min, max)
+    coursecraft_course::safe_clamp(min + (max - min) * fraction, min, max)
 }
 
 fn slider_ms(rect: Rect, x: f32, duration_ms: u32, inset: f32) -> u32 {
@@ -3043,7 +3053,8 @@ fn draw_drawer(
                             Pos2::new(row.right(), bottom),
                         )
                     } else {
-                        let y = row.top().clamp(clip.top(), clip.bottom());
+                        let y =
+                            coursecraft_course::safe_clamp(row.top(), clip.top(), clip.bottom());
                         Rect::from_min_size(Pos2::new(row.left(), y), egui::Vec2::ZERO)
                     };
                     chrome.push((

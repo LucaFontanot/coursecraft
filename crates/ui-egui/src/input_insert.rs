@@ -21,8 +21,10 @@ fn unique_variable(editor: &Editor, base: &str) -> String {
 
 fn centred_frame(editor: &Editor, width: f32, height: f32) -> Rect {
     let size = editor.session.course.slide_size;
-    let width = width.clamp(20.0, size.w as f32);
-    let height = height.clamp(20.0, size.h as f32);
+    let max_w = (size.w as f32).max(1.0);
+    let max_h = (size.h as f32).max(1.0);
+    let width = coursecraft_course::safe_clamp(width, 20.0_f32.min(max_w), max_w);
+    let height = coursecraft_course::safe_clamp(height, 20.0_f32.min(max_h), max_h);
     Rect {
         x: ((size.w as f32 - width) * 0.5).max(0.0),
         y: ((size.h as f32 - height) * 0.5).max(0.0),

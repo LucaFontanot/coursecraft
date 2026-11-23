@@ -324,6 +324,13 @@ Plan by Gemini 4 Neon: `docs/testing/m30-plan.md`; log: `docs/bug-hunt/2026-11-2
 - Glossary in Find and Replace, Spell Check and translation; sort the glossary A to Z; Timeline Show all and Unlock all.
 - Released as 0.4.1.
 
+## M31 Urgent fixes from an external review ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m31-plan.md`; log: `docs/bug-hunt/2026-11-23-m31.md`; report: `docs/testing/m31-report.md`.
+
+- Save, Save As, Open and New shortcuts; MCP keeps a `.ccraft` file's media; no crashes on tiny slides, tall scroll panels or crossed clamp bounds; publish with an empty state picture; SCORM 1.2 never downgrades a reported pass or completion; Last visited slide never loops; the web editor asks before replacing unsaved changes and publishes without freezing the tab.
+- Released as 0.4.2.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.

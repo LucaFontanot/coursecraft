@@ -2006,3 +2006,134 @@ fn simulate_strict_click_on_an_object_not_on_screen_fails() {
         "expected first warning message in stderr, got: {stderr:?}"
     );
 }
+
+#[test]
+fn m31_18_simulate_last_visited_after_bank_redraw_does_not_loop() {
+    let bank_slides: Vec<serde_json::Value> = (1..=6)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("bq{i}"),
+                "title": format!("BQ{i}"),
+                "question": {
+                    "kind": "multiple_choice",
+                    "prompt": "Pick one",
+                    "choices": [
+                        { "id": "a", "text": "A" },
+                        { "id": "b", "text": "B", "correct": true }
+                    ],
+                    "attempts": 1
+                },
+                "objects": [{
+                    "id": "btn-back",
+                    "kind": { "type": "button", "label": "Back" },
+                    "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+                }],
+                "triggers": [{
+                    "action": { "action": "jump_to_slide", "target": "last_visited" },
+                    "when": { "event": "click", "object": "btn-back" }
+                }]
+            })
+        })
+        .collect();
+    let course_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "m31-18-last-visited",
+        "title": "M31-18 Last Visited",
+        "scenes": [{
+            "id": "sc",
+            "title": "Scene",
+            "slides": [
+                {
+                    "id": "s-intro",
+                    "title": "Intro",
+                    "objects": [{
+                        "id": "btn-back",
+                        "kind": { "type": "button", "label": "Back" },
+                        "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+                    }],
+                    "triggers": [{
+                        "action": { "action": "jump_to_slide", "target": "last_visited" },
+                        "when": { "event": "click", "object": "btn-back" }
+                    }]
+                },
+                { "id": "s-draw", "title": "Draw", "draw": { "bank": "bank1", "count": 2 } },
+                {
+                    "id": "s-results",
+                    "title": "Results",
+                    "objects": [
+                        {
+                            "id": "btn-retry",
+                            "kind": { "type": "button", "label": "Retry" },
+                            "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 40.0 }
+                        },
+                        {
+                            "id": "btn-back",
+                            "kind": { "type": "button", "label": "Back" },
+                            "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+                        }
+                    ],
+                    "triggers": [
+                        {
+                            "action": { "action": "retry_quiz" },
+                            "when": { "event": "click", "object": "btn-retry" }
+                        },
+                        {
+                            "action": { "action": "jump_to_slide", "target": "last_visited" },
+                            "when": { "event": "click", "object": "btn-back" }
+                        }
+                    ]
+                }
+            ]
+        }],
+        "banks": [{ "id": "bank1", "title": "Bank One", "slides": bank_slides }]
+    });
+    let inputs_json = serde_json::json!([
+        { "input": "start" },
+        { "input": "next" },
+        { "input": "next" },
+        { "input": "next" },
+        { "input": "click", "object": "btn-retry" },
+        { "input": "click", "object": "btn-back" },
+        { "input": "click", "object": "btn-back" },
+        { "input": "click", "object": "btn-back" },
+        { "input": "click", "object": "btn-back" }
+    ]);
+
+    let scratch = scratch_dir("test-cli-m31-18-last-visited");
+    let course_path = scratch.join("course.json");
+    let inputs_path = scratch.join("inputs.json");
+    std::fs::write(&course_path, course_json.to_string()).expect("write course");
+    std::fs::write(&inputs_path, inputs_json.to_string()).expect("write inputs");
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code =
+        run_simulate(&course_path, &inputs_path, 1, true, &mut out, &mut err).expect("simulate");
+    assert_eq!(
+        code,
+        ExitCode::SUCCESS,
+        "stderr: {}",
+        String::from_utf8_lossy(&err)
+    );
+
+    let stdout = String::from_utf8(out).expect("utf8 stdout");
+    let entered: Vec<String> = stdout
+        .lines()
+        .filter_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            if v.get("effect")?.as_str()? == "slide_entered" {
+                v.get("slide")?.as_str().map(str::to_owned)
+            } else {
+                None
+            }
+        })
+        .collect();
+    // Final btn-back on s-intro (index 0) must NOT emit another slide_entered: "s-intro".
+    assert_eq!(entered.first().map(String::as_str), Some("s-intro"));
+    assert_eq!(entered.last().map(String::as_str), Some("s-intro"));
+    assert_eq!(
+        entered.iter().filter(|s| s.as_str() == "s-intro").count(),
+        2,
+        "expected s-intro entered only at start and once on LastVisited, got {entered:?}"
+    );
+}

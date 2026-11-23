@@ -1567,3 +1567,73 @@ fn into_arc_media_preserves_entries_without_extra_vec_copies() {
     assert_eq!(arcs[1].0, "two.mp3");
     assert_eq!(&*arcs[1].1, &[4, 5]);
 }
+
+#[test]
+fn m31_19_web_unsaved_clean_runs_immediately_and_dirty_queues_pending() {
+    use crate::web_state::{WebPendingAction, WebUnsavedState};
+    use coursecraft_ui_egui::{ExampleId, TemplateId};
+
+    let actions = [
+        WebPendingAction::New,
+        WebPendingAction::Open,
+        WebPendingAction::OpenExample(ExampleId::HealthyHabits),
+        WebPendingAction::OpenTemplate(TemplateId::Blank),
+        WebPendingAction::ImportPptx,
+    ];
+
+    for action in actions {
+        let mut state = WebUnsavedState::new(10);
+        assert!(!state.is_dirty(10));
+        assert_eq!(state.file_name_display(), "Untitled");
+        assert_eq!(state.request_or_run(action, 10), Some(action));
+        assert_eq!(state.pending, None);
+
+        // Advance revision -> dirty -> queues pending instead of running immediately
+        assert!(state.is_dirty(11));
+        assert_eq!(state.request_or_run(action, 11), None);
+        assert_eq!(state.pending, Some(action));
+    }
+}
+
+#[test]
+fn m31_19_web_unsaved_save_dont_save_cancel_and_pptx_import() {
+    use crate::web_state::{WebPendingAction, WebUnsavedState};
+
+    let mut state = WebUnsavedState::new(0);
+    assert_eq!(state.request_or_run(WebPendingAction::New, 3), None);
+    assert_eq!(state.pending, Some(WebPendingAction::New));
+
+    // Cancel / Escape clears pending without marking clean
+    state.cancel();
+    assert_eq!(state.pending, None);
+    assert!(state.is_dirty(3));
+
+    // Save marks clean, updates display name, and continues with pending action
+    assert_eq!(state.request_or_run(WebPendingAction::Open, 3), None);
+    state.mark_saved_as(3, "course.ccraft");
+    assert!(!state.is_dirty(3));
+    assert_eq!(state.file_name_display(), "course.ccraft");
+    assert_eq!(state.take_pending(), Some(WebPendingAction::Open));
+    assert_eq!(state.pending, None);
+
+    // Don't Save discards changes and continues, then reset_for_new clears file name
+    assert_eq!(state.request_or_run(WebPendingAction::New, 5), None);
+    assert_eq!(state.take_pending(), Some(WebPendingAction::New));
+    state.reset_for_new(0);
+    assert!(!state.is_dirty(0));
+    assert_eq!(state.file_name_display(), "Untitled");
+
+    // PPTX import marks dirty even at revision 0 and clears file name
+    state.mark_saved_as(0, "old.ccraft");
+    state.mark_dirty_after_import();
+    assert!(state.is_dirty(0));
+    assert_eq!(state.file_name_display(), "Untitled");
+    assert_eq!(state.request_or_run(WebPendingAction::ImportPptx, 0), None);
+    assert_eq!(state.pending, Some(WebPendingAction::ImportPptx));
+
+    // mark_saved preserves existing file name
+    state.mark_saved_as(1, "saved.ccraft");
+    state.mark_saved(2);
+    assert!(!state.is_dirty(2));
+    assert_eq!(state.file_name_display(), "saved.ccraft");
+}

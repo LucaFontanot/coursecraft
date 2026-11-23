@@ -30,6 +30,22 @@ pub fn shortcut_label(ctx: &egui::Context, shortcut: &str) -> String {
 #[must_use]
 pub fn format_shortcut(shortcut: &str, is_mac: bool, has_glyph: impl Fn(char) -> bool) -> String {
     let trimmed = shortcut.trim();
+    if trimmed.contains(" / ") {
+        return trimmed
+            .split(" / ")
+            .map(|part| format_single_shortcut(part, is_mac, &has_glyph))
+            .collect::<Vec<_>>()
+            .join(" / ");
+    }
+    format_single_shortcut(trimmed, is_mac, &has_glyph)
+}
+
+fn format_single_shortcut(
+    shortcut: &str,
+    is_mac: bool,
+    has_glyph: &dyn Fn(char) -> bool,
+) -> String {
+    let trimmed = shortcut.trim();
     if trimmed.is_empty() {
         return String::new();
     }
@@ -569,7 +585,10 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
     MenuBar::new().ui(ui, |ui| {
         // 1. File menu (always first, combining shell requests and any File/* commands)
         ui.menu_button("File", |ui| {
-            if ui.button("New").clicked() {
+            if ui
+                .add(Button::new("New").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+N")))
+                .clicked()
+            {
                 requests.push(EditorRequest::New);
                 ui.close();
             }
@@ -579,7 +598,10 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             let desktop_file_ops = editor.file_ops_available && !cfg!(target_arch = "wasm32");
 
             if editor.file_ops_available {
-                if ui.button("Open…").clicked() {
+                if ui
+                    .add(Button::new("Open…").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+O")))
+                    .clicked()
+                {
                     requests.push(EditorRequest::Open);
                     ui.close();
                 }
@@ -622,7 +644,10 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             ui.separator();
 
             if editor.file_ops_available {
-                if ui.button("Save").clicked() {
+                if ui
+                    .add(Button::new("Save").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+S")))
+                    .clicked()
+                {
                     requests.push(EditorRequest::Save);
                     ui.close();
                 }
@@ -632,7 +657,13 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             }
 
             if editor.file_ops_available {
-                if ui.button("Save As…").clicked() {
+                if ui
+                    .add(
+                        Button::new("Save As…")
+                            .shortcut_text(shortcut_label(ui.ctx(), "Ctrl+Shift+S")),
+                    )
+                    .clicked()
+                {
                     requests.push(EditorRequest::SaveAs);
                     ui.close();
                 }

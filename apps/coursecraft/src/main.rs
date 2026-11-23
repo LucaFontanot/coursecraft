@@ -38,6 +38,8 @@ pub mod system_fonts;
 pub mod template_library;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod versions;
+#[cfg(any(target_arch = "wasm32", test))]
+pub mod web_state;
 
 #[cfg(test)]
 mod bughunt_m24_preview;
@@ -233,6 +235,23 @@ struct EditorApp {
     project_open_tx: std::sync::mpsc::Sender<(String, Vec<u8>)>,
     #[cfg(target_arch = "wasm32")]
     project_open_rx: std::sync::mpsc::Receiver<(String, Vec<u8>)>,
+    /// Unsaved-changes guard and pending action for the web editor.
+    #[cfg(target_arch = "wasm32")]
+    web_unsaved: web_state::WebUnsavedState,
+    /// Active frame-chunked web publish job.
+    #[cfg(target_arch = "wasm32")]
+    web_publish: Option<WebPublishJob>,
+}
+
+#[cfg(target_arch = "wasm32")]
+enum WebPublishJob {
+    Preparing {
+        standard: coursecraft_ui_egui::PublishStandard,
+    },
+    Zipping {
+        standard: coursecraft_ui_egui::PublishStandard,
+        zipper: coursecraft_publish::PackageZipper,
+    },
 }
 
 /// Whether a close request must be intercepted to ask about unsaved changes.
@@ -1104,7 +1123,26 @@ impl EditorApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn is_blocked_file_request(&self, req: &EditorRequest) -> bool {
+        let modal_open = self.pending_action.is_some()
+            || self.conflict_prompt.is_some()
+            || self.restore_prompt.is_some()
+            || self.error_modal.is_some();
+        modal_open
+            && matches!(
+                req,
+                EditorRequest::New
+                    | EditorRequest::Open
+                    | EditorRequest::Save
+                    | EditorRequest::SaveAs
+            )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn handle_request(&mut self, req: EditorRequest, ctx: &egui::Context) {
+        if self.is_blocked_file_request(&req) {
+            return;
+        }
         match req {
             EditorRequest::New => self.guard_unsaved(PendingAction::New, ctx),
             EditorRequest::Open => self.guard_unsaved(PendingAction::Open, ctx),
@@ -2432,6 +2470,8 @@ impl EditorApp {
                     self.project.saved_revision = u64::MAX;
                     self.reset_autosaver();
                 }
+                #[cfg(target_arch = "wasm32")]
+                self.web_unsaved.mark_dirty_after_import();
                 let summary = imported.report.summary_window_text();
                 self.editor.set_import_report(summary);
             }
@@ -2857,6 +2897,16 @@ impl EditorApp {
             || self.error_modal.is_some())
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
 
+        #[cfg(target_arch = "wasm32")]
+        let web_modal_esc = {
+            self.step_web_publish(ui.ctx());
+            let is_dirty = self.web_unsaved.is_dirty(self.editor.session.revision);
+            let name = self.web_unsaved.file_name_display().to_owned();
+            self.editor.set_title_info(name, is_dirty);
+            self.web_unsaved.pending.is_some()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        };
+
         // 4. Editor main UI
         let _requests = self.editor.show(ui);
 
@@ -3130,6 +3180,20 @@ impl EditorApp {
             }
 
             for req in _requests {
+                if self.web_unsaved.pending.is_some()
+                    && matches!(
+                        req,
+                        EditorRequest::New
+                            | EditorRequest::Open
+                            | EditorRequest::Save
+                            | EditorRequest::SaveAs
+                            | EditorRequest::OpenExample(_)
+                            | EditorRequest::OpenTemplate(_)
+                            | EditorRequest::PickPptx
+                    )
+                {
+                    continue;
+                }
                 match req {
                     EditorRequest::PickImage => {
                         let tx = self.import_tx.clone();
@@ -3239,20 +3303,7 @@ impl EditorApp {
                         });
                     }
                     EditorRequest::PickPptx => {
-                        let tx = self.import_tx.clone();
-                        let ctx = ui.ctx().clone();
-                        wasm_bindgen_futures::spawn_local(async move {
-                            let file = rfd::AsyncFileDialog::new()
-                                .add_filter("PowerPoint (*.pptx)", &["pptx"])
-                                .pick_file()
-                                .await;
-                            if let Some(file) = file {
-                                let name = file.file_name();
-                                let bytes = file.read().await;
-                                let _ = tx.send((name, bytes));
-                                ctx.request_repaint();
-                            }
-                        });
+                        self.guard_web_unsaved(web_state::WebPendingAction::ImportPptx, ui.ctx());
                     }
                     EditorRequest::PickDocument => {
                         let tx = self.document_tx.clone();
@@ -3279,14 +3330,19 @@ impl EditorApp {
                         coursecraft_ui_egui::coursecraft_render::apply_style(ui.ctx(), mode);
                     }
                     EditorRequest::New => {
-                        let course = Session::blank("Untitled course").course;
-                        self.editor.replace_course(course);
+                        self.guard_web_unsaved(web_state::WebPendingAction::New, ui.ctx());
                     }
                     EditorRequest::OpenExample(id) => {
-                        self.editor.open_example(id);
+                        self.guard_web_unsaved(
+                            web_state::WebPendingAction::OpenExample(id),
+                            ui.ctx(),
+                        );
                     }
                     EditorRequest::OpenTemplate(id) => {
-                        self.editor.open_template(id);
+                        self.guard_web_unsaved(
+                            web_state::WebPendingAction::OpenTemplate(id),
+                            ui.ctx(),
+                        );
                     }
                     EditorRequest::AiChat { purpose, request } => {
                         self.start_ai(purpose, request, ui.ctx());
@@ -3335,85 +3391,60 @@ impl EditorApp {
                     }
                     EditorRequest::AddSystemFont { .. } => {}
                     EditorRequest::Open => {
-                        let tx = self.project_open_tx.clone();
-                        let ctx = ui.ctx().clone();
-                        wasm_bindgen_futures::spawn_local(async move {
-                            let file = rfd::AsyncFileDialog::new()
-                                .add_filter(
-                                    "CourseCraft Project (*.ccraft, *.json)",
-                                    &["ccraft", "json"],
-                                )
-                                .pick_file()
-                                .await;
-                            if let Some(file) = file {
-                                let name = file.file_name();
-                                let bytes = file.read().await;
-                                let _ = tx.send((name, bytes));
-                                ctx.request_repaint();
-                            }
-                        });
+                        self.guard_web_unsaved(web_state::WebPendingAction::Open, ui.ctx());
                     }
                     EditorRequest::Save | EditorRequest::SaveAs => {
-                        let media = self.editor.used_media();
-                        match coursecraft_format::save_project(&self.editor.session.course, &media)
-                        {
-                            Ok(bytes) => {
-                                let stem = sanitize_filename_stem(
-                                    &self.editor.session.course.title,
-                                    "Untitled",
-                                );
-                                let file_name = format!("{stem}.ccraft");
-                                match web_download_bytes(
-                                    &file_name,
-                                    &bytes,
-                                    "application/octet-stream",
-                                ) {
-                                    Ok(()) => {
-                                        self.editor.set_status(format!("Downloaded {file_name}"))
-                                    }
-                                    Err(err) => self.editor.set_status(format!(
-                                        "Couldn't download {file_name}: {err}"
-                                    )),
-                                }
-                            }
-                            Err(err) => {
-                                self.editor
-                                    .set_status(format!("Couldn't save project: {err}"));
-                            }
-                        }
+                        self.perform_web_save();
                     }
                     EditorRequest::Publish { standard } => {
-                        self.editor.set_publish_busy();
-                        let pkg_standard = publish::package_standard(standard);
-                        let player = player_bundle::player_files();
-                        match publish::run_publish_bytes(
-                            &self.editor.session.course,
-                            &self.editor.media,
-                            pkg_standard,
-                            &player,
-                        ) {
-                            Ok(bytes) => {
-                                let stem = sanitize_filename_stem(
-                                    &self.editor.session.course.title,
-                                    "course",
-                                );
-                                let file_name = format!("{stem}-{}.zip", standard.file_stem());
-                                match web_download_bytes(&file_name, &bytes, "application/zip") {
-                                    Ok(()) => self
-                                        .editor
-                                        .set_publish_success(file_name, bytes.len() as u64),
-                                    Err(err) => self.editor.set_publish_failure(format!(
-                                        "Couldn't download {file_name}: {err}"
-                                    )),
-                                }
-                            }
-                            Err(err) => self.editor.set_publish_failure(err),
+                        if self.web_publish.is_none() {
+                            self.editor.set_publish_busy();
+                            self.web_publish = Some(WebPublishJob::Preparing { standard });
+                            ui.ctx().request_repaint();
                         }
                     }
                     EditorRequest::SaveImage { .. } => {
                         self.editor.set_status("Saving works in the desktop app.");
                     }
                     _ => {}
+                }
+            }
+
+            // Unsaved changes confirmation modal
+            if self.web_unsaved.pending.is_some() {
+                let modal_id = egui::Id::unique("web_unsaved_changes_modal");
+                let mode = resolve_web_theme(ui.ctx());
+                let modal = egui::Modal::new(modal_id)
+                    .backdrop_color(coursecraft_ui_egui::modal_backdrop_color(mode))
+                    .show(ui.ctx(), |ui| {
+                        ui.set_max_width(480.0);
+                        let name = self.web_unsaved.file_name_display().to_owned();
+                        ui.heading(format!("Save changes to {name}?"));
+                        ui.add_space(8.0);
+                        ui.add(
+                            egui::Label::new("Your changes will be lost if you don't save them.")
+                                .wrap(),
+                        );
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if coursecraft_ui_egui::primary_button(ui, "Save").clicked()
+                                && self.perform_web_save()
+                                && let Some(action) = self.web_unsaved.take_pending()
+                            {
+                                self.execute_web_pending_action(action, ui.ctx());
+                            }
+                            if ui.button("Don't Save").clicked()
+                                && let Some(action) = self.web_unsaved.take_pending()
+                            {
+                                self.execute_web_pending_action(action, ui.ctx());
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.web_unsaved.cancel();
+                            }
+                        });
+                    });
+                if modal.should_close() || web_modal_esc {
+                    self.web_unsaved.cancel();
                 }
             }
         }
@@ -3532,12 +3563,53 @@ fn run_editor_window() -> eframe::Result {
     )
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn should_prevent_browser_file_shortcut(
+    ctrl_or_meta: bool,
+    alt: bool,
+    shift: bool,
+    key: &str,
+) -> bool {
+    if !ctrl_or_meta || alt {
+        return false;
+    }
+    match key.to_ascii_lowercase().as_str() {
+        "s" => true,
+        "o" | "n" => !shift,
+        _ => false,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_web_file_shortcut_guard(window: &web_sys::Window) {
+    use eframe::wasm_bindgen::{JsCast as _, closure::Closure};
+
+    let listener = Closure::<dyn FnMut(web_sys::Event)>::new(|event: web_sys::Event| {
+        if let Ok(kb) = event.dyn_into::<web_sys::KeyboardEvent>()
+            && should_prevent_browser_file_shortcut(
+                kb.ctrl_key() || kb.meta_key(),
+                kb.alt_key(),
+                kb.shift_key(),
+                &kb.key(),
+            )
+        {
+            kb.prevent_default();
+        }
+    });
+    let target: &web_sys::EventTarget = window.as_ref();
+    let _ = target.add_event_listener_with_callback("keydown", listener.as_ref().unchecked_ref());
+    listener.forget();
+}
+
 #[cfg(target_arch = "wasm32")]
 fn main() {
     use eframe::wasm_bindgen::JsCast as _;
 
     wasm_bindgen_futures::spawn_local(async {
         let window = web_sys::window();
+        if let Some(ref w) = window {
+            install_web_file_shortcut_guard(w);
+        }
         let blank = window
             .as_ref()
             .and_then(|w| w.location().search().ok())
@@ -3565,6 +3637,7 @@ fn main() {
         let (background_audio_tx, background_audio_rx) = std::sync::mpsc::channel();
         let (document_tx, document_rx) = std::sync::mpsc::channel();
         let (project_open_tx, project_open_rx) = std::sync::mpsc::channel();
+        let web_unsaved = web_state::WebUnsavedState::new(editor.session.revision);
         if let Err(e) = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -3586,6 +3659,8 @@ fn main() {
                         document_rx,
                         project_open_tx,
                         project_open_rx,
+                        web_unsaved,
+                        web_publish: None,
                     }))
                 }),
             )
@@ -3598,6 +3673,163 @@ fn main() {
 
 #[cfg(target_arch = "wasm32")]
 impl EditorApp {
+    fn step_web_publish(&mut self, ctx: &egui::Context) {
+        const CHUNK_BYTES: usize = 256 * 1024;
+        let Some(job) = self.web_publish.take() else {
+            return;
+        };
+        match job {
+            WebPublishJob::Preparing { standard } => {
+                let pkg_standard = publish::package_standard(standard);
+                let player = player_bundle::player_files();
+                match publish::package_files_from(
+                    &self.editor.session.course,
+                    &self.editor.media,
+                    pkg_standard,
+                    &player,
+                ) {
+                    Ok(files) => {
+                        self.editor.set_publish_progress(Some(0.0));
+                        self.web_publish = Some(WebPublishJob::Zipping {
+                            standard,
+                            zipper: coursecraft_publish::PackageZipper::new(files),
+                        });
+                        ctx.request_repaint();
+                    }
+                    Err(err) => {
+                        self.editor.set_publish_failure(err);
+                    }
+                }
+            }
+            WebPublishJob::Zipping {
+                standard,
+                mut zipper,
+            } => match zipper.step(CHUNK_BYTES) {
+                Ok(coursecraft_publish::ZipStep::InProgress {
+                    bytes_done,
+                    bytes_total,
+                }) => {
+                    let progress = if bytes_total == 0 {
+                        1.0
+                    } else {
+                        bytes_done as f32 / bytes_total as f32
+                    };
+                    self.editor.set_publish_progress(Some(progress));
+                    self.web_publish = Some(WebPublishJob::Zipping { standard, zipper });
+                    ctx.request_repaint();
+                }
+                Ok(coursecraft_publish::ZipStep::Done(bytes)) => {
+                    let stem = sanitize_filename_stem(&self.editor.session.course.title, "course");
+                    let file_name = format!("{stem}-{}.zip", standard.file_stem());
+                    match web_download_bytes(&file_name, &bytes, "application/zip") {
+                        Ok(()) => self
+                            .editor
+                            .set_publish_success(file_name, bytes.len() as u64),
+                        Err(err) => self
+                            .editor
+                            .set_publish_failure(format!("Couldn't download {file_name}: {err}")),
+                    }
+                }
+                Err(err) => {
+                    self.editor
+                        .set_publish_failure(format!("Couldn't create the zip file: {err}"));
+                }
+            },
+        }
+    }
+
+    fn guard_web_unsaved(&mut self, action: web_state::WebPendingAction, ctx: &egui::Context) {
+        let rev = self.editor.session.revision;
+        if let Some(ready) = self.web_unsaved.request_or_run(action, rev) {
+            self.execute_web_pending_action(ready, ctx);
+        }
+    }
+
+    fn execute_web_pending_action(
+        &mut self,
+        action: web_state::WebPendingAction,
+        ctx: &egui::Context,
+    ) {
+        match action {
+            web_state::WebPendingAction::New => {
+                let course = Session::blank("Untitled course").course;
+                self.editor.replace_course(course);
+                self.web_unsaved.reset_for_new(self.editor.session.revision);
+            }
+            web_state::WebPendingAction::Open => {
+                let tx = self.project_open_tx.clone();
+                let ctx = ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter(
+                            "CourseCraft Project (*.ccraft, *.json)",
+                            &["ccraft", "json"],
+                        )
+                        .pick_file()
+                        .await;
+                    if let Some(file) = file {
+                        let name = file.file_name();
+                        let bytes = file.read().await;
+                        let _ = tx.send((name, bytes));
+                        ctx.request_repaint();
+                    }
+                });
+            }
+            web_state::WebPendingAction::OpenExample(id) => {
+                self.editor.open_example(id);
+                self.web_unsaved.reset_for_new(self.editor.session.revision);
+            }
+            web_state::WebPendingAction::OpenTemplate(id) => {
+                self.editor.open_template(id);
+                self.web_unsaved.reset_for_new(self.editor.session.revision);
+            }
+            web_state::WebPendingAction::ImportPptx => {
+                let tx = self.import_tx.clone();
+                let ctx = ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter("PowerPoint (*.pptx)", &["pptx"])
+                        .pick_file()
+                        .await;
+                    if let Some(file) = file {
+                        let name = file.file_name();
+                        let bytes = file.read().await;
+                        let _ = tx.send((name, bytes));
+                        ctx.request_repaint();
+                    }
+                });
+            }
+        }
+    }
+
+    fn perform_web_save(&mut self) -> bool {
+        let media = self.editor.used_media();
+        match coursecraft_format::save_project(&self.editor.session.course, &media) {
+            Ok(bytes) => {
+                let stem = sanitize_filename_stem(&self.editor.session.course.title, "Untitled");
+                let file_name = format!("{stem}.ccraft");
+                match web_download_bytes(&file_name, &bytes, "application/octet-stream") {
+                    Ok(()) => {
+                        self.web_unsaved
+                            .mark_saved_as(self.editor.session.revision, file_name.clone());
+                        self.editor.set_status(format!("Downloaded {file_name}"));
+                        true
+                    }
+                    Err(err) => {
+                        self.editor
+                            .set_status(format!("Couldn't download {file_name}: {err}"));
+                        false
+                    }
+                }
+            }
+            Err(err) => {
+                self.editor
+                    .set_status(format!("Couldn't save project: {err}"));
+                false
+            }
+        }
+    }
+
     fn open_web_project_bytes(&mut self, name: &str, bytes: &[u8]) {
         let lower = name.to_ascii_lowercase();
         if lower.ends_with(".ccraft") {
@@ -3605,6 +3837,8 @@ impl EditorApp {
                 Ok(project) => {
                     self.editor.replace_course(project.course);
                     self.editor.set_media(into_arc_media(project.media));
+                    self.web_unsaved
+                        .mark_saved_as(self.editor.session.revision, name.to_owned());
                     self.editor.set_status(format!("Opened {name}"));
                 }
                 Err(err) => {
@@ -3620,6 +3854,8 @@ impl EditorApp {
                 Ok(course) => {
                     self.editor.replace_course(course);
                     self.editor.set_media(Vec::new());
+                    self.web_unsaved
+                        .mark_saved_as(self.editor.session.revision, name.to_owned());
                     self.editor.set_status(format!("Opened {name}"));
                 }
                 Err(err) => {

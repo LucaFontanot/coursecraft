@@ -270,3 +270,321 @@ fn scorm2004_output_is_identical_for_every_lms_status_option() {
         }
     }
 }
+
+fn assert_scorm12_in_session_non_downgrade(
+    option: LmsStatus,
+    initial: CompletionStatus,
+    expected_cmi: &str,
+) {
+    let course = hello_course_with_lms_status(option);
+    let state = PlayerState::default();
+    let mut api = Strict12Adapter::new(StrictScorm12::new());
+    let mut bridge = LmsBridge::for_standard(Standard::Scorm12);
+    assert!(bridge.start(&mut api, &course).1.is_empty());
+
+    let w = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[Effect::Completion { status: initial }],
+        1000,
+    );
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(
+        api.inner.lms_get_value("cmi.core.lesson_status"),
+        expected_cmi
+    );
+
+    let w = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[
+            Effect::Score {
+                raw: 40,
+                max: 100,
+                percent: 40,
+                status: CompletionStatus::Failed,
+            },
+            Effect::Completion {
+                status: CompletionStatus::Failed,
+            },
+            Effect::Completion {
+                status: CompletionStatus::Incomplete,
+            },
+        ],
+        2000,
+    );
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(
+        api.inner.lms_get_value("cmi.core.lesson_status"),
+        expected_cmi
+    );
+    assert_eq!(api.inner.lms_get_value("cmi.core.score.raw"), "");
+
+    assert!(bridge.finish_session(&mut api, 3000).is_empty());
+    assert_eq!(
+        api.inner.violations(),
+        &[],
+        "option={option:?} initial={initial:?}"
+    );
+}
+
+#[test]
+fn m31_14_scorm12_never_downgrades_reported_pass_or_completion_in_session() {
+    for option in [LmsStatus::PassedIncomplete, LmsStatus::PassedFailed] {
+        assert_scorm12_in_session_non_downgrade(option, CompletionStatus::Completed, "passed");
+        assert_scorm12_in_session_non_downgrade(option, CompletionStatus::Passed, "passed");
+    }
+
+    for option in [LmsStatus::CompletedIncomplete, LmsStatus::CompletedFailed] {
+        assert_scorm12_in_session_non_downgrade(option, CompletionStatus::Completed, "completed");
+        assert_scorm12_in_session_non_downgrade(option, CompletionStatus::Passed, "completed");
+    }
+
+    // Auto: Passed writes "passed" and blocks Failed/Incomplete/Completed; Completed can still upgrade to Passed.
+    let course = hello_course_with_lms_status(LmsStatus::Auto);
+    let state = PlayerState::default();
+    let mut api = Strict12Adapter::new(StrictScorm12::new());
+    let mut bridge = LmsBridge::for_standard(Standard::Scorm12);
+    assert!(bridge.start(&mut api, &course).1.is_empty());
+
+    let w = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[Effect::Completion {
+            status: CompletionStatus::Completed,
+        }],
+        500,
+    );
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(
+        api.inner.lms_get_value("cmi.core.lesson_status"),
+        "completed"
+    );
+
+    let w = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[Effect::Completion {
+            status: CompletionStatus::Passed,
+        }],
+        1000,
+    );
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(api.inner.lms_get_value("cmi.core.lesson_status"), "passed");
+
+    let w = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[
+            Effect::Score {
+                raw: 40,
+                max: 100,
+                percent: 40,
+                status: CompletionStatus::Failed,
+            },
+            Effect::Completion {
+                status: CompletionStatus::Failed,
+            },
+            Effect::Completion {
+                status: CompletionStatus::Completed,
+            },
+            Effect::Completion {
+                status: CompletionStatus::Incomplete,
+            },
+        ],
+        2000,
+    );
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(api.inner.lms_get_value("cmi.core.lesson_status"), "passed");
+    assert_eq!(api.inner.lms_get_value("cmi.core.score.raw"), "");
+
+    assert!(bridge.finish_session(&mut api, 3000).is_empty());
+    assert_eq!(api.inner.violations(), &[]);
+}
+
+#[test]
+fn m31_15_scorm12_resume_protects_status_across_all_five_modes() {
+    let state = PlayerState::default();
+    let modes = [
+        (LmsStatus::Auto, "passed"),
+        (LmsStatus::PassedIncomplete, "passed"),
+        (LmsStatus::PassedFailed, "passed"),
+        (LmsStatus::CompletedIncomplete, "completed"),
+        (LmsStatus::CompletedFailed, "completed"),
+    ];
+
+    for (option, seeded_status) in modes {
+        let course = hello_course_with_lms_status(option);
+        let mut strict = StrictScorm12::new();
+        strict.seed_status(seeded_status, Some("90"));
+        let mut api = Strict12Adapter::new(strict);
+        let mut bridge = LmsBridge::for_standard(Standard::Scorm12);
+        assert!(bridge.start(&mut api, &course).1.is_empty());
+
+        // Later Failed/40 and lower Passed/80 are rejected.
+        let w = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 40,
+                    max: 100,
+                    percent: 40,
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Incomplete,
+                },
+                Effect::Score {
+                    raw: 80,
+                    max: 100,
+                    percent: 80,
+                    status: CompletionStatus::Passed,
+                },
+            ],
+            1000,
+        );
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(
+            api.inner.lms_get_value("cmi.core.lesson_status"),
+            seeded_status
+        );
+        assert_eq!(api.inner.lms_get_value("cmi.core.score.raw"), "90");
+
+        // Higher Passed/95 updates score and keeps protected status.
+        let w = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[Effect::Score {
+                raw: 95,
+                max: 100,
+                percent: 95,
+                status: CompletionStatus::Passed,
+            }],
+            2000,
+        );
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(
+            api.inner.lms_get_value("cmi.core.lesson_status"),
+            seeded_status
+        );
+        assert_eq!(api.inner.lms_get_value("cmi.core.score.raw"), "95");
+
+        assert!(bridge.finish_session(&mut api, 3000).is_empty());
+        assert_eq!(api.inner.violations(), &[], "option={option:?}");
+    }
+}
+
+#[test]
+fn m31_16_scorm12_completed_then_passing_score_and_scorm2004_regression() {
+    let state = PlayerState::default();
+
+    // Scoreless Completed followed by Score(90, Passed) still records 90, while Score(40, Failed) is ignored.
+    for (option, expected_status) in [
+        (LmsStatus::PassedIncomplete, "passed"),
+        (LmsStatus::PassedFailed, "passed"),
+        (LmsStatus::CompletedIncomplete, "completed"),
+        (LmsStatus::CompletedFailed, "completed"),
+    ] {
+        let course = hello_course_with_lms_status(option);
+        let mut api = Strict12Adapter::new(StrictScorm12::new());
+        let mut bridge = LmsBridge::for_standard(Standard::Scorm12);
+        assert!(bridge.start(&mut api, &course).1.is_empty());
+
+        let w = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[Effect::Completion {
+                status: CompletionStatus::Completed,
+            }],
+            1000,
+        );
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(
+            api.inner.lms_get_value("cmi.core.lesson_status"),
+            expected_status
+        );
+
+        let w = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 90,
+                    max: 100,
+                    percent: 90,
+                    status: CompletionStatus::Passed,
+                },
+                Effect::Score {
+                    raw: 40,
+                    max: 100,
+                    percent: 40,
+                    status: CompletionStatus::Failed,
+                },
+            ],
+            2000,
+        );
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(
+            api.inner.lms_get_value("cmi.core.lesson_status"),
+            expected_status
+        );
+        assert_eq!(api.inner.lms_get_value("cmi.core.score.raw"), "90");
+
+        assert!(bridge.finish_session(&mut api, 3000).is_empty());
+        assert_eq!(api.inner.violations(), &[], "option={option:?}");
+    }
+
+    // SCORM 2004 regression: Completed + Score(90, Passed) then Score(40, Failed) + Completion(Failed) keeps passed/90.
+    {
+        let course = hello_course_with_lms_status(LmsStatus::PassedIncomplete);
+        let mut api = Strict2004Adapter::new(StrictScorm2004::new());
+        let mut bridge = LmsBridge::for_standard(Standard::Scorm2004);
+        assert!(bridge.start(&mut api, &course).1.is_empty());
+
+        let w = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[
+                Effect::Completion {
+                    status: CompletionStatus::Completed,
+                },
+                Effect::Score {
+                    raw: 90,
+                    max: 100,
+                    percent: 90,
+                    status: CompletionStatus::Passed,
+                },
+                Effect::Score {
+                    raw: 40,
+                    max: 100,
+                    percent: 40,
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Failed,
+                },
+            ],
+            1000,
+        );
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(api.inner.get_value("cmi.completion_status"), "completed");
+        assert_eq!(api.inner.get_value("cmi.success_status"), "passed");
+        assert_eq!(api.inner.get_value("cmi.score.raw"), "90");
+        assert!(bridge.finish_session(&mut api, 2000).is_empty());
+        assert_eq!(api.inner.violations(), &[]);
+    }
+}

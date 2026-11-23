@@ -1053,7 +1053,7 @@ fn add_patterned_stroke(
                 if is_dot {
                     let half_dash = phase_len * 0.5;
                     if !dot_mid_recorded && phase + step >= half_dash - EPS {
-                        let dt = (half_dash - phase).clamp(0.0, step);
+                        let dt = coursecraft_course::safe_clamp(half_dash - phase, 0.0, step);
                         let center = lerp(a, b, ((t + dt) / len).clamp(0.0, 1.0));
                         let dot_half = half * d_mult.clamp(0.4, 1.0);
                         let dot = circle_contour(center.0, center.1, dot_half, DOT_SEGMENTS);
@@ -1555,5 +1555,39 @@ mod tests {
         );
         assert!(mesh.vertices.iter().any(|v| v.color.a() == 0));
         assert!(mesh.vertices.iter().any(|v| v.color.a() > 0));
+    }
+
+    #[test]
+    fn m31_11_patterned_stroke_hostile_inputs_do_not_panic() {
+        let mut mesh = Mesh::default();
+        add_patterned_stroke(
+            &mut mesh,
+            &[(0.0, 0.0), (1e-4, 0.0), (10.0, 0.0)],
+            false,
+            1e-4,
+            5e-5,
+            0.0,
+            Color32::WHITE,
+            1.0,
+            coursecraft_course::DashStyle::Dot,
+            None,
+            StrokeJoin::default(),
+        );
+        add_patterned_stroke(
+            &mut mesh,
+            &[(0.0, 0.0), (f32::NAN, 1.0), (10.0, 0.0)],
+            false,
+            2.0,
+            1.0,
+            0.5,
+            Color32::WHITE,
+            1.0,
+            coursecraft_course::DashStyle::DashDot,
+            Some(&[0.5, 0.5]),
+            StrokeJoin {
+                kind: coursecraft_course::LineJoin::Round,
+                ..StrokeJoin::default()
+            },
+        );
     }
 }

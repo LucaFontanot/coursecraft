@@ -187,9 +187,16 @@ impl CmiMapping {
         }
     }
 
-    fn is_passed(&self, statuses: &[String]) -> bool {
+    fn is_passed_for(&self, statuses: &[String], lms_status: LmsStatus) -> bool {
         match self.standard {
-            Standard::Scorm12 => statuses.first().is_some_and(|s| s == "passed"),
+            Standard::Scorm12 => statuses.first().is_some_and(|s| match lms_status {
+                LmsStatus::Auto | LmsStatus::PassedIncomplete | LmsStatus::PassedFailed => {
+                    s == "passed"
+                }
+                LmsStatus::CompletedIncomplete | LmsStatus::CompletedFailed => {
+                    matches!(s.as_str(), "passed" | "completed")
+                }
+            }),
             Standard::Scorm2004 => statuses.get(1).is_some_and(|s| s == "passed"),
         }
     }
@@ -537,7 +544,7 @@ impl LmsBridge {
                 self.lms_status,
             );
         }
-        if self.mapping.is_passed(&statuses) {
+        if self.mapping.is_passed_for(&statuses, self.lms_status) {
             self.passed = true;
             self.best_passed_score = api
                 .get_value(self.mapping.score.raw)
@@ -726,16 +733,21 @@ impl LmsBridge {
         warnings: &mut Vec<String>,
     ) {
         let percent_f = f64::from(percent);
+        let status_allowed = match self.mapping.standard {
+            Standard::Scorm12 => {
+                is_protected_status(map_status(status, self.lms_status), self.lms_status)
+            }
+            Standard::Scorm2004 => status == CompletionStatus::Passed,
+        };
         if self.passed
-            && (status != CompletionStatus::Passed
-                || self.best_passed_score.is_some_and(|best| percent_f < best))
+            && (!status_allowed || self.best_passed_score.is_some_and(|best| percent_f < best))
         {
             return;
         }
         self.mapping.write_score(api, percent, warnings);
         self.mapping
             .write_status(api, status, last_status, warnings, self.lms_status);
-        if status == CompletionStatus::Passed {
+        if status_allowed {
             self.passed = true;
             self.best_passed_score = Some(
                 self.best_passed_score
@@ -764,18 +776,26 @@ impl LmsBridge {
         last_status: &mut Option<CompletionStatus>,
         warnings: &mut Vec<String>,
     ) {
-        if self.passed
-            && (matches!(
-                status,
-                CompletionStatus::Failed | CompletionStatus::Incomplete
-            ) || (self.mapping.standard == Standard::Scorm12
-                && status == CompletionStatus::Completed))
-        {
+        let protected_after_pass = match self.mapping.standard {
+            Standard::Scorm12 => {
+                !is_protected_status(map_status(status, self.lms_status), self.lms_status)
+            }
+            Standard::Scorm2004 => {
+                matches!(
+                    status,
+                    CompletionStatus::Failed | CompletionStatus::Incomplete
+                )
+            }
+        };
+        if self.passed && protected_after_pass {
             return;
         }
         self.mapping
             .write_status(api, status, last_status, warnings, self.lms_status);
-        if status == CompletionStatus::Passed {
+        if status == CompletionStatus::Passed
+            || (self.mapping.standard == Standard::Scorm12
+                && is_protected_status(map_status(status, self.lms_status), self.lms_status))
+        {
             self.passed = true;
         }
         let is_finished_status = match self.mapping.standard {
@@ -839,6 +859,17 @@ impl LmsBridge {
                     api.last_error()
                 ));
             }
+        }
+    }
+}
+
+fn is_protected_status(written: LessonStatus, lms_status: LmsStatus) -> bool {
+    match lms_status {
+        LmsStatus::Auto | LmsStatus::PassedIncomplete | LmsStatus::PassedFailed => {
+            written == LessonStatus::Passed
+        }
+        LmsStatus::CompletedIncomplete | LmsStatus::CompletedFailed => {
+            matches!(written, LessonStatus::Passed | LessonStatus::Completed)
         }
     }
 }

@@ -2191,31 +2191,39 @@ fn check_object_states(cx: &mut Ctx<'_>, o: &Object, p: &str) {
                 format!("color {:?} is not #RRGGBB or #RRGGBBAA", c.0),
             );
         }
-        if let Some(src) = &s.src
-            && !src.is_empty()
-        {
+        if let Some(src) = &s.src {
             let obj_label = if o.name.trim().is_empty() {
                 o.id.as_str()
             } else {
                 o.name.as_str()
             };
-            if !matches!(o.kind, ObjectKind::Image { .. }) {
+            if src.trim().is_empty() {
                 cx.warn(
                     format!("{p}/states/{i}/src"),
                     format!(
-                        "State \u{201C}{}\u{201D} on \u{201C}{obj_label}\u{201D} sets an image, which only applies to image objects.",
+                        "State \u{201C}{}\u{201D} on \u{201C}{obj_label}\u{201D} has an empty image path; the base image will be used.",
                         s.name
                     ),
                 );
-            }
-            if !is_safe_relative_path(src) {
-                cx.warn(
-                    format!("{p}/states/{i}/src"),
-                    format!(
-                        "State \u{201C}{}\u{201D} on \u{201C}{obj_label}\u{201D} points at a file outside the course. Choose the image again from the state card.",
-                        s.name
-                    ),
-                );
+            } else {
+                if !matches!(o.kind, ObjectKind::Image { .. }) {
+                    cx.warn(
+                        format!("{p}/states/{i}/src"),
+                        format!(
+                            "State \u{201C}{}\u{201D} on \u{201C}{obj_label}\u{201D} sets an image, which only applies to image objects.",
+                            s.name
+                        ),
+                    );
+                }
+                if !is_safe_relative_path(src) {
+                    cx.warn(
+                        format!("{p}/states/{i}/src"),
+                        format!(
+                            "State \u{201C}{}\u{201D} on \u{201C}{obj_label}\u{201D} points at a file outside the course. Choose the image again from the state card.",
+                            s.name
+                        ),
+                    );
+                }
             }
         }
         let sp = format!("{p}/states/{i}");
