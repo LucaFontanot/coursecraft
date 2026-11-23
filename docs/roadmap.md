@@ -359,6 +359,10 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    shortcut and help, complete right-click menus.
 6. Dialog front-ends over existing commands: Trigger, Insert Slide / Insert Question, Player
    Properties, Publish.
+7. Settings panels (`docs/ui/panels.md`): every ↘ launcher opens a closable dock panel with all
+   the settings of its category, in place of Storyline's dialogs. M30 builds the registry, the
+   launcher wiring and Grid and Guides; the category panels follow in M31–M35, then
+   customization (sections, pinning, workspaces).
 
 The milestones after M30 switch the disabled buttons on, one area at a time. Each one moves rows
 in `docs/ui/feature-parity.md` to ✅ and flips the matching `NotYet` actions in the ribbon spec.
@@ -368,7 +372,8 @@ Order follows what testers ask for; this is the default.
 
 Clear formatting, text shadow, change case, highlight colour (new run field), text direction,
 numbering styles, vertical alignment in the ribbon, paste options (keep source, text only, Paste
-Special), Font, Paragraph and Size and Position dialogs, Create New Theme Fonts dialog, slide
+Special), the Text and Size and Position settings panels that the Font, Paragraph and Size and
+Position ↘ launchers open (`docs/ui/panels.md`), Create New Theme Fonts dialog, slide
 number field, symbol picker, insert variable reference, focus order dialog.
 
 ## M32 Pictures, buttons and media polish (planned)

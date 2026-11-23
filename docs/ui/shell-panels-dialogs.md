@@ -88,7 +88,7 @@ States tab: Edit States button, Initial state combo, one thumbnail per state, bu
 | Triggers: toolbar New, Edit, Copy, Paste, Delete, Up, Down; Group; Variables | ✅ | `triggers.rs`, `variables.rs`; check Copy/Paste |
 | Sections Object / Slide / Layer / Player triggers, sentence rows with inline links | ✅ | |
 | Slide Layers: base last, eye, New, Duplicate, Delete, Dim, properties ⚙ | ✅ | `layers.rs` |
-| Format / Animate / Slide / Course inspectors | CourseCraft extra | keep as the ↘ dialog-launcher target and as a dockable panel; Storyline uses dialogs instead |
+| Format / Animate / Slide / Course inspectors | CourseCraft extra | dock panels of their own (✅); every ↘ opens a settings panel instead of a dialog, see [panels.md](panels.md) |
 
 ## Context menus
 
@@ -135,8 +135,8 @@ New Slide ▸, New Scene, Apply Layout ▸, Duplicate, Delete, Rename, Move to S
 | Insert Question | New Slide › Graded/Survey/Custom | `toolbar::insert_question` | 🟡 same dialog, question tiles |
 | Player Properties | Home › Player | `course_settings.rs` | 🟡 own ribbon (Features, Menu, Resources, Glossary, Colors & Effects, Text Labels, Other) and live preview |
 | Publish | Home › Publish | `publish.rs` | 🟡 left list: Share for Review 🚫, Web ✅, Video ✅, Word ✅, LMS (SCORM 1.2, SCORM 2004, cmi5, xAPI) ✅; Properties links (Player, Quality, Publish scope, Tracking) |
-| Font, Paragraph | ↘ launchers | — | ⛔ |
-| Size and Position | ↘ launcher, context menu | inspector | ⛔ |
+| Font, Paragraph | ↘ launchers | — | ⛔ the Text settings panel ([panels.md](panels.md) step 2) |
+| Size and Position | ↘ launcher, context menu | inspector | ⛔ the Size and Position panel ([panels.md](panels.md) step 3) |
 | Find and Replace | Home › Find / Replace | `find.rs` | ✅ |
 | Characters, Photos, Illustrations, Videos | Insert › Library | — | 🚫 |
 | Media Library | Insert › Picture ▾ | `media_library.rs` | ✅ |

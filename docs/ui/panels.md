@@ -1,0 +1,156 @@
+# Settings panels: what the ↘ launcher opens
+
+> Part of [the ribbon plan](README.md). **Status:** planned. **Written:** 2026-11-23. Status marks
+> as in README. Long-term plan: it starts in M30 and grows with every milestone after it.
+
+In Storyline the ↘ in a group's caption opens a modal dialog (Font, Paragraph, Size and Position,
+Format Shape). CourseCraft opens a **dock panel** instead: the same settings, and more, in a panel
+the author can keep open, tab, split, float or close. A panel is where a category's advanced
+settings live. The ribbon keeps the common ones. The panel holds every setting of that category,
+including the ones Storyline hides in dialogs and the ones CourseCraft adds.
+
+Why a panel and not a dialog:
+
+- It stays open while the author works, so changing ten objects needs no reopening.
+- It follows the selection, like the inspectors already do.
+- It goes where the author wants it: tabbed with the inspectors, beside the canvas, on a second
+  screen.
+- It closes. Nothing is on screen that the author did not ask for.
+
+## Today (2026-11-23)
+
+### Dock panels
+
+`crates/ui-egui/src/dock.rs`, `Panel`:
+
+| Panel | Holds | Closable |
+|---|---|---|
+| Slides | scene and slide thumbnails (`slides.rs`) | yes |
+| Canvas | the slide being edited | no (protected) |
+| Timeline | bottom tabs Timeline, States, Triggers, Variables, Question (`timeline.rs` `BottomTab`), and Slide Layers on its right (`layers.rs`) | yes |
+| Format | inspector: Position & Size, Shape, Text, Image, Path, Effects, Frame, Rotate, Table (Rows, Columns, Cell, Borders), Draggable, Question, States, Accessibility (`properties.rs`) | yes |
+| Animate | inspector: Transition, Animations, Motion Paths | yes |
+| Slide | inspector: Draw, Master, Question, Notes, background, advance and revisit | yes |
+| Course | inspector: Title, Pass mark, Slides | yes |
+
+Closing: craft-ui closes a docked panel from its tab's menu (Close Panel, Close Tab Group, Close
+Other Panels in Group); a floating window draws a ×. View › Panels reopens any of them.
+
+### Launchers
+
+| Ribbon group | ↘ today |
+|---|---|
+| Home › Font | disabled: "the Font dialog" |
+| Home › Paragraph | disabled: "the Paragraph dialog" |
+| Home › Drawing | Format inspector |
+| Design › Background | Slide inspector |
+| Animations › Size and Position | Format inspector |
+| Contextual: Shape Styles, Button Styles, Picture Styles, Size and Position (×3), Video Options, Audio Options, Background | listed in [contextual-tabs.md](contextual-tabs.md), not wired |
+
+Every other group has no ↘.
+
+## Categories
+
+Every panel belongs to one of three families. View › Panels lists them in this order, one heading
+per family.
+
+| Family | What it is | Panels |
+|---|---|---|
+| **Workspace** | where the course is built | Slides, Canvas, Timeline, Layers, Notes |
+| **Inspectors** | quick settings for the selection, as today | Format, Animate, Slide, Course |
+| **Settings** | every setting of one category; opened by ↘ | the panels below |
+
+The settings panels, by category. "Today" says where those settings live now. "Adds" is what the
+panel holds that nothing holds today.
+
+| Panel | Opened by ↘ in | Today | Adds | Milestone |
+|---|---|---|---|---|
+| **Text** (sections Font, Paragraph, Text Box) | Home › Font, Home › Paragraph, Drawing Tools text groups | Format › Text | character spacing, caps, super/subscript, highlight, underline style; indents, spacing before and after, exact line spacing, tab stops; autofit, margins, columns, direction, vertical alignment | M31 |
+| **Shape Style** (Fill, Outline, Effects) | Home › Drawing, Shape Styles, Button Styles, Picture Styles | Format › Shape, Effects | gradient stop editor, dash, caps and joins, every shadow, glow, reflection, soft edge and bevel parameter, save as style | M31, M32 |
+| **Size and Position** | Size and Position (Drawing, Button, Picture tools), Animations › Size and Position | Format › Position & Size, Rotate, Frame | lock aspect ratio, scale %, reset to original size, numeric crop, anchor point, zoom picture | M31, M32 |
+| **Media** (Picture, Video, Audio) | Video Options, Audio Options | Format › Image, Frame; Timeline › media timing | volume, fade in and out, trim, playback and controls, captions, compression | M32 |
+| **Table** | Table Tools groups | Format › Rows, Columns, Cell, Borders | cell margins, merge and split, banded rows, border presets | M32 |
+| **Animation** | Animations › Entrance, Exit, Emphasis, Motion, Advanced | Animate › Animations, Motion Paths | easing, sequence by paragraph, path orientation and relative start, timing in seconds | M34 |
+| **Transition** | Transitions › Timing | Animate › Transition | per-layer transitions, direction options | M34 |
+| **Slide Properties** | Design › Background, Design › Options, Slides › Slide | Slide inspector | background styles (gradient, picture), hide background graphics, swipe, player overrides | M33 |
+| **Theme** | Design › Themes | `theme_dialog.rs` window | every colour slot, theme fonts, save and share a theme | M31, M33 |
+| **Course and Player** | Design › Setup | Course inspector, `course_settings.rs` window | player features, menu, resources, glossary, text labels | M33 |
+| **Triggers** | Insert › Interactive | Timeline › Triggers tab | the trigger form as a panel (Action, target, When, Object, Conditions) | M33 |
+| **States** | Drawing Tools › States | Timeline › States tab | — (moves out) | M33 |
+| **Variables** | Triggers › Variables | Timeline › Variables tab | — (moves out) | M33 |
+| **Question** | Slides › Questions, Question Tools | Timeline › Question tab, Format › Question | feedback, scoring and attempts in one place | M33 |
+| **Accessibility** | context menu Accessibility…, Home › Drawing | `alt_text.rs` window, Format › Accessibility | focus order, tab order, contrast check | M31 |
+| **Grid and Guides** | View › Show | View toggles | grid spacing, snap options, guide list, ruler units | M30 |
+| **AI** | AI › Write, Media, Assess, Agents | `ai_settings.rs`, `connect_agent.rs` windows | chat with the connected agent, generation history, voices | M35 |
+
+Layers and Notes move from the Timeline panel to Workspace panels of their own, as
+[shell-panels-dialogs.md](shell-panels-dialogs.md) › step 6 already plans.
+
+## Rules
+
+1. **Every ↘ opens a panel.** In the ribbon spec a launcher is
+   `Ui(UiAction::PanelAt(panel, section))` or `NotYet("the <name> panel")`. No launcher opens a
+   modal dialog. A launcher whose panel is not built is drawn disabled with its reason.
+2. **One panel, many launchers.** Font ↘ and Paragraph ↘ both open Text: one at Font, one at
+   Paragraph. The panel scrolls to that section and flashes its header.
+3. **↘ only reveals.** A closed panel reopens where it was last, or at its default place: tabbed
+   with the inspectors. An open panel comes to the front. ↘ never closes.
+4. **Every panel closes,** except Canvas. A closed panel comes back from its ↘, from View ›
+   Panels, or from the context menu entry that names it. Docking off (Preferences › Interface):
+   the panel opens as a floating window with a ×.
+5. **One body of code per section.** A section (Font, Fill, Position…) is one function drawn in
+   two modes: *quick* in an inspector, *full* in its panel. An inspector section header carries
+   its own ↘ that opens the full panel at that section. No control is written twice.
+6. **Panels follow the selection.** With nothing that the panel applies to, its controls are drawn
+   disabled with the reason ("Select a shape to change its style"). Nothing is hidden.
+7. **Missing features are drawn disabled,** as in the ribbon, and counted in
+   [feature-parity.md](feature-parity.md).
+8. **Every change is an engine command.** Panels dispatch; undo works as everywhere else.
+9. **A saved layout survives new panels.** A panel the saved layout does not know opens at its
+   default place; a name the build does not know is dropped. The layout never resets for that.
+
+## Customization (later)
+
+The panels are the base for the customization testers ask for. In order:
+
+1. **Sections:** collapse, expand and reorder sections in a panel; remembered per panel.
+2. **Pin to inspector:** a full-panel section can be pinned into an inspector, so an author's
+   inspector holds exactly what they use.
+3. **Workspaces:** View › Workspace ▾ with presets (Build, Animate, Review, Compact) and Save
+   Current Workspace. A workspace is a saved dock layout.
+4. **Custom panels:** the author picks sections from any category into a panel of their own.
+5. **Ribbon and QAT:** right-click any control › Add to Quick Access Toolbar, Show ↘ panel.
+
+## Code
+
+- `crates/ui-egui/src/panels/registry.rs`: one `PanelSpec` per panel: `Panel`, title, icon,
+  family, default place, sections. `Panel::ALL`, View › Panels and the default layout come from
+  it.
+- `crates/ui-egui/src/panels/<category>.rs`: the sections of one category, each
+  `fn show(editor, ui, mode: SectionMode)`. The inspectors in `properties.rs` call the same
+  functions in `SectionMode::Quick`.
+- `ribbon/spec.rs`: `UiAction::PanelAt(Panel, Section)`; launchers point there.
+- Tests (`panels_tests.rs`):
+  - every `Panel` has a spec, and every spec section exists;
+  - every launcher in the spec opens a registered panel at one of its sections, or is `NotYet`;
+  - ↘ on a closed panel opens it, on a shown panel keeps it shown;
+  - every panel but Canvas closes and comes back from View › Panels;
+  - a layout saved without a panel loads, and the panel opens at its default place;
+  - a layout naming an unknown panel loads without it.
+
+## Order of work
+
+| Step | What | Closes |
+|---|---|---|
+| 1 | Registry, `PanelAt`, the tolerant layout loader, View › Panels by family, the tests above; Format/Slide launchers move to `PanelAt` | the infrastructure |
+| 2 | **Text** panel; Font ↘ and Paragraph ↘ switch on | Font and Paragraph dialogs (M31) |
+| 3 | **Size and Position** and **Shape Style**; Drawing ↘ and the contextual launchers | Size and Position dialog, Format Shape (M31) |
+| 4 | **Layers**, **Notes**, **Triggers**, **States**, **Variables**, **Question** as panels of their own | shell step 6 (M33) |
+| 5 | **Animation** and **Transition** | M34 |
+| 6 | **Slide Properties**, **Theme**, **Course and Player**, **Grid and Guides** | M33 |
+| 7 | **Media**, **Table**, **Accessibility** | M32 |
+| 8 | **AI** panel with agent chat | M35 |
+| 9 | Customization 1–3 | after M35 |
+
+Each step updates this file, [ribbon.md](ribbon.md) or [contextual-tabs.md](contextual-tabs.md),
+and [feature-parity.md](feature-parity.md) in the same commit.

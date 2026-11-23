@@ -153,7 +153,7 @@ Shown when the Course Map view tab is active.
 | | Highlight | SS | `text.style_range` `{highlight}` (new field) | ⛔ | text runs have no highlight colour yet |
 | | Font Color | SS | `text.style_range` `{color}` | ✅ | theme colours + eyedropper (`eyedropper.rs`) |
 | | Spelling | S | `ui:spellCheck` | ✅ | `spell_check.rs` |
-| | ↘ Font dialog | — | `ui:dialog.font` (new) | ⛔ | |
+| | ↘ Font | — | `ui:panel.text#font` (new) | ⛔ | opens the Text panel ([panels.md](panels.md)) |
 | Paragraph ↘ | Bullets | SS | `text.set_paragraph` `{bullet}` | ✅ | ▾ bullet symbols |
 | | Numbering | SS | `text.set_paragraph` `{numbering}` | 🟡 | verify numbering styles |
 | | Decrease / Increase Indent | S | `text.set_paragraph` `{indent}` | ✅ | |
@@ -162,7 +162,7 @@ Shown when the Course Map view tab is active.
 | | Text Direction | SS | — | ⛔ | horizontal, rotate 90°/270°, stacked |
 | | Align Text | SS | `object.update` `{v_align}` | 🟡 | top / middle / bottom; verify field |
 | | Find / Replace | SS | `course.find`, `course.replace` | ✅ | `find.rs` |
-| | ↘ Paragraph dialog | — | `ui:dialog.paragraph` (new) | ⛔ | |
+| | ↘ Paragraph | — | `ui:panel.text#paragraph` (new) | ⛔ | opens the Text panel ([panels.md](panels.md)) |
 | Drawing ↘ | Arrange | LS | `object.reorder`, `object.align`, `object.distribute`, `object.group` | ✅ | ▾ Order, Group, Align, Rotate (as Edit › Order/Align) |
 | | Quick Styles | LS | `object.apply_style` | ✅ | |
 | | Shape Fill | SS | `object.set_fill_style` | ✅ | |
