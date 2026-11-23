@@ -319,7 +319,7 @@ From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Sugges
 
 A Storyline 360 author should find every command where they look for it. Plan and full inventory:
 `docs/ui/` (start at `docs/ui/README.md`), taken from public beginner tutorials. Feature-level
-status: `docs/ui/feature-parity.md` (2026-11-23: 103 built, 39 partly, 65 not yet, 12 not
+status: `docs/ui/feature-parity.md` (2026-11-23: 105 built, 38 partly, 64 not yet, 12 not
 planned). Clean-room: same tabs, groups and order; our own look and coined names. Hand checks:
 `docs/release-checklist.md` § 9.
 
@@ -337,11 +337,16 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    `crates/ui-egui/src/ribbon/` (`spec.rs`, `widgets.rs`, `mod.rs`), View › Ribbon, Home in both
    variants, the other tabs drawn with a "being built" note. **Docking built (2026-11-23):**
    `crates/ui-egui/src/dock.rs` hosts slides, canvas, timeline and Inspector in a
-   `craft_ui::docking` workspace behind View › Docked Panels, with Reset Panel Layout. Still
-   open: saving the layout, closing and reopening panels, and making both the default.
+   `craft_ui::docking` workspace, with Reset Panel Layout. **Saved and on by default
+   (2026-11-23):** the arrangement goes to `prefs.json`, View › Panels closes and reopens
+   panels, and Preferences › Interface turns the ribbon and docking off.
 2. Every main tab (File, Home, Insert, Slides, Design, Transitions, Animations, View, Help) with
    built controls wired and the rest **drawn disabled** with a "Not available yet" or "Not planned"
-   tooltip; the shared New Slide ▾ menu.
+   tooltip; the shared New Slide ▾ menu. **Insert, Slides and View built (2026-11-23)**, with a
+   quick access toolbar (Save, Undo, Redo), Ctrl+F1, and groups that shrink to one button when
+   the window is narrow. The ribbon replaces the flat toolbar and the menu bar's Insert menu;
+   the Inspector switches its Format, Animate, Slide and Course tabs itself. Still open: Design,
+   Transitions, Animations, Help and the File page.
 3. Contextual tabs (Drawing, Picture, Button, Audio/Video, Table, Question Tools) and modes (Slide
    Master, Preview); then the menu bar and flat toolbar go, the quick access toolbar arrives.
 4. File page (the welcome screen restyled: start actions, Recent with thumbnails, Close project).

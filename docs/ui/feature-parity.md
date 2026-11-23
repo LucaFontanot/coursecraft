@@ -18,14 +18,14 @@
 | Text | 12 | 3 | 9 | 0 |
 | Shapes, pictures and buttons | 13 | 5 | 11 | 0 |
 | Media | 10 | 3 | 5 | 1 |
-| Interactivity | 13 | 2 | 2 | 0 |
+| Interactivity | 12 | 3 | 2 | 0 |
 | Animation, transitions, timeline | 10 | 3 | 9 | 0 |
 | Questions and quizzes | 9 | 3 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
-| Editor shell and panels | 8 | 10 | 4 | 0 |
+| Editor shell and panels | 11 | 8 | 3 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **103** | **39** | **65** | **12** |
+| **Total** | **105** | **38** | **64** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -163,7 +163,7 @@ Counted from the tables below; recount when a row changes.
 | Triggers: actions, events, conditions | `trigger.*` | ✅ | — |
 | Object / slide / layer / player trigger sections | `triggers.rs` | ✅ | — |
 | Variables | `variable.*` | ✅ | — |
-| Buttons, hotspots, markers | `object.add`, `object.set_marker` | ✅ | — |
+| Buttons, hotspots, markers | `object.add`, `object.set_marker`; no hotspot object yet (hotspot questions and the Hotspot reveal interaction only) | 🟡 | M30 |
 | Sliders, dials | `Slider`, `Dial` | ✅ | — |
 | Text entry, checkbox, radio buttons | `object.set_input` | ✅ | — |
 | Drag and drop | `object.set_drag` | ✅ | — |
@@ -271,12 +271,12 @@ Counted from the tables below; recount when a row changes.
 | Right-click menus complete (canvas, timeline, scenes) | | 🟡 | M30 |
 | Collapse panels | | 🟡 | M30 |
 | Slide Properties in the Course Map | | 🟡 | M30 |
-| **Tabbed ribbon** with contextual tabs | View › Ribbon: tab strip and Home (`ribbon/`); other tabs and contextual tabs to come | 🟡 | M30 |
-| Quick access toolbar | — | ⛔ | M30 |
-| Collapse ribbon | click the open tab (behind View › Ribbon) | 🟡 | M30 |
+| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): Home, Insert, Slides, View; Design, Transitions, Animations, Help, File and the contextual tabs to come | 🟡 | M30 |
+| Quick access toolbar | Save, Undo, Redo left of the tab strip; Customize to come | 🟡 | M30 |
+| Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |
 | View tabs for open slides | — | ⛔ | M30 |
-| Undock / float / redock panels | View › Docked Panels (`dock.rs`, craft-ui docking); not saved yet, no Close | 🟡 | M30 |
-| Reset panel layout | View › Reset Panel Layout (docked panels) | 🟡 | M30 |
+| Undock / float / redock panels | docked by default (`dock.rs`, craft-ui docking): move, tab, float, close and reopen (View › Panels); the arrangement is saved in the preferences; Preferences › Interface turns it off | ✅ | — |
+| Reset panel layout | View › Panels › Reset Panel Layout | ✅ | — |
 | Slide-flow arrows in the Scenes panel | — | ⛔ | M30 |
 | Comments tab | — | ⛔ needs review workflow | — |
 

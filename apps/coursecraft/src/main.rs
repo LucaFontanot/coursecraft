@@ -377,6 +377,7 @@ impl EditorApp {
         editor.set_automation_enabled(prefs.automation_enabled);
         editor.set_theme_pref(prefs.theme.into());
         editor.set_language(&prefs.language);
+        editor.set_layout_prefs(&prefs.layout());
         editor.set_coach_marks_done(prefs.coach_marks_done);
         editor.set_preferences(prefs.autosave_minutes_clamped(), prefs.default_slide.size());
         editor.set_versions_to_keep(prefs.versions_to_keep_clamped());
@@ -1105,6 +1106,13 @@ impl EditorApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    /// Write the preferences file, when there is a config folder.
+    fn persist_prefs(&self) {
+        if let Some(ref dir) = self.config_dir {
+            let _ = prefs::save_prefs(dir, &self.prefs);
+        }
+    }
+
     fn handle_request(&mut self, req: EditorRequest, ctx: &egui::Context) {
         match req {
             EditorRequest::New => self.guard_unsaved(PendingAction::New, ctx),
@@ -1360,12 +1368,14 @@ impl EditorApp {
                     let _ = prefs::save_prefs(dir, &self.prefs);
                 }
             }
+            EditorRequest::SaveLayout(layout) => {
+                self.prefs.set_layout(layout);
+                self.persist_prefs();
+            }
             EditorRequest::SetLanguage(setting) => {
                 self.editor.set_language(&setting);
                 self.prefs.language.clone_from(&self.editor.language);
-                if let Some(ref dir) = self.config_dir {
-                    let _ = prefs::save_prefs(dir, &self.prefs);
-                }
+                self.persist_prefs();
                 ctx.request_repaint();
             }
             EditorRequest::SetTheme(theme_pref) => {

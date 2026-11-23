@@ -77,6 +77,13 @@ impl TestHarness {
         ctx.set_global_style(style);
         let screen_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(w / zoom, h / zoom));
         let mut editor = Editor::new(course);
+        // The existing UI tests drive the flat toolbar and the fixed panels; tests of
+        // the ribbon and the docked panels turn them on (`with_new_layout`).
+        editor.set_layout_prefs(&crate::dock::LayoutPrefs {
+            ribbon: false,
+            docked: false,
+            workspace: None,
+        });
         editor.set_theme_pref(match mode {
             coursecraft_render::ThemeMode::Dark => coursecraft_render::ThemePref::Dark,
             coursecraft_render::ThemeMode::Light => coursecraft_render::ThemePref::Light,

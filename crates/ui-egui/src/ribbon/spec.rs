@@ -112,6 +112,56 @@ pub enum UiAction {
     Player,
     Preview,
     Publish,
+    // Insert
+    SlideLayer,
+    Picture,
+    MediaLibrary,
+    Shape,
+    Video,
+    Audio,
+    RecordNarration,
+    WebObject,
+    Lottie,
+    TextBox,
+    Table,
+    Button,
+    Slider,
+    Dial,
+    InputText,
+    InputCheckbox,
+    InputRadio,
+    Marker,
+    ScrollPanel,
+    Trigger,
+    Interaction,
+    // Slides
+    Question,
+    ResultsSlide,
+    Certificate,
+    ImportPptx,
+    ImportQuestions,
+    ImportDocument,
+    ImportOutline,
+    SlideMaster,
+    // View
+    CourseMap,
+    SlideView,
+    ZoomFit,
+    ZoomIn,
+    ZoomOut,
+    Zoom100,
+    Rulers,
+    Grid,
+    Guides,
+    SnapToGrid,
+    SnapToGuides,
+    PanelSlides,
+    PanelTimeline,
+    PanelInspector,
+    ResetPanels,
+    ThemeLight,
+    ThemeDark,
+    ThemeSystem,
 }
 
 /// A split control's ▾ menu.
@@ -133,12 +183,16 @@ pub enum UiMenu {
     Preview,
     /// Arrange ▾ (the Arrange menu's commands).
     Arrange,
+    /// Shape ▾ (the shape gallery).
+    Shapes,
+    /// Question ▾ (the question kinds).
+    Questions,
 }
 
 /// Why a control whose feature exists is not wired to the ribbon yet (M30 step 2).
 pub const WIRING_FORMAT: &str = "ribbon wiring (use the Format inspector)";
 const WIRING_SLIDE: &str = "ribbon wiring (use the Slide inspector)";
-const WIRING_BANKS: &str = "ribbon wiring (use Insert › Question Bank)";
+const WIRING_BANKS: &str = "ribbon wiring (use Question banks in the slides panel)";
 
 const fn item(
     id: &'static str,
@@ -831,6 +885,758 @@ const HOME_MAP: &[Group] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// Insert
+// ---------------------------------------------------------------------------
+
+const PICTURE_MENU: &[Item] = &[
+    item(
+        "picture.file",
+        "Picture from File…",
+        Icon::Image,
+        Small,
+        Ui(UiAction::Picture),
+    ),
+    item(
+        "picture.library",
+        "Media Library…",
+        Icon::FolderOpen,
+        Small,
+        Ui(UiAction::MediaLibrary),
+    ),
+    item(
+        "picture.screenshot",
+        "Screenshot",
+        Icon::Monitor,
+        Small,
+        NotYet("screenshots"),
+    ),
+];
+
+const VIDEO_MENU: &[Item] = &[
+    item(
+        "video.file",
+        "Video from File…",
+        Icon::FilmStrip,
+        Small,
+        Ui(UiAction::Video),
+    ),
+    item(
+        "video.website",
+        "Video from Website…",
+        Icon::Link,
+        Small,
+        Ui(UiAction::WebObject),
+    ),
+    item(
+        "video.webcam",
+        "Record Webcam",
+        Icon::VideoCamera,
+        Small,
+        NotYet("webcam recording"),
+    ),
+    item(
+        "video.library",
+        "Media Library…",
+        Icon::FolderOpen,
+        Small,
+        Ui(UiAction::MediaLibrary),
+    ),
+];
+
+const AUDIO_MENU: &[Item] = &[
+    item(
+        "audio.file",
+        "Audio from File…",
+        Icon::SpeakerHigh,
+        Small,
+        Ui(UiAction::Audio),
+    ),
+    item(
+        "audio.library",
+        "Media Library…",
+        Icon::FolderOpen,
+        Small,
+        Ui(UiAction::MediaLibrary),
+    ),
+    item(
+        "audio.record",
+        "Record Mic…",
+        Icon::Headphones,
+        Small,
+        Ui(UiAction::RecordNarration),
+    ),
+    item(
+        "audio.tts",
+        "Text-to-Speech…",
+        Icon::SpeakerHigh,
+        Small,
+        Ui(UiAction::NarrationFromText),
+    ),
+    item(
+        "audio.ai",
+        "AI Audio",
+        Icon::Sparkle,
+        Small,
+        NotYet("AI sound effects and music"),
+    ),
+    item(
+        "audio.options",
+        "Options…",
+        Icon::Gear,
+        Small,
+        NotYet("the course audio options"),
+    ),
+];
+
+const INPUT_MENU: &[Item] = &[
+    item(
+        "input.text",
+        "Text Entry",
+        Icon::TextT,
+        Small,
+        Ui(UiAction::InputText),
+    ),
+    item(
+        "input.checkbox",
+        "Checkbox",
+        Icon::CheckSquare,
+        Small,
+        Ui(UiAction::InputCheckbox),
+    ),
+    item(
+        "input.radio",
+        "Radio Buttons",
+        Icon::RadioButton,
+        Small,
+        Ui(UiAction::InputRadio),
+    ),
+];
+
+const INSERT: &[Group] = &[
+    Group {
+        id: "insert.slide",
+        label: "Slide",
+        launcher: None,
+        items: &[
+            helped(
+                item(
+                    "insert.slide_layer",
+                    "Slide Layer",
+                    Icon::Stack,
+                    Large,
+                    Ui(UiAction::SlideLayer),
+                ),
+                "Add a layer to the current slide.",
+            ),
+            item(
+                "insert.convert_question",
+                "Convert to Custom Question",
+                Icon::Question,
+                Large,
+                NotYet("turning a slide's objects into a custom question"),
+            ),
+            item(
+                "insert.zoom_region",
+                "Zoom Region",
+                Icon::MagnifyingGlassPlus,
+                Large,
+                NotYet("zoom regions"),
+            ),
+        ],
+    },
+    Group {
+        id: "insert.library",
+        label: "Library",
+        launcher: None,
+        items: &[
+            item(
+                "insert.characters",
+                "Characters",
+                Icon::Robot,
+                Large,
+                NotPlanned("characters"),
+            ),
+            item(
+                "insert.photos",
+                "Photos",
+                Icon::Image,
+                Large,
+                NotPlanned("a content library"),
+            ),
+            item(
+                "insert.illustrations",
+                "Illustrations",
+                Icon::Palette,
+                Small,
+                NotPlanned("a content library"),
+            ),
+            item(
+                "insert.icons",
+                "Icons",
+                Icon::Shapes,
+                Small,
+                NotYet("a bundled icon set"),
+            ),
+            item(
+                "insert.videos",
+                "Videos",
+                Icon::FilmStrip,
+                Small,
+                NotPlanned("a content library"),
+            ),
+        ],
+    },
+    Group {
+        id: "insert.media",
+        label: "Media",
+        launcher: None,
+        items: &[
+            helped(
+                split(
+                    "insert.picture",
+                    "Picture",
+                    Icon::Image,
+                    LargeSplit,
+                    Ui(UiAction::Picture),
+                    Menu::Items(PICTURE_MENU),
+                ),
+                "Insert a picture from a file.",
+            ),
+            item(
+                "insert.image_360",
+                "360° Image",
+                Icon::Circle,
+                Large,
+                NotPlanned("360° images"),
+            ),
+            helped(
+                split(
+                    "insert.shape",
+                    "Shape",
+                    Icon::Shapes,
+                    LargeSplit,
+                    Ui(UiAction::Shape),
+                    Menu::Ui(UiMenu::Shapes),
+                ),
+                "Pick a shape, then drag on the slide.",
+            ),
+            item(
+                "insert.caption",
+                "Caption",
+                Icon::Subtitles,
+                LargeSplit,
+                NotYet("callout shapes"),
+            ),
+            split(
+                "insert.video",
+                "Video",
+                Icon::FilmStrip,
+                LargeSplit,
+                Ui(UiAction::Video),
+                Menu::Items(VIDEO_MENU),
+            ),
+            split(
+                "insert.audio",
+                "Audio",
+                Icon::SpeakerHigh,
+                LargeSplit,
+                Ui(UiAction::Audio),
+                Menu::Items(AUDIO_MENU),
+            ),
+            helped(
+                item(
+                    "insert.web_object",
+                    "Web Object",
+                    Icon::Link,
+                    Large,
+                    Ui(UiAction::WebObject),
+                ),
+                "Embed a web page or a video from a website.",
+            ),
+            helped(
+                item(
+                    "insert.lottie",
+                    "Animation",
+                    Icon::Sparkle,
+                    Large,
+                    Ui(UiAction::Lottie),
+                ),
+                "Insert a Lottie animation.",
+            ),
+        ],
+    },
+    Group {
+        id: "insert.text",
+        label: "Text",
+        launcher: None,
+        items: &[
+            helped(
+                item(
+                    "insert.text_box",
+                    "Text Box",
+                    Icon::TextT,
+                    Large,
+                    Ui(UiAction::TextBox),
+                ),
+                "Drag on the slide to place a text box.",
+            ),
+            item(
+                "insert.table",
+                "Table",
+                Icon::Rows,
+                Large,
+                Ui(UiAction::Table),
+            ),
+            item(
+                "insert.slide_number",
+                "Slide Number",
+                Icon::ListNumbers,
+                Large,
+                NotYet("slide number fields"),
+            ),
+            item(
+                "insert.symbol",
+                "Symbol",
+                Icon::TextAa,
+                Small,
+                NotYet("the symbol picker"),
+            ),
+            item(
+                "insert.reference",
+                "Reference",
+                Icon::BracketsCurly,
+                Small,
+                NotYet("inserting a variable reference"),
+            ),
+            item(
+                "insert.hyperlink",
+                "Hyperlink",
+                Icon::Link,
+                Small,
+                NotYet(WIRING_FORMAT),
+            ),
+        ],
+    },
+    Group {
+        id: "insert.interactive",
+        label: "Interactive Objects",
+        launcher: None,
+        items: &[
+            helped(
+                item(
+                    "insert.button",
+                    "Button",
+                    Icon::CursorClick,
+                    Large,
+                    Ui(UiAction::Button),
+                ),
+                "Drag on the slide to place a button.",
+            ),
+            item(
+                "insert.slider",
+                "Slider",
+                Icon::SlidersHorizontal,
+                Large,
+                Ui(UiAction::Slider),
+            ),
+            item(
+                "insert.dial",
+                "Dial",
+                Icon::Timer,
+                Large,
+                Ui(UiAction::Dial),
+            ),
+            item(
+                "insert.hotspot",
+                "Hotspot",
+                Icon::Target,
+                Large,
+                NotYet("hotspot objects (a hotspot question has its own)"),
+            ),
+            split(
+                "insert.input",
+                "Input",
+                Icon::TextColumns,
+                LargeSplit,
+                Ui(UiAction::InputText),
+                Menu::Items(INPUT_MENU),
+            ),
+            item(
+                "insert.marker",
+                "Marker",
+                Icon::Flag,
+                Large,
+                Ui(UiAction::Marker),
+            ),
+            helped(
+                item(
+                    "insert.trigger",
+                    "Trigger",
+                    Icon::Lightning,
+                    Small,
+                    Ui(UiAction::Trigger),
+                ),
+                "Add a trigger to the selected object or the slide.",
+            ),
+            item(
+                "insert.scroll_panel",
+                "Scrolling Panel",
+                Icon::ArrowsDownUp,
+                Small,
+                Ui(UiAction::ScrollPanel),
+            ),
+            item(
+                "insert.mouse",
+                "Mouse",
+                Icon::Cursor,
+                Small,
+                NotYet("a custom cursor per slide"),
+            ),
+            helped(
+                item(
+                    "insert.interaction",
+                    "Interaction",
+                    Icon::SquaresFour,
+                    Large,
+                    Ui(UiAction::Interaction),
+                ),
+                "Tabs, accordions, flip cards and more, built from layers and triggers.",
+            ),
+        ],
+    },
+    PUBLISH,
+];
+
+// ---------------------------------------------------------------------------
+// Slides
+// ---------------------------------------------------------------------------
+
+const IMPORT_MENU: &[Item] = &[
+    item(
+        "import.pptx",
+        "PowerPoint…",
+        Icon::MicrosoftPowerpointLogo,
+        Small,
+        Ui(UiAction::ImportPptx),
+    ),
+    item(
+        "import.questions",
+        "Questions from CSV…",
+        Icon::ListChecks,
+        Small,
+        Ui(UiAction::ImportQuestions),
+    ),
+    item(
+        "import.document",
+        "Course from Document…",
+        Icon::Article,
+        Small,
+        Ui(UiAction::ImportDocument),
+    ),
+    item(
+        "import.outline",
+        "Slides from Outline…",
+        Icon::ListBullets,
+        Small,
+        Ui(UiAction::ImportOutline),
+    ),
+];
+
+const SLIDES: &[Group] = &[
+    Group {
+        id: "slides.slide",
+        label: "Slide",
+        launcher: None,
+        items: &[
+            Item {
+                id: "slides.new_slide",
+                ..NEW_SLIDE
+            },
+            split(
+                "slides.import",
+                "Import",
+                Icon::FilePlus,
+                LargeSplit,
+                Ui(UiAction::ImportPptx),
+                Menu::Items(IMPORT_MENU),
+            ),
+            item(
+                "slides.duplicate",
+                "Duplicate",
+                Icon::Copy,
+                Small,
+                Ui(UiAction::DuplicateSlide),
+            ),
+        ],
+    },
+    Group {
+        id: "slides.scene",
+        label: "Scene",
+        launcher: None,
+        items: &[helped(
+            item(
+                "slides.new_scene",
+                "New Scene",
+                Icon::PlusSquare,
+                Large,
+                Ui(UiAction::NewScene),
+            ),
+            "Add a scene that starts with one slide.",
+        )],
+    },
+    Group {
+        id: "slides.questions",
+        label: "Questions",
+        launcher: None,
+        items: &[
+            helped(
+                split(
+                    "slides.question",
+                    "Question",
+                    Icon::Question,
+                    LargeSplit,
+                    Ui(UiAction::Question),
+                    Menu::Ui(UiMenu::Questions),
+                ),
+                "Add a question slide: pick the kind.",
+            ),
+            item(
+                "slides.banks",
+                "Question Banks",
+                Icon::Cards,
+                LargeSplit,
+                NotYet(WIRING_BANKS),
+            ),
+            item(
+                "slides.results",
+                "Results Slide",
+                Icon::Trophy,
+                Large,
+                Ui(UiAction::ResultsSlide),
+            ),
+            item(
+                "slides.certificate",
+                "Certificate",
+                Icon::GraduationCap,
+                Large,
+                Ui(UiAction::Certificate),
+            ),
+        ],
+    },
+    Group {
+        id: "slides.masters",
+        label: "Masters",
+        launcher: None,
+        items: &[
+            item(
+                "slides.slide_master",
+                "Slide Master",
+                Icon::Layout,
+                Large,
+                Ui(UiAction::SlideMaster),
+            ),
+            item(
+                "slides.feedback_master",
+                "Feedback Master",
+                Icon::Layout,
+                Large,
+                NotYet("feedback masters"),
+            ),
+        ],
+    },
+    PUBLISH,
+];
+
+// ---------------------------------------------------------------------------
+// View
+// ---------------------------------------------------------------------------
+
+const VIEW: &[Group] = &[
+    Group {
+        id: "view.views",
+        label: "Views",
+        launcher: None,
+        items: &[
+            helped(
+                item(
+                    "view.course_map",
+                    "Course Map",
+                    Icon::SquaresFour,
+                    Large,
+                    Ui(UiAction::CourseMap),
+                ),
+                "Every scene and slide, with how they link.",
+            ),
+            item(
+                "view.slide",
+                "Slide",
+                Icon::Presentation,
+                Large,
+                Ui(UiAction::SlideView),
+            ),
+            item(
+                "view.slide_master",
+                "Slide Master",
+                Icon::Layout,
+                Large,
+                Ui(UiAction::SlideMaster),
+            ),
+            item(
+                "view.feedback_master",
+                "Feedback Master",
+                Icon::Layout,
+                Large,
+                NotYet("feedback masters"),
+            ),
+        ],
+    },
+    Group {
+        id: "view.zoom",
+        label: "Zoom",
+        launcher: None,
+        items: &[
+            item(
+                "view.fit",
+                "Fit in Window",
+                Icon::CornersIn,
+                Large,
+                Ui(UiAction::ZoomFit),
+            ),
+            item(
+                "view.zoom_in",
+                "Zoom In",
+                Icon::MagnifyingGlassPlus,
+                Small,
+                Ui(UiAction::ZoomIn),
+            ),
+            item(
+                "view.zoom_out",
+                "Zoom Out",
+                Icon::MagnifyingGlassMinus,
+                Small,
+                Ui(UiAction::ZoomOut),
+            ),
+            item(
+                "view.zoom_100",
+                "100%",
+                Icon::MagnifyingGlass,
+                Small,
+                Ui(UiAction::Zoom100),
+            ),
+        ],
+    },
+    Group {
+        id: "view.show",
+        label: "Show",
+        launcher: None,
+        items: &[
+            item(
+                "view.rulers",
+                "Rulers",
+                Icon::Rows,
+                Small,
+                Ui(UiAction::Rulers),
+            ),
+            item(
+                "view.grid",
+                "Grid",
+                Icon::SquaresFour,
+                Small,
+                Ui(UiAction::Grid),
+            ),
+            item(
+                "view.guides",
+                "Guides",
+                Icon::Plus,
+                Small,
+                Ui(UiAction::Guides),
+            ),
+            item(
+                "view.snap_grid",
+                "Snap to Grid",
+                Icon::Selection,
+                Small,
+                Ui(UiAction::SnapToGrid),
+            ),
+            item(
+                "view.snap_guides",
+                "Snap to Guides",
+                Icon::SelectionPlus,
+                Small,
+                Ui(UiAction::SnapToGuides),
+            ),
+        ],
+    },
+    Group {
+        id: "view.panels",
+        label: "Panels",
+        launcher: None,
+        items: &[
+            item(
+                "view.panel_slides",
+                "Slides",
+                Icon::SidebarSimple,
+                Small,
+                Ui(UiAction::PanelSlides),
+            ),
+            item(
+                "view.panel_timeline",
+                "Timeline",
+                Icon::Clock,
+                Small,
+                Ui(UiAction::PanelTimeline),
+            ),
+            item(
+                "view.panel_inspector",
+                "Inspector",
+                Icon::SlidersHorizontal,
+                Small,
+                Ui(UiAction::PanelInspector),
+            ),
+            helped(
+                item(
+                    "view.reset_panels",
+                    "Reset Panels",
+                    Icon::ArrowCounterClockwise,
+                    Small,
+                    Ui(UiAction::ResetPanels),
+                ),
+                "Put every panel back where it starts.",
+            ),
+        ],
+    },
+    Group {
+        id: "view.theme",
+        label: "Theme",
+        launcher: None,
+        items: &[
+            item(
+                "view.light",
+                "Light",
+                Icon::Sun,
+                Small,
+                Ui(UiAction::ThemeLight),
+            ),
+            item(
+                "view.dark",
+                "Dark",
+                Icon::Moon,
+                Small,
+                Ui(UiAction::ThemeDark),
+            ),
+            item(
+                "view.system",
+                "Match System",
+                Icon::Monitor,
+                Small,
+                Ui(UiAction::ThemeSystem),
+            ),
+        ],
+    },
+    PUBLISH,
+];
+
+// ---------------------------------------------------------------------------
 // The strip
 // ---------------------------------------------------------------------------
 
@@ -847,14 +1653,14 @@ pub const TABS: &[Tab] = &[
         id: "insert",
         label: "Insert",
         when: TabWhen::SlideOpen,
-        groups: &[],
+        groups: INSERT,
         map_groups: None,
     },
     Tab {
         id: "slides",
         label: "Slides",
         when: TabWhen::Always,
-        groups: &[],
+        groups: SLIDES,
         map_groups: None,
     },
     Tab {
@@ -882,7 +1688,7 @@ pub const TABS: &[Tab] = &[
         id: "view",
         label: "View",
         when: TabWhen::Always,
-        groups: &[],
+        groups: VIEW,
         map_groups: None,
     },
     Tab {

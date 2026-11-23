@@ -1507,3 +1507,34 @@ fn language_preference_round_trips_and_defaults_to_auto() {
     save_prefs(&dir, &prefs).expect("save prefs");
     assert_eq!(load_prefs(&dir).language, "fr");
 }
+
+#[test]
+fn layout_preferences_default_on_and_round_trip() {
+    let dir = scratch_dir("prefs-layout");
+    std::fs::write(dir.join("prefs.json"), "{\"recent\": []}").unwrap();
+    let loaded = load_prefs(&dir);
+    assert!(loaded.ribbon && loaded.docked_panels && loaded.panel_layout.is_none());
+    let course = coursecraft_course::Course::from_json(include_str!(
+        "../../../examples/hello-course/course.json"
+    ))
+    .expect("hello course parses");
+    let mut editor = coursecraft_ui_egui::Editor::new(course.clone());
+    editor.ui.ribbon.visible = false;
+    coursecraft_ui_egui::dock::set_open(
+        &mut editor,
+        coursecraft_ui_egui::dock::Panel::Timeline,
+        false,
+    );
+    let mut prefs = Prefs::default();
+    prefs.set_layout(editor.layout_prefs());
+    save_prefs(&dir, &prefs).expect("save prefs");
+    let back = load_prefs(&dir);
+    assert!(!back.ribbon && back.docked_panels);
+    let mut reopened = coursecraft_ui_egui::Editor::new(course);
+    reopened.set_layout_prefs(&back.layout());
+    assert!(!coursecraft_ui_egui::dock::is_open(
+        &reopened,
+        coursecraft_ui_egui::dock::Panel::Timeline
+    ));
+    assert!(!reopened.ui.ribbon.visible);
+}

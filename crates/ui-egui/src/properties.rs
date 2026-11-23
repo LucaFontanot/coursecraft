@@ -42,6 +42,53 @@ impl InspectorTab {
     }
 }
 
+/// The inspector's tab row (Format, Animate, Slide, Course), drawn in its
+/// header when the ribbon replaces the toolbar that used to switch them.
+fn inspector_tabs(editor: &mut crate::Editor, ui: &mut Ui) {
+    let tabs = [
+        (
+            InspectorTab::Format,
+            coursecraft_render::Icon::SlidersHorizontal,
+        ),
+        (InspectorTab::Animate, coursecraft_render::Icon::Sparkle),
+        (InspectorTab::Slide, coursecraft_render::Icon::Presentation),
+        (
+            InspectorTab::Course,
+            coursecraft_render::Icon::GraduationCap,
+        ),
+    ];
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let available = ui.available_width();
+        let width = ((available - 6.0) / 4.0).floor().max(24.0);
+        // Names when they fit in a quarter of the panel each, else icons.
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let fits = tabs.iter().all(|(tab, _)| {
+            ui.painter()
+                .layout_no_wrap(tl!(tab.name()).to_owned(), font.clone(), Color32::WHITE)
+                .size()
+                .x
+                + 2.0 * ui.spacing().button_padding.x
+                <= width
+        });
+        for (tab, icon) in tabs {
+            let active = editor.ui.inspector_tab == tab;
+            let name = tl!(tab.name());
+            let text = if fits {
+                RichText::new(name)
+            } else {
+                coursecraft_render::icon(icon, 15.0)
+            };
+            let resp = ui
+                .add_sized([width, 24.0], egui::Button::selectable(active, text))
+                .on_hover_text(craft_i18n::fmt(tl!("{tab} inspector"), &[("tab", name)]));
+            if resp.clicked() {
+                editor.ui.inspector_tab = tab;
+            }
+        }
+    });
+}
+
 /// Local edit buffers for the properties panel.
 ///
 /// Buffers are reset whenever the selection or `session.revision` changes,
@@ -2399,7 +2446,8 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
     let mut actions_to_run: Vec<(&'static str, Json)> = Vec::new();
     let p = coursecraft_render::palette(ui.ctx());
 
-    // 1. Pinned inspector header: the current tab's name (the toolbar switches tabs).
+    // 1. Pinned inspector header: with the ribbon, the four inspector tabs; with
+    // the older toolbar (which switches them), the current tab's name.
     egui::Frame::NONE
         .fill(p.panel)
         .inner_margin(egui::Margin::symmetric(
@@ -2407,6 +2455,16 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
             8,
         ))
         .show(ui, |ui| {
+            if editor.ui.ribbon.visible {
+                inspector_tabs(editor, ui);
+                if editor.ui.inspector_tab == InspectorTab::Format
+                    && editor.selection.object.is_some()
+                {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| show_arrange_icons(editor, ui, &mut actions_to_run));
+                }
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.label(coursecraft_render::title(editor.ui.inspector_tab.name()));
                 if editor.ui.inspector_tab == InspectorTab::Format

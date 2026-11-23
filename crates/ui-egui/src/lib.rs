@@ -531,6 +531,9 @@ pub enum EditorRequest {
     SetTheme(coursecraft_render::ThemePref),
     /// Preferences › Language: `"auto"` or a language code, to save.
     SetLanguage(String),
+    /// The ribbon or docking setting or the panel arrangement changed: save it.
+    /// Sent once a gesture ends, never while a panel is being dragged.
+    SaveLayout(dock::LayoutPrefs),
     /// Save the autosave interval, the number of file versions to keep and the
     /// default slide size for new courses.
     SetPreferences {
@@ -1170,6 +1173,9 @@ pub struct Editor {
     pub theme_pref: coursecraft_render::ThemePref,
     /// Interface language setting: [`i18n::AUTO`] or a code (docs/ui/localization.md).
     pub language: String,
+    /// The ribbon, docking and panel arrangement last saved (or loaded), so a
+    /// change is sent once as [`EditorRequest::SaveLayout`].
+    saved_layout: (bool, bool, craft_ui::docking::Workspace<dock::Panel>),
     /// Timeline playback (authoring-only: no runtime, no document writes).
     pub timeline_playback: timeline_playback::TimelinePlayback,
     /// Session revision the timeline playback last saw; a change stops Play.
@@ -1498,6 +1504,11 @@ impl Editor {
             automation_port: None,
             theme_pref: coursecraft_render::ThemePref::Dark,
             language: i18n::AUTO.to_owned(),
+            saved_layout: (
+                true,
+                true,
+                craft_ui::docking::Workspace::new(dock::default_layout()),
+            ),
             timeline_playback: timeline_playback::TimelinePlayback::create_default(),
             timeline_last_revision: initial_revision,
             timeline_mono_ms: 0,
@@ -1529,6 +1540,44 @@ impl Editor {
     /// the next frame; an unknown code shows English but is kept.
     pub fn set_language(&mut self, setting: &str) {
         self.language = i18n::normalize(setting);
+    }
+
+    /// Apply the saved ribbon, docking and panel settings (app start).
+    pub fn set_layout_prefs(&mut self, prefs: &dock::LayoutPrefs) {
+        self.ui.ribbon.visible = prefs.ribbon;
+        self.ui.dock.enabled = prefs.docked;
+        self.ui.dock.workspace = dock::load_workspace(prefs.workspace.as_ref());
+        self.saved_layout = (prefs.ribbon, prefs.docked, self.ui.dock.workspace.clone());
+    }
+
+    /// The ribbon, docking and panel settings to save.
+    #[must_use]
+    pub fn layout_prefs(&self) -> dock::LayoutPrefs {
+        dock::LayoutPrefs {
+            ribbon: self.ui.ribbon.visible,
+            docked: self.ui.dock.enabled,
+            workspace: serde_json::to_value(&self.ui.dock.workspace).ok(),
+        }
+    }
+
+    /// The settings to save when they differ from the last saved ones.
+    fn layout_changed(&mut self) -> Option<dock::LayoutPrefs> {
+        let now = (
+            self.ui.ribbon.visible,
+            self.ui.dock.enabled,
+            &self.ui.dock.workspace,
+        );
+        if (now.0, now.1, now.2)
+            == (
+                self.saved_layout.0,
+                self.saved_layout.1,
+                &self.saved_layout.2,
+            )
+        {
+            return None;
+        }
+        self.saved_layout = (now.0, now.1, now.2.clone());
+        Some(self.layout_prefs())
     }
 
     /// Update recent files list shown in the File menu.
@@ -4680,29 +4729,30 @@ impl Editor {
                 menu::show_menu_bar(self, ui, &mut requests);
             });
 
-        // 1b. Keynote-style toolbar (52 px, panel fill, hairline below)
-        let toolbar_panel = Panel::top("editor_toolbar")
-            .exact_size(toolbar::TOOLBAR_HEIGHT)
-            .resizable(false)
-            .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
-            .show_separator_line(true)
-            .show(ui, |ui| {
-                toolbar::show_toolbar(self, ui, &mut requests);
-            });
-        // 1c. The ribbon (M30), below the toolbar while both are shown.
-        let mut top_bottom = toolbar_panel.response.rect.max.y;
-        if self.ui.ribbon.visible {
-            let ribbon_panel = Panel::top("editor_ribbon")
+        // 1b. The ribbon (M30, the default), or the older flat toolbar when the
+        // ribbon is turned off in Preferences.
+        let top_panel = if self.ui.ribbon.visible {
+            Panel::top("editor_ribbon")
                 .exact_size(ribbon::height(&self.ui.ribbon))
                 .resizable(false)
                 .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
                 .show_separator_line(true)
                 .show(ui, |ui| {
                     ribbon::show(self, ui, &mut requests);
-                });
-            top_bottom = ribbon_panel.response.rect.max.y;
-        }
-        // Dialogs open below the toolbar (and the ribbon).
+                })
+        } else {
+            Panel::top("editor_toolbar")
+                .exact_size(toolbar::TOOLBAR_HEIGHT)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(p.panel).inner_margin(edge_margin))
+                .show_separator_line(true)
+                .show(ui, |ui| {
+                    toolbar::show_toolbar(self, ui, &mut requests);
+                })
+        };
+        let top_bottom = top_panel.response.rect.max.y;
+        let top_h = top_panel.response.rect.height();
+        // Dialogs open below the toolbar or the ribbon.
         dialog::set_top_inset(ui.ctx(), top_bottom);
 
         // 2. Bottom status bar (26 px, panel fill, hairline above)
@@ -4731,7 +4781,7 @@ impl Editor {
                 .show(ui, |ui| dock::show(self, ui));
             coach::set_chrome_rects(
                 ui.ctx(),
-                toolbar_panel.response.rect,
+                top_panel.response.rect,
                 self.ui
                     .dock
                     .rect(dock::Panel::Slides)
@@ -4749,7 +4799,7 @@ impl Editor {
                 self.ui.timeline.tab_rects.clear();
             } else {
                 let content_h = ui.ctx().content_rect().height();
-                let chrome_h = TOP_BAR_HEIGHT + toolbar::TOOLBAR_HEIGHT + STATUS_BAR_HEIGHT;
+                let chrome_h = TOP_BAR_HEIGHT + top_h + STATUS_BAR_HEIGHT;
                 let max_by_canvas =
                     (content_h - chrome_h - 200.0).max(timeline::TIMELINE_PANEL_MIN_HEIGHT);
                 let max_panel_h = (content_h * timeline::TIMELINE_PANEL_MAX_FRACTION)
@@ -4807,7 +4857,7 @@ impl Editor {
                 .show(ui, |ui| self.inspector_body(ui));
             coach::set_chrome_rects(
                 ui.ctx(),
-                toolbar_panel.response.rect,
+                top_panel.response.rect,
                 slides_panel.response.rect,
                 properties_panel.response.rect,
             );
@@ -4934,6 +4984,11 @@ impl Editor {
             );
         });
         widgets::end_press_guard(ui.ctx());
+        if !ui.input(|i| i.pointer.any_down())
+            && let Some(layout) = self.layout_changed()
+        {
+            requests.push(EditorRequest::SaveLayout(layout));
+        }
         requests.append(&mut self.pending_requests);
         requests
     }

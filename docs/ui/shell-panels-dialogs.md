@@ -19,16 +19,16 @@ Top to bottom:
 
 | Element | Storyline | CourseCraft today | Status | Work |
 |---|---|---|---|---|
-| QAT: Save, Undo, Redo, Customize ▾ | yes | Undo/Redo in Edit menu | ⛔ | add QAT; Customize: right-click a ribbon button → Add to QAT (as DeckCraft) |
+| QAT: Save, Undo, Redo, Customize ▾ | yes | Save, Undo, Redo left of the ribbon tab strip (`ribbon/mod.rs`) | 🟡 | Customize: right-click a ribbon button → Add to QAT (as DeckCraft); move into the title bar |
 | Title `name* - App` | yes | window title | 🟡 | add the `*` |
-| Menu bar | none | File, Edit, Insert, Arrange, Project, View, Help | — | **remove** once every item has a ribbon home (ribbon.md › File, Help) |
-| Flat toolbar | none | `toolbar.rs` | — | **remove**; its buttons move to Home/Insert |
-| Collapse ribbon (Ctrl+F1, double-click a tab) | yes | — | ⛔ | |
+| Menu bar | none | File, Edit, Arrange, Project, View, Help (Insert hidden while the ribbon is on) | — | **remove** once every item has a ribbon home (ribbon.md › File, Help) |
+| Flat toolbar | none | `toolbar.rs`, drawn only when Preferences › Interface › Ribbon is off | — | its buttons are on Home, Insert, Slides and View; the Format/Animate/Slide/Course switch is the Inspector's own tab row; delete the code with the menu bar (step 4) |
+| Collapse ribbon (Ctrl+F1, double-click a tab) | yes | click or double-click the open tab, Ctrl+F1 | ✅ | |
 | File page = start screen (left action column, Recent with thumbnails, news) | yes | `welcome.rs` | 🟡 | restyle as the File page; reachable from the File tab |
 | Tooltips: name, shortcut, one sentence | yes | partial | 🟡 | every ribbon control, from the registry |
 | View tabs row with open slides | yes | single canvas | ⛔ | open slides as tabs; Course Map is the first tab |
 | Device toggles in view row | yes | — | ⛔ | they set the preview device |
-| Panels undock / float / dock back | yes | View › Docked Panels (`dock.rs`) | 🟡 | craft-ui docking; save the workspace in prefs, add close/reopen |
+| Panels undock / float / dock back | yes | docked by default (`dock.rs`); View › Panels closes and reopens; saved in prefs | ✅ | Triggers, Slide Layers, States, Notes as dock panels of their own (step 6) |
 | Status bar: Slide n of m, size, theme | yes | `status.rs` | 🟡 | add size and theme name |
 | Status bar: view buttons, zoom %, slider, fit | yes | zoom in View | 🟡 | |
 

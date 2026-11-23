@@ -178,11 +178,26 @@ Each step is one commit, `cargo xtask ci` green, docs status updated in the same
    DeckCraft uses only `craft_ui::ComboBox`; CourseCraft is the first Craft app on
    `craft_ui::docking`. It was chosen over `craft_ui::panes` (the suite's pick for Office-style
    apps) because Storyline stacks panels (Triggers over Slide Layers) and tabs them (Timeline,
-   States, Notes), which panes cannot. Still open: saving the workspace in prefs (`serde`
-   feature), View toggles that close and reopen panels, the Triggers, Slide Layers, States and
-   Notes panels, and switching the default once the fixed-panel tests move over.
+   States, Notes), which panes cannot. **Saved and default:** the workspace is serialized with
+   craft-ui's `serde` feature into `prefs.json` (`panel_layout`), sent by the editor as
+   `EditorRequest::SaveLayout` once a gesture ends, and fitted with `Workspace::reconcile` on
+   load (a file that doesn't load gives the default arrangement). View › Panels closes and
+   reopens the slides, timeline and Inspector panels where they were; the canvas can't close.
+   Ribbon and docking are on by default and Preferences › Interface turns either off; the test
+   harness keeps the old layout for the existing UI tests, and new tests turn the new one on.
+   Still open: the Triggers, Slide Layers, States and Notes panels as dock panels of their own
+   (today they are tabs inside the timeline panel), step 6.
 2. Fill every main tab from ribbon.md with the right `Action`s (most ✅ wire to existing commands;
-   the rest are `NotYet`).
+   the rest are `NotYet`). **Insert, Slides and View built.** With them the ribbon replaces the
+   flat toolbar (drawn only when Preferences › Interface › Ribbon is off) and the menu bar's
+   Insert menu (hidden while the ribbon is on); `spec_tests.rs` checks that every Insert-menu
+   command and every toolbar button has a ribbon home. Where the toolbar's other pieces went:
+   Undo and Redo to a quick access toolbar (Save, Undo, Redo) left of the tab strip; Map to
+   View › Course Map; the Format / Animate / Slide / Course switch to a tab row in the
+   Inspector's own header, which shows names when they fit and icons otherwise. Narrow windows
+   (§ 4) shrink groups from the right to one button that opens the group in a popup; each
+   group's width is measured when it is last drawn whole. Still open: Design, Transitions,
+   Animations, Help, File.
 3. Contextual tabs: Drawing Tools, Picture Tools, Audio/Video Tools, Table Tools, Question Tools;
    modes: Slide Master, Preview.
 4. File menu and Help tab take over the menu bar items; delete the menu bar and the flat toolbar;

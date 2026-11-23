@@ -238,6 +238,16 @@ pub struct Prefs {
     /// Interface language: `"auto"` follows the system, else a language code.
     #[serde(default = "default_language")]
     pub language: String,
+    /// The ribbon replaces the flat toolbar.
+    #[serde(default = "default_true")]
+    pub ribbon: bool,
+    /// The panels are docked, so they can be moved, tabbed, floated and closed.
+    #[serde(default = "default_true")]
+    pub docked_panels: bool,
+    /// The docked panel arrangement (`craft_ui::docking::Workspace`); the editor
+    /// checks it on load and falls back to the default arrangement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel_layout: Option<serde_json::Value>,
 }
 
 fn default_language() -> String {
@@ -311,7 +321,29 @@ impl Default for Prefs {
             spell_check_as_you_type: true,
             spell_words: Vec::new(),
             language: default_language(),
+            ribbon: true,
+            docked_panels: true,
+            panel_layout: None,
         }
+    }
+}
+
+impl Prefs {
+    /// The ribbon, docking and panel settings for the editor.
+    #[must_use]
+    pub fn layout(&self) -> coursecraft_ui_egui::dock::LayoutPrefs {
+        coursecraft_ui_egui::dock::LayoutPrefs {
+            ribbon: self.ribbon,
+            docked: self.docked_panels,
+            workspace: self.panel_layout.clone(),
+        }
+    }
+
+    /// Store the editor's ribbon, docking and panel settings.
+    pub fn set_layout(&mut self, layout: coursecraft_ui_egui::dock::LayoutPrefs) {
+        self.ribbon = layout.ribbon;
+        self.docked_panels = layout.docked;
+        self.panel_layout = layout.workspace;
     }
 }
 

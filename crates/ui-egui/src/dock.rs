@@ -1,9 +1,11 @@
 //! The editor's panels in a `craft_ui::docking` workspace (M30 step 1).
 //!
-//! Behind View › Docked Panels while it is being built: the slides panel, the
-//! canvas, the timeline and the Inspector become dock panels the user can move,
-//! stack, tab and float. The canvas is protected: it stays docked and open. The
-//! fixed egui panels stay the default until this replaces them.
+//! On by default (Preferences › Interface › Docked panels): the slides panel, the
+//! canvas, the timeline and the Inspector are dock panels the user can move, stack,
+//! tab, float, close and reopen (View › Panels). The canvas is protected: it stays
+//! docked and open. The arrangement is saved in the app's preferences through
+//! [`crate::EditorRequest::SaveLayout`]; the fixed egui panels remain when docking
+//! is turned off.
 //!
 //! Docking rather than `craft_ui::panes`: Storyline stacks panels (Triggers over
 //! Slide Layers) and tabs them (Timeline, States, Notes), which panes don't do.
@@ -14,11 +16,13 @@ use craft_ui::docking::{
 };
 use craft_ui::layout::{SplitAxis, SplitSize};
 use egui::{Rect, Ui, vec2};
+use serde::{Deserialize, Serialize};
 
 use crate::Editor;
 
-/// One dockable part of the editor window. Stable ids, never shown.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// One dockable part of the editor window. Stable ids, saved in the preferences.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Panel {
     Slides,
     Canvas,
@@ -53,11 +57,8 @@ impl Panel {
                 accepts_splits: true,
                 ..Permissions::PROTECTED
             },
-            // Nothing reopens a closed panel yet, so none can close.
-            Panel::Slides | Panel::Timeline | Panel::Inspector => Permissions {
-                closable: false,
-                ..Permissions::default()
-            },
+            // View › Panels reopens them.
+            Panel::Slides | Panel::Timeline | Panel::Inspector => Permissions::default(),
         }
     }
 
@@ -78,7 +79,7 @@ impl Panel {
 /// Docking on or off, and the arrangement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DockState {
-    /// View › Docked Panels.
+    /// Preferences › Interface › Docked panels (also View › Docked Panels).
     pub enabled: bool,
     pub workspace: Workspace<Panel>,
     /// Where each panel's body was drawn last frame.
@@ -88,7 +89,7 @@ pub struct DockState {
 impl Default for DockState {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             workspace: Workspace::new(default_layout()),
             rects: Vec::new(),
         }
@@ -104,6 +105,72 @@ impl DockState {
             .find(|(p, _)| *p == panel)
             .map(|(_, r)| *r)
     }
+}
+
+/// The ribbon and docking settings and the panel arrangement, as the app saves them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayoutPrefs {
+    /// The ribbon replaces the flat toolbar.
+    pub ribbon: bool,
+    /// The panels are docked (else the fixed panels).
+    pub docked: bool,
+    /// The saved `craft_ui::docking::Workspace`; `None` for the default.
+    pub workspace: Option<serde_json::Value>,
+}
+
+impl Default for LayoutPrefs {
+    fn default() -> Self {
+        Self {
+            ribbon: true,
+            docked: true,
+            workspace: None,
+        }
+    }
+}
+
+/// A saved workspace fitted to today's panels, or the default when it is
+/// missing, does not parse or does not validate.
+#[must_use]
+pub fn load_workspace(saved: Option<&serde_json::Value>) -> Workspace<Panel> {
+    let default = Workspace::new(default_layout());
+    let Some(value) = saved else {
+        return default;
+    };
+    match serde_json::from_value::<Workspace<Panel>>(value.clone()) {
+        Ok(mut workspace) if workspace.version <= Workspace::<Panel>::VERSION => {
+            workspace.reconcile(|_| true, |p: &Panel| p.permissions(), &default);
+            workspace
+        }
+        Ok(_) | Err(_) => {
+            log::warn!("saved panel layout ignored: it does not load in this version");
+            default
+        }
+    }
+}
+
+/// Whether `panel` is shown in the workspace.
+#[must_use]
+pub fn is_open(editor: &Editor, panel: Panel) -> bool {
+    editor.ui.dock.workspace.layout.contains(&panel)
+}
+
+/// Show or hide one panel (View › Panels). Shown panels come back where they
+/// were closed; the canvas can't be hidden.
+pub fn set_open(editor: &mut Editor, panel: Panel, open: bool) {
+    let fallback = Some(Panel::Canvas).filter(|p| *p != panel);
+    if let Err(err) = editor
+        .ui
+        .dock
+        .workspace
+        .set_visible(panel, open, fallback, |p: &Panel| p.permissions())
+    {
+        log::debug!("panel {panel:?} not changed: {err:?}");
+    }
+}
+
+/// View › Reset Panel Layout: the default arrangement, every panel open.
+pub fn reset(editor: &mut Editor) {
+    editor.ui.dock.workspace = Workspace::new(default_layout());
 }
 
 fn group(panel: Panel) -> Group<Panel> {

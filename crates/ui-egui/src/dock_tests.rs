@@ -22,7 +22,7 @@ fn docked() -> TestHarness {
 #[test]
 fn default_layout_is_valid_and_has_every_panel_once() {
     let state = dock::DockState::default();
-    assert!(!state.enabled, "docking is opt-in while it is being built");
+    assert!(state.enabled, "docking is the default");
     assert_eq!(state.workspace.validate(), Ok(()));
     let panels: Vec<Panel> = state
         .workspace
@@ -134,16 +134,115 @@ fn the_canvas_stays_docked_and_open() {
 }
 
 #[test]
-fn no_panel_can_be_closed_yet() {
+fn panels_close_and_reopen_where_they_were() {
     let mut h = docked();
-    let before = h.editor.ui.dock.workspace.clone();
-    for panel in [Panel::Slides, Panel::Timeline, Panel::Inspector] {
-        dock::apply(&mut h.editor, vec![Action::Close { panel }]);
-    }
-    assert_eq!(
-        h.editor.ui.dock.workspace, before,
-        "nothing reopens a closed panel yet"
+    dock::apply(
+        &mut h.editor,
+        vec![Action::Move {
+            panel: Panel::Timeline,
+            anchor: Panel::Inspector,
+            placement: Placement::Tab { before: None },
+        }],
     );
+    let moved = h.editor.ui.dock.workspace.layout.clone();
+    dock::set_open(&mut h.editor, Panel::Timeline, false);
+    assert!(!dock::is_open(&h.editor, Panel::Timeline));
+    h.idle_frame();
+    assert_eq!(
+        h.editor.ui.timeline.panel_rect, None,
+        "a closed timeline has no rect"
+    );
+    dock::set_open(&mut h.editor, Panel::Timeline, true);
+    assert!(dock::is_open(&h.editor, Panel::Timeline));
+    assert_eq!(
+        h.editor.ui.dock.workspace.layout.panels().len(),
+        moved.panels().len()
+    );
+    let tabbed_with_inspector = h
+        .editor
+        .ui
+        .dock
+        .workspace
+        .layout
+        .location(&Panel::Timeline)
+        .ok()
+        .and_then(|l| l.anchor)
+        == Some(Panel::Inspector);
+    assert!(tabbed_with_inspector, "reopened beside the Inspector");
+}
+
+#[test]
+fn the_canvas_cannot_be_hidden() {
+    let mut h = docked();
+    dock::set_open(&mut h.editor, Panel::Canvas, false);
+    assert!(dock::is_open(&h.editor, Panel::Canvas));
+}
+
+#[test]
+fn reset_reopens_every_panel() {
+    let mut h = docked();
+    for panel in [Panel::Slides, Panel::Timeline, Panel::Inspector] {
+        dock::set_open(&mut h.editor, panel, false);
+    }
+    dock::reset(&mut h.editor);
+    for panel in Panel::ALL {
+        assert!(dock::is_open(&h.editor, panel), "{panel:?}");
+    }
+}
+
+#[test]
+fn layout_round_trips_through_the_preferences() {
+    let mut h = docked();
+    dock::set_open(&mut h.editor, Panel::Slides, false);
+    let prefs = h.editor.layout_prefs();
+    assert!(prefs.ribbon == h.editor.ui.ribbon.visible && prefs.docked);
+    let mut other = TestHarness::new(Course::from_json(HELLO_COURSE).expect("parses"));
+    other.editor.set_layout_prefs(&prefs);
+    assert_eq!(other.editor.ui.dock.workspace, h.editor.ui.dock.workspace);
+    assert!(other.editor.ui.dock.enabled);
+}
+
+#[test]
+fn a_bad_saved_layout_falls_back_to_the_default() {
+    for saved in [
+        serde_json::json!("not a layout"),
+        serde_json::json!({ "version": 99, "layout": {} }),
+        serde_json::json!({ "layout": { "root": { "Tabs": { "panels": ["slides", "slides"], "active": 0 } } } }),
+    ] {
+        let workspace = dock::load_workspace(Some(&saved));
+        assert_eq!(workspace.validate(), Ok(()));
+        for panel in Panel::ALL {
+            assert!(workspace.layout.contains(&panel), "{panel:?} after {saved}");
+        }
+    }
+}
+
+#[test]
+fn a_saved_layout_without_the_canvas_gets_it_back() {
+    let mut workspace = craft_ui::docking::Workspace::new(dock::default_layout());
+    workspace.hidden.clear();
+    let mut value = serde_json::to_value(&workspace).expect("serializes");
+    // An edited file: every panel but the canvas.
+    let text = value.to_string().replace("\"canvas\"", "\"slides\"");
+    value = serde_json::from_str(&text).expect("still JSON");
+    let loaded = dock::load_workspace(Some(&value));
+    assert!(loaded.layout.contains(&Panel::Canvas));
+}
+
+#[test]
+fn a_layout_change_is_sent_once_the_gesture_ends() {
+    let mut h = docked();
+    let _ = h.editor.layout_prefs();
+    dock::set_open(&mut h.editor, Panel::Inspector, false);
+    let first = h.idle_frame();
+    let saves = |r: &[crate::EditorRequest]| {
+        r.iter()
+            .filter(|r| matches!(r, crate::EditorRequest::SaveLayout(_)))
+            .count()
+    };
+    assert_eq!(saves(&first), 1);
+    let second = h.idle_frame();
+    assert_eq!(saves(&second), 0, "sent once");
 }
 
 #[test]

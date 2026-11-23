@@ -76,10 +76,13 @@ Project commands (below the start actions once a course is open):
 
 Shown when the Course Map view tab is active.
 
-> **In the code (M30 step 1):** both Home variants are drawn from `crates/ui-egui/src/ribbon/spec.rs`
-> behind View › Ribbon. The Status column is the feature's status. Built features that the
-> ribbon doesn't reach yet (text formatting, Apply Layout, Question Banks, Quick Styles, Shape
-> Fill/Outline/Effect) are drawn disabled with "Not available yet: ribbon wiring" until step 2.
+> **In the code (M30 steps 1–2):** Home (both variants), Insert, Slides and View are drawn from
+> `crates/ui-egui/src/ribbon/spec.rs`; the ribbon is on by default (Preferences › Interface) and
+> replaces the flat toolbar, with Save, Undo and Redo in a quick access toolbar left of the tab
+> strip. The Status column is the feature's status. Built features that the ribbon doesn't reach
+> yet (text formatting, Hyperlink, Apply Layout, Question Banks, Quick Styles, Shape
+> Fill/Outline/Effect) are drawn disabled with "Not available yet: ribbon wiring". Groups that
+> don't fit the window shrink to one button, rightmost first, which opens the group in a popup.
 
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
@@ -168,7 +171,7 @@ Shown when the Course Map view tab is active.
 
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
-| Slide | Slide Layer | L | `layer.add` | ✅ | `toolbar::add_new_layer` |
+| Slide | Slide Layer | L | `layer.add` | ✅ | `toolbar::add_new_layer`. **Insert is built in `spec.rs`**; the menu bar's Insert menu is hidden while the ribbon is on |
 | | Convert to Custom Question | L | `question.set_kind` | ⛔ | turn the slide's objects into a custom question |
 | | Zoom Region | L | — | ⛔ | camera zoom on part of the slide |
 | AI | Insert Text, Edit Text, Insert Image, Insert Audio, Quiz, Question, Summary | | as Home | | |
@@ -194,8 +197,8 @@ Shown when the Course Map view tab is active.
 | Interactive Objects | Button | LS | `object.add` `{button}` | ✅ | ▾ button styles |
 | | Slider | LS | `object.add` `{slider}` | ✅ | `input_insert.rs` |
 | | Dial | LS | `object.add` `{dial}` | ✅ | |
-| | Hotspot | LS | `object.add` `{hotspot}` | ✅ | ▾ rectangle, oval, freeform |
-| | Input | LS | `object.add` `{text_entry}` / `object.set_input` | ✅ | ▾ Text entry, Checkbox, Radio buttons (Edit › Input today) |
+| | Hotspot | LS | `object.add` `{hotspot}` | ⛔ | no hotspot object yet: hotspot questions have their own regions and the Hotspot reveal interaction covers clickable areas; ▾ rectangle, oval, freeform to come |
+| | Input | LS | `object.add` `{text_entry}` / `object.set_input` | ✅ | ▾ Text Entry, Checkbox, Radio Buttons |
 | | Marker | LS | `object.set_marker` | ✅ | |
 | | Trigger | S | `trigger.add` | ✅ | |
 | | Scrolling Panel | S | `object.set_scroll_panel` | ✅ | |
@@ -210,12 +213,12 @@ order against the app before building.
 
 | Group | Control | Kind | Action | Status |
 |---|---|---|---|---|
-| Slide | New Slide | LS | `slide.add` | ✅ |
-| | Import | LS | `ui:file.import.*` | ✅ ▾ PowerPoint…, Questions from CSV…, Course from Document… |
+| Slide | New Slide | LS | `slide.add` | ✅ (built in `spec.rs`, as is the rest of this tab) |
+| | Import | LS | `ui:file.import.*` | ✅ ▾ PowerPoint…, Questions from CSV…, Course from Document…, Slides from Outline… |
 | | Duplicate | S | `slide.duplicate` | ✅ |
 | Scene | New Scene | L | `scene.add` | ✅ |
-| Questions | Graded / Survey / Custom Question | LS | `question.insert` | ✅ |
-| | Question Banks | LS | `bank.*` | ✅ |
+| Questions | Graded / Survey / Custom Question | LS | `question.insert` | ✅ (one Question ▾ listing the kinds) |
+| | Question Banks | LS | `bank.*` | ✅ (drawn disabled: ribbon wiring) |
 | | Results Slide | L | `results.insert` | ✅ |
 | | Certificate | L | `certificate.insert` | ✅ (CourseCraft extra) |
 | Masters | Slide Master | L | `ui:view.master` | ✅ |
@@ -270,19 +273,19 @@ Not shown except Slide Master; proposal.
 
 | Group | Control | Kind | Action | Status |
 |---|---|---|---|---|
-| Views | Course Map | L | `ui:view.map` | ✅ (toolbar Map) |
+| Views | Course Map | L | `ui:view.map` | ✅ (built in `spec.rs`, as is the rest of this tab) |
 | | Slide | L | `ui:view.slide` | ✅ |
 | | Slide Master | L | `ui:view.master` | ✅ |
 | | Feedback Master | L | — | ⛔ |
-| Zoom | Zoom | L | `ui:zoom.dialog` | 🟡 |
+| Zoom | Zoom | L | `ui:zoom.dialog` | 🟡 (Zoom In, Zoom Out, 100% for now) |
 | | Fit in Window | L | `ui:zoom.fit` | ✅ |
 | Show | Rulers | K | `view.set` `{rulers}` | ✅ |
 | | Grid | K | `view.set` `{grid}` | ✅ |
 | | Guides | K | `view.set` `{guides}` | ✅ |
 | | Snap to Grid / Snap to Guides | K | `view.set` | ✅ |
-| Panels | Timeline, States, Notes, Triggers, Layers, Scenes | K | `ui:panel.toggle` | 🟡 |
-| | Reset Panels | S | `ui:panel.reset` | ⛔ |
-| Theme | Light / Dark | T | `ui:theme` | ✅ (View › Theme) |
+| Panels | Timeline, States, Notes, Triggers, Layers, Scenes | K | `ui:panel.toggle` | 🟡 (Slides, Timeline, Inspector; the others are tabs inside the timeline panel) |
+| | Reset Panels | S | `ui:panel.reset` | ✅ |
+| Theme | Light / Dark | T | `ui:theme` | ✅ (Light, Dark, Match System) |
 | Publish | Preview | LS | | ✅ |
 
 ## Help

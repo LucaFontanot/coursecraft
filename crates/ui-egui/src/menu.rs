@@ -761,9 +761,10 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             }
         });
 
-        // 2. Other categories from the registry
+        // 2. Other categories from the registry. Insert lives on the ribbon's
+        // Insert and Slides tabs while the ribbon is on.
         for category in categories {
-            if category == "File" {
+            if category == "File" || (category == "Insert" && editor.ui.ribbon.visible) {
                 continue;
             }
             if category == "Edit" {
@@ -785,25 +786,15 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 ui.close();
             }
             ui.checkbox(&mut editor.ui.show_media_library, "Media library");
-            ui.checkbox(&mut editor.ui.dock.enabled, tl!("Docked Panels"))
-                .on_hover_text(tl!(
-                    "Arrange the panels freely: drag tabs to dock, stack or float them."
-                ));
-            if ui
-                .add_enabled(
-                    editor.ui.dock.enabled,
-                    egui::Button::new(tl!("Reset Panel Layout")),
-                )
-                .clicked()
-            {
-                editor.ui.dock.workspace =
-                    craft_ui::docking::Workspace::new(crate::dock::default_layout());
-                ui.close();
-            }
             ui.checkbox(&mut editor.ui.ribbon.visible, tl!("Ribbon"))
                 .on_hover_text(tl!(
-                    "Show the new ribbon above the toolbar while it is being built."
+                    "Commands in tabs above the slide. Off shows the older toolbar."
                 ));
+            ui.checkbox(&mut editor.ui.dock.enabled, tl!("Docked Panels"))
+                .on_hover_text(tl!(
+                    "Move, tab, float and close the panels. Off keeps them fixed."
+                ));
+            panels_menu(editor, ui);
             ui.separator();
             ui.menu_button("Theme", |ui| {
                 let current = editor.theme_pref;
@@ -881,6 +872,31 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             editor.run(cmd, params);
         }
     }
+}
+
+/// View › Panels: show or hide each docked panel, and reset the arrangement.
+pub(crate) fn panels_menu(editor: &mut Editor, ui: &mut Ui) {
+    let docked = editor.ui.dock.enabled;
+    ui.add_enabled_ui(docked, |ui| {
+        ui.menu_button(tl!("Panels"), |ui| {
+            for panel in crate::dock::Panel::ALL {
+                if panel == crate::dock::Panel::Canvas {
+                    continue;
+                }
+                let mut open = crate::dock::is_open(editor, panel);
+                if ui.checkbox(&mut open, tl!(panel.label())).changed() {
+                    crate::dock::set_open(editor, panel, open);
+                }
+            }
+            ui.separator();
+            if ui.button(tl!("Reset Panel Layout")).clicked() {
+                crate::dock::reset(editor);
+                ui.close();
+            }
+        })
+        .response
+        .on_disabled_hover_text(tl!("Turn on Docked Panels first"));
+    });
 }
 
 /// Help items that report a problem or open the project's pages on GitHub.

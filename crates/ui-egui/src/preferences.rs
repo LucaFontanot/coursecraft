@@ -1,8 +1,9 @@
-//! Preferences window: autosave interval, spelling, versions, appearance,
-//! interface language and the default slide size.
+//! Preferences window: autosave interval, spelling, versions, appearance, the
+//! ribbon and docked panels, interface language and the default slide size.
 //!
 //! The window holds a view of the saved settings. Every change applies at once
-//! and goes to the app as an [`EditorRequest`], which saves it.
+//! and goes to the app as an [`EditorRequest`], which saves it (the ribbon and
+//! docking settings through [`EditorRequest::SaveLayout`], sent by the editor).
 
 use crate::dialog::Dialog;
 use coursecraft_render::ThemePref;
@@ -85,11 +86,10 @@ pub fn show_preferences_window(
         .open(&mut open)
         .width(440.0)
         .show(ctx, |ui| {
-            let prefs = &mut editor.ui.prefs;
             let form = crate::dialog::Form::new(ui, &[autosave, versions]);
             form.row(ui, autosave, |ui, _| {
                 ui.add(
-                    DragValue::new(&mut prefs.autosave_minutes)
+                    DragValue::new(&mut editor.ui.prefs.autosave_minutes)
                         .range(0..=MAX_AUTOSAVE_MINUTES)
                         .suffix(format!(" {}", tl!("min"))),
                 );
@@ -98,13 +98,13 @@ pub fn show_preferences_window(
             ui.separator();
             ui.label(tl!("Writing"));
             ui.checkbox(
-                &mut prefs.spell_check_as_you_type,
+                &mut editor.ui.prefs.spell_check_as_you_type,
                 tl!("Check spelling as you type"),
             );
             ui.separator();
             form.row(ui, versions, |ui, _| {
                 ui.add(
-                    DragValue::new(&mut prefs.versions_to_keep)
+                    DragValue::new(&mut editor.ui.prefs.versions_to_keep)
                         .range(0..=MAX_VERSIONS_TO_KEEP)
                         .suffix(format!(" {}", tl!("per file"))),
                 );
@@ -124,15 +124,25 @@ pub fn show_preferences_window(
                 }
             }
             ui.separator();
+            ui.label(tl!("Interface"));
+            ui.checkbox(&mut editor.ui.ribbon.visible, tl!("Ribbon"))
+                .on_hover_text(tl!(
+                    "Commands in tabs above the slide. Off shows the older toolbar."
+                ));
+            ui.checkbox(&mut editor.ui.dock.enabled, tl!("Docked panels"))
+                .on_hover_text(tl!(
+                    "Move, tab, float and close the panels. Off keeps them fixed."
+                ));
+            ui.separator();
             language_picker(ui, &mut language);
             ui.separator();
             ui.label(tl!("Default slide size for new courses"));
             for (label, w, h) in PRESETS {
                 if ui
-                    .radio(prefs.default_slide == (w, h), tl!(label))
+                    .radio(editor.ui.prefs.default_slide == (w, h), tl!(label))
                     .clicked()
                 {
-                    prefs.default_slide = (w, h);
+                    editor.ui.prefs.default_slide = (w, h);
                 }
             }
         });
