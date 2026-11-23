@@ -27,9 +27,11 @@ fn a7_10_native_playback_backend_rejects_hostile_bytes_safely() {
         backend.seek("v", 0);
         backend.seek("v", 5000);
 
+        // macOS can take a little over 3 s to reject plain text as a video, so allow 10 s;
+        // a real hang still fails.
         let start = Instant::now();
         let mut finished = false;
-        while start.elapsed() < Duration::from_secs(3) {
+        while start.elapsed() < Duration::from_secs(10) {
             if backend.video_error("v").is_some() || !backend.take_ended().is_empty() {
                 finished = true;
                 break;
@@ -38,7 +40,7 @@ fn a7_10_native_playback_backend_rejects_hostile_bytes_safely() {
         }
         backend.stop_all();
         assert!(
-            finished || start.elapsed() < Duration::from_secs(3),
+            finished || start.elapsed() < Duration::from_secs(10),
             "payload {idx} hung"
         );
     }
