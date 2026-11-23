@@ -19174,3 +19174,208 @@ fn view_menu_show_all_and_unlock_all_disabled_tooltips_and_batch_undo() {
         2
     );
 }
+
+#[test]
+fn m31_01_file_shortcuts_emit_requests_and_shift_s_beats_s() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut h = TestHarness::new(course);
+    h.idle_frame();
+
+    let key_event = |key: Key, modifiers: Modifiers| {
+        vec![Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]
+    };
+
+    let reqs = h.frame(key_event(Key::S, Modifiers::COMMAND));
+    assert!(
+        reqs.iter().any(|r| matches!(r, EditorRequest::Save)),
+        "Cmd/Ctrl+S must emit EditorRequest::Save, got {reqs:?}"
+    );
+
+    let reqs = h.frame(key_event(Key::S, Modifiers::COMMAND | Modifiers::SHIFT));
+    assert!(
+        reqs.iter().any(|r| matches!(r, EditorRequest::SaveAs)),
+        "Cmd/Ctrl+Shift+S must emit EditorRequest::SaveAs, got {reqs:?}"
+    );
+    assert!(
+        !reqs.iter().any(|r| matches!(r, EditorRequest::Save)),
+        "Cmd/Ctrl+Shift+S must not also emit EditorRequest::Save, got {reqs:?}"
+    );
+
+    let reqs = h.frame(key_event(Key::O, Modifiers::COMMAND));
+    assert!(
+        reqs.iter().any(|r| matches!(r, EditorRequest::Open)),
+        "Cmd/Ctrl+O must emit EditorRequest::Open, got {reqs:?}"
+    );
+
+    let reqs = h.frame(key_event(Key::N, Modifiers::COMMAND));
+    assert!(
+        reqs.iter().any(|r| matches!(r, EditorRequest::New)),
+        "Cmd/Ctrl+N must emit EditorRequest::New, got {reqs:?}"
+    );
+}
+
+#[test]
+fn m31_02_file_shortcuts_suppressed_in_text_edit_inline_preview_and_welcome() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut h = TestHarness::new(course);
+    h.idle_frame();
+
+    let key_event = |key: Key, modifiers: Modifiers| {
+        vec![Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]
+    };
+    let is_file_req = |r: &EditorRequest| {
+        matches!(
+            r,
+            EditorRequest::Save | EditorRequest::SaveAs | EditorRequest::Open | EditorRequest::New
+        )
+    };
+
+    // 1. TextEdit focused (Find & Replace dialog focuses its search TextEdit).
+    h.press(Key::F, Modifiers::COMMAND);
+    h.idle_frame();
+    assert!(
+        h.ctx.egui_wants_keyboard_input(),
+        "Find dialog must own keyboard input"
+    );
+    for (key, mods) in [
+        (Key::S, Modifiers::COMMAND),
+        (Key::S, Modifiers::COMMAND | Modifiers::SHIFT),
+        (Key::O, Modifiers::COMMAND),
+        (Key::N, Modifiers::COMMAND),
+    ] {
+        let reqs = h.frame(key_event(key, mods));
+        assert!(
+            !reqs.iter().any(is_file_req),
+            "file shortcut ({key:?}) must be suppressed while TextEdit is focused: {reqs:?}"
+        );
+    }
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+
+    // 2. Inline canvas text edit active.
+    let slide_id = h.editor.selection.slide.clone();
+    let text_obj = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .and_then(|s| {
+            s.objects
+                .iter()
+                .find(|o| matches!(o.kind, ObjectKind::Text { .. }))
+        })
+        .map(|o| o.id.clone())
+        .expect("text object in hello course");
+    h.editor.ui.inline_edit = Some(crate::canvas::InlineEdit {
+        slide: slide_id,
+        object: text_obj,
+        buffer: "Editing".to_owned(),
+        original: "Editing".to_owned(),
+        is_button: false,
+        is_shape: false,
+        cell: None,
+        just_entered: false,
+        live_runs: Vec::new(),
+        live_paragraphs: Vec::new(),
+        last_revision: 0,
+        state_name: None,
+        extra_id: None,
+    });
+    for (key, mods) in [
+        (Key::S, Modifiers::COMMAND),
+        (Key::S, Modifiers::COMMAND | Modifiers::SHIFT),
+        (Key::O, Modifiers::COMMAND),
+        (Key::N, Modifiers::COMMAND),
+    ] {
+        let reqs = h.frame(key_event(key, mods));
+        assert!(
+            !reqs.iter().any(is_file_req),
+            "file shortcut ({key:?}) must be suppressed during inline edit: {reqs:?}"
+        );
+    }
+    h.editor.ui.inline_edit = None;
+    h.idle_frame();
+
+    // 3. Preview focused.
+    h.editor.open_preview_at(None);
+    h.idle_frame();
+    for (key, mods) in [
+        (Key::S, Modifiers::COMMAND),
+        (Key::S, Modifiers::COMMAND | Modifiers::SHIFT),
+        (Key::O, Modifiers::COMMAND),
+        (Key::N, Modifiers::COMMAND),
+    ] {
+        let reqs = h.frame(key_event(key, mods));
+        assert!(
+            !reqs.iter().any(is_file_req),
+            "file shortcut ({key:?}) must be suppressed while preview is open: {reqs:?}"
+        );
+    }
+    h.editor.preview = None;
+    h.idle_frame();
+
+    // 4. Welcome screen: Save/SaveAs suppressed, Open/New allowed.
+    h.editor.ui.show_welcome = true;
+    h.idle_frame();
+    let save_reqs = h.frame(key_event(Key::S, Modifiers::COMMAND));
+    assert!(!save_reqs.iter().any(is_file_req));
+    let save_as_reqs = h.frame(key_event(Key::S, Modifiers::COMMAND | Modifiers::SHIFT));
+    assert!(!save_as_reqs.iter().any(is_file_req));
+    let open_reqs = h.frame(key_event(Key::O, Modifiers::COMMAND));
+    assert!(open_reqs.iter().any(|r| matches!(r, EditorRequest::Open)));
+    let new_reqs = h.frame(key_event(Key::N, Modifiers::COMMAND));
+    assert!(new_reqs.iter().any(|r| matches!(r, EditorRequest::New)));
+}
+
+#[test]
+fn m31_04_file_menu_hints_and_compound_shortcut_formatting() {
+    assert_eq!(
+        crate::menu::format_shortcut("Ctrl+S / Ctrl+Shift+S", true, |_| true),
+        "⌘S / ⇧⌘S"
+    );
+    assert_eq!(
+        crate::menu::format_shortcut("Ctrl+S / Ctrl+Shift+S", false, |_| true),
+        "Ctrl+S / Ctrl+Shift+S"
+    );
+    assert_eq!(
+        crate::menu::format_shortcut("Ctrl+N / Ctrl+O", true, |_| true),
+        "⌘N / ⌘O"
+    );
+
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut h = TestHarness::new(course);
+    h.idle_frame();
+
+    let file_menu = h.find_text("File").expect("File menu");
+    h.click_at(file_menu);
+    h.idle_frame();
+
+    for (label, sc) in [
+        ("New", "Ctrl+N"),
+        ("Open…", "Ctrl+O"),
+        ("Save", "Ctrl+S"),
+        ("Save As…", "Ctrl+Shift+S"),
+    ] {
+        assert!(
+            h.find_text(label).is_some(),
+            "File menu must show '{label}'"
+        );
+        let hint = crate::menu::shortcut_label(&h.ctx, sc);
+        assert!(
+            h.find_text(&hint).is_some(),
+            "File menu must show shortcut hint '{hint}' for '{label}'"
+        );
+    }
+}

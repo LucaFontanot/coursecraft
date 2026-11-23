@@ -43,7 +43,7 @@ arboard = { version = "3.6", default-features = false, features = ["image-data"]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys.workspace = true
 wasm-bindgen-futures.workspace = true
-web-sys = { workspace = true, features = ["Window", "Document", "Element", "HtmlAnchorElement", "HtmlCanvasElement", "HtmlElement", "Blob", "BlobPropertyBag", "Url", "console", "Location"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "Event", "EventTarget", "KeyboardEvent", "HtmlAnchorElement", "HtmlCanvasElement", "HtmlElement", "Blob", "BlobPropertyBag", "Url", "console", "Location"] }
 
 # Embeds the icon in the Windows .exe; build.rs only calls it when the target is Windows.
 [build-dependencies]

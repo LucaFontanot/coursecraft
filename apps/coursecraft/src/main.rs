@@ -1104,7 +1104,26 @@ impl EditorApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn is_blocked_file_request(&self, req: &EditorRequest) -> bool {
+        let modal_open = self.pending_action.is_some()
+            || self.conflict_prompt.is_some()
+            || self.restore_prompt.is_some()
+            || self.error_modal.is_some();
+        modal_open
+            && matches!(
+                req,
+                EditorRequest::New
+                    | EditorRequest::Open
+                    | EditorRequest::Save
+                    | EditorRequest::SaveAs
+            )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn handle_request(&mut self, req: EditorRequest, ctx: &egui::Context) {
+        if self.is_blocked_file_request(&req) {
+            return;
+        }
         match req {
             EditorRequest::New => self.guard_unsaved(PendingAction::New, ctx),
             EditorRequest::Open => self.guard_unsaved(PendingAction::Open, ctx),
@@ -3532,12 +3551,53 @@ fn run_editor_window() -> eframe::Result {
     )
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn should_prevent_browser_file_shortcut(
+    ctrl_or_meta: bool,
+    alt: bool,
+    shift: bool,
+    key: &str,
+) -> bool {
+    if !ctrl_or_meta || alt {
+        return false;
+    }
+    match key.to_ascii_lowercase().as_str() {
+        "s" => true,
+        "o" | "n" => !shift,
+        _ => false,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_web_file_shortcut_guard(window: &web_sys::Window) {
+    use eframe::wasm_bindgen::{JsCast as _, closure::Closure};
+
+    let listener = Closure::<dyn FnMut(web_sys::Event)>::new(|event: web_sys::Event| {
+        if let Ok(kb) = event.dyn_into::<web_sys::KeyboardEvent>()
+            && should_prevent_browser_file_shortcut(
+                kb.ctrl_key() || kb.meta_key(),
+                kb.alt_key(),
+                kb.shift_key(),
+                &kb.key(),
+            )
+        {
+            kb.prevent_default();
+        }
+    });
+    let target: &web_sys::EventTarget = window.as_ref();
+    let _ = target.add_event_listener_with_callback("keydown", listener.as_ref().unchecked_ref());
+    listener.forget();
+}
+
 #[cfg(target_arch = "wasm32")]
 fn main() {
     use eframe::wasm_bindgen::JsCast as _;
 
     wasm_bindgen_futures::spawn_local(async {
         let window = web_sys::window();
+        if let Some(ref w) = window {
+            install_web_file_shortcut_guard(w);
+        }
         let blank = window
             .as_ref()
             .and_then(|w| w.location().search().ok())

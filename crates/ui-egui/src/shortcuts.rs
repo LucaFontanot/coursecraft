@@ -36,15 +36,15 @@ const DIALOG_MAX_HEIGHT_FRACTION: f32 = 0.8;
 /// Height reserved for the pinned title, hint, and separator above the list.
 const DIALOG_HEADER_HEIGHT: f32 = 100.0;
 /// Height of one shortcut row.
-const SHORTCUT_ROW_HEIGHT: f32 = 20.0;
+const SHORTCUT_ROW_HEIGHT: f32 = 18.0;
 /// Vertical gap between consecutive shortcut rows (`item_spacing.y`).
-const SHORTCUT_ROW_GAP: f32 = 3.0;
+const SHORTCUT_ROW_GAP: f32 = 2.0;
 /// Height of a category caption line.
 const SHORTCUT_GROUP_HEADER_HEIGHT: f32 = 15.0;
 /// Space above each category.
-const SHORTCUT_GROUP_TOP_SPACE: f32 = 8.0;
+const SHORTCUT_GROUP_TOP_SPACE: f32 = 5.0;
 /// Space below each category.
-const SHORTCUT_GROUP_BOTTOM_SPACE: f32 = 4.0;
+const SHORTCUT_GROUP_BOTTOM_SPACE: f32 = 2.0;
 
 /// Show the modal keyboard shortcuts dialog if `editor.ui.show_shortcuts_dialog` is true.
 pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
@@ -143,7 +143,7 @@ pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
                     .max_height(list_height)
                     .show(ui, |ui| {
                         for group in groups {
-                            ui.add_space(8.0);
+                            ui.add_space(SHORTCUT_GROUP_TOP_SPACE);
                             ui.label(
                                 RichText::new(group.category)
                                     .size(SIZE_CAPTION)
@@ -178,7 +178,7 @@ pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
                                     );
                                 }
                             }
-                            ui.add_space(4.0);
+                            ui.add_space(SHORTCUT_GROUP_BOTTOM_SPACE);
                         }
                     });
             });
@@ -220,7 +220,7 @@ fn draw_keycap_chip(ui: &mut Ui, right_x: f32, center_y: f32, key_text: &str) {
         .layout_no_wrap(key_text.to_owned(), font_id, p.text);
 
     let pad_x = 8.0f32;
-    let pad_y = 3.0f32;
+    let pad_y = 2.0f32;
     let chip_w = galley.size().x + pad_x * 2.0;
     let chip_h = galley.size().y + pad_y * 2.0;
 
@@ -243,6 +243,20 @@ fn draw_keycap_chip(ui: &mut Ui, right_x: f32, center_y: f32, key_text: &str) {
 }
 
 pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
+    let file_items = vec![
+        ShortcutRow {
+            action: "New / Open",
+            shortcut: "Ctrl+N / Ctrl+O",
+        },
+        ShortcutRow {
+            action: "Save / Save As",
+            shortcut: "Ctrl+S / Ctrl+Shift+S",
+        },
+        ShortcutRow {
+            action: "Publish course",
+            shortcut: "Ctrl+Shift+P",
+        },
+    ];
     let mut edit_items = vec![
         ShortcutRow {
             action: "Cut / Copy / Paste / Select all",
@@ -319,14 +333,14 @@ pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
             action: "Keyboard shortcuts cheat sheet / Preferences",
             shortcut: "? / Ctrl+,",
         },
-        ShortcutRow {
-            action: "Publish course",
-            shortcut: "Ctrl+Shift+P",
-        },
     ];
 
     // Never show an empty heading: a category with no commands disappears.
     vec![
+        ShortcutGroup {
+            category: "File",
+            items: file_items,
+        },
         ShortcutGroup {
             category: "Edit",
             items: edit_items,

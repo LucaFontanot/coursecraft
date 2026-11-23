@@ -4258,6 +4258,44 @@ impl Editor {
             }
         }
 
+        let mut requests = Vec::new();
+
+        // File shortcuts (Save As before Save because egui's COMMAND match ignores extra Shift).
+        let file_shortcuts_allowed = !preview_has_focus
+            && !ui.ctx().egui_wants_keyboard_input()
+            && self.ui.inline_edit.is_none()
+            && !self.is_cropping()
+            && !self.ui.ai.open
+            && !self.ui.document.open
+            && !self.ui.alt.open
+            && !self.ui.translate.open
+            && !self.ui.show_shortcuts_dialog
+            && !matches!(self.ui.publish.phase, PublishPhase::Busy);
+        if file_shortcuts_allowed {
+            if self.file_ops_available && !self.ui.show_welcome {
+                if let Some(sc) = menu::parse_shortcut("Ctrl+Shift+S")
+                    && ui.input_mut(|i| i.consume_shortcut(&sc))
+                {
+                    requests.push(EditorRequest::SaveAs);
+                } else if let Some(sc) = menu::parse_shortcut("Ctrl+S")
+                    && ui.input_mut(|i| i.consume_shortcut(&sc))
+                {
+                    requests.push(EditorRequest::Save);
+                }
+            }
+            if self.file_ops_available
+                && let Some(sc) = menu::parse_shortcut("Ctrl+O")
+                && ui.input_mut(|i| i.consume_shortcut(&sc))
+            {
+                requests.push(EditorRequest::Open);
+            }
+            if let Some(sc) = menu::parse_shortcut("Ctrl+N")
+                && ui.input_mut(|i| i.consume_shortcut(&sc))
+            {
+                requests.push(EditorRequest::New);
+            }
+        }
+
         // Escape disarms the format painter before the canvas can act on it.
         if !preview_has_focus && !text_focus {
             self.consume_format_painter_escape(ui.ctx());
@@ -4545,7 +4583,6 @@ impl Editor {
         if self.ui.master_view && self.ui.bottom_tab == BottomTab::States {
             self.ui.bottom_tab = BottomTab::Timeline;
         }
-        let mut requests = Vec::new();
         // F12 previews this slide and Shift+F12 the course from the start,
         // like the toolbar's Preview button and its menu.
         if !self.ui.show_welcome

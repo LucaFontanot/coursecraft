@@ -236,3 +236,131 @@ fn t13_8_web_theme_resolution_follows_system_theme() {
     .drop_without_applying_deltas();
     assert_eq!(resolve_web_theme(&ctx), ThemeMode::Dark);
 }
+
+#[test]
+fn m31_03_desktop_file_shortcuts_route_dirty_prompts_and_block_during_modals() {
+    let mut h = ShellHarness::new(ThemeMode::Dark);
+    h.frame(Vec::new()).drop_without_applying_deltas();
+
+    // Mark course dirty by running an edit command.
+    h.app.editor.run(
+        "course.set_title",
+        serde_json::json!({ "title": "Edited Title" }),
+    );
+    assert!(
+        h.app.project.is_dirty(&h.app.editor.session),
+        "course must be dirty after edit"
+    );
+
+    let key_event = |key: Key, modifiers: Modifiers| {
+        vec![Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]
+    };
+
+    // Ctrl/Cmd+N on dirty course opens unsaved-changes prompt.
+    h.frame(key_event(Key::N, Modifiers::COMMAND))
+        .drop_without_applying_deltas();
+    assert!(
+        matches!(h.app.pending_action, Some(PendingAction::New)),
+        "Cmd/Ctrl+N on dirty course must set PendingAction::New"
+    );
+
+    // While pending_action modal is open, subsequent file shortcuts are ignored.
+    for (key, mods) in [
+        (Key::O, Modifiers::COMMAND),
+        (Key::S, Modifiers::COMMAND),
+        (Key::S, Modifiers::COMMAND | Modifiers::SHIFT),
+        (Key::N, Modifiers::COMMAND),
+    ] {
+        h.frame(key_event(key, mods)).drop_without_applying_deltas();
+        assert!(
+            matches!(h.app.pending_action, Some(PendingAction::New)),
+            "file shortcut ({key:?}) must be ignored while pending_action modal is open"
+        );
+    }
+
+    // Dismiss pending_action, then test Ctrl/Cmd+O on dirty course.
+    h.app.pending_action = None;
+    h.frame(key_event(Key::O, Modifiers::COMMAND))
+        .drop_without_applying_deltas();
+    assert!(
+        matches!(h.app.pending_action, Some(PendingAction::Open)),
+        "Cmd/Ctrl+O on dirty course must set PendingAction::Open"
+    );
+    h.app.pending_action = None;
+
+    // Blocking modals (conflict_prompt, restore_prompt, error_modal) also block file shortcuts.
+    h.app.error_modal = Some("Something failed".to_string());
+    h.frame(key_event(Key::N, Modifiers::COMMAND))
+        .drop_without_applying_deltas();
+    assert!(
+        h.app.pending_action.is_none(),
+        "error_modal must block Cmd/Ctrl+N"
+    );
+    h.app.error_modal = None;
+
+    h.app.conflict_prompt = Some(ConflictPrompt {
+        files: vec!["course.json".to_string()],
+        then: None,
+    });
+    h.frame(key_event(Key::O, Modifiers::COMMAND))
+        .drop_without_applying_deltas();
+    assert!(
+        h.app.pending_action.is_none(),
+        "conflict_prompt must block Cmd/Ctrl+O"
+    );
+    h.app.conflict_prompt = None;
+
+    h.app.restore_prompt = Some(RestorePrompt {
+        autosave_path: std::path::PathBuf::from("autosave.ccraft"),
+        file_path: None,
+        time_str: "12:00".to_string(),
+    });
+    h.frame(key_event(Key::N, Modifiers::COMMAND))
+        .drop_without_applying_deltas();
+    assert!(
+        h.app.pending_action.is_none(),
+        "restore_prompt must block Cmd/Ctrl+N"
+    );
+    h.app.restore_prompt = None;
+
+    // Web browser shortcut guard: prevents only Cmd/Ctrl+S, Cmd/Ctrl+Shift+S, Cmd/Ctrl+O, Cmd/Ctrl+N.
+    assert!(crate::should_prevent_browser_file_shortcut(
+        true, false, false, "s"
+    ));
+    assert!(crate::should_prevent_browser_file_shortcut(
+        true, false, true, "S"
+    ));
+    assert!(crate::should_prevent_browser_file_shortcut(
+        true, false, false, "o"
+    ));
+    assert!(crate::should_prevent_browser_file_shortcut(
+        true, false, false, "n"
+    ));
+    assert!(!crate::should_prevent_browser_file_shortcut(
+        true, false, true, "o"
+    ));
+    assert!(!crate::should_prevent_browser_file_shortcut(
+        true, false, true, "n"
+    ));
+    assert!(!crate::should_prevent_browser_file_shortcut(
+        true, false, false, "c"
+    ));
+    assert!(!crate::should_prevent_browser_file_shortcut(
+        true, false, false, "v"
+    ));
+    assert!(!crate::should_prevent_browser_file_shortcut(
+        true, false, false, "a"
+    ));
+    assert!(!crate::should_prevent_browser_file_shortcut(
+        true, true, false, "s"
+    ));
+    assert!(!crate::should_prevent_browser_file_shortcut(
+        false, false, false, "s"
+    ));
+}
