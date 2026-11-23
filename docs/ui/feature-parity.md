@@ -263,7 +263,7 @@ Counted from the tables below; recount when a row changes.
 | Scenes panel with scene combo | `slides.rs` | ✅ | — |
 | Triggers panel | `triggers.rs` | ✅ | — |
 | Slide layers panel | `layers.rs` | ✅ | — |
-| Timeline, States, Notes tabs | `timeline.rs`, `states.rs` | ✅ | — |
+| Timeline, States, Notes tabs | `timeline.rs`, `states.rs`; docked, Timeline, States, Triggers, Variables and Question are dock panels of their own, tabbed together by default (`dock.rs`) | ✅ | — |
 | Canvas zoom and fit | | ✅ | — |
 | Tooltips with name, shortcut and help | | 🟡 | M30 |
 | Status bar: slide n of m, size, theme, zoom | `status.rs` | 🟡 | M30 |

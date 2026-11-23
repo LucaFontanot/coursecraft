@@ -13,7 +13,8 @@ use crate::dock::Panel;
 /// The three kinds of panel, in View › Panels order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
-    /// Where the course is built: slides, canvas, timeline.
+    /// Where the course is built: slides, canvas, the timeline and the bottom
+    /// tabs beside it (states, triggers, variables, question).
     Workspace,
     /// Quick settings for the selection: Format, Animate, Slide, Course.
     Inspectors,
@@ -67,7 +68,13 @@ impl Section {
 #[must_use]
 pub fn family(panel: Panel) -> Family {
     match panel {
-        Panel::Slides | Panel::Canvas | Panel::Timeline => Family::Workspace,
+        Panel::Slides
+        | Panel::Canvas
+        | Panel::Timeline
+        | Panel::States
+        | Panel::Triggers
+        | Panel::Variables
+        | Panel::Question => Family::Workspace,
         Panel::Format | Panel::Animate | Panel::SlideInspector | Panel::CourseInspector => {
             Family::Inspectors
         }
@@ -83,6 +90,10 @@ pub fn sections(panel: Panel) -> &'static [Section] {
         Panel::Slides
         | Panel::Canvas
         | Panel::Timeline
+        | Panel::States
+        | Panel::Triggers
+        | Panel::Variables
+        | Panel::Question
         | Panel::Format
         | Panel::Animate
         | Panel::SlideInspector
@@ -171,6 +182,10 @@ pub fn body(editor: &mut Editor, ui: &mut egui::Ui, panel: Panel) {
         Panel::Slides
         | Panel::Canvas
         | Panel::Timeline
+        | Panel::States
+        | Panel::Triggers
+        | Panel::Variables
+        | Panel::Question
         | Panel::Format
         | Panel::Animate
         | Panel::SlideInspector

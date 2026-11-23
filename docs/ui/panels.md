@@ -1,6 +1,6 @@
 # Settings panels: what the ↘ launcher opens
 
-> Part of [the ribbon plan](README.md). **Status:** step 1 built, step 2 (Text) partly built.
+> Part of [the ribbon plan](README.md). **Status:** step 1 built, steps 2 (Text) and 4 (bottom tabs) partly built.
 > **Written:** 2026-11-23. Status marks as in README. Long-term plan: it starts in M30 and grows with every milestone after it.
 
 In Storyline the ↘ in a group's caption opens a modal dialog (Font, Paragraph, Size and Position,
@@ -58,7 +58,7 @@ per family. In the code: `crates/ui-egui/src/panels.rs`, `family()`.
 
 | Family | What it is | Panels |
 |---|---|---|
-| **Workspace** | where the course is built | Slides, Canvas, Timeline, Layers, Notes |
+| **Workspace** | where the course is built | Slides, Canvas, Timeline, States, Triggers, Variables, Question, Layers, Notes |
 | **Inspectors** | quick settings for the selection, as today | Format, Animate, Slide, Course |
 | **Settings** | every setting of one category; opened by ↘ | the panels below |
 
@@ -154,7 +154,7 @@ The panels are the base for the customization testers ask for. In order:
 | 1 ✅ | Registry (`panels.rs`: families, sections), `UiAction::PanelAt`, the tolerant layout loader (`dock::forget_unknown_panels`), View › Panels in family order, opening by itself (rule 10), floating windows with docking off, `panels_tests.rs`; every launcher moved to `PanelAt` | the infrastructure |
 | 2 🟡 | **Text** panel (Font, Paragraph, Text Box sections); Font ↘ and Paragraph ↘ switched on; space before and after a paragraph (only in this panel). Still disabled: caps, highlight, underline styles, tab stops, columns. Still to do: the Format inspector's text rows in quick mode, a ↘ on its Text header | Font and Paragraph dialogs (M31) |
 | 3 | **Size and Position** and **Shape Style**; Drawing ↘ and the contextual launchers | Size and Position dialog, Format Shape (M31) |
-| 4 | **Layers**, **Notes**, **Triggers**, **States**, **Variables**, **Question** as panels of their own | shell step 6 (M33) |
+| 4 🟡 | **Triggers**, **States**, **Variables**, **Question** as dock panels of their own (✅: tabbed with Timeline by default; a saved layout gains them beside Timeline; `ui.bottom_tab` brings its panel forward; in Master View they say why they are empty). Still to do: **Layers** and **Notes** out of the Timeline panel; Triggers, Variables and Question as settings panels with ↘ launchers | shell step 6 (M33) |
 | 5 | **Animation** and **Transition** | M34 |
 | 6 | **Slide Properties**, **Theme**, **Course and Player**, **Grid and Guides** | M33 |
 | 7 | **Media**, **Table**, **Accessibility** | M32 |

@@ -429,7 +429,10 @@ fn render_timeline_header(
                 let thumb_slot = ui.painter().add(egui::Shape::Noop);
                 let mut selected_rect = None;
                 let mut tabs = vec![BottomTab::Timeline];
-                if !editor.ui.master_view {
+                // Docked, each bottom tab is a dock panel with its own dock tab.
+                if editor.ui.dock.enabled {
+                    tabs.clear();
+                } else if !editor.ui.master_view {
                     tabs.extend([BottomTab::States, BottomTab::Triggers, BottomTab::Variables]);
                     // A draw slide has no question panel.
                     let slide_is_draw = editor
@@ -2314,6 +2317,45 @@ fn render_slide_cue_markers(
     on_slide_cue
 }
 
+/// Draw one of the bottom tabs other than the timeline.
+pub fn show_bottom_tab(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    tab: BottomTab,
+    actions: &mut Vec<(&'static str, Json)>,
+) {
+    match tab {
+        BottomTab::Timeline => {}
+        BottomTab::States => crate::states::show_states_tab(editor, ui, actions),
+        BottomTab::Triggers => crate::triggers::show_triggers_tab(editor, ui, actions),
+        BottomTab::Variables => crate::variables::show_variables_tab(editor, ui, actions),
+        BottomTab::Question => crate::question::show_question_tab(editor, ui, actions),
+    }
+}
+
+/// Why a bottom tab has nothing to show for the slide in hand, if it has not:
+/// the fixed panel hides these tabs, a dock panel says why.
+#[must_use]
+pub fn bottom_tab_unavailable(editor: &Editor, tab: BottomTab) -> Option<&'static str> {
+    if editor.ui.master_view {
+        return match tab {
+            BottomTab::Timeline => None,
+            BottomTab::States => Some(tl!("Slide masters have no states.")),
+            BottomTab::Triggers => Some(tl!("Slide masters have no triggers.")),
+            BottomTab::Variables => Some(tl!(
+                "Variables are edited on course slides, not on masters."
+            )),
+            BottomTab::Question => Some(tl!("Slide masters have no question.")),
+        };
+    }
+    let slide_is_draw = editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .is_some_and(|slide| slide.draw.is_some());
+    (tab == BottomTab::Question && slide_is_draw).then(|| tl!("A draw slide has no question."))
+}
+
 fn show_timeline_content(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -2370,22 +2412,9 @@ fn show_timeline_content(
 
     bleed_separator(ui);
 
-    if editor.ui.bottom_tab != BottomTab::Timeline {
-        match editor.ui.bottom_tab {
-            BottomTab::Timeline => {}
-            BottomTab::States => {
-                crate::states::show_states_tab(editor, ui, actions);
-            }
-            BottomTab::Triggers => {
-                crate::triggers::show_triggers_tab(editor, ui, actions);
-            }
-            BottomTab::Variables => {
-                crate::variables::show_variables_tab(editor, ui, actions);
-            }
-            BottomTab::Question => {
-                crate::question::show_question_tab(editor, ui, actions);
-            }
-        }
+    // Docked, the other bottom tabs are dock panels of their own.
+    if editor.ui.bottom_tab != BottomTab::Timeline && !editor.ui.dock.enabled {
+        show_bottom_tab(editor, ui, editor.ui.bottom_tab, actions);
         return;
     }
 

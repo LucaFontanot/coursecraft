@@ -318,3 +318,59 @@ fn a_layout_naming_a_panel_this_build_does_not_know_still_loads() {
         assert!(loaded.layout.contains(&Panel::Format));
     }
 }
+
+#[test]
+fn the_bottom_tabs_are_dock_panels_tabbed_with_the_timeline() {
+    let h = harness(true);
+    let group = group_of(&h, Panel::Timeline);
+    assert_eq!(group, Panel::BOTTOM.to_vec(), "one tab group: {group:?}");
+    for panel in Panel::BOTTOM {
+        assert_eq!(panels::family(panel), Family::Workspace, "{panel:?}");
+    }
+    assert!(
+        !h.editor.ui.timeline.tab_rects.contains_key("Triggers"),
+        "the timeline header has no tab strip of its own"
+    );
+}
+
+#[test]
+fn asking_for_a_bottom_tab_brings_its_panel_forward() {
+    let mut h = harness(true);
+    h.editor.ui.bottom_tab = crate::BottomTab::Triggers;
+    frames(&mut h, 2);
+    assert!(h.editor.ui.dock.rect(Panel::Triggers).is_some(), "in front");
+    assert!(
+        h.editor.ui.dock.rect(Panel::Timeline).is_none(),
+        "same group"
+    );
+    dock::set_open(&mut h.editor, Panel::Variables, false);
+    h.editor.ui.bottom_tab = crate::BottomTab::Variables;
+    frames(&mut h, 2);
+    assert!(dock::is_open(&h.editor, Panel::Variables), "reopened");
+    assert!(h.editor.ui.dock.rect(Panel::Variables).is_some());
+}
+
+#[test]
+fn in_master_view_the_bottom_panels_say_why_they_are_empty() {
+    let mut h = harness(true);
+    h.editor.ui.master_view = true;
+    h.editor.ui.bottom_tab = crate::BottomTab::Triggers;
+    frames(&mut h, 2);
+    assert!(h.find_text("Slide masters have no triggers.").is_some());
+}
+
+#[test]
+fn a_layout_saved_with_the_old_bottom_tab_strip_gains_the_new_panels() {
+    let h = harness(true);
+    let mut saved = serde_json::to_value(&h.editor.ui.dock.workspace).expect("serializes");
+    let text = saved.to_string().replace(
+        r#""timeline","states","triggers","variables","question""#,
+        r#""timeline""#,
+    );
+    assert_ne!(text, saved.to_string(), "the group was found");
+    saved = serde_json::from_str(&text).expect("still JSON");
+    let loaded = dock::load_workspace(Some(&saved));
+    for panel in Panel::BOTTOM {
+        assert!(loaded.layout.contains(&panel), "{panel:?} added");
+    }
+}

@@ -4330,6 +4330,21 @@ impl Editor {
         }
     }
 
+    /// One bottom tab drawn as a dock panel of its own (States, Triggers,
+    /// Variables, Question).
+    pub(crate) fn bottom_tab_body(&mut self, ui: &mut Ui, tab: BottomTab) {
+        if let Some(reason) = timeline::bottom_tab_unavailable(self, tab) {
+            ui.add_space(8.0);
+            ui.label(reason);
+            return;
+        }
+        let mut actions = Vec::new();
+        timeline::show_bottom_tab(self, ui, tab, &mut actions);
+        for (cmd, params) in actions {
+            self.run(cmd, params);
+        }
+    }
+
     /// Display the editor UI inside `ui` and return any shell requests.
     #[allow(clippy::cognitive_complexity)]
     pub fn show(&mut self, ui: &mut Ui) -> Vec<EditorRequest> {

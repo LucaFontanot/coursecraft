@@ -18,7 +18,7 @@ use craft_ui::layout::{SplitAxis, SplitSize};
 use egui::{Rect, Ui, vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::{Editor, InspectorTab};
+use crate::{BottomTab, Editor, InspectorTab};
 
 /// One dockable part of the editor window. Stable ids, saved in the preferences.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -38,18 +38,37 @@ pub enum Panel {
     /// Settings panels (`crate::panels`): opened by a ↘ launcher or by the
     /// work that needs them, not part of the default layout.
     Text,
+    /// The bottom tabs, each a panel of its own (they start as tabs of the
+    /// Timeline's group, where the fixed bottom panel's tab strip used to be).
+    States,
+    Triggers,
+    Variables,
+    Question,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 8] = [
+    pub const ALL: [Panel; 12] = [
         Panel::Slides,
         Panel::Canvas,
         Panel::Timeline,
+        Panel::States,
+        Panel::Triggers,
+        Panel::Variables,
+        Panel::Question,
         Panel::Format,
         Panel::Animate,
         Panel::SlideInspector,
         Panel::CourseInspector,
         Panel::Text,
+    ];
+
+    /// The bottom panels, in their tab order.
+    pub const BOTTOM: [Panel; 5] = [
+        Panel::Timeline,
+        Panel::States,
+        Panel::Triggers,
+        Panel::Variables,
+        Panel::Question,
     ];
 
     /// The inspector panels, in their tab order.
@@ -68,7 +87,45 @@ impl Panel {
             Panel::Animate => Some(InspectorTab::Animate),
             Panel::SlideInspector => Some(InspectorTab::Slide),
             Panel::CourseInspector => Some(InspectorTab::Course),
-            Panel::Slides | Panel::Canvas | Panel::Timeline | Panel::Text => None,
+            Panel::Slides
+            | Panel::Canvas
+            | Panel::Timeline
+            | Panel::Text
+            | Panel::States
+            | Panel::Triggers
+            | Panel::Variables
+            | Panel::Question => None,
+        }
+    }
+
+    /// The bottom tab this panel draws, if it is one.
+    #[must_use]
+    pub fn bottom_tab(self) -> Option<BottomTab> {
+        match self {
+            Panel::Timeline => Some(BottomTab::Timeline),
+            Panel::States => Some(BottomTab::States),
+            Panel::Triggers => Some(BottomTab::Triggers),
+            Panel::Variables => Some(BottomTab::Variables),
+            Panel::Question => Some(BottomTab::Question),
+            Panel::Slides
+            | Panel::Canvas
+            | Panel::Format
+            | Panel::Animate
+            | Panel::SlideInspector
+            | Panel::CourseInspector
+            | Panel::Text => None,
+        }
+    }
+
+    /// The panel that draws `tab`.
+    #[must_use]
+    pub fn for_bottom_tab(tab: BottomTab) -> Panel {
+        match tab {
+            BottomTab::Timeline => Panel::Timeline,
+            BottomTab::States => Panel::States,
+            BottomTab::Triggers => Panel::Triggers,
+            BottomTab::Variables => Panel::Variables,
+            BottomTab::Question => Panel::Question,
         }
     }
 
@@ -95,6 +152,10 @@ impl Panel {
             Panel::SlideInspector => "Slide",
             Panel::CourseInspector => "Course",
             Panel::Text => "Text",
+            Panel::States => "States",
+            Panel::Triggers => "Triggers",
+            Panel::Variables => "Variables",
+            Panel::Question => "Question",
         }
     }
 
@@ -113,7 +174,11 @@ impl Panel {
             | Panel::Animate
             | Panel::SlideInspector
             | Panel::CourseInspector
-            | Panel::Text => Permissions::default(),
+            | Panel::Text
+            | Panel::States
+            | Panel::Triggers
+            | Panel::Variables
+            | Panel::Question => Permissions::default(),
         }
     }
 
@@ -121,7 +186,11 @@ impl Panel {
         let min = match self {
             Panel::Slides => vec2(180.0, 160.0),
             Panel::Canvas => vec2(320.0, 200.0),
-            Panel::Timeline => vec2(320.0, crate::timeline::TIMELINE_PANEL_MIN_HEIGHT),
+            Panel::Timeline
+            | Panel::States
+            | Panel::Triggers
+            | Panel::Variables
+            | Panel::Question => vec2(320.0, crate::timeline::TIMELINE_PANEL_MIN_HEIGHT),
             Panel::Format
             | Panel::Animate
             | Panel::SlideInspector
@@ -147,6 +216,9 @@ pub struct DockState {
     /// from it (a ribbon button, a new selection), that panel is opened and
     /// activated.
     pub shown_inspector: InspectorTab,
+    /// The bottom tab last brought forward, as `shown_inspector` for
+    /// `ui.bottom_tab`.
+    pub shown_bottom: BottomTab,
 }
 
 impl Default for DockState {
@@ -156,6 +228,7 @@ impl Default for DockState {
             workspace: Workspace::new(default_layout()),
             rects: Vec::new(),
             shown_inspector: InspectorTab::default(),
+            shown_bottom: BottomTab::default(),
         }
     }
 }
@@ -354,7 +427,7 @@ pub fn default_layout() -> Layout<Panel> {
             active: 0,
         }),
         second: Box::new(Node::Tabs {
-            panels: vec![Panel::Timeline],
+            panels: Panel::BOTTOM.to_vec(),
             active: 0,
         }),
     };
@@ -399,6 +472,11 @@ impl DockContent<Panel> for Content<'_> {
                     self.editor.timeline_body(ui);
                 }
             }
+            Panel::States | Panel::Triggers | Panel::Variables | Panel::Question => {
+                if let Some(tab) = panel.bottom_tab() {
+                    self.editor.bottom_tab_body(ui, tab);
+                }
+            }
         }
     }
 
@@ -419,6 +497,7 @@ impl DockContent<Panel> for Content<'_> {
 /// and apply the user's layout changes.
 pub fn show(editor: &mut Editor, ui: &mut Ui) {
     reveal_inspector(editor);
+    reveal_bottom_tab(editor);
     crate::panels::follow_work(editor);
     let style = DockStyle::from_ui(ui);
     let layout = editor.ui.dock.workspace.layout.clone();
@@ -435,6 +514,7 @@ pub fn show(editor: &mut Editor, ui: &mut Ui) {
     let Content { editor, rects } = content;
     editor.ui.dock.rects = rects;
     follow_activated_inspector(editor, &output.actions);
+    follow_activated_bottom_tab(editor, &output.actions);
     apply(editor, output.actions);
     if let Some(err) = output.error {
         log::debug!("dock gesture refused: {err:?}");
@@ -500,6 +580,32 @@ fn follow_activated_inspector(editor: &mut Editor, actions: &[Action<Panel>]) {
         {
             editor.ui.inspector_tab = tab;
             editor.ui.dock.shown_inspector = tab;
+        }
+    }
+}
+
+/// Bring the bottom panel `ui.bottom_tab` names forward when it changed since
+/// the last frame (a menu item, Find, a states shortcut): opened if closed,
+/// then made the active tab of its group.
+pub fn reveal_bottom_tab(editor: &mut Editor) {
+    let tab = editor.ui.bottom_tab;
+    if editor.ui.dock.shown_bottom == tab {
+        return;
+    }
+    editor.ui.dock.shown_bottom = tab;
+    reveal(editor, Panel::for_bottom_tab(tab));
+}
+
+/// A click on a bottom panel's dock tab makes it the current bottom tab, so
+/// the shortcuts that act on one tab (C adds a cue point on the timeline)
+/// follow the user's choice.
+fn follow_activated_bottom_tab(editor: &mut Editor, actions: &[Action<Panel>]) {
+    for action in actions {
+        if let Action::Activate { panel } = action
+            && let Some(tab) = panel.bottom_tab()
+        {
+            editor.ui.bottom_tab = tab;
+            editor.ui.dock.shown_bottom = tab;
         }
     }
 }
