@@ -373,3 +373,160 @@ fn attached_server_starts_without_the_app_and_finds_it_when_it_opens() {
     drop(server);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn course_with_image(title: &str, src: &str) -> Course {
+    let mut course = Course::from_json(include_str!("../../../examples/hello-course/course.json"))
+        .expect("hello course");
+    course.title = title.to_owned();
+    let mut obj = course.scenes[0].slides[0].objects[0].clone();
+    obj.id = "pic-1".to_owned();
+    obj.kind = coursecraft_course::ObjectKind::Image {
+        src: src.to_owned(),
+        alt: "Pic".to_owned(),
+        crop: None,
+        outline: None,
+        shape: None,
+    };
+    course.scenes[0].slides[0].objects.push(obj);
+    course
+}
+
+#[test]
+fn m31_05_mcp_startup_open_ccraft_preserves_media_across_edit_and_save() {
+    let dir = std::env::temp_dir().join(format!("coursecraft-m31-05-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let ccraft_path = dir.join("deck.ccraft");
+    let png_bytes = b"\x89PNG\r\n\x1a\nfake-png-m31-05".to_vec();
+    let media = vec![("pic.png".to_owned(), png_bytes.clone())];
+    let course = course_with_image("M31-05 Initial", "pic.png");
+    let bytes = coursecraft_format::save_project(&course, &media).expect("save initial ccraft");
+    std::fs::write(&ccraft_path, bytes).expect("write initial ccraft");
+
+    let mut host = crate::open_headless_host(&ccraft_path).expect("startup open ccraft");
+
+    let messages = vec![
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "command_run",
+                "arguments": {
+                    "id": "slide.add",
+                    "params": { "title": "Edited Slide" }
+                }
+            }
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "file_save",
+                "arguments": {}
+            }
+        }),
+    ];
+
+    let responses = run_mcp_exchange(&messages, &mut host);
+    assert_eq!(responses.len(), 2);
+    assert!(
+        responses[0]["result"]["isError"].is_null() || responses[0]["result"]["isError"] == false,
+        "command_run failed: {}",
+        responses[0]
+    );
+    assert!(
+        responses[1]["result"]["isError"].is_null() || responses[1]["result"]["isError"] == false,
+        "file_save failed: {}",
+        responses[1]
+    );
+
+    let saved_bytes = std::fs::read(&ccraft_path).expect("read saved ccraft");
+    let reopened = coursecraft_format::open_project(&saved_bytes).expect("reopen ccraft");
+    assert!(
+        reopened.course.scenes[0]
+            .slides
+            .iter()
+            .any(|s| s.title == "Edited Slide")
+    );
+    assert_eq!(reopened.media, vec![("pic.png".to_owned(), png_bytes)]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn m31_06_mcp_startup_open_folder_and_course_json_with_media_preserve_media() {
+    let dir = std::env::temp_dir().join(format!("coursecraft-m31-06-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    // 1. .ccraft-folder startup open -> file_save -> media intact
+    let folder = dir.join("proj.ccraft-folder");
+    let png_bytes = b"\x89PNG\r\n\x1a\nfake-png-m31-06".to_vec();
+    let media = vec![("pic.png".to_owned(), png_bytes.clone())];
+    let course = course_with_image("M31-06 Folder", "pic.png");
+    let mut record = coursecraft_format::FolderRecord::default();
+    coursecraft_format::save_project_folder(&folder, &course, &media, &mut record)
+        .expect("save initial folder");
+
+    let mut host = crate::open_headless_host(&folder).expect("startup open folder");
+    let save_msgs = vec![json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "file_save", "arguments": {} }
+    })];
+    let res = run_mcp_exchange(&save_msgs, &mut host);
+    assert!(
+        res[0]["result"]["isError"].is_null() || res[0]["result"]["isError"] == false,
+        "folder file_save failed: {}",
+        res[0]
+    );
+    let reopened_folder = coursecraft_format::open_project_folder(&folder).expect("reopen folder");
+    assert_eq!(
+        reopened_folder.project.media,
+        vec![("pic.png".to_owned(), png_bytes.clone())]
+    );
+
+    // 2. course.json with sibling media/ -> file_save to .ccraft preserves media
+    let json_dir = dir.join("loose");
+    std::fs::create_dir_all(json_dir.join("media")).expect("media dir");
+    std::fs::write(json_dir.join("media/pic.png"), &png_bytes).expect("write sibling media");
+    let json_course = course_with_image("M31-06 Json", "pic.png");
+    let json_path = json_dir.join("course.json");
+    std::fs::write(
+        &json_path,
+        format!("{}\n", json_course.to_json().expect("serialize")),
+    )
+    .expect("write course.json");
+
+    let mut json_host = crate::open_headless_host(&json_path).expect("startup open course.json");
+    let out_ccraft = dir.join("converted.ccraft");
+    let convert_msgs = vec![json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "file_save",
+            "arguments": { "path": out_ccraft.to_string_lossy().to_string() }
+        }
+    })];
+    let convert_res = run_mcp_exchange(&convert_msgs, &mut json_host);
+    assert!(
+        convert_res[0]["result"]["isError"].is_null()
+            || convert_res[0]["result"]["isError"] == false,
+        "convert file_save failed: {}",
+        convert_res[0]
+    );
+    let converted_bytes = std::fs::read(&out_ccraft).expect("read converted ccraft");
+    let reopened_ccraft =
+        coursecraft_format::open_project(&converted_bytes).expect("reopen converted ccraft");
+    assert_eq!(
+        reopened_ccraft.media,
+        vec![("pic.png".to_owned(), png_bytes)]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

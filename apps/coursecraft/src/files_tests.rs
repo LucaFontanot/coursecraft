@@ -534,3 +534,57 @@ fn control_save_is_folder_matches_open_folder_without_extension() {
         &project
     ));
 }
+
+#[test]
+fn m31_07_attach_editor_host_adapter_ccraft_round_trip_keeps_media() {
+    use coursecraft_control::ControlHost;
+
+    let dir = scratch_dir("m31-07-attach-ccraft-media");
+    let ccraft_path = dir.join("attach-deck.ccraft");
+
+    let mut initial = course_titled("Attach Initial");
+    let mut img = initial.scenes[0].slides[0].objects[0].clone();
+    img.id = "logo".to_owned();
+    img.kind = coursecraft_course::ObjectKind::Image {
+        src: "logo.png".to_owned(),
+        alt: "Logo".to_owned(),
+        crop: None,
+        outline: None,
+        shape: None,
+    };
+    initial.scenes[0].slides[0].objects.push(img);
+
+    let media = vec![("logo.png".to_owned(), vec![1_u8; 40])];
+    crate::files::save_to(&ccraft_path, &initial, &media).expect("save initial ccraft");
+
+    let mut app = crate::EditorApp::new_desktop(course_titled("Blank"), None);
+    let mut adapter = crate::EditorHostAdapter {
+        editor: &mut app.editor,
+        project: &mut app.project,
+        config_dir: app.config_dir.as_deref(),
+        prefs: &mut app.prefs,
+    };
+
+    let opened_title =
+        ControlHost::open(&mut adapter, &ccraft_path, true).expect("attach open ccraft");
+    assert_eq!(opened_title, "Attach Initial");
+
+    ControlHost::run(
+        &mut adapter,
+        "slide.add",
+        &serde_json::json!({ "title": "Attach Edited Slide" }),
+    )
+    .expect("attach edit");
+
+    let saved_path = ControlHost::save(&mut adapter, None).expect("attach save");
+    assert_eq!(saved_path, ccraft_path);
+
+    let (reopened_course, reopened_media) = open_from(&ccraft_path).expect("reopen ccraft");
+    assert!(
+        reopened_course.scenes[0]
+            .slides
+            .iter()
+            .any(|s| s.title == "Attach Edited Slide")
+    );
+    assert_eq!(reopened_media, media);
+}

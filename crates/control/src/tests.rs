@@ -626,3 +626,46 @@ fn test_course_get_pointer_matches_full_course_json() {
         );
     }
 }
+
+#[test]
+fn m31_06_headless_open_path_course_json_with_sibling_media_saves_to_ccraft() {
+    let scratch = scratch_dir("m31-06-open-path-json-media");
+    let json_dir = scratch.join("course_dir");
+    std::fs::create_dir_all(json_dir.join("media")).expect("create media dir");
+    let png_bytes = b"\x89PNG\r\n\x1a\nsibling-media-bytes".to_vec();
+    std::fs::write(json_dir.join("media/hero.png"), &png_bytes).expect("write sibling media");
+
+    let mut course = coursecraft_course::Course::from_json(include_str!(
+        "../../../examples/hello-course/course.json"
+    ))
+    .expect("hello course");
+    course.title = "Sibling Media".to_owned();
+    let mut obj = course.scenes[0].slides[0].objects[0].clone();
+    obj.id = "hero-img".to_owned();
+    obj.kind = coursecraft_course::ObjectKind::Image {
+        src: "hero.png".to_owned(),
+        alt: "Hero".to_owned(),
+        crop: None,
+        outline: None,
+        shape: None,
+    };
+    course.scenes[0].slides[0].objects.push(obj);
+
+    let json_path = json_dir.join("course.json");
+    std::fs::write(
+        &json_path,
+        format!("{}\n", course.to_json().expect("serialize")),
+    )
+    .expect("write course.json");
+
+    let mut host = HeadlessHost::open_path(&json_path).expect("open_path course.json");
+    let out_ccraft = scratch.join("out.ccraft");
+    host.save(Some(&out_ccraft)).expect("save to ccraft");
+
+    // A second in-place save must still keep the media even after target changed.
+    host.save(None).expect("second in-place save");
+
+    let bytes = std::fs::read(&out_ccraft).expect("read out.ccraft");
+    let reopened = coursecraft_format::open_project(&bytes).expect("reopen out.ccraft");
+    assert_eq!(reopened.media, vec![("hero.png".to_owned(), png_bytes)]);
+}
