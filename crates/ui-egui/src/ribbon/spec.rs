@@ -428,85 +428,6 @@ const HOME_SLIDE: &[Group] = &[
         ],
     },
     Group {
-        id: "ai",
-        label: "AI",
-        launcher: None,
-        items: &[
-            item(
-                "ai.insert_text",
-                "Insert Text",
-                Icon::Sparkle,
-                Large,
-                NotYet("AI text drafting"),
-            ),
-            item(
-                "ai.edit_text",
-                "Edit Text",
-                Icon::PencilSimple,
-                Large,
-                NotYet("AI rewriting of selected text"),
-            ),
-            item(
-                "ai.insert_image",
-                "Insert Image",
-                Icon::Image,
-                Large,
-                NotYet("AI images"),
-            ),
-            split(
-                "ai.insert_audio",
-                "Insert Audio",
-                Icon::SpeakerHigh,
-                LargeSplit,
-                Ui(UiAction::NarrationFromText),
-                Menu::Items(&[
-                    item(
-                        "ai.audio.narration",
-                        "Narration from Text…",
-                        Icon::SpeakerHigh,
-                        Small,
-                        Ui(UiAction::NarrationFromText),
-                    ),
-                    item(
-                        "ai.audio.effect",
-                        "Sound Effect",
-                        Icon::SpeakerHigh,
-                        Small,
-                        NotYet("AI sound effects"),
-                    ),
-                    item(
-                        "ai.audio.music",
-                        "Music",
-                        Icon::SpeakerHigh,
-                        Small,
-                        NotYet("AI music"),
-                    ),
-                ]),
-            ),
-            item(
-                "ai.quiz",
-                "Quiz",
-                Icon::ListChecks,
-                Small,
-                NotYet("AI quiz drafting"),
-            ),
-            item(
-                "ai.question",
-                "Question",
-                Icon::Question,
-                Small,
-                NotYet("AI question drafting"),
-            ),
-            item(
-                "ai.summary",
-                "Summary",
-                Icon::Article,
-                Small,
-                NotYet("AI summaries"),
-            ),
-        ],
-    },
-    Group {
         id: "font",
         label: "Font",
         launcher: Some(NotYet("the Font dialog")),
@@ -825,34 +746,6 @@ const HOME_MAP: &[Group] = &[
                 Icon::Cards,
                 SmallSplit,
                 NotYet(WIRING_BANKS),
-            ),
-        ],
-    },
-    Group {
-        id: "map.ai",
-        label: "AI",
-        launcher: None,
-        items: &[
-            item(
-                "map.ai.quiz",
-                "Quiz",
-                Icon::ListChecks,
-                Large,
-                NotYet("AI quiz drafting"),
-            ),
-            item(
-                "map.ai.question",
-                "Question",
-                Icon::Question,
-                Large,
-                NotYet("AI question drafting"),
-            ),
-            item(
-                "map.ai.summary",
-                "Summary",
-                Icon::Article,
-                Large,
-                NotYet("AI summaries"),
             ),
         ],
     },
@@ -1879,6 +1772,130 @@ const ANIMATIONS: &[Group] = &[
 // Help
 // ---------------------------------------------------------------------------
 
+const AI: &[Group] = &[
+    Group {
+        id: "ai.write",
+        label: "Write",
+        launcher: None,
+        items: &[
+            item(
+                "ai.insert_text",
+                "Insert Text",
+                Icon::Sparkle,
+                Large,
+                NotYet("AI text drafting"),
+            ),
+            item(
+                "ai.edit_text",
+                "Edit Text",
+                Icon::PencilSimple,
+                Large,
+                NotYet("AI rewriting of selected text"),
+            ),
+            item(
+                "ai.summary",
+                "Summary",
+                Icon::Article,
+                Large,
+                NotYet("AI summaries"),
+            ),
+        ],
+    },
+    Group {
+        id: "ai.media",
+        label: "Media",
+        launcher: None,
+        items: &[
+            item(
+                "ai.insert_image",
+                "Insert Image",
+                Icon::Image,
+                Large,
+                NotYet("AI images"),
+            ),
+            split(
+                "ai.insert_audio",
+                "Insert Audio",
+                Icon::SpeakerHigh,
+                LargeSplit,
+                Ui(UiAction::NarrationFromText),
+                Menu::Items(&[
+                    item(
+                        "ai.audio.narration",
+                        "Narration from Text…",
+                        Icon::SpeakerHigh,
+                        Small,
+                        Ui(UiAction::NarrationFromText),
+                    ),
+                    item(
+                        "ai.audio.effect",
+                        "Sound Effect",
+                        Icon::SpeakerHigh,
+                        Small,
+                        NotYet("AI sound effects"),
+                    ),
+                    item(
+                        "ai.audio.music",
+                        "Music",
+                        Icon::SpeakerHigh,
+                        Small,
+                        NotYet("AI music"),
+                    ),
+                ]),
+            ),
+        ],
+    },
+    Group {
+        id: "ai.assess",
+        label: "Assess",
+        launcher: None,
+        items: &[
+            item(
+                "ai.quiz",
+                "Quiz",
+                Icon::ListChecks,
+                Large,
+                NotYet("AI quiz drafting"),
+            ),
+            item(
+                "ai.question",
+                "Question",
+                Icon::Question,
+                Large,
+                NotYet("AI question drafting"),
+            ),
+        ],
+    },
+    Group {
+        id: "ai.agents",
+        label: "Agents",
+        launcher: None,
+        items: &[
+            item(
+                "ai.connect_agent",
+                "Connect an AI Agent…",
+                Icon::Robot,
+                Small,
+                Ui(UiAction::ConnectAgent),
+            ),
+            item(
+                "ai.settings",
+                "AI Settings…",
+                Icon::Gear,
+                Small,
+                Ui(UiAction::AiSettings),
+            ),
+            item(
+                "ai.automation",
+                "Allow Automation",
+                Icon::Lock,
+                Small,
+                Ui(UiAction::Automation),
+            ),
+        ],
+    },
+];
+
 const HELP: &[Group] = &[
     Group {
         id: "help.help",
@@ -1949,34 +1966,6 @@ const HELP: &[Group] = &[
         )],
     },
     Group {
-        id: "help.ai",
-        label: "AI",
-        launcher: None,
-        items: &[
-            item(
-                "help.connect_agent",
-                "Connect an AI Agent…",
-                Icon::Robot,
-                Small,
-                Ui(UiAction::ConnectAgent),
-            ),
-            item(
-                "help.ai_settings",
-                "AI Settings…",
-                Icon::Gear,
-                Small,
-                Ui(UiAction::AiSettings),
-            ),
-            item(
-                "help.automation",
-                "Allow Automation",
-                Icon::Lock,
-                Small,
-                Ui(UiAction::Automation),
-            ),
-        ],
-    },
-    Group {
         id: "help.about",
         label: "About",
         launcher: None,
@@ -2043,6 +2032,13 @@ pub const TABS: &[Tab] = &[
         label: "View",
         when: TabWhen::Always,
         groups: VIEW,
+        map_groups: None,
+    },
+    Tab {
+        id: "ai",
+        label: "AI",
+        when: TabWhen::Always,
+        groups: AI,
         map_groups: None,
     },
     Tab {

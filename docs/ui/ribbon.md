@@ -24,14 +24,15 @@
 | 5 | **Transitions** | slide open |
 | 6 | **Animations** | slide open |
 | 7 | **View** | always |
-| 8 | **Help** | always |
-| 9+ | contextual | see [contextual-tabs.md](contextual-tabs.md) |
+| 8 | **AI** | always; CourseCraft's own tab (Storyline keeps its AI Assistant on Home) |
+| 9 | **Help** | always |
+| 10+ | contextual | see [contextual-tabs.md](contextual-tabs.md) |
 
 In the Course Map, Insert, Transitions and Animations stay in the strip but every control in them is
 disabled with the tooltip `Open a slide first`. (This keeps the strip from jumping; Storyline hides
 nothing either.)
 
-Every main tab ends with a **Publish** group (Preview at least). Its controls are the same
+Every main tab but AI and Help ends with a **Publish** group (Preview at least). Its controls are the same
 everywhere and are specified once, under Home.
 
 ## File
@@ -94,9 +95,6 @@ Shown when the Course Map view tab is active.
 | | Starting Scene | T | `course.update` `{start_scene}` (new field) | ⛔ | the course model has no start-scene field yet; the course starts at the first slide. Needs the field, a flag in the map and a runtime rule in `triggers.md` |
 | | Index | LS | — | ⛔ | Storyline's scene index menu; behaviour to confirm |
 | | Question Banks | LS | `bank.create`, `ui:banks.manage` | ✅ | ▾ New Question Bank, Manage Banks…, Import Questions from CSV… |
-| AI | Quiz | L | `ui:ai.quiz` (new) | ⛔ | draft a quiz from the course text through the user's agent |
-| | Question | L | `ui:ai.question` (new) | ⛔ | |
-| | Summary | L | `ui:ai.summary` (new) | ⛔ | |
 | Slide | New Slide | LS | `slide.add`, `slide.add_from_layout`, `template.add_slide` | 🟡 | ▾ menu below |
 | | Apply Layout | SS | `slide.set_master` | ✅ | |
 | | Reset | S | `slide.set_master` (reapply) | ⛔ | reset placeholders to the layout |
@@ -132,11 +130,6 @@ Shown when the Course Map view tab is active.
 | | Apply Layout | SS | `slide.set_master` | ✅ | |
 | | Focus Order | S | `ui:focusOrder` | 🟡 | focus order exists (`focus_order`); needs its own dialog |
 | | Duplicate | S | `slide.duplicate` | ✅ | |
-| AI | Insert Text | L | — | ⛔ | |
-| | Edit Text | L | — | ⛔ | rewrite selected text |
-| | Insert Image | L | — | ⛔ | |
-| | Insert Audio | LS | `ui:narration.fromText` | 🟡 | ▾ Narration from Text… ✅ (`audio_ai.rs`), Sound Effect ⛔, Music ⛔ |
-| | Quiz / Question / Summary | S×3 | — | ⛔ | as Course Map |
 | Font ↘ | Text Styles | LS | `text_style.apply` | ✅ | `text_styles_ui.rs`; ▾ lists course text styles |
 | | Font family | C | `text.style_range` `{font}` | ✅ | `font_picker.rs` |
 | | Font size | C | `text.style_range` `{size}` | ✅ | |
@@ -175,7 +168,7 @@ Shown when the Course Map view tab is active.
 | Slide | Slide Layer | L | `layer.add` | ✅ | `toolbar::add_new_layer`. **Insert is built in `spec.rs`**; the menu bar's Insert menu is hidden while the ribbon is on |
 | | Convert to Custom Question | L | `question.set_kind` | ⛔ | turn the slide's objects into a custom question |
 | | Zoom Region | L | — | ⛔ | camera zoom on part of the slide |
-| AI | Insert Text, Edit Text, Insert Image, Insert Audio, Quiz, Question, Summary | | as Home | | |
+| AI | Insert Text, Edit Text, Insert Image, Insert Audio, Quiz, Question, Summary | | on the AI tab | | |
 | Library | Characters | L | — | 🚫 | Not planned: characters |
 | | Photos | L | — | 🚫 | Not planned: content library |
 | | Illustrations | L | — | 🚫 | |
@@ -289,6 +282,22 @@ Not shown except Slide Master; proposal.
 | Theme | Light / Dark | T | `ui:theme` | ✅ (Light, Dark, Match System) |
 | Publish | Preview | LS | | ✅ |
 
+## AI
+
+CourseCraft's own tab: every AI control in one place, so Home keeps only editing. Storyline puts
+its AI Assistant group on Home; the controls and their status are the same.
+
+| Group | Control | Kind | Action | Status | Notes |
+|---|---|---|---|---|---|
+| Write | Insert Text | L | — | ⛔ | draft text on the slide |
+| | Edit Text | L | — | ⛔ | rewrite selected text |
+| | Summary | L | `ui:ai.summary` (new) | ⛔ | |
+| Media | Insert Image | L | — | ⛔ | |
+| | Insert Audio | LS | `ui:narration.fromText` | 🟡 | ▾ Narration from Text… ✅ (`audio_ai.rs`), Sound Effect ⛔, Music ⛔ |
+| Assess | Quiz | L | `ui:ai.quiz` (new) | ⛔ | draft a quiz from the course text through the user's agent |
+| | Question | L | `ui:ai.question` (new) | ⛔ | |
+| Agents | Connect an AI Agent…, AI Settings…, Allow automation | S×3 | `ui:ai.*` | ✅ | moved from Help |
+
 ## Help
 
 | Group | Control | Action | Status |
@@ -298,7 +307,6 @@ Not shown except Slide Master; proposal.
 | | Welcome Screen | `ui:welcome` | ✅ |
 | Community | CourseCraft on GitHub, Report a Problem…, Suggest a Feature… | `ui:help.*` | ✅ |
 | Updates | Check for Updates | `ui:updates` | ✅ |
-| AI | Connect an AI Agent…, AI Settings…, Allow automation | `ui:ai.*` | ✅ |
 | About | About CourseCraft | `ui:about` | ⛔ (no About window yet; drawn disabled) |
 
 CourseCraft's **Project** menu (Course settings, Variables, Glossary, Resources, Audit,

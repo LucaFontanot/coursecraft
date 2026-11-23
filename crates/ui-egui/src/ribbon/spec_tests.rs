@@ -94,6 +94,7 @@ fn tab_strip_matches_the_documented_order() {
             "transitions",
             "animations",
             "view",
+            "ai",
             "help"
         ],
         "docs/ui/ribbon.md › Tab strip"
@@ -102,8 +103,8 @@ fn tab_strip_matches_the_documented_order() {
 
 #[test]
 fn every_built_tab_ends_with_publish() {
-    // Help has no Publish group (ribbon.md › Help).
-    for tab in TABS.iter().filter(|t| t.id != "help") {
+    // Help and AI have no Publish group (ribbon.md › Help, AI).
+    for tab in TABS.iter().filter(|t| !matches!(t.id, "help" | "ai")) {
         for groups in [Some(tab.groups), tab.map_groups].into_iter().flatten() {
             if let Some(last) = groups.last() {
                 assert_eq!(last.label, "Publish", "{} must end with Publish", tab.id);
@@ -167,6 +168,8 @@ fn home_draws_its_groups_and_tab_strip() {
 #[test]
 fn disabled_control_explains_and_does_nothing() {
     let mut h = harness_with_ribbon();
+    h.editor.ui.ribbon.tab = "ai";
+    h.idle_frame();
     let pos = h.find_text("Insert\nText").expect("Insert Text");
     let tip = h.probe_tooltip(pos).unwrap_or_default();
     assert!(
@@ -458,4 +461,20 @@ fn groups_that_do_not_fit_shrink_to_one_button() {
     assert!(!shrunk[0], "the leftmost group stays whole");
     let wide = super::shrunk_groups(&h.editor.ui.ribbon, tab.groups, 5000.0);
     assert!(wide.iter().all(|s| !*s));
+}
+
+#[test]
+fn ai_controls_live_on_their_own_tab() {
+    let ai = spec::tab("ai").expect("ai tab");
+    let ids: Vec<&str> = ai.groups.iter().map(|g| g.id).collect();
+    assert_eq!(ids, ["ai.write", "ai.media", "ai.assess", "ai.agents"]);
+    for id in ["home", "help"] {
+        let tab = spec::tab(id).expect("tab");
+        for groups in [Some(tab.groups), tab.map_groups].into_iter().flatten() {
+            assert!(
+                groups.iter().all(|g| !g.label.contains("AI")),
+                "{id} still has an AI group"
+            );
+        }
+    }
 }
