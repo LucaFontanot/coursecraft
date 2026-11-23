@@ -15,7 +15,7 @@
 |---|---|---|---|---|
 | Project and file | 7 | 2 | 1 | 2 |
 | Structure: scenes, slides, masters | 8 | 3 | 7 | 0 |
-| Text | 12 | 4 | 8 | 0 |
+| Text | 13 | 3 | 8 | 0 |
 | Shapes, pictures and buttons | 13 | 5 | 11 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
@@ -25,7 +25,7 @@
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **106** | **40** | **62** | **12** |
+| **Total** | **107** | **39** | **62** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -74,20 +74,20 @@ Counted from the tables below; recount when a row changes.
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
 | Text boxes, placeholders, autofit | `object.add`, `object.set_autofit` | ✅ | — |
-| Font family and size, grow/shrink | `text.style_range` | ✅ | — |
+| Font family and size, grow/shrink | `text.style_range`; Home › Font through `text_format.rs` | ✅ | — |
 | Bold, italic, underline, strikethrough | `text.style_range` | ✅ | — |
 | Superscript, subscript | `text.style_range` | ✅ | — |
 | Character spacing | `letter_spacing` | ✅ | — |
 | Font colour with theme colours and eyedropper | `eyedropper.rs` | ✅ | — |
 | Text styles | `text_style.*` | ✅ | — |
-| Bullets, numbering, indent, line spacing, alignment | `text.set_paragraph` | 🟡 numbering styles | M31 |
+| Bullets, numbering, indent, line spacing, alignment | `text.set_paragraph(s)`; Home › Paragraph through `text_format.rs` | 🟡 numbering styles | M31 |
 | Find and replace | `course.find`, `course.replace` | ✅ | — |
 | Spelling | `spell_check.rs` | ✅ | — |
 | Hyperlinks | `text.set_link` | ✅ | — |
 | Format painter | `format_painter.rs` | ✅ | — |
 | Theme fonts (heading + body) | Theme dialog | ✅ | — |
 | Paste options (destination theme, keep source, text only) | `object.paste` | 🟡 one mode | M31 |
-| Vertical text alignment | inspector | 🟡 | M31 |
+| Vertical text alignment | `text.set_paragraph` `{valign}`: Home › Paragraph › Align Text, inspector | ✅ | — |
 | Clear formatting | — | ⛔ | M31 |
 | Text shadow | — | ⛔ | M31 |
 | Change case | — | ⛔ | M31 |

@@ -37,6 +37,11 @@ pub struct RibbonState {
     /// Each group's drawn width (group id, width), measured when it was last
     /// drawn whole; groups that don't fit shrink to one button, rightmost first.
     pub group_widths: Vec<(&'static str, f32)>,
+    /// Where the ribbon was drawn last frame: a click there leaves the text
+    /// being edited on the canvas open, so Bold acts on it.
+    pub rect: Rect,
+    /// What the text controls act on this frame (`crate::text_format`).
+    pub text: Result<crate::text_format::TextState, &'static str>,
 }
 
 impl Default for RibbonState {
@@ -46,6 +51,8 @@ impl Default for RibbonState {
             tab: "home",
             collapsed: false,
             group_widths: Vec::new(),
+            rect: Rect::NOTHING,
+            text: Err(""),
         }
     }
 }
@@ -72,7 +79,7 @@ pub fn disabled_reason(action: Action) -> Option<String> {
             tl!("Not planned: {reason}"),
             &[("reason", tl!(reason))],
         )),
-        Action::Command(_) | Action::Ui(_) => None,
+        Action::Command(_) | Action::Ui(_) | Action::Text(_) => None,
     }
 }
 
@@ -97,6 +104,10 @@ pub fn availability(
             }
         }
         Action::Ui(ui_action) => ui_available(editor, ui_action).map_err(|r| tl!(r).to_owned()),
+        Action::Text(_) => match &editor.ui.ribbon.text {
+            Ok(_) => Ok(()),
+            Err(reason) => Err(tl!(reason).to_owned()),
+        },
         Action::NotYet(_) | Action::NotPlanned(_) => Ok(()),
     }
 }
@@ -300,6 +311,11 @@ fn run(editor: &mut Editor, action: Action, resp: &Response, requests: &mut Vec<
             }
         }
         Action::Ui(ui_action) => run_ui(editor, ui_action, resp, requests),
+        Action::Text(op) => {
+            if let Some(change) = text_change(editor, op) {
+                crate::text_format::apply(editor, &change);
+            }
+        }
         Action::NotYet(_) | Action::NotPlanned(_) => {}
     }
 }
@@ -486,6 +502,10 @@ pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>)
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F1)) {
         editor.ui.ribbon.collapsed = !editor.ui.ribbon.collapsed;
     }
+    editor.ui.ribbon.rect = ui.max_rect();
+    editor.ui.ribbon.text = crate::text_format::targets(editor).and_then(|_| {
+        crate::text_format::state(editor).ok_or("Select a text box, or a shape that holds text")
+    });
     tab_strip(editor, ui, requests);
     if editor.ui.ribbon.collapsed {
         return;
@@ -908,7 +928,11 @@ fn control(
     let state = availability(editor, item.action, blocked);
     let enabled = state.is_ok();
     let label = tl!(item.label);
-    let selected = matches!(item.action, Action::Ui(a) if ui_selected(editor, a));
+    let selected = match item.action {
+        Action::Ui(a) => ui_selected(editor, a),
+        Action::Text(op) => text_selected(editor, op),
+        _ => false,
+    };
     let (main, arrow) = match item.kind {
         Kind::Large | Kind::LargeSplit => widgets::large(
             ui,
@@ -930,7 +954,10 @@ fn control(
             widgets::toggle(ui, item.icon, label, enabled, selected),
             None,
         ),
-        Kind::Combo { width } => (widgets::combo_field(ui, label, "", width, enabled), None),
+        Kind::Combo { width } => (
+            widgets::combo_field(ui, label, &combo_text(editor, item.action), width, enabled),
+            None,
+        ),
     };
     let tip = tooltip(item, &state);
     let main = main.on_hover_text(&tip);
@@ -946,11 +973,246 @@ fn control(
             run(editor, item.action, &main, requests);
         }
     }
-    if let Some(arrow) = arrow {
+    if let (Some(arrow), Action::Text(op)) = (&arrow, item.action) {
+        let arrow = arrow.clone().on_hover_text(&tip);
+        widgets::split_popup(&main, &arrow, op.has_menu() && enabled)
+            .show(|ui| text_menu(editor, ui, op));
+    } else if let Some(arrow) = arrow {
         let arrow = arrow.on_hover_text(&tip);
         widgets::split_popup(&main, &arrow, menu_only && enabled).show(|ui| {
             menu(editor, ui, item, blocked, requests);
         });
+    } else if let Action::Text(op) = item.action
+        && op.has_menu()
+    {
+        // Font, size, colour, spacing: the control itself opens its list.
+        widgets::split_popup(&main, &main, enabled).show(|ui| text_menu(editor, ui, op));
+    }
+}
+
+/// Whether a text toggle is on for the text the controls act on.
+fn text_selected(editor: &Editor, op: spec::TextOp) -> bool {
+    use coursecraft_course::{Align, ListKind};
+    use spec::TextOp;
+    let Ok(st) = &editor.ui.ribbon.text else {
+        return false;
+    };
+    match op {
+        TextOp::Bold => st.bold == Some(true),
+        TextOp::Italic => st.italic == Some(true),
+        TextOp::Underline => st.underline == Some(true),
+        TextOp::Strikethrough => st.strikethrough == Some(true),
+        TextOp::Bullets => st.list == Some(ListKind::Bullet),
+        TextOp::Numbering => st.list == Some(ListKind::Number),
+        TextOp::AlignLeft => st.align == Some(Align::Left),
+        TextOp::AlignCenter => st.align == Some(Align::Center),
+        TextOp::AlignRight => st.align == Some(Align::Right),
+        TextOp::Justify => st.align == Some(Align::Justify),
+        _ => false,
+    }
+}
+
+/// The value a combo shows: the font or size at the text, blank when mixed.
+fn combo_text(editor: &Editor, action: Action) -> String {
+    let Ok(st) = &editor.ui.ribbon.text else {
+        return String::new();
+    };
+    match action {
+        Action::Text(spec::TextOp::Font) => st.font.clone().unwrap_or_default(),
+        Action::Text(spec::TextOp::Size) => st.size.map(fmt_size).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn fmt_size(size: f32) -> String {
+    if (size - size.round()).abs() < 0.05 {
+        format!("{}", size.round() as i32)
+    } else {
+        format!("{size:.1}")
+    }
+}
+
+/// The change a text control makes when clicked (controls with a menu make
+/// theirs from the menu).
+fn text_change(editor: &Editor, op: spec::TextOp) -> Option<crate::text_format::Change> {
+    use crate::text_format::Change;
+    use coursecraft_course::{Align, ListKind};
+    use spec::TextOp;
+    let _ = editor;
+    Some(match op {
+        TextOp::Grow => Change::Grow,
+        TextOp::Shrink => Change::Shrink,
+        TextOp::Bold => Change::Bold,
+        TextOp::Italic => Change::Italic,
+        TextOp::Underline => Change::Underline,
+        TextOp::Strikethrough => Change::Strikethrough,
+        TextOp::Bullets => Change::List(ListKind::Bullet),
+        TextOp::Numbering => Change::List(ListKind::Number),
+        TextOp::IndentLess => Change::Indent(-1),
+        TextOp::IndentMore => Change::Indent(1),
+        TextOp::AlignLeft => Change::Align(Align::Left),
+        TextOp::AlignCenter => Change::Align(Align::Center),
+        TextOp::AlignRight => Change::Align(Align::Right),
+        TextOp::Justify => Change::Align(Align::Justify),
+        TextOp::TextStyles
+        | TextOp::Font
+        | TextOp::Size
+        | TextOp::Spacing
+        | TextOp::Color
+        | TextOp::LineSpacing
+        | TextOp::AlignText => return None,
+    })
+}
+
+/// The ▾ list of a text control; a pick applies at once.
+fn text_menu(editor: &mut Editor, ui: &mut Ui, op: spec::TextOp) {
+    use crate::text_format::{Change, LINE_SPACINGS, SIZES, SPACINGS};
+    use coursecraft_course::VAlign;
+    use spec::TextOp;
+    let st = editor.ui.ribbon.text.clone().unwrap_or_default();
+    let mut picked: Option<Change> = None;
+    let mut item = |ui: &mut Ui, label: &str, on: bool, change: Change| {
+        if ui.add(egui::Button::selectable(on, label)).clicked() {
+            picked = Some(change);
+        }
+    };
+    match op {
+        TextOp::TextStyles => {
+            text_styles_menu(editor, ui);
+            return;
+        }
+        TextOp::Font => {
+            let mut fonts = editor.ui.properties_lists.font_families.clone();
+            let theme = editor.session.course.theme.font.clone();
+            fonts.retain(|f| *f != theme);
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(tl!("Theme font"))
+                            .small()
+                            .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+                    );
+                    let on = st.font.as_deref() == Some(theme.as_str());
+                    item(ui, &theme, on, Change::Font(theme.clone()));
+                    ui.separator();
+                    for font in fonts {
+                        let on = st.font.as_deref() == Some(font.as_str());
+                        item(ui, &font, on, Change::Font(font.clone()));
+                    }
+                });
+        }
+        TextOp::Size => {
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    for size in SIZES {
+                        let on = st.size.is_some_and(|s| (s - size).abs() < 0.05);
+                        item(ui, &fmt_size(size), on, Change::Size(size));
+                    }
+                });
+        }
+        TextOp::Spacing => {
+            for (label, points) in SPACINGS {
+                item(ui, tl!(label), false, Change::Spacing(points));
+            }
+        }
+        TextOp::LineSpacing => {
+            for lines in LINE_SPACINGS {
+                let on = st.line_spacing.is_some_and(|l| (l - lines).abs() < 0.01);
+                item(
+                    ui,
+                    format!("{lines:.2}")
+                        .trim_end_matches('0')
+                        .trim_end_matches('.'),
+                    on,
+                    Change::LineSpacing(lines),
+                );
+            }
+        }
+        TextOp::AlignText => {
+            for (label, valign) in [
+                ("Top", VAlign::Top),
+                ("Middle", VAlign::Middle),
+                ("Bottom", VAlign::Bottom),
+            ] {
+                item(
+                    ui,
+                    tl!(label),
+                    st.valign == Some(valign),
+                    Change::VAlign(valign),
+                );
+            }
+        }
+        TextOp::Color => {
+            let theme = &editor.session.course.theme;
+            let mut colors: Vec<(String, String)> = vec![
+                (tl!("Text").to_owned(), theme.text.0.clone()),
+                (tl!("Accent").to_owned(), theme.accent.0.clone()),
+                (tl!("Background").to_owned(), theme.background.0.clone()),
+            ];
+            colors.extend(
+                theme
+                    .palette
+                    .iter()
+                    .map(|c| (c.name.clone(), c.color.0.clone())),
+            );
+            for (name, hex) in [
+                ("Black", "#000000"),
+                ("White", "#FFFFFF"),
+                ("Red", "#C00000"),
+                ("Orange", "#ED7D31"),
+                ("Yellow", "#FFC000"),
+                ("Green", "#00B050"),
+                ("Blue", "#0070C0"),
+                ("Purple", "#7030A0"),
+            ] {
+                colors.push((tl!(name).to_owned(), hex.to_owned()));
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(8.0 * 24.0);
+                for (name, hex) in colors {
+                    let fill =
+                        coursecraft_render::parse_color(&coursecraft_course::Color(hex.clone()))
+                            .unwrap_or(egui::Color32::TRANSPARENT);
+                    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
+                    ui.painter().rect_filled(rect, 2.0, fill);
+                    let on = st
+                        .color
+                        .as_deref()
+                        .is_some_and(|c| c.eq_ignore_ascii_case(&hex));
+                    let p = coursecraft_render::palette(ui.ctx());
+                    let stroke = if on || resp.hovered() {
+                        p.accent
+                    } else {
+                        p.border
+                    };
+                    ui.painter().rect_stroke(
+                        rect,
+                        2.0,
+                        egui::Stroke::new(if on { 2.0 } else { 1.0 }, stroke),
+                        egui::StrokeKind::Inside,
+                    );
+                    if resp.on_hover_text(format!("{name} {hex}")).clicked() {
+                        picked = Some(Change::Color(hex.clone()));
+                    }
+                }
+            });
+            ui.separator();
+            if ui.button(tl!("More Colors…")).clicked() {
+                crate::panels::open_at(
+                    editor,
+                    crate::dock::Panel::Text,
+                    Some(crate::panels::Section::Font),
+                );
+                ui.close();
+            }
+        }
+        _ => {}
+    }
+    if let Some(change) = picked {
+        crate::text_format::apply(editor, &change);
+        ui.close();
     }
 }
 
@@ -1022,5 +1284,66 @@ fn shapes_menu(editor: &mut Editor, ui: &mut Ui) {
             ui.close();
         }
         None => {}
+    }
+}
+
+/// Text Styles ▾: apply a course style to the selected text boxes, make one
+/// from the first, or manage them.
+fn text_styles_menu(editor: &mut Editor, ui: &mut Ui) {
+    let Ok(targets) = crate::text_format::targets(editor) else {
+        return;
+    };
+    let course = &editor.session.course;
+    let slide = targets.first().map(|t| t.slide.clone()).unwrap_or_default();
+    // Named styles link to text boxes only, not to shapes or table cells.
+    let boxes: Vec<String> = targets
+        .iter()
+        .filter(|t| t.cell.is_none())
+        .filter(|t| {
+            course
+                .slide(&t.slide)
+                .and_then(|s| s.object(&t.object))
+                .is_some_and(|(o, _)| matches!(o.kind, coursecraft_course::ObjectKind::Text { .. }))
+        })
+        .map(|t| t.object.clone())
+        .collect();
+    let mut action: Option<(&'static str, serde_json::Value)> = None;
+    if course.text_styles.is_empty() {
+        ui.label(tl!("No styles yet"));
+    }
+    for named in &course.text_styles {
+        let resp = ui.add_enabled(!boxes.is_empty(), egui::Button::new(&named.name));
+        let resp = resp.on_disabled_hover_text(tl!("Text styles apply to text boxes"));
+        if resp.clicked() {
+            action = Some((
+                "text_style.apply",
+                json!({ "id": named.id, "slide": slide, "objects": boxes }),
+            ));
+        }
+    }
+    ui.separator();
+    let full = course.text_styles.len() >= coursecraft_course::MAX_TEXT_STYLES;
+    let resp = ui
+        .add_enabled(
+            !full && !boxes.is_empty(),
+            egui::Button::new(tl!("New Style from Selection")),
+        )
+        .on_disabled_hover_text(tl!("Select a text box; a course holds at most 50 styles"));
+    if resp.clicked()
+        && let Some(object) = boxes.first()
+    {
+        let name = format!("Style {}", course.text_styles.len() + 1);
+        action = Some((
+            "text_style.create",
+            json!({ "name": name, "from_object": { "slide": slide, "object": object } }),
+        ));
+    }
+    if ui.button(tl!("Manage Styles…")).clicked() {
+        crate::text_styles_ui::set_manage_open(ui.ctx(), true);
+        ui.close();
+    }
+    if let Some((id, params)) = action {
+        editor.run(id, params);
+        ui.close();
     }
 }

@@ -6141,12 +6141,20 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
     let toggle_italic = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::I));
     let toggle_underline = ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::U));
     let panel_right = ui.max_rect().max.x;
-    let clicked_outside = ui.input(|i| {
-        i.pointer.primary_pressed()
-            && !menu_open_at_start
-            && i.pointer
-                .interact_pos()
-                .is_some_and(|pos| !rect.contains(pos) && pos.x < panel_right)
+    // Read the press first: `layer_id_at` takes the context lock `input` holds.
+    let press = ui.input(|i| {
+        (i.pointer.primary_pressed() && !menu_open_at_start)
+            .then(|| i.pointer.interact_pos())
+            .flatten()
+    });
+    let clicked_outside = press.is_some_and(|pos| {
+        !rect.contains(pos)
+            && pos.x < panel_right
+            // The ribbon and its menus format the text being edited.
+            && !editor.ui.ribbon.rect.contains(pos)
+            && !ui.ctx().layer_id_at(pos).is_some_and(|layer| {
+                matches!(layer.order, egui::Order::Foreground | egui::Order::Tooltip)
+            })
     });
     let yielded_to_panel = update_inline_edit_panel_yield(editor, ui, rect, panel_right);
 
@@ -6194,7 +6202,22 @@ fn draw_inline_edit(editor: &mut Editor, ui: &mut Ui, t: &SlideTransform) {
         editor.ui.inline_edit_selection =
             Some((edit.slide.clone(), edit.object.clone(), sel_range, cpos));
     }
-    if (toggle_bold || toggle_italic || toggle_underline) && !escaped {
+    if (toggle_bold || toggle_italic || toggle_underline)
+        && !escaped
+        && crate::text_format::targets(editor).is_ok()
+    {
+        // The same path as the ribbon's Bold, Italic and Underline.
+        for (on, change) in [
+            (toggle_bold, crate::text_format::Change::Bold),
+            (toggle_italic, crate::text_format::Change::Italic),
+            (toggle_underline, crate::text_format::Change::Underline),
+        ] {
+            if on {
+                crate::text_format::apply(editor, &change);
+            }
+        }
+    } else if (toggle_bold || toggle_italic || toggle_underline) && !escaped {
+        // Text inside a state: its own runs, not yet in `text_format`.
         apply_inline_edit_style_shortcut(
             editor,
             &edit,

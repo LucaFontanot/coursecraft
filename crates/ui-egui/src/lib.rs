@@ -80,6 +80,7 @@ pub mod snapshot;
 pub mod spell_check;
 pub mod states;
 pub mod status;
+pub mod text_format;
 pub mod text_styles_ui;
 pub mod theme_dialog;
 pub mod timeline;
@@ -255,6 +256,8 @@ mod templates_tests;
 pub(crate) mod test_harness;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod text_format_ribbon_tests;
 #[cfg(test)]
 mod text_format_tests;
 #[cfg(test)]
@@ -4787,6 +4790,7 @@ impl Editor {
 
         // 1b. The ribbon (M30, the default), or the older flat toolbar when the
         // ribbon is turned off in Preferences.
+        self.ui.ribbon.rect = egui::Rect::NOTHING;
         let top_panel = if self.ui.ribbon.visible {
             Panel::top("editor_ribbon")
                 .exact_size(ribbon::height(&self.ui.ribbon))

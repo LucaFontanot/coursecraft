@@ -22,7 +22,7 @@ fn manage_open_id() -> Id {
 }
 
 /// Open or close the "Manage styles" window.
-fn set_manage_open(ctx: &Context, open: bool) {
+pub(crate) fn set_manage_open(ctx: &Context, open: bool) {
     ctx.data_mut(|d| d.insert_temp(manage_open_id(), open));
 }
 

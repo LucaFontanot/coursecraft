@@ -2238,7 +2238,7 @@ fn tri_bool(all_true: bool, any_true: bool) -> Option<bool> {
 /// Tri-state `(bold, italic, underline)` for a character range `[start, end)`.
 /// Returns `Some(true)` if all selected chars have the style, `Some(false)` if
 /// none do, and `None` (Mixed) when runs disagree.
-fn style_tri_for_range(
+pub(crate) fn style_tri_for_range(
     runs: &[TextRun],
     style: &TextStyle,
     range: (usize, usize),
@@ -2287,7 +2287,7 @@ fn style_tri_for_range(
 }
 
 /// Tri-state `(strikethrough, superscript, subscript)` for `[start, end)`.
-fn effects_tri_for_range(
+pub(crate) fn effects_tri_for_range(
     runs: &[TextRun],
     style: &TextStyle,
     range: (usize, usize),
@@ -2404,7 +2404,7 @@ fn effects_for_range(
 }
 
 /// The font named by the run at `cursor_char`, if any.
-fn font_at_cursor(runs: &[TextRun], cursor_char: usize) -> Option<String> {
+pub(crate) fn font_at_cursor(runs: &[TextRun], cursor_char: usize) -> Option<String> {
     run_at_caret(runs, cursor_char)
         .and_then(|run| run.font.clone())
         .or_else(|| runs.iter().rev().find_map(|run| run.font.clone()))
@@ -3524,7 +3524,7 @@ fn parse_finite(value: &str) -> Option<f32> {
 }
 
 /// A default shape text style that contrasts with the fill, centred both ways.
-fn default_shape_text_style(fill: &Color) -> TextStyle {
+pub(crate) fn default_shape_text_style(fill: &Color) -> TextStyle {
     let dark = Color("#1F1F1F".to_owned());
     let light = Color("#FFFFFF".to_owned());
     let color = match coursecraft_course::parse_color(fill) {

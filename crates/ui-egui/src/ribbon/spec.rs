@@ -92,6 +92,59 @@ pub enum Action {
     NotYet(&'static str),
     /// Drawn disabled: "Not planned: {reason}".
     NotPlanned(&'static str),
+    /// A text formatting control (`crate::text_format`): it acts on the text
+    /// being edited or the selected text objects.
+    Text(TextOp),
+}
+
+/// The text formatting controls of Home › Font and Home › Paragraph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextOp {
+    /// Text Styles ▾: the course's named text styles.
+    TextStyles,
+    /// Font ▾: the course fonts.
+    Font,
+    /// Font size ▾.
+    Size,
+    Grow,
+    Shrink,
+    Bold,
+    Italic,
+    Underline,
+    Strikethrough,
+    /// Character Spacing ▾.
+    Spacing,
+    /// Font Color ▾: the theme colours.
+    Color,
+    Bullets,
+    Numbering,
+    IndentLess,
+    IndentMore,
+    /// Line Spacing ▾.
+    LineSpacing,
+    AlignLeft,
+    AlignCenter,
+    AlignRight,
+    Justify,
+    /// Align Text ▾: top, middle, bottom.
+    AlignText,
+}
+
+impl TextOp {
+    /// Opens a ▾ menu instead of acting at once.
+    #[must_use]
+    pub fn has_menu(self) -> bool {
+        matches!(
+            self,
+            TextOp::TextStyles
+                | TextOp::Font
+                | TextOp::Size
+                | TextOp::Spacing
+                | TextOp::Color
+                | TextOp::LineSpacing
+                | TextOp::AlignText
+        )
+    }
 }
 
 /// Editor-side actions (dialogs, views, the clipboard), run in `ribbon/mod.rs`.
@@ -257,7 +310,7 @@ const fn helped(mut i: Item, help: &'static str) -> Item {
     i
 }
 
-use Action::{Command, NotPlanned, NotYet, Ui};
+use Action::{Command, NotPlanned, NotYet, Text, Ui};
 use Kind::{Combo, Large, LargeSplit, Small, SmallSplit, Toggle};
 
 // ---------------------------------------------------------------------------
@@ -451,7 +504,7 @@ const HOME_SLIDE: &[Group] = &[
                 "Text Styles",
                 Icon::TextAa,
                 LargeSplit,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::TextStyles),
             ),
             // Three rows of five, in Storyline's reading order.
             item(
@@ -459,28 +512,28 @@ const HOME_SLIDE: &[Group] = &[
                 "Font",
                 Icon::TextT,
                 Combo { width: 128.0 },
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Font),
             ),
             item(
                 "font.size",
                 "Font size",
                 Icon::TextT,
                 Combo { width: 52.0 },
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Size),
             ),
             item(
                 "font.grow",
                 "Grow Font",
                 Icon::CaretUp,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Grow),
             ),
             item(
                 "font.shrink",
                 "Shrink Font",
                 Icon::CaretDown,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Shrink),
             ),
             item(
                 "font.clear",
@@ -489,33 +542,27 @@ const HOME_SLIDE: &[Group] = &[
                 Toggle,
                 NotYet("clearing formatting"),
             ),
-            item(
-                "font.bold",
-                "Bold",
-                Icon::TextB,
-                Toggle,
-                NotYet(WIRING_FORMAT),
-            ),
+            item("font.bold", "Bold", Icon::TextB, Toggle, Text(TextOp::Bold)),
             item(
                 "font.italic",
                 "Italic",
                 Icon::TextItalic,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Italic),
             ),
             item(
                 "font.underline",
                 "Underline",
                 Icon::TextUnderline,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Underline),
             ),
             item(
                 "font.strikethrough",
                 "Strikethrough",
                 Icon::Minus,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Strikethrough),
             ),
             item(
                 "font.shadow",
@@ -529,7 +576,7 @@ const HOME_SLIDE: &[Group] = &[
                 "Character Spacing",
                 Icon::ArrowsOut,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Spacing),
             ),
             item(
                 "font.case",
@@ -550,7 +597,7 @@ const HOME_SLIDE: &[Group] = &[
                 "Font Color",
                 Icon::Palette,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Color),
             ),
             helped(
                 item(
@@ -577,63 +624,63 @@ const HOME_SLIDE: &[Group] = &[
                 "Bullets",
                 Icon::ListBullets,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Bullets),
             ),
             item(
                 "paragraph.numbering",
                 "Numbering",
                 Icon::ListNumbers,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Numbering),
             ),
             item(
                 "paragraph.indent_less",
                 "Decrease Indent",
                 Icon::ArrowLeft,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::IndentLess),
             ),
             item(
                 "paragraph.indent_more",
                 "Increase Indent",
                 Icon::ArrowRight,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::IndentMore),
             ),
             item(
                 "paragraph.line_spacing",
                 "Line Spacing",
                 Icon::Rows,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::LineSpacing),
             ),
             item(
                 "paragraph.align_left",
                 "Align Left",
                 Icon::TextAlignLeft,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::AlignLeft),
             ),
             item(
                 "paragraph.align_center",
                 "Center",
                 Icon::TextAlignCenter,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::AlignCenter),
             ),
             item(
                 "paragraph.align_right",
                 "Align Right",
                 Icon::TextAlignRight,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::AlignRight),
             ),
             item(
                 "paragraph.justify",
                 "Justify",
                 Icon::List,
                 Toggle,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::Justify),
             ),
             item(
                 "paragraph.direction",
@@ -647,7 +694,7 @@ const HOME_SLIDE: &[Group] = &[
                 "Align Text",
                 Icon::TextColumns,
                 SmallSplit,
-                NotYet(WIRING_FORMAT),
+                Text(TextOp::AlignText),
             ),
             helped(
                 item(

@@ -91,9 +91,17 @@ Shown when the Course Map view tab is active.
 > `crates/ui-egui/src/ribbon/spec.rs`; the ribbon is on by default (Preferences › Interface) and
 > replaces the flat toolbar, with Save, Undo and Redo in a quick access toolbar left of the tab
 > strip. The Status column is the feature's status. Built features that the ribbon doesn't reach
-> yet (text formatting, Hyperlink, Apply Layout, Question Banks, Quick Styles, Shape
+> yet (Hyperlink, Apply Layout, Question Banks, Quick Styles, Shape
 > Fill/Outline/Effect) are drawn disabled with "Not available yet: ribbon wiring". Groups that
 > don't fit the window shrink to one button, rightmost first, which opens the group in a popup.
+>
+> **Font and Paragraph** go through `crates/ui-egui/src/text_format.rs`, the one place that
+> resolves what a text control acts on (the characters selected in the text being edited, its
+> caret, or every selected text box and shape whole), the state the toggles and combos show
+> (`None` where mixed), and the engine commands a change runs, as one undo step with any typed
+> text committed first. Ctrl+B, Ctrl+I and Ctrl+U take the same path. A click on the ribbon
+> leaves the in-place editor open. Text inside a state and button labels stay with the Text panel
+> and the Format inspector; the controls say so.
 
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
@@ -140,27 +148,27 @@ Shown when the Course Map view tab is active.
 | | Apply Layout | SS | `slide.set_master` | ✅ | |
 | | Focus Order | S | `ui:focusOrder` | 🟡 | focus order exists (`focus_order`); needs its own dialog |
 | | Duplicate | S | `slide.duplicate` | ✅ | |
-| Font ↘ | Text Styles | LS | `text_style.apply` | ✅ | `text_styles_ui.rs`; ▾ lists course text styles |
-| | Font family | C | `text.style_range` `{font}` | ✅ | `font_picker.rs` |
-| | Font size | C | `text.style_range` `{size}` | ✅ | |
-| | Grow Font / Shrink Font | S | `text.style_range` | ✅ | |
+| Font ↘ | Text Styles | LS | `text_style.apply`, `text_style.create` | ✅ | ▾ course styles, New Style from Selection, Manage Styles… |
+| | Font family | C | `text.style_range` `{font}` | ✅ | ▾ theme font, then the course fonts; Add Font in the Text panel |
+| | Font size | C | `text.style_range` `{size}` | ✅ | ▾ 8–96 |
+| | Grow Font / Shrink Font | S | `text.style_range` `{size}` | ✅ | next size in the list |
 | | Clear Formatting | S | `text.style_range` (reset) | ⛔ | |
 | | Bold / Italic / Underline | T | `text.style_range` | ✅ | |
 | | Shadow (text) | T | — | ⛔ | |
 | | Strikethrough | T | `text.style_range` | ✅ | |
-| | Character Spacing | SS | `text.style_range` `{letter_spacing}` | ✅ | |
+| | Character Spacing | SS | `text.style_range` `{letter_spacing}` | ✅ | ▾ Very Tight … Very Loose; exact value in the Text panel |
 | | Change Case | SS | — | ⛔ | Sentence, lower, UPPER, Capitalize, tOGGLE |
 | | Highlight | SS | `text.style_range` `{highlight}` (new field) | ⛔ | text runs have no highlight colour yet |
-| | Font Color | SS | `text.style_range` `{color}` | ✅ | theme colours + eyedropper (`eyedropper.rs`) |
+| | Font Color | SS | `text.style_range` `{color}` | ✅ | ▾ theme and palette colours, standard colours; More Colors… opens the Text panel (picker, eyedropper) |
 | | Spelling | S | `ui:spellCheck` | ✅ | `spell_check.rs` |
 | | ↘ Font | — | `UiAction::PanelAt(Text, Font)` | ✅ | opens the Text settings panel at Font ([panels.md](panels.md)) |
-| Paragraph ↘ | Bullets | SS | `text.set_paragraph` `{bullet}` | ✅ | ▾ bullet symbols |
-| | Numbering | SS | `text.set_paragraph` `{numbering}` | 🟡 | verify numbering styles |
-| | Decrease / Increase Indent | S | `text.set_paragraph` `{indent}` | ✅ | |
-| | Line Spacing | SS | `text.set_paragraph` `{line_spacing}` | ✅ | |
+| Paragraph ↘ | Bullets | SS | `text.set_paragraphs` `{list}` | ✅ | toggles on the paragraphs at the selection; bullet symbols in the Text panel |
+| | Numbering | SS | `text.set_paragraphs` `{list}` | ✅ | numbering styles in the Text panel |
+| | Decrease / Increase Indent | S | `text.set_paragraphs` `{level}` | ✅ | levels 0–4 |
+| | Line Spacing | SS | `text.set_paragraphs` `{line_spacing}` | ✅ | ▾ 1.0–3.0 |
 | | Align Left / Center / Right / Justify | T | `text.set_paragraph` `{align}` | ✅ | |
 | | Text Direction | SS | — | ⛔ | horizontal, rotate 90°/270°, stacked |
-| | Align Text | SS | `object.update` `{v_align}` | 🟡 | top / middle / bottom; verify field |
+| | Align Text | SS | `text.set_paragraph` `{valign}` | ✅ | ▾ top / middle / bottom |
 | | Find / Replace | SS | `course.find`, `course.replace` | ✅ | `find.rs` |
 | | ↘ Paragraph | — | `UiAction::PanelAt(Text, Paragraph)` | ✅ | opens the Text settings panel at Paragraph |
 | Drawing ↘ | Arrange | LS | `object.reorder`, `object.align`, `object.distribute`, `object.group` | ✅ | ▾ Order, Group, Align, Rotate (as Edit › Order/Align) |
