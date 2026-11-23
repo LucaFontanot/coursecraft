@@ -501,7 +501,20 @@ fn render_timeline_header(
             editor.toggle_timeline_playback(owner_duration);
         }
         let readout = format_timeline_readout(editor.ui.timeline.playhead_ms, owner_duration);
-        ui.label(RichText::new(readout).color(p.text_secondary));
+        // In a narrow panel (a docked timeline under the canvas) the readout
+        // gives way to the duration field rather than overlap it.
+        let readout_w = ui
+            .painter()
+            .layout_no_wrap(
+                readout.clone(),
+                egui::TextStyle::Body.resolve(ui.style()),
+                p.text_secondary,
+            )
+            .size()
+            .x;
+        if ui.available_width() >= readout_w + 140.0 {
+            ui.label(RichText::new(readout).color(p.text_secondary));
+        }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut duration_s = editor.ui.timeline.duration_ms as f64 / 1000.0;
@@ -543,7 +556,9 @@ fn render_timeline_header(
                 }
             }
 
-            ui.label(coursecraft_render::caption("Duration").color(p.text_secondary));
+            if ui.available_width() >= 60.0 {
+                ui.label(coursecraft_render::caption("Duration").color(p.text_secondary));
+            }
         });
     });
 }
