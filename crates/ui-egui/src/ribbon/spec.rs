@@ -162,6 +162,23 @@ pub enum UiAction {
     ThemeLight,
     ThemeDark,
     ThemeSystem,
+    // Design, Transitions, Animations
+    SlideSize,
+    Themes,
+    SlideInspector,
+    AnimateInspector,
+    AddMotionPath,
+    // Help
+    Guide,
+    Shortcuts,
+    Welcome,
+    GitHub,
+    ReportProblem,
+    SuggestFeature,
+    CheckUpdates,
+    ConnectAgent,
+    AiSettings,
+    Automation,
 }
 
 /// A split control's ▾ menu.
@@ -1637,6 +1654,343 @@ const VIEW: &[Group] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// Design
+// ---------------------------------------------------------------------------
+
+const DESIGN: &[Group] = &[
+    Group {
+        id: "design.setup",
+        label: "Setup",
+        launcher: None,
+        items: &[helped(
+            item(
+                "design.slide_size",
+                "Slide Size",
+                Icon::FrameCorners,
+                Large,
+                Ui(UiAction::SlideSize),
+            ),
+            "Change the size of every slide.",
+        )],
+    },
+    Group {
+        id: "design.themes",
+        label: "Themes",
+        launcher: None,
+        items: &[helped(
+            item(
+                "design.themes",
+                "Themes",
+                Icon::Palette,
+                Large,
+                Ui(UiAction::Themes),
+            ),
+            "Pick a theme: colors and fonts for the whole course.",
+        )],
+    },
+    Group {
+        id: "design.options",
+        label: "Theme Options",
+        launcher: None,
+        items: &[
+            item(
+                "design.colors",
+                "Colors",
+                Icon::Drop,
+                Small,
+                Ui(UiAction::Themes),
+            ),
+            item(
+                "design.fonts",
+                "Fonts",
+                Icon::TextAa,
+                Small,
+                Ui(UiAction::Themes),
+            ),
+        ],
+    },
+    Group {
+        id: "design.background",
+        label: "Background",
+        launcher: Some(Ui(UiAction::SlideInspector)),
+        items: &[
+            item(
+                "design.background_styles",
+                "Background Styles",
+                Icon::Image,
+                SmallSplit,
+                NotYet(WIRING_SLIDE),
+            ),
+            item(
+                "design.hide_background",
+                "Hide Background Graphics",
+                Icon::EyeSlash,
+                Small,
+                NotYet("hiding the master's graphics on one slide"),
+            ),
+        ],
+    },
+    PUBLISH,
+];
+
+// ---------------------------------------------------------------------------
+// Transitions
+// ---------------------------------------------------------------------------
+
+const TRANSITIONS: &[Group] = &[
+    Group {
+        id: "transitions.to_this_slide",
+        label: "Transition to This Slide",
+        launcher: None,
+        items: &[
+            helped(
+                item(
+                    "transitions.pick",
+                    "Transition",
+                    Icon::FilmStrip,
+                    Large,
+                    Ui(UiAction::SlideInspector),
+                ),
+                "Pick the transition in the Slide inspector.",
+            ),
+            item(
+                "transitions.options",
+                "Effect Options",
+                Icon::SlidersHorizontal,
+                LargeSplit,
+                NotYet(WIRING_SLIDE),
+            ),
+        ],
+    },
+    Group {
+        id: "transitions.timing",
+        label: "Timing",
+        launcher: None,
+        items: &[
+            item(
+                "transitions.duration",
+                "Duration",
+                Icon::Timer,
+                Small,
+                NotYet(WIRING_SLIDE),
+            ),
+            item(
+                "transitions.apply_all",
+                "Apply To All",
+                Icon::Stack,
+                Small,
+                NotYet("applying one transition to every slide"),
+            ),
+        ],
+    },
+    PUBLISH,
+];
+
+// ---------------------------------------------------------------------------
+// Animations
+// ---------------------------------------------------------------------------
+
+const ANIMATIONS: &[Group] = &[
+    Group {
+        id: "animations.advanced",
+        label: "Advanced",
+        launcher: None,
+        items: &[item(
+            "animations.painter",
+            "Animation Painter",
+            Icon::PaintBrush,
+            Large,
+            NotYet("the Animation Painter"),
+        )],
+    },
+    Group {
+        id: "animations.entrance",
+        label: "Entrance Animations",
+        launcher: None,
+        items: &[helped(
+            item(
+                "animations.entrance",
+                "Entrance",
+                Icon::ArrowRight,
+                Large,
+                Ui(UiAction::AnimateInspector),
+            ),
+            "Pick how the object comes in, in the Animate inspector.",
+        )],
+    },
+    Group {
+        id: "animations.exit",
+        label: "Exit Animations",
+        launcher: None,
+        items: &[helped(
+            item(
+                "animations.exit",
+                "Exit",
+                Icon::ArrowLeft,
+                Large,
+                Ui(UiAction::AnimateInspector),
+            ),
+            "Pick how the object goes out, in the Animate inspector.",
+        )],
+    },
+    Group {
+        id: "animations.emphasis",
+        label: "Emphasis Animations",
+        launcher: None,
+        items: &[item(
+            "animations.emphasis",
+            "Add Emphasis Animation",
+            Icon::Sparkle,
+            LargeSplit,
+            NotYet("emphasis animations"),
+        )],
+    },
+    Group {
+        id: "animations.motion",
+        label: "Motion Paths",
+        launcher: None,
+        items: &[helped(
+            item(
+                "animations.motion_path",
+                "Add Motion Path",
+                Icon::Path,
+                Large,
+                Ui(UiAction::AddMotionPath),
+            ),
+            "Move the selected object along a path.",
+        )],
+    },
+    Group {
+        id: "animations.size",
+        label: "Size and Position",
+        launcher: Some(Ui(UiAction::FormatInspector)),
+        items: &[item(
+            "animations.size_position",
+            "Size and Position",
+            Icon::CornersOut,
+            Large,
+            Ui(UiAction::FormatInspector),
+        )],
+    },
+    PUBLISH,
+];
+
+// ---------------------------------------------------------------------------
+// Help
+// ---------------------------------------------------------------------------
+
+const HELP: &[Group] = &[
+    Group {
+        id: "help.help",
+        label: "Help",
+        launcher: None,
+        items: &[
+            item(
+                "help.guide",
+                "Guide",
+                Icon::BookOpen,
+                Large,
+                Ui(UiAction::Guide),
+            ),
+            item(
+                "help.shortcuts",
+                "Keyboard Shortcuts",
+                Icon::Keyboard,
+                Large,
+                Ui(UiAction::Shortcuts),
+            ),
+            item(
+                "help.welcome",
+                "Welcome Screen",
+                Icon::House,
+                Large,
+                Ui(UiAction::Welcome),
+            ),
+        ],
+    },
+    Group {
+        id: "help.community",
+        label: "Community",
+        launcher: None,
+        items: &[
+            item(
+                "help.github",
+                "CourseCraft on GitHub",
+                Icon::ArrowSquareOut,
+                Small,
+                Ui(UiAction::GitHub),
+            ),
+            item(
+                "help.report",
+                "Report a Problem…",
+                Icon::Warning,
+                Small,
+                Ui(UiAction::ReportProblem),
+            ),
+            item(
+                "help.suggest",
+                "Suggest a Feature…",
+                Icon::Lightning,
+                Small,
+                Ui(UiAction::SuggestFeature),
+            ),
+        ],
+    },
+    Group {
+        id: "help.updates",
+        label: "Updates",
+        launcher: None,
+        items: &[item(
+            "help.check_updates",
+            "Check for Updates",
+            Icon::ArrowClockwise,
+            Large,
+            Ui(UiAction::CheckUpdates),
+        )],
+    },
+    Group {
+        id: "help.ai",
+        label: "AI",
+        launcher: None,
+        items: &[
+            item(
+                "help.connect_agent",
+                "Connect an AI Agent…",
+                Icon::Robot,
+                Small,
+                Ui(UiAction::ConnectAgent),
+            ),
+            item(
+                "help.ai_settings",
+                "AI Settings…",
+                Icon::Gear,
+                Small,
+                Ui(UiAction::AiSettings),
+            ),
+            item(
+                "help.automation",
+                "Allow Automation",
+                Icon::Lock,
+                Small,
+                Ui(UiAction::Automation),
+            ),
+        ],
+    },
+    Group {
+        id: "help.about",
+        label: "About",
+        launcher: None,
+        items: &[item(
+            "help.about",
+            "About CourseCraft",
+            Icon::Info,
+            Large,
+            NotYet("an About window"),
+        )],
+    },
+];
+
+// ---------------------------------------------------------------------------
 // The strip
 // ---------------------------------------------------------------------------
 
@@ -1667,21 +2021,21 @@ pub const TABS: &[Tab] = &[
         id: "design",
         label: "Design",
         when: TabWhen::Always,
-        groups: &[],
+        groups: DESIGN,
         map_groups: None,
     },
     Tab {
         id: "transitions",
         label: "Transitions",
         when: TabWhen::SlideOpen,
-        groups: &[],
+        groups: TRANSITIONS,
         map_groups: None,
     },
     Tab {
         id: "animations",
         label: "Animations",
         when: TabWhen::SlideOpen,
-        groups: &[],
+        groups: ANIMATIONS,
         map_groups: None,
     },
     Tab {
@@ -1695,7 +2049,7 @@ pub const TABS: &[Tab] = &[
         id: "help",
         label: "Help",
         when: TabWhen::Always,
-        groups: &[],
+        groups: HELP,
         map_groups: None,
     },
 ];

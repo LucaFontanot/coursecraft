@@ -196,8 +196,10 @@ Each step is one commit, `cargo xtask ci` green, docs status updated in the same
    View › Course Map; the Format / Animate / Slide / Course switch to a tab row in the
    Inspector's own header, which shows names when they fit and icons otherwise. Narrow windows
    (§ 4) shrink groups from the right to one button that opens the group in a popup; each
-   group's width is measured when it is last drawn whole. Still open: Design, Transitions,
-   Animations, Help, File.
+   group's width is measured when it is last drawn whole. Design, Transitions, Animations and
+   Help are built too: their controls open the dialog or inspector that does the work (theme
+   window, Slide and Animate inspectors) until the theme, transition and animation galleries
+   are wired. Still open: the File page.
 3. Contextual tabs: Drawing Tools, Picture Tools, Audio/Video Tools, Table Tools, Question Tools;
    modes: Slide Master, Preview.
 4. File menu and Help tab take over the menu bar items; delete the menu bar and the flat toolbar;

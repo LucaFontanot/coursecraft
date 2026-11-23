@@ -76,7 +76,8 @@ Project commands (below the start actions once a course is open):
 
 Shown when the Course Map view tab is active.
 
-> **In the code (M30 steps 1–2):** Home (both variants), Insert, Slides and View are drawn from
+> **In the code (M30 steps 1–2):** every main tab (Home in both variants, Insert, Slides, Design,
+> Transitions, Animations, View, Help) is drawn from
 > `crates/ui-egui/src/ribbon/spec.rs`; the ribbon is on by default (Preferences › Interface) and
 > replaces the flat toolbar, with Save, Undo and Redo in a quick access toolbar left of the tab
 > strip. The Status column is the feature's status. Built features that the ribbon doesn't reach
@@ -229,7 +230,7 @@ order against the app before building.
 
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
-| Setup | Slide Size | L | `course.set_slide_size` | ✅ | `slide_size_dialog.rs` |
+| Setup | Slide Size | L | `course.set_slide_size` | ✅ | `slide_size_dialog.rs`. In the code: Themes, Colors and Fonts open the theme window; Background Styles waits for ribbon wiring (↘ opens the Slide inspector) |
 | Themes | theme gallery | G | `course.set_theme` | ✅ | `theme_dialog.rs`; gallery of built-in themes |
 | Theme options | Colors | SS | `theme.set_palette` | ✅ | ▾ palettes, Create New Theme Colors… (`theme.set_palette_color`) |
 | | Fonts | SS | `course.update` `{fonts}` | 🟡 | ▾ font pairs, Create New Theme Fonts… |
@@ -243,7 +244,7 @@ Not shown in the tutorial; standard layout.
 
 | Group | Control | Kind | Action | Status |
 |---|---|---|---|---|
-| Transition to This Slide | transition gallery | G | `slide.set_transition` | ✅ |
+| Transition to This Slide | transition gallery | G | `slide.set_transition` | ✅ (in the code: a Transition button that opens the Slide inspector until the gallery is wired) |
 | | Effect Options | LS | `slide.set_transition` `{direction}` | 🟡 |
 | Timing | Duration | N | `slide.set_transition` `{duration}` | ✅ |
 | | Apply To All | S | `slide.set_transition` (all) | ⛔ |
@@ -254,7 +255,7 @@ Not shown in the tutorial; standard layout.
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
 | Advanced | Animation Painter | L | `ui:animationPainter` | ⛔ | Format Painter for animations |
-| Entrance Animations | effect gallery | LS | `object.set_animation` `{entrance}` | ✅ | None, Fade, Grow, Fly In, Float In, Split, Wipe, Shape, Wheel, Random Bars, Spin, Spin & Grow, Grow & Spin, Zoom, Swivel, Bounce; missing effects disabled in the gallery |
+| Entrance Animations | effect gallery | LS | `object.set_animation` `{entrance}` | ✅ | in the code: Entrance and Exit buttons open the Animate inspector until the galleries are wired; Add Motion Path runs `object.add_motion_path`; None, Fade, Grow, Fly In, Float In, Split, Wipe, Shape, Wheel, Random Bars, Spin, Spin & Grow, Grow & Spin, Zoom, Swivel, Bounce; missing effects disabled in the gallery |
 | | Duration | N | `object.set_animation` `{duration}` | ✅ | |
 | | Effect Options | SS | `object.set_animation` `{direction, sequence}` | 🟡 | direction ✅; Sequence By Paragraph ⛔ |
 | Exit Animations | (same three) | | `object.set_animation` `{exit}` | ✅ | |
@@ -292,13 +293,13 @@ Not shown except Slide Master; proposal.
 
 | Group | Control | Action | Status |
 |---|---|---|---|
-| Help | Help / Guide | `ui:help.guide` | ✅ |
+| Help | Help / Guide | `ui:help.guide` | ✅ (opens the docs on GitHub) |
 | | Keyboard Shortcuts | `ui:help.shortcuts` | ✅ |
 | | Welcome Screen | `ui:welcome` | ✅ |
 | Community | CourseCraft on GitHub, Report a Problem…, Suggest a Feature… | `ui:help.*` | ✅ |
 | Updates | Check for Updates | `ui:updates` | ✅ |
 | AI | Connect an AI Agent…, AI Settings…, Allow automation | `ui:ai.*` | ✅ |
-| About | About CourseCraft | `ui:about` | ✅ |
+| About | About CourseCraft | `ui:about` | ⛔ (no About window yet; drawn disabled) |
 
 CourseCraft's **Project** menu (Course settings, Variables, Glossary, Resources, Audit,
 Accessibility check, Suggest Alt Text…) has no Storyline twin on a tab. Course settings and Player go

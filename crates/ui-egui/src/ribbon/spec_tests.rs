@@ -102,7 +102,8 @@ fn tab_strip_matches_the_documented_order() {
 
 #[test]
 fn every_built_tab_ends_with_publish() {
-    for tab in TABS {
+    // Help has no Publish group (ribbon.md › Help).
+    for tab in TABS.iter().filter(|t| t.id != "help") {
         for groups in [Some(tab.groups), tab.map_groups].into_iter().flatten() {
             if let Some(last) = groups.last() {
                 assert_eq!(last.label, "Publish", "{} must end with Publish", tab.id);
@@ -209,16 +210,45 @@ fn slide_tabs_are_disabled_in_the_course_map() {
 }
 
 #[test]
-fn tabs_still_being_built_say_so() {
+fn every_main_tab_is_built() {
+    for tab in TABS {
+        assert!(!tab.groups.is_empty(), "{} has no groups", tab.id);
+    }
+}
+
+#[test]
+fn design_tab_opens_the_slide_size_dialog() {
     let mut h = harness_with_ribbon();
     let pos = h.find_text("Design").expect("Design tab");
     h.click_at(pos);
     h.idle_frame();
     assert_eq!(h.editor.ui.ribbon.tab, "design");
-    assert!(
-        h.find_text("This tab is being built. Its commands are in the menu bar for now.")
-            .is_some()
-    );
+    let pos = h
+        .find_text("Slide\nSize")
+        .or_else(|| h.find_text("Slide Size"));
+    h.click_at(pos.expect("Slide Size"));
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.open);
+}
+
+#[test]
+fn help_tab_opens_the_shortcuts_sheet() {
+    let mut h = harness_with_ribbon();
+    h.editor.ui.ribbon.tab = "help";
+    h.idle_frame();
+    let pos = h
+        .find_text("Keyboard\nShortcuts")
+        .expect("Keyboard Shortcuts");
+    h.click_at(pos);
+    h.idle_frame();
+    assert!(h.editor.ui.show_shortcuts_dialog);
+}
+
+#[test]
+fn add_motion_path_needs_an_object() {
+    let h = harness_with_ribbon();
+    let state = super::availability(&h.editor, Action::Ui(spec::UiAction::AddMotionPath), None);
+    assert_eq!(state, Err("Select an object first".to_owned()));
 }
 
 #[test]

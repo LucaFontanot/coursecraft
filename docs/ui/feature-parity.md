@@ -271,7 +271,7 @@ Counted from the tables below; recount when a row changes.
 | Right-click menus complete (canvas, timeline, scenes) | | 🟡 | M30 |
 | Collapse panels | | 🟡 | M30 |
 | Slide Properties in the Course Map | | 🟡 | M30 |
-| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): Home, Insert, Slides, View; Design, Transitions, Animations, Help, File and the contextual tabs to come | 🟡 | M30 |
+| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab; the File page, the galleries (themes, transitions, animations) and the contextual tabs to come | 🟡 | M30 |
 | Quick access toolbar | Save, Undo, Redo left of the tab strip; Customize to come | 🟡 | M30 |
 | Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |
 | View tabs for open slides | — | ⛔ | M30 |

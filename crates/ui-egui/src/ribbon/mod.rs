@@ -105,6 +105,9 @@ const MASTER: &str = "Not available in Master View";
 
 const STATE: &str = "Not available inside a state";
 
+/// The user documentation, on the project's site.
+const GUIDE_URL: &str = "https://github.com/ad1-kamath/coursecraft/tree/main/docs";
+
 fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
     let master = editor.ui.master_view;
     let state = editor.ui.editing_state.is_some();
@@ -230,6 +233,37 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
         | UiAction::ImportQuestions
         | UiAction::ImportDocument
         | UiAction::ImportOutline => Ok(()),
+        UiAction::AddMotionPath => {
+            if master {
+                Err(MASTER)
+            } else if state {
+                Err(STATE)
+            } else if editor.selection.object.is_none() {
+                Err("Select an object first")
+            } else {
+                Ok(())
+            }
+        }
+        UiAction::Automation => {
+            if editor.automation_available {
+                Ok(())
+            } else {
+                Err("Automation is desktop-only")
+            }
+        }
+        UiAction::SlideSize
+        | UiAction::Themes
+        | UiAction::SlideInspector
+        | UiAction::AnimateInspector
+        | UiAction::Guide
+        | UiAction::Shortcuts
+        | UiAction::Welcome
+        | UiAction::GitHub
+        | UiAction::ReportProblem
+        | UiAction::SuggestFeature
+        | UiAction::CheckUpdates
+        | UiAction::ConnectAgent
+        | UiAction::AiSettings => Ok(()),
         UiAction::PanelSlides
         | UiAction::PanelTimeline
         | UiAction::PanelInspector
@@ -350,6 +384,35 @@ fn run_ui(
         UiAction::ThemeLight => set_theme(editor, ThemePref::Light, requests),
         UiAction::ThemeDark => set_theme(editor, ThemePref::Dark, requests),
         UiAction::ThemeSystem => set_theme(editor, ThemePref::System, requests),
+        UiAction::SlideSize => editor.open_slide_size_dialog(),
+        UiAction::Themes => editor.ui.show_theme_window = true,
+        UiAction::SlideInspector => editor.ui.inspector_tab = InspectorTab::Slide,
+        UiAction::AnimateInspector => editor.ui.inspector_tab = InspectorTab::Animate,
+        UiAction::AddMotionPath => {
+            if let Some(object) = editor.selection.object.clone() {
+                let slide = editor.selection.slide.clone();
+                editor.run(
+                    "object.add_motion_path",
+                    json!({ "slide": slide, "object": object }),
+                );
+                editor.ui.inspector_tab = InspectorTab::Animate;
+            }
+        }
+        UiAction::Guide => crate::report::open_link(&resp.ctx, GUIDE_URL),
+        UiAction::Shortcuts => editor.ui.show_shortcuts_dialog = true,
+        UiAction::Welcome => editor.ui.show_welcome = true,
+        UiAction::GitHub => crate::report::open_link(&resp.ctx, crate::project_links::REPO_URL),
+        UiAction::ReportProblem => editor.open_report(),
+        UiAction::SuggestFeature => crate::report::open_feature_request(&resp.ctx),
+        UiAction::CheckUpdates => {
+            crate::report::open_link(&resp.ctx, &crate::project_links::releases_url());
+        }
+        UiAction::ConnectAgent => editor.open_agent_settings(),
+        UiAction::AiSettings => editor.open_ai_settings(),
+        UiAction::Automation => {
+            editor.automation_enabled = !editor.automation_enabled;
+            requests.push(EditorRequest::SetAutomation(editor.automation_enabled));
+        }
     }
 }
 
@@ -400,6 +463,7 @@ fn ui_selected(editor: &Editor, action: UiAction) -> bool {
         UiAction::ThemeLight => editor.theme_pref == ThemePref::Light,
         UiAction::ThemeDark => editor.theme_pref == ThemePref::Dark,
         UiAction::ThemeSystem => editor.theme_pref == ThemePref::System,
+        UiAction::Automation => editor.automation_available && editor.automation_enabled,
         _ => false,
     }
 }
