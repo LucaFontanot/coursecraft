@@ -109,7 +109,7 @@ pub fn show_variables_tab(
 
         match editor.ui.variables.new_kind {
             ValueKind::Bool => {
-                ui.checkbox(&mut editor.ui.variables.new_val_bool, "Initial: True/False");
+                ui.checkbox(&mut editor.ui.variables.new_val_bool, "Initial: true/false");
             }
             ValueKind::Number => {
                 ui.add(

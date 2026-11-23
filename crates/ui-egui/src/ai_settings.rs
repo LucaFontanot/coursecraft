@@ -400,10 +400,10 @@ impl Editor {
 /// `Open AI Settings`.
 pub fn show_ai_not_ready(ui: &mut Ui, what: &str) -> bool {
     ui.label(format!(
-        "AI isn't set up yet. CourseCraft can {what} once an AI is set up in AI Settings."
+        "AI isn't set up yet. CourseCraft can {what} once an AI is set up in AI settings."
     ));
     ui.add_space(8.0);
-    crate::primary_button(ui, "Open AI Settings").clicked()
+    crate::primary_button(ui, "Open AI settings").clicked()
 }
 
 /// Draw the AI Settings dialog when it is open.
@@ -427,7 +427,7 @@ pub fn show_ai_settings_window(
         560.0
     };
 
-    Dialog::new("AI Settings")
+    Dialog::new("AI settings")
         .width(max_width)
         .open(&mut open)
         .resizable(true)
@@ -903,35 +903,49 @@ fn show_agent_row(editor: &mut Editor, ui: &mut Ui, index: usize) -> Option<(Age
                             }
                         }
                         AgentStatus::Found => {
-                            if crate::quiet_button(ui, "Connect", crate::QuietTone::Accent, can_act)
-                                .clicked()
+                            if crate::quiet_button_enabled(
+                                ui,
+                                "Connect",
+                                crate::QuietTone::Accent,
+                                can_act,
+                                "Wait for the current agent check to finish",
+                            )
+                            .clicked()
                             {
                                 clicked = Some(RowClick::Action(AgentAction::Connect));
                             }
                         }
                         AgentStatus::Connected => {
-                            if crate::quiet_button(
+                            if crate::quiet_button_enabled(
                                 ui,
                                 "Disconnect",
                                 crate::QuietTone::Danger,
                                 can_act,
+                                "Wait for the current agent check to finish",
                             )
                             .clicked()
                             {
                                 clicked = Some(RowClick::Action(AgentAction::Disconnect));
                             }
-                            if crate::quiet_button(ui, "Test", crate::QuietTone::Secondary, can_act)
-                                .clicked()
+                            if crate::quiet_button_enabled(
+                                ui,
+                                "Test",
+                                crate::QuietTone::Secondary,
+                                can_act,
+                                "Wait for the current agent check to finish",
+                            )
+                            .clicked()
                             {
                                 clicked = Some(RowClick::Action(AgentAction::Test));
                             }
                         }
                         AgentStatus::Problem(_) => {
-                            if crate::quiet_button(
+                            if crate::quiet_button_enabled(
                                 ui,
                                 "Try again",
                                 crate::QuietTone::Accent,
                                 can_act,
+                                "Wait for the current agent check to finish",
                             )
                             .clicked()
                             {

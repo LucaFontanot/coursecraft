@@ -42,7 +42,7 @@ fn insert(
     kind: ObjectKind,
 ) -> Option<String> {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return None;
     }
     if editor.selection.slide.is_empty() {

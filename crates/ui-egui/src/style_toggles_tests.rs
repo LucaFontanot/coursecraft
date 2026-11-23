@@ -339,13 +339,27 @@ fn multi_run_mixed_selection_shows_mixed_state_and_applies_on_click() {
     // Select 6..15 ("italic + "), which has bold mixed (true in 6..12, false in 12..15)
     // and italic mixed (false in 6..12, true in 12..15).
     enter_inline_with_selection(&mut harness, 6, 15);
+    let bold_label = crate::menu::tooltip_with_shortcut(
+        &harness.ctx,
+        "Bold",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Bold,
+        )),
+    );
+    let italic_label = crate::menu::tooltip_with_shortcut(
+        &harness.ctx,
+        "Italic",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Italic,
+        )),
+    );
     assert_eq!(
-        widget_toggled(&harness, "Bold (Ctrl+B)"),
+        widget_toggled(&harness, &bold_label),
         Some(egui::accesskit::Toggled::Mixed),
         "B must report Toggled::Mixed when runs disagree"
     );
     assert_eq!(
-        widget_toggled(&harness, "Italic (Ctrl+I)"),
+        widget_toggled(&harness, &italic_label),
         Some(egui::accesskit::Toggled::Mixed),
         "I must report Toggled::Mixed when runs disagree"
     );
@@ -356,7 +370,7 @@ fn multi_run_mixed_selection_shows_mixed_state_and_applies_on_click() {
     harness.click_at(b_pos);
     harness.idle_frame();
     assert_eq!(
-        widget_toggled(&harness, "Bold (Ctrl+B)"),
+        widget_toggled(&harness, &bold_label),
         Some(egui::accesskit::Toggled::True),
         "clicking Mixed B must set all selected runs bold"
     );
@@ -405,8 +419,15 @@ fn multi_object_mixed_selection_shows_mixed_toggles_font_picker_and_drag_size() 
     harness.idle_frame();
 
     // Mixed italic must report Toggled::Mixed (not False).
+    let italic_label = crate::menu::tooltip_with_shortcut(
+        &harness.ctx,
+        "Italic",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Italic,
+        )),
+    );
     assert_eq!(
-        widget_toggled(&harness, "Italic (Ctrl+I)"),
+        widget_toggled(&harness, &italic_label),
         Some(egui::accesskit::Toggled::Mixed),
         "multi-select Italic must report Toggled::Mixed"
     );
@@ -489,10 +510,31 @@ fn style_buttons_have_tooltips_and_accessible_names_everywhere() {
     harness.editor.selection.object = Some("t1".into());
     harness.idle_frame();
     let panel = harness.right_panel_rect();
+    let bold_tip = crate::menu::tooltip_with_shortcut(
+        &harness.ctx,
+        "Bold",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Bold,
+        )),
+    );
+    let italic_tip = crate::menu::tooltip_with_shortcut(
+        &harness.ctx,
+        "Italic",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Italic,
+        )),
+    );
+    let underline_tip = crate::menu::tooltip_with_shortcut(
+        &harness.ctx,
+        "Underline",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Underline,
+        )),
+    );
     for (btn_text, expected_tip) in [
-        ("B", "Bold (Ctrl+B)"),
-        ("I", "Italic (Ctrl+I)"),
-        ("U", "Underline (Ctrl+U)"),
+        ("B", bold_tip.as_str()),
+        ("I", italic_tip.as_str()),
+        ("U", underline_tip.as_str()),
         ("S", "Strikethrough"),
         ("x\u{b2}", "Superscript"),
         ("x\u{2082}", "Subscript"),
@@ -515,9 +557,9 @@ fn style_buttons_have_tooltips_and_accessible_names_everywhere() {
     harness.editor.selection.object = Some("timer1".into());
     harness.idle_frame();
     for (btn_text, expected_tip) in [
-        ("B", "Bold (Ctrl+B)"),
-        ("I", "Italic (Ctrl+I)"),
-        ("U", "Underline (Ctrl+U)"),
+        ("B", bold_tip.as_str()),
+        ("I", italic_tip.as_str()),
+        ("U", underline_tip.as_str()),
     ] {
         let pos = harness
             .find_text_in(btn_text, panel)

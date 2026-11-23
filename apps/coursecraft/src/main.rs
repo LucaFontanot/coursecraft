@@ -3021,7 +3021,7 @@ impl EditorApp {
                                 saved = self.save_project_file(true);
                                 done = true;
                             }
-                            if ui.button("Save a Copy").clicked() {
+                            if ui.button("Save a copy").clicked() {
                                 saved = if self.project.is_folder() {
                                     self.perform_save_as_folder()
                                 } else {
@@ -3099,7 +3099,7 @@ impl EditorApp {
                         ui.horizontal(|ui| {
                             if let Some(version) = self.open_latest_offer.clone()
                                 && ui
-                                    .button("Open Latest Version")
+                                    .button("Open latest version")
                                     .on_hover_text(
                                         "Open the newest kept version of this file as a copy",
                                     )

@@ -445,6 +445,7 @@ fn show_standards(editor: &mut Editor, ui: &mut egui::Ui, busy: bool) {
         let selected = editor.ui.publish.standard == standard;
         if ui
             .add_enabled(!busy, egui::RadioButton::new(selected, standard.label()))
+            .on_disabled_hover_text("Wait for publishing to finish")
             .clicked()
         {
             editor.ui.publish.standard = standard;
@@ -482,9 +483,12 @@ fn show_standards(editor: &mut Editor, ui: &mut egui::Ui, busy: bool) {
                     }
                 })
                 .response
-                .on_hover_text(LMS_STATUS_TOOLTIP);
+                .on_hover_text(LMS_STATUS_TOOLTIP)
+                .on_disabled_hover_text("Wait for publishing to finish");
             });
-        });
+        })
+        .response
+        .on_disabled_hover_text("Wait for publishing to finish");
         if selected != current {
             editor.run(
                 "course.set_publish_settings",

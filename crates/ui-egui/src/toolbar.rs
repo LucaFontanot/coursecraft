@@ -11,6 +11,8 @@ use coursecraft_course::ShapeKind;
 use coursecraft_render::Icon;
 use egui::{Align, Layout, Rect, Ui, UiBuilder, pos2, vec2};
 
+use crate::menu::tooltip_with_shortcut;
+use crate::shortcuts::{ShortcutAction, shortcut_for_action, shortcut_for_command};
 use crate::{DrawTool, Editor, EditorRequest, InspectorTab, PlacementTool, widgets};
 
 pub const TOOLBAR_HEIGHT: f32 = 52.0;
@@ -28,7 +30,7 @@ pub fn next_slide_title(course: &coursecraft_course::Course) -> String {
 /// Add a new slide to the current or first scene, after current selection if any.
 pub fn add_new_slide(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     let scene_id = editor
@@ -58,7 +60,7 @@ pub fn add_new_slide(editor: &mut Editor) {
 /// slide are one undo step.
 pub fn add_new_scene(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     let course = &editor.session.course;
@@ -89,7 +91,7 @@ fn first_free_id<'a>(prefix: &str, taken: impl Iterator<Item = &'a str>) -> Stri
 /// Add a new layer to the currently selected slide.
 pub fn add_new_layer(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     if !editor.selection.slide.is_empty() {
@@ -108,7 +110,7 @@ pub fn insert_text_box(editor: &mut Editor) {
 /// Insert a 3x3 table centred on the slide.
 pub fn insert_table(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     let size = editor.session.course.slide_size;
@@ -217,7 +219,7 @@ pub fn insert_image(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
 /// Request video file picker for insertion.
 pub fn insert_video(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     editor.pending_image_pick = None;
@@ -227,7 +229,7 @@ pub fn insert_video(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
 /// Request audio file picker for insertion.
 pub fn insert_audio(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     editor.pending_image_pick = None;
@@ -237,7 +239,7 @@ pub fn insert_audio(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
 /// Request Lottie file picker for insertion.
 pub fn insert_lottie(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     editor.pending_image_pick = None;
@@ -247,7 +249,7 @@ pub fn insert_lottie(editor: &mut Editor, requests: &mut Vec<EditorRequest>) {
 /// Insert a question on the current slide and open the Question panel.
 pub fn insert_question(editor: &mut Editor, kind: coursecraft_course::QuestionKind) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     let slide_id = editor.selection.slide.clone();
@@ -281,7 +283,7 @@ pub fn insert_question(editor: &mut Editor, kind: coursecraft_course::QuestionKi
 /// Insert a results slide after the selected slide and select it.
 pub fn insert_results_slide(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     let mut params = serde_json::json!({});
@@ -302,7 +304,7 @@ pub fn insert_results_slide(editor: &mut Editor) {
 /// Insert a certificate slide after the selected slide and select it.
 pub fn insert_certificate_slide(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     let mut params = serde_json::json!({});
@@ -323,7 +325,7 @@ pub fn insert_certificate_slide(editor: &mut Editor) {
 /// Insert a trigger on the current slide/layer.
 pub fn insert_trigger(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {
@@ -393,17 +395,22 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     let master_view = editor.ui.master_view;
 
+    let add_slide_tooltip = if master_view {
+        "Not available in slide masters".to_owned()
+    } else {
+        tooltip_with_shortcut(
+            left_ui.ctx(),
+            "New slide",
+            shortcut_for_command("slide.add"),
+        )
+    };
     let add_slide_resp = widgets::toolbar_button_enabled(
         &mut left_ui,
         Icon::Plus,
-        "Add slide",
+        "New slide",
         false,
         !master_view,
-        if master_view {
-            "Not available in Master View"
-        } else {
-            "Add slide to course"
-        },
+        &add_slide_tooltip,
     );
     if add_slide_resp.clicked() {
         add_new_slide(editor);
@@ -414,7 +421,11 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             if master_view {
-                ui.add_enabled(false, egui::Button::new("Not available in Master View"));
+                let p = coursecraft_render::palette(ui.ctx());
+                ui.label(
+                    coursecraft_render::small("Not available in slide masters")
+                        .color(p.text_disabled),
+                );
                 return;
             }
             crate::slides::show_new_slide_popup(ui, editor);
@@ -426,6 +437,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
             let can_add_layer = !editor.selection.slide.is_empty();
             if ui
                 .add_enabled(can_add_layer, egui::Button::new("New layer"))
+                .on_disabled_hover_text("Select a slide first")
                 .clicked()
             {
                 add_new_layer(editor);
@@ -435,71 +447,43 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     left_ui.add_space(coursecraft_render::SPACE_MD);
 
+    let preview_tooltip = if master_view {
+        "Not available in slide masters".to_owned()
+    } else {
+        tooltip_with_shortcut(
+            left_ui.ctx(),
+            "Preview this slide",
+            Some(shortcut_for_action(ShortcutAction::PreviewThisSlide)),
+        )
+    };
     let preview_resp = widgets::toolbar_button_enabled(
         &mut left_ui,
         Icon::Play,
         "Preview",
         false,
         !master_view,
-        if master_view {
-            "Not available in Master View"
-        } else {
-            "Preview current slide (F12)"
-        },
+        &preview_tooltip,
     );
     if preview_resp.clicked() {
         preview_slide(editor, requests);
     }
     let preview_caret = widgets::toolbar_caret_button(&mut left_ui, "More preview options");
     egui::Popup::menu(&preview_caret).show(|ui| {
-        if master_view {
-            ui.add_enabled(false, egui::Button::new("Not available in Master View"));
-            return;
-        }
-        if ui
-            .add(egui::Button::new("Preview this slide").shortcut_text("F12"))
-            .clicked()
-        {
-            preview_slide(editor, requests);
-            ui.close();
-        }
-        let selected_count = editor
-            .selection
-            .slide_ids()
-            .iter()
-            .filter(|id| editor.session.course.bank_slide(id).is_none())
-            .count();
-        if ui
-            .add_enabled(
-                selected_count >= 2,
-                egui::Button::new("Preview selected slides"),
-            )
-            .clicked()
-        {
-            let slide_id = editor.selection.slide.clone();
-            editor.open_preview_selected();
-            requests.push(EditorRequest::Preview { slide: slide_id });
-            ui.close();
-        }
-        if ui
-            .add(egui::Button::new("Preview from the start").shortcut_text("Shift+F12"))
-            .clicked()
-        {
-            editor.open_preview_at(None);
-            requests.push(EditorRequest::Preview {
-                slide: String::new(),
-            });
-            ui.close();
-        }
+        crate::menu::show_preview_menu_items(editor, ui, requests);
     });
 
     if editor.file_ops_available {
         left_ui.add_space(coursecraft_render::SPACE_MD);
+        let publish_tooltip = tooltip_with_shortcut(
+            left_ui.ctx(),
+            "Publish course",
+            Some(shortcut_for_action(ShortcutAction::Publish)),
+        );
         let publish_resp = widgets::toolbar_primary_button(
             &mut left_ui,
             Icon::UploadSimple,
             "Publish",
-            "Publish course",
+            &publish_tooltip,
         );
         if publish_resp.clicked() {
             editor.open_publish_dialog();
@@ -508,11 +492,14 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     // Course map toggle: the course map replaces the slide editor.
     left_ui.add_space(coursecraft_render::SPACE_MD);
-    let story_sc = crate::menu::shortcut_label(left_ui.ctx(), "Ctrl+Shift+M");
     let map_tooltip = if master_view {
-        "Not available in Master View".to_owned()
+        "Not available in slide masters".to_owned()
     } else {
-        format!("Course map ({story_sc})")
+        tooltip_with_shortcut(
+            left_ui.ctx(),
+            "Course map",
+            Some(shortcut_for_action(ShortcutAction::CourseMap)),
+        )
     };
     if widgets::toolbar_button_enabled(
         &mut left_ui,
@@ -534,13 +521,17 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     let painter_enabled =
         !master_view && !state_edit_locked && (painter_armed || editor.can_arm_format_painter());
     let painter_tooltip = if state_edit_locked {
-        crate::STATE_LOCK_TOOLTIP
+        crate::STATE_LOCK_TOOLTIP.to_owned()
     } else if master_view {
-        "Not available in Master View"
+        "Not available in slide masters".to_owned()
     } else if !painter_enabled {
-        "Select an object to copy its format"
+        "Select an object to copy its format".to_owned()
     } else {
-        "Format Painter"
+        tooltip_with_shortcut(
+            left_ui.ctx(),
+            "Format painter",
+            Some(shortcut_for_action(ShortcutAction::FormatPainter)),
+        )
     };
     let painter_resp = widgets::toolbar_button_enabled(
         &mut left_ui,
@@ -548,7 +539,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         "Paint",
         painter_armed,
         painter_enabled,
-        painter_tooltip,
+        &painter_tooltip,
     );
     if painter_resp.double_clicked() {
         editor.arm_format_painter(true);
@@ -583,7 +574,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         Icon::GraduationCap,
         "Course",
         course_active,
-        "Course Inspector",
+        "Course inspector",
     )
     .clicked()
     {
@@ -597,7 +588,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         Icon::Presentation,
         "Slide",
         slide_active,
-        "Slide Inspector",
+        "Slide inspector",
     )
     .clicked()
     {
@@ -611,7 +602,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         Icon::Sparkle,
         "Animate",
         anim_active,
-        "Animate Inspector",
+        "Animate inspector",
     )
     .clicked()
     {
@@ -625,7 +616,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         Icon::SlidersHorizontal,
         "Format",
         fmt_active,
-        "Format Inspector",
+        "Format inspector",
     )
     .clicked()
     {
@@ -637,10 +628,16 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     // Redo button
     let can_redo = editor.session.can_redo();
-    let redo_sc = crate::menu::shortcut_label(right_ui.ctx(), "Ctrl+Y");
-    let redo_tooltip = format!("Redo ({redo_sc})");
-    if widgets::icon_button_enabled(&mut right_ui, Icon::ArrowClockwise, can_redo, &redo_tooltip)
-        .clicked()
+    let redo_tooltip =
+        tooltip_with_shortcut(right_ui.ctx(), "Redo", shortcut_for_command("edit.redo"));
+    if widgets::icon_button_enabled_reason(
+        &mut right_ui,
+        Icon::ArrowClockwise,
+        can_redo,
+        &redo_tooltip,
+        "Nothing to redo",
+    )
+    .clicked()
         && let Some(p) = crate::menu::adapter(editor, "edit.redo")
     {
         editor.run("edit.redo", p);
@@ -648,13 +645,14 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
 
     // Undo button
     let can_undo = editor.session.can_undo();
-    let undo_sc = crate::menu::shortcut_label(right_ui.ctx(), "Ctrl+Z");
-    let undo_tooltip = format!("Undo ({undo_sc})");
-    if widgets::icon_button_enabled(
+    let undo_tooltip =
+        tooltip_with_shortcut(right_ui.ctx(), "Undo", shortcut_for_command("edit.undo"));
+    if widgets::icon_button_enabled_reason(
         &mut right_ui,
         Icon::ArrowCounterClockwise,
         can_undo,
         &undo_tooltip,
+        "Nothing to undo",
     )
     .clicked()
         && let Some(p) = crate::menu::adapter(editor, "edit.undo")
@@ -677,7 +675,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         Icon::TextT,
         "Text",
         text_active,
-        "Insert Text Box",
+        "Insert text box",
     )
     .clicked()
     {
@@ -698,7 +696,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         Icon::Shapes,
         "Shape",
         shape_active,
-        "Insert Shape",
+        "Insert shape",
     );
     egui::Popup::menu(&shape_resp)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -720,7 +718,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         });
 
     // Image button
-    if widgets::toolbar_button(&mut center_ui, Icon::Image, "Image", "Insert Image").clicked() {
+    if widgets::toolbar_button(&mut center_ui, Icon::Image, "Image", "Insert image").clicked() {
         insert_image(editor, requests);
     }
 
@@ -729,9 +727,9 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     let media_tooltip = if state_edit_locked {
         "Not available inside a state"
     } else if master_view {
-        "Not available in Master View"
+        "Not available in slide masters"
     } else {
-        "Insert Media"
+        "Insert media"
     };
     let media_resp = widgets::toolbar_button_enabled(
         &mut center_ui,
@@ -743,7 +741,8 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     );
     egui::Popup::menu(&media_resp).show(|ui| {
         if !non_visual_enabled {
-            ui.add_enabled(false, egui::Button::new(media_tooltip));
+            let p = coursecraft_render::palette(ui.ctx());
+            ui.label(coursecraft_render::small(media_tooltip).color(p.text_disabled));
             return;
         }
         if ui.button("Video…").clicked() {
@@ -758,7 +757,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
             insert_lottie(editor, requests);
             ui.close();
         }
-        if ui.button("Record Narration…").clicked() {
+        if ui.button("Record narration…").clicked() {
             editor.open_record_narration();
             ui.close();
         }
@@ -769,7 +768,7 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     let btn_tooltip = if state_edit_locked {
         "Not available inside a state"
     } else {
-        "Insert Button"
+        "Insert button"
     };
     if widgets::toolbar_button_enabled(
         &mut center_ui,
@@ -805,9 +804,9 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
         let question_tooltip = if state_edit_locked {
             "Not available inside a state"
         } else if master_view {
-            "Not available in Master View"
+            "Not available in slide masters"
         } else {
-            "Insert Question"
+            "Insert question"
         };
         let question_resp = widgets::toolbar_button_enabled(
             &mut center_ui,
@@ -842,9 +841,9 @@ pub fn show_toolbar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorR
     let trigger_tooltip = if state_edit_locked {
         "Not available inside a state"
     } else if master_view {
-        "Not available in Master View"
+        "Not available in slide masters"
     } else {
-        "Insert Trigger"
+        "Insert trigger"
     };
     let trigger_resp = widgets::toolbar_button_enabled(
         &mut center_ui,

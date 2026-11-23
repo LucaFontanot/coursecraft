@@ -1107,7 +1107,7 @@ pub fn show_layer_settings_window(editor: &mut crate::Editor, ctx: &egui::Contex
         return;
     }
 
-    let title = format!("Layer Settings: {}", state.original_name);
+    let title = format!("Layer settings: {}", state.original_name);
     let mut open = true;
     let mut close = false;
     let mut commit = false;

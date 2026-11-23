@@ -1662,3 +1662,260 @@ fn set_slide_size_fill_undo_redo_and_cli_docs_sync() {
     s.execute("edit.undo", &json!({})).expect("second undo");
     assert_eq!(s.course, before);
 }
+
+/// DF-01: Differential byte-identical JSON and undo/redo metadata oracle across
+/// every `mutates == true` command in `REGISTRY`.
+#[test]
+fn df_01_all_mutating_commands_byte_identical_delta_oracle() {
+    let cases = command_cases();
+
+    let registry_mutating: Vec<&'static str> = registry()
+        .iter()
+        .filter(|c| c.mutates)
+        .map(|c| c.id)
+        .collect();
+    let seen: HashSet<&'static str> = cases.iter().map(|&(id, _)| id).collect();
+    let missing: Vec<&'static str> = registry_mutating
+        .iter()
+        .copied()
+        .filter(|id| !seen.contains(id))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "REGISTRY mutating commands missing from DF-01 ({}): {missing:?}",
+        missing.len()
+    );
+
+    let mut failures = Vec::new();
+    for &(id, ref params) in &cases {
+        let label = registry()
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.label)
+            .expect("command registered");
+
+        let mut s = fixture_session();
+        let before = s.course.clone();
+        let before_json = before.to_json().expect("before json");
+        let base_rev = s.revision;
+
+        if let Err(e) = s.execute(id, params) {
+            failures.push(format!("{id}: execute failed: {e:?}"));
+            continue;
+        }
+        let after = s.course.clone();
+        let after_json = after.to_json().expect("after json");
+        if after == before || after_json == before_json {
+            failures.push(format!("{id}: command did not change course JSON"));
+            continue;
+        }
+        if s.undo_names() != vec![label] || !s.redo_names().is_empty() || s.revision != base_rev + 1
+        {
+            failures.push(format!(
+                "{id}: post-execute oracle mismatch: undo={:?} redo={:?} rev={}",
+                s.undo_names(),
+                s.redo_names(),
+                s.revision
+            ));
+            continue;
+        }
+
+        // Explicit CourseDelta::diff + apply byte-identical roundtrip check.
+        match crate::delta::CourseDelta::diff(before.clone(), &after) {
+            None => {
+                failures.push(format!("{id}: CourseDelta::diff returned None"));
+                continue;
+            }
+            Some(mut delta) => {
+                let mut check = after.clone();
+                if let Err(e) = delta.apply(&mut check) {
+                    failures.push(format!("{id}: delta undo apply failed: {e:?}"));
+                    continue;
+                }
+                let undone_json = check.to_json().expect("delta undo json");
+                if check != before || undone_json != before_json {
+                    failures.push(format!("{id}: delta undo JSON mismatch"));
+                    continue;
+                }
+                if let Err(e) = delta.apply(&mut check) {
+                    failures.push(format!("{id}: delta redo apply failed: {e:?}"));
+                    continue;
+                }
+                let redone_json = check.to_json().expect("delta redo json");
+                if check != after || redone_json != after_json {
+                    failures.push(format!("{id}: delta redo JSON mismatch"));
+                    continue;
+                }
+            }
+        }
+
+        // First edit.undo
+        if let Err(e) = s.execute("edit.undo", &json!({})) {
+            failures.push(format!("{id}: first edit.undo failed: {e:?}"));
+            continue;
+        }
+        let undo1_json = s.course.to_json().expect("undo1 json");
+        if s.course != before
+            || undo1_json != before_json
+            || !s.undo_names().is_empty()
+            || s.redo_names() != vec![label]
+            || s.revision != base_rev + 2
+        {
+            failures.push(format!(
+                "{id}: first edit.undo oracle mismatch (json_eq={}, undo={:?}, redo={:?}, rev={})",
+                undo1_json == before_json,
+                s.undo_names(),
+                s.redo_names(),
+                s.revision
+            ));
+            continue;
+        }
+
+        // edit.redo
+        if let Err(e) = s.execute("edit.redo", &json!({})) {
+            failures.push(format!("{id}: edit.redo failed: {e:?}"));
+            continue;
+        }
+        let redo_json = s.course.to_json().expect("redo json");
+        if s.course != after
+            || redo_json != after_json
+            || s.undo_names() != vec![label]
+            || !s.redo_names().is_empty()
+            || s.revision != base_rev + 3
+        {
+            failures.push(format!(
+                "{id}: edit.redo oracle mismatch (json_eq={}, undo={:?}, redo={:?}, rev={})",
+                redo_json == after_json,
+                s.undo_names(),
+                s.redo_names(),
+                s.revision
+            ));
+            continue;
+        }
+
+        // Second edit.undo
+        if let Err(e) = s.execute("edit.undo", &json!({})) {
+            failures.push(format!("{id}: second edit.undo failed: {e:?}"));
+            continue;
+        }
+        let undo2_json = s.course.to_json().expect("undo2 json");
+        if s.course != before
+            || undo2_json != before_json
+            || !s.undo_names().is_empty()
+            || s.redo_names() != vec![label]
+            || s.revision != base_rev + 4
+        {
+            failures.push(format!(
+                "{id}: second edit.undo oracle mismatch (json_eq={}, undo={:?}, redo={:?}, rev={})",
+                undo2_json == before_json,
+                s.undo_names(),
+                s.redo_names(),
+                s.revision
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "DF-01 failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// SC-01: Every annotated `SingleSlide` and `CourseHeader` command in `REGISTRY`
+/// must mutate only within its declared scope (enforced by the `#[cfg(test)]`
+/// scope-isolation verifier and shadow differential oracle), perform zero
+/// full-course clones, and round-trip undo/redo with byte-identical JSON.
+#[test]
+fn sc_01_all_annotated_commands_isolated_and_zero_full_clones() {
+    use crate::delta::UndoScope;
+
+    let mut annotated_count = 0usize;
+    for cmd in registry() {
+        let scope = cmd.scope();
+        if scope != UndoScope::FullCourse {
+            annotated_count += 1;
+            assert!(
+                cmd.mutates,
+                "command {} is annotated {:?} but has mutates == false",
+                cmd.id, scope
+            );
+        }
+    }
+    assert!(
+        annotated_count >= 130,
+        "expected at least 130 commands annotated as SingleSlide or CourseHeader, found {annotated_count}"
+    );
+
+    let cases = command_cases();
+    let mut failures = Vec::new();
+
+    for &(id, ref params) in &cases {
+        let cmd = registry()
+            .iter()
+            .find(|c| c.id == id)
+            .expect("command registered");
+        let scope = cmd.scope();
+
+        let mut s = fixture_session();
+        let before = s.course.clone();
+        let before_json = before.to_json().expect("before json");
+
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        if let Err(e) = s.execute(id, params) {
+            failures.push(format!("{id} ({scope:?}): execute failed: {e:?}"));
+            continue;
+        }
+
+        #[cfg(debug_assertions)]
+        if scope != UndoScope::FullCourse {
+            let clones = crate::test_counts::full_course_clones();
+            if clones != 0 {
+                failures.push(format!(
+                    "{id} ({scope:?}): expected 0 full-course clones, got {clones}"
+                ));
+                continue;
+            }
+        }
+
+        let after = s.course.clone();
+        let after_json = after.to_json().expect("after json");
+        if after == before || after_json == before_json {
+            failures.push(format!("{id} ({scope:?}): command did not mutate course"));
+            continue;
+        }
+
+        if let Err(e) = s.execute("edit.undo", &json!({})) {
+            failures.push(format!("{id} ({scope:?}): edit.undo failed: {e:?}"));
+            continue;
+        }
+        let undo_json = s.course.to_json().expect("undo json");
+        if s.course != before || undo_json != before_json {
+            failures.push(format!(
+                "{id} ({scope:?}): edit.undo did not restore byte-identical JSON"
+            ));
+            continue;
+        }
+
+        if let Err(e) = s.execute("edit.redo", &json!({})) {
+            failures.push(format!("{id} ({scope:?}): edit.redo failed: {e:?}"));
+            continue;
+        }
+        let redo_json = s.course.to_json().expect("redo json");
+        if s.course != after || redo_json != after_json {
+            failures.push(format!(
+                "{id} ({scope:?}): edit.redo did not restore byte-identical JSON"
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "SC-01 failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

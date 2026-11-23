@@ -229,14 +229,65 @@ own frames.
 | `idle_frames_do_no_counted_work` | 20 idle frames on hello-course after settling: course copies, speller runs, thumbnail redraws, picture decodes | 0 each |
 | `typing_one_letter_checks_one_text_and_no_suggestions` | One letter in the in-place editor | 1 misspellings call on the edited text, 0 suggestion lookups, 0 course copies |
 | `switching_slides_decodes_only_the_new_pictures` | Switch to an off-screen slide, then back | 1 decode for the new slide, 0 on the way back (cached) |
-| `moving_an_object_redraws_only_that_slide_thumbnail` | Arrow-key nudge | 1 thumbnail recomposed, 1 undo snapshot course copy |
+| `moving_an_object_redraws_only_that_slide_thumbnail` | Arrow-key nudge | 1 thumbnail recomposed, 0 full-course copies |
 | `scrolling_the_list_only_touches_visible_thumbnails` | One wheel frame over a 100-slide list | at most 12 thumbnails redrawn and 12 pictures decoded |
 | `spelling_window_asks_for_suggestions_when_open` | Open Check Spelling on a course with a typo | at least 1 suggestion lookup, the contrast with typing |
 
-The editor copies the whole course only when a command mutates it: the engine
-takes one undo snapshot, so the idle count is zero and a committed change costs
-one copy. Validation and audit are read-only commands and copy nothing. A
-thumbnail "redraw" means a row that needed recomposing, not every paint call:
-egui paints the panel every frame, but a row is counted only when it first comes
-into view, its slide changes, or it returns after being off screen. That is the
-work step 4's off-screen paint skip removed.
+`guard_counters::course_copies()` now reads the real engine counter
+`coursecraft_engine::test_counts::full_course_clones()` (gated on
+`debug_assertions`, just like `coursecraft_render::media::test_counts`, so
+release builds compile it out). Single-slide edits, same-slide batches, and
+course-header edits use `CourseDelta` and `UndoScope` to snapshot only the
+affected slide or header fields, taking **0 full-course copies**; only
+course-wide structural commands fall back to a temporary full-course clone.
+Validation and audit are read-only commands and copy nothing. A thumbnail
+"redraw" means a row that needed recomposing, not every paint call: egui paints
+the panel every frame, but a row is counted only when it first comes into view,
+its slide changes, or it returns after being off screen. That is the work step
+4's off-screen paint skip removed.
+
+### Delta undo engine (M33)
+
+`coursecraft_engine::Session` stores undo and redo history as reversible
+structural deltas (`CourseDelta` in `crates/engine/src/delta.rs`) inside
+`VecDeque<(CourseDelta, String)>` instead of cloning the whole `Course` on
+every edit:
+
+- **Structural deltas (`CourseDelta`):** Single-object edits store only the
+  changed object (`SlideDelta::ObjectModified` / `ObjectInserted` /
+  `ObjectRemoved` / `ObjectReordered`), slide-metadata edits store only changed
+  fields (`SlideDelta::Fields`), course-header edits store only changed header
+  fields (`CourseDelta::Header`), and structural changes store compact patches
+  (`CourseDelta::Patch`) with a `FullCourse` fallback for wholesale rewrites.
+  `CourseDelta::apply` swaps before/after values in place so `undo()` and
+  `redo()` restore byte-identical `Course::to_json()` with zero serde
+  round-tripping and zero full-course clones.
+- **Scoped pre-edit snapshots (`UndoScope`):** Commands annotated
+  `UndoScope::SingleSlide` clone only the target slide (and reroute glued
+  connectors only on that slide); same-slide batches share one single-slide
+  snapshot; `UndoScope::CourseHeader` commands snapshot only the 17 header
+  fields. Unannotated or cross-slide commands default to
+  `UndoScope::FullCourse` for safety.
+- **O(1) history eviction:** `MAX_HISTORY` (200) is enforced with
+  `VecDeque::pop_front()`.
+
+Target budgets from `docs/testing/m33-plan.md` (compared against the pre-M33
+full-copy baseline on 300-slide courses):
+
+| Metric | Target budget | Verification |
+|---|---|---|
+| `perf300` — 200 single-object edits heap delta | ≤ 2.0 MB (`undo_estimated_bytes() <= 512 KiB`) | `undo_perf_tests` (`PF-01`), `GD-02` |
+| `rich300` — 200 single-object edits heap delta | ≤ 4.0 MB (`undo_estimated_bytes() <= 2 MiB`) | `undo_perf_tests` (`PF-02`) |
+| `perf300` — 200 edits + 200 undo + 200 redo wall time | ≤ 120 ms (≤ 0.60 ms/edit) | `undo_perf_tests` (`PF-01`) |
+| `rich300` — 200 edits wall time | ≤ 400 ms (≤ 2.0 ms/edit) | `undo_perf_tests` (`PF-02`) |
+| `perf300` — single `undo()` or `redo()` median latency | ≤ 0.05 ms | `undo_perf_tests` (`PF-01`) |
+| `perf300` — 200 no-op edits wall time | ≤ 100 ms (≤ 0.50 ms/no-op) | `undo_perf_tests` (`PF-03`) |
+| Full-course clones on object nudge | 0 | `guard_tests` (`GD-01`) |
+| Editor `perf_tests` `undo / redo move` (30 cycles) | ≤ 6.5 ms median / ≤ 7.5 ms p95 (budget 33 ms) | `perf_tests` (`PF-04`) |
+| Media bytes duplicated by undo | 0 MB | Design invariant + `PF-01` |
+
+Run the release engine undo benchmarks with:
+
+```sh
+cargo test --release -p coursecraft-engine undo_perf_tests -- --ignored --nocapture --test-threads=1
+```

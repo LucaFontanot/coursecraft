@@ -150,7 +150,7 @@ impl Editor {
     /// Open the narration window with an empty field.
     pub fn open_speech_dialog(&mut self) {
         if self.ui.master_view {
-            self.set_status("Not available in Master View");
+            self.set_status("Not available in slide masters");
             return;
         }
         self.ui.speech = SpeechState {
@@ -163,7 +163,7 @@ impl Editor {
     /// Open the narration window filled with a slide's notes.
     pub fn open_narration_from_notes(&mut self, slide_id: &str) {
         if self.ui.master_view {
-            self.set_status("Not available in Master View");
+            self.set_status("Not available in slide masters");
             return;
         }
         let Some(slide) = self.session.course.slide(slide_id) else {
@@ -406,7 +406,7 @@ pub fn show_captions_window(
 
     let replace = editor.ui.captions.had_captions;
 
-    Dialog::new("Generate Captions")
+    Dialog::new("Generate captions")
         .id(Id::unique(("generate_captions_dialog", 0_u64)))
         .width(560.0)
         .open(&mut open)
@@ -431,7 +431,7 @@ pub fn show_captions_window(
                             .color(p.text_secondary),
                     );
                     ui.add_space(8.0);
-                    if crate::primary_button(ui, "Open AI Settings").clicked() {
+                    if crate::primary_button(ui, "Open AI settings").clicked() {
                         open_settings = true;
                     }
                     ui.add_space(8.0);
@@ -450,7 +450,7 @@ pub fn show_captions_window(
                 if !ready {
                     ui.label(RichText::new(problem.unwrap_or_default()).color(p.danger));
                     ui.add_space(8.0);
-                    if crate::primary_button(ui, "Open AI Settings").clicked() {
+                    if crate::primary_button(ui, "Open AI settings").clicked() {
                         open_settings = true;
                     }
                     ui.add_space(8.0);
@@ -645,7 +645,7 @@ pub fn show_speech_window(
         editor.ui.speech.playing = false;
     }
 
-    Dialog::new("Narration from Text")
+    Dialog::new("Narration from text")
         .id(Id::unique(("narration_from_text_dialog", 0_u64)))
         .width(560.0)
         .open(&mut open)
@@ -674,7 +674,7 @@ pub fn show_speech_window(
                                 .color(p.text_secondary),
                         );
                         ui.add_space(8.0);
-                        if crate::primary_button(ui, "Open AI Settings").clicked() {
+                        if crate::primary_button(ui, "Open AI settings").clicked() {
                             open_settings = true;
                         }
                         ui.add_space(8.0);
@@ -688,7 +688,7 @@ pub fn show_speech_window(
                             RichText::new(problem.clone().unwrap_or_default()).color(p.danger),
                         );
                         ui.add_space(8.0);
-                        if crate::primary_button(ui, "Open AI Settings").clicked() {
+                        if crate::primary_button(ui, "Open AI settings").clicked() {
                             open_settings = true;
                         }
                         ui.add_space(8.0);

@@ -524,6 +524,22 @@ impl Preview {
         }
     }
 
+    /// Create a full-course preview starting at `slide_id` (not a partial subset).
+    ///
+    /// If `slide_id` is empty or does not refer to a play-order slide (e.g. a bank slide),
+    /// starts from the course's normal start slide.
+    #[must_use]
+    pub fn new_from_slide(course: &Course, slide_id: &str) -> Self {
+        let mut course_clone = course.clone();
+        if !slide_id.is_empty()
+            && course.bank_slide(slide_id).is_none()
+            && course.play_slide(slide_id).is_some()
+        {
+            course_clone.start_slide = Some(slide_id.to_owned());
+        }
+        Self::new_subset(&course_clone, None)
+    }
+
     /// Create a new preview for the given course, optionally restricted to a subset of slide IDs.
     #[must_use]
     pub fn new_subset(course: &Course, subset: Option<&[String]>) -> Self {
@@ -796,7 +812,7 @@ impl Preview {
     /// Render validation error messages when the course cannot be previewed.
     fn show_errors(&self, ui: &mut Ui) {
         let p = coursecraft_render::palette(ui.ctx());
-        ui.heading("Course Validation Errors");
+        ui.heading("Course validation errors");
         ui.label("This course cannot be previewed because it has validation errors:");
         ui.add_space(8.0);
         ScrollArea::vertical().show(ui, |ui| {
@@ -1207,7 +1223,7 @@ impl Preview {
                                                 Layout::top_down(Align::Min),
                                                 |ui| {
                                                     ui.label(
-                                                        egui::RichText::new("Effect Log").strong(),
+                                                        egui::RichText::new("Effect log").strong(),
                                                     );
                                                     ScrollArea::vertical()
                                                         .auto_shrink([false, false])
@@ -1229,7 +1245,7 @@ impl Preview {
                                                 now,
                                             );
                                         } else {
-                                            ui.label(egui::RichText::new("Effect Log").strong());
+                                            ui.label(egui::RichText::new("Effect log").strong());
                                             ScrollArea::vertical()
                                                 .auto_shrink([false, false])
                                                 .stick_to_bottom(true)
@@ -1297,10 +1313,10 @@ impl Preview {
                             );
                             ui.add_space(12.0);
                             ui.horizontal(|ui| {
-                                if ui.button("Replay Slide(s)").clicked() {
+                                if ui.button("Replay slide(s)").clicked() {
                                     popup_replay = true;
                                 }
-                                if ui.button("Close Preview").clicked() {
+                                if ui.button("Close preview").clicked() {
                                     popup_close_preview = true;
                                 }
                             });

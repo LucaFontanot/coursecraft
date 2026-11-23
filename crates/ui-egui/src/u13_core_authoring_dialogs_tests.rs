@@ -44,6 +44,7 @@ fn dialog_rect(h: &TestHarness, title: &str) -> Option<Rect> {
     dialog_rect_by_id(h, Id::unique(("coursecraft_dialog", title)))
 }
 
+/// L-03: Core authoring dialogs paint sentence-case titles and form labels.
 #[test]
 fn t10_1_uniform_sentence_case_dialog_titles_and_form_alignment() {
     let mut h = TestHarness::new_with_size(base_course(), (1280.0, 800.0));

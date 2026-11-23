@@ -1978,7 +1978,7 @@ fn gear_opens_layer_settings_and_selection_alone_does_not() {
         Some("about")
     );
     assert!(
-        harness.find_text("Layer Settings: About").is_some(),
+        harness.find_text("Layer settings: About").is_some(),
         "the window is titled after the layer"
     );
 }
@@ -4184,6 +4184,31 @@ fn test_shortcut_formatting_both_platforms_and_fallbacks() {
 }
 
 #[test]
+fn test_function_key_shortcut_formatting_both_platforms() {
+    let all_glyphs = |_| true;
+    let no_glyphs = |_| false;
+    assert_eq!(menu::format_shortcut("F12", true, all_glyphs), "F12");
+    assert_eq!(menu::format_shortcut("Ctrl+F12", true, all_glyphs), "⌘F12");
+    assert_eq!(menu::format_shortcut("Shift+F12", true, all_glyphs), "⇧F12");
+    assert_eq!(
+        menu::format_shortcut("Ctrl+F12", true, no_glyphs),
+        "Cmd+F12"
+    );
+    assert_eq!(
+        menu::format_shortcut("Shift+F12", true, no_glyphs),
+        "Shift+F12"
+    );
+    assert_eq!(
+        menu::format_shortcut("Ctrl+F12", false, all_glyphs),
+        "Ctrl+F12"
+    );
+    assert_eq!(
+        menu::format_shortcut("Shift+F12", false, all_glyphs),
+        "Shift+F12"
+    );
+}
+
+#[test]
 fn bottom_panel_is_resizable_and_bounded() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
@@ -6018,13 +6043,13 @@ fn typing_in_styled_text_preserves_runs() {
     let mut text_edit_pos = None;
     for _ in 0..20 {
         let panel = harness.right_panel_rect();
-        if let Some(pos) = harness.find_text_in("Text Content", panel) {
+        if let Some(pos) = harness.find_text_in("Text content", panel) {
             text_edit_pos = Some(pos + vec2(110.0, 0.0));
             break;
         }
         harness.scroll_over(panel.center(), -120.0);
     }
-    let text_edit_pos = text_edit_pos.expect("Text Content label");
+    let text_edit_pos = text_edit_pos.expect("Text content label");
     harness.editor.ui.properties.text_body = "Thanks a lot for completing the course.".to_owned();
     // Simulate commit via blur
     harness.click_at(text_edit_pos);
@@ -6571,8 +6596,8 @@ fn insert_menu_creates_a_results_slide_and_selects_it() {
     harness.click_at(insert);
     harness.idle_frame();
     let item = harness
-        .find_text("Results Slide")
-        .expect("Results Slide menu item");
+        .find_text("Results slide")
+        .expect("Results slide menu item");
     harness.click_at(item);
     harness.idle_frame();
 
@@ -6608,8 +6633,8 @@ fn insert_menu_creates_a_certificate_slide_and_selects_it() {
     harness.click_at(insert);
     harness.idle_frame();
     let item = harness
-        .find_text("Certificate Slide")
-        .expect("Certificate Slide menu item");
+        .find_text("Certificate slide")
+        .expect("Certificate slide menu item");
     harness.click_at(item);
     harness.idle_frame();
 
@@ -6685,7 +6710,7 @@ fn switching_question_kind_to_fill_in_shows_the_fill_in_form() {
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
     assert!(harness.find_text("+ Add choice").is_some());
     let prompt = quiz_question(&harness).prompt;
-    harness.pick_combo("Multiple Choice", "Fill in");
+    harness.pick_combo("Multiple choice", "Fill in");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::FillIn);
@@ -6707,7 +6732,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
     use coursecraft_course::{CmpOp, Condition, QuestionKind, Value};
 
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Custom question (graded by a condition)");
+    harness.pick_combo("Multiple choice", "Custom question (graded by a condition)");
     harness.idle_frame();
     harness.idle_frame();
 
@@ -6758,7 +6783,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
 fn likert_choices_never_mark_correct_and_add_hides_at_eleven() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Likert scale");
+    harness.pick_combo("Multiple choice", "Likert scale");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Likert);
@@ -6801,7 +6826,7 @@ fn likert_choices_never_mark_correct_and_add_hides_at_eleven() {
 fn survey_question_shows_not_graded_and_no_points() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Likert scale");
+    harness.pick_combo("Multiple choice", "Likert scale");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Likert);
@@ -6813,7 +6838,7 @@ fn survey_question_shows_not_graded_and_no_points() {
 fn adding_a_matching_pair_appends_one() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Matching");
+    harness.pick_combo("Multiple choice", "Matching");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Matching);
@@ -6836,7 +6861,7 @@ fn adding_a_matching_pair_appends_one() {
 fn reordering_a_sequence_item_moves_it_down() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Sequence");
+    harness.pick_combo("Multiple choice", "Sequence");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Sequence);
@@ -6866,7 +6891,7 @@ fn switching_question_kind_to_hotspot_shows_the_hotspot_form_and_adds_region() {
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
 
     // Switching to Hotspot before an image exists on the slide fails
-    harness.pick_combo("Multiple Choice", "Hotspot");
+    harness.pick_combo("Multiple choice", "Hotspot");
     harness.idle_frame();
     assert!(harness.editor.ui.last_error.is_some());
     assert_ne!(quiz_question(&harness).kind, QuestionKind::Hotspot);
@@ -6883,7 +6908,7 @@ fn switching_question_kind_to_hotspot_shows_the_hotspot_form_and_adds_region() {
     harness.idle_frame();
 
     // Now switch to Hotspot succeeds
-    harness.pick_combo("Multiple Choice", "Hotspot");
+    harness.pick_combo("Multiple choice", "Hotspot");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Hotspot);
@@ -6916,7 +6941,7 @@ fn canvas_hotspot_region_dragging_updates_position_and_undo() {
     );
     harness.idle_frame();
 
-    harness.pick_combo("Multiple Choice", "Hotspot");
+    harness.pick_combo("Multiple choice", "Hotspot");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Hotspot);
@@ -7002,7 +7027,7 @@ fn switching_question_kind_to_drag_drop_shows_form_and_updates_target() {
     harness.idle_frame();
 
     // Switch to Drag and drop
-    harness.pick_combo("Multiple Choice", "Drag and drop");
+    harness.pick_combo("Multiple choice", "Drag and drop");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::DragDrop);
@@ -7203,8 +7228,8 @@ fn toolbar_normal_width_labels_and_actions() {
 
     // At >= 1100 px width, toolbar labels are laid out
     assert!(
-        harness.find_text("Add slide").is_some(),
-        "Add slide button label"
+        harness.find_text("New slide").is_some(),
+        "New slide button label"
     );
     assert!(
         harness.find_text("Preview").is_some(),
@@ -7238,8 +7263,8 @@ fn toolbar_normal_width_labels_and_actions() {
     harness.idle_frame();
     assert_eq!(harness.editor.ui.inspector_tab, crate::InspectorTab::Course);
 
-    // Clicking Preview dispatches preview request
-    let preview_pos = harness.find_text("Preview").expect("Preview button");
+    // Clicking Preview dispatches preview request (find_text_last skips the top-level Preview menu)
+    let preview_pos = harness.find_text_last("Preview").expect("Preview button");
     let reqs = harness.frame(vec![
         egui::Event::PointerMoved(preview_pos),
         egui::Event::PointerButton {
@@ -7270,8 +7295,8 @@ fn toolbar_narrow_width_drops_labels_icon_only() {
 
     // Below 1100 px, toolbar labels are dropped to prevent clipping
     assert!(
-        harness.find_text("Add slide").is_none(),
-        "Add slide label should be dropped at 1024 px width"
+        harness.find_text("New slide").is_none(),
+        "New slide label should be dropped at 1024 px width"
     );
 
     // But icons are still rendered and interactive
@@ -8832,9 +8857,9 @@ fn toolbar_question_popup_inserts_and_opens_question_tab() {
     harness.click_at(question_btn);
     harness.idle_frame();
     for name in [
-        "Multiple Choice",
-        "Multiple Response",
-        "True / False",
+        "Multiple choice",
+        "Multiple response",
+        "True / false",
         "Fill in",
         "Sequence",
         "Matching",
@@ -8847,8 +8872,8 @@ fn toolbar_question_popup_inserts_and_opens_question_tab() {
         );
     }
     let kind = harness
-        .find_text("Multiple Choice")
-        .expect("Multiple Choice popup item");
+        .find_text("Multiple choice")
+        .expect("Multiple choice popup item");
     harness.click_at(kind);
     harness.idle_frame();
 
@@ -9742,12 +9767,12 @@ fn menu_routes_open_the_variables_tab_and_course_settings() {
     harness.idle_frame();
     assert_eq!(harness.editor.ui.bottom_tab, BottomTab::Variables);
 
-    let file = harness.find_text("File").expect("File menu");
-    harness.click_at(file);
+    let project = harness.find_text("Project").expect("Project menu");
+    harness.click_at(project);
     harness.idle_frame();
     let properties = harness
-        .find_text_last("Course Properties")
-        .expect("Course Properties menu item");
+        .find_text_last("Course settings…")
+        .expect("Course settings menu item");
     harness.click_at(properties);
     harness.idle_frame();
     assert!(harness.editor.ui.show_course_settings_window);
@@ -9790,8 +9815,8 @@ fn edit_menu_delete_scene_opens_the_confirmation() {
     harness.click_at(edit);
     harness.idle_frame();
     let delete = harness
-        .find_text_last("Delete Scene")
-        .expect("Delete Scene menu item");
+        .find_text_last("Delete scene")
+        .expect("Delete scene menu item");
     harness.click_at(delete);
     harness.idle_frame();
     assert!(harness.editor.ui.pending_delete_scene.is_some());
@@ -11498,7 +11523,7 @@ fn entering_and_leaving_master_view_restores_the_slide_and_hides_tabs() {
             .tab_rects
             .contains_key("Question")
     );
-    assert!(harness.find_text("Close Master View").is_some());
+    assert!(harness.find_text("Close slide masters").is_some());
 
     harness.editor.leave_master_view();
     harness.idle_frame();
@@ -11661,8 +11686,8 @@ fn project_menu_opens_ai_settings() {
     harness.click_at(project);
     harness.idle_frame();
     let item = harness
-        .find_text_last("AI Settings…")
-        .expect("AI Settings menu item");
+        .find_text_last("AI settings…")
+        .expect("AI settings menu item");
     harness.click_at(item);
     harness.idle_frame();
 
@@ -14395,7 +14420,7 @@ fn trigger_form_shows_the_key_picker_and_filtered_object_lists() {
     }
     harness.idle_frame();
     harness.idle_frame();
-    assert!(harness.find_text("Draggable Object").is_some());
+    assert!(harness.find_text("Draggable object").is_some());
     assert!(harness.find_text("Target").is_some());
 
     {
@@ -16275,7 +16300,7 @@ fn record_narration_is_refused_in_master_view() {
             .status_message
             .as_ref()
             .map(|(message, _)| message.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
 }
 
@@ -16952,8 +16977,8 @@ fn record_narration_opens_from_the_insert_menu() {
     harness.click_at(insert);
     harness.idle_frame();
     let item = harness
-        .find_text_last("Record Narration…")
-        .expect("Record Narration menu item");
+        .find_text_last("Record narration…")
+        .expect("Record narration menu item");
     harness.click_at(item);
     harness.idle_frame();
     assert!(harness.editor.ui.record_narration.open);
@@ -16978,8 +17003,8 @@ fn record_narration_opens_from_the_toolbar_media_popup() {
     harness.click_at(media_btn);
     harness.idle_frame();
     let item = harness
-        .find_text("Record Narration…")
-        .expect("Record Narration… in Media popup");
+        .find_text("Record narration…")
+        .expect("Record narration… in Media popup");
     harness.click_at(item);
     harness.idle_frame();
     assert!(harness.editor.ui.record_narration.open);
@@ -17145,7 +17170,7 @@ fn view_menu_toggles_rulers_grid_snap_and_guides() {
             (|e: &Editor| e.session.course.editor.show_rulers) as fn(&Editor) -> bool,
         ),
         ("Grid", |e: &Editor| e.session.course.editor.show_grid),
-        ("Snap to Grid", |e: &Editor| {
+        ("Snap to grid", |e: &Editor| {
             e.session.course.editor.snap_to_grid
         }),
         ("Guides", |e: &Editor| e.session.course.editor.show_guides),
@@ -18076,7 +18101,7 @@ fn trigger_copy_then_paste_adds_it_to_another_owner_and_skips_misfits() {
         .triggers
         .len();
     let undo = h.editor.session.undo_len();
-    let paste = h.find_text("Paste Triggers").expect("Paste Triggers");
+    let paste = h.find_text("Paste triggers").expect("Paste triggers");
     h.click_at(paste);
     h.idle_frame();
     let slide = h.editor.session.course.slide("s-tabs").unwrap();
@@ -18141,7 +18166,7 @@ fn version_history_menu_item_is_disabled_without_a_file_and_opens_with_one() {
     let file = h.find_text("File").expect("File menu");
     h.click_at(file);
     h.idle_frame();
-    let item = h.find_text("Version History…").expect("menu item");
+    let item = h.find_text("Version history…").expect("menu item");
     let requests = click_collect(&mut h, item);
     assert!(
         !requests
@@ -18153,12 +18178,12 @@ fn version_history_menu_item_is_disabled_without_a_file_and_opens_with_one() {
     // A saved project enables it and the click raises the request.
     h.editor.set_project_has_file(true);
     h.idle_frame();
-    if h.find_text("Version History…").is_none() {
+    if h.find_text("Version history…").is_none() {
         let file = h.find_text("File").expect("File menu");
         h.click_at(file);
         h.idle_frame();
     }
-    let item = h.find_text("Version History…").expect("menu item");
+    let item = h.find_text("Version history…").expect("menu item");
     let requests = click_collect(&mut h, item);
     assert!(
         requests
@@ -18215,7 +18240,7 @@ fn folder_menu_items_raise_requests_and_history_says_git_is_the_history() {
     let file = h.find_text("File").expect("File menu");
     h.click_at(file);
     h.idle_frame();
-    let open = h.find_text("Open Folder…").expect("Open Folder item");
+    let open = h.find_text("Open folder…").expect("Open folder item");
     let requests = click_collect(&mut h, open);
     assert!(
         requests
@@ -18223,14 +18248,14 @@ fn folder_menu_items_raise_requests_and_history_says_git_is_the_history() {
             .any(|r| matches!(r, EditorRequest::OpenFolder))
     );
 
-    if h.find_text("Save As Project Folder (for git)…").is_none() {
+    if h.find_text("Save as project folder (for git)…").is_none() {
         let file = h.find_text("File").expect("File menu");
         h.click_at(file);
         h.idle_frame();
     }
     let save = h
-        .find_text("Save As Project Folder (for git)…")
-        .expect("Save As Project Folder item");
+        .find_text("Save as project folder (for git)…")
+        .expect("Save as project folder item");
     let requests = click_collect(&mut h, save);
     assert!(
         requests
@@ -18636,7 +18661,7 @@ fn edit_menu_shows_named_undo_and_redo() {
     harness.click_at(edit);
     harness.idle_frame();
     assert!(
-        harness.find_text_last("Undo Course Title").is_some(),
+        harness.find_text_last("Undo course title").is_some(),
         "Edit menu should show named Undo"
     );
     assert!(
@@ -18648,7 +18673,7 @@ fn edit_menu_shows_named_undo_and_redo() {
     harness.editor.run("edit.undo", serde_json::json!({}));
     harness.idle_frame();
     assert!(
-        harness.find_text_last("Redo Course Title").is_some(),
+        harness.find_text_last("Redo course title").is_some(),
         "Edit menu should show named Redo"
     );
 }
@@ -19366,7 +19391,7 @@ fn m31_04_file_menu_hints_and_compound_shortcut_formatting() {
         ("New", "Ctrl+N"),
         ("Open…", "Ctrl+O"),
         ("Save", "Ctrl+S"),
-        ("Save As…", "Ctrl+Shift+S"),
+        ("Save as…", "Ctrl+Shift+S"),
     ] {
         assert!(
             h.find_text(label).is_some(),
@@ -19378,4 +19403,757 @@ fn m31_04_file_menu_hints_and_compound_shortcut_formatting() {
             "File menu must show shortcut hint '{hint}' for '{label}'"
         );
     }
+}
+
+/// L-04: Static sentence-case lint over all production `Dialog::new("...")` titles
+/// in `crates/ui-egui/src/` and menu/toolbar/navigator button literals in
+/// `menu.rs`, `toolbar.rs`, and `slides.rs`.
+#[test]
+fn static_sentence_case_lint_for_dialogs_menus_toolbar_and_slides() {
+    const ALLOWED_CAPS: &[&str] = &[
+        "CourseCraft",
+        "PowerPoint",
+        "PPTX",
+        "Word",
+        "PDF",
+        "MP4",
+        "CSV",
+        "XLIFF",
+        "SCORM",
+        "LTI",
+        "xAPI",
+        "cmi5",
+        "HTML5",
+        "AI",
+        "Lottie",
+        "GitHub",
+        "Inter",
+        "OK",
+        "ID",
+        "A–Z",
+        "Web",
+        "Esc",
+        "Enter",
+        "Delete",
+        "Ctrl",
+        "Cmd",
+        "Shift",
+        "Alt",
+        "F2",
+        "F7",
+        "F11",
+        "F12",
+    ];
+
+    fn strip_test_module(src: &str) -> &str {
+        src.find("\n#[cfg(test)]").map_or(src, |idx| &src[..idx])
+    }
+
+    fn strip_line_comments(src: &str) -> String {
+        src.lines()
+            .map(|line| {
+                if line.trim_start().starts_with("//") {
+                    ""
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn parse_quoted_literal(s: &str) -> Option<(String, usize)> {
+        let mut chars = s.char_indices();
+        let (_, first) = chars.next()?;
+        if first != '"' {
+            return None;
+        }
+        let mut out = String::new();
+        let mut escaped = false;
+        for (idx, ch) in chars {
+            if escaped {
+                out.push(ch);
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                return Some((out, idx + 1));
+            } else {
+                out.push(ch);
+            }
+        }
+        None
+    }
+
+    fn collect_first_string_arg_after(src: &str, needle: &str) -> Vec<String> {
+        let mut results = Vec::new();
+        let mut offset = 0;
+        while let Some(pos) = src[offset..].find(needle) {
+            let after = offset + pos + needle.len();
+            let rest = src[after..].trim_start();
+            if let Some((lit, consumed)) = parse_quoted_literal(rest) {
+                results.push(lit);
+                offset = after + (src[after..].len() - rest.len()) + consumed;
+            } else {
+                offset = after;
+            }
+        }
+        results
+    }
+
+    fn collect_nth_string_arg_after(src: &str, needle: &str, arg_index: usize) -> Vec<String> {
+        let mut results = Vec::new();
+        let mut offset = 0;
+        while let Some(pos) = src[offset..].find(needle) {
+            let after = offset + pos + needle.len();
+            let rest = &src[after..];
+            let mut depth = 0usize;
+            let mut comma_count = 0usize;
+            let mut in_str = false;
+            let mut escaped = false;
+            let mut arg_start = if arg_index == 0 { Some(0) } else { None };
+            for (idx, ch) in rest.char_indices() {
+                if in_str {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        in_str = false;
+                    }
+                    continue;
+                }
+                match ch {
+                    '"' => {
+                        if let Some(start) = arg_start
+                            && rest[start..idx].trim().is_empty()
+                        {
+                            if let Some((lit, _)) = parse_quoted_literal(&rest[idx..]) {
+                                results.push(lit);
+                            }
+                            break;
+                        }
+                        in_str = true;
+                    }
+                    '(' | '[' | '{' => depth += 1,
+                    ')' => {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    ']' | '}' => depth = depth.saturating_sub(1),
+                    ',' if depth == 0 => {
+                        comma_count += 1;
+                        if comma_count == arg_index {
+                            arg_start = Some(idx + 1);
+                        } else if comma_count > arg_index {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            offset = after;
+        }
+        results
+    }
+
+    fn check_sentence_case(phrase: &str, context: &str, violations: &mut Vec<String>) {
+        if phrase.is_empty() || phrase == "Don't Save" {
+            return;
+        }
+        if let Some(first_alpha) = phrase.chars().find(|c| c.is_alphabetic())
+            && !first_alpha.is_uppercase()
+        {
+            violations.push(format!(
+                "{context}: {phrase:?} must start with an uppercase letter"
+            ));
+            return;
+        }
+        let tokens: Vec<&str> = phrase
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .filter(|t| !t.is_empty())
+            .collect();
+        for &token in tokens.iter().skip(1) {
+            let trimmed = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '–');
+            if trimmed.is_empty() || ALLOWED_CAPS.contains(&trimmed) {
+                continue;
+            }
+            if trimmed.chars().any(char::is_uppercase) {
+                violations.push(format!(
+                    "{context}: unexpected Title Case token {trimmed:?} in {phrase:?}"
+                ));
+            }
+        }
+    }
+
+    let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations = Vec::new();
+    let mut dialog_count = 0usize;
+    let mut button_count = 0usize;
+
+    let entries = std::fs::read_dir(&src_dir).expect("read crates/ui-egui/src");
+    for entry in entries {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if file_name == "tests.rs"
+            || file_name == "test_harness.rs"
+            || file_name.ends_with("_tests.rs")
+            || file_name.starts_with("bughunt_")
+        {
+            continue;
+        }
+
+        let raw = std::fs::read_to_string(&path).expect("read source file");
+        let prod = strip_line_comments(strip_test_module(&raw));
+
+        for title in collect_first_string_arg_after(&prod, "Dialog::new(") {
+            dialog_count += 1;
+            check_sentence_case(&title, &format!("{file_name} Dialog::new"), &mut violations);
+        }
+
+        if matches!(file_name, "menu.rs" | "toolbar.rs" | "slides.rs") {
+            for needle in ["Button::new(", ".button(", ".menu_button("] {
+                for label in collect_first_string_arg_after(&prod, needle) {
+                    button_count += 1;
+                    check_sentence_case(&label, &format!("{file_name} {needle}"), &mut violations);
+                }
+            }
+            for (needle, arg_idx) in [
+                (".checkbox(", 1),
+                ("quiet_button(", 1),
+                ("primary_button(", 1),
+                ("toolbar_toggle(", 2),
+                ("toolbar_toggle(", 4),
+                ("toolbar_button_enabled(", 2),
+            ] {
+                for label in collect_nth_string_arg_after(&prod, needle, arg_idx) {
+                    button_count += 1;
+                    check_sentence_case(
+                        &label,
+                        &format!("{file_name} {needle} arg {arg_idx}"),
+                        &mut violations,
+                    );
+                }
+            }
+        }
+
+        if file_name == "properties.rs" {
+            for heading in collect_nth_string_arg_after(&prod, "inspector_section_header(", 1) {
+                button_count += 1;
+                check_sentence_case(
+                    &heading,
+                    "properties.rs inspector_section_header",
+                    &mut violations,
+                );
+            }
+        }
+    }
+
+    assert!(
+        dialog_count >= 25,
+        "expected >= 25 Dialog::new titles scanned, found {dialog_count}"
+    );
+    assert!(
+        button_count >= 80,
+        "expected >= 80 menu/toolbar/navigator button literals scanned, found {button_count}"
+    );
+    assert!(
+        violations.is_empty(),
+        "sentence-case lint violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// D-02: Static CI guard ensuring every `.add_enabled(` and `.add_enabled_ui(` call
+/// in production UI code attaches `.on_disabled_hover_text(` and zero `ui.disable()`
+/// calls exist (`UX-08` / `M32-05`).
+#[test]
+fn every_add_enabled_has_disabled_reason() {
+    fn strip_comments_keep_lines(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let bytes = src.as_bytes();
+        let mut i = 0usize;
+        let mut in_str = false;
+        let mut in_char = false;
+        let mut escaped = false;
+        let mut block_depth = 0usize;
+
+        while i < bytes.len() {
+            let b = bytes[i];
+            if block_depth > 0 {
+                if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    block_depth += 1;
+                    out.push_str("  ");
+                    i += 2;
+                } else if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    block_depth -= 1;
+                    out.push_str("  ");
+                    i += 2;
+                } else {
+                    out.push(if b == b'\n' { '\n' } else { ' ' });
+                    i += 1;
+                }
+                continue;
+            }
+            if in_str {
+                out.push(b as char);
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_char {
+                out.push(b as char);
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+                continue;
+            }
+            if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    out.push(' ');
+                    i += 1;
+                }
+                continue;
+            }
+            if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                block_depth = 1;
+                out.push_str("  ");
+                i += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_str = true;
+                out.push('"');
+                i += 1;
+                continue;
+            }
+            // Only enter char literal if it looks like `'x'` or `'\x'`, not a lifetime `'a`.
+            if b == b'\''
+                && ((i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                    || (i + 3 < bytes.len() && bytes[i + 1] == b'\\' && bytes[i + 3] == b'\''))
+            {
+                in_char = true;
+                out.push('\'');
+                i += 1;
+                continue;
+            }
+            let ch = src[i..].chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+        out
+    }
+
+    fn strip_inline_cfg_test_modules(comment_free: &str) -> String {
+        let lines: Vec<&str> = comment_free.lines().collect();
+        let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+        let mut idx = 0usize;
+        while idx < lines.len() {
+            let trimmed = lines[idx].trim();
+            let mut inline_mod_start = None;
+            if trimmed.starts_with("#[cfg(test)]") {
+                let rest = trimmed.trim_start_matches("#[cfg(test)]").trim();
+                let is_mod_decl = |s: &str| {
+                    (s.starts_with("mod ")
+                        || s.starts_with("pub mod ")
+                        || s.starts_with("pub(crate) mod "))
+                        && !s.trim_end().ends_with(';')
+                };
+                if is_mod_decl(rest) {
+                    inline_mod_start = Some(idx);
+                } else if rest.is_empty() {
+                    let mut next = idx + 1;
+                    while next < lines.len() {
+                        let t = lines[next].trim();
+                        if t.is_empty() || t.starts_with("#[") {
+                            next += 1;
+                            continue;
+                        }
+                        if is_mod_decl(t) {
+                            inline_mod_start = Some(next);
+                        }
+                        break;
+                    }
+                }
+            }
+            if let Some(mod_line) = inline_mod_start {
+                while idx < mod_line {
+                    kept.push(String::new());
+                    idx += 1;
+                }
+                let mut depth = 0usize;
+                let mut opened = false;
+                while idx < lines.len() {
+                    let line = lines[idx];
+                    let bytes = line.as_bytes();
+                    let mut i = 0usize;
+                    let mut in_str = false;
+                    let mut in_char = false;
+                    let mut escaped = false;
+                    while i < bytes.len() {
+                        let b = bytes[i];
+                        if in_str {
+                            if escaped {
+                                escaped = false;
+                            } else if b == b'\\' {
+                                escaped = true;
+                            } else if b == b'"' {
+                                in_str = false;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                        if in_char {
+                            if escaped {
+                                escaped = false;
+                            } else if b == b'\\' {
+                                escaped = true;
+                            } else if b == b'\'' {
+                                in_char = false;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                        if b == b'"' {
+                            in_str = true;
+                        } else if b == b'\''
+                            && ((i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                                || (i + 3 < bytes.len()
+                                    && bytes[i + 1] == b'\\'
+                                    && bytes[i + 3] == b'\''))
+                        {
+                            in_char = true;
+                        } else if b == b'{' {
+                            depth += 1;
+                            opened = true;
+                        } else if b == b'}' && depth > 0 {
+                            depth -= 1;
+                        }
+                        i += 1;
+                    }
+                    kept.push(String::new());
+                    idx += 1;
+                    if opened && depth == 0 {
+                        break;
+                    }
+                }
+                continue;
+            }
+            kept.push(lines[idx].to_owned());
+            idx += 1;
+        }
+        kept.join("\n")
+    }
+
+    fn find_matching_paren(src: &str, open_paren_idx: usize) -> Option<usize> {
+        let bytes = src.as_bytes();
+        let mut depth = 0usize;
+        let mut in_str = false;
+        let mut in_char = false;
+        let mut escaped = false;
+        let mut i = open_paren_idx;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if in_str {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_char {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+                continue;
+            }
+            match b {
+                b'"' => in_str = true,
+                b'\''
+                    if (i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                        || (i + 3 < bytes.len()
+                            && bytes[i + 1] == b'\\'
+                            && bytes[i + 3] == b'\'') =>
+                {
+                    in_char = true;
+                }
+                b'(' => depth += 1,
+                b')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    fn statement_end_after(src: &str, start_idx: usize) -> usize {
+        let bytes = src.as_bytes();
+        let mut depth = 0usize;
+        let mut in_str = false;
+        let mut in_char = false;
+        let mut escaped = false;
+        let mut i = start_idx;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if in_str {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_char {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+                continue;
+            }
+            match b {
+                b'"' => in_str = true,
+                b'\''
+                    if (i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                        || (i + 3 < bytes.len()
+                            && bytes[i + 1] == b'\\'
+                            && bytes[i + 3] == b'\'') =>
+                {
+                    in_char = true;
+                }
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        return i;
+                    }
+                    depth -= 1;
+                }
+                b';' | b',' if depth == 0 => return i,
+                _ => {}
+            }
+            i += 1;
+        }
+        src.len()
+    }
+
+    fn bound_var_before(src: &str, call_idx: usize) -> Option<&str> {
+        let prefix = &src[..call_idx];
+        let stmt_start = prefix.rfind([';', '{', '}']).map_or(0, |p| p + 1);
+        let stmt = prefix[stmt_start..].trim_start();
+        let after_let = stmt.strip_prefix("let ")?.trim_start();
+        let after_mut = after_let
+            .strip_prefix("mut ")
+            .unwrap_or(after_let)
+            .trim_start();
+        let ident_end = after_mut
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(after_mut.len());
+        let ident = &after_mut[..ident_end];
+        if ident.is_empty() { None } else { Some(ident) }
+    }
+
+    fn line_number_at(src: &str, byte_idx: usize) -> usize {
+        src[..byte_idx].bytes().filter(|&b| b == b'\n').count() + 1
+    }
+
+    fn scan_source(file_name: &str, raw: &str) -> (usize, Vec<String>) {
+        let prod = strip_inline_cfg_test_modules(&strip_comments_keep_lines(raw));
+        let mut violations = Vec::new();
+        let mut checked = 0usize;
+
+        // 1. Forbid `ui.disable()` in production code.
+        let mut disable_offset = 0usize;
+        while let Some(pos) = prod[disable_offset..].find(".disable()") {
+            let abs = disable_offset + pos;
+            let line = line_number_at(&prod, abs);
+            violations.push(format!(
+                "{file_name}:{line}: forbidden `ui.disable()` in production code; use `add_enabled_ui` with `.on_disabled_hover_text(...)`"
+            ));
+            disable_offset = abs + ".disable()".len();
+        }
+
+        // 2. Check every `.add_enabled(` and `.add_enabled_ui(`.
+        for needle in [".add_enabled(", ".add_enabled_ui("] {
+            let is_ui_block = needle == ".add_enabled_ui(";
+            let mut offset = 0usize;
+            while let Some(pos) = prod[offset..].find(needle) {
+                let abs = offset + pos;
+                let open_paren = abs + needle.len() - 1;
+                offset = open_paren + 1;
+                checked += 1;
+
+                let Some(close_paren) = find_matching_paren(&prod, open_paren) else {
+                    let line = line_number_at(&prod, abs);
+                    violations.push(format!("{file_name}:{line}: unmatched paren in `{needle}`"));
+                    continue;
+                };
+
+                let after_call = close_paren + 1;
+                let stmt_end = statement_end_after(&prod, after_call);
+                let chain = &prod[after_call..stmt_end];
+                let inside = &prod[open_paren..=close_paren];
+
+                let mut has_reason = chain.contains(".on_disabled_hover_text(")
+                    || (is_ui_block && inside.contains(".on_disabled_hover_text("));
+
+                if !has_reason && let Some(var) = bound_var_before(&prod, abs) {
+                    let lookahead_end = prod
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .find(|&i| i >= (stmt_end + 800).min(prod.len()))
+                        .unwrap_or(prod.len());
+                    let lookahead_compact: String = prod[stmt_end..lookahead_end]
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .collect();
+                    let direct = format!("{var}.on_disabled_hover_text(");
+                    let chained = format!("{var}.on_hover_text(");
+                    if lookahead_compact.contains(&direct)
+                        || (lookahead_compact.contains(&chained)
+                            && lookahead_compact.contains(".on_disabled_hover_text("))
+                    {
+                        has_reason = true;
+                    }
+                }
+
+                if !has_reason {
+                    let line = line_number_at(&prod, abs);
+                    violations.push(format!(
+                        "{file_name}:{line}: `{needle}` is missing `.on_disabled_hover_text(...)`"
+                    ));
+                }
+            }
+        }
+
+        (checked, violations)
+    }
+
+    // Self-check: out-of-line `#[cfg(test)] mod foo;` (like lib.rs & main.rs) must NOT blind
+    // the scanner, inline `#[cfg(test)] mod tests { ... }` must be ignored, and char literals
+    // like `'"'` must not break paren matching.
+    let (_, synthetic_violations) = scan_source(
+        "synthetic.rs",
+        r#"
+#[cfg(test)]
+mod external_tests;
+
+fn prod(ui: &mut egui::Ui, ok: bool) {
+    #[cfg(test)]
+    let _c = '"';
+    ui.add_enabled(ok, egui::Button::new("Bare"));
+    ui.disable();
+}
+
+#[cfg(test)]
+mod tests {
+    fn ignored(ui: &mut egui::Ui) {
+        ui.disable();
+        ui.add_enabled(false, egui::Button::new("In test"));
+    }
+}
+"#,
+    );
+    assert_eq!(
+        synthetic_violations.len(),
+        2,
+        "guard self-check must catch prod violations after out-of-line #[cfg(test)] mod and ignore inline #[cfg(test)] mod tests, got: {synthetic_violations:?}"
+    );
+
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dirs = [
+        manifest.join("src"),
+        manifest.join("../../apps/coursecraft/src"),
+    ];
+    let mut violations = Vec::new();
+    let mut scanned_files = 0usize;
+    let mut checked_calls = 0usize;
+    let mut lib_rs_checked_calls = 0usize;
+
+    for dir in &dirs {
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if file_name == "tests.rs"
+                || file_name == "test_harness.rs"
+                || file_name.ends_with("_tests.rs")
+                || file_name.starts_with("bughunt_")
+            {
+                continue;
+            }
+            scanned_files += 1;
+            let raw = std::fs::read_to_string(&path).expect("read production source file");
+            let (file_checked, file_violations) = scan_source(file_name, &raw);
+            if file_name == "lib.rs" {
+                lib_rs_checked_calls = file_checked;
+            }
+            checked_calls += file_checked;
+            violations.extend(file_violations);
+        }
+    }
+
+    assert!(
+        scanned_files >= 30,
+        "expected >= 30 production files scanned, found {scanned_files}"
+    );
+    assert!(
+        lib_rs_checked_calls >= 1,
+        "lib.rs must be scanned past its out-of-line #[cfg(test)] mod declarations (expected quiet_button_enabled)"
+    );
+    assert!(
+        checked_calls >= 60,
+        "expected >= 60 add_enabled/add_enabled_ui calls checked, found {checked_calls}"
+    );
+    assert!(
+        violations.is_empty(),
+        "disabled-control guard violations ({}):\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
 }

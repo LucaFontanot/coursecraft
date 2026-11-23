@@ -1,5 +1,6 @@
 //! Editor menu bar, command adapters, and keyboard shortcut handling.
 
+use crate::shortcuts::{ShortcutAction, shortcut_for_action, shortcut_for_command};
 use crate::{Editor, EditorRequest};
 use coursecraft_engine::registry;
 use egui::{Button, Key, KeyboardShortcut, MenuBar, Modifiers, Ui};
@@ -18,6 +19,51 @@ pub fn font_has_glyph(ctx: &egui::Context, c: char) -> bool {
 pub fn shortcut_label(ctx: &egui::Context, shortcut: &str) -> String {
     let is_mac = ctx.os().is_mac();
     format_shortcut(shortcut, is_mac, |c| font_has_glyph(ctx, c))
+}
+
+/// Format `"{base} ({formatted})"` with the platform-aware shortcut label,
+/// or plain `base` when `shortcut` is `None` or empty.
+#[must_use]
+pub fn tooltip_with_shortcut(ctx: &egui::Context, base: &str, shortcut: Option<&str>) -> String {
+    match shortcut.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(sc) => {
+            let formatted = shortcut_label(ctx, sc);
+            if formatted.is_empty() {
+                base.to_owned()
+            } else {
+                format!("{base} ({formatted})")
+            }
+        }
+        None => base.to_owned(),
+    }
+}
+
+/// Render a menu button with an optional right-aligned shortcut hint, a hover
+/// tooltip echoing the shortcut, and an optional disabled hover reason.
+pub fn menu_button(
+    ui: &mut Ui,
+    label: &str,
+    shortcut: Option<&str>,
+    enabled: bool,
+    disabled_reason: Option<&str>,
+) -> egui::Response {
+    let shortcut = shortcut.map(str::trim).filter(|s| !s.is_empty());
+    let mut btn = Button::new(label);
+    if let Some(sc) = shortcut {
+        btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
+    }
+    let mut resp = if let Some(reason) = disabled_reason {
+        ui.add_enabled(enabled, btn).on_disabled_hover_text(reason)
+    } else if enabled {
+        ui.add(btn)
+    } else {
+        ui.add_enabled(false, btn)
+            .on_disabled_hover_text("Not available right now")
+    };
+    if let Some(sc) = shortcut {
+        resp = resp.on_hover_text(tooltip_with_shortcut(ui.ctx(), label, Some(sc)));
+    }
+    resp
 }
 
 /// Format a shortcut string like `"Ctrl+Z"`, `"Ctrl+="`, `"Ctrl+-"`, `"Ctrl+Shift+Z"`, `"Delete"`
@@ -110,7 +156,7 @@ fn format_single_shortcut(
         }
         "escape" | "esc" => "Esc".to_owned(),
         _ => {
-            if key_part.len() == 1 {
+            if key_part.len() == 1 || is_function_key(key_part) {
                 key_part.to_ascii_uppercase()
             } else {
                 return trimmed.to_owned();
@@ -172,6 +218,15 @@ fn format_single_shortcut(
         mods.push(&key_str);
         mods.join("+")
     }
+}
+
+fn is_function_key(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix(['f', 'F']) else {
+        return false;
+    };
+    (1..=2).contains(&rest.len())
+        && rest.bytes().all(|b| b.is_ascii_digit())
+        && rest.parse::<u8>().is_ok_and(|n| (1..=20).contains(&n))
 }
 
 /// Parse a shortcut string such as `"Ctrl+Z"`, `"Ctrl+Y"`, `"Ctrl+M"`, `"Delete"`.
@@ -493,7 +548,7 @@ pub fn adapter_reason(editor: &Editor, id: &str) -> &'static str {
                 | "question.delete"
         )
     {
-        return "Not available in Master View";
+        return "Not available in slide masters";
     }
     match id {
         "edit.undo" => "Nothing to undo",
@@ -585,9 +640,14 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
     MenuBar::new().ui(ui, |ui| {
         // 1. File menu (always first, combining shell requests and any File/* commands)
         ui.menu_button("File", |ui| {
-            if ui
-                .add(Button::new("New").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+N")))
-                .clicked()
+            if menu_button(
+                ui,
+                "New",
+                Some(shortcut_for_action(ShortcutAction::NewCourse)),
+                true,
+                None,
+            )
+            .clicked()
             {
                 requests.push(EditorRequest::New);
                 ui.close();
@@ -597,32 +657,35 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 "Opening and saving files is desktop-only in this version";
             let desktop_file_ops = editor.file_ops_available && !cfg!(target_arch = "wasm32");
 
-            if editor.file_ops_available {
-                if ui
-                    .add(Button::new("Open…").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+O")))
-                    .clicked()
-                {
-                    requests.push(EditorRequest::Open);
-                    ui.close();
-                }
-            } else {
-                ui.add_enabled(false, Button::new("Open…"))
-                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG);
+            if menu_button(
+                ui,
+                "Open…",
+                Some(shortcut_for_action(ShortcutAction::OpenCourse)),
+                editor.file_ops_available,
+                Some(FILE_OPS_DISABLED_MSG),
+            )
+            .clicked()
+            {
+                requests.push(EditorRequest::Open);
+                ui.close();
             }
 
             file_op_item(
                 ui,
                 desktop_file_ops,
-                "Open Folder…",
+                "Open folder…",
                 "Open a project folder, such as one kept in git",
                 EditorRequest::OpenFolder,
                 requests,
             );
 
             if desktop_file_ops {
-                ui.menu_button("Open Recent", |ui| {
+                ui.menu_button("Open recent", |ui| {
                     if editor.recent_files.is_empty() {
-                        ui.add_enabled(false, Button::new("(No recent files)"));
+                        let p = coursecraft_render::palette(ui.ctx());
+                        ui.label(
+                            coursecraft_render::small("No recent files").color(p.text_disabled),
+                        );
                     } else {
                         for (idx, full_path) in editor.recent_files.iter().enumerate() {
                             let name = std::path::Path::new(full_path)
@@ -637,52 +700,49 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                     }
                 });
             } else {
-                ui.add_enabled(false, Button::new("Open Recent"))
+                ui.add_enabled(false, Button::new("Open recent"))
                     .on_disabled_hover_text(FILE_OPS_DISABLED_MSG);
             }
 
             ui.separator();
 
-            if editor.file_ops_available {
-                if ui
-                    .add(Button::new("Save").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+S")))
-                    .clicked()
-                {
-                    requests.push(EditorRequest::Save);
-                    ui.close();
-                }
-            } else {
-                ui.add_enabled(false, Button::new("Save"))
-                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG);
+            if menu_button(
+                ui,
+                "Save",
+                Some(shortcut_for_action(ShortcutAction::Save)),
+                editor.file_ops_available,
+                Some(FILE_OPS_DISABLED_MSG),
+            )
+            .clicked()
+            {
+                requests.push(EditorRequest::Save);
+                ui.close();
             }
 
-            if editor.file_ops_available {
-                if ui
-                    .add(
-                        Button::new("Save As…")
-                            .shortcut_text(shortcut_label(ui.ctx(), "Ctrl+Shift+S")),
-                    )
-                    .clicked()
-                {
-                    requests.push(EditorRequest::SaveAs);
-                    ui.close();
-                }
-            } else {
-                ui.add_enabled(false, Button::new("Save As…"))
-                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG);
+            if menu_button(
+                ui,
+                "Save as…",
+                Some(shortcut_for_action(ShortcutAction::SaveAs)),
+                editor.file_ops_available,
+                Some(FILE_OPS_DISABLED_MSG),
+            )
+            .clicked()
+            {
+                requests.push(EditorRequest::SaveAs);
+                ui.close();
             }
 
             file_op_item(
                 ui,
                 desktop_file_ops,
-                "Save As Project Folder (for git)…",
+                "Save as project folder (for git)…",
                 "Save as a folder of plain files that git can track",
                 EditorRequest::SaveAsFolder,
                 requests,
             );
 
             let history_ready = desktop_file_ops && editor.ui.versions.has_file;
-            let history = ui.add_enabled(history_ready, Button::new("Version History…"));
+            let history = ui.add_enabled(history_ready, Button::new("Version history…"));
             let history = if desktop_file_ops {
                 history.on_disabled_hover_text("Save the course first to start its history.")
             } else {
@@ -695,7 +755,15 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
 
             ui.separator();
 
-            if ui.button("Preferences…").clicked() {
+            if menu_button(
+                ui,
+                "Preferences…",
+                Some(shortcut_for_action(ShortcutAction::Preferences)),
+                true,
+                None,
+            )
+            .clicked()
+            {
                 editor.open_preferences();
                 ui.close();
             }
@@ -711,43 +779,45 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
 
             ui.separator();
 
-            if ui.button("Import PowerPoint…").clicked() {
-                requests.push(EditorRequest::PickPptx);
-                ui.close();
-            }
             ui.menu_button("Import", |ui| {
-                if ui.button("Questions from CSV…").clicked() {
+                if ui.button("PowerPoint (.pptx)…").clicked() {
+                    requests.push(EditorRequest::PickPptx);
+                    ui.close();
+                }
+                if ui.button("Course from document…").clicked() {
+                    editor.open_document_dialog();
+                    ui.close();
+                }
+                if ui.button("Slides from outline…").clicked() {
+                    editor.open_outline_dialog();
+                    ui.close();
+                }
+                if ui.button("Questions from spreadsheet (CSV)…").clicked() {
                     requests.push(EditorRequest::ImportQuestionsCsv);
                     ui.close();
                 }
-            });
-
-            if ui.button("Add font…").clicked() {
-                requests.push(EditorRequest::PickFonts);
-                ui.close();
-            }
-            if ui.button("Manage fonts…").clicked() {
-                editor.ui.show_fonts_window = true;
-                ui.close();
-            }
-
-            if desktop_file_ops {
-                if ui.button("Export Translation…").clicked() {
-                    editor.ui.show_export_translation = true;
-                    ui.close();
-                }
-                if ui.button("Import Translation…").clicked() {
+                if ui
+                    .add_enabled(desktop_file_ops, Button::new("Translation (XLIFF)…"))
+                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG)
+                    .clicked()
+                {
                     requests.push(EditorRequest::ImportTranslation);
                     ui.close();
                 }
-            } else {
-                ui.add_enabled(false, Button::new("Export Translation…"))
-                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG);
-                ui.add_enabled(false, Button::new("Import Translation…"))
-                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG);
-            }
-
-            ui.separator();
+                ui.separator();
+                if ui
+                    .add_enabled(desktop_file_ops, Button::new("Media files…"))
+                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG)
+                    .clicked()
+                {
+                    requests.push(EditorRequest::PickMediaFiles);
+                    ui.close();
+                }
+                if ui.button("Font…").clicked() {
+                    requests.push(EditorRequest::PickFonts);
+                    ui.close();
+                }
+            });
 
             ui.menu_button("Export", |ui| {
                 if ui.button("Video (MP4)…").clicked() {
@@ -762,27 +832,43 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                     editor.open_export_review(crate::ReviewFormat::Word);
                     ui.close();
                 }
+                if ui
+                    .add_enabled(desktop_file_ops, Button::new("Translation (XLIFF)…"))
+                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG)
+                    .clicked()
+                {
+                    editor.ui.show_export_translation = true;
+                    ui.close();
+                }
             });
+
+            if ui.button("Manage fonts…").clicked() {
+                editor.ui.show_fonts_window = true;
+                ui.close();
+            }
 
             ui.separator();
 
-            if editor.file_ops_available {
-                let btn =
-                    Button::new("Publish…").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+Shift+P"));
-                if ui.add(btn).clicked() {
-                    editor.open_publish_dialog();
-                    ui.close();
-                }
-            } else {
-                ui.add_enabled(false, Button::new("Publish…"))
-                    .on_disabled_hover_text(FILE_OPS_DISABLED_MSG);
+            if menu_button(
+                ui,
+                "Publish…",
+                Some(shortcut_for_action(ShortcutAction::Publish)),
+                editor.file_ops_available,
+                Some(FILE_OPS_DISABLED_MSG),
+            )
+            .clicked()
+            {
+                editor.open_publish_dialog();
+                ui.close();
             }
 
             ui.separator();
 
             // Registry items under File/
             for cmd in registry() {
-                if let Some(sub) = cmd.menu.strip_prefix("File/") {
+                if let Some(sub) = cmd.menu.strip_prefix("File/")
+                    && !sub.starts_with("Import/")
+                {
                     render_registry_menu_item(editor, ui, cmd, sub, &mut action_to_run);
                 }
             }
@@ -821,11 +907,60 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
         // View menu (Theme preference selection)
         ui.menu_button("View", |ui| {
             let mut masters_on = editor.ui.master_view;
-            if ui.checkbox(&mut masters_on, "Slide Masters").changed() {
+            if ui.checkbox(&mut masters_on, "Slide masters").changed() {
                 editor.toggle_master_view();
                 ui.close();
             }
             ui.checkbox(&mut editor.ui.show_media_library, "Media library");
+            if menu_button(
+                ui,
+                "Course map",
+                Some(shortcut_for_action(ShortcutAction::CourseMap)),
+                !editor.ui.master_view,
+                Some("Not available in slide masters"),
+            )
+            .clicked()
+            {
+                editor.ui.story_view = !editor.ui.story_view;
+                ui.close();
+            }
+            ui.separator();
+            if menu_button(
+                ui,
+                "Zoom to fit",
+                Some(shortcut_for_action(ShortcutAction::ZoomFit)),
+                true,
+                None,
+            )
+            .clicked()
+            {
+                editor.ui.zoom = crate::ZoomLevel::Fit;
+                ui.close();
+            }
+            if menu_button(
+                ui,
+                "Zoom in",
+                Some(shortcut_for_action(ShortcutAction::ZoomIn)),
+                true,
+                None,
+            )
+            .clicked()
+            {
+                editor.ui.zoom = editor.ui.zoom.zoom_in();
+                ui.close();
+            }
+            if menu_button(
+                ui,
+                "Zoom out",
+                Some(shortcut_for_action(ShortcutAction::ZoomOut)),
+                true,
+                None,
+            )
+            .clicked()
+            {
+                editor.ui.zoom = editor.ui.zoom.zoom_out();
+                ui.close();
+            }
             ui.separator();
             ui.menu_button("Theme", |ui| {
                 let current = editor.theme_pref;
@@ -842,7 +977,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 }
             });
             ui.separator();
-            ui.checkbox(&mut editor.ui.snap_to_guides, "Snap to Guides");
+            ui.checkbox(&mut editor.ui.snap_to_guides, "Snap to guides");
             ui.separator();
             let mut show_rulers = editor.session.course.editor.show_rulers;
             if ui.checkbox(&mut show_rulers, "Rulers").changed() {
@@ -856,7 +991,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 editor.run("view.set", serde_json::json!({ "show_grid": show_grid }));
             }
             let mut snap_to_grid = editor.session.course.editor.snap_to_grid;
-            if ui.checkbox(&mut snap_to_grid, "Snap to Grid").changed() {
+            if ui.checkbox(&mut snap_to_grid, "Snap to grid").changed() {
                 editor.run(
                     "view.set",
                     serde_json::json!({ "snap_to_grid": snap_to_grid }),
@@ -909,9 +1044,22 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
             }
         });
 
-        // 3. Help menu
+        // 3. Preview menu
+        ui.menu_button("Preview", |ui| {
+            show_preview_menu_items(editor, ui, requests);
+        });
+
+        // 4. Help menu
         ui.menu_button("Help", |ui| {
-            if ui.button("Keyboard shortcuts").clicked() {
+            if menu_button(
+                ui,
+                "Keyboard shortcuts",
+                Some(shortcut_for_action(ShortcutAction::KeyboardShortcuts)),
+                true,
+                None,
+            )
+            .clicked()
+            {
                 editor.ui.show_shortcuts_dialog = true;
                 ui.close();
             }
@@ -943,15 +1091,107 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
     }
 }
 
+/// Shared menu items for both the top-level **Preview** menu and the toolbar's
+/// Preview caret popup.
+pub(crate) fn show_preview_menu_items(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    requests: &mut Vec<EditorRequest>,
+) {
+    let master_view = editor.ui.master_view;
+    let slide_id = editor.selection.slide.clone();
+    let slide_empty = slide_id.is_empty();
+    let on_bank_slide = !slide_empty && editor.session.course.bank_slide(&slide_id).is_some();
+
+    let can_preview_current = !master_view && !on_bank_slide && !slide_empty;
+    let current_disabled_reason = if master_view {
+        "Not available in slide masters"
+    } else if on_bank_slide {
+        "Question bank slides can't be previewed directly"
+    } else {
+        "Select a slide first"
+    };
+
+    if menu_button(
+        ui,
+        "Preview this slide",
+        Some(shortcut_for_action(ShortcutAction::PreviewThisSlide)),
+        can_preview_current,
+        Some(current_disabled_reason),
+    )
+    .clicked()
+    {
+        crate::toolbar::preview_slide(editor, requests);
+        ui.close();
+    }
+
+    if menu_button(
+        ui,
+        "Preview from here",
+        Some(shortcut_for_action(ShortcutAction::PreviewFromHere)),
+        can_preview_current,
+        Some(current_disabled_reason),
+    )
+    .clicked()
+    {
+        editor.open_preview_from(&slide_id);
+        requests.push(EditorRequest::Preview { slide: slide_id });
+        ui.close();
+    }
+
+    let selected_non_bank_count = editor
+        .selection
+        .slide_ids()
+        .iter()
+        .filter(|id| !id.is_empty() && editor.session.course.bank_slide(id).is_none())
+        .count();
+    let can_preview_selected = !master_view && selected_non_bank_count >= 2;
+    let selected_disabled_reason = if master_view {
+        "Not available in slide masters"
+    } else {
+        "Select two or more slides to preview them"
+    };
+    if menu_button(
+        ui,
+        "Preview selected slides",
+        None,
+        can_preview_selected,
+        Some(selected_disabled_reason),
+    )
+    .clicked()
+    {
+        let slide = editor.selection.slide.clone();
+        editor.open_preview_selected();
+        requests.push(EditorRequest::Preview { slide });
+        ui.close();
+    }
+
+    if menu_button(
+        ui,
+        "Preview whole course",
+        Some(shortcut_for_action(ShortcutAction::PreviewWholeCourse)),
+        !master_view,
+        Some("Not available in slide masters"),
+    )
+    .clicked()
+    {
+        editor.open_preview_at(None);
+        requests.push(EditorRequest::Preview {
+            slide: String::new(),
+        });
+        ui.close();
+    }
+}
+
 /// Help items that report a problem or open the project's pages on GitHub.
 fn show_project_help_items(editor: &mut Editor, ui: &mut Ui) {
     use crate::project_links::{REPO_URL, releases_url};
     use crate::report::{open_feature_request, open_link};
-    if ui.button("Report a Problem…").clicked() {
+    if ui.button("Report a problem…").clicked() {
         editor.open_report();
         ui.close();
     }
-    if ui.button("Suggest a Feature…").clicked() {
+    if ui.button("Suggest a feature…").clicked() {
         open_feature_request(ui.ctx());
         ui.close();
     }
@@ -959,9 +1199,39 @@ fn show_project_help_items(editor: &mut Editor, ui: &mut Ui) {
         open_link(ui.ctx(), REPO_URL);
         ui.close();
     }
-    if ui.button("Check for Updates").clicked() {
+    if ui.button("Check for updates").clicked() {
         open_link(ui.ctx(), &releases_url());
         ui.close();
+    }
+}
+
+fn format_undo_redo_label(prefix: &str, name: &str) -> String {
+    const KEEP_CAPS: &[&str] = &[
+        "AI",
+        "CSV",
+        "XLIFF",
+        "Lottie",
+        "PowerPoint",
+        "PDF",
+        "MP4",
+        "Word",
+        "SCORM",
+        "LTI",
+        "CourseCraft",
+    ];
+    let first_word = name
+        .split(|c: char| !c.is_alphanumeric())
+        .next()
+        .unwrap_or("");
+    if KEEP_CAPS.contains(&first_word) {
+        return format!("{prefix} {name}");
+    }
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_uppercase() => {
+            format!("{prefix} {}{}", first.to_ascii_lowercase(), chars.as_str())
+        }
+        _ => format!("{prefix} {name}"),
     }
 }
 
@@ -976,7 +1246,7 @@ fn show_edit_menu(
             let label = match id {
                 "edit.undo" => {
                     if let Some(name) = editor.session.undo_names().first() {
-                        dynamic_label = format!("Undo {name}");
+                        dynamic_label = format_undo_redo_label("Undo", name);
                         dynamic_label.as_str()
                     } else {
                         cmd.label
@@ -984,7 +1254,7 @@ fn show_edit_menu(
                 }
                 "edit.redo" => {
                     if let Some(name) = editor.session.redo_names().first() {
-                        dynamic_label = format!("Redo {name}");
+                        dynamic_label = format_undo_redo_label("Redo", name);
                         dynamic_label.as_str()
                     } else {
                         cmd.label
@@ -1009,32 +1279,40 @@ fn show_edit_menu(
 
     let cut_enabled =
         !master_view && ((navigator && has_slide && can_cut_slide) || (!navigator && has_objects));
-    let cut = Button::new("Cut").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+X"));
-    if ui
-        .add_enabled(cut_enabled, cut)
-        .on_disabled_hover_text(if master_view {
-            "Not available in Master View"
-        } else if navigator {
-            "Can't cut the only slide"
-        } else {
-            "Select an object first"
-        })
-        .clicked()
+    let cut_reason = if master_view {
+        "Not available in slide masters"
+    } else if navigator {
+        "Can't cut the only slide"
+    } else {
+        "Select an object first"
+    };
+    if menu_button(
+        ui,
+        "Cut",
+        Some(shortcut_for_action(ShortcutAction::Cut)),
+        cut_enabled,
+        Some(cut_reason),
+    )
+    .clicked()
     {
         crate::clipboard::cut(editor);
         ui.close();
     }
 
     let copy_enabled = !master_view && ((navigator && has_slide) || (!navigator && has_objects));
-    let copy = Button::new("Copy").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+C"));
-    if ui
-        .add_enabled(copy_enabled, copy)
-        .on_disabled_hover_text(if master_view {
-            "Not available in Master View"
-        } else {
-            "Select something first"
-        })
-        .clicked()
+    let copy_reason = if master_view {
+        "Not available in slide masters"
+    } else {
+        "Select something first"
+    };
+    if menu_button(
+        ui,
+        "Copy",
+        Some(shortcut_for_action(ShortcutAction::Copy)),
+        copy_enabled,
+        Some(copy_reason),
+    )
+    .clicked()
     {
         crate::clipboard::copy(editor);
         ui.close();
@@ -1042,15 +1320,19 @@ fn show_edit_menu(
 
     let paste_enabled =
         !master_view && (editor.ui.clipboard.is_some() || editor.file_ops_available);
-    let paste = Button::new("Paste").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+V"));
-    if ui
-        .add_enabled(paste_enabled, paste)
-        .on_disabled_hover_text(if master_view {
-            "Not available in Master View"
-        } else {
-            "Nothing to paste"
-        })
-        .clicked()
+    let paste_reason = if master_view {
+        "Not available in slide masters"
+    } else {
+        "Nothing to paste"
+    };
+    if menu_button(
+        ui,
+        "Paste",
+        Some(shortcut_for_action(ShortcutAction::Paste)),
+        paste_enabled,
+        Some(paste_reason),
+    )
+    .clicked()
     {
         if editor.file_ops_available {
             ui.ctx()
@@ -1061,15 +1343,29 @@ fn show_edit_menu(
         ui.close();
     }
 
-    let select_all = Button::new("Select All").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+A"));
-    if ui.add(select_all).clicked() {
+    if menu_button(
+        ui,
+        "Select all",
+        Some(shortcut_for_action(ShortcutAction::SelectAll)),
+        true,
+        None,
+    )
+    .clicked()
+    {
         editor.select_all_objects();
         ui.close();
     }
 
     ui.separator();
-    let spelling = Button::new("Check Spelling…").shortcut_text(shortcut_label(ui.ctx(), "F7"));
-    if ui.add(spelling).clicked() {
+    if menu_button(
+        ui,
+        "Check spelling…",
+        Some(shortcut_for_action(ShortcutAction::CheckSpelling)),
+        true,
+        None,
+    )
+    .clicked()
+    {
         crate::spell_check::open(editor);
         ui.close();
     }
@@ -1184,65 +1480,83 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
     let master_view = editor.ui.master_view;
 
     let cut_enabled = has_selection && !master_view;
-    let cut = Button::new("Cut").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+X"));
-    if ui
-        .add_enabled(cut_enabled, cut)
-        .on_disabled_hover_text(if master_view {
-            "Not available in Master View"
-        } else {
-            "Select an object first"
-        })
-        .clicked()
+    let cut_reason = if master_view {
+        "Not available in slide masters"
+    } else {
+        "Select an object first"
+    };
+    if menu_button(
+        ui,
+        "Cut",
+        Some(shortcut_for_action(ShortcutAction::Cut)),
+        cut_enabled,
+        Some(cut_reason),
+    )
+    .clicked()
     {
         crate::clipboard::cut(editor);
         ui.close();
     }
 
     let copy_enabled = has_selection && !master_view;
-    let copy = Button::new("Copy").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+C"));
-    if ui
-        .add_enabled(copy_enabled, copy)
-        .on_disabled_hover_text(if master_view {
-            "Not available in Master View"
-        } else {
-            "Select an object first"
-        })
-        .clicked()
+    let copy_reason = if master_view {
+        "Not available in slide masters"
+    } else {
+        "Select an object first"
+    };
+    if menu_button(
+        ui,
+        "Copy",
+        Some(shortcut_for_action(ShortcutAction::Copy)),
+        copy_enabled,
+        Some(copy_reason),
+    )
+    .clicked()
     {
         crate::clipboard::copy(editor);
         ui.close();
     }
 
     let paste_enabled = paste_enabled(editor);
-    let paste = Button::new("Paste").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+V"));
-    if ui
-        .add_enabled(paste_enabled, paste)
-        .on_disabled_hover_text(if master_view {
-            "Not available in Master View"
-        } else {
-            "Nothing copied yet"
-        })
-        .clicked()
+    let paste_reason = if master_view {
+        "Not available in slide masters"
+    } else {
+        "Nothing copied yet"
+    };
+    if menu_button(
+        ui,
+        "Paste",
+        Some(shortcut_for_action(ShortcutAction::Paste)),
+        paste_enabled,
+        Some(paste_reason),
+    )
+    .clicked()
     {
         crate::clipboard::paste_private(editor);
         ui.close();
     }
 
-    let duplicate = Button::new("Duplicate").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+D"));
-    if ui
-        .add_enabled(has_selection, duplicate)
-        .on_disabled_hover_text("Select an object first")
-        .clicked()
+    if menu_button(
+        ui,
+        "Duplicate",
+        shortcut_for_command("object.duplicate"),
+        has_selection,
+        Some("Select an object first"),
+    )
+    .clicked()
     {
         editor.duplicate_selection();
         ui.close();
     }
 
-    let delete = Button::new("Delete").shortcut_text(shortcut_label(ui.ctx(), "Delete"));
-    if ui
-        .add_enabled(has_selection, delete)
-        .on_disabled_hover_text("Select an object first")
-        .clicked()
+    if menu_button(
+        ui,
+        "Delete",
+        shortcut_for_command("object.delete"),
+        has_selection,
+        Some("Select an object first"),
+    )
+    .clicked()
     {
         editor.delete_selection();
         ui.close();
@@ -1304,7 +1618,7 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
             let mut action_to_run: Option<(&'static str, Json)> = None;
             render_align_actions(editor, ui, &mut action_to_run);
             ui.separator();
-            ui.checkbox(&mut editor.ui.align_to_slide, "Align to Slide");
+            ui.checkbox(&mut editor.ui.align_to_slide, "Align to slide");
             if let Some((cmd, params)) = action_to_run {
                 editor.run(cmd, params);
             }
@@ -1314,8 +1628,15 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
     .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
     ui.separator();
 
-    let select_all = Button::new("Select all").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+A"));
-    if ui.add(select_all).clicked() {
+    if menu_button(
+        ui,
+        "Select all",
+        Some(shortcut_for_action(ShortcutAction::SelectAll)),
+        true,
+        None,
+    )
+    .clicked()
+    {
         editor.select_all_objects();
         ui.close();
     }
@@ -1323,15 +1644,17 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
 
 fn render_group_ungroup_items(editor: &mut Editor, ui: &mut Ui, shortcuts: bool) {
     let group_params = adapter(editor, "object.group");
-    let group = if shortcuts {
-        Button::new("Group").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+G"))
-    } else {
-        Button::new("Group")
-    };
-    if ui
-        .add_enabled(group_params.is_some(), group)
-        .on_disabled_hover_text("Select at least two objects")
-        .clicked()
+    let group_sc = shortcuts
+        .then(|| shortcut_for_command("object.group"))
+        .flatten();
+    if menu_button(
+        ui,
+        "Group",
+        group_sc,
+        group_params.is_some(),
+        Some("Select at least two objects"),
+    )
+    .clicked()
     {
         if let Some(params) = group_params {
             editor.run("object.group", params);
@@ -1340,15 +1663,17 @@ fn render_group_ungroup_items(editor: &mut Editor, ui: &mut Ui, shortcuts: bool)
     }
 
     let ungroup_params = adapter(editor, "object.ungroup");
-    let ungroup = if shortcuts {
-        Button::new("Ungroup").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+Shift+G"))
-    } else {
-        Button::new("Ungroup")
-    };
-    if ui
-        .add_enabled(ungroup_params.is_some(), ungroup)
-        .on_disabled_hover_text("This object isn't in a group")
-        .clicked()
+    let ungroup_sc = shortcuts
+        .then(|| shortcut_for_command("object.ungroup"))
+        .flatten();
+    if menu_button(
+        ui,
+        "Ungroup",
+        ungroup_sc,
+        ungroup_params.is_some(),
+        Some("This object isn't in a group"),
+    )
+    .clicked()
     {
         if let Some(params) = ungroup_params {
             editor.run("object.ungroup", params);
@@ -1441,8 +1766,15 @@ pub(crate) fn show_state_extra_menu(editor: &mut Editor, ui: &mut Ui) {
     }
 
     ui.separator();
-    let delete = Button::new("Delete extra").shortcut_text(shortcut_label(ui.ctx(), "Delete"));
-    if ui.add(delete).clicked() {
+    if menu_button(
+        ui,
+        "Delete extra",
+        shortcut_for_command("object.delete"),
+        true,
+        None,
+    )
+    .clicked()
+    {
         editor.delete_selection();
         ui.close();
     }
@@ -1479,23 +1811,34 @@ pub(crate) fn paste_enabled(editor: &Editor) -> bool {
 /// Items for the canvas background context menu: paste and select all.
 pub(crate) fn show_canvas_background_menu(editor: &mut Editor, ui: &mut Ui) {
     let can_paste = paste_enabled(editor);
-    let paste = Button::new("Paste").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+V"));
-    if ui
-        .add_enabled(can_paste, paste)
-        .on_disabled_hover_text(if editor.ui.master_view {
-            "Not available in Master View"
-        } else {
-            "Nothing copied yet"
-        })
-        .clicked()
+    let paste_reason = if editor.ui.master_view {
+        "Not available in slide masters"
+    } else {
+        "Nothing copied yet"
+    };
+    if menu_button(
+        ui,
+        "Paste",
+        Some(shortcut_for_action(ShortcutAction::Paste)),
+        can_paste,
+        Some(paste_reason),
+    )
+    .clicked()
     {
         let point = editor.ui.canvas_context_pos;
         crate::clipboard::paste_private_at(editor, point);
         ui.close();
     }
 
-    let select_all = Button::new("Select all").shortcut_text(shortcut_label(ui.ctx(), "Ctrl+A"));
-    if ui.add(select_all).clicked() {
+    if menu_button(
+        ui,
+        "Select all",
+        Some(shortcut_for_action(ShortcutAction::SelectAll)),
+        true,
+        None,
+    )
+    .clicked()
+    {
         editor.select_all_objects();
         ui.close();
     }
@@ -1508,11 +1851,7 @@ fn render_open_window_menu_item(
     cmd: &'static coursecraft_engine::Command,
     label: &str,
 ) {
-    let mut btn = Button::new(label);
-    if let Some(sc) = cmd.shortcut {
-        btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-    }
-    if ui.add(btn).clicked() {
+    if menu_button(ui, label, cmd.shortcut, true, None).clicked() {
         match cmd.id {
             "course.find" => crate::find::open(editor),
             "course.import_outline" => editor.open_outline_dialog(),
@@ -1537,20 +1876,12 @@ fn render_delete_slide_menu_item(
         1
     };
     let enabled = adapter(editor, cmd.id).is_some() && total > selected_count;
-    let mut btn = Button::new(label);
-    if let Some(sc) = cmd.shortcut {
-        btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-    }
     let reason = if total <= selected_count {
         "A course needs at least one slide"
     } else {
         adapter_reason(editor, cmd.id)
     };
-    if ui
-        .add_enabled(enabled, btn)
-        .on_disabled_hover_text(reason)
-        .clicked()
-    {
+    if menu_button(ui, label, cmd.shortcut, enabled, Some(reason)).clicked() {
         editor.delete_selected_slides();
         ui.close();
     }
@@ -1583,14 +1914,14 @@ fn render_registry_menu_item(
 
     if cmd.id == "object.duplicate" || cmd.id == "object.delete" {
         let enabled = editor.selection.object.is_some();
-        let mut btn = Button::new(label);
-        if let Some(sc) = cmd.shortcut {
-            btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-        }
-        if ui
-            .add_enabled(enabled, btn)
-            .on_disabled_hover_text("Select an object first")
-            .clicked()
+        if menu_button(
+            ui,
+            label,
+            cmd.shortcut,
+            enabled,
+            Some("Select an object first"),
+        )
+        .clicked()
         {
             if cmd.id == "object.duplicate" {
                 editor.duplicate_selection();
@@ -1603,11 +1934,7 @@ fn render_registry_menu_item(
     }
 
     if cmd.id == "course.update" || cmd.id == "course.set_player" || cmd.id == "course.set_quiz" {
-        let mut btn = Button::new(label);
-        if let Some(sc) = cmd.shortcut {
-            btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-        }
-        if ui.add(btn).clicked() {
+        if menu_button(ui, label, cmd.shortcut, true, None).clicked() {
             editor.ui.show_course_settings_window = true;
             ui.close();
         }
@@ -1615,11 +1942,7 @@ fn render_registry_menu_item(
     }
 
     if cmd.id == "variable.add" {
-        let mut btn = Button::new(label);
-        if let Some(sc) = cmd.shortcut {
-            btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-        }
-        if ui.add(btn).clicked() {
+        if menu_button(ui, label, cmd.shortcut, true, None).clicked() {
             editor.ui.bottom_tab = crate::BottomTab::Variables;
             ui.close();
         }
@@ -1627,11 +1950,7 @@ fn render_registry_menu_item(
     }
 
     if cmd.id == "trigger.add" {
-        let mut btn = Button::new(label);
-        if let Some(sc) = cmd.shortcut {
-            btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-        }
-        if ui.add(btn).clicked() {
+        if menu_button(ui, label, cmd.shortcut, true, None).clicked() {
             crate::toolbar::insert_trigger(editor);
             ui.close();
         }
@@ -1639,11 +1958,7 @@ fn render_registry_menu_item(
     }
 
     if cmd.id == "results.insert" || cmd.id == "certificate.insert" {
-        let mut btn = Button::new(label);
-        if let Some(sc) = cmd.shortcut {
-            btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-        }
-        if ui.add(btn).clicked() {
+        if menu_button(ui, label, cmd.shortcut, true, None).clicked() {
             if cmd.id == "results.insert" {
                 crate::toolbar::insert_results_slide(editor);
             } else {
@@ -1667,14 +1982,14 @@ fn render_registry_menu_item(
             }
         });
         let enabled = scene_id.is_some() && editor.session.course.scenes.len() > 1;
-        let mut btn = Button::new(label);
-        if let Some(sc) = cmd.shortcut {
-            btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-        }
-        if ui
-            .add_enabled(enabled, btn)
-            .on_disabled_hover_text(adapter_reason(editor, cmd.id))
-            .clicked()
+        if menu_button(
+            ui,
+            label,
+            cmd.shortcut,
+            enabled,
+            Some(adapter_reason(editor, cmd.id)),
+        )
+        .clicked()
             && let Some(id) = scene_id
         {
             editor.ui.pending_delete_scene = Some(id);
@@ -1683,22 +1998,14 @@ fn render_registry_menu_item(
         return;
     }
 
-    if let Some(params) = adapter(editor, cmd.id) {
-        let mut btn = Button::new(label);
-        if let Some(sc) = cmd.shortcut {
-            btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-        }
-        if ui.add(btn).clicked() {
-            *action_to_run = Some((cmd.id, params));
-            ui.close();
-        }
-    } else {
-        let reason = adapter_reason(editor, cmd.id);
-        let mut btn = Button::new(label);
-        if let Some(sc) = cmd.shortcut {
-            btn = btn.shortcut_text(shortcut_label(ui.ctx(), sc));
-        }
-        ui.add_enabled(false, btn).on_disabled_hover_text(reason);
+    let params = adapter(editor, cmd.id);
+    let enabled = params.is_some();
+    let reason = adapter_reason(editor, cmd.id);
+    if menu_button(ui, label, cmd.shortcut, enabled, Some(reason)).clicked()
+        && let Some(params) = params
+    {
+        *action_to_run = Some((cmd.id, params));
+        ui.close();
     }
 }
 
@@ -1802,12 +2109,12 @@ fn render_align_actions(
     action_to_run: &mut Option<(&'static str, Json)>,
 ) {
     for (label, edge) in [
-        ("Align Left", "left"),
-        ("Align Center", "center"),
-        ("Align Right", "right"),
-        ("Align Top", "top"),
-        ("Align Middle", "middle"),
-        ("Align Bottom", "bottom"),
+        ("Align left", "left"),
+        ("Align center", "center"),
+        ("Align right", "right"),
+        ("Align top", "top"),
+        ("Align middle", "middle"),
+        ("Align bottom", "bottom"),
     ] {
         arrange_menu_item(
             ui,
@@ -1820,8 +2127,8 @@ fn render_align_actions(
     }
     ui.separator();
     for (label, axis) in [
-        ("Distribute Horizontally", "horizontal"),
-        ("Distribute Vertically", "vertical"),
+        ("Distribute horizontally", "horizontal"),
+        ("Distribute vertically", "vertical"),
     ] {
         arrange_menu_item(
             ui,
@@ -1833,7 +2140,7 @@ fn render_align_actions(
         );
     }
     ui.separator();
-    for (label, dimension) in [("Match Width", "width"), ("Match Height", "height")] {
+    for (label, dimension) in [("Match width", "width"), ("Match height", "height")] {
         arrange_menu_item(
             ui,
             label,
@@ -1853,7 +2160,7 @@ fn render_arrange_extras(
     ui.separator();
     render_align_actions(editor, ui, action_to_run);
     ui.separator();
-    ui.checkbox(&mut editor.ui.align_to_slide, "Align to Slide");
+    ui.checkbox(&mut editor.ui.align_to_slide, "Align to slide");
 }
 
 fn render_extra_category_items(
@@ -1869,19 +2176,15 @@ fn render_extra_category_items(
 
     if category == "Project" {
         ui.separator();
-        if ui.button("Course settings").clicked() {
-            editor.ui.show_course_settings_window = true;
-            ui.close();
-        }
         if ui.button("Theme…").clicked() {
             editor.ui.show_theme_window = true;
             ui.close();
         }
-        if ui.button("AI Settings…").clicked() {
+        if ui.button("AI settings…").clicked() {
             editor.open_ai_settings();
             ui.close();
         }
-        if ui.button("Suggest Alt Text…").clicked() {
+        if ui.button("Suggest alt text…").clicked() {
             editor.open_alt_text_dialog();
             ui.close();
         }
@@ -1892,7 +2195,7 @@ fn render_extra_category_items(
         let template_slide = editor.selection.slide.clone();
         let can_template = editor.session.course.play_slide(&template_slide).is_some();
         if ui
-            .add_enabled(can_template, Button::new("Save as Template"))
+            .add_enabled(can_template, Button::new("Save as template"))
             .on_disabled_hover_text("Select a slide first")
             .clicked()
         {
@@ -1908,7 +2211,7 @@ fn render_extra_category_items(
         let state_locked = editor.ui.editing_state.is_some();
         let state_tip = "Not available inside a state";
         ui.separator();
-        if ui.button("Text Box").clicked() {
+        if ui.button("Text box").clicked() {
             crate::toolbar::insert_text_box(editor);
             ui.close();
         }
@@ -2004,17 +2307,12 @@ fn render_extra_category_items(
             ui.close();
         }
         ui.separator();
-        if ui.button("Record Narration…").clicked() {
+        if ui.button("Record narration…").clicked() {
             editor.open_record_narration();
             ui.close();
         }
-        if ui.button("Narration from Text…").clicked() {
+        if ui.button("Narration from text…").clicked() {
             editor.open_speech_dialog();
-            ui.close();
-        }
-        ui.separator();
-        if ui.button("Course from Document…").clicked() {
-            editor.open_document_dialog();
             ui.close();
         }
     }

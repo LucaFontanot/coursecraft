@@ -482,8 +482,8 @@ fn t11_8_agents_tab_copy_feedback_and_layout_at_1024x600_scale_1_5() {
 
         let dialog_rect = h
             .ctx
-            .memory(|m| m.area_rect(egui::Id::unique(("coursecraft_dialog", "AI Settings"))))
-            .expect("AI Settings dialog rect");
+            .memory(|m| m.area_rect(egui::Id::unique(("coursecraft_dialog", "AI settings"))))
+            .expect("AI settings dialog rect");
         let mut copy_pos = h.find_text("Copy").expect("Copy button");
         assert!(
             copy_pos.x >= dialog_rect.min.x
@@ -511,4 +511,90 @@ fn t11_8_agents_tab_copy_feedback_and_layout_at_1024x600_scale_1_5() {
             "Clicking Copy must show 'Copied' confirmation feedback ({mode:?})"
         );
     }
+}
+
+/// L-03: AI, audio, outline, document, and translation dialogs paint sentence-case titles.
+#[test]
+fn ai_and_translation_dialogs_paint_sentence_case_titles() {
+    let mut h = TestHarness::new_with_size(base_course(), (1280.0, 800.0));
+
+    h.editor.open_ai_settings();
+    h.idle_frame();
+    assert!(
+        h.find_text("AI settings").is_some(),
+        "expected 'AI settings'"
+    );
+    assert!(h.find_text("AI Settings").is_none());
+    h.editor.ui.ai.open = false;
+    h.idle_frame();
+
+    h.editor.open_outline_dialog();
+    h.idle_frame();
+    assert!(
+        h.find_text("Slides from outline").is_some(),
+        "expected 'Slides from outline'"
+    );
+    h.editor.ui.show_outline_dialog = false;
+    h.idle_frame();
+
+    h.editor.open_document_dialog();
+    h.idle_frame();
+    assert!(
+        h.find_text("Course from document").is_some(),
+        "expected 'Course from document'"
+    );
+    h.editor.ui.document.open = false;
+    h.idle_frame();
+
+    h.editor.open_alt_text_dialog();
+    h.idle_frame();
+    assert!(
+        h.find_text("Suggest alt text").is_some(),
+        "expected 'Suggest alt text'"
+    );
+    h.editor.ui.alt.open = false;
+    h.idle_frame();
+
+    h.editor.open_record_narration();
+    h.idle_frame();
+    assert!(
+        h.find_text("Record narration").is_some(),
+        "expected 'Record narration'"
+    );
+    h.editor.ui.record_narration.open = false;
+    h.idle_frame();
+
+    h.editor.open_speech_dialog();
+    h.idle_frame();
+    assert!(
+        h.find_text("Narration from text").is_some(),
+        "expected 'Narration from text'"
+    );
+    h.editor.ui.speech.open = false;
+    h.idle_frame();
+
+    h.editor.ui.captions.open = true;
+    h.idle_frame();
+    assert!(
+        h.find_text("Generate captions").is_some(),
+        "expected 'Generate captions'"
+    );
+    h.editor.ui.captions.open = false;
+    h.idle_frame();
+
+    h.editor.ui.show_export_translation = true;
+    h.idle_frame();
+    assert!(
+        h.find_text("Export translation").is_some(),
+        "expected 'Export translation'"
+    );
+    h.editor.ui.show_export_translation = false;
+    h.idle_frame();
+
+    h.editor.set_translation_report("Applied 2 unit(s).");
+    h.idle_frame();
+    assert!(
+        h.find_text("Translation import report").is_some(),
+        "expected 'Translation import report'"
+    );
 }

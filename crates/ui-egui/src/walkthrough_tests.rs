@@ -252,8 +252,8 @@ fn configure_course_settings(harness: &mut TestHarness) {
     harness.click_at(proj);
     harness.idle_frame();
     let settings = harness
-        .find_text("Course settings")
-        .expect("Course Settings menu item");
+        .find_text("Course settings…")
+        .expect("Course settings menu item");
     harness.click_at(settings);
     // The window sizes itself over a few frames now that it holds more options.
     for _ in 0..4 {
@@ -309,7 +309,7 @@ fn build_intro_slide(harness: &mut TestHarness) {
     harness.set_field(dur_pos, "4000");
 
     // Text object `title`
-    insert_object(harness, "Text Box");
+    insert_object(harness, "Text box");
     set_object_name(harness, "title");
     set_object_frame(harness, 80.0, 120.0, 1120.0, 80.0);
     let panel_mid = harness.right_panel_rect().center();
@@ -326,7 +326,7 @@ fn build_intro_slide(harness: &mut TestHarness) {
         .expect("Bold button");
     harness.click_at(bold_pos);
     harness.idle_frame();
-    let text_pos = scroll_to_label(harness, "Text Content") + vec2(110.0, 0.0);
+    let text_pos = scroll_to_label(harness, "Text content") + vec2(110.0, 0.0);
     set_multiline_text(harness, text_pos, "Workplace Safety Basics");
 
     // Button `btn-start`
@@ -396,9 +396,9 @@ fn build_intro_slide(harness: &mut TestHarness) {
     set_object_frame(harness, 240.0, 140.0, 800.0, 440.0);
 
     // Text `about-text`
-    insert_object(harness, "Text Box");
+    insert_object(harness, "Text box");
     set_object_name(harness, "about-text");
-    let text_pos = scroll_to_label(harness, "Text Content") + vec2(110.0, 0.0);
+    let text_pos = scroll_to_label(harness, "Text content") + vec2(110.0, 0.0);
     set_multiline_text(harness, text_pos, "Ten minutes. One quiz. 80% to pass.");
     set_object_frame(harness, 280.0, 200.0, 720.0, 200.0);
 
@@ -502,7 +502,7 @@ fn build_tabs_slide(harness: &mut TestHarness) {
     let insert = harness.find_text("Insert").expect("Insert menu");
     harness.click_at(insert);
     harness.idle_frame();
-    let new_slide = harness.find_text("New Slide").expect("New Slide menu item");
+    let new_slide = harness.find_text("New slide").expect("New slide menu item");
     harness.click_at(new_slide);
     harness.idle_frame();
 
@@ -631,9 +631,9 @@ fn build_tabs_slide(harness: &mut TestHarness) {
         deselect_object_via_thumbnail(harness, &slide2_id);
         add_layer(harness, layer_name);
 
-        insert_object(harness, "Text Box");
+        insert_object(harness, "Text box");
         set_object_name(harness, text_obj_name);
-        let text_pos = scroll_to_label(harness, "Text Content") + vec2(110.0, 0.0);
+        let text_pos = scroll_to_label(harness, "Text content") + vec2(110.0, 0.0);
         set_multiline_text(harness, text_pos, text_body);
         set_object_frame(harness, 80.0, 200.0, 1000.0, 300.0);
     }
@@ -820,7 +820,7 @@ fn build_quiz_slide(harness: &mut TestHarness) {
     let insert = harness.find_text("Insert").expect("Insert menu");
     harness.click_at(insert);
     harness.idle_frame();
-    let new_slide = harness.find_text("New Slide").expect("New Slide menu item");
+    let new_slide = harness.find_text("New slide").expect("New slide menu item");
     harness.click_at(new_slide);
     harness.idle_frame();
 
@@ -1093,7 +1093,7 @@ fn build_results_slide(harness: &mut TestHarness) {
     let insert = harness.find_text("Insert").expect("Insert menu");
     harness.click_at(insert);
     harness.idle_frame();
-    let new_slide = harness.find_text("New Slide").expect("New Slide menu item");
+    let new_slide = harness.find_text("New slide").expect("New slide menu item");
     harness.click_at(new_slide);
     harness.idle_frame();
 
@@ -1115,9 +1115,9 @@ fn build_results_slide(harness: &mut TestHarness) {
     harness.set_field(dur_pos, "1000");
 
     // Text object results-text
-    insert_object(harness, "Text Box");
+    insert_object(harness, "Text box");
     set_object_name(harness, "results-text");
-    let text_pos = scroll_to_label(harness, "Text Content") + vec2(110.0, 0.0);
+    let text_pos = scroll_to_label(harness, "Text content") + vec2(110.0, 0.0);
     set_multiline_text(harness, text_pos, "Thanks for completing the course.");
     set_object_frame(harness, 80.0, 200.0, 1120.0, 200.0);
 
@@ -1552,7 +1552,7 @@ fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
     let mut harness = TestHarness::new_with_size(blank, (1280.0, 860.0));
     harness.idle_frame();
     let slide = harness.editor.selection.slide.clone();
-    insert_object(&mut harness, "Text Box");
+    insert_object(&mut harness, "Text box");
     let Some(id) = harness.editor.selection.object.clone() else {
         panic!("the new text box is selected");
     };

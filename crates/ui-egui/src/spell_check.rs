@@ -245,7 +245,7 @@ pub fn show_word_menu(
     }
     if !outcome.replace.is_some() {
         ui.separator();
-        if ui.button("Add to Dictionary").clicked() {
+        if ui.button("Add to dictionary").clicked() {
             outcome.add = Some(word.word.clone());
             ui.close();
         }

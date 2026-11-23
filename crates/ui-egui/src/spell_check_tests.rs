@@ -194,13 +194,13 @@ fn right_clicking_a_squiggle_opens_the_word_menu() {
     harness.right_click_at(center);
     harness.idle_frame();
     assert!(
-        harness.find_text("Add to Dictionary").is_some(),
+        harness.find_text("Add to dictionary").is_some(),
         "egui's text-edit context menu is used for the word actions"
     );
     assert!(harness.find_text("Ignore").is_some());
 
     let add = harness
-        .find_text("Add to Dictionary")
+        .find_text("Add to dictionary")
         .expect("add to dictionary item");
     harness.click_at(add);
     harness.idle_frame();

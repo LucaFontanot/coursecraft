@@ -294,7 +294,7 @@ pub fn write(editor: &mut Editor, clipboard: Clipboard, message: String) {
 /// Copy the current object selection (or the slide when the navigator is active).
 pub fn copy(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     if editor.ui.last_active_area == crate::ActiveArea::Navigator {
@@ -329,7 +329,7 @@ fn copy_slide_action(editor: &mut Editor) {
 /// Cut the current selection. Cut is copy then delete; the delete is one undo.
 pub fn cut(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     if editor.ui.last_active_area == crate::ActiveArea::Navigator {
@@ -371,7 +371,7 @@ fn cut_slide_action(editor: &mut Editor) {
 /// Paste from the private clipboard. Used by the Edit menu.
 pub fn paste_private(editor: &mut Editor) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     let Some(clipboard) = editor.ui.clipboard.clone() else {
@@ -387,7 +387,7 @@ pub fn paste_private(editor: &mut Editor) {
 /// be placed fall back to the normal keyboard/Edit menu offset.
 pub fn paste_private_at(editor: &mut Editor, centre: Option<egui::Pos2>) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     let Some(clipboard) = editor.ui.clipboard.clone() else {
@@ -400,7 +400,7 @@ pub fn paste_private_at(editor: &mut Editor, centre: Option<egui::Pos2>) {
 /// Paste clipboard text, falling back to a text box for plain text.
 pub fn paste_text(editor: &mut Editor, text: &str) {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return;
     }
     if text.len() > MAX_CLIPBOARD_BYTES {

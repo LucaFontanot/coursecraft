@@ -399,7 +399,7 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
             .audit_findings
             .iter()
             .any(|finding| finding.check == "alt-text");
-        Dialog::new("Check Course")
+        Dialog::new("Check course")
             .open(&mut editor.ui.show_validation_window)
             .default_size([500.0, 300.0])
             .resizable(true)
@@ -534,7 +534,7 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
 
     // Error history popup window
     if editor.ui.show_error_history_window {
-        Dialog::new("Error History")
+        Dialog::new("Error history")
             .open(&mut editor.ui.show_error_history_window)
             .default_size([500.0, 300.0])
             .resizable(true)
@@ -553,7 +553,7 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
     if let Some(ref report) = editor.ui.pptx_import_report.clone() {
         let mut open = true;
         let mut dismissed = false;
-        Dialog::new("PowerPoint Import Report")
+        Dialog::new("PowerPoint import report")
             .open(&mut open)
             .default_size([450.0, 220.0])
             .resizable(true)

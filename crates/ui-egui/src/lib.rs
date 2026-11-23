@@ -388,9 +388,9 @@ pub use welcome::{
 };
 pub use widgets::{
     COMBO_MIN_POPUP_HEIGHT, COMBO_MIN_WIDTH, IconTone, icon_button, icon_button_danger,
-    icon_button_enabled, icon_toggle, mixed_toggle, modal_backdrop_color, styled_combo,
-    toolbar_button, toolbar_button_active, toolbar_button_enabled, toolbar_caret_button,
-    toolbar_primary_button, toolbar_toggle,
+    icon_button_danger_reason, icon_button_enabled, icon_button_enabled_reason, icon_toggle,
+    mixed_toggle, modal_backdrop_color, styled_combo, toolbar_button, toolbar_button_active,
+    toolbar_button_enabled, toolbar_caret_button, toolbar_primary_button, toolbar_toggle,
 };
 
 use coursecraft_course::{Course, FontStyle, ShapeKind, shape_label};
@@ -765,7 +765,7 @@ impl PlacementTool {
     #[must_use]
     pub fn name(&self) -> String {
         match self {
-            Self::TextBox => "Text Box".to_owned(),
+            Self::TextBox => "Text box".to_owned(),
             Self::Button => "Button".to_owned(),
             Self::Shape(kind) => shape_label(*kind).to_owned(),
             Self::Draw(tool) => tool.label().to_owned(),
@@ -1027,6 +1027,10 @@ pub struct UiState {
     pub(crate) properties_lists: PropertiesListCache,
     /// Cached `media_references` for the Media Library window.
     pub(crate) media_refs_cache: MediaRefsCache,
+    /// Revision- and fingerprint-keyed thumbnail draw-item cache.
+    pub(crate) thumbnail_cache: crate::slides::ThumbnailCache,
+    /// Revision-cached slide/scene/bank summaries for the left navigator.
+    pub(crate) navigator_index: crate::slides::NavigatorIndex,
 }
 
 /// Cached per-revision / per-media-count lists for the Properties panel.
@@ -1186,6 +1190,19 @@ pub enum QuietTone {
 ///
 /// A disabled button is painted in `text_disabled`, never highlights and does not sense clicks.
 pub fn quiet_button(ui: &mut Ui, text: &str, tone: QuietTone, enabled: bool) -> egui::Response {
+    quiet_button_enabled(ui, text, tone, enabled, "Not available right now")
+}
+
+/// A quiet text button with an explicit disabled hover reason.
+///
+/// Wraps the button in [`Ui::add_enabled_ui`] so `.on_disabled_hover_text` fires reliably in egui.
+pub fn quiet_button_enabled(
+    ui: &mut Ui,
+    text: &str,
+    tone: QuietTone,
+    enabled: bool,
+    disabled_reason: &str,
+) -> egui::Response {
     let p = coursecraft_render::palette(ui.ctx());
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
@@ -1197,35 +1214,38 @@ pub fn quiet_button(ui: &mut Ui, text: &str, tone: QuietTone, enabled: bool) -> 
         galley.size().x + 2.0 * pad_x,
         coursecraft_render::CONTROL_COMPACT,
     );
-    let sense = if enabled {
-        egui::Sense::click()
-    } else {
-        egui::Sense::hover()
-    };
-    let (rect, resp) = ui.allocate_exact_size(size, sense);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text.to_owned()));
-    if ui.is_rect_visible(rect) {
-        let hovered = enabled && resp.hovered();
-        let color = if !enabled {
-            p.text_disabled
-        } else {
-            match (tone, hovered) {
-                (QuietTone::Accent, _) => p.accent_text,
-                (QuietTone::Secondary, true) => p.text,
-                (QuietTone::Danger, true) => p.danger,
-                (QuietTone::Secondary | QuietTone::Danger, false) => p.text_secondary,
+    let resp = ui
+        .add_enabled_ui(enabled, |ui| {
+            let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+            resp.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, enabled, text.to_owned())
+            });
+            if ui.is_rect_visible(rect) {
+                let hovered = enabled && resp.hovered();
+                let color = if !enabled {
+                    p.text_disabled
+                } else {
+                    match (tone, hovered) {
+                        (QuietTone::Accent, _) => p.accent_text,
+                        (QuietTone::Secondary, true) => p.text,
+                        (QuietTone::Danger, true) => p.danger,
+                        (QuietTone::Secondary | QuietTone::Danger, false) => p.text_secondary,
+                    }
+                };
+                if hovered {
+                    ui.painter().rect_filled(
+                        rect,
+                        egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+                        p.hover,
+                    );
+                }
+                let pos = egui::pos2(rect.left() + pad_x, rect.center().y - galley.size().y * 0.5);
+                ui.painter().galley(pos, galley, color);
             }
-        };
-        if hovered {
-            ui.painter().rect_filled(
-                rect,
-                egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
-                p.hover,
-            );
-        }
-        let pos = egui::pos2(rect.left() + pad_x, rect.center().y - galley.size().y * 0.5);
-        ui.painter().galley(pos, galley, color);
-    }
+            resp
+        })
+        .inner
+        .on_disabled_hover_text(disabled_reason);
     if enabled {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {
@@ -1457,6 +1477,8 @@ impl Editor {
                 course_map: CourseMapState::default(),
                 properties_lists: PropertiesListCache::default(),
                 media_refs_cache: MediaRefsCache::default(),
+                thumbnail_cache: crate::slides::ThumbnailCache::default(),
+                navigator_index: crate::slides::NavigatorIndex::default(),
             },
             preview: None,
             recent_files: Vec::new(),
@@ -1745,6 +1767,8 @@ impl Editor {
         self.ui.media_library = media_library::MediaLibraryState::default();
         self.ui.story_view = false;
         self.ui.course_map = CourseMapState::default();
+        self.ui.thumbnail_cache.clear();
+        self.ui.navigator_index.clear();
         self.ui.publish.open = false;
         self.ui.publish.phase = PublishPhase::Idle;
         self.ui.publish.status = None;
@@ -2439,7 +2463,7 @@ impl Editor {
     /// changing the course in Master View or when no slide is selected.
     pub fn paste_image_png(&mut self, png_bytes: &[u8]) -> bool {
         if self.ui.master_view {
-            self.set_status("Not available in Master View");
+            self.set_status("Not available in slide masters");
             return false;
         }
         let slide_id = self.selection.slide.clone();
@@ -3333,6 +3357,24 @@ impl Editor {
         self.preview = Some(preview);
     }
 
+    /// Open the in-editor full-course preview starting at `slide_id`.
+    ///
+    /// Falls back to the whole course from its start slide if `slide_id` is empty
+    /// or refers to a question bank slide.
+    pub fn open_preview_from(&mut self, slide_id: &str) {
+        self.exit_edit_state();
+        let is_scene_slide = !slide_id.is_empty()
+            && self.session.course.bank_slide(slide_id).is_none()
+            && self.session.course.play_slide(slide_id).is_some();
+        let mut preview = if is_scene_slide {
+            Preview::new_from_slide(&self.session.course, slide_id)
+        } else {
+            Preview::new(&self.session.course, None)
+        };
+        preview.set_initial_size(self.ui.preview_size);
+        self.preview = Some(preview);
+    }
+
     /// Open the in-editor course preview window restricted to the given slide IDs.
     ///
     /// Bank slides are ignored; if no scene slides remain, opens the whole course.
@@ -3832,17 +3874,6 @@ impl Editor {
     /// On `Err` it stores the error message in `ui.last_error` and returns `None`.
     /// Nothing else in the crate calls `execute`.
     pub fn run(&mut self, id: &str, params: Json) -> Option<Json> {
-        // A mutating command makes `Session::execute` clone the whole course
-        // for its undo snapshot. Count that copy here, where the editor has a
-        // hook; non-mutating reads (validate, audit, info) copy nothing.
-        #[cfg(test)]
-        if registry()
-            .iter()
-            .find(|cmd| cmd.id == id)
-            .is_some_and(|cmd| cmd.mutates)
-        {
-            crate::guard_counters::note_course_copy();
-        }
         #[cfg(test)]
         let before_for_log = std::env::var("CC_FAILED_LOG")
             .ok()
@@ -3877,11 +3908,6 @@ impl Editor {
     /// On `Err` it stores the error message in `ui.last_error` and returns `None`.
     /// On success, selects the last created item if any.
     pub fn run_batch(&mut self, steps: &[(String, Json)]) -> Option<Vec<Json>> {
-        // `execute_batch` takes one undo snapshot for the whole batch, up front.
-        #[cfg(test)]
-        if !steps.is_empty() {
-            crate::guard_counters::note_course_copy();
-        }
         match self.session.execute_batch(steps) {
             Ok(results) => {
                 self.ui.pending_undo_redo = false;
@@ -4583,8 +4609,8 @@ impl Editor {
         if self.ui.master_view && self.ui.bottom_tab == BottomTab::States {
             self.ui.bottom_tab = BottomTab::Timeline;
         }
-        // F12 previews this slide and Shift+F12 the course from the start,
-        // like the toolbar's Preview button and its menu.
+        // F12 previews this slide, Ctrl+F12 (Cmd+F12 on macOS) previews from here,
+        // and Shift+F12 previews the whole course, like the Preview menu and toolbar.
         if !self.ui.show_welcome
             && self.preview.is_none()
             && !self.ui.master_view
@@ -4595,6 +4621,10 @@ impl Editor {
                 requests.push(EditorRequest::Preview {
                     slide: String::new(),
                 });
+            } else if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F12)) {
+                let slide_id = self.selection.slide.clone();
+                self.open_preview_from(&slide_id);
+                requests.push(EditorRequest::Preview { slide: slide_id });
             } else if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F12)) {
                 toolbar::preview_slide(self, &mut requests);
             }

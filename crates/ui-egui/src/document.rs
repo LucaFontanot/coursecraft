@@ -292,7 +292,7 @@ pub fn show_document_dialog(
     let mut choose_file = false;
     let mut open_settings = false;
 
-    Dialog::new("Course from Document")
+    Dialog::new("Course from document")
         .id(Id::unique(("course_from_document_dialog", 0_u64)))
         .width(640.0)
         .open(&mut open)

@@ -453,27 +453,27 @@ fn undo_names_follow_commands_and_move_with_undo_redo() {
     assert!(s.redo_names().is_empty());
 
     ok(&mut s, "course.set_title", json!({ "title": "B" }));
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
     assert!(s.redo_names().is_empty());
 
     // A no-change command adds no name.
     ok(&mut s, "course.set_title", json!({ "title": "B" }));
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
 
     ok(&mut s, "slide.add", json!({ "title": "Slide 2" }));
-    assert_eq!(s.undo_names(), vec!["New Slide", "Course Title"]);
+    assert_eq!(s.undo_names(), vec!["New slide", "Course title"]);
 
     s.undo().expect("undo 1");
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
-    assert_eq!(s.redo_names(), vec!["New Slide"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
+    assert_eq!(s.redo_names(), vec!["New slide"]);
 
     s.undo().expect("undo 2");
     assert!(s.undo_names().is_empty());
-    assert_eq!(s.redo_names(), vec!["Course Title", "New Slide"]);
+    assert_eq!(s.redo_names(), vec!["Course title", "New slide"]);
 
     s.redo().expect("redo 1");
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
-    assert_eq!(s.redo_names(), vec!["New Slide"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
+    assert_eq!(s.redo_names(), vec!["New slide"]);
 }
 
 #[test]
@@ -486,14 +486,14 @@ fn execute_batch_uses_first_changing_step_label_and_named_batch_overrides() {
         ("scene.add".to_string(), json!({ "title": "Scene 2" })),
     ];
     s.execute_batch(&steps).expect("batch");
-    assert_eq!(s.undo_names(), vec!["New Slide"]);
+    assert_eq!(s.undo_names(), vec!["New slide"]);
 
     s.execute_batch_named(
         "Import deck",
         &[("slide.add".to_string(), json!({ "title": "Slide 3" }))],
     )
     .expect("named batch");
-    assert_eq!(s.undo_names(), vec!["Import deck", "New Slide"]);
+    assert_eq!(s.undo_names(), vec!["Import deck", "New slide"]);
 }
 
 #[test]
@@ -10677,4 +10677,1513 @@ fn course_find_and_replace_on_glossary_entries() {
     assert!(err.to_string().contains("glossary term is empty"), "{err}");
     assert_eq!(s.course.glossary[0].term, "Acme Token");
     assert_eq!(s.course.glossary[0].definition, "An Acme security token.");
+}
+
+/// L-01: Every command `label` and `menu` leaf in `REGISTRY` uses sentence case,
+/// with zero empty labels and the expected command count.
+#[test]
+fn registry_labels_and_menu_leaves_use_sentence_case() {
+    const ALLOWED_CAPS: &[&str] = &[
+        "CourseCraft",
+        "PowerPoint",
+        "PPTX",
+        "Word",
+        "PDF",
+        "MP4",
+        "CSV",
+        "XLIFF",
+        "SCORM",
+        "LTI",
+        "xAPI",
+        "cmi5",
+        "HTML5",
+        "AI",
+        "Lottie",
+        "GitHub",
+        "Inter",
+        "OK",
+        "ID",
+        "A–Z",
+        "Web",
+    ];
+
+    let check_phrase = |phrase: &str, context: &str| {
+        assert!(!phrase.trim().is_empty(), "{context}: empty label");
+        let first_char = phrase.chars().next().expect("non-empty phrase");
+        assert!(
+            first_char.is_uppercase(),
+            "{context}: {phrase:?} must start with an uppercase letter"
+        );
+        let tokens: Vec<&str> = phrase
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .filter(|t| !t.is_empty())
+            .collect();
+        for &token in tokens.iter().skip(1) {
+            let trimmed = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '–');
+            if trimmed.is_empty() || ALLOWED_CAPS.contains(&trimmed) {
+                continue;
+            }
+            assert!(
+                !trimmed.chars().any(char::is_uppercase),
+                "{context}: unexpected Title Case token {trimmed:?} in {phrase:?}"
+            );
+        }
+    };
+
+    let cmds = crate::registry();
+    assert_eq!(cmds.len(), 186, "unexpected registry command count");
+
+    for cmd in cmds {
+        check_phrase(cmd.label, &format!("label for {}", cmd.id));
+        if !cmd.menu.is_empty() {
+            let leaf = cmd.menu.rsplit('/').next().unwrap_or(cmd.menu);
+            check_phrase(leaf, &format!("menu leaf for {}", cmd.id));
+        }
+    }
+
+    let course_update = cmds
+        .iter()
+        .find(|c| c.id == "course.update")
+        .expect("course.update");
+    assert_eq!(course_update.menu, "Project/Course settings…");
+}
+
+struct Df02LegacyOracle {
+    course: coursecraft_course::Course,
+    undo: Vec<(coursecraft_course::Course, String)>,
+    redo: Vec<(coursecraft_course::Course, String)>,
+    revision: u64,
+    history_truncated: bool,
+}
+
+impl Df02LegacyOracle {
+    fn new(course: coursecraft_course::Course) -> Self {
+        Self {
+            course,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            revision: 0,
+            history_truncated: false,
+        }
+    }
+
+    fn undo_names(&self) -> Vec<&str> {
+        self.undo.iter().rev().map(|(_, n)| n.as_str()).collect()
+    }
+
+    fn redo_names(&self) -> Vec<&str> {
+        self.redo.iter().rev().map(|(_, n)| n.as_str()).collect()
+    }
+
+    fn push_undo(&mut self, snapshot: coursecraft_course::Course, label: String) {
+        self.undo.push((snapshot, label));
+        if self.undo.len() > crate::MAX_HISTORY {
+            self.undo.remove(0);
+            self.history_truncated = true;
+        }
+        self.redo.clear();
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn execute(&mut self, id: &str, params: &Json) -> crate::Result<Json> {
+        if id == "edit.undo" {
+            return self.undo().map(|()| json!({}));
+        }
+        if id == "edit.redo" {
+            return self.redo().map(|()| json!({}));
+        }
+        let cmd = registry()
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| EngineError::UnknownCommand(id.to_owned()))?;
+        let snapshot = self.course.clone();
+        let mut tmp = Session::new(self.course.clone());
+        if !cmd.mutates {
+            return (cmd.run)(&mut tmp, params);
+        }
+        tmp.skip_undo = false;
+        let val = (cmd.run)(&mut tmp, params)?;
+        let unchanged = std::mem::take(&mut tmp.skip_undo) || tmp.course == snapshot;
+        if !unchanged {
+            crate::reroute_connectors(&mut tmp.course);
+            self.course = tmp.course;
+            self.push_undo(snapshot, cmd.label.to_owned());
+        }
+        Ok(val)
+    }
+
+    fn execute_batch_with_name(
+        &mut self,
+        name: Option<&str>,
+        steps: &[(String, Json)],
+    ) -> crate::Result<Vec<Json>> {
+        if steps.is_empty() {
+            return Ok(Vec::new());
+        }
+        for (i, (id, _)) in steps.iter().enumerate() {
+            if matches!(id.as_str(), "edit.undo" | "edit.redo") {
+                return Err(EngineError::BatchFailed {
+                    step: i,
+                    command: id.clone(),
+                    error: Box::new(EngineError::Invalid(format!(
+                        "{id} is not allowed inside a batch"
+                    ))),
+                });
+            }
+        }
+        let snapshot = self.course.clone();
+        let mut tmp = Session::new(self.course.clone());
+        let mut results = Vec::with_capacity(steps.len());
+        let mut any_changed = false;
+        let mut first_label: Option<&'static str> = None;
+
+        for (i, (id, params)) in steps.iter().enumerate() {
+            let cmd = registry()
+                .iter()
+                .find(|c| c.id == id.as_str())
+                .ok_or_else(|| EngineError::BatchFailed {
+                    step: i,
+                    command: id.clone(),
+                    error: Box::new(EngineError::UnknownCommand(id.clone())),
+                })?;
+            let step_snapshot = (name.is_none() && first_label.is_none() && cmd.mutates)
+                .then(|| tmp.course.clone());
+            tmp.skip_undo = false;
+            let outcome = (cmd.run)(&mut tmp, params);
+            if cmd.mutates {
+                tmp.valid_at_revision = None;
+            }
+            if std::mem::take(&mut tmp.skip_undo) {
+                // Nothing to record for this step.
+            } else if cmd.mutates {
+                any_changed = true;
+                if let Some(before) = step_snapshot
+                    && tmp.course != before
+                {
+                    first_label = Some(cmd.label);
+                }
+            }
+            match outcome {
+                Ok(res) => results.push(res),
+                Err(e) => {
+                    return Err(EngineError::BatchFailed {
+                        step: i,
+                        command: id.clone(),
+                        error: Box::new(e),
+                    });
+                }
+            }
+        }
+
+        if any_changed && tmp.course != snapshot {
+            crate::reroute_connectors(&mut tmp.course);
+            let label = name
+                .map(str::to_owned)
+                .or_else(|| first_label.map(str::to_owned))
+                .unwrap_or_else(|| "Batch".to_owned());
+            self.course = tmp.course;
+            self.push_undo(snapshot, label);
+        }
+        Ok(results)
+    }
+
+    fn undo(&mut self) -> crate::Result<()> {
+        let (prev, name) = self.undo.pop().ok_or(EngineError::NothingTo("undo"))?;
+        let current = std::mem::replace(&mut self.course, prev);
+        self.redo.push((current, name));
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    fn redo(&mut self) -> crate::Result<()> {
+        let (next, name) = self.redo.pop().ok_or(EngineError::NothingTo("redo"))?;
+        let current = std::mem::replace(&mut self.course, next);
+        self.undo.push((current, name));
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    fn undo_steps(&mut self, n: usize) -> crate::Result<()> {
+        if n > self.undo.len() {
+            return Err(EngineError::NothingTo("undo"));
+        }
+        for _ in 0..n {
+            self.undo()?;
+        }
+        Ok(())
+    }
+
+    fn redo_steps(&mut self, n: usize) -> crate::Result<()> {
+        if n > self.redo.len() {
+            return Err(EngineError::NothingTo("redo"));
+        }
+        for _ in 0..n {
+            self.redo()?;
+        }
+        Ok(())
+    }
+}
+
+fn df_02_assert_parity(s: &Session, o: &Df02LegacyOracle, step: usize, op: &str) {
+    assert_eq!(
+        s.course.to_json().expect("session json"),
+        o.course.to_json().expect("oracle json"),
+        "step {step} ({op}): Course::to_json() mismatch"
+    );
+    assert_eq!(
+        s.undo_names(),
+        o.undo_names(),
+        "step {step} ({op}): undo_names mismatch"
+    );
+    assert_eq!(
+        s.redo_names(),
+        o.redo_names(),
+        "step {step} ({op}): redo_names mismatch"
+    );
+    assert_eq!(
+        s.revision, o.revision,
+        "step {step} ({op}): revision mismatch"
+    );
+    assert_eq!(
+        s.history_truncated(),
+        o.history_truncated,
+        "step {step} ({op}): history_truncated mismatch"
+    );
+}
+
+fn df_02_exec_both(s: &mut Session, o: &mut Df02LegacyOracle, id: &str, p: &Json) {
+    let sr = s.execute(id, p);
+    let or = o.execute(id, p);
+    assert!(
+        sr.is_ok() && or.is_ok(),
+        "expected {id} to succeed in DF-02: session={sr:?}, oracle={or:?}"
+    );
+}
+
+fn df_02_phase1_single_slide(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    bucket: usize,
+) -> &'static str {
+    if bucket < 12 {
+        #[allow(clippy::cast_precision_loss)]
+        let x = 10.0 + ((step * 7) % 400) as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let y = 10.0 + ((step * 11) % 300) as f64;
+        let p = json!({
+            "slide": "slide1",
+            "object": "perm_shape",
+            "frame": { "x": x, "y": y, "w": 120.0, "h": 60.0 }
+        });
+        df_02_exec_both(s, o, "object.set_frame", &p);
+        "object.set_frame"
+    } else if bucket < 20 {
+        #[allow(clippy::cast_precision_loss)]
+        let x = 30.0 + ((step * 5) % 300) as f64;
+        let p = json!({
+            "slide": "slide1",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#557799" },
+            "frame": { "x": x, "y": 160.0, "w": 50.0, "h": 50.0 }
+        });
+        df_02_exec_both(s, o, "object.add", &p);
+        "object.add"
+    } else if bucket < 28 {
+        let removable = s.course.slide("slide1").and_then(|sl| {
+            sl.objects
+                .iter()
+                .rev()
+                .find(|obj| obj.id != "perm_shape" && obj.id != "perm_text")
+                .map(|obj| obj.id.clone())
+        });
+        if let Some(obj_id) = removable {
+            let p = json!({ "slide": "slide1", "object": obj_id });
+            df_02_exec_both(s, o, "object.delete", &p);
+            "object.delete"
+        } else {
+            let p = json!({
+                "slide": "slide1",
+                "object": "perm_text",
+                "text": format!("Step {step}")
+            });
+            df_02_exec_both(s, o, "text.set", &p);
+            "text.set"
+        }
+    } else {
+        let p = json!({
+            "slide": "slide1",
+            "object": "perm_text",
+            "text": format!("Copy step {step}")
+        });
+        df_02_exec_both(s, o, "text.set", &p);
+        "text.set"
+    }
+}
+
+fn df_02_phase1_step(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    bucket: usize,
+    counts: &mut [usize; 14],
+) -> &'static str {
+    if bucket < 36 {
+        counts[0] += 1;
+        return df_02_phase1_single_slide(s, o, step, bucket);
+    }
+    if bucket < 59 {
+        counts[1] += 1;
+        let (id, p) = if bucket < 45 {
+            (
+                "course.set_title",
+                json!({ "title": format!("Course {step}") }),
+            )
+        } else if bucket < 52 {
+            (
+                "glossary.add",
+                json!({
+                    "term": format!("Term{step}"),
+                    "definition": format!("Definition for step {step}")
+                }),
+            )
+        } else {
+            (
+                "variable.add",
+                json!({ "name": format!("v_{step}"), "value": step }),
+            )
+        };
+        df_02_exec_both(s, o, id, &p);
+        return id;
+    }
+    if bucket < 79 {
+        counts[2] += 1;
+        let (id, p) = if bucket < 67 {
+            (
+                "slide.add",
+                json!({ "scene": "scene1", "title": format!("Slide {step}") }),
+            )
+        } else if bucket < 74 {
+            let last_slide = s.course.scenes[0]
+                .slides
+                .last()
+                .map(|sl| sl.id.clone())
+                .expect("non-empty scene1");
+            (
+                "slide.move",
+                json!({ "slide": last_slide, "scene": "scene1", "index": 0 }),
+            )
+        } else {
+            ("scene.add", json!({ "title": format!("Scene {step}") }))
+        };
+        df_02_exec_both(s, o, id, &p);
+        return id;
+    }
+    df_02_phase1_batch_or_edge(s, o, step, bucket, counts)
+}
+
+fn df_02_phase1_batch_or_edge(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    bucket: usize,
+    counts: &mut [usize; 14],
+) -> &'static str {
+    if bucket < 88 {
+        counts[3] += 1;
+        #[allow(clippy::cast_precision_loss)]
+        let x = 25.0 + ((step * 13) % 350) as f64;
+        let steps = vec![
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": s.course.title.clone() }),
+            ),
+            (
+                "object.set_frame".to_owned(),
+                json!({
+                    "slide": "slide1",
+                    "object": "perm_shape",
+                    "frame": { "x": x, "y": 40.0, "w": 110.0, "h": 55.0 }
+                }),
+            ),
+            (
+                "text.set".to_owned(),
+                json!({
+                    "slide": "slide1",
+                    "object": "perm_text",
+                    "text": format!("Batch {step}")
+                }),
+            ),
+        ];
+        let sr = s.execute_batch(&steps);
+        let or = o.execute_batch_with_name(None, &steps);
+        assert!(
+            sr.is_ok() && or.is_ok(),
+            "execute_batch failed at step {step}: session={sr:?}, oracle={or:?}"
+        );
+        "execute_batch"
+    } else if bucket < 96 {
+        counts[4] += 1;
+        let steps = vec![
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": format!("Named {step}") }),
+            ),
+            (
+                "text.set".to_owned(),
+                json!({
+                    "slide": "slide1",
+                    "object": "perm_text",
+                    "text": format!("Named text {step}")
+                }),
+            ),
+        ];
+        let sr = s.execute_batch_named("Named tweak", &steps);
+        let or = o.execute_batch_with_name(Some("Named tweak"), &steps);
+        assert!(
+            sr.is_ok() && or.is_ok(),
+            "execute_batch_named failed at step {step}: session={sr:?}, oracle={or:?}"
+        );
+        "execute_batch_named"
+    } else if bucket < 98 {
+        counts[5] += 1;
+        let (cmd_id, p) = if step.is_multiple_of(2) {
+            (
+                "course.set_title",
+                json!({ "title": s.course.title.clone() }),
+            )
+        } else {
+            (
+                "course.replace",
+                json!({ "query": "__no_such_text__", "replacement": "x" }),
+            )
+        };
+        df_02_exec_both(s, o, cmd_id, &p);
+        "noop"
+    } else if bucket == 98 {
+        counts[6] += 1;
+        let p = json!({ "slide": "slide1", "object": "missing_obj" });
+        let sr = s.execute("object.delete", &p);
+        let or = o.execute("object.delete", &p);
+        assert!(sr.is_err(), "expected failing_single to error");
+        assert_eq!(sr, or);
+        "failing_single"
+    } else {
+        counts[7] += 1;
+        let steps = vec![
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": "Rolled back title" }),
+            ),
+            (
+                "object.delete".to_owned(),
+                json!({ "slide": "slide1", "object": "missing_obj" }),
+            ),
+        ];
+        let sr = s.execute_batch(&steps);
+        let or = o.execute_batch_with_name(None, &steps);
+        assert!(sr.is_err(), "expected failing_batch to error");
+        assert_eq!(sr, or);
+        "failing_batch"
+    }
+}
+
+fn df_02_phase2_step(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    counts: &mut [usize; 14],
+) -> &'static str {
+    match step - 218 {
+        0 | 1 | 2 | 12 | 25 => {
+            counts[8] += 1;
+            assert_eq!(s.undo(), Ok(()));
+            assert_eq!(o.undo(), Ok(()));
+            "undo"
+        }
+        3 | 13 | 26 => {
+            counts[9] += 1;
+            assert_eq!(s.redo(), Ok(()));
+            assert_eq!(o.redo(), Ok(()));
+            "redo"
+        }
+        4 | 14 | 20 => {
+            counts[10] += 1;
+            assert_eq!(s.undo_steps(5), Ok(()));
+            assert_eq!(o.undo_steps(5), Ok(()));
+            "undo_steps_ok"
+        }
+        5 | 21 => {
+            counts[11] += 1;
+            let n = s.undo_len() + 1;
+            assert_eq!(s.undo_steps(n), Err(EngineError::NothingTo("undo")));
+            assert_eq!(o.undo_steps(n), Err(EngineError::NothingTo("undo")));
+            "undo_steps_oob"
+        }
+        6 | 15 | 22 => {
+            counts[12] += 1;
+            assert_eq!(s.redo_steps(3), Ok(()));
+            assert_eq!(o.redo_steps(3), Ok(()));
+            "redo_steps_ok"
+        }
+        7 | 23 => {
+            counts[13] += 1;
+            let n = s.redo_names().len() + 1;
+            assert_eq!(s.redo_steps(n), Err(EngineError::NothingTo("redo")));
+            assert_eq!(o.redo_steps(n), Err(EngineError::NothingTo("redo")));
+            "redo_steps_oob"
+        }
+        8 | 16 => {
+            counts[5] += 1;
+            let p = json!({ "query": "__never_present__", "replacement": "z" });
+            df_02_exec_both(s, o, "course.replace", &p);
+            "noop_preserves_redo"
+        }
+        9 | 17 => {
+            counts[6] += 1;
+            let p = json!({ "slide": "slide1", "object": "missing_obj" });
+            let sr = s.execute("object.delete", &p);
+            let or = o.execute("object.delete", &p);
+            assert!(sr.is_err(), "expected failing_single_phase2 to error");
+            assert_eq!(sr, or);
+            "failing_single_phase2"
+        }
+        10 | 18 => {
+            counts[7] += 1;
+            let steps = vec![
+                (
+                    "course.set_title".to_owned(),
+                    json!({ "title": "Will fail" }),
+                ),
+                (
+                    "object.delete".to_owned(),
+                    json!({ "slide": "slide1", "object": "missing_obj" }),
+                ),
+            ];
+            let sr = s.execute_batch(&steps);
+            let or = o.execute_batch_with_name(None, &steps);
+            assert!(sr.is_err(), "expected failing_batch_phase2 to error");
+            assert_eq!(sr, or);
+            "failing_batch_phase2"
+        }
+        11 | 19 | 24 => {
+            counts[1] += 1;
+            let p = json!({ "title": format!("Post-undo {step}") });
+            df_02_exec_both(s, o, "course.set_title", &p);
+            "edit_clears_redo"
+        }
+        _ => {
+            counts[8] += 1;
+            assert_eq!(s.undo(), Ok(()));
+            assert_eq!(o.undo(), Ok(()));
+            "undo_tail"
+        }
+    }
+}
+
+/// DF-02: 250-step deterministic pseudo-random mixed sequence verified step-by-step
+/// against a legacy full-snapshot undo/redo oracle, including MAX_HISTORY eviction,
+/// `undo_steps`/`redo_steps`, `skip_undo`, no-ops, batches, and rollbacks.
+#[test]
+fn df_02_differential_250_step_mixed_sequence_with_eviction() {
+    let mut seed = Session::blank("DF-02 Seed");
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "perm_shape",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 20.0, "y": 20.0, "w": 120.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "perm_text",
+            "kind": { "type": "text", "text": "Initial" },
+            "frame": { "x": 20.0, "y": 100.0, "w": 240.0, "h": 40.0 }
+        }),
+    );
+    ok(&mut seed, "slide.add", json!({ "title": "Seed Slide 2" }));
+
+    let initial_course = seed.course;
+    let mut s = Session::new(initial_course.clone());
+    let mut o = Df02LegacyOracle::new(initial_course);
+
+    let mut lcg: u64 = 0x5EED_DF02_0000_0001;
+    let mut counts = [0usize; 14];
+
+    for step in 0..250usize {
+        lcg = lcg
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let bucket = ((lcg >> 33) as usize) % 100;
+        let op_label = if step < 218 {
+            df_02_phase1_step(&mut s, &mut o, step, bucket, &mut counts)
+        } else {
+            df_02_phase2_step(&mut s, &mut o, step, &mut counts)
+        };
+        df_02_assert_parity(&s, &o, step, op_label);
+    }
+
+    assert!(
+        s.history_truncated(),
+        "MAX_HISTORY ({}) eviction must occur during DF-02",
+        crate::MAX_HISTORY
+    );
+    assert!(o.history_truncated);
+    for (idx, count) in counts.iter().enumerate() {
+        assert!(*count > 0, "DF-02 operation category {idx} never executed");
+    }
+}
+
+#[test]
+fn undo_estimated_bytes_tracks_undo_and_redo_deltas() {
+    let mut s = Session::blank("Bytes");
+    assert_eq!(s.undo_estimated_bytes(), 0);
+
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "rect1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    let after_add = s.undo_estimated_bytes();
+    assert!(after_add > 0);
+
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "rect1",
+            "frame": { "x": 50.0, "y": 20.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    let after_move = s.undo_estimated_bytes();
+    assert!(after_move > after_add);
+
+    // Moving a delta from undo to redo keeps it accounted for in undo_estimated_bytes.
+    s.undo().expect("undo move");
+    assert_eq!(s.undo_estimated_bytes(), after_move);
+
+    // Undoing all steps empties undo; non-zero bytes prove redo deltas are counted.
+    s.undo().expect("undo add");
+    assert!(!s.can_undo());
+    assert!(s.can_redo());
+    let after_undo_all = s.undo_estimated_bytes();
+    assert!(after_undo_all > after_move);
+
+    // A new small edit clears redo so the larger object deltas are dropped.
+    ok(&mut s, "course.set_title", json!({ "title": "Renamed" }));
+    assert!(!s.can_redo());
+    let after_rename = s.undo_estimated_bytes();
+    assert!(after_rename > 0);
+    assert!(after_rename < after_undo_all);
+}
+
+#[test]
+fn undo_steps_and_redo_steps_unwind_atomically_on_mid_loop_delta_error() {
+    let mut s = Session::blank("Atomic Unwind");
+    ok(&mut s, "course.set_title", json!({ "title": "One" }));
+    ok(&mut s, "course.set_title", json!({ "title": "Two" }));
+    ok(&mut s, "course.set_title", json!({ "title": "Three" }));
+
+    // Corrupt the second step from the top (index 1) so step 0 succeeds and step 1 fails.
+    let bad_delta = crate::delta::CourseDelta::SlideChange {
+        loc: crate::delta::SlideLoc::SceneSlide {
+            scene: 99,
+            slide: 0,
+        },
+        change: crate::delta::SlideDelta::ObjectInserted {
+            layer: None,
+            index: 0,
+        },
+    };
+    let saved_good = std::mem::replace(&mut s.undo[1].0, bad_delta.clone());
+
+    let before_course = s.course.clone();
+    let before_rev = s.revision;
+    let before_undo: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    let before_redo: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+
+    let err = s.undo_steps(3).expect_err("corrupted mid-loop undo fails");
+    assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    assert_eq!(s.course, before_course);
+    assert_eq!(s.revision, before_rev);
+    assert_eq!(s.undo_names(), before_undo);
+    assert_eq!(s.redo_names(), before_redo);
+
+    // Restore good delta, undo all 3, then test redo_steps mid-loop unwind.
+    s.undo[1].0 = saved_good;
+    s.undo_steps(3).expect("valid undo_steps(3)");
+    s.redo[1].0 = bad_delta;
+
+    let before_course = s.course.clone();
+    let before_rev = s.revision;
+    let before_undo: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    let before_redo: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+
+    let err = s.redo_steps(3).expect_err("corrupted mid-loop redo fails");
+    assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    assert_eq!(s.course, before_course);
+    assert_eq!(s.revision, before_rev);
+    assert_eq!(s.undo_names(), before_undo);
+    assert_eq!(s.redo_names(), before_redo);
+}
+
+/// SC-01: Pilot `SingleSlide` (`object.set_frame`, `object.update`, `text.set`)
+/// and `CourseHeader` (`course.set_title`) commands execute and roll back with
+/// zero full-course clones and byte-identical undo/redo.
+#[test]
+fn sc_01_pilot_scoped_commands_zero_full_clones_and_isolated() {
+    let mut s = Session::blank("Pilot Scope");
+    ok(&mut s, "slide.add", json!({ "title": "Slide 2" }));
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "shape1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+            "frame": { "x": 10.0, "y": 20.0, "w": 100.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "text1",
+            "kind": { "type": "text", "text": "Hello" },
+            "frame": { "x": 10.0, "y": 100.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide2",
+            "id": "other_shape",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#993333" },
+            "frame": { "x": 5.0, "y": 5.0, "w": 50.0, "h": 50.0 }
+        }),
+    );
+
+    let success_cases = [
+        (
+            "object.set_frame",
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 45.0, "y": 55.0, "w": 120.0, "h": 70.0 }
+            }),
+        ),
+        (
+            "object.update",
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "Hero Box",
+                "description": "Primary callout",
+                "focus_order": 2
+            }),
+        ),
+        (
+            "text.set",
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "Updated copy"
+            }),
+        ),
+        ("course.set_title", json!({ "title": "Renamed Pilot" })),
+    ];
+
+    for (cmd, params) in &success_cases {
+        let before_json = s.course.to_json().expect("before json");
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        ok(&mut s, cmd, params.clone());
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "{cmd} must not clone the full course"
+        );
+
+        let after_json = s.course.to_json().expect("after json");
+        assert_ne!(after_json, before_json, "{cmd} should mutate course");
+
+        // Re-running with identical params is a no-op with 0 full-course clones
+        // and preserves any existing redo stack.
+        s.undo().expect("undo");
+        assert_eq!(
+            s.course.to_json().expect("undone json"),
+            before_json,
+            "undo of {cmd} must restore byte-identical JSON"
+        );
+        s.redo().expect("redo");
+        assert_eq!(
+            s.course.to_json().expect("redone json"),
+            after_json,
+            "redo of {cmd} must restore byte-identical JSON"
+        );
+
+        let rev_after = s.revision;
+        let undo_after = s.undo_len();
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+        ok(&mut s, cmd, params.clone());
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "no-op {cmd} must not clone the full course"
+        );
+        assert_eq!(s.revision, rev_after);
+        assert_eq!(s.undo_len(), undo_after);
+    }
+
+    // Verify no-op on both SingleSlide and CourseHeader preserves an active redo stack.
+    s.undo().expect("undo to populate redo");
+    assert!(s.can_redo());
+    let redo_before: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+    let current_title = s.course.title.clone();
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    ok(
+        &mut s,
+        "course.set_title",
+        json!({ "title": current_title }),
+    );
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": "slide1", "object": "text1", "text": "Updated copy" }),
+    );
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    assert_eq!(s.redo_names(), redo_before);
+    s.redo().expect("redo still works after scoped no-ops");
+
+    // Error rollback cases for each pilot command: 0 full-course clones and untouched course.
+    let error_cases = [
+        (
+            "object.set_frame",
+            json!({
+                "slide": "slide1",
+                "object": "missing_object",
+                "frame": { "x": 1.0, "y": 2.0, "w": 10.0, "h": 10.0 }
+            }),
+        ),
+        (
+            "object.update",
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "MustRollBack",
+                "initial_state": "   "
+            }),
+        ),
+        (
+            "text.set",
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "x".repeat(5000)
+            }),
+        ),
+        ("course.set_title", json!({ "title": "   " })),
+    ];
+
+    for (cmd, params) in &error_cases {
+        let before_json = s.course.to_json().expect("before error json");
+        let before_rev = s.revision;
+        let before_undo = s.undo_len();
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        let err = s.execute(cmd, params);
+        assert!(err.is_err(), "{cmd} error case must fail");
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "error rollback of {cmd} must not clone the full course"
+        );
+        assert_eq!(
+            s.course.to_json().expect("after error json"),
+            before_json,
+            "error rollback of {cmd} must leave course byte-identical"
+        );
+        assert_eq!(s.revision, before_rev);
+        assert_eq!(s.undo_len(), before_undo);
+    }
+}
+
+/// SC-02: Same-slide batch of `SingleSlide` edits takes zero full-course clones,
+/// commits one atomic undo step, and rolls back atomically on mid-batch error.
+#[test]
+fn sc_02_same_slide_batch_zero_full_clones_and_atomic_rollback() {
+    let mut seed = Session::blank("Same-Slide Batch");
+    ok(&mut seed, "slide.add", json!({ "title": "Slide 2" }));
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "shape1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "text1",
+            "kind": { "type": "text", "text": "Start" },
+            "frame": { "x": 10.0, "y": 80.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+
+    let mut s = Session::new(seed.course);
+    let before_json = s.course.to_json().expect("before batch json");
+
+    let steps = vec![
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 20.0, "y": 15.0, "w": 90.0, "h": 45.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "Step Two"
+            }),
+        ),
+        (
+            "text.set".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "Step Three"
+            }),
+        ),
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 60.0, "y": 30.0, "w": 110.0, "h": 55.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "description": "Batch caption"
+            }),
+        ),
+    ];
+
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    let results = s.execute_batch(&steps).expect("same-slide batch succeeds");
+    assert_eq!(results.len(), 5);
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        crate::test_counts::full_course_clones(),
+        0,
+        "same-slide batch must not clone the full course"
+    );
+    assert_eq!(s.undo_len(), 1);
+
+    let after_json = s.course.to_json().expect("after batch json");
+    assert_ne!(after_json, before_json);
+
+    s.undo().expect("undo batch");
+    assert_eq!(s.course.to_json().expect("undone batch json"), before_json);
+    s.redo().expect("redo batch");
+    assert_eq!(s.course.to_json().expect("redone batch json"), after_json);
+
+    // Failing 4th step rolls back steps 1-3 atomically with zero full-course clones.
+    let before_fail_json = s.course.to_json().expect("before fail json");
+    let before_fail_rev = s.revision;
+    let before_undo_names: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    let before_redo_names: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+
+    let failing_steps = vec![
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 150.0, "y": 150.0, "w": 80.0, "h": 40.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "Should Not Stick"
+            }),
+        ),
+        (
+            "text.set".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "Rolled back"
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "initial_state": "   "
+            }),
+        ),
+    ];
+
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    let err = s
+        .execute_batch(&failing_steps)
+        .expect_err("step 4 must fail");
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        crate::test_counts::full_course_clones(),
+        0,
+        "failed same-slide batch must not clone the full course"
+    );
+    assert!(
+        matches!(err, EngineError::BatchFailed { step: 3, .. }),
+        "expected BatchFailed at step 3, got {err:?}"
+    );
+    assert_eq!(
+        s.course.to_json().expect("after fail json"),
+        before_fail_json
+    );
+    assert_eq!(s.revision, before_fail_rev);
+    assert_eq!(s.undo_names(), before_undo_names);
+    assert_eq!(s.redo_names(), before_redo_names);
+}
+
+/// SC-03: Missing, non-string, or unknown `"slide"` param on a `SingleSlide`
+/// command falls back safely without panicking and leaves the course untouched.
+#[test]
+fn sc_03_single_slide_missing_or_unknown_slide_falls_back_safely() {
+    let mut s = Session::blank("SC-03 Fallback");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "shape1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+
+    let before_json = s.course.to_json().expect("before json");
+    let before_rev = s.revision;
+    let before_undo = s.undo_len();
+
+    let missing = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "object": "shape1",
+                "frame": { "x": 50.0, "y": 50.0, "w": 80.0, "h": 40.0 }
+            }),
+        )
+        .expect_err("missing slide must error");
+    assert!(
+        matches!(missing, EngineError::BadParams { .. }),
+        "{missing:?}"
+    );
+
+    let non_string = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "slide": 123,
+                "object": "shape1",
+                "frame": { "x": 50.0, "y": 50.0, "w": 80.0, "h": 40.0 }
+            }),
+        )
+        .expect_err("non-string slide must error");
+    assert!(
+        matches!(non_string, EngineError::BadParams { .. }),
+        "{non_string:?}"
+    );
+
+    let unknown = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "slide": "does-not-exist",
+                "object": "shape1",
+                "frame": { "x": 50.0, "y": 50.0, "w": 80.0, "h": 40.0 }
+            }),
+        )
+        .expect_err("unknown slide must error");
+    assert!(matches!(unknown, EngineError::NotFound(_)), "{unknown:?}");
+
+    assert_eq!(s.course.to_json().expect("after json"), before_json);
+    assert_eq!(s.revision, before_rev);
+    assert_eq!(s.undo_len(), before_undo);
+}
+
+/// SingleSlide lookup must match `Course::slide_mut` precedence (scenes -> banks
+/// -> masters, never templates), even on malformed courses where a bank slide
+/// shares an id with a master or template.
+#[test]
+fn sc_03_single_slide_matches_course_slide_mut_precedence_with_duplicate_ids() {
+    let mut seed = Session::blank("Duplicate ID Precedence");
+    ok(&mut seed, "master.add", json!({ "id": "dup_bank_master" }));
+    let bank_id = ok(&mut seed, "bank.create", json!({ "title": "B1" }))["id"]
+        .as_str()
+        .expect("bank id")
+        .to_owned();
+    let bank_slide_id = ok(
+        &mut seed,
+        "bank.add_question",
+        json!({ "bank": bank_id, "title": "Bank Slide" }),
+    )["id"]
+        .as_str()
+        .expect("bank slide id")
+        .to_owned();
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": bank_slide_id,
+            "id": "bank_shape",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+
+    // Construct a malformed course where the bank slide has the same id as the
+    // master AND a template, plus a template-only id.
+    let mut course = seed.course;
+    let mut tpl = course.scenes[0].slides[0].clone();
+    tpl.id = "dup_bank_master".into();
+    course.templates.push(tpl);
+    let mut tpl_only = course.scenes[0].slides[0].clone();
+    tpl_only.id = "template_only".into();
+    course.templates.push(tpl_only);
+    course.banks[0].slides[0].id = "dup_bank_master".into();
+
+    let mut s = Session::new(course);
+    let before_json = s.course.to_json().expect("before json");
+
+    // SingleSlide edit must target the bank slide (matching Course::slide_mut),
+    // take 0 full-course clones, pass scope isolation, and undo/redo cleanly.
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "dup_bank_master",
+            "object": "bank_shape",
+            "frame": { "x": 75.0, "y": 85.0, "w": 90.0, "h": 50.0 }
+        }),
+    );
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    assert_eq!(s.undo_len(), 1);
+    let after_json = s.course.to_json().expect("after json");
+    assert_ne!(after_json, before_json);
+
+    s.undo().expect("undo bank edit");
+    assert_eq!(s.course.to_json().expect("undone json"), before_json);
+    s.redo().expect("redo bank edit");
+    assert_eq!(s.course.to_json().expect("redone json"), after_json);
+
+    // Partial-mutation error on the bank slide must roll back the bank slide.
+    let before_err_json = s.course.to_json().expect("before err json");
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    let err = s
+        .execute(
+            "object.update",
+            &json!({
+                "slide": "dup_bank_master",
+                "object": "bank_shape",
+                "name": "ShouldRollBack",
+                "initial_state": "   "
+            }),
+        )
+        .expect_err("invalid initial_state must fail");
+    assert!(matches!(err, EngineError::BadParams { .. }), "{err:?}");
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    assert_eq!(s.course.to_json().expect("after err json"), before_err_json);
+
+    // Same-slide batch targeting the bank slide must also match slide_mut.
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    s.execute_batch(&[
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "dup_bank_master",
+                "object": "bank_shape",
+                "frame": { "x": 120.0, "y": 130.0, "w": 90.0, "h": 50.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "dup_bank_master",
+                "object": "bank_shape",
+                "name": "Batch Bank Shape"
+            }),
+        ),
+    ])
+    .expect("same-slide batch on bank slide");
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    s.undo().expect("undo batch");
+    assert_eq!(
+        s.course.to_json().expect("undone batch json"),
+        before_err_json
+    );
+
+    // Template-only id is not editable via Course::slide_mut and falls back cleanly.
+    let tpl_err = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "slide": "template_only",
+                "object": "bank_shape",
+                "frame": { "x": 1.0, "y": 2.0, "w": 10.0, "h": 10.0 }
+            }),
+        )
+        .expect_err("template slide is not editable");
+    assert!(matches!(tpl_err, EngineError::NotFound(_)), "{tpl_err:?}");
+    assert_eq!(
+        s.course.to_json().expect("after template err json"),
+        before_err_json
+    );
+}
+
+fn assert_u07_repeated_move_merge(s: &mut Session) {
+    let pre_first_json = s.course.to_json().expect("pre first json");
+    for step in 1..=5 {
+        ok(
+            s,
+            "object.set_frame",
+            json!({
+                "slide": "slide1",
+                "object": "box1",
+                "frame": {
+                    "x": 10.0 + (step as f64) * 20.0,
+                    "y": 10.0 + (step as f64) * 10.0,
+                    "w": 80.0,
+                    "h": 40.0
+                }
+            }),
+        );
+    }
+    assert_eq!(s.undo_len(), 5);
+    let post_fifth_json = s.course.to_json().expect("post fifth json");
+    assert_ne!(pre_first_json, post_fifth_json);
+
+    let rev_before_merge = s.revision;
+    for _ in 0..4 {
+        assert!(s.merge_last_two_undos(Some("Move object")));
+    }
+    assert_eq!(
+        s.revision, rev_before_merge,
+        "merging must not bump revision"
+    );
+    assert_eq!(s.undo_len(), 1);
+    assert_eq!(s.undo_names(), vec!["Move object"]);
+    assert!(!s.merge_last_two_undos(Some("Too few")));
+
+    s.undo().expect("undo merged moves");
+    assert_eq!(s.course.to_json().expect("undone json"), pre_first_json);
+    s.redo().expect("redo merged moves");
+    assert_eq!(s.course.to_json().expect("redone json"), post_fifth_json);
+}
+
+fn assert_u07_mixed_merge_preserves_label_and_redo(s2: &mut Session) {
+    let mixed_before_json = s2.course.to_json().expect("mixed before json");
+    ok(
+        s2,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "box1",
+            "frame": { "x": 220.0, "y": 140.0, "w": 95.0, "h": 55.0 }
+        }),
+    );
+    let older_label = s2.undo_names()[0].to_owned();
+    ok(
+        s2,
+        "course.set_title",
+        json!({ "title": "Renamed After Move" }),
+    );
+    let mixed_after_json = s2.course.to_json().expect("mixed after json");
+    assert_ne!(mixed_before_json, mixed_after_json);
+
+    // Push a third edit and undo it so redo stack is non-empty when merging.
+    ok(
+        s2,
+        "course.set_title",
+        json!({ "title": "Temporary Redo Title" }),
+    );
+    s2.undo().expect("undo third edit to populate redo");
+    let expected_redo_names: Vec<String> = s2.redo_names().into_iter().map(str::to_owned).collect();
+    assert_eq!(expected_redo_names.len(), 1);
+    let rev_before_mixed_merge = s2.revision;
+
+    assert!(s2.merge_last_two_undos(None));
+    assert_eq!(s2.revision, rev_before_mixed_merge);
+    assert_eq!(s2.undo_len(), 1);
+    assert_eq!(s2.undo_names(), vec![older_label.as_str()]);
+    assert_eq!(
+        s2.redo_names(),
+        expected_redo_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        "merging must not clear redo"
+    );
+
+    s2.undo().expect("undo merged mixed");
+    assert_eq!(
+        s2.course.to_json().expect("undone mixed json"),
+        mixed_before_json
+    );
+    s2.redo().expect("redo merged mixed");
+    assert_eq!(
+        s2.course.to_json().expect("redone mixed json"),
+        mixed_after_json
+    );
+}
+
+/// U-07: `Session::merge_last_two_undos` returns `false` when `< 2` steps exist,
+/// merges repeated `object.set_frame` edits into one step with custom label,
+/// preserves `revision` and `redo`, and merges mixed edits keeping older label
+/// when `label = None` with byte-identical `undo()` / `redo()`.
+#[test]
+fn u_07_session_merge_last_two_undos_roundtrip() {
+    let mut s = Session::blank("U-07 Merge");
+    let rev0 = s.revision;
+    assert!(!s.merge_last_two_undos(Some("Nope")));
+    assert_eq!(s.revision, rev0);
+    assert_eq!(s.undo_len(), 0);
+
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    let rev1 = s.revision;
+    assert!(!s.merge_last_two_undos(None));
+    assert_eq!(s.revision, rev1);
+    assert_eq!(s.undo_len(), 1);
+
+    let mut s_moves = Session::new(s.course);
+    assert_u07_repeated_move_merge(&mut s_moves);
+
+    let mut s_mixed = Session::new(s_moves.course);
+    assert_u07_mixed_merge_preserves_label_and_redo(&mut s_mixed);
+}
+
+/// GD-02 (`M33-08`, `M33-09`): 200 single-object edits on a 300-slide course
+/// (`perf300`) perform zero full-course clones, keep all 200 undo deltas under
+/// 512 KiB, and roundtrip byte-identically across `undo_steps(200)` and
+/// `redo_steps(200)`.
+#[test]
+fn two_hundred_edits_on_300_slide_course_zero_full_clones_and_small_deltas() {
+    let mut s = Session::new(crate::undo_perf_tests::perf300());
+    let orig_json = s.course.to_json().expect("initial perf300 JSON");
+
+    crate::with_scope_verifier_disabled(|| {
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        for i in 0..200 {
+            ok(
+                &mut s,
+                "object.set_frame",
+                json!({
+                    "slide": "s-150",
+                    "object": "h150",
+                    "frame": {
+                        "x": 60.0 + (i + 1) as f64,
+                        "y": 520.0,
+                        "w": 200.0,
+                        "h": 80.0
+                    }
+                }),
+            );
+        }
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "200 single-slide edits must perform zero full-course clones"
+        );
+        assert_eq!(s.undo_len(), 200);
+        let est_bytes = s.undo_estimated_bytes();
+        assert!(
+            est_bytes < 512 * 1024,
+            "200 single-object deltas must use < 512 KiB, got {est_bytes} bytes"
+        );
+
+        let after_json = s.course.to_json().expect("after-200 perf300 JSON");
+        assert_ne!(after_json, orig_json);
+
+        s.undo_steps(200).expect("undo_steps(200) succeeds");
+        assert_eq!(
+            s.course.to_json().expect("undone perf300 JSON"),
+            orig_json,
+            "undo_steps(200) must restore original perf300 JSON byte-identically"
+        );
+
+        s.redo_steps(200).expect("redo_steps(200) succeeds");
+        assert_eq!(
+            s.course.to_json().expect("redone perf300 JSON"),
+            after_json,
+            "redo_steps(200) must restore post-edit perf300 JSON byte-identically"
+        );
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "undo_steps(200) and redo_steps(200) must also perform zero full-course clones"
+        );
+    });
 }

@@ -22,10 +22,10 @@ use std::thread::LocalKey;
 use coursecraft_course::{Object, Slide};
 
 thread_local! {
-    static COURSE_COPIES: Cell<u64> = const { Cell::new(0) };
     static SPELLER_RUNS: Cell<u64> = const { Cell::new(0) };
     static SUGGESTION_LOOKUPS: Cell<u64> = const { Cell::new(0) };
     static THUMBNAIL_REDRAWS: Cell<u64> = const { Cell::new(0) };
+    static THUMBNAIL_COMPOSES: Cell<u64> = const { Cell::new(0) };
     static STATE_THUMBNAIL_REDRAWS: Cell<u64> = const { Cell::new(0) };
     static VALIDATION_RUNS: Cell<u64> = const { Cell::new(0) };
     static AUDIT_RUNS: Cell<u64> = const { Cell::new(0) };
@@ -52,10 +52,12 @@ pub(crate) fn begin_frame() {
 /// Zero the counts before the measured part of a test. The per-row signatures
 /// stay, so a slide already drawn while settling is still considered unchanged.
 pub(crate) fn reset() {
-    COURSE_COPIES.set(0);
+    #[cfg(debug_assertions)]
+    coursecraft_engine::test_counts::reset();
     SPELLER_RUNS.set(0);
     SUGGESTION_LOOKUPS.set(0);
     THUMBNAIL_REDRAWS.set(0);
+    THUMBNAIL_COMPOSES.set(0);
     STATE_THUMBNAIL_REDRAWS.set(0);
     VALIDATION_RUNS.set(0);
     AUDIT_RUNS.set(0);
@@ -68,10 +70,6 @@ pub(crate) fn reset() {
 pub(crate) fn reset_thumb_signatures() {
     LAST_THUMB_SLIDES.with(|slot| slot.borrow_mut().clear());
     LAST_STATE_THUMBS.with(|slot| slot.borrow_mut().clear());
-}
-
-pub(crate) fn note_course_copy() {
-    bump(&COURSE_COPIES);
 }
 
 pub(crate) fn note_speller_run() {
@@ -98,6 +96,10 @@ pub(crate) fn note_thumbnail_paint(slide_id: &str, slide: &Slide) {
     });
 }
 
+pub(crate) fn note_thumbnail_compose() {
+    bump(&THUMBNAIL_COMPOSES);
+}
+
 pub(crate) fn note_validation_run() {
     bump(&VALIDATION_RUNS);
 }
@@ -115,7 +117,14 @@ pub(crate) fn note_timeline_list_rebuild() {
 }
 
 pub(crate) fn course_copies() -> u64 {
-    COURSE_COPIES.get()
+    #[cfg(debug_assertions)]
+    {
+        coursecraft_engine::test_counts::full_course_clones()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        0
+    }
 }
 
 pub(crate) fn speller_runs() -> u64 {
@@ -147,6 +156,10 @@ pub(crate) fn state_thumbnail_redraws() -> u64 {
 
 pub(crate) fn thumbnail_redraws() -> u64 {
     THUMBNAIL_REDRAWS.get()
+}
+
+pub(crate) fn thumbnail_composes() -> u64 {
+    THUMBNAIL_COMPOSES.get()
 }
 
 pub(crate) fn validation_runs() -> u64 {

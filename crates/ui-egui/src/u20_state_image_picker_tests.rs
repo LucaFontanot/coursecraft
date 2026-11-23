@@ -86,8 +86,8 @@ fn state_card_has_no_src_text_input_and_shows_same_as_normal() {
         "raw Src text box label must be removed from States tab"
     );
     assert!(
-        h.find_text("Same as Normal").is_some(),
-        "empty state src should show muted 'Same as Normal'"
+        h.find_text("Same as normal").is_some(),
+        "empty state src should show muted 'Same as normal'"
     );
     let _choose = h
         .find_text("Choose image…")

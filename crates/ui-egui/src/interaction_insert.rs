@@ -21,7 +21,7 @@ fn centred_frame(editor: &Editor, width: f32, height: f32) -> Rect {
 
 fn insert(editor: &mut Editor, name: &str, frame: Rect, kind: ObjectKind) -> Option<String> {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return None;
     }
     if editor.selection.slide.is_empty() {
@@ -78,7 +78,7 @@ pub fn insert_timer(editor: &mut Editor) -> Option<String> {
 /// Insert a progress meter with a new number variable, like the inputs.
 pub fn insert_progress_meter(editor: &mut Editor) -> Option<String> {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return None;
     }
     if editor.selection.slide.is_empty() {
@@ -156,7 +156,7 @@ pub fn insert_accordion(editor: &mut Editor) -> Option<Vec<String>> {
 
 pub(crate) fn insert_interaction(editor: &mut Editor, kind: &str) -> Option<Vec<String>> {
     if editor.ui.master_view {
-        editor.set_status("Not available in Master View");
+        editor.set_status("Not available in slide masters");
         return None;
     }
     if editor.selection.slide.is_empty() {

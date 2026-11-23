@@ -385,7 +385,7 @@ fn show_report_window(editor: &mut Editor, ctx: &Context) {
     }
     let mut open = true;
     let mut done = false;
-    Dialog::new("Report a Problem")
+    Dialog::new("Report a problem")
         .open(&mut open)
         .width(520.0)
         .resizable(true)
@@ -440,7 +440,7 @@ fn report_buttons(state: &ReportState, ui: &mut egui::Ui, ctx: &Context) -> bool
             open_link(ctx, &state.issue_url());
             close = true;
         }
-        if ui.add(Button::new("Copy to Clipboard")).clicked() {
+        if ui.add(Button::new("Copy to clipboard")).clicked() {
             ctx.copy_text(state.report_text());
         }
         if ui.add(Button::new("Cancel")).clicked() {
