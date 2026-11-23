@@ -17503,6 +17503,147 @@ fn slide_size_dialog_content_modes_dispatch_and_undo() {
 }
 
 #[test]
+fn slide_size_dialog_live_preview_and_course_wide_impact_counts() {
+    let (mut h, _t) = lock_hide_setup();
+    // Add an object on the current slide that sits at (900, 500) so it is inside 1280x720
+    // but completely outside 640x360 when keeping positions.
+    h.editor.run(
+        "object.add",
+        serde_json::json!({
+            "slide": h.editor.selection.slide,
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 900.0, "y": 500.0, "w": 120.0, "h": 80.0 }
+        }),
+    );
+    assert!(
+        h.editor.ui.last_error.is_none(),
+        "unexpected error adding object: {:?}",
+        h.editor.ui.last_error
+    );
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+
+    // 1) 1280x720 -> 1920x1080 (scale): reports "0 outside" and 150%.
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
+    h.click_at(fhd);
+    h.idle_frame();
+    assert!(
+        h.find_text_containing("0 outside").is_some(),
+        "expected '0 outside' for 1280x720 -> 1920x1080 (scale)"
+    );
+    assert!(
+        h.find_text_containing("150%").is_some(),
+        "expected '150%' scale hint for 1280x720 -> 1920x1080 (scale)"
+    );
+
+    // 2) 1280x720 -> 1080x1080 (scale): reports margin hint.
+    let combo = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let square = h
+        .find_text("1:1 Square (1080 × 1080)")
+        .expect("Square preset");
+    h.click_at(square);
+    h.idle_frame();
+    assert!(
+        h.find_text_containing("Adds top/bottom margins").is_some(),
+        "expected margin hint for 1280x720 -> 1080x1080 (scale)"
+    );
+
+    // 3) 1280x720 -> 640x360 (keep): reports exact off-slide object count across the course.
+    let keep = h.find_text("Keep as is").expect("Keep as is radio");
+    h.click_at(keep);
+    h.idle_frame();
+    let lock = h
+        .find_text("Lock aspect ratio")
+        .expect("Lock aspect ratio checkbox");
+    h.click_at(lock);
+    h.idle_frame();
+    h.editor.ui.slide_size_dialog.w = 640;
+    h.editor.ui.slide_size_dialog.h = 360;
+    h.idle_frame();
+
+    let expected_outside = h
+        .editor
+        .session
+        .course
+        .slides()
+        .chain(h.editor.session.course.masters.iter())
+        .chain(h.editor.session.course.templates.iter())
+        .chain(
+            h.editor
+                .session
+                .course
+                .banks
+                .iter()
+                .flat_map(|b| b.slides.iter()),
+        )
+        .flat_map(|s| {
+            s.objects
+                .iter()
+                .chain(s.layers.iter().flat_map(|l| l.objects.iter()))
+        })
+        .filter(|o| {
+            !matches!(o.kind, ObjectKind::Audio { .. })
+                && o.panel.is_none()
+                && (o.frame.x + o.frame.w <= 0.0
+                    || o.frame.x >= 640.0
+                    || o.frame.y + o.frame.h <= 0.0
+                    || o.frame.y >= 360.0)
+        })
+        .count();
+    assert!(
+        expected_outside >= 1,
+        "expected at least 1 off-slide object at 640x360"
+    );
+    let needle = format!("{expected_outside} outside");
+    assert!(
+        h.find_text_containing(&needle).is_some(),
+        "expected '{needle}' in preview impact summary"
+    );
+}
+
+#[test]
+fn slide_size_dialog_preview_idle_frames_do_not_recompute() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 1);
+
+    for _ in 0..5 {
+        h.idle_frame();
+    }
+    assert_eq!(
+        h.editor.ui.slide_size_dialog.impact_recomputes, 1,
+        "idle frames must not recompute course-wide impact"
+    );
+
+    h.editor.ui.slide_size_dialog.mode = crate::slide_size_dialog::ResizeModeChoice::Fill;
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 2);
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 2);
+
+    h.editor.ui.slide_size_dialog.w = 1920;
+    h.editor.ui.slide_size_dialog.h = 1080;
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 3);
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 3);
+}
+
+#[test]
 fn inspector_strikethrough_button_styles_the_text() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);

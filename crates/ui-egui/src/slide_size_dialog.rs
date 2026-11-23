@@ -3,7 +3,8 @@
 use crate::dialog::{Dialog, Form};
 use crate::widgets::styled_combo;
 use crate::{Editor, EditorRequest};
-use egui::DragValue;
+use coursecraft_course::{Course, MAX_OBJECT_FRAME_SIZE, Object, ObjectKind, Rect};
+use egui::{Color32, DragValue, Pos2, StrokeKind, pos2, vec2};
 use serde_json::json;
 
 /// Default slide size for new courses (16:9 HD).
@@ -119,6 +120,26 @@ impl ResizeModeChoice {
     }
 }
 
+/// Cached key for the course-wide resize impact summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImpactCacheKey {
+    pub revision: u64,
+    pub w: u32,
+    pub h: u32,
+    pub mode: ResizeModeChoice,
+}
+
+/// Course-wide impact summary for a candidate slide size and resize mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlideSizeImpact {
+    pub outside: usize,
+    pub clipped: usize,
+    pub same_size: bool,
+    pub same_aspect: bool,
+    pub scale_pct: u32,
+    pub hint: String,
+}
+
 /// Dialog state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SlideSizeState {
@@ -133,6 +154,11 @@ pub struct SlideSizeState {
     pub locked_ratio: f64,
     /// Inline confirmation after saving the current dimensions as default.
     pub saved_default_notice: bool,
+    /// Cached course-wide impact summary keyed on `(revision, w, h, mode)`.
+    pub impact_cache: Option<(ImpactCacheKey, SlideSizeImpact)>,
+    /// Number of times the impact summary was recomputed (for idle-frame caching tests).
+    #[cfg(test)]
+    pub impact_recomputes: usize,
 }
 
 impl Default for SlideSizeState {
@@ -145,6 +171,9 @@ impl Default for SlideSizeState {
             lock_aspect: true,
             locked_ratio: 1280.0 / 720.0,
             saved_default_notice: false,
+            impact_cache: None,
+            #[cfg(test)]
+            impact_recomputes: 0,
         }
     }
 }
@@ -179,7 +208,299 @@ impl Editor {
             lock_aspect: true,
             locked_ratio,
             saved_default_notice: false,
+            impact_cache: None,
+            #[cfg(test)]
+            impact_recomputes: 0,
         };
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ResizeMap {
+    factor: f32,
+    dx: f32,
+    dy: f32,
+}
+
+impl ResizeMap {
+    fn new(old_w: u32, old_h: u32, new_w: u32, new_h: u32, mode: ResizeModeChoice) -> Self {
+        let ow = (old_w.max(1)) as f32;
+        let oh = (old_h.max(1)) as f32;
+        let nw = new_w as f32;
+        let nh = new_h as f32;
+        let factor = match mode {
+            ResizeModeChoice::Scale => (nw / ow).min(nh / oh),
+            ResizeModeChoice::Fill => (nw / ow).max(nh / oh),
+            ResizeModeChoice::Keep => {
+                return Self {
+                    factor: 1.0,
+                    dx: 0.0,
+                    dy: 0.0,
+                };
+            }
+        };
+        Self {
+            factor,
+            dx: (nw - ow * factor) * 0.5,
+            dy: (nh - oh * factor) * 0.5,
+        }
+    }
+
+    fn project_frame(self, f: Rect, mode: ResizeModeChoice) -> Rect {
+        if mode == ResizeModeChoice::Keep {
+            return f;
+        }
+        Rect {
+            x: (f.x * self.factor + self.dx).clamp(-100_000.0, 100_000.0),
+            y: (f.y * self.factor + self.dy).clamp(-100_000.0, 100_000.0),
+            w: (f.w * self.factor)
+                .round()
+                .clamp(1.0, MAX_OBJECT_FRAME_SIZE),
+            h: (f.h * self.factor)
+                .round()
+                .clamp(1.0, MAX_OBJECT_FRAME_SIZE),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObjectPlacement {
+    Inside,
+    Clipped,
+    Outside,
+}
+
+fn rotated_aabb(frame: Rect, rotation_deg: f32) -> (f32, f32, f32, f32) {
+    let cx = frame.x + frame.w * 0.5;
+    let cy = frame.y + frame.h * 0.5;
+    let hw = frame.w * 0.5;
+    let hh = frame.h * 0.5;
+    let (sin, cos) = rotation_deg.to_radians().sin_cos();
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (lx, ly) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
+        let x = cx + lx * cos - ly * sin;
+        let y = cy + lx * sin + ly * cos;
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    (min_x, max_x, min_y, max_y)
+}
+
+fn classify_placement(frame: Rect, rotation_deg: f32, new_w: f32, new_h: f32) -> ObjectPlacement {
+    if ![frame.x, frame.y, frame.w, frame.h, rotation_deg]
+        .iter()
+        .all(|v| v.is_finite())
+        || frame.w < 0.0
+        || frame.h < 0.0
+    {
+        return ObjectPlacement::Outside;
+    }
+    let (min_x, max_x, min_y, max_y) = rotated_aabb(frame, rotation_deg);
+    if max_x <= 0.0 || min_x >= new_w || max_y <= 0.0 || min_y >= new_h {
+        ObjectPlacement::Outside
+    } else if min_x >= -0.5 && max_x <= new_w + 0.5 && min_y >= -0.5 && max_y <= new_h + 0.5 {
+        ObjectPlacement::Inside
+    } else {
+        ObjectPlacement::Clipped
+    }
+}
+
+fn is_previewable_object(obj: &Object) -> bool {
+    !matches!(obj.kind, ObjectKind::Audio { .. }) && obj.panel.is_none()
+}
+
+fn compute_impact(
+    course: &Course,
+    new_w: u32,
+    new_h: u32,
+    mode: ResizeModeChoice,
+) -> SlideSizeImpact {
+    let old_w = course.slide_size.w;
+    let old_h = course.slide_size.h;
+    let same_size = new_w == old_w && new_h == old_h;
+    let same_aspect = u64::from(new_w) * u64::from(old_h) == u64::from(old_w) * u64::from(new_h);
+    let map = ResizeMap::new(old_w, old_h, new_w, new_h, mode);
+    let scale_pct = (map.factor * 100.0).round().clamp(0.0, 100_000.0) as u32;
+
+    let hint = if same_size {
+        "Current size (no change).".to_owned()
+    } else if mode == ResizeModeChoice::Keep {
+        "Keeps current object positions and sizes.".to_owned()
+    } else if same_aspect {
+        format!("Scales cleanly at {scale_pct}% with no cropping or margins.")
+    } else {
+        let sx = new_w as f32 / (old_w.max(1)) as f32;
+        let sy = new_h as f32 / (old_h.max(1)) as f32;
+        match mode {
+            ResizeModeChoice::Scale => {
+                if sx < sy {
+                    "Adds top/bottom margins.".to_owned()
+                } else {
+                    "Adds left/right margins.".to_owned()
+                }
+            }
+            ResizeModeChoice::Fill => {
+                if sx > sy {
+                    "Crops top/bottom edges.".to_owned()
+                } else {
+                    "Crops left/right edges.".to_owned()
+                }
+            }
+            ResizeModeChoice::Keep => unreachable_hint(),
+        }
+    };
+
+    let nw = new_w as f32;
+    let nh = new_h as f32;
+    let mut outside = 0usize;
+    let mut clipped = 0usize;
+    for slide in course
+        .slides()
+        .chain(course.masters.iter())
+        .chain(course.templates.iter())
+        .chain(course.banks.iter().flat_map(|bank| bank.slides.iter()))
+    {
+        for obj in slide
+            .objects
+            .iter()
+            .chain(slide.layers.iter().flat_map(|l| l.objects.iter()))
+        {
+            if !is_previewable_object(obj) {
+                continue;
+            }
+            let projected = map.project_frame(obj.frame, mode);
+            match classify_placement(projected, obj.rotation, nw, nh) {
+                ObjectPlacement::Outside => outside += 1,
+                ObjectPlacement::Clipped => clipped += 1,
+                ObjectPlacement::Inside => {}
+            }
+        }
+    }
+
+    SlideSizeImpact {
+        outside,
+        clipped,
+        same_size,
+        same_aspect,
+        scale_pct,
+        hint,
+    }
+}
+
+fn unreachable_hint() -> String {
+    String::new()
+}
+
+fn draw_placement_preview(
+    ui: &mut egui::Ui,
+    course: &Course,
+    current_slide_id: &str,
+    new_w: u32,
+    new_h: u32,
+    mode: ResizeModeChoice,
+    p: &coursecraft_render::Palette,
+) {
+    let (preview_rect, _resp) = ui.allocate_exact_size(vec2(220.0, 132.0), egui::Sense::hover());
+    let painter = ui.painter_at(preview_rect);
+    painter.rect_filled(preview_rect, coursecraft_render::RADIUS_SM, p.canvas);
+    painter.rect_stroke(
+        preview_rect,
+        coursecraft_render::RADIUS_SM,
+        egui::Stroke::new(1.0, p.border),
+        StrokeKind::Inside,
+    );
+
+    let nw = (new_w.max(1)) as f32;
+    let nh = (new_h.max(1)) as f32;
+    let ow = (course.slide_size.w.max(1)) as f32;
+    let oh = (course.slide_size.h.max(1)) as f32;
+    let map = ResizeMap::new(course.slide_size.w, course.slide_size.h, new_w, new_h, mode);
+
+    let old_proj_x = map.dx;
+    let old_proj_y = map.dy;
+    let old_proj_w = ow * map.factor;
+    let old_proj_h = oh * map.factor;
+
+    let min_x = 0.0_f32.min(old_proj_x);
+    let min_y = 0.0_f32.min(old_proj_y);
+    let max_x = nw.max(old_proj_x + old_proj_w);
+    let max_y = nh.max(old_proj_y + old_proj_h);
+    let union_w = (max_x - min_x).max(1.0);
+    let union_h = (max_y - min_y).max(1.0);
+    let union_cx = (min_x + max_x) * 0.5;
+    let union_cy = (min_y + max_y) * 0.5;
+
+    let inner = preview_rect.shrink(10.0);
+    let scale = (inner.width() / union_w).min(inner.height() / union_h);
+    let to_screen = |x: f32, y: f32| -> Pos2 {
+        pos2(
+            inner.center().x + (x - union_cx) * scale,
+            inner.center().y + (y - union_cy) * scale,
+        )
+    };
+    let rect_to_screen = |x: f32, y: f32, w: f32, h: f32| -> egui::Rect {
+        egui::Rect::from_min_max(to_screen(x, y), to_screen(x + w, y + h))
+    };
+
+    let current_slide = course.slide(current_slide_id);
+    let slide_bg = current_slide
+        .and_then(|s| coursecraft_render::parse_color(course.slide_background(s)))
+        .unwrap_or(Color32::WHITE);
+
+    let new_slide_rect = rect_to_screen(0.0, 0.0, nw, nh);
+    painter.rect_filled(new_slide_rect, 2.0, slide_bg);
+    painter.rect_stroke(
+        new_slide_rect,
+        2.0,
+        egui::Stroke::new(1.5, p.accent),
+        StrokeKind::Outside,
+    );
+
+    if let Some(slide) = current_slide {
+        for obj in &slide.objects {
+            if !is_previewable_object(obj) {
+                continue;
+            }
+            let proj = map.project_frame(obj.frame, mode);
+            let placement = classify_placement(proj, obj.rotation, nw, nh);
+            let (fill, stroke) = match placement {
+                ObjectPlacement::Inside => {
+                    (p.accent.gamma_multiply(0.35), p.accent.gamma_multiply(0.75))
+                }
+                ObjectPlacement::Clipped => (p.warning.gamma_multiply(0.55), p.warning),
+                ObjectPlacement::Outside => (p.danger.gamma_multiply(0.65), p.danger),
+            };
+            let obj_rect = rect_to_screen(proj.x, proj.y, proj.w, proj.h);
+            painter.rect_filled(obj_rect, 2.0, fill);
+            painter.rect_stroke(
+                obj_rect,
+                2.0,
+                egui::Stroke::new(1.0, stroke),
+                StrokeKind::Inside,
+            );
+        }
+    }
+
+    let old_rect = rect_to_screen(old_proj_x, old_proj_y, old_proj_w, old_proj_h);
+    let corners = [
+        old_rect.left_top(),
+        old_rect.right_top(),
+        old_rect.right_bottom(),
+        old_rect.left_bottom(),
+        old_rect.left_top(),
+    ];
+    for shape in egui::Shape::dashed_line(
+        &corners,
+        egui::Stroke::new(1.0, p.text_secondary.gamma_multiply(0.7)),
+        4.0,
+        3.0,
+    ) {
+        painter.add(shape);
     }
 }
 
@@ -195,7 +516,10 @@ pub fn show_slide_size_dialog(
     let mut open = true;
     let mut apply = false;
     let mut cancel = false;
-    let current_size = editor.session.course.slide_size;
+    let course = &editor.session.course;
+    let revision = editor.session.revision;
+    let current_slide_id = editor.selection.slide.clone();
+    let current_size = course.slide_size;
     let default_slide = editor.ui.prefs.default_slide;
     let autosave_minutes = editor.ui.prefs.autosave_minutes;
     let versions_to_keep = editor.ui.prefs.versions_to_keep;
@@ -364,6 +688,102 @@ pub fn show_slide_size_dialog(
                         ui.label(egui::RichText::new(helper).small().color(p.text_secondary));
                     });
                     ui.add_space(2.0);
+                }
+
+                ui.add_space(coursecraft_render::SPACE_SM);
+                ui.separator();
+                ui.add_space(coursecraft_render::SPACE_SM);
+
+                if state.valid() {
+                    let key = ImpactCacheKey {
+                        revision,
+                        w: state.w,
+                        h: state.h,
+                        mode: state.mode,
+                    };
+                    let cache_hit = state
+                        .impact_cache
+                        .as_ref()
+                        .is_some_and(|(cached_key, _)| *cached_key == key);
+                    if !cache_hit {
+                        let impact = compute_impact(course, state.w, state.h, state.mode);
+                        state.impact_cache = Some((key, impact));
+                        #[cfg(test)]
+                        {
+                            state.impact_recomputes += 1;
+                        }
+                    }
+
+                    ui.horizontal(|ui| {
+                        draw_placement_preview(
+                            ui,
+                            course,
+                            &current_slide_id,
+                            state.w,
+                            state.h,
+                            state.mode,
+                            &p,
+                        );
+                        ui.add_space(coursecraft_render::SPACE_SM);
+                        if let Some((_, impact)) = &state.impact_cache {
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("Preview").strong());
+                                ui.add_space(2.0);
+                                ui.label(
+                                    egui::RichText::new(&impact.hint)
+                                        .small()
+                                        .color(p.text_secondary),
+                                );
+                                if !impact.same_size || impact.outside > 0 || impact.clipped > 0 {
+                                    ui.add_space(4.0);
+                                    if impact.outside == 0 && impact.clipped == 0 {
+                                        ui.label(
+                                            egui::RichText::new("0 outside, 0 clipped")
+                                                .small()
+                                                .color(p.text_secondary),
+                                        );
+                                    } else {
+                                        if impact.outside > 0 {
+                                            let noun = if impact.outside == 1 {
+                                                "object"
+                                            } else {
+                                                "objects"
+                                            };
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} outside ({} {} will sit outside the slide)",
+                                                    impact.outside, impact.outside, noun
+                                                ))
+                                                .small()
+                                                .color(p.warning),
+                                            );
+                                        } else {
+                                            ui.label(
+                                                egui::RichText::new("0 outside")
+                                                    .small()
+                                                    .color(p.text_secondary),
+                                            );
+                                        }
+                                        if impact.clipped > 0 {
+                                            let noun = if impact.clipped == 1 {
+                                                "object"
+                                            } else {
+                                                "objects"
+                                            };
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} clipped ({} {} will extend past an edge)",
+                                                    impact.clipped, impact.clipped, noun
+                                                ))
+                                                .small()
+                                                .color(p.warning),
+                                            );
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    });
                 }
             });
 
