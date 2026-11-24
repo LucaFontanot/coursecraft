@@ -13641,6 +13641,394 @@ fn pt_06_state_extra_point_text_fits_and_converts() {
     ));
 }
 
+fn pt_11_text_info(
+    s: &Session,
+    slide_id: &str,
+    obj_id: &str,
+) -> (coursecraft_course::Rect, bool, bool, f32, Option<String>) {
+    let (obj, _) = s.course.slide(slide_id).unwrap().object(obj_id).unwrap();
+    match &obj.kind {
+        ObjectKind::Text {
+            style,
+            point_text,
+            text_style,
+            ..
+        } => (
+            obj.frame,
+            *point_text,
+            style.wrap,
+            style.size,
+            text_style.clone(),
+        ),
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+fn pt_11_verify_apply_bigger_font(s: &mut Session) -> (String, f32, f32) {
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "pt_center",
+            "kind": {
+                "type": "text",
+                "text": "Heading",
+                "point_text": true,
+                "style": { "size": 16.0, "wrap": false, "align": "center", "valign": "middle" }
+            },
+            "frame": { "x": 200.0, "y": 100.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+
+    let (before_frame, before_pt, before_wrap, before_size, _) =
+        pt_11_text_info(s, "slide1", "pt_center");
+    assert!(before_pt);
+    assert!(!before_wrap);
+    assert_eq!(before_size, 16.0);
+    let before_cx = before_frame.x + before_frame.w * 0.5;
+    let before_cy = before_frame.y + before_frame.h * 0.5;
+
+    let big_id = ok(
+        s,
+        "text_style.create",
+        json!({
+            "name": "Big Display",
+            "style": {
+                "size": 36.0,
+                "bold": true,
+                "wrap": false,
+                "align": "center",
+                "valign": "middle"
+            }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": big_id, "slide": "slide1", "objects": ["pt_center"] }),
+    );
+    let (grown_frame, grown_pt, grown_wrap, grown_size, grown_link) =
+        pt_11_text_info(s, "slide1", "pt_center");
+    assert!(grown_pt);
+    assert!(!grown_wrap);
+    assert_eq!(grown_size, 36.0);
+    assert_eq!(grown_link.as_deref(), Some(big_id.as_str()));
+    assert!(grown_frame.w > before_frame.w);
+    assert!(grown_frame.h > before_frame.h);
+    let after_cx = grown_frame.x + grown_frame.w * 0.5;
+    let after_cy = grown_frame.y + grown_frame.h * 0.5;
+    assert!((after_cx - before_cx).abs() <= 1.0);
+    assert!((after_cy - before_cy).abs() <= 1.0);
+
+    // Single-step undo reverts both style and refitted frame.
+    s.undo().unwrap();
+    let (undone_frame, undone_pt, undone_wrap, undone_size, undone_link) =
+        pt_11_text_info(s, "slide1", "pt_center");
+    assert_eq!(undone_frame, before_frame);
+    assert!(undone_pt);
+    assert!(!undone_wrap);
+    assert_eq!(undone_size, 16.0);
+    assert_eq!(undone_link, None);
+    s.redo().unwrap();
+    assert_eq!(pt_11_text_info(s, "slide1", "pt_center").0, grown_frame);
+
+    (big_id, before_cx, before_cy)
+}
+
+fn pt_11_verify_apply_wrap_converts(s: &mut Session) {
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "pt_wrap",
+            "kind": {
+                "type": "text",
+                "text": "Convert Me",
+                "point_text": true,
+                "style": { "size": 18.0, "wrap": false }
+            },
+            "frame": { "x": 40.0, "y": 200.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    let wrap_before = pt_11_text_info(s, "slide1", "pt_wrap").0;
+    let body_id = ok(
+        s,
+        "text_style.create",
+        json!({
+            "name": "Body Wrapped",
+            "style": { "size": 32.0, "wrap": true }
+        }),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": body_id, "slide": "slide1", "objects": ["pt_wrap"] }),
+    );
+    let (conv_frame, conv_pt, conv_wrap, conv_size, conv_link) =
+        pt_11_text_info(s, "slide1", "pt_wrap");
+    assert!(!conv_pt);
+    assert!(conv_wrap);
+    assert_eq!(conv_size, 32.0);
+    assert_eq!(conv_link.as_deref(), Some(body_id.as_str()));
+    assert_eq!(conv_frame, wrap_before);
+
+    // Single-step undo restores point text and unlinks style.
+    s.undo().unwrap();
+    let (u_frame, u_pt, u_wrap, u_size, u_link) = pt_11_text_info(s, "slide1", "pt_wrap");
+    assert_eq!(u_frame, wrap_before);
+    assert!(u_pt);
+    assert!(!u_wrap);
+    assert_eq!(u_size, 18.0);
+    assert_eq!(u_link, None);
+}
+
+fn pt_11_setup_multi_slide_and_extra(
+    s: &mut Session,
+    big_id: &str,
+) -> (coursecraft_course::Rect, coursecraft_course::StateExtra) {
+    let area_orig = coursecraft_course::Rect {
+        x: 50.0,
+        y: 280.0,
+        w: 220.0,
+        h: 80.0,
+    };
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "area_box",
+            "kind": {
+                "type": "text",
+                "text": "Fixed Box",
+                "style": { "size": 16.0, "wrap": true }
+            },
+            "frame": area_orig
+        }),
+    );
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": big_id, "slide": "slide1", "objects": ["area_box"] }),
+    );
+    let (area_frame, area_pt, area_wrap, area_size, _) = pt_11_text_info(s, "slide1", "area_box");
+    assert!(!area_pt);
+    assert!(!area_wrap);
+    assert_eq!(area_size, 36.0);
+    assert_eq!(area_frame, area_orig);
+
+    ok(
+        s,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "lay1", "name": "Overlay" }),
+    );
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "lay1",
+            "id": "pt_layer",
+            "kind": {
+                "type": "text",
+                "text": "Layer Title",
+                "point_text": true,
+                "style": { "size": 16.0, "wrap": false }
+            },
+            "frame": { "x": 80.0, "y": 40.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": big_id, "slide": "slide1", "objects": ["pt_layer"] }),
+    );
+    ok(s, "slide.add", json!({ "id": "slide2", "title": "S2" }));
+    ok(
+        s,
+        "object.add",
+        json!({
+            "slide": "slide2",
+            "id": "pt_slide2",
+            "kind": {
+                "type": "text",
+                "text": "Slide Two",
+                "point_text": true,
+                "style": { "size": 16.0, "wrap": false }
+            },
+            "frame": { "x": 120.0, "y": 60.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        s,
+        "text_style.apply",
+        json!({ "id": big_id, "slide": "slide2", "objects": ["pt_slide2"] }),
+    );
+
+    // StateExtraKind::Text has no named-style link in the course model; attach one to
+    // pt_center to confirm it stays valid and untouched during text_style.update.
+    ok(
+        s,
+        "object.add_state",
+        json!({ "slide": "slide1", "object": "pt_center", "state": { "name": "hover" } }),
+    );
+    ok(
+        s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "pt_center",
+            "state": "hover",
+            "extra": {
+                "id": "badge",
+                "name": "Badge",
+                "kind": {
+                    "type": "text",
+                    "text": "New",
+                    "point_text": true,
+                    "style": { "size": 14.0, "wrap": false }
+                },
+                "frame": { "x": 0.0, "y": -20.0, "w": 120.0, "h": 30.0 }
+            }
+        }),
+    );
+    let extra_before = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt_center")
+        .unwrap()
+        .0
+        .states
+        .iter()
+        .find(|st| st.name == "hover")
+        .unwrap()
+        .extras[0]
+        .clone();
+    (area_orig, extra_before)
+}
+
+fn pt_11_verify_update_wrap_converts(
+    s: &mut Session,
+    big_id: &str,
+    expected_pt: &[(&str, &str, coursecraft_course::Rect)],
+    area_orig: coursecraft_course::Rect,
+) {
+    ok(
+        s,
+        "text_style.update",
+        json!({ "id": big_id, "style": { "wrap": true } }),
+    );
+    for &(sid, oid, expected_frame) in expected_pt {
+        let (frame, pt, wrap, _, _) = pt_11_text_info(s, sid, oid);
+        assert!(!pt);
+        assert!(wrap);
+        assert_eq!(frame, expected_frame);
+    }
+    let (area_frame, area_pt, area_wrap, _, _) = pt_11_text_info(s, "slide1", "area_box");
+    assert!(!area_pt);
+    assert!(area_wrap);
+    assert_eq!(area_frame, area_orig);
+
+    s.undo().unwrap();
+    for &(sid, oid, expected_frame) in expected_pt {
+        let (frame, pt, wrap, _, _) = pt_11_text_info(s, sid, oid);
+        assert!(pt);
+        assert!(!wrap);
+        assert_eq!(frame, expected_frame);
+    }
+}
+
+#[test]
+fn pt_11_named_style_refits_or_converts_point_text() {
+    use coursecraft_course::StateExtraKind;
+
+    let mut s = Session::blank("Named Style Point Text");
+    let (big_id, before_cx, before_cy) = pt_11_verify_apply_bigger_font(&mut s);
+    pt_11_verify_apply_wrap_converts(&mut s);
+    let (area_orig, extra_before) = pt_11_setup_multi_slide_and_extra(&mut s, &big_id);
+
+    let pt_center_36 = pt_11_text_info(&s, "slide1", "pt_center").0;
+    let pt_layer_36 = pt_11_text_info(&s, "slide1", "pt_layer").0;
+    let pt_slide2_36 = pt_11_text_info(&s, "slide2", "pt_slide2").0;
+
+    let upd = ok(
+        &mut s,
+        "text_style.update",
+        json!({ "id": big_id, "style": { "size": 54.0, "wrap": false } }),
+    );
+    assert_eq!(upd["updated"], 4);
+
+    let (pt_center_54, c_pt, c_wrap, c_size, _) = pt_11_text_info(&s, "slide1", "pt_center");
+    let (pt_layer_54, l_pt, l_wrap, l_size, _) = pt_11_text_info(&s, "slide1", "pt_layer");
+    let (pt_slide2_54, s2_pt, s2_wrap, s2_size, _) = pt_11_text_info(&s, "slide2", "pt_slide2");
+    let (area_54, a_pt, _, a_size, _) = pt_11_text_info(&s, "slide1", "area_box");
+
+    assert_eq!((c_pt, c_wrap, c_size), (true, false, 54.0));
+    assert_eq!((l_pt, l_wrap, l_size), (true, false, 54.0));
+    assert_eq!((s2_pt, s2_wrap, s2_size), (true, false, 54.0));
+    assert!(pt_center_54.w > pt_center_36.w);
+    assert!(pt_center_54.h > pt_center_36.h);
+    assert!(pt_layer_54.w > pt_layer_36.w);
+    assert!(pt_layer_54.h > pt_layer_36.h);
+    assert!(pt_slide2_54.w > pt_slide2_36.w);
+    assert!(pt_slide2_54.h > pt_slide2_36.h);
+    let cx_54 = pt_center_54.x + pt_center_54.w * 0.5;
+    let cy_54 = pt_center_54.y + pt_center_54.h * 0.5;
+    assert!((cx_54 - before_cx).abs() <= 1.0);
+    assert!((cy_54 - before_cy).abs() <= 1.0);
+    assert_eq!((a_pt, a_size, area_54), (false, 54.0, area_orig));
+
+    let extra_after = &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt_center")
+        .unwrap()
+        .0
+        .states
+        .iter()
+        .find(|st| st.name == "hover")
+        .unwrap()
+        .extras[0];
+    assert_eq!(extra_after.frame, extra_before.frame);
+    assert!(matches!(
+        &extra_after.kind,
+        StateExtraKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    // Single-step undo reverts all 4 objects and the style definition.
+    s.undo().unwrap();
+    assert_eq!(pt_11_text_info(&s, "slide1", "pt_center").0, pt_center_36);
+    assert_eq!(pt_11_text_info(&s, "slide1", "pt_layer").0, pt_layer_36);
+    assert_eq!(pt_11_text_info(&s, "slide2", "pt_slide2").0, pt_slide2_36);
+    assert_eq!(pt_11_text_info(&s, "slide1", "area_box").3, 36.0);
+    assert_eq!(pt_11_text_info(&s, "slide1", "area_box").0, area_orig);
+
+    // Redo, then update style to wrap: true -> converts all linked point-text users to area text.
+    s.redo().unwrap();
+    pt_11_verify_update_wrap_converts(
+        &mut s,
+        &big_id,
+        &[
+            ("slide1", "pt_center", pt_center_54),
+            ("slide1", "pt_layer", pt_layer_54),
+            ("slide2", "pt_slide2", pt_slide2_54),
+        ],
+        area_orig,
+    );
+}
+
 #[test]
 fn gb_12_group_set_interactive_no_silent_migration_and_opt_out_guard() {
     let mut s = Session::blank("Interactive Group No Migration");
