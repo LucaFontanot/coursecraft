@@ -13,12 +13,13 @@
     clippy::unreachable
 )]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::sync::Arc;
 
 use coursecraft_course::{
-    BACKGROUND_AUDIO_ID, Course, FontFace, FontStyle, Object, ObjectKind, TextRun, TextStyle,
+    BACKGROUND_AUDIO_ID, Course, FontFace, FontStyle, MediaOwner, MediaRole, MediaScope, Object,
+    ObjectKind, SlideContainer, TextRun, TextStyle, visit_course_media,
 };
 use coursecraft_scorm::Standard;
 use coursecraft_xapi::{Flavor, PackageSpec, cmi5_xml, tincan_xml};
@@ -104,179 +105,14 @@ impl From<std::io::Error> for PublishError {
 
 pub use coursecraft_format::is_safe_relative_path;
 
-struct MediaRef<'a> {
-    object_id: &'a str,
-    src: &'a str,
-}
-
-fn collect_object_media<'a>(obj: &'a Object, out: &mut Vec<MediaRef<'a>>) {
-    match &obj.kind {
-        ObjectKind::Image { src, .. } | ObjectKind::Lottie { src, .. } => {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-        }
-        ObjectKind::Audio { src, captions, .. } => {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-            if let Some(captions) = captions {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src: captions,
-                });
-            }
-        }
-        ObjectKind::Video {
-            src,
-            captions,
-            poster,
-            ..
-        } => {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-            if let Some(captions) = captions {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src: captions,
-                });
-            }
-            if let Some(poster) = poster
-                && !poster.is_empty()
-            {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src: poster,
-                });
-            }
-        }
-        ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
-            if let Some(src) = fill_style
-                .as_ref()
-                .and_then(coursecraft_course::FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src,
-                });
-            }
-        }
-        ObjectKind::Path { path } => {
-            if let Some(src) = path
-                .fill_style
-                .as_ref()
-                .and_then(coursecraft_course::FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src,
-                });
-            }
-        }
-        _ => {}
-    }
-    for state in &obj.states {
-        if let Some(src) = &state.src
-            && !src.is_empty()
-        {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-        }
-        if let Some(src) = state
-            .fill_style
-            .as_ref()
-            .and_then(coursecraft_course::FillStyle::picture_src)
-            && !src.is_empty()
-        {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-        }
-        for extra in &state.extras {
-            let extra_src = match &extra.kind {
-                coursecraft_course::StateExtraKind::Image { src, .. } => Some(src.as_str()),
-                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => fill_style
-                    .as_ref()
-                    .and_then(coursecraft_course::FillStyle::picture_src),
-                coursecraft_course::StateExtraKind::Path { path } => path
-                    .fill_style
-                    .as_ref()
-                    .and_then(coursecraft_course::FillStyle::picture_src),
-                coursecraft_course::StateExtraKind::Text { .. } => None,
-            };
-            if let Some(src) = extra_src
-                && !src.is_empty()
-            {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src,
-                });
-            }
-        }
-    }
-}
-
-fn collect_resource_media<'a>(course: &'a Course, out: &mut Vec<MediaRef<'a>>) {
-    if let Some(logo) = &course.player.logo {
-        out.push(MediaRef {
-            object_id: "player-logo",
-            src: logo,
-        });
-    }
-    for resource in &course.resources {
-        if let coursecraft_course::ResourceTarget::File { src } = &resource.target {
-            out.push(MediaRef {
-                object_id: &resource.id,
-                src,
-            });
-        }
-    }
-}
-
 type WebFolderEntries<'a, B> = dyn Fn(&str) -> Option<Vec<(String, B)>> + 'a;
 
 fn add_web_folders<B>(
-    course: &Course,
+    web_folders: HashSet<String>,
+    web_entries: &HashMap<String, String>,
     files: &mut Vec<(String, B)>,
     web_folder: &WebFolderEntries<'_, B>,
 ) -> Result<(), PublishError> {
-    let mut web_folders = HashSet::new();
-    for slide in course.slides() {
-        for obj in &slide.objects {
-            collect_web_folders(obj, &mut web_folders);
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                collect_web_folders(obj, &mut web_folders);
-            }
-        }
-    }
-    for master in &course.masters {
-        for obj in &master.objects {
-            collect_web_folders(obj, &mut web_folders);
-        }
-    }
-    for bank in &course.banks {
-        for slide in &bank.slides {
-            for obj in &slide.objects {
-                collect_web_folders(obj, &mut web_folders);
-            }
-            for layer in &slide.layers {
-                for obj in &layer.objects {
-                    collect_web_folders(obj, &mut web_folders);
-                }
-            }
-        }
-    }
     let mut folders: Vec<String> = web_folders.into_iter().collect();
     folders.sort();
     for folder in folders {
@@ -286,7 +122,7 @@ fn add_web_folders<B>(
                 src: folder,
             });
         }
-        let entry = web_folder_entry(course, &folder);
+        let entry = web_entries.get(&folder).cloned();
         let folder_files = web_folder(&folder).ok_or_else(|| PublishError::MissingMedia {
             object: "web".to_string(),
             src: entry.clone().unwrap_or_else(|| folder.clone()),
@@ -313,51 +149,6 @@ fn add_web_folders<B>(
         }
     }
     Ok(())
-}
-
-fn collect_web_folders(obj: &Object, out: &mut HashSet<String>) {
-    if let ObjectKind::Web {
-        source: coursecraft_course::WebSource::Folder { path, .. },
-    } = &obj.kind
-    {
-        out.insert(path.clone());
-    }
-}
-
-/// The media-relative entry file of the first web object using `folder`.
-fn web_folder_entry(course: &Course, folder: &str) -> Option<String> {
-    let mut objects = course
-        .slides()
-        .flat_map(|slide| {
-            slide
-                .objects
-                .iter()
-                .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
-        })
-        .chain(
-            course
-                .masters
-                .iter()
-                .flat_map(|master| master.objects.iter()),
-        )
-        .chain(
-            course
-                .banks
-                .iter()
-                .flat_map(|bank| bank.slides.iter())
-                .flat_map(|slide| {
-                    slide
-                        .objects
-                        .iter()
-                        .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
-                }),
-        );
-    objects.find_map(|object| match &object.kind {
-        ObjectKind::Web {
-            source: coursecraft_course::WebSource::Folder { path, entry },
-        } if path == folder => Some(format!("{path}/{entry}")),
-        _ => None,
-    })
 }
 
 /// Build the full SCORM 1.2 file set in memory.
@@ -532,55 +323,61 @@ fn build_package_entries<B>(
     // 3. Collect media references from base objects and layer objects, and from
     // masters, which draw under every slide that names them. Template media is
     // not collected: a template is not played.
-    let mut media_refs = Vec::new();
-    for slide in course.slides() {
-        for obj in &slide.objects {
-            collect_object_media(obj, &mut media_refs);
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                collect_object_media(obj, &mut media_refs);
-            }
-        }
-    }
-    for master in &course.masters {
-        for obj in &master.objects {
-            collect_object_media(obj, &mut media_refs);
-        }
-    }
-    for bank in &course.banks {
-        for slide in &bank.slides {
-            for obj in &slide.objects {
-                collect_object_media(obj, &mut media_refs);
-            }
-            for layer in &slide.layers {
-                for obj in &layer.objects {
-                    collect_object_media(obj, &mut media_refs);
-                }
-            }
-        }
-    }
+    let mut object_refs: Vec<(&str, &str)> = Vec::new();
+    let mut bg_audio_refs: Vec<(&str, &str)> = Vec::new();
+    let mut font_refs: Vec<(&str, &str)> = Vec::new();
+    let mut logo_refs: Vec<(&str, &str)> = Vec::new();
+    let mut resource_refs: Vec<(&str, &str)> = Vec::new();
+    let mut web_folders: HashSet<String> = HashSet::new();
+    let mut web_entries: HashMap<String, String> = HashMap::new();
 
-    // A course-wide background track is media too.
-    media_refs.extend(course.background_audio.iter().map(|audio| MediaRef {
-        object_id: BACKGROUND_AUDIO_ID,
-        src: &audio.src,
-    }));
-
-    // Course fonts are media too: every face ships under media/fonts/.
-    for face in &course.fonts {
-        media_refs.push(MediaRef {
-            object_id: "font",
-            src: &face.src,
-        });
-    }
-
-    // Resource files ship like any other asset, under media/.
-    collect_resource_media(course, &mut media_refs);
+    visit_course_media(course, MediaScope::Publishable, &mut |r| {
+        if matches!(
+            r.owner,
+            MediaOwner::Object {
+                container: SlideContainer::Master,
+                layer: Some(_),
+                ..
+            }
+        ) {
+            return;
+        }
+        if r.role == MediaRole::WebFolder {
+            let folder = r.src.to_owned();
+            web_entries
+                .entry(folder.clone())
+                .or_insert_with(|| format!("{}/{}", r.src, r.web_entry.unwrap_or("")));
+            web_folders.insert(folder);
+            return;
+        }
+        if r.src.is_empty()
+            && matches!(
+                r.role,
+                MediaRole::VideoPoster
+                    | MediaRole::PictureFill
+                    | MediaRole::StateImage
+                    | MediaRole::StateExtraImage
+            )
+        {
+            return;
+        }
+        match r.owner {
+            MediaOwner::Object { object, .. } => object_refs.push((object.id.as_str(), r.src)),
+            MediaOwner::BackgroundAudio => bg_audio_refs.push((BACKGROUND_AUDIO_ID, r.src)),
+            MediaOwner::Font { .. } => font_refs.push(("font", r.src)),
+            MediaOwner::PlayerLogo => logo_refs.push(("player-logo", r.src)),
+            MediaOwner::Resource { id, .. } => resource_refs.push((id, r.src)),
+        }
+    });
 
     let mut seen_sources = HashSet::new();
-    for m in media_refs {
-        let src = m.src;
+    for (object_id, src) in object_refs
+        .into_iter()
+        .chain(bg_audio_refs)
+        .chain(font_refs)
+        .chain(logo_refs)
+        .chain(resource_refs)
+    {
         // Skip remote http:// and https:// sources.
         if src.starts_with("http://") || src.starts_with("https://") {
             continue;
@@ -588,7 +385,7 @@ fn build_package_entries<B>(
 
         if !is_safe_relative_path(src) {
             return Err(PublishError::UnsafePath {
-                object: m.object_id.to_string(),
+                object: object_id.to_string(),
                 src: src.to_string(),
             });
         }
@@ -598,7 +395,7 @@ fn build_package_entries<B>(
         }
 
         let bytes = media(src).ok_or_else(|| PublishError::MissingMedia {
-            object: m.object_id.to_string(),
+            object: object_id.to_string(),
             src: src.to_string(),
         })?;
 
@@ -610,7 +407,7 @@ fn build_package_entries<B>(
 
     // 3b. Web object folders: every file ships under media/<path>/ and keeps
     // its relative path, so the iframe can load `media/web/<name>/<entry>`.
-    add_web_folders(course, &mut files, web_folder)?;
+    add_web_folders(web_folders, &web_entries, &mut files, web_folder)?;
 
     // 4. State the standard for the player. SCORM 1.2 stays marker-free so its
     // packages are unchanged; a missing file means 1.2.

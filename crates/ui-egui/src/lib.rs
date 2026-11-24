@@ -2289,26 +2289,14 @@ impl Editor {
     pub fn slide_media(&self, slide: &coursecraft_course::Slide) -> Vec<(String, Vec<u8>)> {
         let mut referenced = std::collections::HashSet::new();
         let mut web_prefixes = std::collections::BTreeSet::new();
-        for obj in &slide.objects {
-            collect_object_media_srcs(obj, &mut referenced);
-            if let coursecraft_course::ObjectKind::Web {
-                source: coursecraft_course::WebSource::Folder { path, .. },
-            } = &obj.kind
-            {
-                web_prefixes.insert(format!("{path}/"));
+        coursecraft_course::visit_slide_media(slide, &mut |r| {
+            if r.role == coursecraft_course::MediaRole::WebFolder {
+                referenced.insert(format!("{}/{}", r.src, r.web_entry.unwrap_or("")));
+                web_prefixes.insert(format!("{}/", r.src));
+            } else if !r.src.is_empty() {
+                referenced.insert(r.src.to_owned());
             }
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                collect_object_media_srcs(obj, &mut referenced);
-                if let coursecraft_course::ObjectKind::Web {
-                    source: coursecraft_course::WebSource::Folder { path, .. },
-                } = &obj.kind
-                {
-                    web_prefixes.insert(format!("{path}/"));
-                }
-            }
-        }
+        });
         self.media
             .iter()
             .filter(|(src, _)| {
@@ -5402,43 +5390,17 @@ impl coursecraft_render::MediaSource for TimelineMediaSource<'_> {
 #[must_use]
 pub fn referenced_media_srcs(course: &Course) -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
-    for face in &course.fonts {
-        if !face.src.is_empty() {
-            set.insert(face.src.clone());
-        }
-    }
-    if let Some(logo) = &course.player.logo
-        && !logo.is_empty()
-    {
-        set.insert(logo.clone());
-    }
-    for resource in &course.resources {
-        if let coursecraft_course::ResourceTarget::File { src } = &resource.target
-            && !src.is_empty()
-        {
-            set.insert(src.clone());
-        }
-    }
-    if let Some(audio) = &course.background_audio
-        && !audio.src.is_empty()
-    {
-        set.insert(audio.src.clone());
-    }
-    for slide in course
-        .slides()
-        .chain(course.masters.iter())
-        .chain(course.templates.iter())
-        .chain(course.banks.iter().flat_map(|bank| bank.slides.iter()))
-    {
-        for obj in &slide.objects {
-            collect_object_media_srcs(obj, &mut set);
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                collect_object_media_srcs(obj, &mut set);
+    coursecraft_course::visit_course_media(
+        course,
+        coursecraft_course::MediaScope::AllIncludingTemplates,
+        &mut |r| {
+            if r.role == coursecraft_course::MediaRole::WebFolder {
+                set.insert(format!("{}/{}", r.src, r.web_entry.unwrap_or("")));
+            } else if !r.src.is_empty() {
+                set.insert(r.src.to_owned());
             }
-        }
-    }
+        },
+    );
     set
 }
 
@@ -5447,135 +5409,16 @@ pub fn referenced_media_srcs(course: &Course) -> std::collections::HashSet<Strin
 #[must_use]
 pub fn web_folder_prefixes(course: &Course) -> Vec<String> {
     let mut prefixes = std::collections::BTreeSet::new();
-    for slide in course
-        .slides()
-        .chain(course.masters.iter())
-        .chain(course.templates.iter())
-        .chain(course.banks.iter().flat_map(|bank| bank.slides.iter()))
-    {
-        for obj in &slide.objects {
-            if let coursecraft_course::ObjectKind::Web {
-                source: coursecraft_course::WebSource::Folder { path, .. },
-            } = &obj.kind
-            {
-                prefixes.insert(format!("{path}/"));
+    coursecraft_course::visit_course_media(
+        course,
+        coursecraft_course::MediaScope::AllIncludingTemplates,
+        &mut |r| {
+            if r.role == coursecraft_course::MediaRole::WebFolder {
+                prefixes.insert(format!("{}/", r.src));
             }
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                if let coursecraft_course::ObjectKind::Web {
-                    source: coursecraft_course::WebSource::Folder { path, .. },
-                } = &obj.kind
-                {
-                    prefixes.insert(format!("{path}/"));
-                }
-            }
-        }
-    }
+        },
+    );
     prefixes.into_iter().collect()
-}
-
-fn collect_object_media_srcs(
-    obj: &coursecraft_course::Object,
-    set: &mut std::collections::HashSet<String>,
-) {
-    match &obj.kind {
-        coursecraft_course::ObjectKind::Image { src, .. }
-        | coursecraft_course::ObjectKind::Lottie { src, .. }
-            if !src.is_empty() =>
-        {
-            set.insert(src.clone());
-        }
-        coursecraft_course::ObjectKind::Audio { src, captions, .. } => {
-            if !src.is_empty() {
-                set.insert(src.clone());
-            }
-            if let Some(captions) = captions
-                && !captions.is_empty()
-            {
-                set.insert(captions.clone());
-            }
-        }
-        coursecraft_course::ObjectKind::Video {
-            src,
-            captions,
-            poster,
-            ..
-        } => {
-            if !src.is_empty() {
-                set.insert(src.clone());
-            }
-            if let Some(captions) = captions
-                && !captions.is_empty()
-            {
-                set.insert(captions.clone());
-            }
-            if let Some(poster) = poster
-                && !poster.is_empty()
-            {
-                set.insert(poster.clone());
-            }
-        }
-        coursecraft_course::ObjectKind::Shape { fill_style, .. }
-        | coursecraft_course::ObjectKind::Button { fill_style, .. } => {
-            if let Some(src) = fill_style
-                .as_ref()
-                .and_then(coursecraft_course::FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                set.insert(src.to_owned());
-            }
-        }
-        coursecraft_course::ObjectKind::Path { path } => {
-            if let Some(src) = path
-                .fill_style
-                .as_ref()
-                .and_then(coursecraft_course::FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                set.insert(src.to_owned());
-            }
-        }
-        coursecraft_course::ObjectKind::Web {
-            source: coursecraft_course::WebSource::Folder { path, entry },
-        } => {
-            set.insert(format!("{path}/{entry}"));
-        }
-        _ => {}
-    }
-    for state in &obj.states {
-        if let Some(src) = &state.src
-            && !src.is_empty()
-        {
-            set.insert(src.clone());
-        }
-        if let Some(src) = state
-            .fill_style
-            .as_ref()
-            .and_then(coursecraft_course::FillStyle::picture_src)
-            && !src.is_empty()
-        {
-            set.insert(src.to_owned());
-        }
-        for extra in &state.extras {
-            let extra_src = match &extra.kind {
-                coursecraft_course::StateExtraKind::Image { src, .. } => Some(src.as_str()),
-                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => fill_style
-                    .as_ref()
-                    .and_then(coursecraft_course::FillStyle::picture_src),
-                coursecraft_course::StateExtraKind::Path { path } => path
-                    .fill_style
-                    .as_ref()
-                    .and_then(coursecraft_course::FillStyle::picture_src),
-                coursecraft_course::StateExtraKind::Text { .. } => None,
-            };
-            if let Some(src) = extra_src
-                && !src.is_empty()
-            {
-                set.insert(src.to_owned());
-            }
-        }
-    }
 }
 
 fn rewrite_slide_media_srcs(
