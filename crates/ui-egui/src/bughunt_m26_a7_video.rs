@@ -177,9 +177,7 @@ fn a7_2_empty_zero_byte_and_missing_media_video_safe() {
     .to_string();
     let course = Course::from_json(&json).expect("valid");
     let mut h = TestHarness::new(course);
-    h.editor
-        .media
-        .push(("empty.mp4".into(), Arc::from(&[][..])));
+    h.editor.media.push("empty.mp4".into(), Arc::from(&[][..]));
     h.editor.selection.slide = "s1".into();
     h.editor.selection.object = Some("v-empty".into());
     h.editor.ui.inspector_tab = InspectorTab::Format;
@@ -211,7 +209,7 @@ fn a7_3_explicit_backend_error_string_surfaces_on_canvas() {
         let mut h = TestHarness::new(blank_video_course());
         h.editor
             .media
-            .push(("broken.mp4".into(), Arc::from(&b"fake"[..])));
+            .push("broken.mp4".into(), Arc::from(&b"fake"[..]));
         let (backend, state) = StubBackend::new(push_ended, push_ended);
         state
             .lock()
@@ -271,10 +269,10 @@ fn a7_4_two_videos_good_and_bad_isolated_under_rapid_clicking() {
     let mut h = TestHarness::new(course);
     h.editor
         .media
-        .push(("good.mp4".into(), Arc::from(&b"good"[..])));
+        .push("good.mp4".into(), Arc::from(&b"good"[..]));
     h.editor
         .media
-        .push(("bad.mp4".into(), Arc::from(&b"bad"[..])));
+        .push("bad.mp4".into(), Arc::from(&b"bad"[..]));
     let (backend, state) = StubBackend::new(false, false);
     state.lock().unwrap().frames.insert(
         "v-good".into(),
@@ -327,7 +325,7 @@ fn a7_8_preview_modal_with_broken_and_real_video_closes_cleanly() {
     let mut h = TestHarness::new(blank_video_course());
     h.editor
         .media
-        .push(("broken.mp4".into(), Arc::from(&b"garbage"[..])));
+        .push("broken.mp4".into(), Arc::from(&b"garbage"[..]));
     h.idle_frame();
     h.editor.open_preview();
     for i in 0..10 {
@@ -345,7 +343,7 @@ fn a7_8_preview_modal_with_broken_and_real_video_closes_cleanly() {
     let mut h2 = TestHarness::new(c2);
     h2.editor
         .media
-        .push(("stretch.mp4".into(), Arc::from(stretch_bytes())));
+        .push("stretch.mp4".into(), Arc::from(stretch_bytes()));
     h2.idle_frame();
     h2.editor.open_preview();
     for i in 0..5 {
@@ -368,7 +366,7 @@ fn a7_5_delayed_video_scrubbed_onto_off_and_back_caches_failure() {
     let mut h = TestHarness::new(course);
     h.editor
         .media
-        .push(("broken.mp4".into(), Arc::from(&b"bad"[..])));
+        .push("broken.mp4".into(), Arc::from(&b"bad"[..]));
     let (backend, state) = StubBackend::new(true, true);
     h.editor
         .set_timeline_playback(TimelinePlayback::with_backend(Box::new(backend)));
@@ -430,7 +428,7 @@ fn a7_6_video_on_slide_layer_selects_and_shows_placeholder() {
     let mut h = TestHarness::new(course);
     h.editor
         .media
-        .push(("broken.mp4".into(), Arc::from(&b"bad"[..])));
+        .push("broken.mp4".into(), Arc::from(&b"bad"[..]));
     let (backend, state) = StubBackend::new(true, true);
     h.editor
         .set_timeline_playback(TimelinePlayback::with_backend(Box::new(backend)));
@@ -457,7 +455,7 @@ fn a7_7_drag_duplicate_delete_and_undo_delete_of_video() {
     let mut h = TestHarness::new(blank_video_course());
     h.editor
         .media
-        .push(("broken.mp4".into(), Arc::from(&b"bad"[..])));
+        .push("broken.mp4".into(), Arc::from(&b"bad"[..]));
     let (backend, _) = StubBackend::new(true, true);
     h.editor
         .set_timeline_playback(TimelinePlayback::with_backend(Box::new(backend)));
@@ -506,7 +504,7 @@ fn a7_9_video_with_trim_and_cue_point_scrubbing_past_eof() {
     let mut h = TestHarness::new(course);
     h.editor
         .media
-        .push(("stretch.mp4".into(), Arc::from(stretch_bytes())));
+        .push("stretch.mp4".into(), Arc::from(stretch_bytes()));
     h.editor
         .session
         .execute(

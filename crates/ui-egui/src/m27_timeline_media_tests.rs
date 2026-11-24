@@ -1339,14 +1339,14 @@ fn d4_5_audio_video_lottie_blocked_in_master_view() {
 #[test]
 fn d4_6_bug_d3_web_object_folder_inside_question_bank_retained_by_used_media() {
     let mut h = TestHarness::new(make_timeline_course());
-    h.editor.media.push((
+    h.editor.media.push(
         "web/demo/index.html".into(),
         b"<h1>Demo</h1>".as_slice().into(),
-    ));
-    h.editor.media.push((
+    );
+    h.editor.media.push(
         "web/demo/app.js".into(),
         b"console.log(1);".as_slice().into(),
-    ));
+    );
     h.editor
         .run(
             "object.add",

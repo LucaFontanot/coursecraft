@@ -14926,7 +14926,7 @@ fn timeline_harness_with_fake() -> TestHarness {
     use crate::timeline_playback::tests::FakeTimelineMedia;
     use std::sync::Arc;
     let mut harness = TestHarness::new(timeline_media_course());
-    harness.editor.media = vec![
+    harness.editor.media.set_all(vec![
         (
             "clip.mp4".to_owned(),
             Arc::from(vec![1u8; 64].into_boxed_slice()),
@@ -14935,7 +14935,7 @@ fn timeline_harness_with_fake() -> TestHarness {
             "note.wav".to_owned(),
             Arc::from(vec![2u8; 64].into_boxed_slice()),
         ),
-    ];
+    ]);
     harness
         .editor
         .set_timeline_playback(crate::timeline_playback::TimelinePlayback::with_backend(

@@ -251,7 +251,7 @@ mod tests {
         let img_bytes = b"fake-png-bytes".to_vec();
         editor1
             .media
-            .push(("hero.png".to_owned(), img_bytes.clone().into()));
+            .push("hero.png".to_owned(), img_bytes.clone().into());
 
         let mut slide = editor1.session.course.scenes[0].slides[0].clone();
         slide.id = "tpl-welcome".to_owned();
@@ -323,7 +323,7 @@ mod tests {
         let mut editor2 = Editor::new(course2);
         editor2
             .media
-            .push(("banner.png".to_owned(), b"existing-banner".to_vec().into()));
+            .push("banner.png".to_owned(), b"existing-banner".to_vec().into());
 
         let (loaded_slide, loaded_media) = load_template(&dir, &saved.id).unwrap();
         editor2.insert_library_template(loaded_slide, loaded_media, None, None);

@@ -1005,7 +1005,7 @@ fn add_tiny_png(h: &mut TestHarness, key: &str) {
     let png = coursecraft_media::encode_png_rgba(4, 4, &pixels).expect("png");
     h.editor
         .media
-        .push((key.to_owned(), std::sync::Arc::from(png)));
+        .push(key.to_owned(), std::sync::Arc::from(png));
 }
 
 #[test]

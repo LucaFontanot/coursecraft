@@ -454,7 +454,7 @@ fn s5_crop_mode_patches_state_in_edit_state_mode() {
     ];
     h.editor
         .media
-        .push(("media/hero.png".to_owned(), std::sync::Arc::from(TINY_PNG)));
+        .push("media/hero.png".to_owned(), std::sync::Arc::from(TINY_PNG));
 
     h.editor.enter_edit_state("s1", "img1", "hover");
     h.idle_frame();

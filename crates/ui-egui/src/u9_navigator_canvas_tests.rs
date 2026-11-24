@@ -636,7 +636,7 @@ fn t5_5_crop_mode_escape_cancels_and_enter_commits_in_one_undo() {
         .expect("encode png");
     h.editor
         .media
-        .push(("test.png".to_owned(), std::sync::Arc::from(png_bytes)));
+        .push("test.png".to_owned(), std::sync::Arc::from(png_bytes));
     h.editor.selection.object = Some("obj_img".to_owned());
     h.idle_frame();
 

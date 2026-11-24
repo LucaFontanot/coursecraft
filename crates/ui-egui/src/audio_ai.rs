@@ -219,7 +219,7 @@ impl Editor {
         vtt: &str,
     ) -> Option<String> {
         let name = crate::sanitize_media_src(file_name_hint, &self.media);
-        self.media.push((name.clone(), Arc::from(vtt.as_bytes())));
+        self.media.push(name.clone(), Arc::from(vtt.as_bytes()));
         let result = self.run(
             "object.set_captions",
             serde_json::json!({
@@ -256,7 +256,7 @@ impl Editor {
     ) -> Option<String> {
         let _ = self.session.course.slide(slide_id)?;
         let name = narration_file_name(extension, &self.media);
-        self.media.push((name.clone(), Arc::from(audio)));
+        self.media.push(name.clone(), Arc::from(audio));
         let slide_size = self.session.course.slide_size;
         let width = 48.0_f32;
         let height = 48.0_f32;

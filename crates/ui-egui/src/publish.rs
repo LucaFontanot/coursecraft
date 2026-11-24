@@ -558,7 +558,7 @@ fn show_success_details(editor: &mut Editor, ui: &mut egui::Ui) {
                     .iter()
                     .any(|(name, _)| name.eq_ignore_ascii_case(&face.src))
                 {
-                    editor.media.push((face.src.clone(), bytes));
+                    editor.media.push(face.src.clone(), bytes);
                 }
                 let _ = editor.run(
                     "course.add_font",

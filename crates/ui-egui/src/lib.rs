@@ -50,6 +50,8 @@ pub mod interaction_gallery;
 pub mod interaction_insert;
 pub mod layers;
 pub mod media_library;
+mod media_store;
+pub use media_store::MediaStore;
 pub mod menu;
 pub mod outline;
 pub mod preferences;
@@ -1303,11 +1305,7 @@ pub struct Editor {
     pub file_ops_available: bool,
     pub publish_available: bool,
     pub title_info: Option<(String, bool)>,
-    pub media: Vec<(String, std::sync::Arc<[u8]>)>,
-    media_index: std::collections::HashMap<String, usize>,
-    media_index_len: usize,
-    media_index_sig: u64,
-    media_total_bytes: u64,
+    pub media: MediaStore,
     pub media_cache: coursecraft_render::MediaCache,
     /// Cached audio waveform peak envelopes (`0.0..=1.0`, <= 2,000 peaks) keyed by media id (`src`).
     pub audio_waveforms: std::collections::HashMap<String, Option<Vec<f32>>>,
@@ -1665,11 +1663,7 @@ impl Editor {
             file_ops_available: true,
             publish_available: true,
             title_info: None,
-            media: Vec::new(),
-            media_index: std::collections::HashMap::new(),
-            media_index_len: 0,
-            media_index_sig: media_names_sig(&[]),
-            media_total_bytes: 0,
+            media: MediaStore::new(),
             media_cache: coursecraft_render::MediaCache::new(),
             audio_waveforms: std::collections::HashMap::new(),
             video_durations: std::sync::Arc::new(std::sync::Mutex::new(
@@ -1721,7 +1715,7 @@ impl Editor {
             cfg!(target_arch = "wasm32"),
             self.low_memory_device,
             slide_count,
-            self.media_total_bytes,
+            self.media.total_bytes(),
         )
     }
 
@@ -1748,7 +1742,7 @@ impl Editor {
         #[cfg(not(target_arch = "wasm32"))]
         const THRESHOLD: u64 = 512 * 1024 * 1024;
 
-        if !self.ui.memory_pressure_warned && self.media_total_bytes > THRESHOLD {
+        if !self.ui.memory_pressure_warned && self.media.total_bytes() > THRESHOLD {
             self.ui.memory_pressure_warned = true;
             self.set_status(
                 "Large media library detected. Consider saving as a project folder or switching Preferences to Lite mode.",
@@ -1865,15 +1859,12 @@ impl Editor {
             .slide(&slide_id)
             .map_or(100, |slide| slide.duration_ms.max(100));
         self.timeline_playback.update_clock(now_mono);
-        let media_index =
-            media_index_matches_ends(&self.media, &self.media_index, self.media_index_len)
-                .then_some(&self.media_index);
         self.timeline_playback.sync_slide_indexed(
             &self.session.course,
             &slide_id,
             duration_ms,
             &self.media,
-            media_index,
+            Some(self.media.index()),
             Some(self.session.revision),
             self.ui.timeline.playhead_ms,
         );
@@ -2039,7 +2030,6 @@ impl Editor {
         self.timeline_mono_ms = 0;
 
         self.media.clear();
-        self.rebuild_media_index();
         self.media_cache = coursecraft_render::MediaCache::new();
         self.sync_perf_profile(None);
         self.pending_image_pick = None;
@@ -2095,79 +2085,35 @@ impl Editor {
 
     /// Update the in-memory media list (e.g. after opening a project file).
     pub fn set_media(&mut self, media: Vec<(String, std::sync::Arc<[u8]>)>) {
-        self.media = media;
-        self.rebuild_media_index();
+        self.media.set_all(media);
         self.media_cache = coursecraft_render::MediaCache::new();
         self.ui.applied_cache_profile = None;
         self.sync_perf_profile(None);
     }
 
-    pub(crate) fn rebuild_media_index(&mut self) {
-        self.media_index.clear();
-        self.media_index.reserve(self.media.len());
-        let mut total_bytes = 0u64;
-        for (idx, (name, bytes)) in self.media.iter().enumerate() {
-            self.media_index.entry(name.clone()).or_insert(idx);
-            total_bytes = total_bytes.saturating_add(bytes.len() as u64);
-        }
-        self.media_index_len = self.media.len();
-        self.media_index_sig = media_names_sig(&self.media);
-        self.media_total_bytes = total_bytes;
-    }
-
-    pub(crate) fn sync_media_index(&mut self) {
-        if self.media_index_len != self.media.len()
-            || self.media_index_sig != media_names_sig(&self.media)
-        {
-            self.rebuild_media_index();
-        }
-    }
-
-    fn media_index_quick_valid(&self) -> bool {
-        media_index_matches_ends(&self.media, &self.media_index, self.media_index_len)
-    }
-
-    pub(crate) fn media_index_if_synced(
-        &self,
-    ) -> Option<&std::collections::HashMap<String, usize>> {
-        self.media_index_quick_valid().then_some(&self.media_index)
+    /// Append a raw media entry directly into the editor's media store.
+    pub fn add_raw_media(&mut self, name: String, bytes: std::sync::Arc<[u8]>) {
+        self.media.push(name, bytes);
     }
 
     pub(crate) fn media_get(&self, src: &str) -> Option<&std::sync::Arc<[u8]>> {
-        if self.media_index_quick_valid() {
-            return match self.media_index.get(src) {
-                Some(&idx) => match self.media.get(idx) {
-                    Some((name, bytes)) if name == src => Some(bytes),
-                    _ => self
-                        .media
-                        .iter()
-                        .find(|(name, _)| name == src)
-                        .map(|(_, bytes)| bytes),
-                },
-                None => None,
-            };
-        }
-        self.media
-            .iter()
-            .find(|(name, _)| name == src)
-            .map(|(_, bytes)| bytes)
+        self.media.get(src)
     }
 
     pub(crate) fn media_contains(&self, src: &str) -> bool {
-        self.media_get(src).is_some()
+        self.media.contains(src)
     }
 
     /// Access the in-memory media list.
     #[must_use]
     pub fn media(&self) -> &[(String, std::sync::Arc<[u8]>)] {
-        &self.media
+        self.media.as_slice()
     }
 
     /// Mark a media-list change as a document change, so autosave and the
     /// unsaved-changes prompt see it. Media entries live outside `course.json`,
     /// so this bumps the revision without adding an undo step.
     pub(crate) fn mark_media_changed(&mut self) {
-        self.rebuild_media_index();
         self.session.revision = self.session.revision.wrapping_add(1);
         self.ui.last_seen_revision = self.session.revision;
     }
@@ -2209,7 +2155,7 @@ impl Editor {
             match coursecraft_media::font_info(bytes) {
                 Ok(_) => {
                     let src = sanitize_font_src(file_name, &self.media);
-                    self.media.push((src.clone(), bytes.into()));
+                    self.media.push(src.clone(), bytes.into());
                     Some(src)
                 }
                 Err(e) => {
@@ -2230,7 +2176,7 @@ impl Editor {
                 None
             } else {
                 let src = sanitize_media_src(file_name, &self.media);
-                self.media.push((src.clone(), bytes.into()));
+                self.media.push(src.clone(), bytes.into());
                 Some(src)
             }
         };
@@ -2254,10 +2200,9 @@ impl Editor {
             self.ui.error_history.push(msg);
             return false;
         }
-        let Some((_, slot)) = self.media.iter_mut().find(|(name, _)| name == src) else {
+        if !self.media.replace(src, bytes.into()) {
             return false;
-        };
-        *slot = bytes.into();
+        }
         self.media_cache = coursecraft_render::MediaCache::new();
         self.audio_waveforms.remove(src);
         self.ensure_audio_waveform(src);
@@ -2332,14 +2277,14 @@ impl Editor {
             {
                 if existing.as_ref() != bytes.as_slice() {
                     let new_src = sanitize_media_src(&src, &self.media);
-                    self.media.push((new_src.clone(), bytes.into()));
+                    self.media.push(new_src.clone(), bytes.into());
                     renames.insert(src, new_src);
                     media_added = true;
                 } else if existing_name != &src {
                     renames.insert(src, existing_name.clone());
                 }
             } else {
-                self.media.push((src, bytes.into()));
+                self.media.push(src, bytes.into());
                 media_added = true;
             }
         }
@@ -2386,7 +2331,6 @@ impl Editor {
         if let Some(size) = self.media_cache.natural_size(src) {
             return Some(size);
         }
-        self.sync_media_index();
         if let Some(bytes) = self.media_get(src) {
             let lower = src.to_ascii_lowercase();
             if lower.ends_with(".svg") || lower.ends_with(".svgz") {
@@ -2899,7 +2843,7 @@ impl Editor {
             }
             let src = sanitize_media_src(file_name, &self.media);
             let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-            self.media.push((src.clone(), arc_bytes));
+            self.media.push(src.clone(), arc_bytes);
             if self
                 .run(
                     "object.patch_state",
@@ -2942,7 +2886,7 @@ impl Editor {
             let parent_frame = parent_frame?;
             let src = sanitize_media_src(file_name, &self.media);
             let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-            self.media.push((src.clone(), arc_bytes));
+            self.media.push(src.clone(), arc_bytes);
 
             let (mut w, mut h) = (natural_width, natural_height);
             if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
@@ -3002,7 +2946,7 @@ impl Editor {
 
         let src = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((src.clone(), arc_bytes));
+        self.media.push(src.clone(), arc_bytes);
 
         match pending_pick {
             Some(PendingImagePick::PictureFill {
@@ -3265,7 +3209,7 @@ impl Editor {
 
         let src = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((src.clone(), arc_bytes));
+        self.media.push(src.clone(), arc_bytes);
         Some(src)
     }
 
@@ -3338,7 +3282,7 @@ impl Editor {
         };
         let src = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((src.clone(), arc_bytes));
+        self.media.push(src.clone(), arc_bytes);
         self.ui.placement_tool = Some(PlacementTool::Lottie {
             src: src.clone(),
             natural_size: (info.width as f32, info.height as f32),
@@ -3365,7 +3309,7 @@ impl Editor {
 
         let path = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((path.clone(), arc_bytes));
+        self.media.push(path.clone(), arc_bytes);
 
         let Some(PendingImagePick::ReplaceObject(object_id)) = (if matches!(
             self.pending_image_pick,
@@ -3411,7 +3355,7 @@ impl Editor {
         };
         let src = sanitize_font_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((src.clone(), arc_bytes));
+        self.media.push(src.clone(), arc_bytes);
         let style = match info.style {
             coursecraft_media::FontFileStyle::Regular => FontStyle::Regular,
             coursecraft_media::FontFileStyle::Bold => FontStyle::Bold,
@@ -4460,7 +4404,6 @@ impl Editor {
                 message: issue.message.clone(),
             });
         }
-        self.sync_media_index();
         for r in coursecraft_course::media_references(&self.session.course) {
             if r.src.ends_with('/') {
                 continue;
@@ -4555,7 +4498,6 @@ impl Editor {
         crate::guard_counters::begin_frame();
         self.ui.current_time = ui.input(|i| i.time);
         self.media_cache.begin_frame();
-        self.sync_media_index();
         self.sync_perf_profile(Some(ui.ctx()));
         self.check_memory_pressure();
         widgets::begin_press_guard(ui.ctx());
@@ -4571,7 +4513,7 @@ impl Editor {
         coursecraft_render::install_course_fonts(
             ui.ctx(),
             &self.session.course,
-            &MemoryMediaSource::from_parts(&self.media, &self.media_index, self.media_index_len),
+            &MemoryMediaSource::from_store(&self.media),
         );
         self.update_timeline_playback(ui);
 
@@ -5218,11 +5160,7 @@ impl Editor {
         if self.preview.is_some() {
             let mut open = true;
             if let Some(ref mut preview) = self.preview {
-                let source = MemoryMediaSource::from_parts(
-                    &self.media,
-                    &self.media_index,
-                    self.media_index_len,
-                );
+                let source = MemoryMediaSource::from_store(&self.media);
                 preview.show(ui.ctx(), &mut open, Some((&mut self.media_cache, &source)));
                 if let Some(size) = preview.remembered_size() {
                     self.ui.preview_size = Some(size);
@@ -5279,33 +5217,6 @@ pub fn primary_button(ui: &mut Ui, label: impl Into<egui::WidgetText>) -> egui::
     ui.add(btn)
 }
 
-fn media_names_sig(media: &[(String, std::sync::Arc<[u8]>)]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for (name, _) in media {
-        for &b in name.as_bytes() {
-            hash ^= u64::from(b);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        hash ^= 0xff;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
-
-fn media_index_matches_ends(
-    media: &[(String, std::sync::Arc<[u8]>)],
-    index: &std::collections::HashMap<String, usize>,
-    index_len: usize,
-) -> bool {
-    index_len == media.len()
-        && media
-            .first()
-            .is_none_or(|(name, _)| index.get(name) == Some(&0))
-        && media
-            .last()
-            .is_none_or(|(name, _)| index.get(name).is_some())
-}
-
 /// In-memory media source borrowing from an editor's media assets.
 pub struct MemoryMediaSource<'a> {
     pub media: &'a [(String, std::sync::Arc<[u8]>)],
@@ -5313,14 +5224,10 @@ pub struct MemoryMediaSource<'a> {
 }
 
 impl<'a> MemoryMediaSource<'a> {
-    pub(crate) fn from_parts(
-        media: &'a [(String, std::sync::Arc<[u8]>)],
-        index: &'a std::collections::HashMap<String, usize>,
-        index_len: usize,
-    ) -> Self {
+    pub(crate) fn from_store(store: &'a MediaStore) -> Self {
         Self {
-            media,
-            index: media_index_matches_ends(media, index, index_len).then_some(index),
+            media: store.as_slice(),
+            index: Some(store.index()),
         }
     }
 

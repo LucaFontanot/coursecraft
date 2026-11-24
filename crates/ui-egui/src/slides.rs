@@ -689,11 +689,7 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                     {
                         #[cfg(test)]
                         crate::guard_counters::note_thumbnail_paint(&master_id, master);
-                        let source = crate::MemoryMediaSource::from_parts(
-                            &editor.media,
-                            &editor.media_index,
-                            editor.media_index_len,
-                        );
+                        let source = crate::MemoryMediaSource::from_store(&editor.media);
                         paint(
                             &painter,
                             &t,
@@ -1782,11 +1778,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
                     #[cfg(test)]
                     crate::guard_counters::note_thumbnail_paint(&slide.id, slide_ref);
-                    let source = crate::MemoryMediaSource::from_parts(
-                        &editor.media,
-                        &editor.media_index,
-                        editor.media_index_len,
-                    );
+                    let source = crate::MemoryMediaSource::from_store(&editor.media);
                     paint(
                         &painter,
                         &t,
@@ -2195,11 +2187,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     if let Some(t) =
                         SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
                     {
-                        let source = crate::MemoryMediaSource::from_parts(
-                            &editor.media,
-                            &editor.media_index,
-                            editor.media_index_len,
-                        );
+                        let source = crate::MemoryMediaSource::from_store(&editor.media);
                         paint(
                             &painter,
                             &t,
