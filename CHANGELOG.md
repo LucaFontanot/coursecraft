@@ -2,6 +2,23 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.4.4
+
+CourseCraft is now much lighter on low-end computers, and it can tell you when an update is out.
+
+**Faster everyday editing** (measured on a 300-slide test course):
+- **Undo and redo: 3× faster** (8.8 ms → 2.9 ms), and inserting an interaction and undoing it went from 3.3 ms to 1.2 ms. Each edit now re-checks only what it changed instead of the whole course.
+- **Moving between slides with pictures: about 7× faster** (3.3 ms → 0.44 ms). Pictures are decoded at the size they're shown, and the same picture used on many slides is kept in memory only once.
+- **Check Spelling's Ignore: about 16× faster** (9.3 ms → 0.56 ms).
+- **Published courses and Preview no longer redraw when nothing moves**, so a learner reading a slide uses almost no CPU or battery. They still wake for timers, media, animations and clicks.
+- Saving in the background (autosave) no longer pauses the editor; opening and publishing big courses use much less memory; text, shapes and slides are cached instead of redrawn every frame; the published player is smaller.
+- New **Performance mode** in Preferences (Auto, Standard, Lite). Lite uses less memory on weak computers and never changes how a published course looks.
+
+**Check for updates** (thanks to aplannersguide for the idea):
+- **Help → Check for updates…** shows the new version and what's new in it. CourseCraft can also check quietly once a day; turn that off in Preferences.
+- **Download update** picks the right file for your computer, checks it's complete and genuine, and shows it in your Downloads folder. CourseCraft only asks GitHub for the version list and sends nothing about you.
+- Each release now includes `SHA256SUMS.txt`.
+
 ## 0.4.3
 
 Big courses are now much lighter and faster, and the menus are tidier.

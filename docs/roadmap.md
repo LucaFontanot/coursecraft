@@ -345,6 +345,20 @@ Plan by Gemini 4 Neon: `docs/testing/m33-plan.md`; report: `docs/testing/m33-rep
 - Undo stores a delta per edit (one slide, the course settings, or the whole course when in doubt) instead of a full course copy; 140 commands annotated; a differential test checks every command against the old full-copy undo.
 - Released as 0.4.3.
 
+## M34 Fast on low-end hardware ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m34-plan.md`; report: `docs/testing/m34-report.md`; refactor proposal (awaiting owner approval): `docs/testing/refactor-proposal.md`.
+
+- Player and Preview repaint only when something changes; pictures decoded at display size and shared; scoped, allocation-free validation; streaming Open and Publish; autosave off the UI thread; text, shape and canvas caches; faster Check Spelling; Performance mode (Auto, Standard, Lite).
+- Released as 0.4.4.
+
+## M35 Check for updates ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m35-plan.md`; report: `docs/testing/m35-report.md`. From GitHub issue #5.
+
+- Desktop-only Help → Check for updates… plus an optional daily check; release notes in the app; Download update picks the right installer, verifies its SHA-256 and reveals it; releases publish `SHA256SUMS.txt`.
+- Released as 0.4.4.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
