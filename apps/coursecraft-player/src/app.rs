@@ -235,14 +235,21 @@ impl Playing {
         if a11y.is_some() {
             frame.focus_mut().set_dom_focus_owner(true);
         }
+        let lite_cache = crate::load::web_is_constrained_device();
+        let profile = coursecraft_render::PerfProfile::for_player_cache(lite_cache, true);
+        let mut media_cache = coursecraft_render::MediaCache::new();
+        media_cache.set_picture_budget(profile.media_budget_bytes);
+        coursecraft_render::set_render_profile(&ctx, &profile);
+        let media_source =
+            crate::media::WebMediaSource::with_max_bytes(ctx, profile.web_media_cache_bytes);
         Self {
             player,
             view: SlideView::new(),
             frame,
             ticker: Ticker::new(),
             last_frame_time: None,
-            media_cache: coursecraft_render::MediaCache::new(),
-            media_source: crate::media::WebMediaSource::new(ctx),
+            media_cache,
+            media_source,
             media: MediaDriver::new(),
             log: Vec::new(),
             show_log: false,

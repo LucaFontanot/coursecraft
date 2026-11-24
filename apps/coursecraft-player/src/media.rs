@@ -371,9 +371,14 @@ impl WebMediaSource {
 
     /// Create a new web media source that repaints `ctx` when assets arrive.
     pub fn new(ctx: egui::Context) -> Self {
+        Self::with_max_bytes(ctx, MAX_WEB_CACHE_BYTES)
+    }
+
+    /// Create a new web media source with a custom raw-byte cache ceiling.
+    pub fn with_max_bytes(ctx: egui::Context, max_bytes: usize) -> Self {
         Self {
             state: Arc::new(std::sync::Mutex::new(WebMediaState::with_max_bytes(
-                MAX_WEB_CACHE_BYTES,
+                max_bytes,
             ))),
             ctx,
         }

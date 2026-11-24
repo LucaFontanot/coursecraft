@@ -530,6 +530,8 @@ pub enum EditorRequest {
         spell_check_as_you_type: bool,
         /// The personal dictionary, saved with the other preferences.
         spell_words: Vec<String>,
+        /// Editor performance mode (`Auto` / `Standard` / `Lite`).
+        performance_mode: coursecraft_render::PerformanceMode,
     },
     /// File > Open Folder…: open a project folder (kept in git).
     OpenFolder,
@@ -1035,6 +1037,12 @@ pub struct UiState {
     pub(crate) canvas_compose_cache: CanvasComposeCache,
     /// Course revision for which theme colors were last published to egui temp data.
     pub(crate) last_published_theme_rev: Option<u64>,
+    /// True once the one-time large-media-library notice has been shown for the open course.
+    pub memory_pressure_warned: bool,
+    /// Last performance profile applied to `media_cache` and `thumbnail_cache`.
+    pub(crate) applied_cache_profile: Option<coursecraft_render::PerfProfile>,
+    /// Last performance profile applied to `egui::Context` via `set_render_profile`.
+    pub(crate) applied_ctx_profile: Option<coursecraft_render::PerfProfile>,
 }
 
 /// Cached composed draw items for the main authoring canvas.
@@ -1284,6 +1292,7 @@ pub struct Editor {
     media_index: std::collections::HashMap<String, usize>,
     media_index_len: usize,
     media_index_sig: u64,
+    media_total_bytes: u64,
     pub media_cache: coursecraft_render::MediaCache,
     /// Cached audio waveform peak envelopes (`0.0..=1.0`, <= 2,000 peaks) keyed by media id (`src`).
     pub audio_waveforms: std::collections::HashMap<String, Option<Vec<f32>>>,
@@ -1299,6 +1308,10 @@ pub struct Editor {
     pub automation_enabled: bool,
     pub automation_port: Option<u16>,
     pub theme_pref: coursecraft_render::ThemePref,
+    /// User-selected editor performance mode (`Auto` / `Standard` / `Lite`).
+    pub performance_mode: coursecraft_render::PerformanceMode,
+    /// True when the host shell detected a constrained/low-memory device (e.g. `deviceMemory <= 4`).
+    pub low_memory_device: bool,
     /// Timeline playback (authoring-only: no runtime, no document writes).
     pub timeline_playback: timeline_playback::TimelinePlayback,
     /// Session revision the timeline playback last saw; a change stops Play.
@@ -1623,6 +1636,9 @@ impl Editor {
                 navigator_index: crate::slides::NavigatorIndex::default(),
                 canvas_compose_cache: CanvasComposeCache::default(),
                 last_published_theme_rev: None,
+                memory_pressure_warned: false,
+                applied_cache_profile: None,
+                applied_ctx_profile: None,
             },
             preview: None,
             recent_files: Vec::new(),
@@ -1635,6 +1651,7 @@ impl Editor {
             media_index: std::collections::HashMap::new(),
             media_index_len: 0,
             media_index_sig: media_names_sig(&[]),
+            media_total_bytes: 0,
             media_cache: coursecraft_render::MediaCache::new(),
             audio_waveforms: std::collections::HashMap::new(),
             video_durations: std::sync::Arc::new(std::sync::Mutex::new(
@@ -1647,6 +1664,8 @@ impl Editor {
             automation_enabled: true,
             automation_port: None,
             theme_pref: coursecraft_render::ThemePref::Dark,
+            performance_mode: coursecraft_render::PerformanceMode::Auto,
+            low_memory_device: false,
             timeline_playback: timeline_playback::TimelinePlayback::create_default(),
             timeline_last_revision: initial_revision,
             timeline_mono_ms: 0,
@@ -1656,9 +1675,66 @@ impl Editor {
             spell_version: 0,
             system_font_provider: None,
         };
+        editor.sync_perf_profile(None);
         editor.check_revision();
         editor.refresh_audit_now();
         editor
+    }
+
+    /// Tell the editor whether the host detected a constrained/low-memory device.
+    pub fn set_low_memory_device(&mut self, low: bool) {
+        self.low_memory_device = low;
+        self.sync_perf_profile(None);
+    }
+
+    /// Resolve the active editor [`coursecraft_render::PerfProfile`] for the current course and device.
+    #[must_use]
+    pub fn resolved_perf_profile(&self) -> coursecraft_render::PerfProfile {
+        let slide_count: usize = self
+            .session
+            .course
+            .scenes
+            .iter()
+            .map(|scene| scene.slides.len())
+            .sum();
+        coursecraft_render::PerfProfile::for_editor(
+            self.performance_mode,
+            cfg!(target_arch = "wasm32"),
+            self.low_memory_device,
+            slide_count,
+            self.media_total_bytes,
+        )
+    }
+
+    pub(crate) fn sync_perf_profile(&mut self, ctx: Option<&egui::Context>) {
+        let profile = self.resolved_perf_profile();
+        if self.ui.applied_cache_profile != Some(profile) {
+            self.media_cache.apply_perf_profile(&profile);
+            self.ui
+                .thumbnail_cache
+                .set_max_entries(profile.thumbnail_cache_entries);
+            self.ui.applied_cache_profile = Some(profile);
+        }
+        if let Some(ctx) = ctx
+            && self.ui.applied_ctx_profile != Some(profile)
+        {
+            coursecraft_render::set_render_profile(ctx, &profile);
+            self.ui.applied_ctx_profile = Some(profile);
+        }
+    }
+
+    fn check_memory_pressure(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        const THRESHOLD: u64 = 128 * 1024 * 1024;
+        #[cfg(not(target_arch = "wasm32"))]
+        const THRESHOLD: u64 = 512 * 1024 * 1024;
+
+        if !self.ui.memory_pressure_warned && self.media_total_bytes > THRESHOLD {
+            self.ui.memory_pressure_warned = true;
+            self.set_status(
+                "Large media library detected. Consider saving as a project folder or switching Preferences to Lite mode.",
+            );
+        }
     }
 
     /// Register (or clear) the optional system font provider for slide rendering.
@@ -1923,6 +1999,8 @@ impl Editor {
         self.ui.navigator_index.clear();
         self.ui.canvas_compose_cache.clear();
         self.ui.last_published_theme_rev = None;
+        self.ui.memory_pressure_warned = false;
+        self.ui.applied_cache_profile = None;
         self.ui.publish.open = false;
         self.ui.publish.phase = PublishPhase::Idle;
         self.ui.publish.status = None;
@@ -1939,6 +2017,7 @@ impl Editor {
         self.media.clear();
         self.rebuild_media_index();
         self.media_cache = coursecraft_render::MediaCache::new();
+        self.sync_perf_profile(None);
         self.pending_image_pick = None;
         self.pending_requests.clear();
 
@@ -1995,16 +2074,21 @@ impl Editor {
         self.media = media;
         self.rebuild_media_index();
         self.media_cache = coursecraft_render::MediaCache::new();
+        self.ui.applied_cache_profile = None;
+        self.sync_perf_profile(None);
     }
 
     pub(crate) fn rebuild_media_index(&mut self) {
         self.media_index.clear();
         self.media_index.reserve(self.media.len());
-        for (idx, (name, _)) in self.media.iter().enumerate() {
+        let mut total_bytes = 0u64;
+        for (idx, (name, bytes)) in self.media.iter().enumerate() {
             self.media_index.entry(name.clone()).or_insert(idx);
+            total_bytes = total_bytes.saturating_add(bytes.len() as u64);
         }
         self.media_index_len = self.media.len();
         self.media_index_sig = media_names_sig(&self.media);
+        self.media_total_bytes = total_bytes;
     }
 
     pub(crate) fn sync_media_index(&mut self) {
@@ -4460,6 +4544,8 @@ impl Editor {
         self.ui.current_time = ui.input(|i| i.time);
         self.media_cache.begin_frame();
         self.sync_media_index();
+        self.sync_perf_profile(Some(ui.ctx()));
+        self.check_memory_pressure();
         widgets::begin_press_guard(ui.ctx());
         // Pick mode owns the pointer and Escape before anything else sees them.
         eyedropper::process_frame(ui.ctx());

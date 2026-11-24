@@ -467,6 +467,13 @@ impl MediaCache {
         self.max_thumb_dim
     }
 
+    /// Apply the memory ceiling and raster decode caps from `profile`.
+    pub fn apply_perf_profile(&mut self, profile: &crate::design::PerfProfile) {
+        self.set_max_canvas_dim(profile.max_canvas_decode_px);
+        self.set_max_thumb_dim(profile.max_thumb_decode_px);
+        self.set_picture_budget(profile.media_budget_bytes);
+    }
+
     /// Number of unique decoded picture textures resident in GPU memory
     /// (deduplicated across keys sharing identical image bytes).
     #[must_use]

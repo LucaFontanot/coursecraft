@@ -9489,3 +9489,334 @@ fn u08_mid_pass_course_font_install_does_not_poison_text_layout_cache() {
         "pass 3 must hit TextLayoutCache once custom fonts are active"
     );
 }
+
+fn measure_u11_paint_profile(
+    course: &Course,
+    slide: &coursecraft_course::Slide,
+    items: &[DrawItem],
+    profile: &crate::design::PerfProfile,
+) -> (usize, std::time::Duration, usize, usize) {
+    use crate::design::{paint_quality, set_render_profile};
+    use crate::paint::{Highlight, paint, shape_mesh_cache_limit};
+    use crate::text_layout::text_layout_cache_limit;
+
+    let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 360.0));
+    let transform = SlideTransform::fit(screen, course.slide_size).expect("fit");
+    let ctx = egui::Context::default();
+    crate::install_fonts(&ctx);
+    set_render_profile(&ctx, profile);
+    let text_cap = text_layout_cache_limit(&ctx);
+    let mesh_cap = shape_mesh_cache_limit(&ctx);
+    // Warm up egui's initial font-upload pass before measuring repaint delay.
+    for step in 0..2 {
+        let warm = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(0.1 * f64::from(step + 1)),
+            ..Default::default()
+        };
+        ctx.run_ui(warm, |_ui| {}).drop_without_applying_deltas();
+    }
+    let raw = egui::RawInput {
+        screen_rect: Some(screen),
+        time: Some(0.5),
+        ..Default::default()
+    };
+    let out = ctx.run_ui(raw, |ui| {
+        let painter = ui.painter();
+        paint(
+            painter,
+            &transform,
+            items,
+            Highlight::default(),
+            None,
+            Some(&course.theme),
+            Some(course.slide_background(slide)),
+        );
+    });
+    let delay = out
+        .viewport_output
+        .get(&ctx.viewport_id())
+        .map_or(std::time::Duration::ZERO, |vp| vp.repaint_delay);
+    let prims = ctx.tessellate(out.shapes.clone(), out.pixels_per_point);
+    out.drop_without_applying_deltas();
+    let tris: usize = prims
+        .iter()
+        .map(|p| match &p.primitive {
+            egui::epaint::Primitive::Mesh(mesh) => mesh.indices.len() / 3,
+            egui::epaint::Primitive::Callback(_) => 0,
+        })
+        .sum();
+    assert_eq!(
+        paint_quality(&ctx).max_effect_layers,
+        profile.max_effect_layers
+    );
+    (tris, delay, text_cap, mesh_cap)
+}
+
+fn assert_u11_editor_profile_caps() -> (crate::design::PerfProfile, crate::design::PerfProfile) {
+    use crate::design::{PerfProfile, PerformanceMode};
+    use crate::media::MediaCache;
+
+    let lite = PerfProfile::for_editor(PerformanceMode::Lite, false, false, 1, 0);
+    assert_eq!(lite.media_budget_bytes, 64 * 1024 * 1024);
+    assert_eq!(lite.max_canvas_decode_px, 1024);
+    assert_eq!(lite.max_thumb_decode_px, 256);
+    assert_eq!(lite.thumbnail_cache_entries, 32);
+    assert_eq!(lite.text_layout_cache_entries, 96);
+    assert_eq!(lite.shape_mesh_cache_entries, 96);
+    assert_eq!(lite.max_effect_layers, 2);
+    assert!((lite.gradient_max_edge - 24.0).abs() < f32::EPSILON);
+    assert!(!lite.marker_pulse);
+    assert_eq!(lite.web_media_cache_bytes, 32 * 1024 * 1024);
+
+    let auto_small = PerfProfile::for_editor(PerformanceMode::Auto, false, false, 10, 0);
+    assert_eq!(auto_small.media_budget_bytes, 256 * 1024 * 1024);
+    assert_eq!(auto_small.max_effect_layers, 6);
+    assert!((auto_small.gradient_max_edge - 12.0).abs() < f32::EPSILON);
+    assert!(auto_small.marker_pulse);
+
+    for auto_lite in [
+        PerfProfile::for_editor(PerformanceMode::Auto, false, true, 1, 0),
+        PerfProfile::for_editor(PerformanceMode::Auto, false, false, 151, 0),
+        PerfProfile::for_editor(
+            PerformanceMode::Auto,
+            false,
+            false,
+            1,
+            256 * 1024 * 1024 + 1,
+        ),
+        PerfProfile::for_editor(PerformanceMode::Auto, true, false, 1, 64 * 1024 * 1024 + 1),
+    ] {
+        assert_eq!(auto_lite, lite);
+    }
+
+    let mut media_cache = MediaCache::new();
+    media_cache.apply_perf_profile(&lite);
+    assert_eq!(media_cache.picture_budget(), 64 * 1024 * 1024);
+    assert_eq!(media_cache.max_canvas_dim(), 1024);
+    assert_eq!(media_cache.max_thumb_dim(), 256);
+    (auto_small, lite)
+}
+
+/// U-11: Editor Lite profile enforces lower cache caps and fewer triangles for
+/// gradients/shadows, and suppresses pulsing marker repaints.
+#[test]
+fn u11_perf_profile_lite_enforces_editor_caps_and_reduces_editor_triangles() {
+    let (auto_small, lite) = assert_u11_editor_profile_caps();
+
+    let json = r##"{
+      "schema_version": 1,
+      "id": "u11-grad-shadow",
+      "title": "U11 Gradient Shadow",
+      "slide_size": { "w": 640, "h": 360 },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide 1",
+          "objects": [
+            {
+              "id": "g1",
+              "kind": {
+                "type": "shape",
+                "shape": "rounded_rectangle",
+                "fill": "#1D4ED8",
+                "fill_style": {
+                  "type": "linear",
+                  "angle": 45.0,
+                  "stops": [
+                    { "position": 0.0, "color": "#1D4ED8" },
+                    { "position": 1.0, "color": "#10B981" }
+                  ]
+                }
+              },
+              "frame": { "x": 40, "y": 40, "w": 320, "h": 200 },
+              "shadow": { "offset_x": 6.0, "offset_y": 8.0, "blur": 14.0, "color": "#00000088" }
+            },
+            {
+              "id": "m1",
+              "kind": { "type": "marker", "title": "Pulse", "color": "#FF0000" },
+              "frame": { "x": 420, "y": 100, "w": 32, "h": 32 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let slide = course.slide("s1").expect("slide");
+    let mut items = compose_authoring(&course, slide, None);
+    for item in &mut items {
+        if let Visual::Marker { pulse, .. } = &mut item.visual {
+            *pulse = true;
+        }
+    }
+
+    let (std_tris, std_delay, std_text_cap, std_mesh_cap) =
+        measure_u11_paint_profile(&course, slide, &items, &auto_small);
+    let (lite_tris, lite_delay, lite_text_cap, lite_mesh_cap) =
+        measure_u11_paint_profile(&course, slide, &items, &lite);
+
+    assert_eq!(std_text_cap, 256);
+    assert_eq!(std_mesh_cap, 256);
+    assert_eq!(lite_text_cap, 96);
+    assert_eq!(lite_mesh_cap, 96);
+    assert!(
+        lite_tris > 0 && lite_tris < std_tris,
+        "Lite profile must produce fewer triangles ({lite_tris}) than Standard ({std_tris}) while still rendering"
+    );
+    // Standard throttles marker pulse to ~33 ms rather than 0 ms; Lite suppresses it completely.
+    assert!(
+        std_delay >= std::time::Duration::from_millis(20)
+            && std_delay <= std::time::Duration::from_millis(100),
+        "Standard pulsing marker should request ~33 ms throttled repaint, got {std_delay:?}"
+    );
+    assert!(
+        lite_delay >= std::time::Duration::from_secs(1),
+        "Lite mode with marker_pulse=false must not request pulse repaints, got {lite_delay:?}"
+    );
+}
+
+/// U-11 (Reviewer Note #3): Player lite cache profile lowers cache caps ONLY
+/// while preserving byte-identical published visual output.
+#[test]
+fn u11_player_cache_profile_preserves_published_visual_quality() {
+    use crate::design::{PerfProfile, PerformanceMode, set_render_profile};
+    use crate::media::{MediaCache, MediaFetch, MediaSource};
+    use crate::offscreen::{RenderMode, RenderOptions, render_slide_rgba, render_ui};
+    use crate::paint::{Highlight, paint};
+
+    struct EmptyMedia;
+    impl MediaSource for EmptyMedia {
+        fn get(&self, _src: &str) -> MediaFetch {
+            MediaFetch::Missing
+        }
+    }
+
+    let player_lite = PerfProfile::for_player_cache(true, true);
+    assert_eq!(player_lite.media_budget_bytes, 64 * 1024 * 1024);
+    assert_eq!(player_lite.web_media_cache_bytes, 32 * 1024 * 1024);
+    assert_eq!(player_lite.text_layout_cache_entries, 96);
+    assert_eq!(player_lite.shape_mesh_cache_entries, 96);
+    assert_eq!(player_lite.max_effect_layers, 6);
+    assert!((player_lite.gradient_max_edge - 12.0).abs() < f32::EPSILON);
+    assert!(player_lite.marker_pulse);
+    assert_eq!(player_lite.max_canvas_decode_px, 2048);
+
+    let json = r##"{
+      "schema_version": 1,
+      "id": "u11-player-visual-parity",
+      "title": "U11 Visual Parity",
+      "slide_size": { "w": 640, "h": 360 },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide 1",
+          "objects": [
+            {
+              "id": "grad-box",
+              "kind": {
+                "type": "shape",
+                "shape": "rounded_rectangle",
+                "fill": "#2563EB",
+                "fill_style": {
+                  "type": "linear",
+                  "angle": 30.0,
+                  "stops": [
+                    { "position": 0.0, "color": "#2563EB" },
+                    { "position": 0.5, "color": "#7C3AED" },
+                    { "position": 1.0, "color": "#EC4899" }
+                  ]
+                }
+              },
+              "frame": { "x": 60, "y": 50, "w": 260, "h": 180 },
+              "shadow": { "offset_x": 5.0, "offset_y": 6.0, "blur": 12.0, "color": "#00000066" },
+              "glow": { "size": 10.0, "color": "#38BDF888" }
+            },
+            {
+              "id": "title",
+              "kind": { "type": "text", "text": "Published Visual Parity", "style": { "size": 24, "bold": true } },
+              "frame": { "x": 350, "y": 90, "w": 240, "h": 100 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let opts = RenderOptions {
+        width: 640,
+        mode: RenderMode::Player,
+        ..RenderOptions::default()
+    };
+    let baseline = render_slide_rgba(&course, "s1", &opts, &EmptyMedia).expect("baseline render");
+
+    let mut player = Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+    let slide = course.slide("s1").expect("slide");
+    let items = compose(&player);
+    let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 360.0));
+    let transform = SlideTransform::fit(screen, course.slide_size).expect("fit");
+
+    let mut player_cache = MediaCache::new();
+    player_cache.apply_perf_profile(&player_lite);
+    let lite_player_rgba = render_ui(
+        640,
+        360,
+        1.0,
+        |ctx| {
+            crate::install_course_fonts(ctx, &course, &EmptyMedia);
+            set_render_profile(ctx, &player_lite);
+        },
+        |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            paint(
+                &painter,
+                &transform,
+                &items,
+                Highlight::default(),
+                Some((&mut player_cache, &EmptyMedia as &dyn MediaSource)),
+                Some(&course.theme),
+                Some(course.slide_background(slide)),
+            );
+        },
+    )
+    .expect("player lite cache render");
+
+    assert_eq!(
+        lite_player_rgba.pixels, baseline.pixels,
+        "player lite cache profile must produce byte-identical RGBA pixels to Standard render_slide_rgba"
+    );
+
+    // Sanity check: editor Lite mode does intentionally simplify editor preview detail.
+    let editor_lite = PerfProfile::for_editor(PerformanceMode::Lite, false, false, 1, 0);
+    let mut editor_cache = MediaCache::new();
+    editor_cache.apply_perf_profile(&editor_lite);
+    let editor_lite_rgba = render_ui(
+        640,
+        360,
+        1.0,
+        |ctx| {
+            crate::install_course_fonts(ctx, &course, &EmptyMedia);
+            set_render_profile(ctx, &editor_lite);
+        },
+        |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            paint(
+                &painter,
+                &transform,
+                &items,
+                Highlight::default(),
+                Some((&mut editor_cache, &EmptyMedia as &dyn MediaSource)),
+                Some(&course.theme),
+                Some(course.slide_background(slide)),
+            );
+        },
+    )
+    .expect("editor lite render");
+    assert_ne!(
+        editor_lite_rgba.pixels, baseline.pixels,
+        "test slide must exercise shadow/gradient quality differences under editor Lite mode"
+    );
+}

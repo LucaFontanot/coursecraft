@@ -50,6 +50,185 @@ impl ThemePref {
     }
 }
 
+/// Editor performance preference controlling cache ceilings and editor-only preview detail.
+///
+/// Published courses are never visually affected by this setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PerformanceMode {
+    /// Automatically pick Lite on constrained devices or large courses.
+    #[default]
+    Auto,
+    /// Standard cache ceilings and full editor preview detail.
+    Standard,
+    /// Lower editor cache ceilings and simplified editor preview detail.
+    Lite,
+}
+
+/// Concrete cache ceilings and editor-only paint quality resolved from [`PerformanceMode`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PerfProfile {
+    /// Unified decoded media cache ceiling in bytes.
+    pub media_budget_bytes: u64,
+    /// Maximum longest-side pixel dimension for canvas-tier raster decoding.
+    pub max_canvas_decode_px: u32,
+    /// Maximum longest-side pixel dimension for thumbnail-tier raster decoding.
+    pub max_thumb_decode_px: u32,
+    /// Maximum composed thumbnails retained in the editor navigator cache.
+    pub thumbnail_cache_entries: usize,
+    /// Maximum entries retained in the per-context text layout cache.
+    pub text_layout_cache_entries: usize,
+    /// Maximum entries retained in the per-context shape mesh cache.
+    pub shape_mesh_cache_entries: usize,
+    /// Blur/glow approximation layers (editor-only; published player always uses Standard).
+    pub max_effect_layers: usize,
+    /// Maximum triangle edge length in points for gradient subdivision (editor-only; published player always uses Standard).
+    pub gradient_max_edge: f32,
+    /// Whether pulsing marker rings animate (editor-only; published player respects `reduced_motion` only).
+    pub marker_pulse: bool,
+    /// Maximum raw bytes kept in the web player's HTTP media cache.
+    pub web_media_cache_bytes: usize,
+}
+
+impl PerfProfile {
+    const MIB: u64 = 1024 * 1024;
+    const MIB_USIZE: usize = 1024 * 1024;
+
+    /// Resolve the editor performance profile for the current device and course size.
+    ///
+    /// In [`PerformanceMode::Auto`], switches to Lite when running on a low-memory
+    /// device, when `slide_count > 150`, when `raw_media_bytes > 256 MiB`, or on
+    /// wasm when `raw_media_bytes > 64 MiB`.
+    #[must_use]
+    pub const fn for_editor(
+        mode: PerformanceMode,
+        is_wasm: bool,
+        low_memory_device: bool,
+        slide_count: usize,
+        raw_media_bytes: u64,
+    ) -> Self {
+        let use_lite = match mode {
+            PerformanceMode::Lite => true,
+            PerformanceMode::Standard => false,
+            PerformanceMode::Auto => {
+                low_memory_device
+                    || slide_count > 150
+                    || raw_media_bytes > 256 * Self::MIB
+                    || (is_wasm && raw_media_bytes > 64 * Self::MIB)
+            }
+        };
+        if use_lite {
+            Self {
+                media_budget_bytes: 64 * Self::MIB,
+                max_canvas_decode_px: 1024,
+                max_thumb_decode_px: 256,
+                thumbnail_cache_entries: 32,
+                text_layout_cache_entries: 96,
+                shape_mesh_cache_entries: 96,
+                max_effect_layers: 2,
+                gradient_max_edge: 24.0,
+                marker_pulse: false,
+                web_media_cache_bytes: 32 * Self::MIB_USIZE,
+            }
+        } else if is_wasm {
+            Self {
+                media_budget_bytes: 96 * Self::MIB,
+                max_canvas_decode_px: 1536,
+                max_thumb_decode_px: 384,
+                thumbnail_cache_entries: 64,
+                text_layout_cache_entries: 128,
+                shape_mesh_cache_entries: 128,
+                max_effect_layers: 4,
+                gradient_max_edge: 16.0,
+                marker_pulse: true,
+                web_media_cache_bytes: 64 * Self::MIB_USIZE,
+            }
+        } else {
+            Self {
+                media_budget_bytes: 256 * Self::MIB,
+                max_canvas_decode_px: 2048,
+                max_thumb_decode_px: 384,
+                thumbnail_cache_entries: 128,
+                text_layout_cache_entries: 256,
+                shape_mesh_cache_entries: 256,
+                max_effect_layers: 6,
+                gradient_max_edge: 12.0,
+                marker_pulse: true,
+                web_media_cache_bytes: 64 * Self::MIB_USIZE,
+            }
+        }
+    }
+
+    /// Resolve a runtime-cache-only profile for the published player.
+    ///
+    /// Always preserves full Standard visual fidelity (`max_effect_layers = 6`,
+    /// `gradient_max_edge = 12.0`, `marker_pulse = true`, `max_canvas_decode_px = 2048`),
+    /// lowering only memory cache ceilings when `lite_cache` is true.
+    #[must_use]
+    pub const fn for_player_cache(lite_cache: bool, is_wasm: bool) -> Self {
+        if lite_cache {
+            Self {
+                media_budget_bytes: 64 * Self::MIB,
+                max_canvas_decode_px: 2048,
+                max_thumb_decode_px: 384,
+                thumbnail_cache_entries: 32,
+                text_layout_cache_entries: 96,
+                shape_mesh_cache_entries: 96,
+                max_effect_layers: 6,
+                gradient_max_edge: 12.0,
+                marker_pulse: true,
+                web_media_cache_bytes: 32 * Self::MIB_USIZE,
+            }
+        } else if is_wasm {
+            Self {
+                media_budget_bytes: 96 * Self::MIB,
+                max_canvas_decode_px: 2048,
+                max_thumb_decode_px: 384,
+                thumbnail_cache_entries: 64,
+                text_layout_cache_entries: 128,
+                shape_mesh_cache_entries: 128,
+                max_effect_layers: 6,
+                gradient_max_edge: 12.0,
+                marker_pulse: true,
+                web_media_cache_bytes: 64 * Self::MIB_USIZE,
+            }
+        } else {
+            Self {
+                media_budget_bytes: 256 * Self::MIB,
+                max_canvas_decode_px: 2048,
+                max_thumb_decode_px: 384,
+                thumbnail_cache_entries: 128,
+                text_layout_cache_entries: 256,
+                shape_mesh_cache_entries: 256,
+                max_effect_layers: 6,
+                gradient_max_edge: 12.0,
+                marker_pulse: true,
+                web_media_cache_bytes: 64 * Self::MIB_USIZE,
+            }
+        }
+    }
+}
+
+/// Active per-context paint quality settings.
+///
+/// Defaults to Standard visual quality so published players and offscreen
+/// renders are unaffected unless an editor explicitly applies a [`PerfProfile`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaintQuality {
+    pub max_effect_layers: usize,
+    pub gradient_max_edge: f32,
+    pub marker_pulse: bool,
+}
+
+impl Default for PaintQuality {
+    fn default() -> Self {
+        Self {
+            max_effect_layers: 6,
+            gradient_max_edge: 12.0,
+            marker_pulse: true,
+        }
+    }
+}
+
 /// Colour palette roles for application chrome.
 ///
 /// All values are sRGB and meet WCAG AA contrast standards on their respective surfaces.
@@ -348,6 +527,38 @@ pub fn body_strong(text: impl Into<String>) -> RichText {
 
 const PALETTE_ID: &str = "coursecraft-palette";
 const THEME_MODE_ID: &str = "coursecraft-theme-mode";
+const PAINT_QUALITY_ID: &str = "coursecraft-paint-quality";
+
+/// Retrieve the active [`PaintQuality`] from `ctx` data, defaulting to Standard visual quality.
+#[must_use]
+pub fn paint_quality(ctx: &egui::Context) -> PaintQuality {
+    ctx.data(|d| d.get_temp(Id::unique(PAINT_QUALITY_ID)))
+        .unwrap_or_default()
+}
+
+/// Apply `profile`'s paint quality and render cache entry limits onto `ctx`.
+pub fn set_render_profile(ctx: &egui::Context, profile: &PerfProfile) {
+    let prev = paint_quality(ctx);
+    let next = PaintQuality {
+        max_effect_layers: profile.max_effect_layers.max(1),
+        gradient_max_edge: if profile.gradient_max_edge.is_finite()
+            && profile.gradient_max_edge > 0.0
+        {
+            profile.gradient_max_edge
+        } else {
+            PaintQuality::default().gradient_max_edge
+        },
+        marker_pulse: profile.marker_pulse,
+    };
+    ctx.data_mut(|d| {
+        d.insert_temp(Id::unique(PAINT_QUALITY_ID), next);
+    });
+    if prev.gradient_max_edge.to_bits() != next.gradient_max_edge.to_bits() {
+        crate::paint::clear_shape_mesh_cache(ctx);
+    }
+    crate::text_layout::set_text_layout_cache_limit(ctx, profile.text_layout_cache_entries);
+    crate::paint::set_shape_mesh_cache_limit(ctx, profile.shape_mesh_cache_entries);
+}
 
 /// Retrieve the active [`Palette`] from `ctx` data, defaulting to dark mode.
 #[must_use]

@@ -603,7 +603,8 @@ fn low_end_lite_mode_300_slides() {
 
     let mut h = TestHarness::new(course);
     h.editor.set_media(media);
-    h.editor.media_cache.set_picture_budget(64 * 1024 * 1024);
+    h.editor
+        .set_performance_mode(coursecraft_render::PerformanceMode::Lite);
 
     let mut samples = Vec::with_capacity(60);
     for step in 0..60 {
@@ -611,6 +612,11 @@ fn low_end_lite_mode_300_slides() {
         h.editor.selection.slide = format!("s-{slide_idx}");
         samples.push(timed(&mut h, Vec::new()));
     }
+    assert!(
+        h.editor.media_cache.total_bytes() <= 64 * 1024 * 1024,
+        "Lite mode media cache must stay within 64 MiB ceiling, got {} bytes",
+        h.editor.media_cache.total_bytes()
+    );
     let media_mib = h.editor.media_cache.total_bytes() as f64 / (1024.0 * 1024.0);
     let undo_kib = h.editor.session.undo_estimated_bytes() as f64 / 1024.0;
     report_note(

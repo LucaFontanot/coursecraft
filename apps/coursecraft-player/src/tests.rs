@@ -1626,3 +1626,37 @@ fn g01_player_resume_after_idle_pause_does_not_jump_and_delayed_wake_advances() 
         "resuming after a 10 s idle pause must not jump by 1000 ms, advanced {resumed_advance} ms"
     );
 }
+
+/// U-11: `?lite=1` query flag parsing and 32 MiB web media cache ceiling enforcement.
+#[test]
+fn u11_lite_mode_from_query_parses_flag() {
+    use std::sync::Arc;
+
+    assert!(crate::load::lite_mode_from_query("?lite=1"));
+    assert!(crate::load::lite_mode_from_query("?debug=1&lite=1"));
+    assert!(crate::load::lite_mode_from_query("lite=1&name=Ada"));
+    assert!(!crate::load::lite_mode_from_query("?lite=0"));
+    assert!(!crate::load::lite_mode_from_query(""));
+    assert!(!crate::load::lite_mode_from_query("?lite_mode=1"));
+
+    const LITE_CAP: usize = 32 * 1024 * 1024;
+    let profile = coursecraft_render::PerfProfile::for_player_cache(true, true);
+    assert_eq!(profile.web_media_cache_bytes, LITE_CAP);
+
+    let mut state = crate::media::WebMediaState::with_max_bytes(profile.web_media_cache_bytes);
+    // Insert three 12 MiB unprotected entries (36 MiB total -> must evict oldest to stay <= 32 MiB).
+    let chunk: Arc<[u8]> = Arc::from(vec![0u8; 12 * 1024 * 1024]);
+    state.insert_ready("a.png".into(), Arc::clone(&chunk));
+    state.insert_ready("b.png".into(), Arc::clone(&chunk));
+    assert_eq!(state.total_bytes(), 24 * 1024 * 1024);
+
+    state.insert_ready("c.png".into(), chunk);
+    assert!(
+        state.total_bytes() <= LITE_CAP,
+        "web media cache must stay within 32 MiB cap, got {} bytes",
+        state.total_bytes()
+    );
+    assert!(!state.contains("a.png"));
+    assert!(state.contains("b.png"));
+    assert!(state.contains("c.png"));
+}

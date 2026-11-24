@@ -562,6 +562,16 @@ pub fn clear_text_layout_cache(ctx: &Context) {
     guard.clear();
 }
 
+#[cfg(test)]
+pub(crate) fn text_layout_cache_limit(ctx: &Context) -> usize {
+    let cache = text_layout_cache(ctx);
+    let guard = match cache.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.max_entries
+}
+
 fn translate_laid_text(base: &LaidText, offset: egui::Vec2) -> LaidText {
     if offset == egui::Vec2::ZERO {
         return base.clone();

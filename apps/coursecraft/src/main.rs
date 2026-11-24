@@ -415,6 +415,7 @@ impl EditorApp {
         editor.set_preferences(prefs.autosave_minutes_clamped(), prefs.default_slide.size());
         editor.set_versions_to_keep(prefs.versions_to_keep_clamped());
         editor.set_spell_preferences(prefs.spell_check_as_you_type, prefs.spell_words.clone());
+        editor.set_performance_mode(prefs.performance_mode.into());
         editor.set_ai_config(prefs.ai.as_ref().map(prefs::AiPrefs::to_config));
         editor.set_ai_source(
             prefs
@@ -1445,11 +1446,14 @@ impl EditorApp {
                 default_slide,
                 spell_check_as_you_type,
                 spell_words,
+                performance_mode,
             } => {
                 self.prefs.autosave_minutes = autosave_minutes.min(prefs::MAX_AUTOSAVE_MINUTES);
                 self.prefs.versions_to_keep = versions_to_keep.min(prefs::MAX_VERSIONS_TO_KEEP);
                 self.prefs.spell_check_as_you_type = spell_check_as_you_type;
                 self.prefs.spell_words = spell_words;
+                self.prefs.performance_mode = performance_mode.into();
+                self.editor.set_performance_mode(performance_mode);
                 if let Some(size) = prefs::DefaultSlideSize::from_valid_size(default_slide) {
                     self.prefs.default_slide = size;
                 }
@@ -3693,6 +3697,24 @@ fn main() {
 
         let (course, media) = initial_course_and_media(blank);
         let mut editor = Editor::new(course);
+        let low_memory = web_sys::window().is_some_and(|window| {
+            js_sys::Reflect::get(
+                window.as_ref(),
+                &eframe::wasm_bindgen::JsValue::from_str("navigator"),
+            )
+            .ok()
+            .filter(|nav| !nav.is_null() && !nav.is_undefined())
+            .and_then(|nav| {
+                js_sys::Reflect::get(
+                    &nav,
+                    &eframe::wasm_bindgen::JsValue::from_str("deviceMemory"),
+                )
+                .ok()
+            })
+            .and_then(|v| v.as_f64())
+            .is_some_and(|gb| gb.is_finite() && gb > 0.0 && gb <= 4.0)
+        });
+        editor.set_low_memory_device(low_memory);
         editor.set_media(media);
         editor.set_publish_available(player_bundle::has_player());
         editor.set_coach_marks_done(false);

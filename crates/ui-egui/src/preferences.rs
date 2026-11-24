@@ -4,7 +4,7 @@
 //! and goes to the app as an [`EditorRequest`], which saves it.
 
 use crate::dialog::Dialog;
-use coursecraft_render::ThemePref;
+use coursecraft_render::{PerformanceMode, ThemePref};
 use egui::DragValue;
 
 use crate::slide_size_dialog::{
@@ -29,6 +29,8 @@ pub struct PrefsState {
     pub default_slide: (u32, u32),
     /// Underline misspellings while editing text.
     pub spell_check_as_you_type: bool,
+    /// Editor performance profile preference.
+    pub performance_mode: PerformanceMode,
 }
 
 impl Default for PrefsState {
@@ -39,6 +41,7 @@ impl Default for PrefsState {
             versions_to_keep: 10,
             default_slide: DEFAULT_SLIDE_SIZE,
             spell_check_as_you_type: true,
+            performance_mode: PerformanceMode::Auto,
         }
     }
 }
@@ -57,6 +60,13 @@ impl Editor {
     /// Show the saved number of versions to keep in the window.
     pub fn set_versions_to_keep(&mut self, versions: u32) {
         self.ui.prefs.versions_to_keep = versions.min(MAX_VERSIONS_TO_KEEP);
+    }
+
+    /// Set the active editor performance mode and immediately update editor cache ceilings.
+    pub fn set_performance_mode(&mut self, mode: PerformanceMode) {
+        self.performance_mode = mode;
+        self.ui.prefs.performance_mode = mode;
+        self.sync_perf_profile(None);
     }
 
     /// Open the Preferences window.
@@ -118,6 +128,20 @@ pub fn show_preferences_window(
                 }
             }
             ui.separator();
+            ui.label("Performance");
+            for (mode, label) in [
+                (PerformanceMode::Auto, "Automatic"),
+                (PerformanceMode::Standard, "Standard"),
+                (PerformanceMode::Lite, "Lite"),
+            ] {
+                if ui.radio(prefs.performance_mode == mode, label).clicked() {
+                    prefs.performance_mode = mode;
+                }
+            }
+            ui.small(
+                "Lite lowers editor cache sizes and preview detail on older hardware. Published courses are not affected.",
+            );
+            ui.separator();
             ui.label("Default slide size for new courses");
             let selected_preset = PRESETS.iter().find(|p| (p.w, p.h) == prefs.default_slide);
             let selected_label = selected_preset.map_or("Custom", |p| p.label);
@@ -165,12 +189,17 @@ pub fn show_preferences_window(
         requests.push(EditorRequest::SetTheme(theme));
     }
     if editor.ui.prefs != before {
+        if editor.ui.prefs.performance_mode != editor.performance_mode {
+            editor.performance_mode = editor.ui.prefs.performance_mode;
+            editor.sync_perf_profile(Some(ctx));
+        }
         requests.push(EditorRequest::SetPreferences {
             autosave_minutes: editor.ui.prefs.autosave_minutes,
             versions_to_keep: editor.ui.prefs.versions_to_keep,
             default_slide: editor.ui.prefs.default_slide,
             spell_check_as_you_type: editor.ui.prefs.spell_check_as_you_type,
             spell_words: editor.ui.spell_words.clone(),
+            performance_mode: editor.ui.prefs.performance_mode,
         });
     }
     if !open {

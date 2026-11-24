@@ -596,6 +596,16 @@ pub fn clear_shape_mesh_cache(ctx: &egui::Context) {
     guard.clear();
 }
 
+#[cfg(test)]
+pub(crate) fn shape_mesh_cache_limit(ctx: &egui::Context) -> usize {
+    let cache = shape_mesh_cache(ctx);
+    let guard = match cache.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.max_entries
+}
+
 fn cached_shape_mesh(
     ctx: &egui::Context,
     key: &BorrowedShapeMeshKey<'_>,
@@ -643,10 +653,21 @@ fn paint_translated_mesh(painter: &Painter, base: &egui::Mesh, offset: egui::Vec
 
 const DIM_FACTOR: f32 = 0.35;
 pub const DEFAULT_BACKGROUND_COLOR: egui::Color32 = egui::Color32::WHITE;
-/// Longest edge, in screen points, used when shading a gradient fill.
+/// Default longest edge, in screen points, used when shading a gradient fill.
 const GRADIENT_MAX_EDGE: f32 = 12.0;
-/// Layers used to approximate a blur or glow. Keeps per-object cost bounded.
-const MAX_EFFECT_LAYERS: usize = 6;
+
+fn active_gradient_max_edge(ctx: &egui::Context) -> f32 {
+    let edge = crate::design::paint_quality(ctx).gradient_max_edge;
+    if edge.is_finite() && edge > 0.0 {
+        edge
+    } else {
+        GRADIENT_MAX_EDGE
+    }
+}
+
+fn active_max_effect_layers(ctx: &egui::Context) -> usize {
+    crate::design::paint_quality(ctx).max_effect_layers.max(1)
+}
 
 /// UV window of the whole texture: no crop.
 pub const FULL_UV: Rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -974,6 +995,7 @@ fn build_gradient_mesh(
     opacity: f32,
 ) -> Option<egui::Mesh> {
     let centre = rect.center();
+    let max_edge = active_gradient_max_edge(ctx);
     let mesh = match style {
         ResolvedFill::Linear { angle, stops } => {
             let radians = if angle.is_finite() {
@@ -1004,7 +1026,7 @@ fn build_gradient_mesh(
             crate::shape_fill::fill_contours_linear_shaded(
                 contours,
                 ppp,
-                GRADIENT_MAX_EDGE,
+                max_edge,
                 &split_ts,
                 t_at,
                 |point, tri_mid_t| {
@@ -1031,7 +1053,7 @@ fn build_gradient_mesh(
                 (dx * dx + dy * dy).sqrt()
             })
             .fold(0.0_f32, f32::max);
-            fill_contours_shaded(contours, ppp, GRADIENT_MAX_EDGE, |point| {
+            fill_contours_shaded(contours, ppp, max_edge, |point| {
                 let dx = point.0 - origin.x;
                 let dy = point.1 - origin.y;
                 let t = if max_distance > 1e-6 {
@@ -1192,7 +1214,12 @@ fn button_shape(rect: Rect, scale: f32) -> (ShapeKind, Vec<f32>) {
 /// same alpha, chosen so the copies stacked over the middle reach about 90 % of
 /// the colour. Where fewer copies overlap the colour fades, so the edge is a soft
 /// ramp rather than a hard copy of the shape.
-fn effect_copies(offset: (f32, f32), radius: f32, glow: bool) -> Vec<(f32, f32, f32, f32)> {
+fn effect_copies(
+    offset: (f32, f32),
+    radius: f32,
+    glow: bool,
+    max_effect_layers: usize,
+) -> Vec<(f32, f32, f32, f32)> {
     if !radius.is_finite() || radius <= 0.1 {
         return if glow {
             Vec::new()
@@ -1200,7 +1227,7 @@ fn effect_copies(offset: (f32, f32), radius: f32, glow: bool) -> Vec<(f32, f32, 
             vec![(offset.0, offset.1, 0.0, 1.0)]
         };
     }
-    let layers = MAX_EFFECT_LAYERS + 1;
+    let layers = max_effect_layers.max(1).saturating_add(1);
     let alpha = 1.0 - 0.1_f32.powf(1.0 / layers as f32);
     let (from, to) = if glow {
         (0.0, radius)
@@ -1237,7 +1264,8 @@ fn paint_shape_effect(
     opacity: f32,
 ) {
     let base = apply_dim(color, dimmed, opacity);
-    for (dx, dy, expansion, alpha) in effect_copies(offset, radius, glow) {
+    let max_layers = active_max_effect_layers(painter.ctx());
+    for (dx, dy, expansion, alpha) in effect_copies(offset, radius, glow, max_layers) {
         if alpha <= 0.0 {
             continue;
         }
@@ -2002,7 +2030,8 @@ fn paint_text_effect(
         *valign,
         autofit,
     );
-    for (dx, dy, _expansion, alpha) in effect_copies(offset, radius, glow) {
+    let max_layers = active_max_effect_layers(painter.ctx());
+    for (dx, dy, _expansion, alpha) in effect_copies(offset, radius, glow, max_layers) {
         if alpha <= 0.0 {
             continue;
         }
@@ -2856,11 +2885,13 @@ pub fn paint_items(
                 }
             }
             Visual::Path(path) => {
+                let max_layers = active_max_effect_layers(item_painter.ctx());
                 if let Some(shadow) = &item.shadow {
                     for (dx, dy, expansion, alpha) in effect_copies(
                         (shadow.offset_x * scale, shadow.offset_y * scale),
                         shadow.blur * scale,
                         false,
+                        max_layers,
                     ) {
                         let color = apply_dim(shadow.color, item.dimmed, op)
                             .gamma_multiply(alpha.clamp(0.0, 1.0));
@@ -2877,7 +2908,7 @@ pub fn paint_items(
                 }
                 if let Some(glow) = &item.glow {
                     for (_, _, expansion, alpha) in
-                        effect_copies((0.0, 0.0), glow.size * scale, true)
+                        effect_copies((0.0, 0.0), glow.size * scale, true, max_layers)
                     {
                         let color = apply_dim(glow.color, item.dimmed, op)
                             .gamma_multiply(alpha.clamp(0.0, 1.0));
@@ -4339,7 +4370,7 @@ fn paint_marker(
     let dot_color = apply_dim(color, dimmed, opacity);
     let radius = (screen_rect.width().min(screen_rect.height()) * 0.5).max(1.0);
     let center = screen_rect.center();
-    if pulse {
+    if pulse && crate::design::paint_quality(painter.ctx()).marker_pulse {
         let phase = (painter.ctx().input(|i| i.time) as f32 * 1.2).fract();
         let ring = radius + phase * (radius * 0.9);
         let alpha = ((1.0 - phase) * 0.35).clamp(0.0, 1.0);
@@ -4352,7 +4383,9 @@ fn paint_marker(
             ring,
             Stroke::new((1.5 * scale).max(1.0), ring_color),
         );
-        painter.ctx().request_repaint();
+        painter
+            .ctx()
+            .request_repaint_after(std::time::Duration::from_millis(33));
     }
     painter.circle_filled(center, radius, dot_color);
     paint_marker_icon(painter, center, radius, icon, scale);

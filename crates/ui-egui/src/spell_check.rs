@@ -440,6 +440,7 @@ impl Editor {
             default_slide: prefs.default_slide,
             spell_check_as_you_type: prefs.spell_check_as_you_type,
             spell_words: self.ui.spell_words.clone(),
+            performance_mode: prefs.performance_mode,
         });
     }
 }

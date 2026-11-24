@@ -80,12 +80,13 @@ pub use compose::{
 };
 pub use design::{
     CONTROL_COMPACT, CONTROL_PRIMARY, CONTROL_TOOLBAR, ICON_SM, ICON_TOOLBAR, PANEL_MARGIN,
-    PLAYER_GROUND, Palette, RADIUS_LG, RADIUS_MD, RADIUS_SM, RADIUS_XL, SIZE_BODY,
-    SIZE_BODY_STRONG, SIZE_CAPTION, SIZE_DISPLAY, SIZE_HEADING, SIZE_MONO, SIZE_SMALL, SIZE_TITLE,
-    SPACE_6, SPACE_20, SPACE_24, SPACE_32, SPACE_48, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL,
-    SPACE_XS, ThemeMode, ThemePref, apply_style, body, body_strong, caption, contrast_ratio,
-    dialog_shadow, display, heading, palette, popover_shadow, relative_luminance, slide_shadow,
-    small, space, theme_mode, title,
+    PLAYER_GROUND, PaintQuality, Palette, PerfProfile, PerformanceMode, RADIUS_LG, RADIUS_MD,
+    RADIUS_SM, RADIUS_XL, SIZE_BODY, SIZE_BODY_STRONG, SIZE_CAPTION, SIZE_DISPLAY, SIZE_HEADING,
+    SIZE_MONO, SIZE_SMALL, SIZE_TITLE, SPACE_6, SPACE_20, SPACE_24, SPACE_32, SPACE_48, SPACE_LG,
+    SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS, ThemeMode, ThemePref, apply_style, body, body_strong,
+    caption, contrast_ratio, dialog_shadow, display, heading, paint_quality, palette,
+    popover_shadow, relative_luminance, set_render_profile, slide_shadow, small, space, theme_mode,
+    title,
 };
 pub use drawer::{DrawerTab, DrawerView, available_tabs, visible_glossary};
 pub use focus::{
