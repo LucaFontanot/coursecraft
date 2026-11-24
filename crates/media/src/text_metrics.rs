@@ -187,13 +187,13 @@ fn measure_segment(
     let glyph_metrics = font.map(|f| f.glyph_metrics(size, location));
 
     for ch in segment.chars() {
-        if ch == '\r' {
-            continue;
-        }
         if *remaining_chars == 0 {
             break;
         }
         *remaining_chars -= 1;
+        if ch == '\r' {
+            continue;
+        }
 
         let adv = match (&charmap, &glyph_metrics) {
             (Some(cm), Some(gm)) => match cm.map(ch) {
@@ -295,6 +295,9 @@ pub fn measure_unwrapped_text(
     let mut remaining_chars = MAX_CHARS;
 
     for run in runs.iter().take(MAX_RUNS) {
+        if remaining_chars == 0 {
+            break;
+        }
         let base_size = sanitize(run.size, default_size, MIN_FONT_SIZE, MAX_FONT_SIZE);
         let script_scale = if run.script_scale.is_finite() && run.script_scale > 0.0 {
             run.script_scale.clamp(MIN_SCRIPT_SCALE, MAX_SCRIPT_SCALE)
@@ -314,6 +317,10 @@ pub fn measure_unwrapped_text(
         let mut first = true;
         for segment in run.text.split('\n') {
             if !first {
+                if remaining_chars == 0 {
+                    break;
+                }
+                remaining_chars -= 1;
                 accum.finish(
                     para_idx,
                     paragraphs,
@@ -338,6 +345,9 @@ pub fn measure_unwrapped_text(
                     accum.row_height = accum.row_height.max(run_row_h);
                     accum.has_content = true;
                 }
+            }
+            if remaining_chars == 0 {
+                break;
             }
         }
     }
@@ -542,5 +552,26 @@ mod tests {
         let (w, h) = measure_unwrapped_text(&[run], &[pm], 20.0);
         assert!((w - (base_w + 24.0)).abs() < 0.01);
         assert!((h - (base_h * 1.5 + 10.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn hostile_newline_and_cr_flood_respects_char_cap() {
+        let many_newlines = "\n".repeat(MAX_CHARS + 50_000);
+        let (w_nl, h_nl) = measure_unwrapped_text(&[plain_run(&many_newlines, 20.0)], &[], 20.0);
+        assert_eq!(w_nl, 0.0);
+        assert_eq!(h_nl, POINT_TEXT_MAX_DIM);
+
+        // Trailing text after a flood of \r beyond MAX_CHARS must be capped and not measured.
+        let mut cr_flood = "\r".repeat(MAX_CHARS + 10);
+        cr_flood.push_str("Should not be reached");
+        let (w_cr, h_cr) = measure_unwrapped_text(&[plain_run(&cr_flood, 20.0)], &[], 20.0);
+        assert_eq!(w_cr, 0.0);
+        assert!(h_cr.is_finite() && (1.0..=POINT_TEXT_MAX_DIM).contains(&h_cr));
+
+        // Trailing text after a flood of \n beyond MAX_CHARS must also be capped.
+        let mut nl_flood = "\n".repeat(MAX_CHARS + 10);
+        nl_flood.push_str("Should not be reached");
+        let (w_nl_tail, _) = measure_unwrapped_text(&[plain_run(&nl_flood, 20.0)], &[], 20.0);
+        assert_eq!(w_nl_tail, 0.0);
     }
 }
