@@ -138,6 +138,76 @@ pub struct ObjectRename {
 /// Cached object summary `(id, name, timing, group)` for timeline rendering.
 pub type CachedTimelineObject = (String, String, Timing, Option<String>);
 
+/// Active drag of a group's summary bar: every member's timing moves by the same amount.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupBarDrag {
+    pub group: String,
+    /// Member ids with their timing at the press.
+    pub members: Vec<(String, Timing)>,
+    pub start_pointer_x: f32,
+    /// Current shift in milliseconds (snapped and clamped).
+    pub delta_ms: i64,
+    /// Smallest and largest shift that keep every member inside the timeline.
+    pub min_delta_ms: i64,
+    pub max_delta_ms: i64,
+}
+
+/// One row of the timeline's name column, top to bottom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TimelineRow {
+    /// A group's folder row; `members` are indices into the object list, top row first.
+    Group { group: String, members: Vec<usize> },
+    /// An object row; `indented` when it sits under an expanded group row.
+    Object { model_idx: usize, indented: bool },
+}
+
+/// Rows in display order. A group with two or more members on this timeline gets a
+/// folder row at the place of its frontmost member, followed by its members unless
+/// the group is collapsed. The course model is unchanged; this is a view only.
+pub(crate) fn timeline_rows(
+    objects: &[CachedTimelineObject],
+    collapsed: &BTreeSet<String>,
+) -> Vec<TimelineRow> {
+    let display: Vec<usize> = (0..objects.len()).rev().collect();
+    let mut members_of: HashMap<&str, Vec<usize>> = HashMap::new();
+    for &idx in &display {
+        if let Some((_, _, _, Some(group))) = objects.get(idx) {
+            members_of.entry(group.as_str()).or_default().push(idx);
+        }
+    }
+    let mut emitted: BTreeSet<&str> = BTreeSet::new();
+    let mut rows = Vec::with_capacity(objects.len());
+    for &idx in &display {
+        let group = objects
+            .get(idx)
+            .and_then(|(_, _, _, group)| group.as_deref())
+            .filter(|g| members_of.get(g).is_some_and(|m| m.len() >= 2));
+        let Some(group) = group else {
+            rows.push(TimelineRow::Object {
+                model_idx: idx,
+                indented: false,
+            });
+            continue;
+        };
+        if !emitted.insert(group) {
+            continue;
+        }
+        let members = members_of.get(group).cloned().unwrap_or_default();
+        let expanded = !collapsed.contains(group);
+        rows.push(TimelineRow::Group {
+            group: group.to_owned(),
+            members: members.clone(),
+        });
+        if expanded {
+            rows.extend(members.into_iter().map(|model_idx| TimelineRow::Object {
+                model_idx,
+                indented: true,
+            }));
+        }
+    }
+    rows
+}
+
 /// Interaction and edit state for the Timeline panel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineState {
@@ -197,6 +267,20 @@ pub struct TimelineState {
     pub cached_slide_cues: std::sync::Arc<[coursecraft_course::SlideCue]>,
     /// Cached audio sources for the current revision + slide/layer.
     pub cached_audio_srcs: std::sync::Arc<[String]>,
+
+    /// Groups shown collapsed (one folder row). View state only: not saved in the course.
+    pub collapsed_groups: BTreeSet<String>,
+    /// Active drag of a group's summary bar.
+    pub group_drag: Option<GroupBarDrag>,
+    /// Group folder rows laid out last frame, keyed by group id (for tests).
+    pub group_row_rects: HashMap<String, Rect>,
+    /// Group summary bars laid out last frame, keyed by group id.
+    pub group_bar_rects: HashMap<String, Rect>,
+    /// Expand/collapse arrows laid out last frame, keyed by group id.
+    pub group_toggle_rects: HashMap<String, Rect>,
+    /// Group eye and lock buttons laid out last frame, keyed by group id.
+    pub group_eye_rects: HashMap<String, Rect>,
+    pub group_lock_rects: HashMap<String, Rect>,
 }
 
 impl Default for TimelineState {
@@ -233,6 +317,13 @@ impl Default for TimelineState {
             cached_objects: std::sync::Arc::from([]),
             cached_slide_cues: std::sync::Arc::from([]),
             cached_audio_srcs: std::sync::Arc::from([]),
+            collapsed_groups: BTreeSet::new(),
+            group_drag: None,
+            group_row_rects: HashMap::new(),
+            group_bar_rects: HashMap::new(),
+            group_toggle_rects: HashMap::new(),
+            group_eye_rects: HashMap::new(),
+            group_lock_rects: HashMap::new(),
         }
     }
 }
@@ -1263,6 +1354,7 @@ fn handle_row_drag(
     painter: &egui::Painter,
     objects: &[(String, String, Timing, Option<String>)],
     total_area: Rect,
+    row_rects: &HashMap<String, Rect>,
 ) {
     let Some(mut drag) = editor.ui.timeline.active_row_drag.take() else {
         return;
@@ -1288,9 +1380,8 @@ fn handle_row_drag(
                     ui.ctx().request_repaint();
                 }
                 let display = display_ids(objects);
-                let row_rects = editor.ui.timeline.object_row_rects.clone();
-                drag.target_slot = drop_slot(&display, &row_rects, pos.y);
-                if let Some(y) = drop_line_y(&display, &row_rects, drag.target_slot) {
+                drag.target_slot = drop_slot(&display, row_rects, pos.y);
+                if let Some(y) = drop_line_y(&display, row_rects, drag.target_slot) {
                     let p = coursecraft_render::palette(ui.ctx());
                     painter.line_segment(
                         [pos2(total_area.min.x, y), pos2(total_area.max.x, y)],
@@ -1383,6 +1474,17 @@ fn render_object_rows(
 ) {
     let p = coursecraft_render::palette(ui.ctx());
     editor.ui.timeline.cue_marker_rects.clear();
+    // Rows of a collapsed group are not laid out, so drop last frame's rects.
+    let tl = &mut editor.ui.timeline;
+    tl.object_row_rects.clear();
+    tl.object_bar_rects.clear();
+    tl.object_left_handle_rects.clear();
+    tl.object_right_handle_rects.clear();
+    tl.group_row_rects.clear();
+    tl.group_bar_rects.clear();
+    tl.group_toggle_rects.clear();
+    tl.group_eye_rects.clear();
+    tl.group_lock_rects.clear();
     let slide_id = editor.selection.slide.clone();
     // Bars scroll under the row names when zoomed, so neither paint nor hit there.
     let bar_painter = painter.with_clip_rect(painter.clip_rect().intersect(Rect::from_x_y_ranges(
@@ -1409,14 +1511,51 @@ fn render_object_rows(
     let primary_pressed = pointer_pos.is_some() && ui.input(|i| i.pointer.primary_pressed());
     let modifiers = ui.input(|i| i.modifiers);
 
-    let row_count = objects.len();
-    for display_idx in 0..row_count {
-        // The top row is the frontmost object, so display order is stacking order reversed.
-        let model_idx = row_count.saturating_sub(1).saturating_sub(display_idx);
+    handle_group_drag(editor, ui, duration_ms, track_width);
+
+    let rows = timeline_rows(objects, &editor.ui.timeline.collapsed_groups);
+    // The top row is the frontmost object, so display order is stacking order reversed.
+    let display = display_ids(objects);
+    // Rects the row drag uses for drop slots: members of a collapsed group use its row.
+    let mut drop_rects: HashMap<String, Rect> = HashMap::new();
+    let geometry = RowGeometry {
+        total_area,
+        track_rect,
+        visible_track,
+        duration_ms,
+        track_width,
+        pointer_pos,
+        primary_pressed,
+        modifiers,
+    };
+    for (row_idx, row) in rows.iter().enumerate() {
+        let row_y = content_start_y + row_idx as f32 * OBJECT_ROW_HEIGHT;
+        let (model_idx, indented) = match row {
+            TimelineRow::Group { group, members } => {
+                render_group_row(
+                    editor,
+                    ui,
+                    painter,
+                    &bar_painter,
+                    objects,
+                    &display,
+                    group,
+                    members,
+                    row_y,
+                    &geometry,
+                    &mut drop_rects,
+                );
+                continue;
+            }
+            TimelineRow::Object {
+                model_idx,
+                indented,
+            } => (*model_idx, *indented),
+        };
         let Some((oid, oname, timing, group)) = objects.get(model_idx) else {
             continue;
         };
-        let row_y = content_start_y + display_idx as f32 * OBJECT_ROW_HEIGHT;
+        let display_idx = display.iter().position(|id| id == oid).unwrap_or(0);
 
         let is_selected = editor.selection.contains(oid);
         let row_rect = Rect::from_min_max(
@@ -1438,6 +1577,7 @@ fn render_object_rows(
             .timeline
             .object_row_rects
             .insert(oid.clone(), row_rect);
+        drop_rects.insert(oid.clone(), row_rect);
 
         let row_response = ui.interact(
             row_rect,
@@ -1548,7 +1688,10 @@ fn render_object_rows(
         } else {
             p.text_secondary
         };
-        let text_x = if group.is_some() {
+        let text_x = if indented {
+            // Members sit under their group's folder row.
+            header_row_rect.min.x + GROUP_INDENT
+        } else if group.is_some() {
             painter.text(
                 pos2(header_row_rect.min.x, header_row_rect.center().y),
                 Align2::LEFT_CENTER,
@@ -1664,8 +1807,10 @@ fn render_object_rows(
 
         let ms_to_x =
             |ms: u32| -> f32 { track_rect.min.x + (ms as f32 / duration_ms as f32) * track_width };
-        let eff_start = timing.start_ms;
-        let eff_end = timing.end_ms.unwrap_or(duration_ms);
+        // While the group's bar is dragged, its members' bars show the shift too.
+        let shift = group_drag_shift(editor, oid);
+        let eff_start = shifted_ms(timing.start_ms, shift);
+        let eff_end = shifted_ms(timing.end_ms.unwrap_or(duration_ms), shift);
         let bar_x1 = ms_to_x(eff_start);
         let bar_x2 = ms_to_x(eff_end).max(bar_x1 + 6.0);
         let bar_rect = Rect::from_min_max(pos2(bar_x1, row_y + 4.0), pos2(bar_x2, row_y + 24.0));
@@ -1742,6 +1887,7 @@ fn render_object_rows(
         if editor.ui.timeline.active_drag.is_none()
             && editor.ui.timeline.active_row_drag.is_none()
             && editor.ui.timeline.cue_drag.is_none()
+            && editor.ui.timeline.group_drag.is_none()
             && let Some(pos) = pointer_pos
             && !on_cue
             && !on_icons
@@ -1935,7 +2081,562 @@ fn render_object_rows(
     }
 
     promote_bar_drag_to_row_drag(editor, ui, objects);
-    handle_row_drag(editor, ui, painter, objects, total_area);
+    handle_row_drag(editor, ui, painter, objects, total_area, &drop_rects);
+}
+
+/// How far a group's members' names are indented under its folder row.
+const GROUP_INDENT: f32 = 18.0;
+
+/// Shared layout and pointer facts for one frame of timeline rows.
+struct RowGeometry {
+    total_area: Rect,
+    track_rect: Rect,
+    visible_track: Rect,
+    duration_ms: u32,
+    track_width: f32,
+    pointer_pos: Option<egui::Pos2>,
+    primary_pressed: bool,
+    modifiers: egui::Modifiers,
+}
+
+/// The shift of the group bar drag that includes `oid`, or 0.
+fn group_drag_shift(editor: &Editor, oid: &str) -> i64 {
+    editor
+        .ui
+        .timeline
+        .group_drag
+        .as_ref()
+        .filter(|drag| drag.members.iter().any(|(id, _)| id == oid))
+        .map_or(0, |drag| drag.delta_ms)
+}
+
+/// `ms` moved by `shift`, kept inside `u32`.
+fn shifted_ms(ms: u32, shift: i64) -> u32 {
+    (i64::from(ms) + shift).clamp(0, i64::from(u32::MAX)) as u32
+}
+
+/// The shifts that keep every member inside `0..=duration_ms`.
+/// A member that runs to the end of the slide keeps at least `min_len_ms` visible.
+fn group_shift_limits(
+    members: &[(String, Timing)],
+    duration_ms: u32,
+    min_len_ms: u32,
+) -> (i64, i64) {
+    let duration = i64::from(duration_ms);
+    let mut min_delta = i64::MIN;
+    let mut max_delta = i64::MAX;
+    for (_, timing) in members {
+        let start = i64::from(timing.start_ms);
+        min_delta = min_delta.max(-start);
+        let room = match timing.end_ms {
+            Some(end) => duration - i64::from(end),
+            None => duration - i64::from(min_len_ms) - start,
+        };
+        max_delta = max_delta.min(room);
+    }
+    if members.is_empty() || max_delta < min_delta {
+        return (0, 0);
+    }
+    (min_delta.min(0), max_delta.max(0))
+}
+
+/// The earliest start and latest end of the members, as drawn on the track.
+fn group_span(objects: &[CachedTimelineObject], members: &[usize], duration_ms: u32) -> (u32, u32) {
+    let mut start = u32::MAX;
+    let mut end = 0;
+    for (_, _, timing, _) in members.iter().filter_map(|&i| objects.get(i)) {
+        start = start.min(timing.start_ms);
+        end = end.max(timing.end_ms.unwrap_or(duration_ms));
+    }
+    if start == u32::MAX {
+        return (0, 0);
+    }
+    (start, end.max(start))
+}
+
+/// Update or finish the group bar drag. On release, all members move in one undo step.
+fn handle_group_drag(editor: &mut Editor, ui: &Ui, duration_ms: u32, track_width: f32) {
+    if editor.ui.timeline.group_drag.is_none() {
+        return;
+    }
+    if ui.input(|i| i.key_pressed(Key::Escape)) {
+        editor.ui.timeline.group_drag = None;
+        return;
+    }
+    let pointer_down = ui.input(|i| i.pointer.primary_down());
+    let pointer_pos = ui.input(|i| i.pointer.interact_pos());
+    let shift = ui.input(|i| i.modifiers.shift);
+    if pointer_down {
+        if let (Some(pos), Some(drag)) = (pointer_pos, editor.ui.timeline.group_drag.as_mut())
+            && track_width > 0.0
+        {
+            let step: i64 = if shift { 10 } else { 100 };
+            let raw = ((pos.x - drag.start_pointer_x) / track_width * duration_ms as f32).round();
+            let raw = if raw.is_finite() { raw as i64 } else { 0 };
+            let snapped = (raw / step) * step;
+            drag.delta_ms = snapped.clamp(drag.min_delta_ms, drag.max_delta_ms);
+        }
+        return;
+    }
+    let Some(drag) = editor.ui.timeline.group_drag.take() else {
+        return;
+    };
+    if drag.delta_ms == 0 {
+        return;
+    }
+    let slide_id = editor.selection.slide.clone();
+    let steps: Vec<(String, Json)> = drag
+        .members
+        .iter()
+        .map(|(id, timing)| {
+            let moved = Timing {
+                start_ms: shifted_ms(timing.start_ms, drag.delta_ms),
+                end_ms: timing.end_ms.map(|end| shifted_ms(end, drag.delta_ms)),
+            };
+            (
+                "object.update".to_owned(),
+                serde_json::json!({ "slide": slide_id, "object": id, "timing": moved }),
+            )
+        })
+        .collect();
+    editor.run_batch(&steps);
+}
+
+/// One group's folder row: expand/collapse arrow, name, eye and lock for all members,
+/// and a summary bar that moves every member's timing together.
+#[allow(clippy::too_many_arguments)]
+fn render_group_row(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    painter: &egui::Painter,
+    bar_painter: &egui::Painter,
+    objects: &[CachedTimelineObject],
+    display: &[String],
+    group: &str,
+    members: &[usize],
+    row_y: f32,
+    g: &RowGeometry,
+    drop_rects: &mut HashMap<String, Rect>,
+) {
+    let p = coursecraft_render::palette(ui.ctx());
+    let member_ids: Vec<String> = members
+        .iter()
+        .filter_map(|&i| objects.get(i).map(|(id, ..)| id.clone()))
+        .collect();
+    let Some(first) = member_ids.first().cloned() else {
+        return;
+    };
+    let collapsed = editor.ui.timeline.collapsed_groups.contains(group);
+
+    let row_rect = Rect::from_min_max(
+        pos2(g.total_area.min.x, row_y),
+        pos2(g.total_area.max.x, row_y + OBJECT_ROW_HEIGHT),
+    );
+    let header_row_rect = Rect::from_min_max(
+        pos2(g.total_area.min.x, row_y),
+        pos2(g.visible_track.min.x, row_y + OBJECT_ROW_HEIGHT),
+    );
+    let bleed = coursecraft_render::PANEL_MARGIN;
+    let header_bg_rect = Rect::from_min_max(
+        pos2(header_row_rect.min.x - bleed, header_row_rect.min.y),
+        header_row_rect.max,
+    );
+    if collapsed {
+        for id in &member_ids {
+            drop_rects.insert(id.clone(), row_rect);
+        }
+    }
+
+    let toggle_rect = Rect::from_center_size(
+        pos2(header_row_rect.min.x + 10.0, header_row_rect.center().y),
+        vec2(24.0, 24.0),
+    );
+    let lock_rect = Rect::from_center_size(
+        pos2(header_row_rect.max.x - 12.0, header_row_rect.center().y),
+        vec2(24.0, 24.0),
+    );
+    let eye_rect = lock_rect.translate(vec2(-26.0, 0.0));
+    {
+        let tl = &mut editor.ui.timeline;
+        tl.group_row_rects.insert(group.to_owned(), row_rect);
+        tl.group_toggle_rects.insert(group.to_owned(), toggle_rect);
+        tl.group_eye_rects.insert(group.to_owned(), eye_rect);
+        tl.group_lock_rects.insert(group.to_owned(), lock_rect);
+    }
+
+    let row_response = ui.interact(
+        row_rect,
+        ui.scope_id().with("timeline_group_row").with(group),
+        Sense::click(),
+    );
+
+    let (all_hidden, all_locked) = editor
+        .session
+        .course
+        .slide(&editor.selection.slide)
+        .map(|slide| {
+            let flags: Vec<(bool, bool)> = member_ids
+                .iter()
+                .filter_map(|id| slide.object(id))
+                .map(|(o, _)| (o.editor_hidden, o.locked))
+                .collect();
+            (
+                !flags.is_empty() && flags.iter().all(|(h, _)| *h),
+                !flags.is_empty() && flags.iter().all(|(_, l)| *l),
+            )
+        })
+        .unwrap_or((false, false));
+
+    let toggle_label = if collapsed {
+        "Expand group"
+    } else {
+        "Collapse group"
+    };
+    let eye_label = if all_hidden {
+        "Show group on canvas"
+    } else {
+        "Hide group on canvas"
+    };
+    let lock_label = if all_locked {
+        "Unlock group"
+    } else {
+        "Lock group"
+    };
+    let toggle_resp = ui
+        .interact(
+            toggle_rect,
+            ui.scope_id().with("timeline_group_toggle").with(group),
+            Sense::click(),
+        )
+        .on_hover_text(toggle_label);
+    let eye_resp = ui
+        .interact(
+            eye_rect,
+            ui.scope_id().with("timeline_group_eye").with(group),
+            Sense::click(),
+        )
+        .on_hover_text(eye_label);
+    let lock_resp = ui
+        .interact(
+            lock_rect,
+            ui.scope_id().with("timeline_group_lock").with(group),
+            Sense::click(),
+        )
+        .on_hover_text(lock_label);
+    toggle_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, toggle_label));
+    eye_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, eye_label));
+    lock_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, lock_label));
+
+    if toggle_resp.clicked() {
+        toggle_group_collapsed(editor, group);
+    }
+    if eye_resp.clicked() {
+        let hidden = !all_hidden;
+        if set_group_flag(
+            editor,
+            &member_ids,
+            "object.hide_in_editor",
+            "hidden",
+            hidden,
+        ) && hidden
+        {
+            for id in &member_ids {
+                if editor.selection.contains(id) {
+                    editor.selection.toggle(id);
+                }
+            }
+        }
+    }
+    if lock_resp.clicked() {
+        set_group_flag(editor, &member_ids, "object.lock", "locked", !all_locked);
+    }
+    let on_icons = g.pointer_pos.is_some_and(|pos| {
+        toggle_rect.contains(pos) || eye_rect.contains(pos) || lock_rect.contains(pos)
+    });
+
+    if row_response.container_secondary_clicked() {
+        editor.ui.last_active_area = crate::ActiveArea::Canvas;
+        if !editor.selection.contains(&first) {
+            select_timeline_row(editor, objects, &first, egui::Modifiers::NONE);
+        }
+    }
+    row_response.container_context_menu(|ui| {
+        crate::menu::show_object_row_menu(editor, ui);
+    });
+    if row_response.double_clicked()
+        && g.pointer_pos
+            .is_some_and(|pos| header_row_rect.contains(pos) && !on_icons)
+    {
+        toggle_group_collapsed(editor, group);
+    }
+
+    let is_selected = member_ids.iter().all(|id| editor.selection.contains(id));
+    let is_dragged = editor
+        .ui
+        .timeline
+        .active_row_drag
+        .as_ref()
+        .is_some_and(|drag| drag.unit_ids.contains(&first));
+    let row_bg = if is_dragged {
+        p.hover
+    } else if is_selected {
+        p.accent_subtle
+    } else {
+        p.panel
+    };
+    painter.rect_filled(header_bg_rect, CornerRadius::ZERO, row_bg);
+
+    let phosphor = FontId::new(12.0, egui::FontFamily::Name("phosphor".into()));
+    let caret = if collapsed {
+        coursecraft_render::Icon::CaretRight
+    } else {
+        coursecraft_render::Icon::CaretDown
+    };
+    painter.text(
+        toggle_rect.center(),
+        Align2::CENTER_CENTER,
+        caret.codepoint().to_string(),
+        phosphor.clone(),
+        p.text_secondary,
+    );
+    let icon_x = toggle_rect.max.x;
+    painter.text(
+        pos2(icon_x, header_row_rect.center().y),
+        Align2::LEFT_CENTER,
+        coursecraft_render::Icon::Stack.codepoint().to_string(),
+        phosphor.clone(),
+        p.text_tertiary,
+    );
+    let text_x = icon_x + 16.0;
+    let text_color = if is_selected {
+        p.text
+    } else {
+        p.text_secondary
+    };
+    let name = format!("Group ({})", member_ids.len());
+    let mut name_job =
+        egui::text::LayoutJob::simple_singleline(name, FontId::proportional(13.0), text_color);
+    name_job.wrap =
+        egui::text::TextWrapping::truncate_at_width((eye_rect.min.x - 6.0 - text_x).max(0.0));
+    let galley = painter.layout_job(name_job);
+    painter.galley(
+        pos2(text_x, header_row_rect.center().y - galley.size().y * 0.5),
+        galley,
+        text_color,
+    );
+    for (rect, icon, on) in [
+        (
+            eye_rect,
+            if all_hidden {
+                coursecraft_render::Icon::EyeSlash
+            } else {
+                coursecraft_render::Icon::Eye
+            },
+            all_hidden,
+        ),
+        (
+            lock_rect,
+            if all_locked {
+                coursecraft_render::Icon::Lock
+            } else {
+                coursecraft_render::Icon::LockOpen
+            },
+            all_locked,
+        ),
+    ] {
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            icon.codepoint().to_string(),
+            phosphor.clone(),
+            if on { p.accent } else { p.text_tertiary },
+        );
+    }
+
+    // Track side: row background and the summary bar.
+    let track_row_rect = Rect::from_min_max(
+        pos2(g.visible_track.min.x, row_y),
+        pos2(g.visible_track.max.x, row_y + OBJECT_ROW_HEIGHT),
+    );
+    let track_bg_rect = Rect::from_min_max(
+        track_row_rect.min,
+        pos2(
+            (track_row_rect.max.x + bleed).min(painter.clip_rect().max.x),
+            track_row_rect.max.y,
+        ),
+    );
+    painter.rect_filled(track_bg_rect, CornerRadius::ZERO, row_bg);
+    painter.line_segment(
+        [track_bg_rect.left_bottom(), track_bg_rect.right_bottom()],
+        Stroke::new(1.0, p.border),
+    );
+
+    let duration_ms = g.duration_ms.max(1);
+    let (span_start, span_end) = group_span(objects, members, g.duration_ms);
+    let dragging_this = editor
+        .ui
+        .timeline
+        .group_drag
+        .as_ref()
+        .is_some_and(|drag| drag.group == group);
+    let shift = editor
+        .ui
+        .timeline
+        .group_drag
+        .as_ref()
+        .filter(|drag| drag.group == group)
+        .map_or(0, |drag| drag.delta_ms);
+    let ms_to_x =
+        |ms: u32| -> f32 { g.track_rect.min.x + (ms as f32 / duration_ms as f32) * g.track_width };
+    let x1 = ms_to_x(shifted_ms(span_start, shift));
+    let x2 = ms_to_x(shifted_ms(span_end, shift)).max(x1 + 6.0);
+    let bar_rect = Rect::from_min_max(pos2(x1, row_y + 7.0), pos2(x2, row_y + 21.0));
+    editor
+        .ui
+        .timeline
+        .group_bar_rects
+        .insert(group.to_owned(), bar_rect);
+    let radius = CornerRadius::same(coursecraft_render::RADIUS_MD as u8);
+    let bar_color = if is_selected || dragging_this {
+        p.accent
+    } else {
+        p.pressed
+    };
+    bar_painter.rect_filled(bar_rect, radius, bar_color.gamma_multiply(0.7));
+    bar_painter.rect_stroke(
+        bar_rect,
+        radius,
+        Stroke::new(1.0, bar_color),
+        StrokeKind::Inside,
+    );
+    ui.interact(
+        bar_rect.intersect(g.visible_track),
+        ui.scope_id().with("timeline_group_bar").with(group),
+        Sense::hover(),
+    )
+    .on_hover_text(format!(
+        "{} – {} (drag to move the whole group)",
+        format_seconds(u64::from(span_start)),
+        format_seconds(u64::from(span_end))
+    ));
+
+    let hit = GroupRowHit {
+        row_rect,
+        header_row_rect,
+        bar_rect,
+        pointer_in_row: row_response.contains_pointer(),
+        on_icons,
+    };
+    handle_group_row_press(
+        editor, ui, objects, display, group, members, &first, &hit, g,
+    );
+}
+
+/// Where a group row's parts are this frame.
+struct GroupRowHit {
+    row_rect: Rect,
+    header_row_rect: Rect,
+    bar_rect: Rect,
+    pointer_in_row: bool,
+    on_icons: bool,
+}
+
+/// A press on a group row: the bar starts a group timing drag, the header a reorder.
+#[allow(clippy::too_many_arguments)]
+fn handle_group_row_press(
+    editor: &mut Editor,
+    ui: &Ui,
+    objects: &[CachedTimelineObject],
+    display: &[String],
+    group: &str,
+    members: &[usize],
+    first: &str,
+    hit: &GroupRowHit,
+    g: &RowGeometry,
+) {
+    let GroupRowHit {
+        row_rect,
+        header_row_rect,
+        bar_rect,
+        pointer_in_row,
+        on_icons,
+    } = *hit;
+    let tl = &editor.ui.timeline;
+    let idle = tl.active_drag.is_none()
+        && tl.active_row_drag.is_none()
+        && tl.cue_drag.is_none()
+        && tl.group_drag.is_none();
+    let Some(pos) = g.pointer_pos.filter(|_| idle && !on_icons) else {
+        return;
+    };
+    let in_track = (g.visible_track.min.x..=g.visible_track.max.x).contains(&pos.x);
+    if in_track && bar_rect.contains(pos) {
+        ui.ctx().set_cursor_icon(CursorIcon::Grab);
+        if g.primary_pressed {
+            select_timeline_row(editor, objects, first, g.modifiers);
+            let timings: Vec<(String, Timing)> = members
+                .iter()
+                .filter_map(|&i| objects.get(i))
+                .map(|(id, _, timing, _)| (id.clone(), *timing))
+                .collect();
+            let (min_delta_ms, max_delta_ms) = group_shift_limits(&timings, g.duration_ms, 100);
+            editor.ui.timeline.group_drag = Some(GroupBarDrag {
+                group: group.to_owned(),
+                members: timings,
+                start_pointer_x: pos.x,
+                delta_ms: 0,
+                min_delta_ms,
+                max_delta_ms,
+            });
+        }
+    } else if header_row_rect.contains(pos) && pointer_in_row {
+        ui.ctx().set_cursor_icon(CursorIcon::Grab);
+        if g.primary_pressed {
+            select_timeline_row(editor, objects, first, g.modifiers);
+            if editor.selection.contains(first) {
+                let unit_ids = row_unit_ids(editor, objects, first);
+                let target_slot = display.iter().position(|id| *id == first).unwrap_or(0);
+                editor.ui.timeline.active_row_drag = Some(TimelineRowDrag {
+                    start_pointer_y: pos.y,
+                    unit_ids,
+                    moved: false,
+                    target_slot,
+                });
+            }
+        }
+    } else if row_rect.contains(pos) && g.primary_pressed {
+        select_timeline_row(editor, objects, first, g.modifiers);
+    }
+}
+
+/// Run `command` with `key: value` on every member, as one undo step.
+fn set_group_flag(
+    editor: &mut Editor,
+    member_ids: &[String],
+    command: &str,
+    key: &str,
+    value: bool,
+) -> bool {
+    let slide_id = editor.selection.slide.clone();
+    let steps: Vec<(String, Json)> = member_ids
+        .iter()
+        .map(|id| {
+            let mut params = serde_json::json!({ "slide": slide_id, "object": id });
+            if let Some(map) = params.as_object_mut() {
+                map.insert(key.to_owned(), Json::Bool(value));
+            }
+            (command.to_owned(), params)
+        })
+        .collect();
+    editor.run_batch(&steps).is_some()
+}
+
+/// Collapse an expanded group row, or expand a collapsed one.
+fn toggle_group_collapsed(editor: &mut Editor, group: &str) {
+    let collapsed = &mut editor.ui.timeline.collapsed_groups;
+    if !collapsed.remove(group) {
+        collapsed.insert(group.to_owned());
+    }
 }
 
 /// The most a pinch can zoom the timeline in.
@@ -2637,8 +3338,10 @@ fn show_timeline_content(
                         track_width,
                         actions,
                     );
+                    let row_count =
+                        timeline_rows(&objects, &editor.ui.timeline.collapsed_groups).len();
                     let content_height =
-                        (objects.len() as f32 * OBJECT_ROW_HEIGHT).max(row_area.height());
+                        (row_count as f32 * OBJECT_ROW_HEIGHT).max(row_area.height());
                     ui.allocate_space(vec2(ui.available_width(), content_height));
                 });
         });
