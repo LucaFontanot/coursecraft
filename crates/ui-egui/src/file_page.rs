@@ -4,6 +4,10 @@
 //! A column of entries on the left: some act at once (Save, Publish…), others
 //! (Recent, Import, Export, Translation, Fonts) show their choices on the right.
 //! Every action closes the page; Esc and Back return to the editor.
+//!
+//! It is also the page CourseCraft opens on (the welcome screen): its Start
+//! section is the start page (`welcome::start_content`), and until a course is
+//! open the entries that need one are drawn disabled.
 
 use coursecraft_render::Icon;
 use egui::{Align, Button, Layout, RichText, Ui, vec2};
@@ -13,7 +17,9 @@ use crate::{Editor, EditorRequest, ReviewFormat};
 /// The entry whose choices fill the right side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FileSection {
+    /// New, open, templates, examples and recent courses (the start page).
     #[default]
+    Start,
     Recent,
     Import,
     Export,
@@ -24,6 +30,7 @@ pub enum FileSection {
 impl FileSection {
     fn label(self) -> &'static str {
         match self {
+            Self::Start => "Start",
             Self::Recent => "Recent",
             Self::Import => "Import",
             Self::Export => "Export",
@@ -34,6 +41,7 @@ impl FileSection {
 
     fn icon(self) -> Icon {
         match self {
+            Self::Start => Icon::House,
             Self::Recent => Icon::Clock,
             Self::Import => Icon::ArrowSquareOut,
             Self::Export => Icon::Export,
@@ -66,9 +74,31 @@ pub fn open(editor: &mut Editor) {
     editor.ui.file_page.open = true;
 }
 
+/// The welcome screen is up and no course has been opened or made yet.
+fn no_course(editor: &Editor) -> bool {
+    editor.ui.show_welcome && !editor.ui.has_loaded_course
+}
+
+/// Why an entry that needs a course is off on the welcome screen.
+const NEEDS_COURSE: &str = "Open or create a course first";
+
+/// The requests that load a course: on the welcome screen they close it.
+fn loads_course(request: &EditorRequest) -> bool {
+    matches!(
+        request,
+        EditorRequest::New
+            | EditorRequest::Open
+            | EditorRequest::OpenFolder
+            | EditorRequest::OpenRecent(_)
+            | EditorRequest::PickPptx
+    )
+}
+
 /// Draw the page over the editor's work area.
 pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>) {
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    let welcome = editor.ui.show_welcome;
+    // On the welcome screen there is no editor to go back to with Esc.
+    if !welcome && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         editor.ui.file_page.open = false;
         return;
     }
@@ -101,13 +131,31 @@ pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>)
             .max_rect(detail)
             .layout(Layout::top_down(Align::Min)),
     );
+    let asked = requests.len();
     egui::ScrollArea::vertical()
         .id_salt("file_page_detail")
-        .show(&mut detail_ui, |ui| section_detail(editor, ui, &mut pick));
+        .show(&mut detail_ui, |ui| {
+            section_detail(editor, ui, &mut pick, requests);
+        });
     ui.allocate_rect(rect, egui::Sense::hover());
+    // The start page acts by itself (a new course, an example, a template).
+    if requests.len() > asked {
+        editor.ui.file_page.open = false;
+    }
 
     if let Some(pick) = pick {
         editor.ui.file_page.open = false;
+        if welcome {
+            let leaves = match &pick {
+                Pick::Request(r) => loads_course(r),
+                Pick::Back => true,
+                Pick::Run(_) | Pick::Command(_) => false,
+            };
+            if leaves {
+                editor.ui.show_welcome = false;
+                editor.ui.has_loaded_course = true;
+            }
+        }
         match pick {
             Pick::Request(r) => requests.push(r),
             Pick::Run(f) => f(editor),
@@ -169,11 +217,26 @@ fn entry(
 }
 
 fn column_entries(editor: &mut Editor, ui: &mut Ui, ink: egui::Color32, pick: &mut Option<Pick>) {
+    let no_course = no_course(editor);
     let file_ops = editor.file_ops_available;
     let desktop = desktop_file_ops(editor);
     let disabled = tl!(crate::menu::FILE_OPS_DISABLED_MSG);
+    let needs = tl!(NEEDS_COURSE);
+    // What an entry that needs a course says on the welcome screen.
+    let course_why = |why: &'static str| if no_course { needs } else { why };
 
-    if entry(ui, ink, Icon::ArrowLeft, "Back", false).clicked() {
+    let back = if editor.ui.show_welcome {
+        "Back to course"
+    } else {
+        "Back"
+    };
+    let resp = ui
+        .add_enabled_ui(!no_course, |ui| {
+            entry(ui, ink, Icon::ArrowLeft, back, false)
+        })
+        .inner
+        .on_disabled_hover_text(needs);
+    if resp.clicked() {
         *pick = Some(Pick::Back);
     }
     ui.add_space(8.0);
@@ -215,40 +278,41 @@ fn column_entries(editor: &mut Editor, ui: &mut Ui, ink: egui::Color32, pick: &m
         ui,
         Icon::FloppyDisk,
         "Save",
-        file_ops,
-        disabled,
+        file_ops && !no_course,
+        course_why(disabled),
         Pick::Request(EditorRequest::Save),
     );
     act(
         ui,
         Icon::FloppyDisk,
         "Save As…",
-        file_ops,
-        disabled,
+        file_ops && !no_course,
+        course_why(disabled),
         Pick::Request(EditorRequest::SaveAs),
     );
     act(
         ui,
         Icon::Stack,
         "Save As Project Folder…",
-        desktop,
-        disabled,
+        desktop && !no_course,
+        course_why(disabled),
         Pick::Request(EditorRequest::SaveAsFolder),
     );
-    let template_ok = editor
-        .session
-        .course
-        .play_slide(&editor.selection.slide)
-        .is_some();
+    let template_ok = !no_course
+        && editor
+            .session
+            .course
+            .play_slide(&editor.selection.slide)
+            .is_some();
     act(
         ui,
         Icon::Layout,
         "Save Slide as Template",
         template_ok,
-        tl!("Select a slide first"),
+        course_why(tl!("Select a slide first")),
         Pick::Run(save_template),
     );
-    let history_ok = desktop && editor.ui.versions.has_file;
+    let history_ok = desktop && editor.ui.versions.has_file && !no_course;
     let history_why = if desktop {
         tl!("Save the course first to start its history.")
     } else {
@@ -259,11 +323,12 @@ fn column_entries(editor: &mut Editor, ui: &mut Ui, ink: egui::Color32, pick: &m
         Icon::ArrowCounterClockwise,
         "Version History…",
         history_ok,
-        history_why,
+        course_why(history_why),
         Pick::Request(EditorRequest::ShowVersionHistory),
     );
     ui.add_space(6.0);
     for section in [
+        FileSection::Start,
         FileSection::Recent,
         FileSection::Import,
         FileSection::Export,
@@ -271,7 +336,18 @@ fn column_entries(editor: &mut Editor, ui: &mut Ui, ink: egui::Color32, pick: &m
         FileSection::Fonts,
     ] {
         let selected = editor.ui.file_page.section == section;
-        if entry(ui, ink, section.icon(), section.label(), selected).clicked() {
+        let enabled = !(no_course
+            && matches!(
+                section,
+                FileSection::Export | FileSection::Translation | FileSection::Fonts
+            ));
+        let resp = ui
+            .add_enabled_ui(enabled, |ui| {
+                entry(ui, ink, section.icon(), section.label(), selected)
+            })
+            .inner
+            .on_disabled_hover_text(needs);
+        if resp.clicked() {
             editor.ui.file_page.section = section;
         }
     }
@@ -280,24 +356,24 @@ fn column_entries(editor: &mut Editor, ui: &mut Ui, ink: egui::Color32, pick: &m
         ui,
         Icon::UploadSimple,
         "Publish…",
-        file_ops,
-        disabled,
+        file_ops && !no_course,
+        course_why(disabled),
         Pick::Run(Editor::open_publish_dialog),
     );
     act(
         ui,
         Icon::Info,
         "Course Info…",
-        true,
-        "",
+        !no_course,
+        needs,
         Pick::Run(|e| e.ui.show_course_settings_window = true),
     );
     act(
         ui,
         Icon::ListChecks,
         "Check Course",
-        true,
-        "",
+        !no_course,
+        needs,
         Pick::Command("course.validate"),
     );
     act(
@@ -350,13 +426,24 @@ fn choice(ui: &mut Ui, label: &str, help: &str, enabled: bool, why: &str) -> boo
     resp.clicked()
 }
 
-fn section_detail(editor: &mut Editor, ui: &mut Ui, pick: &mut Option<Pick>) {
+fn section_detail(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    pick: &mut Option<Pick>,
+    requests: &mut Vec<EditorRequest>,
+) {
     let section = editor.ui.file_page.section;
+    if section == FileSection::Start {
+        ui.set_max_width(720.0);
+        crate::welcome::start_content(editor, ui, requests, false);
+        return;
+    }
     ui.label(coursecraft_render::heading(tl!(section.label())));
     ui.add_space(12.0);
     let desktop = desktop_file_ops(editor);
     let disabled = tl!(crate::menu::FILE_OPS_DISABLED_MSG);
     match section {
+        FileSection::Start => {}
         FileSection::Recent => {
             if !desktop {
                 ui.label(disabled);

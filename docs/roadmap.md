@@ -401,7 +401,7 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    Animations and Help followed: their buttons open the dialog or inspector that does the work
    until the galleries are wired. Then the File page (from the File tab; the menu bar is no
    longer drawn under the ribbon) and the view tabs row (Course Map, then each opened slide).
-   Still open: the galleries and merging the launch screen into the File page.
+   Still open: the galleries. The launch screen is the File page's Start section (2026-11-24).
 3. Contextual tabs (Drawing, Picture, Button, Audio/Video, Table, Question Tools) and modes (Slide
    Master, Preview); then the menu bar and flat toolbar go, the quick access toolbar arrives.
    **Contextual tabs built (2026-11-24):** `CONTEXT_TABS` in `ribbon/spec.rs` and

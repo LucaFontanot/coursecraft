@@ -35,7 +35,7 @@ Counted from the tables below; recount when a row changes.
 |---|---|---|---|
 | New, Open, Save, Save As | File menu | ✅ | — |
 | Recent projects | File › Open Recent (names) | 🟡 thumbnails missing | M37 |
-| Start screen / File page with start actions and Recent | File page from the File tab (`file_page.rs`), welcome screen on launch; one page with thumbnails and news to come | 🟡 layout | M37 |
+| Start screen / File page with start actions and Recent | File page from the File tab and on launch (`file_page.rs`, its Start section is the welcome screen); thumbnails in Recent and news to come | 🟡 thumbnails | M37 |
 | Import PowerPoint | File › Import | ✅ | — |
 | Import questions (CSV / spreadsheet) | File › Import | ✅ | — |
 | Translation export / import (XLIFF) | File › Translation | ✅ | — |

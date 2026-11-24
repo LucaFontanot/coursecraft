@@ -39,9 +39,14 @@ everywhere and are specified once, under Home.
 
 **Built** (`file_page.rs`): the File tab opens it over the window; an accent column of entries
 (Back, New, Open…, Open Folder…, Save, Save As…, Save As Project Folder…, Save Slide as Template,
-Version History…, Recent, Import, Export, Translation, Fonts, Publish…, Course Info…, Check Course,
-Preferences…, Close ⛔, Quit), and the chosen section's choices on the right. Every action closes
-the page; Esc and Back return. Still to do: one page with the launch screen, thumbnails and news.
+Version History…, Start, Recent, Import, Export, Translation, Fonts, Publish…, Course Info…, Check
+Course, Preferences…, Close ⛔, Quit), and the chosen section's choices on the right. Every action
+closes the page; Esc and Back return. **It is also the launch page** (2026-11-24): with the ribbon
+on, CourseCraft opens on the File page at **Start** (new blank course, open, PowerPoint, the
+examples, the templates and recent courses, `welcome::start_content`); until a course is open,
+Back, Esc and the entries that need a course are off ("Open or create a course first"), and
+Help › Welcome opens it again. With the ribbon off the old welcome card is drawn. Still to do:
+thumbnails in Recent, and news.
 
 Not a ribbon tab: a full-window **File page**, the same page CourseCraft shows on launch
 (today's welcome screen, `crates/ui-egui/src/welcome.rs`). Layout per storyline-observed.md ›
@@ -56,7 +61,7 @@ and keeps all of it:
 | Record Screen | — | 🚫 | Not planned (patent watch list) |
 | Import ▾ (PowerPoint…, Questions from CSV…, Course from Document…) | `ui:file.import.*` | ✅ | File › Import |
 | Team Slides | — | — | shared cloud library; not drawn |
-| Recent (thumbnail + name) | `ui:file.openRecent` | 🟡 | names only today; add thumbnails |
+| Recent (thumbnail + name) | `ui:file.openRecent` | 🟡 | names only today, in Start and Recent; add thumbnails |
 | Browse for more… | `ui:file.open` | ✅ | File › Open… |
 
 Project commands (below the start actions once a course is open):

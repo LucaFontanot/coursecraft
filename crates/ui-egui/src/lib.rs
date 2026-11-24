@@ -5080,7 +5080,13 @@ impl Editor {
         // content never touches the window edge (matches the side panels).
         let edge_margin = egui::Margin::symmetric(coursecraft_render::PANEL_MARGIN as i8, 0);
 
-        if self.ui.show_welcome {
+        if self.ui.show_welcome && self.ui.ribbon.visible {
+            // The File page is the start page (docs/ui/ribbon.md › File).
+            dialog::set_top_inset(ui.ctx(), ui.max_rect().min.y);
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE.fill(p.app))
+                .show(ui, |ui| file_page::show(self, ui, &mut requests));
+        } else if self.ui.show_welcome {
             // Top menu bar
             let menu_bar = Panel::top("editor_menu_bar")
                 .exact_size(TOP_BAR_HEIGHT)
@@ -5098,7 +5104,8 @@ impl Editor {
                 .show(ui, |ui| {
                     welcome::show_welcome_screen(self, ui, &mut requests);
                 });
-
+        }
+        if self.ui.show_welcome {
             shortcuts::show_shortcuts_dialog(self, ui.ctx());
             report::show_report_windows(self, ui.ctx(), &mut requests);
             update_dialog::show_update_dialog(self, ui.ctx(), &mut requests);
@@ -5114,6 +5121,7 @@ impl Editor {
             audio_ai::show_speech_window(self, ui.ctx(), &mut requests);
             translate_ai::show_translate_window(self, ui.ctx(), &mut requests);
             layers::show_layer_settings_window(self, ui.ctx());
+            preferences::show_preferences_window(self, ui.ctx(), &mut requests);
 
             eyedropper::paint_overlay(ui.ctx());
             requests.append(&mut self.pending_requests);

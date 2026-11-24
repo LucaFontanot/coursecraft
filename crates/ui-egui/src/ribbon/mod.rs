@@ -439,7 +439,10 @@ fn run_ui(
         }
         UiAction::Guide => crate::report::open_link(&resp.ctx, GUIDE_URL),
         UiAction::Shortcuts => editor.ui.show_shortcuts_dialog = true,
-        UiAction::Welcome => editor.ui.show_welcome = true,
+        UiAction::Welcome => {
+            editor.ui.file_page.section = crate::file_page::FileSection::Start;
+            editor.ui.show_welcome = true;
+        }
         UiAction::GitHub => crate::report::open_link(&resp.ctx, crate::project_links::REPO_URL),
         UiAction::ReportProblem => editor.open_report(),
         UiAction::SuggestFeature => crate::report::open_feature_request(&resp.ctx),
