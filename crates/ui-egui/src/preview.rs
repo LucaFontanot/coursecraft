@@ -841,6 +841,8 @@ impl Preview {
     ) {
         if !*open {
             self.media.stop_all();
+            self.last_frame_time = None;
+            self.ticker.reset();
             return;
         }
 
@@ -1472,17 +1474,23 @@ impl Preview {
                 .retain(|_, changed_at| (0.0..=1.5).contains(&(now - *changed_at)));
             if self.view.transition_active()
                 || self.media.pending_len() > 0
-                || !self.var_changed_at.is_empty()
+                || (self.show_variables && !self.var_changed_at.is_empty())
             {
                 wake = Some(0);
             }
             match wake {
                 Some(0) => ctx.request_repaint(),
                 Some(ms) => ctx.request_repaint_after(std::time::Duration::from_millis(u64::from(
-                    ms.clamp(1, 1000),
+                    ms.clamp(1, 900),
                 ))),
-                None => {}
+                None => {
+                    self.last_frame_time = None;
+                    self.ticker.reset();
+                }
             }
+        } else {
+            self.last_frame_time = None;
+            self.ticker.reset();
         }
     }
 }

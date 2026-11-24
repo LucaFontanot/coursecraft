@@ -1131,15 +1131,14 @@ impl Playing {
 
         // 1. Advance ticker and handle tick input if emitted. Nothing runs
         // until the learner presses Play on the start gate.
+        let was_awaiting_start = playing.frame.awaiting_start;
         let (now, stable_dt) = ui.input(|i| (i.time, i.stable_dt));
         let dt = match playing.last_frame_time {
             Some(prev) if (now - prev).is_finite() && now > prev => (now - prev) as f32,
             _ => stable_dt,
         };
         playing.last_frame_time = Some(now);
-        if !playing.frame.awaiting_start
-            && let Some(tick) = playing.ticker.advance(dt)
-        {
+        if !was_awaiting_start && let Some(tick) = playing.ticker.advance(dt) {
             playing.handle_input(&tick, Some(ui.ctx()));
         }
 
@@ -1259,7 +1258,7 @@ impl Playing {
 
         // Poll media ends, pending async media fetches, and update video element layout
         playing.poll_media(Some(ui.ctx()));
-        let dt_ms = if dt.is_finite() && dt > 0.0 {
+        let dt_ms = if !was_awaiting_start && dt.is_finite() && dt > 0.0 {
             (f64::from(dt.min(1.0)) * 1000.0)
                 .round()
                 .clamp(0.0, u64::MAX as f64) as u64
@@ -1293,9 +1292,12 @@ impl Playing {
             Some(ms) => ui
                 .ctx()
                 .request_repaint_after(std::time::Duration::from_millis(u64::from(
-                    ms.clamp(1, 1000),
+                    ms.clamp(1, 900),
                 ))),
-            None => {}
+            None => {
+                playing.last_frame_time = None;
+                playing.ticker.reset();
+            }
         }
     }
 }

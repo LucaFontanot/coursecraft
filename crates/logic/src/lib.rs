@@ -1196,7 +1196,12 @@ impl<'c> Player<'c> {
             .as_ref()
             .and_then(|o| o.show_bar)
             .unwrap_or(self.course.player.show_bar);
-        let show_seekbar = show_bar && self.effective_player().show_seekbar;
+        let show_seekbar = show_bar
+            && slide
+                .player
+                .as_ref()
+                .and_then(|o| o.show_seekbar)
+                .unwrap_or(self.course.player.show_seekbar);
         let seek_target = self.seek_target();
 
         if !base_held {

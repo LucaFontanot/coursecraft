@@ -1517,3 +1517,112 @@ fn g01_player_start_gate_and_finished_slide_do_not_repaint() {
         "finished slide must stay quiet, got delay {finished_delay:?}"
     );
 }
+
+/// G-01 (player): Resuming after a long idle pause must not jump the slide
+/// clock forward by the paused wall time, while a delayed wake on an active
+/// quiet slide must advance by the full elapsed wake interval.
+#[test]
+fn g01_player_resume_after_idle_pause_does_not_jump_and_delayed_wake_advances() {
+    use std::time::Duration;
+
+    let json = r##"{
+      "schema_version": 1,
+      "id": "g01-player-dt",
+      "title": "G01 Player Dt",
+      "slide_size": { "w": 960, "h": 540 },
+      "player": { "show_seekbar": false },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Quiet Slide",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "late-box",
+              "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+              "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 120.0 },
+              "timing": { "start_ms": 2000 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let mut playing = Playing::from_course(course, false)
+        .expect("valid playing")
+        .with_backend(Box::new(coursecraft_playback::NullBackend::new()));
+    playing.frame.reduced_motion = true;
+
+    let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
+    let mut style = (*ctx.global_style()).clone();
+    style.animation_time = 0.0;
+    ctx.set_global_style(style);
+
+    playing.handle_input(&Input::Start, Some(&ctx));
+
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0));
+    let mut time = 1.0;
+
+    let run_frame =
+        |ctx: &egui::Context, playing: &mut Playing, time: &mut f64, dt: f64| -> Duration {
+            *time += dt;
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(*time),
+                ..Default::default()
+            };
+            let out = ctx.run_ui(raw, |ui| {
+                playing.show_ui(ui);
+            });
+            let delay = out
+                .viewport_output
+                .get(&ctx.viewport_id())
+                .map_or(Duration::ZERO, |vp| vp.repaint_delay);
+            out.drop_without_applying_deltas();
+            delay
+        };
+
+    // Settle initial egui layout frames; quiet slide schedules a bounded delayed wake (<= 900 ms).
+    for _ in 0..4 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02);
+    }
+    let delay1 = run_frame(&ctx, &mut playing, &mut time, 0.02);
+    assert!(
+        delay1 >= Duration::from_millis(500) && delay1 <= Duration::from_millis(900),
+        "quiet slide should schedule a bounded delayed wake, got {delay1:?}"
+    );
+    let before_sleep = playing.player.state().base.ms;
+
+    // Simulate waking 500 ms later: real elapsed wall time must advance the clock.
+    let _ = run_frame(&ctx, &mut playing, &mut time, 0.50);
+    let after_sleep = playing.player.state().base.ms;
+    assert_eq!(
+        after_sleep.saturating_sub(before_sleep),
+        500,
+        "delayed wake must advance the slide clock by the full elapsed interval"
+    );
+
+    // Pause, settle into idle (wake == None), then sit idle for 10 seconds
+    // with zero frames before resuming.
+    playing.handle_input(&Input::PlayerPause, Some(&ctx));
+    for _ in 0..4 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02);
+    }
+    let paused_delay = run_frame(&ctx, &mut playing, &mut time, 0.02);
+    assert!(
+        paused_delay >= Duration::from_secs(1),
+        "paused slide should go idle, got {paused_delay:?}"
+    );
+    let paused_ms = playing.player.state().base.ms;
+
+    playing.handle_input(&Input::PlayerResume, Some(&ctx));
+    let _ = run_frame(&ctx, &mut playing, &mut time, 10.0);
+    let resumed_advance = playing.player.state().base.ms.saturating_sub(paused_ms);
+    assert!(
+        resumed_advance <= 100,
+        "resuming after a 10 s idle pause must not jump by 1000 ms, advanced {resumed_advance} ms"
+    );
+}
