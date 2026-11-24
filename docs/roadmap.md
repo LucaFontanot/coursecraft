@@ -359,6 +359,13 @@ Plan by Gemini 4 Neon: `docs/testing/m35-plan.md`; report: `docs/testing/m35-rep
 - Desktop-only Help → Check for updates… plus an optional daily check; release notes in the app; Download update picks the right installer, verifies its SHA-256 and reveals it; releases publish `SHA256SUMS.txt`.
 - Released as 0.4.4.
 
+## M36 Refactor A ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m36-plan.md`; report: `docs/testing/m36-report.md`. Implemented and reviewed by Gemini 4 Neon.
+
+- One shared media walker and an indexed `MediaStore`; one zero-copy publish path; `crates/engine/src/commands.rs` split into modules by area, with each command's undo scope and validation declared in the registry. No behaviour change.
+- Splitting `apps/coursecraft/src/main.rs` (R8) waits until after the dockable-windows UI overhaul.
+
 ## After the first release
 
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Until then, testing uses English and the other scripts the bundled font supports.
