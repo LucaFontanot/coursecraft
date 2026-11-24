@@ -47,6 +47,20 @@ fn clone_course_counted(course: &Course) -> Course {
 #[cfg(test)]
 thread_local! {
     static VERIFY_SCOPE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static FORCE_FULL_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_full_validation_forced<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            FORCE_FULL_VALIDATION.set(self.0);
+        }
+    }
+    let prev = FORCE_FULL_VALIDATION.replace(true);
+    let _guard = Reset(prev);
+    f()
 }
 
 #[cfg(test)]
@@ -193,6 +207,14 @@ pub struct Session {
     valid_at_revision: Option<(u64, bool)>,
     /// Set by `keep_valid` when the mutated course passed validation.
     validated_in_cmd: bool,
+    /// Active single-slide target while running a command eligible for scoped
+    /// slide validation; always cleared immediately after `cmd.run`.
+    active_single_slide: Option<SlideLoc>,
+    /// Cached full `course.validate()` output keyed by [`Session::revision`].
+    last_validation: Option<(u64, Vec<coursecraft_course::Issue>)>,
+    /// If the current [`Session::revision`] came from a single-slide edit, its
+    /// `(revision, slide_id)` pair.
+    last_single_slide_edit: Option<(u64, String)>,
     #[cfg(test)]
     pub(crate) is_playable_checks: usize,
 }
@@ -209,6 +231,9 @@ impl Session {
             history_truncated: false,
             valid_at_revision: None,
             validated_in_cmd: false,
+            active_single_slide: None,
+            last_validation: None,
+            last_single_slide_edit: None,
             #[cfg(test)]
             is_playable_checks: 0,
         }
@@ -336,7 +361,47 @@ impl Session {
             self.history_truncated = true;
         }
         self.redo.clear();
+        self.last_validation = None;
+        self.last_single_slide_edit = None;
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// If the current [`Session::revision`] came from a single-slide edit,
+    /// return that slide's id so UI caches can skip untouched slides.
+    #[must_use]
+    pub fn last_changed_slide(&self) -> Option<&str> {
+        self.last_single_slide_edit
+            .as_ref()
+            .filter(|(rev, _)| *rev == self.revision)
+            .map(|(_, id)| id.as_str())
+    }
+
+    /// Full validation issues for the current course, cached by [`Session::revision`].
+    ///
+    /// Also populates the cached playability state for this revision so subsequent
+    /// commands do not need to re-run full-course playability checks.
+    pub fn validation_issues(&mut self) -> &[coursecraft_course::Issue] {
+        let stale = !matches!(self.last_validation, Some((rev, _)) if rev == self.revision);
+        if stale {
+            let issues = self.course.validate();
+            let no_errors = !issues
+                .iter()
+                .any(|i| i.severity == coursecraft_course::Severity::Error);
+            self.valid_at_revision = Some((self.revision, no_errors));
+            self.last_validation = Some((self.revision, issues));
+        }
+        match self.last_validation.as_ref() {
+            Some((_, issues)) => issues.as_slice(),
+            None => &[],
+        }
+    }
+
+    fn scoped_slide_for(cmd_id: &str, loc: SlideLoc) -> Option<SlideLoc> {
+        #[cfg(test)]
+        if FORCE_FULL_VALIDATION.get() {
+            return None;
+        }
+        commands::can_use_slide_validation(cmd_id).then_some(loc)
     }
 
     /// Whether the course currently passes validation without errors.
@@ -353,6 +418,8 @@ impl Session {
         {
             self.is_playable_checks += 1;
         }
+        #[cfg(debug_assertions)]
+        crate::test_counts::note_full_course_validation();
         let valid = self.course.is_playable();
         self.valid_at_revision = Some((self.revision, valid));
         valid
@@ -404,7 +471,9 @@ impl Session {
         let verify_before = VERIFY_SCOPE.get().then(|| self.course.clone());
         self.skip_undo = false;
         self.validated_in_cmd = false;
+        self.active_single_slide = Self::scoped_slide_for(cmd.id, loc);
         let outcome = (cmd.run)(self, params);
+        self.active_single_slide = None;
         let skip_undo = std::mem::take(&mut self.skip_undo);
         match outcome {
             Ok(v) => {
@@ -419,11 +488,13 @@ impl Session {
                 if let Some(slide) = slide_at_mut(&mut self.course, loc) {
                     connectors::reroute_connectors_in_slide(slide);
                 }
+                let changed_id = slide_at(&self.course, loc).map(|s| s.id.clone());
                 let delta = slide_at(&self.course, loc)
                     .and_then(|after_slide| SlideDelta::diff(before_slide, after_slide))
                     .map(|change| CourseDelta::SlideChange { loc, change });
                 if let Some(delta) = delta {
                     self.commit_delta(delta, cmd.label.to_owned());
+                    self.last_single_slide_edit = changed_id.map(|id| (self.revision, id));
                     if self.validated_in_cmd {
                         self.valid_at_revision = Some((self.revision, true));
                     }
@@ -566,6 +637,7 @@ impl Session {
         }
 
         let snapshot = clone_course_counted(&self.course);
+        let saved_valid = self.valid_at_revision;
         let mut results = Vec::with_capacity(steps.len());
         let mut any_changed = false;
         let mut first_label: Option<&'static str> = None;
@@ -583,14 +655,18 @@ impl Session {
                 Ok(c) => c,
                 Err(e) => {
                     self.course = snapshot;
+                    self.valid_at_revision = saved_valid;
+                    self.last_validation = None;
                     return Err(e);
                 }
             };
 
             self.skip_undo = false;
+            self.validated_in_cmd = false;
             let outcome = (cmd.run)(self, params);
             let skip_undo = std::mem::take(&mut self.skip_undo);
-            if cmd.mutates {
+            if cmd.mutates && !skip_undo {
+                self.last_validation = None;
                 self.valid_at_revision = None;
             }
             match outcome {
@@ -607,6 +683,8 @@ impl Session {
                 }
                 Err(e) => {
                     self.course = snapshot;
+                    self.valid_at_revision = saved_valid;
+                    self.last_validation = None;
                     return Err(EngineError::BatchFailed {
                         step: i,
                         command: id.clone(),
@@ -641,8 +719,10 @@ impl Session {
         };
         #[cfg(test)]
         let verify_before = VERIFY_SCOPE.get().then(|| self.course.clone());
+        let saved_valid = self.valid_at_revision;
         let mut results = Vec::with_capacity(steps.len());
         let mut any_changed = false;
+        let mut batch_validated_valid = false;
         let mut first_label: Option<&'static str> = None;
 
         for (i, (id, params)) in steps.iter().enumerate() {
@@ -660,15 +740,27 @@ impl Session {
                     if let Some(slot) = slide_at_mut(&mut self.course, loc) {
                         *slot = before_slide;
                     }
+                    self.valid_at_revision = saved_valid;
+                    self.last_validation = None;
                     return Err(e);
                 }
             };
 
             self.skip_undo = false;
+            self.validated_in_cmd = false;
+            self.active_single_slide = Self::scoped_slide_for(cmd.id, loc);
             let outcome = (cmd.run)(self, params);
+            self.active_single_slide = None;
             let skip_undo = std::mem::take(&mut self.skip_undo);
-            if cmd.mutates {
-                self.valid_at_revision = None;
+            if cmd.mutates && !skip_undo {
+                self.last_validation = None;
+                if self.validated_in_cmd {
+                    self.valid_at_revision = Some((self.revision, true));
+                    batch_validated_valid = true;
+                } else {
+                    self.valid_at_revision = None;
+                    batch_validated_valid = false;
+                }
             }
             match outcome {
                 Ok(res) => {
@@ -687,6 +779,8 @@ impl Session {
                     if let Some(slot) = slide_at_mut(&mut self.course, loc) {
                         *slot = before_slide;
                     }
+                    self.valid_at_revision = saved_valid;
+                    self.last_validation = None;
                     #[cfg(test)]
                     if let Some(ref before) = verify_before {
                         assert_eq!(
@@ -716,11 +810,16 @@ impl Session {
                 .map(str::to_owned)
                 .or_else(|| first_label.map(str::to_owned))
                 .unwrap_or_else(|| "Batch".to_owned());
+            let changed_id = slide_at(&self.course, loc).map(|s| s.id.clone());
             let delta = slide_at(&self.course, loc)
                 .and_then(|after_slide| SlideDelta::diff(before_slide, after_slide))
                 .map(|change| CourseDelta::SlideChange { loc, change });
             if let Some(delta) = delta {
                 self.commit_delta(delta, label);
+                self.last_single_slide_edit = changed_id.map(|id| (self.revision, id));
+                if batch_validated_valid {
+                    self.valid_at_revision = Some((self.revision, true));
+                }
             }
         }
 
@@ -735,6 +834,8 @@ impl Session {
         }
         self.redo.push_back((delta, name));
         self.valid_at_revision = None;
+        self.last_validation = None;
+        self.last_single_slide_edit = None;
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
@@ -747,6 +848,8 @@ impl Session {
         }
         self.undo.push_back((delta, name));
         self.valid_at_revision = None;
+        self.last_validation = None;
+        self.last_single_slide_edit = None;
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
@@ -766,6 +869,7 @@ impl Session {
                 }
                 self.revision = saved_revision;
                 self.valid_at_revision = saved_valid;
+                self.last_validation = None;
                 return Err(err);
             }
         }
@@ -787,6 +891,7 @@ impl Session {
                 }
                 self.revision = saved_revision;
                 self.valid_at_revision = saved_valid;
+                self.last_validation = None;
                 return Err(err);
             }
         }

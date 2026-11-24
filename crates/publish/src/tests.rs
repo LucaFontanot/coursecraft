@@ -2638,3 +2638,139 @@ fn m31_20_package_zipper_matches_zip_package_across_chunk_sizes() {
         ZipStep::InProgress { .. } => panic!("empty package must finish in one step"),
     }
 }
+
+/// G-04: `build_package_shared` shares `Arc<[u8]>` media buffers with zero
+/// copies (`Arc::ptr_eq`), emits compact `course.json` without pretty-print
+/// newlines (including when stripping templates), and zips identically to
+/// `zip_package`.
+#[test]
+fn g04_build_package_shared_zero_copy_and_compact_course_json() {
+    let mut course = minimal_course("Zero Copy Shared");
+    course.scenes[0].slides[0].objects.push(Object {
+        id: "img1".into(),
+        name: "Hero".into(),
+        kind: ObjectKind::Image {
+            crop: None,
+            src: "hero.png".into(),
+            alt: "Hero image".into(),
+            outline: None,
+            shape: None,
+        },
+        frame: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 120.0,
+        },
+        timing: Timing::default(),
+        states: Vec::new(),
+        initial_state: "normal".into(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: None,
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+        locked: false,
+        editor_hidden: false,
+    });
+    course.scenes[0].slides[0]
+        .objects
+        .push(web_object("web1", "web/widget", "index.html"));
+
+    // Add a template so template-stripping also exercises compact re-serialization.
+    let mut template = course.scenes[0].slides[0].clone();
+    template.id = "tpl1".into();
+    template.title = "Template".into();
+    template.objects.clear();
+    course.templates.push(template);
+
+    let hero_arc: Arc<[u8]> = Arc::from(vec![0x89, b'P', b'N', b'G', 1, 2, 3, 4]);
+    let web_index_arc: Arc<[u8]> = Arc::from(b"<!doctype html><html>widget</html>".to_vec());
+
+    let compact_json = course.to_json_compact().expect("compact json");
+    assert!(
+        !compact_json.contains('\n'),
+        "Course::to_json_compact must not emit newlines"
+    );
+
+    let player_files = fake_player();
+    let resolve_media =
+        |src: &str| -> Option<Arc<[u8]>> { (src == "hero.png").then(|| Arc::clone(&hero_arc)) };
+    let resolve_folder = |folder: &str| -> Option<Vec<(String, Arc<[u8]>)>> {
+        (folder == "web/widget")
+            .then(|| vec![("web/widget/index.html".into(), Arc::clone(&web_index_arc))])
+    };
+
+    let shared_input = SharedPackageInput {
+        course: &course,
+        course_json: &compact_json,
+        player_files: &player_files,
+        media: &resolve_media,
+    };
+    let shared_files = build_package_shared(
+        &shared_input,
+        PackageStandard::Scorm(Standard::Scorm12),
+        &resolve_folder,
+    )
+    .expect("build_package_shared succeeds");
+
+    // Zero-copy guarantee: output Arcs point to the exact same allocation as input Arcs.
+    let packaged_hero = shared_files
+        .iter()
+        .find(|f| f.path == "media/hero.png")
+        .expect("media/hero.png present");
+    assert!(
+        Arc::ptr_eq(&packaged_hero.bytes, &hero_arc),
+        "media/hero.png must share the input Arc without copying"
+    );
+
+    let packaged_web = shared_files
+        .iter()
+        .find(|f| f.path == "media/web/widget/index.html")
+        .expect("web folder entry present");
+    assert!(
+        Arc::ptr_eq(&packaged_web.bytes, &web_index_arc),
+        "web folder file must share the input Arc without copying"
+    );
+
+    // Published course.json is compact (no pretty-print newlines) and round-trips.
+    let packaged_course = shared_files
+        .iter()
+        .find(|f| f.path == "course.json")
+        .expect("course.json present");
+    let published_json = std::str::from_utf8(&packaged_course.bytes).expect("utf8 course.json");
+    assert!(
+        !published_json.contains('\n'),
+        "published course.json must be compact without pretty-print newlines"
+    );
+    let round_tripped = Course::from_json(published_json).expect("round-trip course.json");
+    let mut expected_course = course.clone();
+    expected_course.templates.clear();
+    assert_eq!(round_tripped, expected_course);
+
+    // zip_shared_package and zip_shared_package_to match zip_package byte-for-byte.
+    let legacy_files: Vec<PackageFile> = shared_files
+        .iter()
+        .map(|f| PackageFile {
+            path: f.path.clone(),
+            bytes: f.bytes.to_vec(),
+        })
+        .collect();
+    let expected_zip = zip_package(&legacy_files).expect("zip_package");
+    let shared_zip = zip_shared_package(&shared_files).expect("zip_shared_package");
+    assert_eq!(shared_zip, expected_zip);
+
+    let mut streamed = std::io::Cursor::new(Vec::new());
+    zip_shared_package_to(&shared_files, &mut streamed).expect("zip_shared_package_to");
+    assert_eq!(streamed.into_inner(), expected_zip);
+}

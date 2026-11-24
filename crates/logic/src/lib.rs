@@ -1097,6 +1097,211 @@ impl<'c> Player<'c> {
         &self.st
     }
 
+    /// Consume the player and return its owned [`PlayerState`].
+    #[must_use]
+    pub fn into_state(self) -> PlayerState {
+        self.st
+    }
+
+    /// Wall-clock milliseconds until the next time-driven change (animation
+    /// frame, object appearance/disappearance, cue point, `timeline_reaches`,
+    /// `timeline_ends`, running timer, motion path, playing media, or seekbar
+    /// update).
+    ///
+    /// Returns `Some(0)` when smooth visual motion needs the next display
+    /// frame immediately, `Some(ms)` (`ms >= 1`) when the host may sleep for
+    /// `ms` milliseconds before waking, or `None` when nothing time-driven is
+    /// pending and the host can stay idle until user input arrives.
+    #[must_use]
+    pub fn next_wake_ms(&self) -> Option<u32> {
+        if !self.st.started
+            || self.st.exited
+            || self.st.player_paused
+            || self.st.reviewing_from.is_some()
+        {
+            return None;
+        }
+        let slide = self.current_slide()?;
+        let base_held = self.base_held_by_layer();
+        let base_paused = self.st.base.paused || base_held;
+
+        // a. Active motion paths on an unpaused, visible timeline need immediate frames.
+        for obj_id in self.st.running_paths.keys() {
+            let Some((_, layer_id)) = slide.object(obj_id) else {
+                continue;
+            };
+            let is_paused = match layer_id {
+                None => base_paused,
+                Some(lid) => {
+                    !self.st.visible_layers.iter().any(|vl| vl == lid)
+                        || self.st.layer_clocks.get(lid).is_none_or(|c| c.paused)
+                }
+            };
+            if !is_paused {
+                return Some(0);
+            }
+        }
+
+        let mut best: Option<u32> = None;
+        let mut record_wall = |ms: u32| {
+            best = Some(best.map_or(ms, |cur| cur.min(ms)));
+        };
+
+        // b. Playing media: visual media (Lottie / Video) and captioned audio need
+        //    immediate frames; non-captioned audio polls periodically for end/trim.
+        for (id, state) in &self.st.media_playback {
+            if *state != MediaPlaybackState::Playing {
+                continue;
+            }
+            let Some((obj, layer_id)) = slide.object(id) else {
+                continue;
+            };
+            let visible =
+                layer_id.is_none_or(|lid| self.st.visible_layers.iter().any(|vl| vl == lid));
+            if !visible {
+                continue;
+            }
+            match &obj.kind {
+                ObjectKind::Lottie { .. } | ObjectKind::Video { .. } => return Some(0),
+                ObjectKind::Audio { captions, .. } => {
+                    if captions.is_some() {
+                        return Some(0);
+                    }
+                    record_wall(50);
+                }
+                _ => {}
+            }
+        }
+        if self.st.background.playing {
+            record_wall(100);
+        }
+
+        let speed_quarters = if self.course.player.show_speed && self.st.speed_quarters != 0 {
+            self.st.speed_quarters
+        } else {
+            4
+        };
+
+        // c. Running (or due-to-autostart) countdown timers whose owning timeline can advance.
+        if let Some(ms) = self.timers_next_wake(slide, base_paused, speed_quarters) {
+            if ms == 0 {
+                return Some(0);
+            }
+            record_wall(ms);
+        }
+
+        // d. Base slide clock and visible layer clocks.
+        let show_bar = slide
+            .player
+            .as_ref()
+            .and_then(|o| o.show_bar)
+            .unwrap_or(self.course.player.show_bar);
+        let show_seekbar = show_bar
+            && slide
+                .player
+                .as_ref()
+                .and_then(|o| o.show_seekbar)
+                .unwrap_or(self.course.player.show_seekbar);
+        let seek_target = self.seek_target();
+
+        if !base_held {
+            let base_has_seekbar = show_seekbar && matches!(seek_target, SeekTarget::Base);
+            if let Some(delta) = clock_next_wake(
+                self.st.base,
+                slide.duration_ms,
+                &slide.objects,
+                slide,
+                &slide.cue_points,
+                None,
+                base_has_seekbar,
+            ) {
+                if delta == 0 {
+                    return Some(0);
+                }
+                record_wall(scale_wake_delta_ms(delta, speed_quarters));
+            }
+        }
+
+        for lid in &self.st.visible_layers {
+            let (Some(layer), Some(&clock)) = (slide.layer(lid), self.st.layer_clocks.get(lid))
+            else {
+                continue;
+            };
+            let layer_has_seekbar =
+                show_seekbar && matches!(&seek_target, SeekTarget::Layer(target) if target == lid);
+            if let Some(delta) = clock_next_wake(
+                clock,
+                layer.duration_ms,
+                &layer.objects,
+                slide,
+                &layer.cue_points,
+                Some(lid.as_str()),
+                layer_has_seekbar,
+            ) {
+                if delta == 0 {
+                    return Some(0);
+                }
+                record_wall(scale_wake_delta_ms(delta, speed_quarters));
+            }
+        }
+
+        best
+    }
+
+    fn timers_next_wake(
+        &self,
+        slide: &Slide,
+        base_paused: bool,
+        speed_quarters: u8,
+    ) -> Option<u32> {
+        let mut best: Option<u32> = None;
+        for (id, timer) in &self.st.timers {
+            if timer.ended {
+                continue;
+            }
+            let Some((obj, layer_id)) = slide.object(id) else {
+                continue;
+            };
+            let owner_clock_ms = match layer_id {
+                None => (!base_paused && !self.st.base.ended).then_some(self.st.base.ms),
+                Some(lid) => self
+                    .st
+                    .visible_layers
+                    .iter()
+                    .any(|vl| vl == lid)
+                    .then(|| {
+                        self.st
+                            .layer_clocks
+                            .get(lid)
+                            .filter(|c| !c.paused && !c.ended)
+                            .map(|c| c.ms)
+                    })
+                    .flatten(),
+            };
+            let Some(clock_ms) = owner_clock_ms else {
+                continue;
+            };
+            let autostart_due = timer.autostart_armed
+                && matches!(
+                    obj.kind,
+                    ObjectKind::Timer {
+                        autostart: true,
+                        ..
+                    }
+                )
+                && clock_ms >= obj.timing.start_ms;
+            if !timer.running && !autostart_due {
+                continue;
+            }
+            if timer.remaining_ms == 0 {
+                return Some(0);
+            }
+            let wall = scale_wake_delta_ms(timer.remaining_ms.min(100), speed_quarters);
+            best = Some(best.map_or(wall, |cur| cur.min(wall)));
+        }
+        best
+    }
+
     /// Replace the learner name and date supplied by the host.
     ///
     /// Names are capped at [`MAX_HOST_NAME_CHARS`] characters and dates at
@@ -1921,6 +2126,97 @@ pub fn civil_date(unix_secs: i64) -> String {
         return String::new();
     }
     format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn scale_wake_delta_ms(delta: u32, speed_quarters: u8) -> u32 {
+    if delta == 0 {
+        return 0;
+    }
+    let q = u64::from(speed_quarters.max(1));
+    let wall = u64::from(delta).saturating_mul(4).saturating_add(q - 1) / q;
+    u32::try_from(wall).unwrap_or(u32::MAX).max(1)
+}
+
+fn clock_next_wake(
+    clock: Clock,
+    duration_ms: u32,
+    objects: &[coursecraft_course::Object],
+    slide: &Slide,
+    cue_points: &[coursecraft_course::SlideCue],
+    layer_id: Option<&str>,
+    has_seekbar: bool,
+) -> Option<u32> {
+    if clock.paused || clock.ended {
+        return None;
+    }
+    if clock.ms >= duration_ms {
+        return Some(0);
+    }
+
+    let mut best = duration_ms - clock.ms;
+
+    for obj in objects {
+        if let Some(ref ent) = obj.entrance {
+            let start = obj.timing.start_ms;
+            let finish = start.saturating_add(ent.duration_ms);
+            if clock.ms >= start && clock.ms < finish {
+                return Some(0);
+            }
+        }
+        if let Some(ref exit) = obj.exit {
+            let end_ms = obj.timing.end_ms.unwrap_or(duration_ms);
+            let exit_start = end_ms.saturating_sub(exit.duration_ms);
+            if clock.ms >= exit_start && clock.ms < end_ms {
+                return Some(0);
+            }
+            if exit_start > clock.ms {
+                best = best.min(exit_start - clock.ms);
+            }
+            if end_ms > clock.ms {
+                best = best.min(end_ms - clock.ms);
+            }
+        }
+        if obj.timing.start_ms > clock.ms {
+            best = best.min(obj.timing.start_ms - clock.ms);
+        }
+        if let Some(end_ms) = obj.timing.end_ms
+            && end_ms > clock.ms
+        {
+            best = best.min(end_ms - clock.ms);
+        }
+    }
+
+    for cue in cue_points {
+        if cue.at_ms > clock.ms {
+            best = best.min(cue.at_ms - clock.ms);
+        }
+    }
+
+    for trigger in slide
+        .triggers
+        .iter()
+        .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+    {
+        if trigger.disabled {
+            continue;
+        }
+        if let coursecraft_course::Event::TimelineReaches {
+            ms,
+            layer,
+            cue: None,
+        } = &trigger.when
+            && layer.as_deref() == layer_id
+            && *ms > clock.ms
+        {
+            best = best.min(*ms - clock.ms);
+        }
+    }
+
+    if has_seekbar {
+        best = best.min(100);
+    }
+
+    Some(best)
 }
 
 fn is_zero_u8(value: &u8) -> bool {

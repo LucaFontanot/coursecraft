@@ -200,6 +200,39 @@ impl From<coursecraft_ui_egui::SpeechSource> for SpeechSourcePref {
     }
 }
 
+/// User editor performance mode stored in `prefs.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PerformanceModePref {
+    /// Automatically pick Lite on constrained devices or large courses.
+    #[default]
+    Auto,
+    /// Standard cache ceilings and full editor preview detail.
+    Standard,
+    /// Reduced editor cache ceilings and preview detail.
+    Lite,
+}
+
+impl From<coursecraft_ui_egui::coursecraft_render::PerformanceMode> for PerformanceModePref {
+    fn from(mode: coursecraft_ui_egui::coursecraft_render::PerformanceMode) -> Self {
+        match mode {
+            coursecraft_ui_egui::coursecraft_render::PerformanceMode::Auto => Self::Auto,
+            coursecraft_ui_egui::coursecraft_render::PerformanceMode::Standard => Self::Standard,
+            coursecraft_ui_egui::coursecraft_render::PerformanceMode::Lite => Self::Lite,
+        }
+    }
+}
+
+impl From<PerformanceModePref> for coursecraft_ui_egui::coursecraft_render::PerformanceMode {
+    fn from(mode: PerformanceModePref) -> Self {
+        match mode {
+            PerformanceModePref::Auto => Self::Auto,
+            PerformanceModePref::Standard => Self::Standard,
+            PerformanceModePref::Lite => Self::Lite,
+        }
+    }
+}
+
 /// Persisted user preferences.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prefs {
@@ -235,6 +268,18 @@ pub struct Prefs {
     /// Words added to the personal dictionary.
     #[serde(default)]
     pub spell_words: Vec<String>,
+    /// Editor performance mode (`auto` / `standard` / `lite`).
+    #[serde(default)]
+    pub performance_mode: PerformanceModePref,
+    /// Check GitHub at most once a day on startup for a newer desktop version.
+    #[serde(default = "default_true")]
+    pub auto_check_updates: bool,
+    /// Unix timestamp (seconds) of the last completed or rate-limited update check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_update_check_unix: Option<u64>,
+    /// Semver version string the user chose to skip (e.g. `"0.4.4"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_update_version: Option<String>,
 }
 
 /// Largest autosave interval, in minutes.
@@ -407,6 +452,10 @@ impl Default for Prefs {
             default_slide: DefaultSlideSize::default(),
             spell_check_as_you_type: true,
             spell_words: Vec::new(),
+            performance_mode: PerformanceModePref::default(),
+            auto_check_updates: true,
+            last_update_check_unix: None,
+            skipped_update_version: None,
         }
     }
 }
@@ -508,4 +557,72 @@ pub fn save_prefs(config_dir: &Path, prefs: &Prefs) -> Result<(), String> {
             .map_err(|e| format!("Failed to secure preferences: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PerformanceModePref, Prefs, load_prefs, save_prefs};
+
+    #[test]
+    fn performance_mode_defaults_to_auto_on_older_json_and_round_trips() {
+        let dir = std::env::temp_dir().join(format!(
+            "coursecraft-prefs-perf-mode-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // Older prefs.json without `performance_mode` must default to Auto.
+        std::fs::write(dir.join("prefs.json"), r#"{"recent": []}"#).expect("write old prefs");
+        let old = load_prefs(&dir);
+        assert_eq!(old.performance_mode, PerformanceModePref::Auto);
+
+        for mode in [
+            PerformanceModePref::Standard,
+            PerformanceModePref::Lite,
+            PerformanceModePref::Auto,
+        ] {
+            let prefs = Prefs {
+                performance_mode: mode,
+                ..Prefs::default()
+            };
+            save_prefs(&dir, &prefs).expect("save prefs");
+            let loaded = load_prefs(&dir);
+            assert_eq!(loaded.performance_mode, mode);
+            let render_mode: coursecraft_ui_egui::coursecraft_render::PerformanceMode = mode.into();
+            assert_eq!(PerformanceModePref::from(render_mode), mode);
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn up09_update_prefs_backward_compat_and_round_trip() {
+        let dir =
+            std::env::temp_dir().join(format!("coursecraft-prefs-up09-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // Legacy prefs.json lacking the 3 update fields must load with defaults.
+        std::fs::write(dir.join("prefs.json"), r#"{"recent": []}"#).expect("write legacy prefs");
+        let legacy = load_prefs(&dir);
+        assert!(legacy.auto_check_updates);
+        assert_eq!(legacy.last_update_check_unix, None);
+        assert_eq!(legacy.skipped_update_version, None);
+
+        // Saving and reloading with all 3 fields populated must preserve them exactly.
+        let populated = Prefs {
+            auto_check_updates: false,
+            last_update_check_unix: Some(1_700_000_000),
+            skipped_update_version: Some("0.4.4".to_owned()),
+            ..Prefs::default()
+        };
+        save_prefs(&dir, &populated).expect("save prefs");
+        let reloaded = load_prefs(&dir);
+        assert!(!reloaded.auto_check_updates);
+        assert_eq!(reloaded.last_update_check_unix, Some(1_700_000_000));
+        assert_eq!(reloaded.skipped_update_version.as_deref(), Some("0.4.4"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

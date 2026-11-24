@@ -129,6 +129,38 @@ fn open_layer_settings_first(editor: &mut Editor) {
     }
 }
 
+fn open_update_dialog_preview(editor: &mut Editor) {
+    editor.updates_available = true;
+    editor.ui.update = crate::update_dialog::UpdateState {
+        open: true,
+        status: crate::update_dialog::UpdateCheckStatus::Available(
+            crate::update_dialog::UpdateInfo {
+                version: "0.4.4".to_owned(),
+                current_version: env!("CARGO_PKG_VERSION").to_owned(),
+                release_url: "https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.4"
+                    .to_owned(),
+                notes_markdown: "\
+## Highlights
+
+**Faster, lighter editor** with smoother timeline scrolling and snappier canvas redraws.
+
+- **In-app updates** check GitHub Releases quietly and verify downloads with `SHA-256`.
+- **Accessibility improvements** for keyboard focus and screen-reader labels.
+- Read the full [release notes on GitHub](https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.4).
+"
+                .to_owned(),
+                asset: Some(crate::update_dialog::UpdateAssetInfo {
+                    name: "CourseCraft-0.4.4-macos.dmg".to_owned(),
+                    size: 28_677_774,
+                }),
+                published_at: Some("2026-11-24T00:00:00Z".to_owned()),
+            },
+        ),
+        download: crate::update_dialog::UpdateDownloadState::Idle,
+        dismissed_version: None,
+    };
+}
+
 /// Every window and dialog the editor can open, by `--window` name.
 pub const WINDOWS: &[WindowSpec] = &[
     window!("course-settings", "Course settings", |e| {
@@ -233,6 +265,7 @@ pub const WINDOWS: &[WindowSpec] = &[
         let id = e.session.course.scenes.first().map(|s| s.id.clone());
         e.ui.pending_delete_scene = id;
     }),
+    window!("update", "Software update", open_update_dialog_preview),
 ];
 
 /// The names `--window` accepts, in table order.

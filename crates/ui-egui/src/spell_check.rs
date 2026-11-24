@@ -88,7 +88,13 @@ impl SpellCache {
         self.suggestions.push((word.to_owned(), list));
     }
 
-    /// Forget everything: personal and ignored words change what is correct.
+    /// Forget cached per-text misspelling lists while preserving word suggestions.
+    pub fn clear_entries(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Forget everything: personal dictionary edits can change both misspellings
+    /// and the suggestions returned for other words.
     pub fn clear(&mut self) {
         self.entries.clear();
         self.suggestions.clear();
@@ -335,7 +341,7 @@ impl Editor {
     /// only when a menu needs them.
     #[must_use]
     pub fn spell_words(&mut self, text: &str) -> Vec<SpelledWord> {
-        if !self.ui.prefs.spell_check_as_you_type {
+        if !self.ui.prefs.spell_check_as_you_type || text.is_empty() {
             return Vec::new();
         }
         let hash = hash_text(text);
@@ -398,7 +404,7 @@ impl Editor {
         {
             self.ui.spell_ignored.push(word.to_owned());
         }
-        self.spell_changed();
+        self.spell_ignore_changed();
     }
 
     /// Ignore one occurrence in one field, for this session only.
@@ -407,7 +413,7 @@ impl Editor {
         if !self.ui.spell_ignored_at.contains(&entry) {
             self.ui.spell_ignored_at.push(entry);
         }
-        self.spell_changed();
+        self.spell_ignore_changed();
     }
 
     /// Load the personal dictionary and the as-you-type preference at start-up.
@@ -432,6 +438,14 @@ impl Editor {
         self.ui.spell_check.key = None;
     }
 
+    /// Session ignores do not alter the speller's dictionary, so cached word
+    /// suggestions remain valid across Ignore / Ignore all steps.
+    fn spell_ignore_changed(&mut self) {
+        self.spell_cache.clear_entries();
+        self.spell_version = self.spell_version.wrapping_add(1);
+        self.ui.spell_check.key = None;
+    }
+
     fn push_spell_prefs_request(&mut self) {
         let prefs = &self.ui.prefs;
         self.pending_requests.push(EditorRequest::SetPreferences {
@@ -440,6 +454,7 @@ impl Editor {
             default_slide: prefs.default_slide,
             spell_check_as_you_type: prefs.spell_check_as_you_type,
             spell_words: self.ui.spell_words.clone(),
+            performance_mode: prefs.performance_mode,
         });
     }
 }
@@ -589,13 +604,35 @@ pub fn ignore_issue(editor: &mut Editor, index: usize, all: bool) {
     let Some(issue) = editor.ui.spell_check.issues.get(index).cloned() else {
         return;
     };
+    let was_fresh =
+        editor.ui.spell_check.key == Some((editor.session.revision, editor.spell_version));
     if all {
         editor.ignore_spell_word(&issue.misspelling.word);
     } else {
         editor.ignore_spell_at(&issue.item.location, issue.misspelling.start);
     }
-    refresh(editor);
-    sync_change_to(&mut editor.ui.spell_check);
+    if was_fresh {
+        let key = (editor.session.revision, editor.spell_version);
+        let state = &mut editor.ui.spell_check;
+        if all {
+            state.issues.retain(|other| {
+                !other
+                    .misspelling
+                    .word
+                    .eq_ignore_ascii_case(&issue.misspelling.word)
+            });
+        } else {
+            state.issues.retain(|other| {
+                !(other.item.location == issue.item.location
+                    && other.misspelling.start == issue.misspelling.start)
+            });
+        }
+        state.key = Some(key);
+        sync_change_to(state);
+    } else {
+        refresh(editor);
+        sync_change_to(&mut editor.ui.spell_check);
+    }
 }
 
 /// Add the word at `index` to the personal dictionary.
@@ -609,9 +646,28 @@ pub fn add_issue_word(editor: &mut Editor, index: usize) {
     else {
         return;
     };
+    let was_fresh =
+        editor.ui.spell_check.key == Some((editor.session.revision, editor.spell_version));
     editor.add_spell_word(&word);
-    refresh(editor);
-    sync_change_to(&mut editor.ui.spell_check);
+    if was_fresh {
+        let key = (editor.session.revision, editor.spell_version);
+        let state = &mut editor.ui.spell_check;
+        if word.is_ascii() {
+            state
+                .issues
+                .retain(|other| !other.misspelling.word.eq_ignore_ascii_case(&word));
+        } else {
+            let lowered = word.to_lowercase();
+            state
+                .issues
+                .retain(|other| other.misspelling.word.to_lowercase() != lowered);
+        }
+        state.key = Some(key);
+        sync_change_to(state);
+    } else {
+        refresh(editor);
+        sync_change_to(&mut editor.ui.spell_check);
+    }
 }
 
 /// Draw the Check Spelling window when it is open.

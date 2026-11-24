@@ -12187,3 +12187,48 @@ fn two_hundred_edits_on_300_slide_course_zero_full_clones_and_small_deltas() {
         );
     });
 }
+
+/// G-07 (`M34-07`): On a 300-slide course (`perf300`), warming playability,
+/// running a real `object.set_frame` edit, and running a no-op `object.set_frame`
+/// with the same frame perform zero full-course validations.
+#[test]
+fn g07_single_slide_frame_edit_and_noop_zero_full_validations() {
+    let mut s = Session::new(crate::undo_perf_tests::perf300());
+    assert!(s.is_playable(), "perf300 fixture should be playable");
+
+    crate::with_scope_verifier_disabled(|| {
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        let moved_frame = json!({
+            "slide": "s-150",
+            "object": "h150",
+            "frame": { "x": 75.0, "y": 530.0, "w": 200.0, "h": 80.0 }
+        });
+
+        // 1. Actual move uses scoped slide validation (0 full-course validations).
+        ok(&mut s, "object.set_frame", moved_frame.clone());
+        assert_eq!(s.revision, 1);
+        assert_eq!(s.undo_len(), 1);
+        let obj_frame = s
+            .course
+            .slide("s-150")
+            .and_then(|slide| slide.object("h150"))
+            .map(|(obj, _)| obj.frame)
+            .expect("h150 exists");
+        assert!((obj_frame.x - 75.0).abs() < 0.01);
+        assert!((obj_frame.y - 530.0).abs() < 0.01);
+
+        // 2. No-op with identical frame short-circuits before validation and undo.
+        ok(&mut s, "object.set_frame", moved_frame);
+        assert_eq!(s.revision, 1, "no-op frame edit must not bump revision");
+        assert_eq!(s.undo_len(), 1, "no-op frame edit must not add undo step");
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_validations(),
+            0,
+            "single-slide frame move and no-op must run zero full-course validations"
+        );
+    });
+}

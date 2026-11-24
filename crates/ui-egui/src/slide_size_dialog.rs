@@ -796,6 +796,7 @@ pub fn show_slide_size_dialog(
                     default_slide: (state.w, state.h),
                     spell_check_as_you_type,
                     spell_words,
+                    performance_mode: editor.ui.prefs.performance_mode,
                 });
             }
 

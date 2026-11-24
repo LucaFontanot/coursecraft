@@ -2382,8 +2382,14 @@ pub fn show_properties_panel(editor: &mut Editor, ui: &mut Ui) {
     // Spell data is computed once per frame here, where the editor is mutable,
     // and read by the Text Content box without threading `Editor` through the
     // whole inspector.
-    let spell_text = editor.ui.properties.text_body.clone();
-    let spelled = editor.spell_words(&spell_text);
+    let spelled = if editor.ui.inspector_tab == InspectorTab::Format
+        && !editor.ui.properties.text_body.is_empty()
+    {
+        let spell_text = editor.ui.properties.text_body.clone();
+        editor.spell_words(&spell_text)
+    } else {
+        Vec::new()
+    };
     // Suggestions are slow to work out, so only when the word menu is open
     // or about to open (a secondary press arrives a frame before the menu).
     let menu_coming = editor.ui.properties.spell_menu_pos.is_some()

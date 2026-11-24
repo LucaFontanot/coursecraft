@@ -11404,3 +11404,408 @@ fn m31_17_last_visited_skips_self_duplicates_and_handles_preview_subset() {
     );
     assert!(prev.preview_boundary_hit);
 }
+
+/// W-01: `Player::next_wake_ms` returns `None` before start, while paused,
+/// after the slide timeline finishes, and after the course exits.
+#[test]
+fn w01_next_wake_ms_none_when_not_started_paused_ended_or_finished() {
+    let mut c = Course::from_json(
+        r#"{
+          "schema_version": 1,
+          "id": "w01-idle",
+          "title": "W01 Idle",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 2000,
+              "objects": [{
+                "id": "btn-exit",
+                "kind": { "type": "button", "label": "Exit" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 40.0 }
+              }],
+              "triggers": [{
+                "when": { "event": "click", "object": "btn-exit" },
+                "action": { "action": "exit_course" }
+              }]
+            }]
+          }]
+        }"#,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+
+    let mut p = Player::new(&c).expect("player");
+    assert_eq!(p.next_wake_ms(), None, "not started yet");
+
+    p.handle(&Input::Start);
+    assert_eq!(p.next_wake_ms(), Some(2000), "running towards timeline end");
+
+    p.handle(&Input::PlayerPause);
+    assert_eq!(p.next_wake_ms(), None, "paused by learner");
+
+    p.handle(&Input::PlayerResume);
+    assert_eq!(p.next_wake_ms(), Some(2000), "resumed");
+
+    p.handle(&Input::Tick { ms: 2000 });
+    assert_eq!(p.next_wake_ms(), None, "timeline finished");
+
+    // Start a fresh player and exit while timeline is still active.
+    let mut p2 = Player::new(&c).expect("player2");
+    p2.handle(&Input::Start);
+    assert!(p2.next_wake_ms().is_some());
+    p2.handle(&click("btn-exit"));
+    assert!(p2.state().exited);
+    assert_eq!(p2.next_wake_ms(), None, "course exited");
+}
+
+/// W-01: `Player::next_wake_ms` returns `Some(0)` during active entrance,
+/// exit, and motion path animations, and sleeps between them.
+#[test]
+fn w01_next_wake_ms_immediate_during_entrance_exit_and_motion_path() {
+    use coursecraft_course::{AnimEffect, Animation, Easing, MotionPath, Point};
+
+    let mut c = Course::from_json(
+        r##"{
+          "schema_version": 1,
+          "id": "w01-anim",
+          "title": "W01 Anim",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 5000,
+              "objects": [
+                {
+                  "id": "box1",
+                  "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                  "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 100.0 },
+                  "timing": { "start_ms": 1000, "end_ms": 3000 }
+                },
+                {
+                  "id": "btn-move",
+                  "kind": { "type": "button", "label": "Move" },
+                  "frame": { "x": 200.0, "y": 10.0, "w": 100.0, "h": 40.0 }
+                }
+              ],
+              "triggers": [{
+                "when": { "event": "click", "object": "btn-move" },
+                "action": { "action": "move_on_path", "object": "btn-move", "path": "p1" }
+              }]
+            }]
+          }]
+        }"##,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+
+    let slide = c.slide_mut("s1").expect("s1");
+    let box1 = slide
+        .objects
+        .iter_mut()
+        .find(|o| o.id == "box1")
+        .expect("box1");
+    box1.entrance = Some(Animation {
+        effect: AnimEffect::Fade,
+        duration_ms: 400,
+        easing: Easing::Linear,
+    });
+    box1.exit = Some(Animation {
+        effect: AnimEffect::Fade,
+        duration_ms: 300,
+        easing: Easing::Linear,
+    });
+    let btn = slide
+        .objects
+        .iter_mut()
+        .find(|o| o.id == "btn-move")
+        .expect("btn-move");
+    btn.motion_paths = vec![MotionPath {
+        id: "p1".into(),
+        points: vec![Point { x: 0.0, y: 0.0 }, Point { x: 120.0, y: 0.0 }],
+        duration_ms: 600,
+        easing: Easing::Linear,
+        relative: true,
+    }];
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+
+    // Waiting for box1 entrance at 1000 ms.
+    assert_eq!(p.next_wake_ms(), Some(1000));
+    p.handle(&Input::Tick { ms: 1000 });
+    // Entrance runs [1000, 1400).
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 200 });
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 200 });
+    // Now at 1400; exit starts at 3000 - 300 = 2700 -> delta 1300.
+    assert_eq!(p.next_wake_ms(), Some(1300));
+    p.handle(&Input::Tick { ms: 1300 });
+    // Exit runs [2700, 3000).
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 300 });
+    // Now at 3000; slide ends at 5000 -> delta 2000.
+    assert_eq!(p.next_wake_ms(), Some(2000));
+
+    // Start a motion path on btn-move -> immediate wake while running.
+    p.handle(&click("btn-move"));
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 300 });
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 300 });
+    // Path finished at t = 3600; 1400 ms remain until slide ends at 5000.
+    assert_eq!(p.next_wake_ms(), Some(1400));
+}
+
+/// W-01: `Player::next_wake_ms` returns exact delays to object start, cue point,
+/// `timeline_reaches`, and timeline end, and caps at 100 ms when the seekbar is visible.
+#[test]
+fn w01_next_wake_ms_exact_delay_to_object_start_cue_point_and_timeline_reaches() {
+    let mut c = Course::from_json(
+        r##"{
+          "schema_version": 1,
+          "id": "w01-delays",
+          "title": "W01 Delays",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 8000,
+              "objects": [{
+                "id": "late-box",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 100.0 },
+                "timing": { "start_ms": 1500 }
+              }],
+              "cue_points": [
+                { "id": "cue1", "name": "Cue 1", "at_ms": 2500 }
+              ],
+              "triggers": [{
+                "when": { "event": "timeline_reaches", "ms": 4000 },
+                "action": { "action": "change_state", "object": "late-box", "state": "normal" }
+              }]
+            }]
+          }]
+        }"##,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+
+    assert_eq!(p.next_wake_ms(), Some(1500), "delay to object start");
+    p.handle(&Input::Tick { ms: 1500 });
+    assert_eq!(p.next_wake_ms(), Some(1000), "delay to cue point at 2500");
+    p.handle(&Input::Tick { ms: 1000 });
+    assert_eq!(
+        p.next_wake_ms(),
+        Some(1500),
+        "delay to timeline_reaches at 4000"
+    );
+    p.handle(&Input::Tick { ms: 1500 });
+    assert_eq!(
+        p.next_wake_ms(),
+        Some(4000),
+        "delay to timeline end at 8000"
+    );
+
+    // With seekbar visible, the wake delay caps at 100 ms (10 fps seekbar).
+    c.player.show_seekbar = true;
+    let mut p_seek = Player::new(&c).expect("player with seekbar");
+    p_seek.handle(&Input::Start);
+    assert_eq!(p_seek.next_wake_ms(), Some(100));
+}
+
+/// W-01: `Player::next_wake_ms` covers running timers, visible layer clocks,
+/// and playing video, Lottie, and audio (captioned and uncaptioned).
+#[test]
+fn w01_next_wake_ms_covers_timers_visible_layer_clocks_and_playing_media() {
+    let mut c = Course::from_json(
+        r#"{
+          "schema_version": 1,
+          "id": "w01-sources",
+          "title": "W01 Sources",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 10000,
+              "objects": [
+                {
+                  "id": "t1",
+                  "kind": { "type": "timer", "duration_ms": 5000, "autostart": true },
+                  "frame": { "x": 10.0, "y": 10.0, "w": 120.0, "h": 40.0 }
+                },
+                {
+                  "id": "btn-layer",
+                  "kind": { "type": "button", "label": "Layer" },
+                  "frame": { "x": 10.0, "y": 60.0, "w": 100.0, "h": 40.0 }
+                },
+                {
+                  "id": "aud-plain",
+                  "kind": { "type": "audio", "src": "voice.mp3", "autoplay": false },
+                  "frame": { "x": 10.0, "y": 110.0, "w": 48.0, "h": 48.0 }
+                },
+                {
+                  "id": "aud-cc",
+                  "kind": { "type": "audio", "src": "voice.mp3", "autoplay": false, "captions": "voice.vtt" },
+                  "frame": { "x": 70.0, "y": 110.0, "w": 48.0, "h": 48.0 }
+                },
+                {
+                  "id": "vid1",
+                  "kind": { "type": "video", "src": "clip.mp4", "autoplay": false },
+                  "frame": { "x": 130.0, "y": 110.0, "w": 200.0, "h": 120.0 }
+                },
+                {
+                  "id": "lot1",
+                  "kind": { "type": "lottie", "src": "anim.json", "autoplay": false },
+                  "frame": { "x": 350.0, "y": 110.0, "w": 120.0, "h": 120.0 }
+                }
+              ],
+              "layers": [{
+                "id": "l1",
+                "name": "Layer 1",
+                "duration_ms": 2000,
+                "cue_points": [{ "id": "lcue", "name": "Layer Cue", "at_ms": 700 }]
+              }],
+              "triggers": [
+                {
+                  "when": { "event": "click", "object": "btn-layer" },
+                  "action": { "action": "show_layer", "layer": "l1" }
+                },
+                {
+                  "when": { "event": "click", "object": "aud-plain" },
+                  "action": { "action": "play_media", "object": "aud-plain" }
+                },
+                {
+                  "when": { "event": "click", "object": "aud-cc" },
+                  "action": { "action": "play_media", "object": "aud-cc" }
+                },
+                {
+                  "when": { "event": "click", "object": "vid1" },
+                  "action": { "action": "play_media", "object": "vid1" }
+                },
+                {
+                  "when": { "event": "click", "object": "lot1" },
+                  "action": { "action": "play_media", "object": "lot1" }
+                }
+              ]
+            }]
+          }]
+        }"#,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+
+    // Running countdown timer caps wake at 100 ms for crisp second updates.
+    assert_eq!(p.next_wake_ms(), Some(100));
+    p.handle(&Input::Tick { ms: 4960 });
+    assert_eq!(p.next_wake_ms(), Some(40), "remaining timer < 100 ms");
+    p.handle(&Input::Tick { ms: 40 });
+    // Timer finished at t = 5000; 5000 ms left on base slide.
+    assert_eq!(p.next_wake_ms(), Some(5000));
+    // Finish base slide.
+    p.handle(&Input::Tick { ms: 5000 });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Showing a visible layer wakes for the layer's cue point and end.
+    p.handle(&click("btn-layer"));
+    assert_eq!(p.next_wake_ms(), Some(700));
+    p.handle(&Input::Tick { ms: 700 });
+    assert_eq!(p.next_wake_ms(), Some(1300));
+    p.handle(&Input::Tick { ms: 1300 });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Playing plain audio wakes at 50 ms polling cadence.
+    p.handle(&click("aud-plain"));
+    assert_eq!(p.next_wake_ms(), Some(50));
+    p.handle(&Input::MediaEnded {
+        object: "aud-plain".into(),
+    });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Playing captioned audio wakes immediately.
+    p.handle(&click("aud-cc"));
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::MediaEnded {
+        object: "aud-cc".into(),
+    });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Playing video wakes immediately.
+    p.handle(&click("vid1"));
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::MediaEnded {
+        object: "vid1".into(),
+    });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Playing Lottie wakes immediately.
+    p.handle(&click("lot1"));
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::MediaEnded {
+        object: "lot1".into(),
+    });
+    assert_eq!(p.next_wake_ms(), None);
+}
+
+/// W-01: `Player::next_wake_ms` scales non-zero wake delays by playback speed.
+#[test]
+fn w01_next_wake_ms_scales_with_playback_speed() {
+    let mut c = Course::from_json(
+        r##"{
+          "schema_version": 1,
+          "id": "w01-speed",
+          "title": "W01 Speed",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 4000,
+              "objects": [{
+                "id": "late",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 100.0 },
+                "timing": { "start_ms": 1000 }
+              }]
+            }]
+          }]
+        }"##,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+    c.player.show_speed = true;
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    assert_eq!(p.next_wake_ms(), Some(1000));
+
+    p.handle(&Input::SetSpeed { rate: 2.0 });
+    assert_eq!(p.next_wake_ms(), Some(500));
+
+    p.handle(&Input::SetSpeed { rate: 0.5 });
+    assert_eq!(p.next_wake_ms(), Some(2000));
+
+    p.handle(&Input::SetSpeed { rate: 1.5 });
+    assert_eq!(p.next_wake_ms(), Some(667));
+}

@@ -340,6 +340,7 @@ fn show_map_thumbnail(
     // Shared revision/fingerprint-keyed thumbnail cache, as in the navigator.
     let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
         editor.session.revision,
+        editor.session.last_changed_slide(),
         &editor.session.course,
         slide,
     );
@@ -350,9 +351,11 @@ fn show_map_thumbnail(
         thumb_bg,
     );
     if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
-        let source = crate::MemoryMediaSource {
-            media: &editor.media,
-        };
+        let source = crate::MemoryMediaSource::from_parts(
+            &editor.media,
+            &editor.media_index,
+            editor.media_index_len,
+        );
         paint(
             &painter,
             &t,

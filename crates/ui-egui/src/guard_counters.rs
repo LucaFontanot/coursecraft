@@ -31,6 +31,7 @@ thread_local! {
     static AUDIT_RUNS: Cell<u64> = const { Cell::new(0) };
     static SLIDE_CLONES: Cell<u64> = const { Cell::new(0) };
     static TIMELINE_LIST_REBUILDS: Cell<u64> = const { Cell::new(0) };
+    static CANVAS_COMPOSES: Cell<u64> = const { Cell::new(0) };
     static FRAME: Cell<u64> = const { Cell::new(0) };
     /// Last slide drawn in each row, and the frame it was drawn on.
     static LAST_THUMB_SLIDES: RefCell<HashMap<String, (Slide, u64)>> =
@@ -53,7 +54,10 @@ pub(crate) fn begin_frame() {
 /// stay, so a slide already drawn while settling is still considered unchanged.
 pub(crate) fn reset() {
     #[cfg(debug_assertions)]
-    coursecraft_engine::test_counts::reset();
+    {
+        coursecraft_engine::test_counts::reset();
+        coursecraft_render::media::test_counts::reset_all();
+    }
     SPELLER_RUNS.set(0);
     SUGGESTION_LOOKUPS.set(0);
     THUMBNAIL_REDRAWS.set(0);
@@ -63,6 +67,7 @@ pub(crate) fn reset() {
     AUDIT_RUNS.set(0);
     SLIDE_CLONES.set(0);
     TIMELINE_LIST_REBUILDS.set(0);
+    CANVAS_COMPOSES.set(0);
 }
 
 /// Forget which rows were painted where, so the next frame counts every row
@@ -116,10 +121,69 @@ pub(crate) fn note_timeline_list_rebuild() {
     bump(&TIMELINE_LIST_REBUILDS);
 }
 
+pub(crate) fn note_canvas_compose() {
+    bump(&CANVAS_COMPOSES);
+}
+
 pub(crate) fn course_copies() -> u64 {
     #[cfg(debug_assertions)]
     {
         coursecraft_engine::test_counts::full_course_clones()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        0
+    }
+}
+
+pub(crate) fn full_course_validations() -> u64 {
+    #[cfg(debug_assertions)]
+    {
+        coursecraft_engine::test_counts::full_course_validations()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        0
+    }
+}
+
+pub(crate) fn font_def_clones() -> u64 {
+    #[cfg(debug_assertions)]
+    {
+        coursecraft_render::media::test_counts::font_def_clone_count()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        0
+    }
+}
+
+pub(crate) fn text_layout_misses() -> u64 {
+    #[cfg(debug_assertions)]
+    {
+        coursecraft_render::media::test_counts::text_layout_miss_count()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        0
+    }
+}
+
+pub(crate) fn shape_mesh_misses() -> u64 {
+    #[cfg(debug_assertions)]
+    {
+        coursecraft_render::media::test_counts::shape_mesh_miss_count()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        0
+    }
+}
+
+pub(crate) fn full_res_thumbnail_decodes() -> u64 {
+    #[cfg(debug_assertions)]
+    {
+        coursecraft_render::media::test_counts::full_res_thumbnail_decode_count()
     }
     #[cfg(not(debug_assertions))]
     {
@@ -176,4 +240,8 @@ pub(crate) fn slide_clones() -> u64 {
 
 pub(crate) fn timeline_list_rebuilds() -> u64 {
     TIMELINE_LIST_REBUILDS.get()
+}
+
+pub(crate) fn canvas_composes() -> u64 {
+    CANVAS_COMPOSES.get()
 }

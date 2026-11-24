@@ -80,12 +80,13 @@ pub use compose::{
 };
 pub use design::{
     CONTROL_COMPACT, CONTROL_PRIMARY, CONTROL_TOOLBAR, ICON_SM, ICON_TOOLBAR, PANEL_MARGIN,
-    PLAYER_GROUND, Palette, RADIUS_LG, RADIUS_MD, RADIUS_SM, RADIUS_XL, SIZE_BODY,
-    SIZE_BODY_STRONG, SIZE_CAPTION, SIZE_DISPLAY, SIZE_HEADING, SIZE_MONO, SIZE_SMALL, SIZE_TITLE,
-    SPACE_6, SPACE_20, SPACE_24, SPACE_32, SPACE_48, SPACE_LG, SPACE_MD, SPACE_SM, SPACE_XL,
-    SPACE_XS, ThemeMode, ThemePref, apply_style, body, body_strong, caption, contrast_ratio,
-    dialog_shadow, display, heading, palette, popover_shadow, relative_luminance, slide_shadow,
-    small, space, theme_mode, title,
+    PLAYER_GROUND, PaintQuality, Palette, PerfProfile, PerformanceMode, RADIUS_LG, RADIUS_MD,
+    RADIUS_SM, RADIUS_XL, SIZE_BODY, SIZE_BODY_STRONG, SIZE_CAPTION, SIZE_DISPLAY, SIZE_HEADING,
+    SIZE_MONO, SIZE_SMALL, SIZE_TITLE, SPACE_6, SPACE_20, SPACE_24, SPACE_32, SPACE_48, SPACE_LG,
+    SPACE_MD, SPACE_SM, SPACE_XL, SPACE_XS, ThemeMode, ThemePref, apply_style, body, body_strong,
+    caption, contrast_ratio, dialog_shadow, display, heading, paint_quality, palette,
+    popover_shadow, relative_luminance, set_render_profile, slide_shadow, small, space, theme_mode,
+    title,
 };
 pub use drawer::{DrawerTab, DrawerView, available_tabs, visible_glossary};
 pub use focus::{
@@ -95,12 +96,14 @@ pub use focus::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use font::IndexFontProvider;
 pub use font::{
-    SystemFontData, SystemFontProvider, course_face_family, install_course_fonts, install_fonts,
-    set_system_font_provider, slide_font, slide_font_named, system_face_family,
+    SystemFontData, SystemFontProvider, course_face_family, font_epoch, install_course_fonts,
+    install_fonts, set_system_font_provider, slide_font, slide_font_named, system_face_family,
 };
 pub use icons::{Icon, icon, icon_fill, icon_text};
 pub use layout::SlideTransform;
 pub use lottie::{LottieInfo, MAX_LOTTIE_BYTES, frame_at, info_of, parse_composition, parse_info};
+#[cfg(debug_assertions)]
+pub use media::test_counts;
 pub use media::{LottieView, MediaCache, MediaEntry, MediaFetch, MediaSource, MediaView};
 pub use media_driver::{
     CaptionFrame, CaptionStore, MediaDriver, PlaybackMediaSource, collect_video_ids,
@@ -112,8 +115,9 @@ pub use offscreen::{
     render_ui,
 };
 pub use paint::{
-    DEFAULT_BACKGROUND_COLOR, Highlight, dial_point, paint, paint_outline, paint_shape,
-    slider_fill_rect, slider_thumb_center, slider_track_rect, value_fraction,
+    DEFAULT_BACKGROUND_COLOR, DEFAULT_SHAPE_MESH_CACHE_MAX, Highlight, clear_shape_mesh_cache,
+    dial_point, paint, paint_outline, paint_shape, set_shape_mesh_cache_limit, slider_fill_rect,
+    slider_thumb_center, slider_track_rect, value_fraction,
 };
 pub use path_geometry::{
     CONNECTOR_MIN_LEAD, PathMeshSpec, arc_points, connector_site, connector_site_direction,
@@ -132,8 +136,9 @@ pub use shape_geometry::{
 };
 pub use snapshot::{PlayerSnapshotSelect, snapshot_player};
 pub use text_layout::{
-    AUTOFIT_MIN_SCALE, INDENT_STEP, LaidLink, LaidMarker, LaidParagraph, LaidText, fill_item_links,
-    inline_edit_layout_job, justify_galley, justify_galley_snapped, layout_text,
+    AUTOFIT_MIN_SCALE, DEFAULT_TEXT_LAYOUT_CACHE_MAX, INDENT_STEP, LaidLink, LaidMarker,
+    LaidParagraph, LaidText, clear_text_layout_cache, fill_item_links, inline_edit_layout_job,
+    justify_galley, justify_galley_snapped, layout_text, set_text_layout_cache_limit,
 };
 pub use ticker::Ticker;
 pub use view::{

@@ -15,6 +15,7 @@ const HELLO_JSON: &str = include_str!("../../../examples/hello-course/course.jso
 /// An egui context with its fonts built, for layout-only tests.
 fn text_layout_context() -> egui::Context {
     let ctx = egui::Context::default();
+    crate::install_fonts(&ctx);
     let output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
     output.drop_without_applying_deltas();
     ctx
@@ -6115,7 +6116,7 @@ fn course_and_render_contrast_agree() {
 }
 
 #[test]
-fn bundled_inter_has_glyphs_for_latin_greek_and_cyrillic_only() {
+fn bundled_inter_has_glyphs_for_latin_and_symbols_only() {
     let ctx = egui::Context::default();
     crate::install_fonts(&ctx);
     let raw = || egui::RawInput {
@@ -6127,7 +6128,9 @@ fn bundled_inter_has_glyphs_for_latin_greek_and_cyrillic_only() {
     };
     ctx.run_ui(raw(), |_ui| {}).drop_without_applying_deltas();
     let font = egui::FontId::new(20.0, egui::FontFamily::Name("inter".into()));
-    for c in ['A', 'é', 'Ω', 'Ж'] {
+    // Bundled Inter is subsetted to Latin, Latin-1 Supplement, Latin Extended-A,
+    // general punctuation, and UI symbols (see crates/render/fonts/README.md).
+    for c in ['A', 'é', 'Ł', '×', '€', '→', '✓'] {
         assert!(
             ctx.fonts_mut(|fonts| fonts.has_glyph(&font, c)),
             "Inter should cover {c:?}"
@@ -6138,6 +6141,14 @@ fn bundled_inter_has_glyphs_for_latin_greek_and_cyrillic_only() {
             !ctx.fonts_mut(|fonts| fonts.has_glyph(&font, c)),
             "Inter should not cover {c:?}"
         );
+    }
+    if egui::FontDefinitions::default().font_data.is_empty() {
+        for c in ['Ω', 'Ж'] {
+            assert!(
+                !ctx.fonts_mut(|fonts| fonts.has_glyph(&font, c)),
+                "Subsetted Inter without epaint_default_fonts should not cover {c:?}"
+            );
+        }
     }
 }
 
@@ -8711,4 +8722,1101 @@ fn question_and_player_and_offscreen_succeed_across_all_aspect_presets_and_tiny(
         assert_eq!(slide_img.height, h);
         assert_eq!(slide_img.pixels.len(), (w * h * 4) as usize);
     }
+}
+
+/// U-03: `base_definitions()` without `epaint_default_fonts` drops Ubuntu/Hack/NotoEmoji,
+/// populates both Proportional and Monospace, resolves every player chrome string, symbol,
+/// and Phosphor icon used by `player_frame` with real glyphs, and renders `▶` bullets via
+/// vector paths without missing-glyph boxes.
+#[test]
+fn u03_base_definitions_covers_player_chrome_glyphs_without_default_fonts() {
+    use crate::icons::Icon;
+    use egui::{FontDefinitions, FontFamily, FontId};
+
+    let default_defs = crate::font::base_definitions();
+    assert!(
+        default_defs
+            .families
+            .get(&FontFamily::Proportional)
+            .is_some_and(|list| !list.is_empty()),
+        "base_definitions must populate Proportional"
+    );
+    assert!(
+        default_defs
+            .families
+            .get(&FontFamily::Monospace)
+            .is_some_and(|list| !list.is_empty()),
+        "base_definitions must populate Monospace"
+    );
+    if FontDefinitions::default().font_data.is_empty() {
+        for forbidden in ["Ubuntu-Light", "Hack", "NotoEmoji-Regular"] {
+            assert!(
+                !default_defs.font_data.contains_key(forbidden),
+                "base_definitions must not contain {forbidden} when default_fonts is off"
+            );
+        }
+    }
+
+    // Always test the exact lean (player / wasm32) font definitions built from empty base,
+    // even when Cargo feature unification enables default_fonts in a multi-crate test run.
+    let lean_defs = crate::font::base_definitions_from(FontDefinitions::empty());
+    for forbidden in [
+        "Ubuntu-Light",
+        "Hack",
+        "NotoEmoji-Regular",
+        "emoji-icon-font",
+    ] {
+        assert!(
+            !lean_defs.font_data.contains_key(forbidden),
+            "lean font definitions must not contain {forbidden}"
+        );
+    }
+    assert!(
+        lean_defs
+            .families
+            .get(&FontFamily::Proportional)
+            .is_some_and(|list| !list.is_empty()),
+        "lean font definitions must populate Proportional"
+    );
+    assert!(
+        lean_defs
+            .families
+            .get(&FontFamily::Monospace)
+            .is_some_and(|list| !list.is_empty()),
+        "lean font definitions must populate Monospace"
+    );
+
+    let ctx = egui::Context::default();
+    ctx.set_fonts(lean_defs);
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0))),
+        ..Default::default()
+    };
+    ctx.run_ui(raw, |_ui| {}).drop_without_applying_deltas();
+
+    let prop_font = FontId::proportional(14.0);
+    let mono_font = FontId::monospace(14.0);
+    let phosphor_font = FontId::new(18.0, FontFamily::Name("phosphor".into()));
+    let phosphor_fill_font = FontId::new(18.0, FontFamily::Name("phosphor-fill".into()));
+
+    assert!(
+        !ctx.fonts_mut(|f| f.has_glyph(&prop_font, '\u{F8FF}')),
+        "sanity check: unmapped private-use codepoint must report missing"
+    );
+
+    // Every non-whitespace character in CHROME_STRINGS resolves in Proportional and Monospace.
+    for (key, text) in coursecraft_course::CHROME_STRINGS {
+        for ch in text.chars().filter(|c| !c.is_whitespace()) {
+            assert!(
+                ctx.fonts_mut(
+                    |f| f.has_glyph(&prop_font, ch) && f.glyph_width(&prop_font, ch) > 0.0
+                ),
+                "CHROME_STRINGS[{key:?}] char {ch:?} (U+{:04X}) missing in Proportional",
+                ch as u32
+            );
+            assert!(
+                ctx.fonts_mut(
+                    |f| f.has_glyph(&mono_font, ch) && f.glyph_width(&mono_font, ch) > 0.0
+                ),
+                "CHROME_STRINGS[{key:?}] char {ch:?} (U+{:04X}) missing in Monospace",
+                ch as u32
+            );
+        }
+    }
+
+    // Player chrome symbols and numeric displays.
+    for sample in ["×", "✓", "…", "←", "→", "•", "00:00 / 01:30", "1.5×"] {
+        for ch in sample.chars().filter(|c| !c.is_whitespace()) {
+            assert!(
+                ctx.fonts_mut(
+                    |f| f.has_glyph(&prop_font, ch) && f.glyph_width(&prop_font, ch) > 0.0
+                ),
+                "chrome symbol {ch:?} (U+{:04X}) in {sample:?} missing in Proportional",
+                ch as u32
+            );
+            assert!(
+                ctx.fonts_mut(
+                    |f| f.has_glyph(&mono_font, ch) && f.glyph_width(&mono_font, ch) > 0.0
+                ),
+                "chrome symbol {ch:?} (U+{:04X}) in {sample:?} missing in Monospace",
+                ch as u32
+            );
+        }
+    }
+
+    // Every Phosphor icon used by player_frame resolves cleanly in phosphor, phosphor-fill, and Proportional.
+    for icon in [
+        Icon::Play,
+        Icon::Pause,
+        Icon::X,
+        Icon::Check,
+        Icon::CheckCircle,
+        Icon::List,
+        Icon::SpeakerHigh,
+        Icon::SpeakerLow,
+        Icon::SpeakerSlash,
+        Icon::Subtitles,
+        Icon::CornersOut,
+        Icon::CornersIn,
+        Icon::ArrowCounterClockwise,
+        Icon::CaretLeft,
+        Icon::CaretRight,
+        Icon::Lock,
+        Icon::Warning,
+        Icon::ArrowSquareOut,
+    ] {
+        let cp = icon.codepoint();
+        assert!(
+            ctx.fonts_mut(|f| {
+                f.has_glyph(&phosphor_font, cp) && f.glyph_width(&phosphor_font, cp) > 0.0
+            }),
+            "player_frame icon {icon:?} missing in phosphor"
+        );
+        assert!(
+            ctx.fonts_mut(|f| {
+                f.has_glyph(&phosphor_fill_font, cp) && f.glyph_width(&phosphor_fill_font, cp) > 0.0
+            }),
+            "player_frame icon {icon:?} missing in phosphor-fill"
+        );
+        assert!(
+            ctx.fonts_mut(|f| {
+                f.has_glyph(&prop_font, cp) && f.glyph_width(&prop_font, cp) > 0.0
+            }),
+            "player_frame icon {icon:?} missing in Proportional fallback"
+        );
+    }
+
+    // Verify `▶` is handled by text_layout's vector bullet renderer without missing-glyph boxes.
+    let runs = vec![crate::compose::ResolvedTextRun {
+        text: "Arrow bullet item".to_owned(),
+        size: 16.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        link: None,
+        font: None,
+        strikethrough: false,
+        baseline: coursecraft_course::Baseline::Normal,
+        letter_spacing: 0.0,
+    }];
+    let paragraphs = vec![coursecraft_course::Paragraph {
+        list: coursecraft_course::ListKind::Bullet,
+        bullet: Some("▶".to_owned()),
+        ..coursecraft_course::Paragraph::default()
+    }];
+    let laid = crate::text_layout::layout_text(
+        &ctx,
+        Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 100.0)),
+        1.0,
+        &runs,
+        &paragraphs,
+        coursecraft_course::Align::Left,
+        coursecraft_course::VAlign::Top,
+        coursecraft_course::Autofit::None,
+    );
+    let marker = laid
+        .paragraphs
+        .first()
+        .and_then(|p| p.marker.as_ref())
+        .expect("bullet paragraph must produce a laid marker");
+    let vb = marker
+        .vector
+        .expect("`▶` bullet must use vector bullet rendering instead of a missing glyph box");
+    assert_eq!(vb.ch, '▶');
+}
+
+/// U-08 (`M34-10`, `RISK-08`, `RISK-10`): `TextLayoutCache`, `ShapeMeshCache`,
+/// and the strict convex fan fast-path produce byte-identical RGBA pixels
+/// compared to uncached rendering across cold/warm frames, two zooms, and
+/// shifted positions; `is_strictly_convex_ccw` rejects concave and
+/// self-intersecting star polygons.
+#[test]
+fn u08_cached_text_and_shape_meshes_match_uncached_pixels() {
+    use crate::compose::compose_authoring;
+    use crate::font::install_course_fonts;
+    use crate::layout::SlideTransform;
+    use crate::media::{MediaCache, MediaFetch, MediaSource};
+    use crate::offscreen::{RenderMode, RenderOptions, render_slide_rgba, render_ui};
+    use crate::paint::{Highlight, clear_shape_mesh_cache, paint, set_shape_mesh_cache_limit};
+    use crate::shape_fill::is_strictly_convex_ccw;
+    use crate::text_layout::{clear_text_layout_cache, set_text_layout_cache_limit};
+    use coursecraft_course::Course;
+    use egui::{Pos2, Rect, pos2, vec2};
+
+    // 1. Verify `is_strictly_convex_ccw` (`RISK-10`).
+    let ccw_square = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+    assert!(
+        is_strictly_convex_ccw(&ccw_square),
+        "CCW square must be strictly convex"
+    );
+    let cw_square: Vec<_> = ccw_square.iter().copied().rev().collect();
+    assert!(
+        !is_strictly_convex_ccw(&cw_square),
+        "CW square must not pass CCW convexity check"
+    );
+    let circle_32: Vec<_> = (0..32)
+        .map(|i| {
+            let a = (i as f32) * std::f32::consts::TAU / 32.0;
+            (50.0 + 40.0 * a.cos(), 50.0 + 40.0 * a.sin())
+        })
+        .collect();
+    assert!(
+        is_strictly_convex_ccw(&circle_32),
+        "CCW 32-gon circle must be strictly convex"
+    );
+    // Concave L-shape.
+    let concave_l = vec![
+        (0.0, 0.0),
+        (100.0, 0.0),
+        (100.0, 40.0),
+        (40.0, 40.0),
+        (40.0, 100.0),
+        (0.0, 100.0),
+    ];
+    assert!(
+        !is_strictly_convex_ccw(&concave_l),
+        "concave L-shape must be rejected"
+    );
+    // Collinear midpoint on one edge.
+    let collinear_square = vec![
+        (0.0, 0.0),
+        (50.0, 0.0),
+        (100.0, 0.0),
+        (100.0, 100.0),
+        (0.0, 100.0),
+    ];
+    assert!(
+        !is_strictly_convex_ccw(&collinear_square),
+        "collinear edge vertex must be rejected"
+    );
+    // Self-intersecting pentagram: vertices 0, 2, 4, 1, 3 around a CCW circle.
+    // Every consecutive triple has positive CCW cross product, but the total
+    // exterior turning angle is 4*PI instead of 2*PI!
+    let pentagram: Vec<_> = [0, 2, 4, 1, 3]
+        .into_iter()
+        .map(|k| {
+            let a = (k as f32) * std::f32::consts::TAU / 5.0;
+            (50.0 + 40.0 * a.cos(), 50.0 + 40.0 * a.sin())
+        })
+        .collect();
+    assert!(
+        !is_strictly_convex_ccw(&pentagram),
+        "self-intersecting pentagram must be rejected by turning-angle check"
+    );
+    assert!(
+        !is_strictly_convex_ccw(&[(0.0, 0.0), (10.0, 0.0)]),
+        "fewer than 3 points must be rejected"
+    );
+    assert!(
+        !is_strictly_convex_ccw(&[(0.0, 0.0), (f32::NAN, 0.0), (0.0, 10.0)]),
+        "NaN vertices must be rejected"
+    );
+
+    // 2. Build a slide with convex + concave shapes, linear + radial gradients,
+    // outlines, and overflowing `Autofit::Shrink` text.
+    let course_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "u08-cache-equiv",
+        "title": "U-08 Cache Pixel Equivalence",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [{
+                "id": "s0",
+                "title": "Slide 0",
+                "objects": [
+                    {
+                        "id": "convex-ellipse",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "ellipse",
+                            "fill": "#2563EB",
+                            "outline": { "color": "#1E3A8A", "width": 3.0 }
+                        },
+                        "frame": { "x": 40, "y": 40, "w": 220, "h": 140 }
+                    },
+                    {
+                        "id": "convex-linear",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "rounded_rectangle",
+                            "fill": "#10B981",
+                            "fill_style": {
+                                "type": "linear",
+                                "angle": 35.0,
+                                "stops": [
+                                    { "color": "#059669", "position": 0.0 },
+                                    { "color": "#34D399", "position": 0.5 },
+                                    { "color": "#1D4ED8", "position": 1.0 }
+                                ]
+                            },
+                            "outline": { "color": "#065F46", "width": 2.0, "dash": "dash" }
+                        },
+                        "frame": { "x": 300, "y": 40, "w": 280, "h": 160 }
+                    },
+                    {
+                        "id": "concave-star",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "star_5",
+                            "fill": "#F59E0B",
+                            "fill_style": {
+                                "type": "linear",
+                                "angle": 90.0,
+                                "stops": [
+                                    { "color": "#F59E0B", "position": 0.0 },
+                                    { "color": "#F59E0B", "position": 0.5 },
+                                    { "color": "#DC2626", "position": 0.5 },
+                                    { "color": "#7F1D1D", "position": 1.0 }
+                                ]
+                            },
+                            "outline": { "color": "#92400E", "width": 2.0 }
+                        },
+                        "frame": { "x": 620, "y": 40, "w": 220, "h": 220 }
+                    },
+                    {
+                        "id": "concave-arrow-radial",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "arrow_right",
+                            "fill": "#7C3AED",
+                            "fill_style": {
+                                "type": "radial",
+                                "center": [0.35, 0.4],
+                                "stops": [
+                                    { "color": "#DDD6FE", "position": 0.0 },
+                                    { "color": "#6D28D9", "position": 1.0 }
+                                ]
+                            }
+                        },
+                        "frame": { "x": 880, "y": 60, "w": 300, "h": 150 }
+                    },
+                    {
+                        "id": "shrink-text",
+                        "kind": {
+                            "type": "text",
+                            "text": "Overflowing shrink-to-fit text box that forces the 20-step Autofit::Shrink binary search to reduce the font size until every single word fits cleanly inside this compact frame.",
+                            "style": {
+                                "size": 30.0,
+                                "color": "#111827",
+                                "align": "center",
+                                "valign": "middle"
+                            },
+                            "autofit": "shrink"
+                        },
+                        "frame": { "x": 40, "y": 280, "w": 380, "h": 110 }
+                    },
+                    {
+                        "id": "bullet-text",
+                        "kind": {
+                            "type": "text",
+                            "text": "First bulleted item\nSecond bulleted item with extra words to wrap",
+                            "style": { "size": 22.0, "color": "#1F2937", "underline": true },
+                            "paragraphs": [
+                                { "list": "bullet", "level": 0 },
+                                { "list": "bullet", "level": 1 }
+                            ]
+                        },
+                        "frame": { "x": 460, "y": 280, "w": 340, "h": 160 }
+                    }
+                ]
+            }]
+        }]
+    });
+    let course = Course::from_json(&course_json.to_string()).expect("u08 course parses");
+    let slide = course.slide("s0").expect("s0 exists");
+    let items = compose_authoring(&course, slide, None);
+
+    struct EmptyMedia;
+    impl MediaSource for EmptyMedia {
+        fn get(&self, _src: &str) -> MediaFetch {
+            MediaFetch::Missing
+        }
+    }
+    let media = EmptyMedia;
+
+    // 3. Compare `render_slide_rgba` (cached) vs uncached (`limit = 0`) at two zooms.
+    for width in [640u32, 960u32] {
+        let height = ((width as f32 * 720.0 / 1280.0).round() as u32).max(16);
+        let opts = RenderOptions {
+            width,
+            mode: RenderMode::Authoring,
+            layers: Vec::new(),
+            at_ms: None,
+        };
+        let cached_img = render_slide_rgba(&course, "s0", &opts, &media)
+            .expect("cached render_slide_rgba succeeds");
+
+        let screen_rect = Rect::from_min_size(Pos2::ZERO, vec2(width as f32, height as f32));
+        let transform = SlideTransform::fit(screen_rect, course.slide_size).expect("transform");
+        let mut media_cache = MediaCache::new();
+        let uncached_img = render_ui(
+            width,
+            height,
+            1.0,
+            |ctx| {
+                install_course_fonts(ctx, &course, &media);
+                set_text_layout_cache_limit(ctx, 0);
+                set_shape_mesh_cache_limit(ctx, 0);
+            },
+            |ctx| {
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                paint(
+                    &painter,
+                    &transform,
+                    &items,
+                    Highlight::default(),
+                    Some((&mut media_cache, &media)),
+                    Some(&course.theme),
+                    Some(course.slide_background(slide)),
+                );
+            },
+        )
+        .expect("uncached render_ui succeeds");
+
+        assert_eq!(cached_img.width, uncached_img.width);
+        assert_eq!(cached_img.height, uncached_img.height);
+        assert_eq!(
+            cached_img.pixels, uncached_img.pixels,
+            "cached render_slide_rgba must be byte-identical to uncached render at width {width}"
+        );
+    }
+
+    // 4. Cold cache (frame 1) vs warm cache (frame 2) and shifted position:
+    // translating the slide by (+48, +32) must hit both caches (0 new misses)
+    // and produce byte-identical RGBA pixels compared to an uncached shifted render.
+    let shifted_w = 720u32;
+    let shifted_h = 420u32;
+    let base_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 360.0));
+    let shifted_rect = Rect::from_min_size(pos2(48.0, 32.0), vec2(640.0, 360.0));
+    let base_t = SlideTransform::fit(base_rect, course.slide_size).expect("base transform");
+    let shifted_t =
+        SlideTransform::fit(shifted_rect, course.slide_size).expect("shifted transform");
+
+    let mut media_cache_cached = MediaCache::new();
+    let mut pass_idx = 0usize;
+    let mut warm_text_misses = 0u64;
+    let mut warm_mesh_misses = 0u64;
+    let cached_shifted = render_ui(
+        shifted_w,
+        shifted_h,
+        1.0,
+        |ctx| {
+            install_course_fonts(ctx, &course, &media);
+            clear_text_layout_cache(ctx);
+            clear_shape_mesh_cache(ctx);
+        },
+        |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            if pass_idx == 0 {
+                // Pass 0: cold cache at base position (0, 0).
+                paint(
+                    &painter,
+                    &base_t,
+                    &items,
+                    Highlight::default(),
+                    Some((&mut media_cache_cached, &media)),
+                    Some(&course.theme),
+                    Some(course.slide_background(slide)),
+                );
+            } else {
+                // Pass 1+: warm cache at shifted position (+48, +32).
+                #[cfg(debug_assertions)]
+                let before_text = crate::media::test_counts::text_layout_miss_count();
+                #[cfg(debug_assertions)]
+                let before_mesh = crate::media::test_counts::shape_mesh_miss_count();
+                paint(
+                    &painter,
+                    &shifted_t,
+                    &items,
+                    Highlight::default(),
+                    Some((&mut media_cache_cached, &media)),
+                    Some(&course.theme),
+                    Some(course.slide_background(slide)),
+                );
+                #[cfg(debug_assertions)]
+                {
+                    warm_text_misses +=
+                        crate::media::test_counts::text_layout_miss_count() - before_text;
+                    warm_mesh_misses +=
+                        crate::media::test_counts::shape_mesh_miss_count() - before_mesh;
+                }
+            }
+            pass_idx += 1;
+        },
+    )
+    .expect("cached shifted render succeeds");
+
+    assert_eq!(
+        warm_text_misses, 0,
+        "translating a slide must hit TextLayoutCache with zero misses"
+    );
+    assert_eq!(
+        warm_mesh_misses, 0,
+        "translating a slide must hit ShapeMeshCache with zero misses"
+    );
+
+    let mut media_cache_uncached = MediaCache::new();
+    let uncached_shifted = render_ui(
+        shifted_w,
+        shifted_h,
+        1.0,
+        |ctx| {
+            install_course_fonts(ctx, &course, &media);
+            set_text_layout_cache_limit(ctx, 0);
+            set_shape_mesh_cache_limit(ctx, 0);
+        },
+        |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            paint(
+                &painter,
+                &shifted_t,
+                &items,
+                Highlight::default(),
+                Some((&mut media_cache_uncached, &media)),
+                Some(&course.theme),
+                Some(course.slide_background(slide)),
+            );
+        },
+    )
+    .expect("uncached shifted render succeeds");
+
+    assert_eq!(
+        cached_shifted.pixels, uncached_shifted.pixels,
+        "cached translated render must be byte-identical to uncached render at shifted position"
+    );
+}
+
+/// Regression (`RISK-08`): calling `install_course_fonts` mid-pass (as `Editor::show`
+/// and `PlayerApp::ui` do) queues `ctx.set_fonts` for the *next* pass. Laying out
+/// text on the same pass must not poison `TextLayoutCache` with the pre-font
+/// fallback layout under the new `font_epoch`.
+#[test]
+fn u08_mid_pass_course_font_install_does_not_poison_text_layout_cache() {
+    use crate::compose::ResolvedTextRun;
+    use crate::font::{install_course_fonts, install_fonts};
+    use crate::media::{MediaFetch, MediaSource};
+    use crate::text_layout::{layout_text, set_text_layout_cache_limit};
+    use coursecraft_course::{Align, Autofit, Baseline, Course, FontFace, FontStyle, VAlign};
+    use egui::{Color32, Pos2, Rect, vec2};
+    use std::sync::Arc;
+
+    const BOLD_FONT_BYTES: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
+
+    struct CustomFontMedia;
+    impl MediaSource for CustomFontMedia {
+        fn get(&self, src: &str) -> MediaFetch {
+            if src == "fonts/wide.ttf" {
+                MediaFetch::Ready(Arc::from(BOLD_FONT_BYTES))
+            } else {
+                MediaFetch::Missing
+            }
+        }
+    }
+
+    let mut course = Course::from_json(
+        r#"{"schema_version":1,"id":"font-cache","title":"Font Cache","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[]}]}]}"#,
+    )
+    .expect("course parses");
+    course.fonts.push(FontFace {
+        family: "WideCustom".into(),
+        style: FontStyle::Regular,
+        src: "fonts/wide.ttf".into(),
+    });
+
+    let runs = vec![ResolvedTextRun {
+        text: "WWWWWWWWWWWWWW".to_owned(),
+        size: 32.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        strikethrough: false,
+        baseline: Baseline::Normal,
+        letter_spacing: 0.0,
+        font: Some("WideCustom".to_owned()),
+        link: None,
+    }];
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 200.0));
+    let raw = egui::RawInput {
+        screen_rect: Some(rect),
+        ..Default::default()
+    };
+
+    // Reference widths with caching disabled: Inter regular vs WideCustom (Inter Bold).
+    let ctx_ref = egui::Context::default();
+    install_fonts(&ctx_ref);
+    set_text_layout_cache_limit(&ctx_ref, 0);
+    let mut fallback_width = 0.0f32;
+    ctx_ref
+        .run_pass(raw.clone(), |ctx| {
+            fallback_width = layout_text(
+                ctx,
+                rect,
+                1.0,
+                &runs,
+                &[],
+                Align::Left,
+                VAlign::Top,
+                Autofit::None,
+            )
+            .width;
+        })
+        .drop_without_applying_deltas();
+    install_course_fonts(&ctx_ref, &course, &CustomFontMedia);
+    let mut custom_width = 0.0f32;
+    ctx_ref
+        .run_pass(raw.clone(), |ctx| {
+            custom_width = layout_text(
+                ctx,
+                rect,
+                1.0,
+                &runs,
+                &[],
+                Align::Left,
+                VAlign::Top,
+                Autofit::None,
+            )
+            .width;
+        })
+        .drop_without_applying_deltas();
+    assert!(
+        (custom_width - fallback_width).abs() > 1.0,
+        "test setup requires custom font width ({custom_width}) to differ from fallback ({fallback_width})"
+    );
+
+    // Now reproduce a real mid-pass font install after text has already been
+    // laid out in the same pass (e.g., editor chrome / an earlier text box on
+    // the slide, or lazy system-font installation): egui defers `set_fonts`
+    // until pass 2, so pass 1 still lays out with the pre-font fallback.
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    ctx.run_pass(raw.clone(), |_ctx| {})
+        .drop_without_applying_deltas();
+
+    let earlier_runs = vec![ResolvedTextRun {
+        text: "Earlier slide text".to_owned(),
+        size: 16.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        strikethrough: false,
+        baseline: Baseline::Normal,
+        letter_spacing: 0.0,
+        font: None,
+        link: None,
+    }];
+    let mut pass1_width = 0.0f32;
+    ctx.run_pass(raw.clone(), |ctx| {
+        // Touch `ctx.fonts` earlier in pass 1 so egui defers `set_fonts` to pass 2.
+        let _ = layout_text(
+            ctx,
+            rect,
+            1.0,
+            &earlier_runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+        );
+        install_course_fonts(ctx, &course, &CustomFontMedia);
+        pass1_width = layout_text(
+            ctx,
+            rect,
+            1.0,
+            &runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+        )
+        .width;
+    })
+    .drop_without_applying_deltas();
+    assert!(
+        (pass1_width - custom_width).abs() > 1.0,
+        "pass 1 must not yet have the custom font applied (pass1={pass1_width}, custom={custom_width}, fallback={fallback_width})"
+    );
+
+    let mut pass2_width = 0.0f32;
+    ctx.run_pass(raw.clone(), |ctx| {
+        install_course_fonts(ctx, &course, &CustomFontMedia);
+        pass2_width = layout_text(
+            ctx,
+            rect,
+            1.0,
+            &runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+        )
+        .width;
+    })
+    .drop_without_applying_deltas();
+    assert!(
+        (pass2_width - custom_width).abs() < 0.01,
+        "pass 2 must lay out with the newly applied custom font ({custom_width}), not the stale pass 1 fallback ({pass2_width})"
+    );
+
+    // Pass 3 must hit the cache with zero misses and keep the custom font width.
+    #[cfg(debug_assertions)]
+    let misses_before = crate::media::test_counts::text_layout_miss_count();
+    let mut pass3_width = 0.0f32;
+    ctx.run_pass(raw, |ctx| {
+        install_course_fonts(ctx, &course, &CustomFontMedia);
+        pass3_width = layout_text(
+            ctx,
+            rect,
+            1.0,
+            &runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+        )
+        .width;
+    })
+    .drop_without_applying_deltas();
+    assert!((pass3_width - custom_width).abs() < 0.01);
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        crate::media::test_counts::text_layout_miss_count() - misses_before,
+        0,
+        "pass 3 must hit TextLayoutCache once custom fonts are active"
+    );
+}
+
+fn measure_u11_paint_profile(
+    course: &Course,
+    slide: &coursecraft_course::Slide,
+    items: &[DrawItem],
+    profile: &crate::design::PerfProfile,
+) -> (usize, std::time::Duration, usize, usize) {
+    use crate::design::{paint_quality, set_render_profile};
+    use crate::paint::{Highlight, paint, shape_mesh_cache_limit};
+    use crate::text_layout::text_layout_cache_limit;
+
+    let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 360.0));
+    let transform = SlideTransform::fit(screen, course.slide_size).expect("fit");
+    let ctx = egui::Context::default();
+    crate::install_fonts(&ctx);
+    set_render_profile(&ctx, profile);
+    let text_cap = text_layout_cache_limit(&ctx);
+    let mesh_cap = shape_mesh_cache_limit(&ctx);
+    // Warm up egui's initial font-upload pass before measuring repaint delay.
+    for step in 0..2 {
+        let warm = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(0.1 * f64::from(step + 1)),
+            ..Default::default()
+        };
+        ctx.run_ui(warm, |_ui| {}).drop_without_applying_deltas();
+    }
+    let raw = egui::RawInput {
+        screen_rect: Some(screen),
+        time: Some(0.5),
+        ..Default::default()
+    };
+    let out = ctx.run_ui(raw, |ui| {
+        let painter = ui.painter();
+        paint(
+            painter,
+            &transform,
+            items,
+            Highlight::default(),
+            None,
+            Some(&course.theme),
+            Some(course.slide_background(slide)),
+        );
+    });
+    let delay = out
+        .viewport_output
+        .get(&ctx.viewport_id())
+        .map_or(std::time::Duration::ZERO, |vp| vp.repaint_delay);
+    let prims = ctx.tessellate(out.shapes.clone(), out.pixels_per_point);
+    out.drop_without_applying_deltas();
+    let tris: usize = prims
+        .iter()
+        .map(|p| match &p.primitive {
+            egui::epaint::Primitive::Mesh(mesh) => mesh.indices.len() / 3,
+            egui::epaint::Primitive::Callback(_) => 0,
+        })
+        .sum();
+    assert_eq!(
+        paint_quality(&ctx).max_effect_layers,
+        profile.max_effect_layers
+    );
+    (tris, delay, text_cap, mesh_cap)
+}
+
+fn assert_u11_editor_profile_caps() -> (crate::design::PerfProfile, crate::design::PerfProfile) {
+    use crate::design::{PerfProfile, PerformanceMode};
+    use crate::media::MediaCache;
+
+    let lite = PerfProfile::for_editor(PerformanceMode::Lite, false, false, 1, 0);
+    assert_eq!(lite.media_budget_bytes, 64 * 1024 * 1024);
+    assert_eq!(lite.max_canvas_decode_px, 1024);
+    assert_eq!(lite.max_thumb_decode_px, 256);
+    assert_eq!(lite.thumbnail_cache_entries, 32);
+    assert_eq!(lite.text_layout_cache_entries, 96);
+    assert_eq!(lite.shape_mesh_cache_entries, 96);
+    assert_eq!(lite.max_effect_layers, 2);
+    assert!((lite.gradient_max_edge - 24.0).abs() < f32::EPSILON);
+    assert!(!lite.marker_pulse);
+    assert_eq!(lite.web_media_cache_bytes, 32 * 1024 * 1024);
+
+    let auto_small = PerfProfile::for_editor(PerformanceMode::Auto, false, false, 10, 0);
+    assert_eq!(auto_small.media_budget_bytes, 256 * 1024 * 1024);
+    assert_eq!(auto_small.max_effect_layers, 6);
+    assert!((auto_small.gradient_max_edge - 12.0).abs() < f32::EPSILON);
+    assert!(auto_small.marker_pulse);
+
+    for auto_lite in [
+        PerfProfile::for_editor(PerformanceMode::Auto, false, true, 1, 0),
+        PerfProfile::for_editor(PerformanceMode::Auto, false, false, 151, 0),
+        PerfProfile::for_editor(
+            PerformanceMode::Auto,
+            false,
+            false,
+            1,
+            256 * 1024 * 1024 + 1,
+        ),
+        PerfProfile::for_editor(PerformanceMode::Auto, true, false, 1, 64 * 1024 * 1024 + 1),
+    ] {
+        assert_eq!(auto_lite, lite);
+    }
+
+    let mut media_cache = MediaCache::new();
+    media_cache.apply_perf_profile(&lite);
+    assert_eq!(media_cache.picture_budget(), 64 * 1024 * 1024);
+    assert_eq!(media_cache.max_canvas_dim(), 1024);
+    assert_eq!(media_cache.max_thumb_dim(), 256);
+    (auto_small, lite)
+}
+
+/// U-11: Editor Lite profile enforces lower cache caps and fewer triangles for
+/// gradients/shadows, and suppresses pulsing marker repaints.
+#[test]
+fn u11_perf_profile_lite_enforces_editor_caps_and_reduces_editor_triangles() {
+    let (auto_small, lite) = assert_u11_editor_profile_caps();
+
+    let json = r##"{
+      "schema_version": 1,
+      "id": "u11-grad-shadow",
+      "title": "U11 Gradient Shadow",
+      "slide_size": { "w": 640, "h": 360 },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide 1",
+          "objects": [
+            {
+              "id": "g1",
+              "kind": {
+                "type": "shape",
+                "shape": "rounded_rectangle",
+                "fill": "#1D4ED8",
+                "fill_style": {
+                  "type": "linear",
+                  "angle": 45.0,
+                  "stops": [
+                    { "position": 0.0, "color": "#1D4ED8" },
+                    { "position": 1.0, "color": "#10B981" }
+                  ]
+                }
+              },
+              "frame": { "x": 40, "y": 40, "w": 320, "h": 200 },
+              "shadow": { "offset_x": 6.0, "offset_y": 8.0, "blur": 14.0, "color": "#00000088" }
+            },
+            {
+              "id": "m1",
+              "kind": { "type": "marker", "title": "Pulse", "color": "#FF0000" },
+              "frame": { "x": 420, "y": 100, "w": 32, "h": 32 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let slide = course.slide("s1").expect("slide");
+    let mut items = compose_authoring(&course, slide, None);
+    for item in &mut items {
+        if let Visual::Marker { pulse, .. } = &mut item.visual {
+            *pulse = true;
+        }
+    }
+
+    let (std_tris, std_delay, std_text_cap, std_mesh_cap) =
+        measure_u11_paint_profile(&course, slide, &items, &auto_small);
+    let (lite_tris, lite_delay, lite_text_cap, lite_mesh_cap) =
+        measure_u11_paint_profile(&course, slide, &items, &lite);
+
+    assert_eq!(std_text_cap, 256);
+    assert_eq!(std_mesh_cap, 256);
+    assert_eq!(lite_text_cap, 96);
+    assert_eq!(lite_mesh_cap, 96);
+    assert!(
+        lite_tris > 0 && lite_tris < std_tris,
+        "Lite profile must produce fewer triangles ({lite_tris}) than Standard ({std_tris}) while still rendering"
+    );
+    // Standard throttles marker pulse to ~33 ms rather than 0 ms; Lite suppresses it completely.
+    assert!(
+        std_delay >= std::time::Duration::from_millis(20)
+            && std_delay <= std::time::Duration::from_millis(100),
+        "Standard pulsing marker should request ~33 ms throttled repaint, got {std_delay:?}"
+    );
+    assert!(
+        lite_delay >= std::time::Duration::from_secs(1),
+        "Lite mode with marker_pulse=false must not request pulse repaints, got {lite_delay:?}"
+    );
+}
+
+/// U-11 (Reviewer Note #3): Player lite cache profile lowers cache caps ONLY
+/// while preserving byte-identical published visual output.
+#[test]
+fn u11_player_cache_profile_preserves_published_visual_quality() {
+    use crate::design::{PerfProfile, PerformanceMode, set_render_profile};
+    use crate::media::{MediaCache, MediaFetch, MediaSource};
+    use crate::offscreen::{RenderMode, RenderOptions, render_slide_rgba, render_ui};
+    use crate::paint::{Highlight, paint};
+
+    struct EmptyMedia;
+    impl MediaSource for EmptyMedia {
+        fn get(&self, _src: &str) -> MediaFetch {
+            MediaFetch::Missing
+        }
+    }
+
+    let player_lite = PerfProfile::for_player_cache(true, true);
+    assert_eq!(player_lite.media_budget_bytes, 64 * 1024 * 1024);
+    assert_eq!(player_lite.web_media_cache_bytes, 32 * 1024 * 1024);
+    assert_eq!(player_lite.text_layout_cache_entries, 96);
+    assert_eq!(player_lite.shape_mesh_cache_entries, 96);
+    assert_eq!(player_lite.max_effect_layers, 6);
+    assert!((player_lite.gradient_max_edge - 12.0).abs() < f32::EPSILON);
+    assert!(player_lite.marker_pulse);
+    assert_eq!(player_lite.max_canvas_decode_px, 2048);
+
+    let json = r##"{
+      "schema_version": 1,
+      "id": "u11-player-visual-parity",
+      "title": "U11 Visual Parity",
+      "slide_size": { "w": 640, "h": 360 },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide 1",
+          "objects": [
+            {
+              "id": "grad-box",
+              "kind": {
+                "type": "shape",
+                "shape": "rounded_rectangle",
+                "fill": "#2563EB",
+                "fill_style": {
+                  "type": "linear",
+                  "angle": 30.0,
+                  "stops": [
+                    { "position": 0.0, "color": "#2563EB" },
+                    { "position": 0.5, "color": "#7C3AED" },
+                    { "position": 1.0, "color": "#EC4899" }
+                  ]
+                }
+              },
+              "frame": { "x": 60, "y": 50, "w": 260, "h": 180 },
+              "shadow": { "offset_x": 5.0, "offset_y": 6.0, "blur": 12.0, "color": "#00000066" },
+              "glow": { "size": 10.0, "color": "#38BDF888" }
+            },
+            {
+              "id": "title",
+              "kind": { "type": "text", "text": "Published Visual Parity", "style": { "size": 24, "bold": true } },
+              "frame": { "x": 350, "y": 90, "w": 240, "h": 100 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let opts = RenderOptions {
+        width: 640,
+        mode: RenderMode::Player,
+        ..RenderOptions::default()
+    };
+    let baseline = render_slide_rgba(&course, "s1", &opts, &EmptyMedia).expect("baseline render");
+
+    let mut player = Player::new(&course).expect("player");
+    player.handle(&Input::Start);
+    let slide = course.slide("s1").expect("slide");
+    let items = compose(&player);
+    let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 360.0));
+    let transform = SlideTransform::fit(screen, course.slide_size).expect("fit");
+
+    let mut player_cache = MediaCache::new();
+    player_cache.apply_perf_profile(&player_lite);
+    let lite_player_rgba = render_ui(
+        640,
+        360,
+        1.0,
+        |ctx| {
+            crate::install_course_fonts(ctx, &course, &EmptyMedia);
+            set_render_profile(ctx, &player_lite);
+        },
+        |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            paint(
+                &painter,
+                &transform,
+                &items,
+                Highlight::default(),
+                Some((&mut player_cache, &EmptyMedia as &dyn MediaSource)),
+                Some(&course.theme),
+                Some(course.slide_background(slide)),
+            );
+        },
+    )
+    .expect("player lite cache render");
+
+    assert_eq!(
+        lite_player_rgba.pixels, baseline.pixels,
+        "player lite cache profile must produce byte-identical RGBA pixels to Standard render_slide_rgba"
+    );
+
+    // Sanity check: editor Lite mode does intentionally simplify editor preview detail.
+    let editor_lite = PerfProfile::for_editor(PerformanceMode::Lite, false, false, 1, 0);
+    let mut editor_cache = MediaCache::new();
+    editor_cache.apply_perf_profile(&editor_lite);
+    let editor_lite_rgba = render_ui(
+        640,
+        360,
+        1.0,
+        |ctx| {
+            crate::install_course_fonts(ctx, &course, &EmptyMedia);
+            set_render_profile(ctx, &editor_lite);
+        },
+        |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            paint(
+                &painter,
+                &transform,
+                &items,
+                Highlight::default(),
+                Some((&mut editor_cache, &EmptyMedia as &dyn MediaSource)),
+                Some(&course.theme),
+                Some(course.slide_background(slide)),
+            );
+        },
+    )
+    .expect("editor lite render");
+    assert_ne!(
+        editor_lite_rgba.pixels, baseline.pixels,
+        "test slide must exercise shadow/gradient quality differences under editor Lite mode"
+    );
 }

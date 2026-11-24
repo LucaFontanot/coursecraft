@@ -35,7 +35,7 @@ impl DesktopMediaSource {
 #[cfg(not(target_arch = "wasm32"))]
 impl MediaSource for DesktopMediaSource {
     fn get(&self, src: &str) -> MediaFetch {
-        if !coursecraft_format::is_safe_relative_path(src) {
+        if !coursecraft_course::is_safe_media_path(src) {
             return MediaFetch::Missing;
         }
 
@@ -67,9 +67,9 @@ impl MediaSource for DesktopMediaSource {
 }
 
 /// Maximum raw bytes kept in the web media cache before evicting LRU entries
-/// that are not on the current slide (128 MiB).
+/// that are not on the current slide (64 MiB).
 #[cfg(any(target_arch = "wasm32", test))]
-pub const MAX_WEB_CACHE_BYTES: usize = 128 * 1024 * 1024;
+pub const MAX_WEB_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Collect image `src` paths referenced by `slide` (including its layers and
 /// master slide, if any). Excludes video and audio.
@@ -273,7 +273,7 @@ impl WebMediaState {
     pub(crate) fn queue_prefetch(&mut self, srcs: &[String]) -> bool {
         let mut queued = false;
         for src in srcs {
-            if !coursecraft_format::is_safe_relative_path(src) || self.entries.contains_key(src) {
+            if !coursecraft_course::is_safe_media_path(src) || self.entries.contains_key(src) {
                 continue;
             }
             self.entries.insert(src.clone(), WebEntryStatus::Pending);
@@ -284,7 +284,7 @@ impl WebMediaState {
     }
 
     pub(crate) fn get_or_queue(&mut self, src: &str) -> (MediaFetch, bool) {
-        if !coursecraft_format::is_safe_relative_path(src) {
+        if !coursecraft_course::is_safe_media_path(src) {
             return (MediaFetch::Missing, false);
         }
 
@@ -371,9 +371,14 @@ impl WebMediaSource {
 
     /// Create a new web media source that repaints `ctx` when assets arrive.
     pub fn new(ctx: egui::Context) -> Self {
+        Self::with_max_bytes(ctx, MAX_WEB_CACHE_BYTES)
+    }
+
+    /// Create a new web media source with a custom raw-byte cache ceiling.
+    pub fn with_max_bytes(ctx: egui::Context, max_bytes: usize) -> Self {
         Self {
             state: Arc::new(std::sync::Mutex::new(WebMediaState::with_max_bytes(
-                MAX_WEB_CACHE_BYTES,
+                max_bytes,
             ))),
             ctx,
         }

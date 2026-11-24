@@ -463,6 +463,7 @@ fn control_save_on_open_folder_without_extension_keeps_folder_record() {
         project: &mut app.project,
         config_dir: app.config_dir.as_deref(),
         prefs: &mut app.prefs,
+        save_epoch: &app.save_epoch,
     };
     let saved_path = ControlHost::save(&mut adapter, None).expect("control save succeeds");
     assert_eq!(saved_path, folder);
@@ -563,6 +564,7 @@ fn m31_07_attach_editor_host_adapter_ccraft_round_trip_keeps_media() {
         project: &mut app.project,
         config_dir: app.config_dir.as_deref(),
         prefs: &mut app.prefs,
+        save_epoch: &app.save_epoch,
     };
 
     let opened_title =
@@ -587,4 +589,232 @@ fn m31_07_attach_editor_host_adapter_ccraft_round_trip_keeps_media() {
             .any(|s| s.title == "Attach Edited Slide")
     );
     assert_eq!(reopened_media, media);
+}
+
+// ---------------------------------------------------------------- U-07 background autosave
+
+/// U-07: guarded autosave writes a valid, verifiable `.ccraft` when `save_epoch` matches
+/// and returns `Ok(false)` without touching disk when `save_epoch` is already stale.
+#[test]
+fn u07_guarded_autosave_writes_valid_verifiable_ccraft() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let dir = scratch_dir("u07-guarded-autosave-valid");
+    let auto_path = dir.join("deck.autosave.ccraft");
+    let course = course_titled("Guarded Autosave");
+    let media: Vec<(String, Arc<[u8]>)> =
+        vec![("logo.png".to_owned(), Arc::from(b"png-bytes".as_slice()))];
+    let save_epoch = Arc::new(AtomicU64::new(7));
+
+    let committed =
+        crate::autosave::write_autosave_arc_guarded(&course, &media, &auto_path, &save_epoch, 7)
+            .expect("guarded autosave succeeds");
+    assert!(committed, "matching epoch must commit");
+    assert!(auto_path.exists());
+
+    let file = std::fs::File::open(&auto_path).expect("open autosave");
+    coursecraft_format::verify_project(std::io::BufReader::new(file))
+        .expect("autosave passes verify_project");
+
+    let (loaded_course, loaded_media) = open_from(&auto_path).expect("reopen autosave");
+    assert_eq!(loaded_course.title, "Guarded Autosave");
+    assert_eq!(
+        loaded_media,
+        vec![("logo.png".to_owned(), b"png-bytes".to_vec())]
+    );
+    assert_eq!(names_in(&dir), vec!["deck.autosave.ccraft".to_string()]);
+
+    // Pre-write stale epoch check skips writing entirely.
+    save_epoch.fetch_add(1, Ordering::AcqRel);
+    let stale_path = dir.join("stale.autosave.ccraft");
+    let committed_stale =
+        crate::autosave::write_autosave_arc_guarded(&course, &media, &stale_path, &save_epoch, 7)
+            .expect("stale guarded autosave returns cleanly");
+    assert!(!committed_stale, "stale epoch must abort");
+    assert!(!stale_path.exists());
+}
+
+/// U-07 / RISK-07: advancing `save_epoch` mid-write aborts before rename, leaves no
+/// autosave file or temp file behind, and never replaces an existing autosave.
+#[test]
+fn u07_guarded_autosave_aborts_when_save_epoch_advances_mid_write() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Case 1: no existing autosave file — must neither create target nor leave temp.
+    let dir = scratch_dir("u07-guarded-autosave-abort-new");
+    let auto_path = dir.join("deck.autosave.ccraft");
+    let course = course_titled("Mid-Write Race");
+    let media: Vec<(String, Arc<[u8]>)> =
+        vec![("a.png".to_owned(), Arc::from(vec![42u8; 4096].as_slice()))];
+    let save_epoch = Arc::new(AtomicU64::new(3));
+    let epoch_in_hook = Arc::clone(&save_epoch);
+    let after_write = move |tmp: &Path| -> std::io::Result<()> {
+        assert!(
+            tmp.exists(),
+            "temp file exists mid-write before commit check"
+        );
+        epoch_in_hook.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    };
+
+    let committed = crate::autosave::write_autosave_slices_guarded_with_after_write(
+        &course,
+        &media,
+        &auto_path,
+        &save_epoch,
+        3,
+        &after_write,
+    )
+    .expect("aborted write returns Ok(false)");
+    assert!(!committed, "mid-write epoch bump must abort commit");
+    assert!(!auto_path.exists(), "autosave file must not be created");
+    assert!(names_in(&dir).is_empty(), "no temp file may remain");
+
+    // Case 2: existing autosave file — must not be replaced when epoch advances mid-write.
+    let dir2 = scratch_dir("u07-guarded-autosave-abort-existing");
+    let auto_path2 = dir2.join("deck.autosave.ccraft");
+    let save_epoch2 = Arc::new(AtomicU64::new(5));
+    assert!(
+        crate::autosave::write_autosave_arc_guarded(
+            &course_titled("Before"),
+            &media,
+            &auto_path2,
+            &save_epoch2,
+            5,
+        )
+        .expect("initial autosave")
+    );
+    let before_bytes = std::fs::read(&auto_path2).expect("read existing autosave");
+
+    let epoch2_in_hook = Arc::clone(&save_epoch2);
+    let bump_mid_write = move |_tmp: &Path| -> std::io::Result<()> {
+        epoch2_in_hook.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    };
+    let committed2 = crate::autosave::write_autosave_slices_guarded_with_after_write(
+        &course_titled("Stale After"),
+        &media,
+        &auto_path2,
+        &save_epoch2,
+        5,
+        &bump_mid_write,
+    )
+    .expect("aborted replacement returns Ok(false)");
+    assert!(!committed2);
+    assert_eq!(
+        std::fs::read(&auto_path2).expect("existing autosave still readable"),
+        before_bytes,
+        "existing autosave must not be replaced"
+    );
+    assert_eq!(
+        names_in(&dir2),
+        vec!["deck.autosave.ccraft".to_string()],
+        "no temp file may remain"
+    );
+}
+
+/// U-07: overlapping autosave triggers while a background write is in flight are
+/// coalesced without spawning a second write, and completion updates
+/// `last_autosaved_revision` cleanly (while ignoring stale epochs after a manual save).
+#[test]
+fn u07_background_autosave_coalesces_overlapping_triggers() {
+    use std::sync::atomic::Ordering;
+
+    let dir = scratch_dir("u07-bg-autosave-coalesce");
+    let project_path = dir.join("deck.ccraft");
+    let mut app = crate::EditorApp::new_desktop(course_titled("Initial"), Some(dir.clone()));
+    app.project.path = Some(project_path.clone());
+    app.project.saved_revision = 1;
+    app.editor.session.revision = 5;
+
+    let ctx = egui::Context::default();
+    let step_autosave = |app: &mut crate::EditorApp, time: f64| {
+        ctx.begin_pass(egui::RawInput {
+            time: Some(time),
+            ..Default::default()
+        });
+        app.update_autosave(&ctx);
+        ctx.end_pass().drop_without_applying_deltas();
+    };
+
+    // Part A: simulate an in-flight background autosave; repeated due ticks must coalesce.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let epoch = app.save_epoch.load(Ordering::Acquire);
+    app.autosave_rx = Some(rx);
+
+    step_autosave(&mut app, 120.0);
+    step_autosave(&mut app, 240.0);
+    assert!(app.autosave_rx.is_some(), "in-flight receiver stays active");
+    assert_eq!(
+        app.autosaver.last_autosave_time, 0.0,
+        "overlapping ticks while in flight must not consume take_due"
+    );
+    assert_eq!(app.autosaver.last_autosaved_revision, None);
+
+    // Finish the in-flight autosave and poll once.
+    tx.send(crate::AutosaveOutcome {
+        revision: 5,
+        epoch,
+        result: Ok(true),
+    })
+    .expect("send outcome");
+    step_autosave(&mut app, 120.0);
+    assert!(app.autosave_rx.is_none(), "completed receiver is cleared");
+    assert_eq!(app.autosaver.last_autosaved_revision, Some(5));
+
+    // Part B: a new revision past the interval spawns a real background autosave worker
+    // and writes a verifiable `.autosave.ccraft` without blocking the main thread.
+    app.editor.session.revision = 6;
+    app.editor.session.course.title = "Edited Rev 6".to_owned();
+    step_autosave(&mut app, 250.0);
+    assert!(
+        app.autosave_rx.is_some(),
+        "background autosave thread spawned"
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while app.autosave_rx.is_some() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        step_autosave(&mut app, 251.0);
+    }
+    assert!(
+        app.autosave_rx.is_none(),
+        "background autosave finished within timeout"
+    );
+    assert_eq!(app.autosaver.last_autosaved_revision, Some(6));
+
+    let auto_path = crate::autosave::autosave_path_for_project(Some(&project_path), &dir);
+    assert!(auto_path.exists());
+    let file = std::fs::File::open(&auto_path).expect("open autosave");
+    coursecraft_format::verify_project(std::io::BufReader::new(file))
+        .expect("background autosave passes verify_project");
+
+    // Part C: manual save bumps save_epoch, deletes autosave, and causes any stale
+    // completed outcome to be ignored.
+    let epoch_before_save = app.save_epoch.load(Ordering::Acquire);
+    let (stale_tx, stale_rx) = std::sync::mpsc::channel();
+    app.autosave_rx = Some(stale_rx);
+    assert!(app.perform_save());
+    assert!(
+        app.save_epoch.load(Ordering::Acquire) > epoch_before_save,
+        "manual save must advance save_epoch"
+    );
+    assert!(!auto_path.exists(), "manual save removes autosave file");
+
+    stale_tx
+        .send(crate::AutosaveOutcome {
+            revision: 99,
+            epoch: epoch_before_save,
+            result: Ok(true),
+        })
+        .expect("send stale outcome");
+    step_autosave(&mut app, 260.0);
+    assert!(app.autosave_rx.is_none());
+    assert_ne!(
+        app.autosaver.last_autosaved_revision,
+        Some(99),
+        "stale epoch outcome must not overwrite last_autosaved_revision"
+    );
 }

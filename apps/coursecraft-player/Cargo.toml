@@ -13,7 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 coursecraft-course.workspace = true
-coursecraft-format.workspace = true
 coursecraft-lms.workspace = true
 coursecraft-logic.workspace = true
 coursecraft-playback.workspace = true

@@ -613,9 +613,11 @@ fn paint_thumbnail(
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(RADIUS_SM as u8), p.hover);
     if kind == MediaKindFilter::Images {
-        let source = MemoryMediaSource {
-            media: &editor.media,
-        };
+        let source = MemoryMediaSource::from_parts(
+            &editor.media,
+            &editor.media_index,
+            editor.media_index_len,
+        );
         if let MediaView::Ready { texture, .. } =
             editor
                 .media_cache

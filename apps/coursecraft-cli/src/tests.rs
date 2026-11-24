@@ -12,7 +12,7 @@ use coursecraft_logic::{Effect, Input, Player};
 use coursecraft_pptx::zip;
 use coursecraft_render::{MediaFetch, MediaSource, RenderMode, RenderOptions, render_slide_rgba};
 
-use crate::{Cli, Cmd, StandardArg, run, run_simulate};
+use crate::{Cli, Cmd, StandardArg, load, needs_system_font_scan, run, run_simulate, run_validate};
 
 const HELLO_JSON: &str = include_str!("../../../examples/hello-course/course.json");
 const SHOWCASE_JSON: &str = include_str!("../../../examples/showcase/course.json");
@@ -2135,5 +2135,73 @@ fn m31_18_simulate_last_visited_after_bank_redraw_does_not_loop() {
         entered.iter().filter(|s| s.as_str() == "s-intro").count(),
         2,
         "expected s-intro entered only at start and once on LastVisited, got {entered:?}"
+    );
+}
+
+/// U-10 (`M34-13`): `validate` skips OS font scanning on Inter-only courses and
+/// still reports the exact missing-font warning for an unembedded non-Inter font.
+#[test]
+fn u10_cli_validate_skips_font_scan_for_inter_and_warns_for_unknown_system_font() {
+    let hello_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello-course/course.json");
+    let hello_course = load(&hello_path).expect("hello course loads");
+    assert!(
+        !needs_system_font_scan(&hello_course),
+        "hello-course uses only Inter and must not trigger OS font scanning"
+    );
+    let mut hello_out = Vec::new();
+    let code = run_validate(&hello_path, &mut hello_out).expect("validate hello-course");
+    assert_eq!(code, ExitCode::SUCCESS);
+    let hello_stdout = String::from_utf8(hello_out).expect("utf8 output");
+    assert!(
+        !hello_stdout.contains("warning: /fonts"),
+        "Inter-only hello-course must emit no font warnings: {hello_stdout}"
+    );
+
+    let custom_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "u10-unknown-font",
+        "title": "U-10 Unknown Font",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [{
+                "id": "s0",
+                "title": "Slide 0",
+                "objects": [{
+                    "id": "t0",
+                    "kind": {
+                        "type": "text",
+                        "text": "Hello in a missing font",
+                        "style": { "font": "NonExistentTestFont", "size": 32 }
+                    },
+                    "frame": { "x": 80, "y": 80, "w": 600, "h": 120 }
+                }]
+            }]
+        }]
+    });
+    let scratch = scratch_dir("test-cli-u10-unknown-font");
+    let custom_path = scratch.join("course.json");
+    std::fs::write(&custom_path, custom_json.to_string()).expect("write course");
+    let custom_course = load(&custom_path).expect("custom course loads");
+    assert!(
+        needs_system_font_scan(&custom_course),
+        "course referencing unembedded NonExistentTestFont must trigger OS font scan"
+    );
+
+    let mut custom_out = Vec::new();
+    let code = run_validate(&custom_path, &mut custom_out).expect("validate custom course");
+    assert_eq!(code, ExitCode::SUCCESS);
+    let custom_stdout = String::from_utf8(custom_out).expect("utf8 output");
+    assert!(
+        custom_stdout
+            .contains("warning: /fonts — Learners without NonExistentTestFont will see Inter."),
+        "validate must report the exact font warning, got: {custom_stdout}"
+    );
+    let expected_warnings = custom_course.validate().len() + 1;
+    assert!(
+        custom_stdout.contains(&format!("0 error(s), {expected_warnings} warning(s)")),
+        "warning count must include the font warning, got: {custom_stdout}"
     );
 }

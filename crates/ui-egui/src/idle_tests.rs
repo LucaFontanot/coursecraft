@@ -131,3 +131,40 @@ fn playback_requests_repaint_then_stops() {
     h.editor.toggle_timeline_playback(4000);
     assert_quiet(&mut h, "editor after playback stops");
 }
+
+/// G-01 (preview): Editor preview wakes while its slide timeline is running,
+/// then stops requesting repaints once the timeline ends and settles.
+#[test]
+fn g01_preview_idle_after_timeline_ends_does_not_repaint() {
+    let mut course = Course::from_json(HELLO_COURSE).expect("hello course parses");
+    if let Some(slide) = course.slide_mut("s-intro") {
+        slide.duration_ms = 300;
+    }
+    let mut h = TestHarness::new(course);
+    h.editor.open_preview();
+    if let Some(preview) = h.editor.preview.as_mut() {
+        preview.frame.reduced_motion = true;
+    }
+
+    // While the 300 ms slide is running, preview must schedule a wake.
+    let active_delay = idle_frame_delay(&mut h);
+    assert!(
+        active_delay < Duration::from_secs(1),
+        "active preview timeline must schedule a wake, got {active_delay:?}"
+    );
+
+    // Advance virtual time well past the 300 ms duration so the slide finishes.
+    for _ in 0..8 {
+        h.advance_time(0.1);
+        let _ = h.idle_frame();
+    }
+    let ended = h
+        .editor
+        .preview
+        .as_ref()
+        .and_then(|p| p.state.as_ref())
+        .is_some_and(|st| st.base.ended);
+    assert!(ended, "preview slide timeline should have ended");
+
+    assert_quiet(&mut h, "editor preview after slide timeline ends");
+}

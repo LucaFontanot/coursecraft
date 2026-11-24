@@ -112,18 +112,23 @@ struct CachedThumbnail {
 /// Bounded LRU cache of composed authoring thumbnails, keyed by slide id and
 /// validated cheaply by session revision and deterministic content fingerprint.
 pub(crate) struct ThumbnailCache {
-    visual_revision: u64,
+    visual_revision: Option<u64>,
     course_visual_fp: u64,
+    /// True when `course_visual_fp` at `visual_revision` matched the previous revision.
+    course_visual_unchanged: bool,
     tick: u64,
+    max_entries: usize,
     entries: HashMap<String, CachedThumbnail>,
 }
 
 impl Default for ThumbnailCache {
     fn default() -> Self {
         Self {
-            visual_revision: u64::MAX,
+            visual_revision: None,
             course_visual_fp: 0,
+            course_visual_unchanged: false,
             tick: 0,
+            max_entries: MAX_CACHED_THUMBNAILS,
             entries: HashMap::new(),
         }
     }
@@ -132,10 +137,27 @@ impl Default for ThumbnailCache {
 impl ThumbnailCache {
     /// Drop all cached thumbnails (called when replacing the open course).
     pub(crate) fn clear(&mut self) {
-        self.visual_revision = u64::MAX;
+        self.visual_revision = None;
         self.course_visual_fp = 0;
+        self.course_visual_unchanged = false;
         self.tick = 0;
         self.entries.clear();
+    }
+
+    /// Configure the maximum number of cached thumbnails, evicting oldest entries if needed.
+    pub(crate) fn set_max_entries(&mut self, max_entries: usize) {
+        self.max_entries = max_entries.max(1);
+        while self.entries.len() > self.max_entries {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest_key);
+        }
     }
 
     #[cfg(test)]
@@ -148,6 +170,7 @@ impl ThumbnailCache {
     pub(crate) fn get_or_compose(
         &mut self,
         revision: u64,
+        last_changed_slide: Option<&str>,
         course: &Course,
         slide: &Slide,
     ) -> (Color32, Arc<[DrawItem]>) {
@@ -160,9 +183,28 @@ impl ThumbnailCache {
             return (entry.bg, Arc::clone(&entry.items));
         }
 
-        if self.visual_revision != revision {
-            self.course_visual_fp = course_visual_fingerprint(course);
-            self.visual_revision = revision;
+        if self.visual_revision != Some(revision) {
+            let new_fp = course_visual_fingerprint(course);
+            self.course_visual_unchanged = self.visual_revision == Some(revision.wrapping_sub(1))
+                && self.course_visual_fp == new_fp;
+            self.course_visual_fp = new_fp;
+            self.visual_revision = Some(revision);
+        }
+
+        // Single-slide edit fast path: if course-level visual state did not change
+        // and only a different slide (not this slide or its master) was edited,
+        // bump `verified_revision` in O(1) without hashing this slide.
+        if self.course_visual_unchanged
+            && let Some(changed_id) = last_changed_slide
+            && slide.id != changed_id
+            && slide.master.as_deref() != Some(changed_id)
+            && let Some(entry) = self.entries.get_mut(&slide.id)
+            && entry.verified_revision == revision.wrapping_sub(1)
+        {
+            self.tick = self.tick.saturating_add(1);
+            entry.verified_revision = revision;
+            entry.last_used = self.tick;
+            return (entry.bg, Arc::clone(&entry.items));
         }
 
         let fp = thumbnail_fingerprint(course, slide, self.course_visual_fp);
@@ -192,13 +234,15 @@ impl ThumbnailCache {
                 last_used: used,
             },
         );
-        if self.entries.len() > MAX_CACHED_THUMBNAILS
-            && let Some(oldest_key) = self
+        while self.entries.len() > self.max_entries {
+            let Some(oldest_key) = self
                 .entries
                 .iter()
                 .min_by_key(|(_, entry)| entry.last_used)
                 .map(|(key, _)| key.clone())
-        {
+            else {
+                break;
+            };
             self.entries.remove(&oldest_key);
         }
         (bg, items)
@@ -630,6 +674,7 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                 {
                     let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
                         revision,
+                        editor.session.last_changed_slide(),
                         &editor.session.course,
                         master,
                     );
@@ -644,9 +689,11 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                     {
                         #[cfg(test)]
                         crate::guard_counters::note_thumbnail_paint(&master_id, master);
-                        let source = crate::MemoryMediaSource {
-                            media: &editor.media,
-                        };
+                        let source = crate::MemoryMediaSource::from_parts(
+                            &editor.media,
+                            &editor.media_index,
+                            editor.media_index_len,
+                        );
                         paint(
                             &painter,
                             &t,
@@ -1722,6 +1769,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             {
                 let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
                     revision,
+                    editor.session.last_changed_slide(),
                     &editor.session.course,
                     slide_ref,
                 );
@@ -1734,9 +1782,11 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
                     #[cfg(test)]
                     crate::guard_counters::note_thumbnail_paint(&slide.id, slide_ref);
-                    let source = crate::MemoryMediaSource {
-                        media: &editor.media,
-                    };
+                    let source = crate::MemoryMediaSource::from_parts(
+                        &editor.media,
+                        &editor.media_index,
+                        editor.media_index_len,
+                    );
                     paint(
                         &painter,
                         &t,
@@ -2132,6 +2182,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 {
                     let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
                         revision,
+                        editor.session.last_changed_slide(),
                         &editor.session.course,
                         slide_ref,
                     );
@@ -2144,9 +2195,11 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     if let Some(t) =
                         SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
                     {
-                        let source = crate::MemoryMediaSource {
-                            media: &editor.media,
-                        };
+                        let source = crate::MemoryMediaSource::from_parts(
+                            &editor.media,
+                            &editor.media_index,
+                            editor.media_index_len,
+                        );
                         paint(
                             &painter,
                             &t,
@@ -2604,12 +2657,15 @@ mod tests {
         }
     }
 
-    /// SL-05: ThumbnailCache stays capped at 128 across a 300-slide scroll,
-    /// empties on `replace_course`, keeps off-screen `scroll_to_rect` working,
-    /// and preserves slide drag-reorder.
+    /// SL-05: ThumbnailCache stays capped at 128 in Standard mode (and 32 in Lite mode)
+    /// across a 300-slide scroll, empties on `replace_course`, keeps off-screen
+    /// `scroll_to_rect` working, and preserves slide drag-reorder.
     #[test]
     fn thumbnail_cache_cap_reset_scroll_to_rect_and_drag_reorder() {
         let mut h = TestHarness::new(slides_course(300));
+        // 300 slides triggers Auto -> Lite (32); explicitly test Standard (128) here.
+        h.editor
+            .set_performance_mode(coursecraft_render::PerformanceMode::Standard);
         for _ in 0..3 {
             let _ = h.idle_frame();
         }
@@ -2646,6 +2702,17 @@ mod tests {
             MAX_CACHED_THUMBNAILS,
             "scrolling through 300 slides should fill cache up to the 128-entry cap"
         );
+
+        // Switching to Lite (or Auto on 300 slides) shrinks the cache to its 32-entry ceiling.
+        h.editor
+            .set_performance_mode(coursecraft_render::PerformanceMode::Lite);
+        assert_eq!(
+            h.editor.ui.thumbnail_cache.len(),
+            32,
+            "Lite mode must evict thumbnail cache down to 32 entries"
+        );
+        h.editor
+            .set_performance_mode(coursecraft_render::PerformanceMode::Standard);
 
         // (b) `replace_course` empties the thumbnail cache.
         h.editor.replace_course(slides_course(300));

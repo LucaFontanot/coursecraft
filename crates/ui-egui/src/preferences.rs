@@ -4,7 +4,7 @@
 //! and goes to the app as an [`EditorRequest`], which saves it.
 
 use crate::dialog::Dialog;
-use coursecraft_render::ThemePref;
+use coursecraft_render::{PerformanceMode, ThemePref};
 use egui::DragValue;
 
 use crate::slide_size_dialog::{
@@ -29,6 +29,10 @@ pub struct PrefsState {
     pub default_slide: (u32, u32),
     /// Underline misspellings while editing text.
     pub spell_check_as_you_type: bool,
+    /// Editor performance profile preference.
+    pub performance_mode: PerformanceMode,
+    /// Check GitHub at most once a day on startup for a newer desktop version.
+    pub auto_check_updates: bool,
 }
 
 impl Default for PrefsState {
@@ -39,6 +43,8 @@ impl Default for PrefsState {
             versions_to_keep: 10,
             default_slide: DEFAULT_SLIDE_SIZE,
             spell_check_as_you_type: true,
+            performance_mode: PerformanceMode::Auto,
+            auto_check_updates: true,
         }
     }
 }
@@ -59,6 +65,18 @@ impl Editor {
         self.ui.prefs.versions_to_keep = versions.min(MAX_VERSIONS_TO_KEEP);
     }
 
+    /// Set the active editor performance mode and immediately update editor cache ceilings.
+    pub fn set_performance_mode(&mut self, mode: PerformanceMode) {
+        self.performance_mode = mode;
+        self.ui.prefs.performance_mode = mode;
+        self.sync_perf_profile(None);
+    }
+
+    /// Show the saved automatic update check setting in the window.
+    pub fn set_auto_check_updates(&mut self, enabled: bool) {
+        self.ui.prefs.auto_check_updates = enabled;
+    }
+
     /// Open the Preferences window.
     pub fn open_preferences(&mut self) {
         self.ui.prefs.open = true;
@@ -77,6 +95,8 @@ pub fn show_preferences_window(
     let mut open = true;
     let before = editor.ui.prefs.clone();
     let mut theme = editor.theme_pref;
+    let updates_available = editor.updates_available;
+    let mut auto_check = editor.ui.prefs.auto_check_updates;
     Dialog::new("Preferences")
         .open(&mut open)
         .width(440.0)
@@ -117,6 +137,20 @@ pub fn show_preferences_window(
                     theme = pref;
                 }
             }
+            ui.separator();
+            ui.label("Performance");
+            for (mode, label) in [
+                (PerformanceMode::Auto, "Automatic"),
+                (PerformanceMode::Standard, "Standard"),
+                (PerformanceMode::Lite, "Lite"),
+            ] {
+                if ui.radio(prefs.performance_mode == mode, label).clicked() {
+                    prefs.performance_mode = mode;
+                }
+            }
+            ui.small(
+                "Lite lowers editor cache sizes and preview detail on older hardware. Published courses are not affected.",
+            );
             ui.separator();
             ui.label("Default slide size for new courses");
             let selected_preset = PRESETS.iter().find(|p| (p.w, p.h) == prefs.default_slide);
@@ -159,21 +193,93 @@ pub fn show_preferences_window(
                     prefs.default_slide.1,
                 ));
             });
+            if updates_available {
+                ui.separator();
+                ui.label("Updates");
+                ui.checkbox(&mut auto_check, "Check for updates automatically");
+                ui.small("Checks GitHub once a day on startup. No personal data is sent.");
+            }
         });
     if theme != editor.theme_pref {
         editor.theme_pref = theme;
         requests.push(EditorRequest::SetTheme(theme));
     }
     if editor.ui.prefs != before {
+        if editor.ui.prefs.performance_mode != editor.performance_mode {
+            editor.performance_mode = editor.ui.prefs.performance_mode;
+            editor.sync_perf_profile(Some(ctx));
+        }
         requests.push(EditorRequest::SetPreferences {
             autosave_minutes: editor.ui.prefs.autosave_minutes,
             versions_to_keep: editor.ui.prefs.versions_to_keep,
             default_slide: editor.ui.prefs.default_slide,
             spell_check_as_you_type: editor.ui.prefs.spell_check_as_you_type,
             spell_words: editor.ui.spell_words.clone(),
+            performance_mode: editor.ui.prefs.performance_mode,
         });
+    }
+    if auto_check != editor.ui.prefs.auto_check_updates {
+        editor.ui.prefs.auto_check_updates = auto_check;
+        requests.push(EditorRequest::SetAutoCheckUpdates(auto_check));
     }
     if !open {
         editor.ui.prefs.open = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_harness::TestHarness;
+    use coursecraft_course::Course;
+
+    fn sample_course() -> Course {
+        let json = include_str!("../../../examples/hello-course/course.json");
+        Course::from_json(json).expect("hello-course fixture")
+    }
+
+    /// UI-05: Toggling "Check for updates automatically" emits `SetAutoCheckUpdates`
+    /// without spuriously emitting `SetPreferences`.
+    #[test]
+    fn ui05_preferences_auto_check_toggle() {
+        let mut h = TestHarness::new(sample_course());
+        h.editor.set_updates_available(true);
+        assert!(h.editor.ui.prefs.auto_check_updates);
+
+        h.editor.open_preferences();
+        h.idle_frame();
+        h.idle_frame();
+
+        let toggle_pos = h
+            .find_text("Check for updates automatically")
+            .expect("auto-check updates checkbox");
+        let reqs = h.click_at_requests(toggle_pos);
+        assert!(!h.editor.ui.prefs.auto_check_updates);
+        assert!(
+            reqs.contains(&EditorRequest::SetAutoCheckUpdates(false)),
+            "expected SetAutoCheckUpdates(false), got {reqs:?}"
+        );
+        assert!(
+            !reqs
+                .iter()
+                .any(|r| matches!(r, EditorRequest::SetPreferences { .. })),
+            "toggling auto_check_updates must not emit SetPreferences, got {reqs:?}"
+        );
+
+        let toggle_pos = h
+            .find_text("Check for updates automatically")
+            .expect("auto-check updates checkbox");
+        let reqs = h.click_at_requests(toggle_pos);
+        assert!(h.editor.ui.prefs.auto_check_updates);
+        assert!(
+            reqs.contains(&EditorRequest::SetAutoCheckUpdates(true)),
+            "expected SetAutoCheckUpdates(true), got {reqs:?}"
+        );
+        assert!(
+            !reqs
+                .iter()
+                .any(|r| matches!(r, EditorRequest::SetPreferences { .. })),
+            "toggling auto_check_updates must not emit SetPreferences, got {reqs:?}"
+        );
     }
 }
