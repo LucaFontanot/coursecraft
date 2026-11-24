@@ -14295,3 +14295,83 @@ fn gb_12_group_update_and_lifecycle_cleanup() {
     assert!(s.course.slide("slide1").unwrap().triggers.is_empty());
     assert!(s.course.first_error().is_none());
 }
+
+#[test]
+fn gb_12_opt_out_plain_colliding_group_and_hostile_paste_groups() {
+    let mut s = Session::blank("Plain Group Colliding ID & Paste Bounds");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box2",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#223344" },
+            "frame": { "x": 20.0, "y": 15.0, "w": 20.0, "h": 20.0 }
+        }),
+    );
+    // Legacy plain group whose group ID matches object ID "box1", while object "box1" has a trigger.
+    {
+        let slide = s.course.slide_mut("slide1").unwrap();
+        slide.objects[0].group = Some("box1".to_owned());
+        slide.objects[1].group = Some("box1".to_owned());
+    }
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": "box1" },
+                "action": { "action": "pause_timeline" }
+            }
+        }),
+    );
+    // Opting out a plain group with no Group record must be a clean no-op, not blocked by the object's trigger.
+    let undo_before = s.undo_len();
+    let res = ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": "box1", "interactive": false }),
+    );
+    assert_eq!(res["group"], "box1");
+    assert_eq!(s.undo_len(), undo_before);
+
+    // Hostile object.paste with >500 groups or oversized group name must be rejected.
+    let obj_val = serde_json::to_value(&s.course.slide("slide1").unwrap().objects[0]).unwrap();
+    let too_many_groups: Vec<Json> = (0..501)
+        .map(|i| json!({ "id": format!("g{i}"), "interactive": true }))
+        .collect();
+    assert!(
+        s.execute(
+            "object.paste",
+            &json!({
+                "slide": "slide1",
+                "objects": [obj_val.clone()],
+                "groups": too_many_groups
+            }),
+        )
+        .is_err()
+    );
+    let huge_name = "x".repeat(200_000);
+    assert!(
+        s.execute(
+            "object.paste",
+            &json!({
+                "slide": "slide1",
+                "objects": [obj_val],
+                "groups": [{ "id": "box1", "name": huge_name, "interactive": true }]
+            }),
+        )
+        .is_err()
+    );
+}

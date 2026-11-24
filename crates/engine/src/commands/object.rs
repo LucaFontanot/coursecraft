@@ -1069,33 +1069,39 @@ pub(super) fn group_set_interactive(s: &mut Session, p: &Json) -> Result<Json> {
         keep_valid(s, was_valid)?;
         Ok(json!({ "group": effective_id }))
     } else {
-        {
+        let has_record = {
             let slide = s
                 .course
                 .slide(&sid)
                 .ok_or_else(|| EngineError::NotFound(format!("slide {sid:?} does not exist")))?;
-            let exists =
-                slide.group(&group_id).is_some() || !slide.group_members(&group_id).is_empty();
-            if !exists {
+            let has_record = slide.group(&group_id).is_some();
+            if !has_record && slide.group_members(&group_id).is_empty() {
                 return Err(EngineError::NotFound(format!(
                     "group {group_id:?} is not on slide {sid:?}"
                 )));
             }
-            let has_trigger = slide
-                .triggers
-                .iter()
-                .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
-                .any(|t| trigger_references_target(t, &group_id))
-                || slide
-                    .question
-                    .as_ref()
-                    .and_then(|q| q.correct_when.as_ref())
-                    .is_some_and(|c| condition_references_target(c, &group_id));
-            if has_trigger {
-                return Err(EngineError::Invalid(
-                    "Cannot remove button behaviour while triggers reference this group; delete or retarget those triggers first".to_owned(),
-                ));
+            if has_record {
+                let has_trigger = slide
+                    .triggers
+                    .iter()
+                    .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+                    .any(|t| trigger_references_target(t, &group_id))
+                    || slide
+                        .question
+                        .as_ref()
+                        .and_then(|q| q.correct_when.as_ref())
+                        .is_some_and(|c| condition_references_target(c, &group_id));
+                if has_trigger {
+                    return Err(EngineError::Invalid(
+                        "Cannot remove button behaviour while triggers reference this group; delete or retarget those triggers first".to_owned(),
+                    ));
+                }
             }
+            has_record
+        };
+        if !has_record {
+            s.skip_undo = true;
+            return Ok(json!({ "group": group_id }));
         }
 
         let slide = slide_mut(s, &sid)?;
@@ -1341,6 +1347,37 @@ pub(super) fn object_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({ "id": first, "ids": new_ids }))
 }
 
+fn collect_paste_source_groups(
+    cmd: &str,
+    src_slide: Option<&Slide>,
+    groups_param: Vec<Group>,
+) -> Result<BTreeMap<String, Group>> {
+    let mut source_groups: BTreeMap<String, Group> = BTreeMap::new();
+    if let Some(src_slide) = src_slide {
+        for g in &src_slide.groups {
+            source_groups.insert(g.id.clone(), g.clone());
+        }
+        for l in &src_slide.layers {
+            for g in &l.groups {
+                source_groups.insert(g.id.clone(), g.clone());
+            }
+        }
+    }
+    for mut g in groups_param {
+        g.name = text(cmd, g.name, "name")?;
+        if let Some(desc) = g.description {
+            let desc = text(cmd, desc, "description")?;
+            g.description = if desc.trim().is_empty() {
+                None
+            } else {
+                Some(desc)
+            };
+        }
+        source_groups.insert(g.id.clone(), g);
+    }
+    Ok(source_groups)
+}
+
 pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "object.paste";
     let was_valid = s.is_playable();
@@ -1355,7 +1392,7 @@ pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
     if objects.is_empty() {
         return Err(bad(C, "`objects` is empty"));
     }
-    if objects.len() > 500 || triggers.len() > 1000 {
+    if objects.len() > 500 || triggers.len() > 1000 || groups_param.len() > 500 {
         return Err(bad(C, "clipboard payload is too large"));
     }
     let offset = offset.unwrap_or(20.0);
@@ -1425,21 +1462,8 @@ pub(super) fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
         )
     };
 
-    let mut source_groups: BTreeMap<String, Group> = BTreeMap::new();
     let src_sid = source_slide.as_deref().unwrap_or(&sid);
-    if let Some(src_slide) = s.course.slide(src_sid) {
-        for g in &src_slide.groups {
-            source_groups.insert(g.id.clone(), g.clone());
-        }
-        for l in &src_slide.layers {
-            for g in &l.groups {
-                source_groups.insert(g.id.clone(), g.clone());
-            }
-        }
-    }
-    for g in groups_param {
-        source_groups.insert(g.id.clone(), g);
-    }
+    let source_groups = collect_paste_source_groups(C, s.course.slide(src_sid), groups_param)?;
 
     let mut object_map: BTreeMap<String, String> = BTreeMap::new();
     let mut pasted: Vec<Object> = Vec::with_capacity(objects.len());
