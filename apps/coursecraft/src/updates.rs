@@ -7,6 +7,8 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 /// Minimum elapsed seconds between automatic startup update checks (24 hours).
 pub const CHECK_INTERVAL_SECS: u64 = 86_400;
@@ -1093,23 +1095,508 @@ pub fn download_asset_verified(
     })
 }
 
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
+const DOWNLOAD_RECV_TIMEOUT: Duration = Duration::from_secs(30);
+const GITHUB_API_VERSION: &str = "2022-11-28";
+const DEFAULT_RELEASES_API_URL: &str =
+    "https://api.github.com/repos/ad1-kamath/coursecraft/releases?per_page=20";
+const PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
+const PROGRESS_MIN_BYTES: u64 = 128 * 1024;
+
+/// Production HTTPS transport backed by `ureq` with manual redirect handling
+/// and per-request timeouts.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UreqHttp;
+
+impl UreqHttp {
+    fn build_agent(kind: RequestKind) -> ureq::Agent {
+        let mut builder = ureq::config::Config::builder()
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .timeout_connect(Some(CONNECT_TIMEOUT));
+        builder = match kind {
+            RequestKind::Metadata | RequestKind::Checksums => {
+                builder.timeout_global(Some(METADATA_TIMEOUT))
+            }
+            RequestKind::Download => builder.timeout_recv_body(Some(DOWNLOAD_RECV_TIMEOUT)),
+        };
+        ureq::Agent::new_with_config(builder.build())
+    }
+}
+
+fn map_ureq_error(err: ureq::Error) -> UpdateError {
+    match err {
+        ureq::Error::Timeout(_) => UpdateError::Timeout,
+        ureq::Error::Io(ref io_err) if io_err.kind() == io::ErrorKind::TimedOut => {
+            UpdateError::Timeout
+        }
+        other => UpdateError::Network(other.to_string()),
+    }
+}
+
+fn header_str(headers: &ureq::http::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+}
+
+fn header_u64(headers: &ureq::http::HeaderMap, name: &str) -> Option<u64> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+impl UpdateHttp for UreqHttp {
+    fn get(
+        &self,
+        url: &str,
+        accept: &str,
+        user_agent: &str,
+        kind: RequestKind,
+    ) -> Result<HttpResponse, UpdateError> {
+        let agent = Self::build_agent(kind);
+        let mut req = agent
+            .get(url)
+            .header("User-Agent", user_agent)
+            .header("Accept", accept);
+        if kind == RequestKind::Metadata {
+            req = req.header("X-GitHub-Api-Version", GITHUB_API_VERSION);
+        }
+        let response = req.call().map_err(map_ureq_error)?;
+        let status = response.status().as_u16();
+        let headers = response.headers();
+        let location = header_str(headers, "location");
+        let content_length = header_u64(headers, "content-length");
+        let rate_limit_remaining = header_u64(headers, "x-ratelimit-remaining");
+        let body = Box::new(response.into_body().into_reader());
+        Ok(HttpResponse {
+            status,
+            location,
+            content_length,
+            rate_limit_remaining,
+            body,
+        })
+    }
+}
+
+fn unquote_xdg_value(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        return trimmed.to_owned();
+    };
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                out.push(next);
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn expand_xdg_path(value: &str, home: &Path) -> Option<PathBuf> {
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return None;
+    }
+    if value == "$HOME" || value == "$HOME/" || value == "${HOME}" || value == "${HOME}/" {
+        return Some(home.to_path_buf());
+    }
+    if let Some(rest) = value
+        .strip_prefix("$HOME/")
+        .or_else(|| value.strip_prefix("${HOME}/"))
+    {
+        let rel = rest.trim_start_matches('/');
+        if rel.is_empty() {
+            return Some(home.to_path_buf());
+        }
+        return Some(home.join(rel));
+    }
+    if value.starts_with('/') {
+        return Some(PathBuf::from(value));
+    }
+    None
+}
+
+/// Parse `XDG_DOWNLOAD_DIR` from an `xdg-user-dirs` `user-dirs.dirs` file.
+#[must_use]
+pub fn parse_xdg_download_dir(text: &str, home: &Path) -> Option<PathBuf> {
+    let mut found = None;
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, raw_val)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "XDG_DOWNLOAD_DIR" {
+            continue;
+        }
+        let unquoted = unquote_xdg_value(raw_val);
+        if let Some(path) = expand_xdg_path(&unquoted, home) {
+            found = Some(path);
+        }
+    }
+    found
+}
+
+fn non_empty_env_path(key: &str) -> Option<PathBuf> {
+    let val = std::env::var_os(key)?;
+    if val.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(val))
+}
+
+/// Return the user's standard Downloads directory for the current platform.
+#[must_use]
+pub fn downloads_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        non_empty_env_path("HOME").map(|home| home.join("Downloads"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        non_empty_env_path("USERPROFILE").map(|profile| profile.join("Downloads"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let home = non_empty_env_path("HOME")?;
+        let config_dir = non_empty_env_path("XDG_CONFIG_HOME")
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join(".config"));
+        let dirs_file = config_dir.join("user-dirs.dirs");
+        if let Ok(text) = std::fs::read_to_string(dirs_file)
+            && let Some(parsed) = parse_xdg_download_dir(&text, &home)
+        {
+            return Some(parsed);
+        }
+        Some(home.join("Downloads"))
+    }
+}
+
+/// Return `true` when an executable path's file stem indicates a portable build.
+#[must_use]
+pub fn exe_path_is_portable(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|stem| stem.to_ascii_lowercase().contains("portable"))
+}
+
+/// Return `true` when the currently running binary appears to be a portable build.
+#[must_use]
+pub fn is_portable_install() -> bool {
+    std::env::current_exe()
+        .ok()
+        .is_some_and(|path| exe_path_is_portable(&path))
+}
+
+/// Events emitted by [`UpdateClient`] background worker threads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+pub enum UpdateEvent {
+    /// A version check completed (either silent startup or manual).
+    CheckFinished {
+        /// `true` when explicitly requested by the user; `false` for silent startup checks.
+        manual: bool,
+        /// Outcome or error from the check.
+        result: Result<CheckOutcome, UpdateError>,
+    },
+    /// Throttled download progress update.
+    DownloadProgress {
+        /// Bytes written so far.
+        downloaded: u64,
+        /// Total expected bytes, if known.
+        total: Option<u64>,
+    },
+    /// A download completed, failed, or was cancelled.
+    DownloadFinished(Result<DownloadResult, UpdateError>),
+}
+
+/// Current background activity of [`UpdateClient`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateBusy {
+    /// No update check or download is running.
+    Idle,
+    /// A background update check is in flight.
+    Checking,
+    /// A background installer download is in flight.
+    Downloading,
+}
+
+struct DownloadJob {
+    http: Arc<dyn UpdateHttp>,
+    asset: ResolvedAsset,
+    checksums_url: Option<String>,
+    dest_dir: PathBuf,
+    user_agent: String,
+    cancel: Arc<AtomicBool>,
+    tx: mpsc::Sender<UpdateEvent>,
+    ctx: egui::Context,
+}
+
+fn run_download_job(job: DownloadJob) {
+    let mut last_sent_at: Option<Instant> = None;
+    let mut last_sent_bytes: u64 = 0;
+    let mut last_total: Option<u64> = None;
+
+    let spec = DownloadSpec {
+        url: &job.asset.download_url,
+        expected_size: (job.asset.size > 0).then_some(job.asset.size),
+        expected_sha256: job.asset.sha256_digest.as_deref(),
+        checksums_url: job.checksums_url.as_deref(),
+        dest_dir: &job.dest_dir,
+        filename: &job.asset.name,
+        user_agent: &job.user_agent,
+    };
+
+    let result = download_asset_verified(
+        job.http.as_ref(),
+        &spec,
+        &job.cancel,
+        |downloaded, total| {
+            last_total = total;
+            let now = Instant::now();
+            let should_send = last_sent_at.is_none()
+                || total.is_some_and(|t| downloaded >= t)
+                || last_sent_at.is_some_and(|t| now.duration_since(t) >= PROGRESS_MIN_INTERVAL)
+                || downloaded.saturating_sub(last_sent_bytes) >= PROGRESS_MIN_BYTES;
+            if should_send {
+                let _ = job
+                    .tx
+                    .send(UpdateEvent::DownloadProgress { downloaded, total });
+                job.ctx.request_repaint();
+                last_sent_at = Some(now);
+                last_sent_bytes = downloaded;
+            }
+        },
+    );
+
+    if let Ok(ref done) = result
+        && last_sent_bytes < done.bytes
+    {
+        let _ = job.tx.send(UpdateEvent::DownloadProgress {
+            downloaded: done.bytes,
+            total: last_total.or(Some(done.bytes)),
+        });
+    }
+
+    let _ = job.tx.send(UpdateEvent::DownloadFinished(result));
+    job.ctx.request_repaint();
+}
+
+/// Non-blocking desktop update coordinator running checks and downloads on a
+/// background thread and notifying the UI via an `mpsc` channel.
+pub struct UpdateClient {
+    http: Arc<dyn UpdateHttp>,
+    api_url: String,
+    current_version: semver::Version,
+    os: String,
+    arch: String,
+    prefer_portable: bool,
+    rx: Option<mpsc::Receiver<UpdateEvent>>,
+    busy: UpdateBusy,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Default for UpdateClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl UpdateClient {
+    /// Construct a production update client targeting the official GitHub releases feed.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            http: Arc::new(UreqHttp),
+            api_url: DEFAULT_RELEASES_API_URL.to_string(),
+            current_version: current_version().unwrap_or_else(|| semver::Version::new(0, 0, 0)),
+            os: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+            prefer_portable: is_portable_install(),
+            rx: None,
+            busy: UpdateBusy::Idle,
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Construct an update client with an injected HTTP transport and platform metadata for tests.
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_http_and_env(
+        http: Arc<dyn UpdateHttp>,
+        current: semver::Version,
+        os: &str,
+        arch: &str,
+        prefer_portable: bool,
+    ) -> Self {
+        Self {
+            http,
+            api_url: DEFAULT_RELEASES_API_URL.to_string(),
+            current_version: current,
+            os: os.to_string(),
+            arch: arch.to_string(),
+            prefer_portable,
+            rx: None,
+            busy: UpdateBusy::Idle,
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Return the current background activity state.
+    #[must_use]
+    pub fn busy(&self) -> UpdateBusy {
+        self.busy
+    }
+
+    /// Spawn a background version check if the client is currently idle.
+    ///
+    /// Returns `false` if a check or download is already in progress (or if the
+    /// worker thread could not be spawned).
+    pub fn start_check(&mut self, manual: bool, ctx: &egui::Context) -> bool {
+        if self.busy != UpdateBusy::Idle {
+            return false;
+        }
+        let (tx, rx) = mpsc::channel();
+        let http = Arc::clone(&self.http);
+        let api_url = self.api_url.clone();
+        let current = self.current_version.clone();
+        let os = self.os.clone();
+        let arch = self.arch.clone();
+        let prefer_portable = self.prefer_portable;
+        let ctx = ctx.clone();
+
+        let spawned = std::thread::Builder::new()
+            .name("coursecraft-update-check".to_string())
+            .spawn(move || {
+                let result = check_for_update_with(
+                    http.as_ref(),
+                    &api_url,
+                    &current,
+                    &os,
+                    &arch,
+                    prefer_portable,
+                );
+                let _ = tx.send(UpdateEvent::CheckFinished { manual, result });
+                ctx.request_repaint();
+            });
+
+        if spawned.is_err() {
+            return false;
+        }
+
+        self.rx = Some(rx);
+        self.busy = UpdateBusy::Checking;
+        true
+    }
+
+    /// Spawn a background verified download if the client is currently idle.
+    ///
+    /// Returns `false` if a check or download is already in progress (or if the
+    /// worker thread could not be spawned).
+    pub fn start_download(
+        &mut self,
+        asset: ResolvedAsset,
+        checksums_url: Option<String>,
+        dest_dir: PathBuf,
+        ctx: &egui::Context,
+    ) -> bool {
+        if self.busy != UpdateBusy::Idle {
+            return false;
+        }
+        self.cancel.store(false, Ordering::Relaxed);
+        let (tx, rx) = mpsc::channel();
+        let job = DownloadJob {
+            http: Arc::clone(&self.http),
+            asset,
+            checksums_url,
+            dest_dir,
+            user_agent: user_agent(&self.current_version.to_string()),
+            cancel: Arc::clone(&self.cancel),
+            tx,
+            ctx: ctx.clone(),
+        };
+
+        let spawned = std::thread::Builder::new()
+            .name("coursecraft-update-download".to_string())
+            .spawn(move || run_download_job(job));
+
+        if spawned.is_err() {
+            return false;
+        }
+
+        self.rx = Some(rx);
+        self.busy = UpdateBusy::Downloading;
+        true
+    }
+
+    /// Signal any in-progress download to cancel at the next chunk boundary.
+    pub fn cancel_download(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Drain pending events from the active background worker without blocking.
+    pub fn poll(&mut self) -> Vec<UpdateEvent> {
+        let mut events = Vec::new();
+        let mut finished = false;
+
+        if let Some(rx) = &self.rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => {
+                        if matches!(
+                            event,
+                            UpdateEvent::CheckFinished { .. } | UpdateEvent::DownloadFinished(_)
+                        ) {
+                            finished = true;
+                        }
+                        events.push(event);
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if finished {
+            self.busy = UpdateBusy::Idle;
+            self.rx = None;
+        }
+        events
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
     use std::io::{self, Cursor, Read};
     use std::path::{Path, PathBuf};
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::{Duration, Instant};
 
     use super::{
         CHECK_INTERVAL_SECS, CheckOutcome, DownloadSpec, GitHubAsset, GitHubRelease, HttpResponse,
-        MAX_API_RESPONSE_BYTES, MAX_DOWNLOAD_BYTES, MAX_SUMS_BYTES, RequestKind, UpdateError,
-        UpdateHttp, auto_check_suppressed_by_env, check_for_update_with, current_version,
-        download_asset_verified, encode_hex_lower, find_checksums_asset, follow_get_redirects,
-        is_allowed_update_url, is_release_eligible, parse_releases_json, parse_sha256_digest,
-        parse_sha256sums_line, parse_tag_version, pick_asset, resolve_redirect_url,
-        safe_asset_filename, select_latest_update, should_auto_check, unique_download_path,
-        user_agent,
+        MAX_API_RESPONSE_BYTES, MAX_DOWNLOAD_BYTES, MAX_SUMS_BYTES, RequestKind, ResolvedAsset,
+        UpdateBusy, UpdateClient, UpdateError, UpdateEvent, UpdateHttp, UreqHttp,
+        auto_check_suppressed_by_env, check_for_update_with, current_version,
+        download_asset_verified, encode_hex_lower, exe_path_is_portable, find_checksums_asset,
+        follow_get_redirects, is_allowed_update_url, is_release_eligible, parse_releases_json,
+        parse_sha256_digest, parse_sha256sums_line, parse_tag_version, parse_xdg_download_dir,
+        pick_asset, resolve_redirect_url, safe_asset_filename, select_latest_update,
+        should_auto_check, unique_download_path, user_agent,
     };
 
     const V043_RELEASES_JSON: &str = r#"[
@@ -2301,5 +2788,302 @@ mod tests {
             tmp.entries().is_empty(),
             "no .part or final file should remain after cancellation"
         );
+    }
+
+    struct BlockingHttp {
+        started_tx: Mutex<Option<mpsc::Sender<()>>>,
+        release_rx: Mutex<Option<mpsc::Receiver<()>>>,
+        inner: FakeHttp,
+    }
+
+    impl BlockingHttp {
+        fn new(
+            started_tx: mpsc::Sender<()>,
+            release_rx: mpsc::Receiver<()>,
+            responses: Vec<Result<HttpResponse, UpdateError>>,
+        ) -> Self {
+            Self {
+                started_tx: Mutex::new(Some(started_tx)),
+                release_rx: Mutex::new(Some(release_rx)),
+                inner: FakeHttp::new(responses),
+            }
+        }
+    }
+
+    impl UpdateHttp for BlockingHttp {
+        fn get(
+            &self,
+            url: &str,
+            accept: &str,
+            user_agent: &str,
+            kind: RequestKind,
+        ) -> Result<HttpResponse, UpdateError> {
+            if let Some(tx) = self.started_tx.lock().expect("started_tx lock").take() {
+                let _ = tx.send(());
+            }
+            if let Some(rx) = self.release_rx.lock().expect("release_rx lock").take() {
+                let _ = rx.recv_timeout(Duration::from_secs(5));
+            }
+            self.inner.get(url, accept, user_agent, kind)
+        }
+    }
+
+    fn poll_until<F>(client: &mut UpdateClient, mut is_done: F) -> Vec<UpdateEvent>
+    where
+        F: FnMut(&[UpdateEvent]) -> bool,
+    {
+        let mut all = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            all.extend(client.poll());
+            if is_done(&all) {
+                return all;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        all
+    }
+
+    #[test]
+    fn dl08_update_client_background_worker_and_dedup() {
+        let ctx = egui::Context::default();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        let payload: Vec<u8> = (0..(320 * 1024_usize)).map(|i| (i % 251) as u8).collect();
+        let payload_sha256 = sha256_hex(&payload);
+        let asset_url = "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-0.4.3-macos.dmg";
+        let release_json = format!(
+            r#"[{{
+                "tag_name": "v0.4.3",
+                "name": "CourseCraft 0.4.3",
+                "body": "Notes",
+                "html_url": "https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.3",
+                "draft": false,
+                "prerelease": true,
+                "assets": [{{
+                    "name": "CourseCraft-0.4.3-macos.dmg",
+                    "browser_download_url": "{asset_url}",
+                    "size": {},
+                    "digest": "sha256:{payload_sha256}"
+                }}]
+            }}]"#,
+            payload.len()
+        );
+
+        let chunked = ChunkedReader {
+            data: payload.clone(),
+            pos: 0,
+            max_chunk: 64 * 1024,
+        };
+        let download_resp = HttpResponse {
+            status: 200,
+            location: None,
+            content_length: Some(payload.len() as u64),
+            rate_limit_remaining: Some(59),
+            body: Box::new(chunked),
+        };
+
+        let http = Arc::new(BlockingHttp::new(
+            started_tx,
+            release_rx,
+            vec![
+                Ok(ok_response(release_json.into_bytes())),
+                Ok(download_resp),
+            ],
+        ));
+        let mut client = UpdateClient::with_http_and_env(
+            http,
+            semver::Version::new(0, 4, 2),
+            "macos",
+            "aarch64",
+            false,
+        );
+        assert_eq!(client.busy(), UpdateBusy::Idle);
+
+        // Start check: returns immediately and marks worker Checking.
+        assert!(client.start_check(true, &ctx));
+        assert_eq!(client.busy(), UpdateBusy::Checking);
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("worker started HTTP check");
+
+        // Concurrent check and download requests are deduplicated while busy.
+        assert!(!client.start_check(false, &ctx));
+        assert!(client.poll().is_empty());
+        assert_eq!(client.busy(), UpdateBusy::Checking);
+
+        // Release blocked check response and wait for CheckFinished.
+        release_tx.send(()).expect("release check");
+        let events = poll_until(&mut client, |evts| {
+            evts.iter()
+                .any(|e| matches!(e, UpdateEvent::CheckFinished { .. }))
+        });
+        assert_eq!(client.busy(), UpdateBusy::Idle);
+        assert_eq!(events.len(), 1);
+        let resolved_asset = match &events[0] {
+            UpdateEvent::CheckFinished {
+                manual: true,
+                result: Ok(CheckOutcome::Available(update)),
+            } => {
+                assert_eq!(update.version, "0.4.3");
+                update.asset.clone().expect("matched macOS asset")
+            }
+            other => panic!("unexpected check event: {other:?}"),
+        };
+
+        // Start background download and verify progress + verified completion.
+        let tmp = TempTestDir::new("dl08");
+        assert!(client.start_download(resolved_asset, None, tmp.path().to_path_buf(), &ctx));
+        assert_eq!(client.busy(), UpdateBusy::Downloading);
+        assert!(!client.start_check(true, &ctx));
+
+        let dl_events = poll_until(&mut client, |evts| {
+            evts.iter()
+                .any(|e| matches!(e, UpdateEvent::DownloadFinished(_)))
+        });
+        assert_eq!(client.busy(), UpdateBusy::Idle);
+
+        let progress_bytes: Vec<u64> = dl_events
+            .iter()
+            .filter_map(|e| match e {
+                UpdateEvent::DownloadProgress { downloaded, .. } => Some(*downloaded),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            progress_bytes.len() >= 2,
+            "expected first and final progress updates, got {progress_bytes:?}"
+        );
+        assert_eq!(progress_bytes.last().copied(), Some(payload.len() as u64));
+
+        let finished = dl_events
+            .iter()
+            .find_map(|e| match e {
+                UpdateEvent::DownloadFinished(res) => Some(res),
+                _ => None,
+            })
+            .expect("DownloadFinished event");
+        let done = finished.as_ref().expect("download succeeded");
+        assert_eq!(done.bytes, payload.len() as u64);
+        assert!(done.sha256_verified);
+        assert_eq!(std::fs::read(&done.path).expect("read downloaded"), payload);
+        assert_eq!(
+            tmp.entries(),
+            vec!["CourseCraft-0.4.3-macos.dmg".to_string()]
+        );
+    }
+
+    #[test]
+    fn dl08_update_client_cancel_download() {
+        let ctx = egui::Context::default();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let payload = vec![0x42_u8; 64 * 1024];
+
+        let http = Arc::new(BlockingHttp::new(
+            started_tx,
+            release_rx,
+            vec![Ok(ok_response(payload.clone()))],
+        ));
+        let mut client = UpdateClient::with_http_and_env(
+            http,
+            semver::Version::new(0, 4, 2),
+            "macos",
+            "aarch64",
+            false,
+        );
+        let tmp = TempTestDir::new("dl08-cancel");
+        let asset = ResolvedAsset {
+            name: "CourseCraft-0.4.3-macos.dmg".to_string(),
+            download_url:
+                "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-0.4.3-macos.dmg"
+                    .to_string(),
+            size: payload.len() as u64,
+            sha256_digest: None,
+        };
+
+        assert!(client.start_download(asset, None, tmp.path().to_path_buf(), &ctx));
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("download started");
+        client.cancel_download();
+        release_tx.send(()).expect("unblock download");
+
+        let events = poll_until(&mut client, |evts| {
+            evts.iter()
+                .any(|e| matches!(e, UpdateEvent::DownloadFinished(_)))
+        });
+        assert_eq!(client.busy(), UpdateBusy::Idle);
+        assert!(matches!(
+            events.last(),
+            Some(UpdateEvent::DownloadFinished(Err(UpdateError::Cancelled)))
+        ));
+        assert!(tmp.entries().is_empty());
+    }
+
+    #[test]
+    fn dl08_platform_helpers_and_ureq_config() {
+        let home = Path::new("/home/alex");
+
+        let standard = "# xdg user dirs\n\
+            XDG_DESKTOP_DIR=\"$HOME/Desktop\"\n\
+            XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"\n";
+        assert_eq!(
+            parse_xdg_download_dir(standard, home),
+            Some(PathBuf::from("/home/alex/Downloads"))
+        );
+
+        let custom_spaces = "XDG_DOWNLOAD_DIR=\"$HOME/My Downloads\"\n";
+        assert_eq!(
+            parse_xdg_download_dir(custom_spaces, home),
+            Some(PathBuf::from("/home/alex/My Downloads"))
+        );
+
+        let braced = "XDG_DOWNLOAD_DIR=\"${HOME}/dl\"\n";
+        assert_eq!(
+            parse_xdg_download_dir(braced, home),
+            Some(PathBuf::from("/home/alex/dl"))
+        );
+
+        let absolute = "XDG_DOWNLOAD_DIR=\"/mnt/shared/downloads\"\n";
+        assert_eq!(
+            parse_xdg_download_dir(absolute, home),
+            Some(PathBuf::from("/mnt/shared/downloads"))
+        );
+
+        let unquoted = "XDG_DOWNLOAD_DIR=$HOME/Incoming\n";
+        assert_eq!(
+            parse_xdg_download_dir(unquoted, home),
+            Some(PathBuf::from("/home/alex/Incoming"))
+        );
+
+        let invalid = "# XDG_DOWNLOAD_DIR=\"$HOME/Commented\"\n\
+            XDG_DOWNLOAD_DIR=\"relative/path\"\n\
+            XDG_DOWNLOAD_DIR=\"\"\n";
+        assert_eq!(parse_xdg_download_dir(invalid, home), None);
+
+        // Portable executable detection checks only the file stem, ASCII case-insensitively.
+        assert!(exe_path_is_portable(Path::new(
+            "CourseCraft-v0.4.3-portable.exe"
+        )));
+        assert!(exe_path_is_portable(Path::new(
+            "/opt/CourseCraft-PORTABLE.exe"
+        )));
+        assert!(!exe_path_is_portable(Path::new(
+            "CourseCraft-v0.4.3-setup.exe"
+        )));
+        assert!(!exe_path_is_portable(Path::new(
+            "/Applications/CourseCraft.app/Contents/MacOS/coursecraft"
+        )));
+        assert!(!exe_path_is_portable(Path::new(
+            "/tmp/portable/coursecraft"
+        )));
+        assert!(!exe_path_is_portable(Path::new("")));
+
+        // Verify agent builders construct cleanly offline for every RequestKind.
+        let _ = UreqHttp::build_agent(RequestKind::Metadata);
+        let _ = UreqHttp::build_agent(RequestKind::Checksums);
+        let _ = UreqHttp::build_agent(RequestKind::Download);
     }
 }
