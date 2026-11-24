@@ -212,6 +212,9 @@ pub struct Session {
     active_single_slide: Option<SlideLoc>,
     /// Cached full `course.validate()` output keyed by [`Session::revision`].
     last_validation: Option<(u64, Vec<coursecraft_course::Issue>)>,
+    /// If the current [`Session::revision`] came from a single-slide edit, its
+    /// `(revision, slide_id)` pair.
+    last_single_slide_edit: Option<(u64, String)>,
     #[cfg(test)]
     pub(crate) is_playable_checks: usize,
 }
@@ -230,6 +233,7 @@ impl Session {
             validated_in_cmd: false,
             active_single_slide: None,
             last_validation: None,
+            last_single_slide_edit: None,
             #[cfg(test)]
             is_playable_checks: 0,
         }
@@ -358,7 +362,18 @@ impl Session {
         }
         self.redo.clear();
         self.last_validation = None;
+        self.last_single_slide_edit = None;
         self.revision = self.revision.wrapping_add(1);
+    }
+
+    /// If the current [`Session::revision`] came from a single-slide edit,
+    /// return that slide's id so UI caches can skip untouched slides.
+    #[must_use]
+    pub fn last_changed_slide(&self) -> Option<&str> {
+        self.last_single_slide_edit
+            .as_ref()
+            .filter(|(rev, _)| *rev == self.revision)
+            .map(|(_, id)| id.as_str())
     }
 
     /// Full validation issues for the current course, cached by [`Session::revision`].
@@ -473,11 +488,13 @@ impl Session {
                 if let Some(slide) = slide_at_mut(&mut self.course, loc) {
                     connectors::reroute_connectors_in_slide(slide);
                 }
+                let changed_id = slide_at(&self.course, loc).map(|s| s.id.clone());
                 let delta = slide_at(&self.course, loc)
                     .and_then(|after_slide| SlideDelta::diff(before_slide, after_slide))
                     .map(|change| CourseDelta::SlideChange { loc, change });
                 if let Some(delta) = delta {
                     self.commit_delta(delta, cmd.label.to_owned());
+                    self.last_single_slide_edit = changed_id.map(|id| (self.revision, id));
                     if self.validated_in_cmd {
                         self.valid_at_revision = Some((self.revision, true));
                     }
@@ -793,11 +810,13 @@ impl Session {
                 .map(str::to_owned)
                 .or_else(|| first_label.map(str::to_owned))
                 .unwrap_or_else(|| "Batch".to_owned());
+            let changed_id = slide_at(&self.course, loc).map(|s| s.id.clone());
             let delta = slide_at(&self.course, loc)
                 .and_then(|after_slide| SlideDelta::diff(before_slide, after_slide))
                 .map(|change| CourseDelta::SlideChange { loc, change });
             if let Some(delta) = delta {
                 self.commit_delta(delta, label);
+                self.last_single_slide_edit = changed_id.map(|id| (self.revision, id));
                 if batch_validated_valid {
                     self.valid_at_revision = Some((self.revision, true));
                 }
@@ -816,6 +835,7 @@ impl Session {
         self.redo.push_back((delta, name));
         self.valid_at_revision = None;
         self.last_validation = None;
+        self.last_single_slide_edit = None;
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
@@ -829,6 +849,7 @@ impl Session {
         self.undo.push_back((delta, name));
         self.valid_at_revision = None;
         self.last_validation = None;
+        self.last_single_slide_edit = None;
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }

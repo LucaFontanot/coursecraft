@@ -5,7 +5,9 @@
 //! (temp file, check it opens again, rename), so a crash never leaves a
 //! half-written course.
 
-use std::collections::HashSet;
+use std::borrow::Cow;
+use std::cell::OnceCell;
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,12 +17,14 @@ use coursecraft_course::{Course, MediaHashes, Severity};
 use coursecraft_engine::Session;
 use coursecraft_format::{FolderRecord, fnv1a64};
 use coursecraft_publish::{
-    PackageFile, PackageStandard, SharedPackageFile, SharedPackageInput, build_package_shared,
-    zip_shared_package_to,
+    PackageFile, PackageStandard, SharedPackageFile, SharedPackageInput, auto_embed_fonts,
+    build_package_shared, zip_shared_package_to,
 };
+use coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex;
 
 use super::{
-    Res, StandardArg, Step, collect_player_files, open_ccraft_file, read, write_course_output,
+    CliFontProvider, Res, StandardArg, Step, collect_player_files, needs_system_font_scan,
+    open_ccraft_file, read, write_course_output,
 };
 
 /// Most courses one batch takes.
@@ -77,6 +81,9 @@ struct Job<'a> {
     steps: &'a [Step],
     replacements: &'a [Replacement],
     player: Option<Vec<PackageFile>>,
+    /// Lazily scanned OS fonts shared across every course in the batch (zero
+    /// scans when all courses use Inter or already-embedded fonts).
+    font_index: OnceCell<SystemFontIndex>,
 }
 
 fn is_ccraft(p: &Path) -> bool {
@@ -528,10 +535,30 @@ fn build_publish(
             "cannot publish: course has {errors} validation error(s)"
         ));
     }
-    let json = edited.course.to_json_compact().map_err(|e| e.to_string())?;
-    let lookup: std::collections::HashMap<&str, &Arc<[u8]>> =
+    let (published_course, embedded_map): (Cow<'_, Course>, HashMap<String, Arc<[u8]>>) =
+        if needs_system_font_scan(&edited.course) {
+            let index = job.font_index.get_or_init(SystemFontIndex::scan_default);
+            let auto = auto_embed_fonts(&edited.course, Some(&CliFontProvider(index)));
+            let map = auto
+                .embedded_files
+                .into_iter()
+                .map(|(face, bytes)| (face.src, Arc::from(bytes)))
+                .collect();
+            (Cow::Owned(auto.course), map)
+        } else {
+            (Cow::Borrowed(&edited.course), HashMap::new())
+        };
+    let json = published_course
+        .to_json_compact()
+        .map_err(|e| e.to_string())?;
+    let lookup: HashMap<&str, &Arc<[u8]>> =
         edited.media.iter().map(|(n, b)| (n.as_str(), b)).collect();
-    let media = |src: &str| lookup.get(src).map(|b| Arc::clone(b));
+    let media = |src: &str| {
+        embedded_map
+            .get(src)
+            .map(Arc::clone)
+            .or_else(|| lookup.get(src).map(|b| Arc::clone(b)))
+    };
     let web = |folder: &str| {
         let prefix = format!("{}/", folder.trim_end_matches('/'));
         let files: Vec<(String, Arc<[u8]>)> = edited
@@ -543,7 +570,7 @@ fn build_publish(
         (!files.is_empty()).then_some(files)
     };
     let input = SharedPackageInput {
-        course: &edited.course,
+        course: &published_course,
         course_json: &json,
         player_files: player,
         media: &media,
@@ -653,6 +680,7 @@ pub(crate) fn run_batch(args: &BatchArgs) -> Res<ExitCode> {
         steps: &steps,
         replacements: &replacements,
         player,
+        font_index: OnceCell::new(),
     };
     let mut taken = HashSet::new();
     let rows: Vec<Row> = courses

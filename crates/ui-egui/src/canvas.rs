@@ -5341,14 +5341,25 @@ fn canvas_media_fingerprint(media: &[(String, std::sync::Arc<[u8]>)]) -> (usize,
 pub(crate) fn missing_images_as_placeholders(
     items: &mut [DrawItem],
     media: &[(String, std::sync::Arc<[u8]>)],
+    media_index: Option<&std::collections::HashMap<String, usize>>,
 ) {
     for item in items {
-        if let Visual::Image { src, .. } = &item.visual
-            && !media.iter().any(|(name, _)| name == src)
-        {
-            item.visual = Visual::ImagePlaceholder {
-                label: "No image yet".to_owned(),
+        if let Visual::Image { src, .. } = &item.visual {
+            let exists = match media_index {
+                Some(index) => match index.get(src.as_str()) {
+                    Some(&idx) => {
+                        media.get(idx).is_some_and(|(name, _)| name == src)
+                            || media.iter().any(|(name, _)| name == src)
+                    }
+                    None => false,
+                },
+                None => media.iter().any(|(name, _)| name == src),
             };
+            if !exists {
+                item.visual = Visual::ImagePlaceholder {
+                    label: "No image yet".to_owned(),
+                };
+            }
         }
     }
 }
@@ -7208,7 +7219,11 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             if let Some(edit) = &editor.ui.inline_edit {
                 hide_edited_text(&mut composed, edit);
             }
-            missing_images_as_placeholders(&mut composed, &editor.media);
+            missing_images_as_placeholders(
+                &mut composed,
+                &editor.media,
+                editor.media_index_if_synced(),
+            );
             if let Some(edit_obj_id) = editing_state {
                 for item in &mut composed {
                     item.dimmed = !matches!(&item.hit, Hit::Object(id) if id == edit_obj_id);
@@ -7483,9 +7498,11 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         if editor.timeline_playback.needs_repaint(playhead_ms) {
             ui.ctx().request_repaint();
         }
-        let memory = crate::MemoryMediaSource {
-            media: &editor.media,
-        };
+        let memory = crate::MemoryMediaSource::from_parts(
+            &editor.media,
+            &editor.media_index,
+            editor.media_index_len,
+        );
         let source = crate::TimelineMediaSource {
             inner: &memory,
             playback: &editor.timeline_playback,

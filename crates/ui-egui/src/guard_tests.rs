@@ -1228,3 +1228,113 @@ fn g05_idle_frames_zero_canvas_composes_and_cache_misses() {
         "20 idle frames must perform zero shape mesh cache misses"
     );
 }
+
+/// G-06 (`M34-12`): In Check Spelling on a 100-slide course, Ignore, Ignore all,
+/// and Add to dictionary filter issues in-place with zero speller runs.
+#[test]
+fn g06_check_spelling_ignore_and_add_run_zero_speller_checks() {
+    const SLIDES: usize = 100;
+    let mut slides = Vec::with_capacity(SLIDES);
+    for i in 0..SLIDES {
+        slides.push(format!(
+            r##"{{"id":"s-{i}","title":"Slide {i}","objects":[{{"id":"t{i}","kind":{{"type":"text","text":"teh recieve seperate"}},"frame":{{"x":60,"y":60,"w":600,"h":120}}}}]}}"##
+        ));
+    }
+    let json = format!(
+        r#"{{"schema_version":1,"id":"g06-spelling","title":"G-06 Spelling","slide_size":{{"w":1280,"h":720}},"scenes":[{{"id":"sc0","title":"Scene 0","slides":[{}]}}]}}"#,
+        slides.join(",")
+    );
+    let course = Course::from_json(&json).expect("g06 spelling course parses");
+    let mut h = TestHarness::new(course);
+    let _ = h.idle_frame();
+
+    // Open Check Spelling and let the initial scan finish.
+    crate::spell_check::open(&mut h.editor);
+    let _ = h.idle_frame();
+    assert_eq!(
+        h.editor.ui.spell_check.issues.len(),
+        SLIDES * 3,
+        "initial Check Spelling scan should find all 300 typos"
+    );
+
+    reset_counts();
+
+    // 1. Ignore one occurrence of "teh" on Slide 0.
+    let first_loc = h.editor.ui.spell_check.issues[0].item.location.clone();
+    let first_start = h.editor.ui.spell_check.issues[0].misspelling.start;
+    crate::spell_check::ignore_issue(&mut h.editor, 0, false);
+    let _ = h.idle_frame();
+    assert_eq!(
+        gc::speller_runs(),
+        0,
+        "Ignore must perform zero speller runs"
+    );
+    assert_eq!(
+        h.editor.ui.spell_check.issues.len(),
+        SLIDES * 3 - 1,
+        "Ignore must remove only the ignored occurrence"
+    );
+    assert!(
+        !h.editor
+            .ui
+            .spell_check
+            .issues
+            .iter()
+            .any(|i| i.item.location == first_loc && i.misspelling.start == first_start),
+        "ignored occurrence must be removed from issues"
+    );
+
+    // 2. Ignore all occurrences of "teh".
+    let teh_idx = h
+        .editor
+        .ui
+        .spell_check
+        .issues
+        .iter()
+        .position(|i| i.misspelling.word.eq_ignore_ascii_case("teh"))
+        .expect("remaining teh occurrence");
+    crate::spell_check::ignore_issue(&mut h.editor, teh_idx, true);
+    let _ = h.idle_frame();
+    assert_eq!(
+        gc::speller_runs(),
+        0,
+        "Ignore all must perform zero speller runs"
+    );
+    assert!(
+        h.editor
+            .ui
+            .spell_check
+            .issues
+            .iter()
+            .all(|i| !i.misspelling.word.eq_ignore_ascii_case("teh")),
+        "Ignore all must remove every occurrence of teh"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues.len(), SLIDES * 2);
+
+    // 3. Add "recieve" to the personal dictionary.
+    let recieve_idx = h
+        .editor
+        .ui
+        .spell_check
+        .issues
+        .iter()
+        .position(|i| i.misspelling.word.eq_ignore_ascii_case("recieve"))
+        .expect("recieve occurrence");
+    crate::spell_check::add_issue_word(&mut h.editor, recieve_idx);
+    let _ = h.idle_frame();
+    assert_eq!(
+        gc::speller_runs(),
+        0,
+        "Add to dictionary must perform zero speller runs"
+    );
+    assert!(
+        h.editor
+            .ui
+            .spell_check
+            .issues
+            .iter()
+            .all(|i| !i.misspelling.word.eq_ignore_ascii_case("recieve")),
+        "Add to dictionary must remove every occurrence of recieve"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues.len(), SLIDES);
+}

@@ -335,7 +335,7 @@ impl Editor {
     /// only when a menu needs them.
     #[must_use]
     pub fn spell_words(&mut self, text: &str) -> Vec<SpelledWord> {
-        if !self.ui.prefs.spell_check_as_you_type {
+        if !self.ui.prefs.spell_check_as_you_type || text.is_empty() {
             return Vec::new();
         }
         let hash = hash_text(text);
@@ -594,8 +594,23 @@ pub fn ignore_issue(editor: &mut Editor, index: usize, all: bool) {
     } else {
         editor.ignore_spell_at(&issue.item.location, issue.misspelling.start);
     }
-    refresh(editor);
-    sync_change_to(&mut editor.ui.spell_check);
+    let key = (editor.session.revision, editor.spell_version);
+    let state = &mut editor.ui.spell_check;
+    if all {
+        state.issues.retain(|other| {
+            !other
+                .misspelling
+                .word
+                .eq_ignore_ascii_case(&issue.misspelling.word)
+        });
+    } else {
+        state.issues.retain(|other| {
+            !(other.item.location == issue.item.location
+                && other.misspelling.start == issue.misspelling.start)
+        });
+    }
+    state.key = Some(key);
+    sync_change_to(state);
 }
 
 /// Add the word at `index` to the personal dictionary.
@@ -610,8 +625,13 @@ pub fn add_issue_word(editor: &mut Editor, index: usize) {
         return;
     };
     editor.add_spell_word(&word);
-    refresh(editor);
-    sync_change_to(&mut editor.ui.spell_check);
+    let key = (editor.session.revision, editor.spell_version);
+    let state = &mut editor.ui.spell_check;
+    state
+        .issues
+        .retain(|other| !other.misspelling.word.eq_ignore_ascii_case(&word));
+    state.key = Some(key);
+    sync_change_to(state);
 }
 
 /// Draw the Check Spelling window when it is open.

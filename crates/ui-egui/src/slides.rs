@@ -111,29 +111,22 @@ struct CachedThumbnail {
 
 /// Bounded LRU cache of composed authoring thumbnails, keyed by slide id and
 /// validated cheaply by session revision and deterministic content fingerprint.
+#[derive(Default)]
 pub(crate) struct ThumbnailCache {
-    visual_revision: u64,
+    visual_revision: Option<u64>,
     course_visual_fp: u64,
+    /// True when `course_visual_fp` at `visual_revision` matched the previous revision.
+    course_visual_unchanged: bool,
     tick: u64,
     entries: HashMap<String, CachedThumbnail>,
-}
-
-impl Default for ThumbnailCache {
-    fn default() -> Self {
-        Self {
-            visual_revision: u64::MAX,
-            course_visual_fp: 0,
-            tick: 0,
-            entries: HashMap::new(),
-        }
-    }
 }
 
 impl ThumbnailCache {
     /// Drop all cached thumbnails (called when replacing the open course).
     pub(crate) fn clear(&mut self) {
-        self.visual_revision = u64::MAX;
+        self.visual_revision = None;
         self.course_visual_fp = 0;
+        self.course_visual_unchanged = false;
         self.tick = 0;
         self.entries.clear();
     }
@@ -148,6 +141,7 @@ impl ThumbnailCache {
     pub(crate) fn get_or_compose(
         &mut self,
         revision: u64,
+        last_changed_slide: Option<&str>,
         course: &Course,
         slide: &Slide,
     ) -> (Color32, Arc<[DrawItem]>) {
@@ -160,9 +154,28 @@ impl ThumbnailCache {
             return (entry.bg, Arc::clone(&entry.items));
         }
 
-        if self.visual_revision != revision {
-            self.course_visual_fp = course_visual_fingerprint(course);
-            self.visual_revision = revision;
+        if self.visual_revision != Some(revision) {
+            let new_fp = course_visual_fingerprint(course);
+            self.course_visual_unchanged = self.visual_revision == Some(revision.wrapping_sub(1))
+                && self.course_visual_fp == new_fp;
+            self.course_visual_fp = new_fp;
+            self.visual_revision = Some(revision);
+        }
+
+        // Single-slide edit fast path: if course-level visual state did not change
+        // and only a different slide (not this slide or its master) was edited,
+        // bump `verified_revision` in O(1) without hashing this slide.
+        if self.course_visual_unchanged
+            && let Some(changed_id) = last_changed_slide
+            && slide.id != changed_id
+            && slide.master.as_deref() != Some(changed_id)
+            && let Some(entry) = self.entries.get_mut(&slide.id)
+            && entry.verified_revision == revision.wrapping_sub(1)
+        {
+            self.tick = self.tick.saturating_add(1);
+            entry.verified_revision = revision;
+            entry.last_used = self.tick;
+            return (entry.bg, Arc::clone(&entry.items));
         }
 
         let fp = thumbnail_fingerprint(course, slide, self.course_visual_fp);
@@ -630,6 +643,7 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                 {
                     let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
                         revision,
+                        editor.session.last_changed_slide(),
                         &editor.session.course,
                         master,
                     );
@@ -644,9 +658,11 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                     {
                         #[cfg(test)]
                         crate::guard_counters::note_thumbnail_paint(&master_id, master);
-                        let source = crate::MemoryMediaSource {
-                            media: &editor.media,
-                        };
+                        let source = crate::MemoryMediaSource::from_parts(
+                            &editor.media,
+                            &editor.media_index,
+                            editor.media_index_len,
+                        );
                         paint(
                             &painter,
                             &t,
@@ -1722,6 +1738,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             {
                 let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
                     revision,
+                    editor.session.last_changed_slide(),
                     &editor.session.course,
                     slide_ref,
                 );
@@ -1734,9 +1751,11 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
                     #[cfg(test)]
                     crate::guard_counters::note_thumbnail_paint(&slide.id, slide_ref);
-                    let source = crate::MemoryMediaSource {
-                        media: &editor.media,
-                    };
+                    let source = crate::MemoryMediaSource::from_parts(
+                        &editor.media,
+                        &editor.media_index,
+                        editor.media_index_len,
+                    );
                     paint(
                         &painter,
                         &t,
@@ -2132,6 +2151,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 {
                     let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
                         revision,
+                        editor.session.last_changed_slide(),
                         &editor.session.course,
                         slide_ref,
                     );
@@ -2144,9 +2164,11 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     if let Some(t) =
                         SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
                     {
-                        let source = crate::MemoryMediaSource {
-                            media: &editor.media,
-                        };
+                        let source = crate::MemoryMediaSource::from_parts(
+                            &editor.media,
+                            &editor.media_index,
+                            editor.media_index_len,
+                        );
                         paint(
                             &painter,
                             &t,

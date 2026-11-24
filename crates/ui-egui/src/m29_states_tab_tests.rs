@@ -301,7 +301,7 @@ fn sus03_canvas_preview_state_emits_extras_and_placeholders() {
         Some(&h.editor.session.course.theme),
         crate::states::course_input_value(&h.editor.session.course, obj),
     );
-    crate::canvas::missing_images_as_placeholders(&mut items, &h.editor.media);
+    crate::canvas::missing_images_as_placeholders(&mut items, &h.editor.media, None);
 
     let btn_items: Vec<_> = items
         .iter()

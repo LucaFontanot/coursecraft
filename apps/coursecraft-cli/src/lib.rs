@@ -1268,14 +1268,27 @@ fn run_publish(
 
     let player_files = collect_player_files(&player)?;
 
-    let font_index =
-        coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default();
-    let auto = coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)));
-    let published_course = if auto.embedded_files.is_empty() {
-        c
-    } else {
-        auto.course
-    };
+    let (published_course, embedded_files, embedded_families, font_warnings) =
+        if needs_system_font_scan(&c) {
+            let font_index =
+                coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default(
+                );
+            let auto =
+                coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)));
+            let published = if auto.embedded_files.is_empty() {
+                c
+            } else {
+                auto.course
+            };
+            (
+                published,
+                auto.embedded_files,
+                auto.embedded_families,
+                auto.warnings,
+            )
+        } else {
+            (c, Vec::new(), Vec::new(), Vec::new())
+        };
     let published_course_text = published_course
         .to_json_compact()
         .map_err(|e| e.to_string())?;
@@ -1289,8 +1302,7 @@ fn run_publish(
 
     // `src` is relative to the project's `media/` folder (docs/spec/course-model.md);
     // `build_package_shared` checks it is a safe relative path before asking for it.
-    let embedded_map: std::collections::HashMap<String, std::sync::Arc<[u8]>> = auto
-        .embedded_files
+    let embedded_map: std::collections::HashMap<String, std::sync::Arc<[u8]>> = embedded_files
         .into_iter()
         .map(|(face, bytes)| (face.src, std::sync::Arc::from(bytes)))
         .collect();
@@ -1313,10 +1325,10 @@ fn run_publish(
     let files = build_package_shared(&pkg_input, standard, &web_folders)
         .map_err(|e| format!("publish error: {e}"))?;
 
-    if !auto.embedded_families.is_empty() {
-        println!("embedded fonts: {}", auto.embedded_families.join(", "));
+    if !embedded_families.is_empty() {
+        println!("embedded fonts: {}", embedded_families.join(", "));
     }
-    for w in &auto.warnings {
+    for w in &font_warnings {
         eprintln!("warning: {w}");
     }
 
@@ -1705,8 +1717,21 @@ fn run_import_questions(
     Ok(ExitCode::SUCCESS)
 }
 
-struct CliFontProvider<'a>(
-    &'a coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex,
+/// True when `course` references at least one non-Inter font face that is not
+/// already embedded in `course.fonts`, matching [`coursecraft_publish::auto_embed_fonts`].
+pub(crate) fn needs_system_font_scan(course: &Course) -> bool {
+    coursecraft_publish::collect_used_font_faces(course)
+        .into_iter()
+        .any(|(family, style)| {
+            !course
+                .fonts
+                .iter()
+                .any(|f| f.family.eq_ignore_ascii_case(&family) && f.style == style)
+        })
+}
+
+pub(crate) struct CliFontProvider<'a>(
+    pub(crate) &'a coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex,
 );
 
 impl coursecraft_publish::PublishFontProvider for CliFontProvider<'_> {
@@ -1886,6 +1911,52 @@ fn run_editor(method: String, params: String, config_dir: Option<PathBuf>) -> Re
     }
 }
 
+fn run_validate(course: &Path, out: &mut impl std::io::Write) -> Res<ExitCode> {
+    let c = match load(course) {
+        Ok(c) => c,
+        Err(err) => {
+            if let Some(hint) = explain_non_course_file(course) {
+                return Err(hint.to_string());
+            }
+            return Err(err);
+        }
+    };
+    let issues = c.validate();
+    for i in &issues {
+        let tag = if i.severity == Severity::Error {
+            "error"
+        } else {
+            "warning"
+        };
+        let _ = writeln!(out, "{tag}: {} — {}", i.path, i.message);
+    }
+    let font_warnings: Vec<String> = if needs_system_font_scan(&c) {
+        let font_index =
+            coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default();
+        coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)))
+            .warnings
+            .into_iter()
+            .filter(|w| !w.contains("responsibility"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for w in &font_warnings {
+        let _ = writeln!(out, "warning: /fonts — {w}");
+    }
+    let errors = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .count();
+    let warnings = issues.len() - errors + font_warnings.len();
+    let _ = writeln!(out, "{errors} error(s), {warnings} warning(s)");
+    Ok(if errors == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
 fn run(cli: Cli) -> Res<ExitCode> {
     match cli.cmd {
         Cmd::New { out, title } => {
@@ -1893,50 +1964,8 @@ fn run(cli: Cli) -> Res<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Validate { course } => {
-            let c = match load(&course) {
-                Ok(c) => c,
-                Err(err) => {
-                    if let Some(hint) = explain_non_course_file(&course) {
-                        return Err(hint.to_string());
-                    }
-                    return Err(err);
-                }
-            };
-            let issues = c.validate();
-            for i in &issues {
-                let tag = if i.severity == Severity::Error {
-                    "error"
-                } else {
-                    "warning"
-                };
-                println!("{tag}: {} — {}", i.path, i.message);
-            }
-            let font_index =
-                coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default(
-                );
-            let auto =
-                coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)));
-            for w in &auto.warnings {
-                if !w.contains("responsibility") {
-                    println!("warning: /fonts — {w}");
-                }
-            }
-            let errors = issues
-                .iter()
-                .filter(|i| i.severity == Severity::Error)
-                .count();
-            let warnings = issues.len() - errors
-                + auto
-                    .warnings
-                    .iter()
-                    .filter(|w| !w.contains("responsibility"))
-                    .count();
-            println!("{errors} error(s), {warnings} warning(s)");
-            Ok(if errors == 0 {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
-            })
+            let mut out = std::io::stdout().lock();
+            run_validate(&course, &mut out)
         }
         Cmd::A11yCheck { course, json } => run_a11y_check(course, json),
         Cmd::Diff { a, b, json } => run_diff(&a, &b, json),

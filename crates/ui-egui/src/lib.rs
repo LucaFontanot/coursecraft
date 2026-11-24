@@ -1033,6 +1033,8 @@ pub struct UiState {
     pub(crate) navigator_index: crate::slides::NavigatorIndex,
     /// Cached main-canvas composed draw items for idle/hover/scroll frames.
     pub(crate) canvas_compose_cache: CanvasComposeCache,
+    /// Course revision for which theme colors were last published to egui temp data.
+    pub(crate) last_published_theme_rev: Option<u64>,
 }
 
 /// Cached composed draw items for the main authoring canvas.
@@ -1279,6 +1281,8 @@ pub struct Editor {
     pub publish_available: bool,
     pub title_info: Option<(String, bool)>,
     pub media: Vec<(String, std::sync::Arc<[u8]>)>,
+    media_index: std::collections::HashMap<String, usize>,
+    media_index_len: usize,
     pub media_cache: coursecraft_render::MediaCache,
     /// Cached audio waveform peak envelopes (`0.0..=1.0`, <= 2,000 peaks) keyed by media id (`src`).
     pub audio_waveforms: std::collections::HashMap<String, Option<Vec<f32>>>,
@@ -1617,6 +1621,7 @@ impl Editor {
                 thumbnail_cache: crate::slides::ThumbnailCache::default(),
                 navigator_index: crate::slides::NavigatorIndex::default(),
                 canvas_compose_cache: CanvasComposeCache::default(),
+                last_published_theme_rev: None,
             },
             preview: None,
             recent_files: Vec::new(),
@@ -1626,6 +1631,8 @@ impl Editor {
             publish_available: true,
             title_info: None,
             media: Vec::new(),
+            media_index: std::collections::HashMap::new(),
+            media_index_len: 0,
             media_cache: coursecraft_render::MediaCache::new(),
             audio_waveforms: std::collections::HashMap::new(),
             video_durations: std::sync::Arc::new(std::sync::Mutex::new(
@@ -1756,11 +1763,14 @@ impl Editor {
             .slide(&slide_id)
             .map_or(100, |slide| slide.duration_ms.max(100));
         self.timeline_playback.update_clock(now_mono);
-        self.timeline_playback.sync_slide(
+        let media_index = (self.media_index_len == self.media.len()).then_some(&self.media_index);
+        self.timeline_playback.sync_slide_indexed(
             &self.session.course,
             &slide_id,
             duration_ms,
             &self.media,
+            media_index,
+            Some(self.session.revision),
             self.ui.timeline.playhead_ms,
         );
 
@@ -1908,6 +1918,7 @@ impl Editor {
         self.ui.thumbnail_cache.clear();
         self.ui.navigator_index.clear();
         self.ui.canvas_compose_cache.clear();
+        self.ui.last_published_theme_rev = None;
         self.ui.publish.open = false;
         self.ui.publish.phase = PublishPhase::Idle;
         self.ui.publish.status = None;
@@ -1922,6 +1933,7 @@ impl Editor {
         self.timeline_mono_ms = 0;
 
         self.media.clear();
+        self.rebuild_media_index();
         self.media_cache = coursecraft_render::MediaCache::new();
         self.pending_image_pick = None;
         self.pending_requests.clear();
@@ -1977,7 +1989,53 @@ impl Editor {
     /// Update the in-memory media list (e.g. after opening a project file).
     pub fn set_media(&mut self, media: Vec<(String, std::sync::Arc<[u8]>)>) {
         self.media = media;
+        self.rebuild_media_index();
         self.media_cache = coursecraft_render::MediaCache::new();
+    }
+
+    pub(crate) fn rebuild_media_index(&mut self) {
+        self.media_index.clear();
+        self.media_index.reserve(self.media.len());
+        for (idx, (name, _)) in self.media.iter().enumerate() {
+            self.media_index.entry(name.clone()).or_insert(idx);
+        }
+        self.media_index_len = self.media.len();
+    }
+
+    pub(crate) fn sync_media_index(&mut self) {
+        if self.media_index_len != self.media.len() {
+            self.rebuild_media_index();
+        }
+    }
+
+    pub(crate) fn media_index_if_synced(
+        &self,
+    ) -> Option<&std::collections::HashMap<String, usize>> {
+        (self.media_index_len == self.media.len()).then_some(&self.media_index)
+    }
+
+    pub(crate) fn media_get(&self, src: &str) -> Option<&std::sync::Arc<[u8]>> {
+        if self.media_index_len == self.media.len() {
+            return match self.media_index.get(src) {
+                Some(&idx) => match self.media.get(idx) {
+                    Some((name, bytes)) if name == src => Some(bytes),
+                    _ => self
+                        .media
+                        .iter()
+                        .find(|(name, _)| name == src)
+                        .map(|(_, bytes)| bytes),
+                },
+                None => None,
+            };
+        }
+        self.media
+            .iter()
+            .find(|(name, _)| name == src)
+            .map(|(_, bytes)| bytes)
+    }
+
+    pub(crate) fn media_contains(&self, src: &str) -> bool {
+        self.media_get(src).is_some()
     }
 
     /// Access the in-memory media list.
@@ -1990,6 +2048,7 @@ impl Editor {
     /// unsaved-changes prompt see it. Media entries live outside `course.json`,
     /// so this bumps the revision without adding an undo step.
     pub(crate) fn mark_media_changed(&mut self) {
+        self.rebuild_media_index();
         self.session.revision = self.session.revision.wrapping_add(1);
         self.ui.last_seen_revision = self.session.revision;
     }
@@ -2208,7 +2267,7 @@ impl Editor {
         let referenced = referenced_media_srcs(&self.session.course);
         referenced
             .into_iter()
-            .filter(|src| !self.media.iter().any(|(name, _)| name == src))
+            .filter(|src| !self.media_contains(src))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -2220,18 +2279,17 @@ impl Editor {
         if let Some(size) = self.media_cache.natural_size(src) {
             return Some(size);
         }
-        for (name, bytes) in &self.media {
-            if name == src {
-                let lower = name.to_ascii_lowercase();
-                if lower.ends_with(".svg") || lower.ends_with(".svgz") {
-                    if let Some(size) = coursecraft_media::svg_natural_size(bytes) {
-                        return Some(size);
-                    }
-                } else if let Ok(img) =
-                    coursecraft_media::decode_image(bytes, &coursecraft_media::Limits::default())
-                {
-                    return Some((img.width as f32, img.height as f32));
+        self.sync_media_index();
+        if let Some(bytes) = self.media_get(src) {
+            let lower = src.to_ascii_lowercase();
+            if lower.ends_with(".svg") || lower.ends_with(".svgz") {
+                if let Some(size) = coursecraft_media::svg_natural_size(bytes) {
+                    return Some(size);
                 }
+            } else if let Ok(img) =
+                coursecraft_media::decode_image(bytes, &coursecraft_media::Limits::default())
+            {
+                return Some((img.width as f32, img.height as f32));
             }
         }
         None
@@ -4295,11 +4353,12 @@ impl Editor {
                 message: issue.message.clone(),
             });
         }
+        self.sync_media_index();
         for r in coursecraft_course::media_references(&self.session.course) {
             if r.src.ends_with('/') {
                 continue;
             }
-            if !self.media.iter().any(|(name, _)| name == &r.src) {
+            if !self.media_contains(&r.src) {
                 warns += 1;
                 issues.push(ValidationIssueSummary {
                     severity: "warning".to_owned(),
@@ -4389,17 +4448,21 @@ impl Editor {
         crate::guard_counters::begin_frame();
         self.ui.current_time = ui.input(|i| i.time);
         self.media_cache.begin_frame();
+        self.sync_media_index();
         widgets::begin_press_guard(ui.ctx());
         // Pick mode owns the pointer and Escape before anything else sees them.
         eyedropper::process_frame(ui.ctx());
         self.check_revision();
         self.maybe_run_deferred_audit(ui.ctx());
-        properties::publish_theme_colors(ui.ctx(), &self.session.course.theme);
+        if self.ui.last_published_theme_rev != Some(self.session.revision) {
+            properties::publish_theme_colors(ui.ctx(), &self.session.course.theme);
+            self.ui.last_published_theme_rev = Some(self.session.revision);
+        }
         coursecraft_render::set_system_font_provider(ui.ctx(), self.system_font_provider.clone());
         coursecraft_render::install_course_fonts(
             ui.ctx(),
             &self.session.course,
-            &MemoryMediaSource { media: &self.media },
+            &MemoryMediaSource::from_parts(&self.media, &self.media_index, self.media_index_len),
         );
         self.update_timeline_playback(ui);
 
@@ -5044,7 +5107,11 @@ impl Editor {
         if self.preview.is_some() {
             let mut open = true;
             if let Some(ref mut preview) = self.preview {
-                let source = MemoryMediaSource { media: &self.media };
+                let source = MemoryMediaSource::from_parts(
+                    &self.media,
+                    &self.media_index,
+                    self.media_index_len,
+                );
                 preview.show(ui.ctx(), &mut open, Some((&mut self.media_cache, &source)));
                 if let Some(size) = preview.remembered_size() {
                     self.ui.preview_size = Some(size);
@@ -5104,10 +5171,22 @@ pub fn primary_button(ui: &mut Ui, label: impl Into<egui::WidgetText>) -> egui::
 /// In-memory media source borrowing from an editor's media assets.
 pub struct MemoryMediaSource<'a> {
     pub media: &'a [(String, std::sync::Arc<[u8]>)],
+    pub index: Option<&'a std::collections::HashMap<String, usize>>,
 }
 
-impl coursecraft_render::MediaSource for MemoryMediaSource<'_> {
-    fn get(&self, src: &str) -> coursecraft_render::MediaFetch {
+impl<'a> MemoryMediaSource<'a> {
+    pub(crate) fn from_parts(
+        media: &'a [(String, std::sync::Arc<[u8]>)],
+        index: &'a std::collections::HashMap<String, usize>,
+        index_len: usize,
+    ) -> Self {
+        Self {
+            media,
+            index: (index_len == media.len()).then_some(index),
+        }
+    }
+
+    fn linear_get(&self, src: &str) -> coursecraft_render::MediaFetch {
         for (name, bytes) in self.media {
             if name == src {
                 return coursecraft_render::MediaFetch::Ready(std::sync::Arc::clone(bytes));
@@ -5117,14 +5196,29 @@ impl coursecraft_render::MediaSource for MemoryMediaSource<'_> {
     }
 }
 
+impl coursecraft_render::MediaSource for MemoryMediaSource<'_> {
+    fn get(&self, src: &str) -> coursecraft_render::MediaFetch {
+        if let Some(index) = self.index {
+            return match index.get(src) {
+                Some(&idx) => match self.media.get(idx) {
+                    Some((name, bytes)) if name == src => {
+                        coursecraft_render::MediaFetch::Ready(std::sync::Arc::clone(bytes))
+                    }
+                    _ => self.linear_get(src),
+                },
+                None => coursecraft_render::MediaFetch::Missing,
+            };
+        }
+        self.linear_get(src)
+    }
+}
+
 impl coursecraft_render::MediaSource for Editor {
     fn get(&self, src: &str) -> coursecraft_render::MediaFetch {
-        for (name, bytes) in &self.media {
-            if name == src {
-                return coursecraft_render::MediaFetch::Ready(std::sync::Arc::clone(bytes));
-            }
+        match self.media_get(src) {
+            Some(bytes) => coursecraft_render::MediaFetch::Ready(std::sync::Arc::clone(bytes)),
+            None => coursecraft_render::MediaFetch::Missing,
         }
-        coursecraft_render::MediaFetch::Missing
     }
 }
 
