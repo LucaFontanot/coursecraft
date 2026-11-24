@@ -31,14 +31,19 @@ pub fn svg_needs_rerasterise(cached: (u32, u32), requested: (u32, u32)) -> bool 
     changed(cached.0, requested.0) || changed(cached.1, requested.1)
 }
 
+fn ends_with_ascii_ci(src: &str, suffix: &[u8]) -> bool {
+    src.len()
+        .checked_sub(suffix.len())
+        .and_then(|start| src.as_bytes().get(start..))
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+}
+
 fn is_svg_src(src: &str) -> bool {
-    let lower = src.to_ascii_lowercase();
-    lower.ends_with(".svg") || lower.ends_with(".svgz")
+    ends_with_ascii_ci(src, b".svg") || ends_with_ascii_ci(src, b".svgz")
 }
 
 fn is_animated_src(src: &str) -> bool {
-    let lower = src.to_ascii_lowercase();
-    lower.ends_with(".gif") || lower.ends_with(".webp")
+    ends_with_ascii_ci(src, b".gif") || ends_with_ascii_ci(src, b".webp")
 }
 
 struct SvgEntry {
@@ -2139,5 +2144,20 @@ mod tests {
         assert!(cache.animations.is_empty());
         assert_eq!(cache.total_bytes(), 64);
         assert!(cache.total_bytes() <= cache.picture_budget());
+    }
+
+    #[test]
+    fn src_extension_checks_are_ascii_case_insensitive_and_utf8_safe() {
+        assert!(is_svg_src("icon.svg"));
+        assert!(is_svg_src("assets/ICON.SVGZ"));
+        assert!(is_svg_src("日本語/図.SvG"));
+        assert!(!is_svg_src("svg"));
+        assert!(!is_svg_src("photo.png"));
+
+        assert!(is_animated_src("anim.gif"));
+        assert!(is_animated_src("assets/LOOP.WEBP"));
+        assert!(is_animated_src("émoji/🎞.GiF"));
+        assert!(!is_animated_src("gif"));
+        assert!(!is_animated_src("photo.jpg"));
     }
 }

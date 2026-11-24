@@ -998,6 +998,7 @@ fn g02_scrolling_100_slide_pictures_stays_under_8_mib() {
         .find_text_containing("Slide 0")
         .unwrap_or_else(|| pos2(90.0, 300.0));
     h.frame(vec![Event::PointerMoved(list_pos)]);
+    let top = h.editor.ui.slides_scroll_y;
 
     // Scroll through the slide list (middle and bottom) without selecting every slide.
     h.frame(vec![wheel(-4000.0)]);
@@ -1005,6 +1006,16 @@ fn g02_scrolling_100_slide_pictures_stays_under_8_mib() {
     h.frame(vec![wheel(-4000.0)]);
     let _ = h.idle_frame();
 
+    assert!(
+        h.editor.ui.slides_scroll_y > top,
+        "wheel events must actually scroll the 100-slide list (top={top}, after={})",
+        h.editor.ui.slides_scroll_y
+    );
+    let decoded_during_scroll = h.editor.media_cache.decoded_picture_count();
+    assert!(
+        decoded_during_scroll >= 10,
+        "scrolling 100 distinct slides must decode at least 10 distinct thumbnails, got {decoded_during_scroll}"
+    );
     let scroll_bytes = h.editor.media_cache.total_bytes();
     assert!(
         scroll_bytes <= 8 * 1024 * 1024,
