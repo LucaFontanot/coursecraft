@@ -1660,3 +1660,282 @@ fn u11_lite_mode_from_query_parses_flag() {
     assert!(state.contains("b.png"));
     assert!(state.contains("c.png"));
 }
+
+#[test]
+fn r1_04_player_slide_media_walkers_golden() {
+    let raw = r##"{
+      "schema_version": 1,
+      "id": "r1-04-player-media",
+      "title": "R1-04 Player Media",
+      "slide_size": { "w": 1280, "h": 720 },
+      "masters": [{
+        "id": "m1",
+        "title": "Master 1",
+        "duration_ms": 5000,
+        "objects": [
+          {
+            "id": "m-img",
+            "name": "MasterPic",
+            "kind": { "type": "image", "src": "master-img.png", "alt": "" },
+            "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+          },
+          {
+            "id": "m-lot",
+            "name": "MasterAnim",
+            "kind": { "type": "lottie", "src": "master-anim.json" },
+            "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+          }
+        ],
+        "layers": [{
+          "id": "ml1",
+          "name": "MasterLayer",
+          "objects": [{
+            "id": "ml-img",
+            "name": "MasterLayerPic",
+            "kind": { "type": "image", "src": "master-layer-img.png", "alt": "" },
+            "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 40.0 }
+          }]
+        }]
+      }],
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Slide 1",
+          "duration_ms": 5000,
+          "master": "m1",
+          "objects": [
+            {
+              "id": "obj-img",
+              "name": "Hero",
+              "kind": { "type": "image", "src": "hero.png", "alt": "" },
+              "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            },
+            {
+              "id": "obj-img-empty",
+              "name": "EmptyImg",
+              "kind": { "type": "image", "src": "", "alt": "" },
+              "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            },
+            {
+              "id": "obj-shp",
+              "name": "ShapePic",
+              "kind": {
+                "type": "shape",
+                "shape": "rectangle",
+                "fill": "#ffffff",
+                "fill_style": { "type": "picture", "src": "shape-fill.png" }
+              },
+              "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            },
+            {
+              "id": "obj-btn",
+              "name": "BtnPic",
+              "kind": {
+                "type": "button",
+                "label": "Go",
+                "fill_style": { "type": "picture", "src": "btn-fill.png" }
+              },
+              "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 44.0 }
+            },
+            {
+              "id": "obj-path",
+              "name": "PathPic",
+              "kind": {
+                "type": "path",
+                "points": [
+                  { "x": 0.0, "y": 0.0 },
+                  { "x": 1.0, "y": 0.0 },
+                  { "x": 0.5, "y": 1.0 }
+                ],
+                "closed": true,
+                "fill": "#ffffff",
+                "fill_style": { "type": "picture", "src": "path-fill.png" },
+                "outline": { "color": "#000000", "width": 1.0 }
+              },
+              "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            },
+            {
+              "id": "obj-lot",
+              "name": "Anim",
+              "kind": { "type": "lottie", "src": "anim.json" },
+              "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            },
+            {
+              "id": "obj-aud",
+              "name": "Voice",
+              "kind": { "type": "audio", "src": "voice.mp3", "captions": "voice.vtt" },
+              "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 }
+            },
+            {
+              "id": "obj-aud-empty-cap",
+              "name": "VoiceEmpty",
+              "kind": { "type": "audio", "src": "voice2.mp3", "captions": "" },
+              "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 }
+            },
+            {
+              "id": "obj-vid",
+              "name": "Clip",
+              "kind": {
+                "type": "video",
+                "src": "clip.mp4",
+                "captions": "clip.vtt",
+                "poster": "clip-poster.png"
+              },
+              "frame": { "x": 0.0, "y": 0.0, "w": 320.0, "h": 180.0 }
+            },
+            {
+              "id": "obj-vid-empty",
+              "name": "ClipEmpty",
+              "kind": {
+                "type": "video",
+                "src": "clip2.mp4",
+                "captions": "",
+                "poster": ""
+              },
+              "frame": { "x": 0.0, "y": 0.0, "w": 320.0, "h": 180.0 }
+            },
+            {
+              "id": "obj-web",
+              "name": "WebWidget",
+              "kind": {
+                "type": "web",
+                "source": { "type": "folder", "path": "web/widget", "entry": "index.html" }
+              },
+              "frame": { "x": 0.0, "y": 0.0, "w": 400.0, "h": 300.0 }
+            },
+            {
+              "id": "obj-st",
+              "name": "Stateful",
+              "kind": { "type": "image", "src": "base-state.png", "alt": "" },
+              "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+              "states": [
+                {
+                  "name": "hover",
+                  "src": "state-img.png",
+                  "fill_style": { "type": "picture", "src": "state-fill.png" },
+                  "extras": [
+                    {
+                      "id": "ex-img",
+                      "kind": { "type": "image", "src": "extra-img.png" },
+                      "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                    },
+                    {
+                      "id": "ex-shp",
+                      "kind": {
+                        "type": "shape",
+                        "shape": "ellipse",
+                        "fill": "#ffffff",
+                        "fill_style": { "type": "picture", "src": "extra-shape-fill.png" }
+                      },
+                      "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                    },
+                    {
+                      "id": "ex-path",
+                      "kind": {
+                        "type": "path",
+                        "points": [
+                          { "x": 0.0, "y": 0.0 },
+                          { "x": 1.0, "y": 0.0 },
+                          { "x": 0.5, "y": 1.0 }
+                        ],
+                        "closed": true,
+                        "fill": "#ffffff",
+                        "fill_style": { "type": "picture", "src": "extra-path-fill.png" },
+                        "outline": { "color": "#000000", "width": 1.0 }
+                      },
+                      "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                    },
+                    {
+                      "id": "ex-txt",
+                      "kind": { "type": "text", "text": "Plain" },
+                      "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 20.0 }
+                    },
+                    {
+                      "id": "ex-empty",
+                      "kind": { "type": "image", "src": "" },
+                      "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                    }
+                  ]
+                },
+                {
+                  "name": "empty_state",
+                  "src": "",
+                  "fill_style": { "type": "picture", "src": "" }
+                }
+              ]
+            }
+          ],
+          "layers": [{
+            "id": "l1",
+            "name": "Layer 1",
+            "objects": [
+              {
+                "id": "l-img",
+                "name": "LayerPic",
+                "kind": { "type": "image", "src": "layer-img.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 80.0 }
+              },
+              {
+                "id": "l-aud",
+                "name": "LayerAud",
+                "kind": { "type": "audio", "src": "layer-aud.mp3", "captions": "layer-aud.vtt" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 }
+              }
+            ]
+          }]
+        }]
+      }]
+    }"##;
+    let course: Course = serde_json::from_str(raw).expect("valid R1-04 course");
+    let slide = &course.scenes[0].slides[0];
+
+    let img_srcs = crate::media::slide_image_srcs(&course, slide);
+    assert_eq!(
+        img_srcs,
+        vec![
+            "hero.png",
+            "shape-fill.png",
+            "btn-fill.png",
+            "path-fill.png",
+            "clip-poster.png",
+            "base-state.png",
+            "state-img.png",
+            "state-fill.png",
+            "extra-img.png",
+            "extra-shape-fill.png",
+            "extra-path-fill.png",
+            "layer-img.png",
+            "master-img.png",
+            "master-layer-img.png",
+        ]
+    );
+
+    let mut media_srcs = crate::media::slide_media_srcs(&course, slide);
+    media_srcs.sort();
+    assert_eq!(
+        media_srcs,
+        vec![
+            "anim.json",
+            "base-state.png",
+            "btn-fill.png",
+            "clip-poster.png",
+            "clip.vtt",
+            "extra-img.png",
+            "extra-path-fill.png",
+            "extra-shape-fill.png",
+            "hero.png",
+            "layer-aud.vtt",
+            "layer-img.png",
+            "master-anim.json",
+            "master-img.png",
+            "master-layer-img.png",
+            "path-fill.png",
+            "shape-fill.png",
+            "state-fill.png",
+            "state-img.png",
+            "voice.vtt",
+        ]
+    );
+}

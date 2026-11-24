@@ -921,11 +921,11 @@ fn fake_player() -> Vec<PackageFile> {
     vec![
         PackageFile {
             path: "index.html".to_string(),
-            bytes: b"<!doctype html><html></html>".to_vec(),
+            bytes: std::sync::Arc::from(b"<!doctype html><html></html>".as_slice()),
         },
         PackageFile {
             path: "assets/app.js".to_string(),
-            bytes: b"console.log('player');".to_vec(),
+            bytes: std::sync::Arc::from(b"console.log('player');".as_slice()),
         },
     ]
 }
@@ -1023,31 +1023,31 @@ fn publish_job_builds_all_standards_with_correct_marker_and_manifest() {
             }
             PackageStandard::Scorm(Standard::Scorm2004) => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"scorm2004"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"scorm2004"}"#);
                 let manifest = find_file(&files, "imsmanifest.xml").expect("manifest");
                 let xml = std::str::from_utf8(&manifest.bytes).expect("manifest is UTF-8");
                 assert!(xml.contains("<schemaversion>2004 4th Edition</schemaversion>"));
             }
             PackageStandard::Xapi(Flavor::Cmi5) => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"cmi5"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"cmi5"}"#);
                 assert!(find_file(&files, "cmi5.xml").is_some());
                 assert!(find_file(&files, "imsmanifest.xml").is_none());
             }
             PackageStandard::Xapi(Flavor::Xapi) => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"xapi"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"xapi"}"#);
                 assert!(find_file(&files, "tincan.xml").is_some());
                 assert!(find_file(&files, "imsmanifest.xml").is_none());
             }
             PackageStandard::Lti => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"lti"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"lti"}"#);
                 assert!(find_file(&files, "imsmanifest.xml").is_none());
             }
             PackageStandard::Web => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"web"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"web"}"#);
                 assert!(find_file(&files, "imsmanifest.xml").is_none());
             }
         }
@@ -1078,7 +1078,7 @@ fn publish_job_puts_in_memory_media_under_media_prefix() {
     };
     let files = package_files(&job).expect("package files");
     let packaged = find_file(&files, "media/photo.png").expect("media file");
-    assert_eq!(packaged.bytes, image);
+    assert_eq!(packaged.bytes.as_ref(), image.as_slice());
 
     let outcome = run_publish_job(job).expect("publish");
     assert!(outcome.path.exists());

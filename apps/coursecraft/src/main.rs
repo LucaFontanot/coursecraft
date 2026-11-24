@@ -1221,7 +1221,7 @@ impl EditorApp {
         match files::import_web_folder(&path, &existing) {
             Ok(import) => {
                 for (name, bytes) in import.files {
-                    self.editor.media.push((name, bytes.into()));
+                    self.editor.add_raw_media(name, bytes.into());
                 }
                 coursecraft_ui_egui::insert_web_object(
                     &mut self.editor,

@@ -19,6 +19,7 @@ mod audit;
 mod connector_route;
 mod course_map;
 mod diff;
+mod media;
 mod model;
 mod named_styles;
 pub mod outline;
@@ -37,6 +38,10 @@ pub use course_map::{
 };
 
 pub use diff::{Change, ChangeKind, MediaHashes, diff, diff_with_media};
+pub use media::{
+    MediaOwner, MediaRef, MediaRole, MediaScope, SlideContainer, visit_course_media,
+    visit_object_media, visit_slide_media,
+};
 pub use named_styles::{StyleLink, apply_named_style, style_link, style_of_text_box};
 pub use recolor::{RecolorError, normalize_hex, recolor_course, same_rgb};
 
@@ -124,195 +129,81 @@ pub struct MediaReference {
 /// `web/<name>/` prefix, which every file under it matches.
 #[must_use]
 pub fn media_references(course: &Course) -> Vec<MediaReference> {
+    use std::fmt::Write as _;
+
     let mut out = Vec::new();
-    for face in &course.fonts {
-        if !face.src.is_empty() {
-            let name = if face.family.trim().is_empty() {
-                face.src.as_str()
-            } else {
-                face.family.as_str()
-            };
-            out.push(MediaReference {
-                src: face.src.clone(),
-                place: format!("Fonts ▸ {name}"),
-                slide: None,
-                object: None,
-            });
+    visit_course_media(course, MediaScope::AllIncludingTemplates, &mut |r| {
+        if r.role != MediaRole::WebFolder && r.src.is_empty() {
+            return;
         }
-    }
-    if let Some(audio) = &course.background_audio
-        && !audio.src.is_empty()
-    {
+        let src = if r.role == MediaRole::WebFolder {
+            format!("{}/", r.src)
+        } else {
+            r.src.to_owned()
+        };
+        let (place, slide, object) = match r.owner {
+            MediaOwner::Font { family } => {
+                let name = if family.trim().is_empty() {
+                    r.src
+                } else {
+                    family
+                };
+                (format!("Fonts ▸ {name}"), None, None)
+            }
+            MediaOwner::BackgroundAudio => ("Course ▸ Background audio".to_owned(), None, None),
+            MediaOwner::PlayerLogo => ("Course ▸ Player logo".to_owned(), None, None),
+            MediaOwner::Resource { title, .. } => (format!("Resources ▸ {title}"), None, None),
+            MediaOwner::Object {
+                container,
+                slide,
+                layer,
+                object,
+                state_name,
+            } => {
+                let mut place = match container {
+                    SlideContainer::SceneSlide { number } => format!("Slide {number}"),
+                    SlideContainer::Master => {
+                        let name = slide.map_or("", |s| slide_place_name(&s.title, &s.id));
+                        format!("Master \"{name}\"")
+                    }
+                    SlideContainer::Template => {
+                        let name = slide.map_or("", |s| slide_place_name(&s.title, &s.id));
+                        format!("Template \"{name}\"")
+                    }
+                    SlideContainer::Bank { bank } => {
+                        let name = slide_place_name(&bank.title, &bank.id);
+                        format!("Bank \"{name}\"")
+                    }
+                    SlideContainer::Detached => slide.map_or_else(String::new, |s| {
+                        slide_place_name(&s.title, &s.id).to_owned()
+                    }),
+                };
+                if let Some(layer) = layer {
+                    let _ = write!(
+                        place,
+                        " ▸ Layer \"{}\"",
+                        slide_place_name(&layer.name, &layer.id)
+                    );
+                }
+                let _ = write!(place, " ▸ {}", slide_place_name(&object.name, &object.id));
+                if let Some(state_name) = state_name {
+                    let _ = write!(place, " ▸ State \"{state_name}\"");
+                }
+                (place, slide.map(|s| s.id.clone()), Some(object.id.clone()))
+            }
+        };
         out.push(MediaReference {
-            src: audio.src.clone(),
-            place: "Course ▸ Background audio".to_owned(),
-            slide: None,
-            object: None,
+            src,
+            place,
+            slide,
+            object,
         });
-    }
-    if let Some(logo) = &course.player.logo
-        && !logo.is_empty()
-    {
-        out.push(MediaReference {
-            src: logo.clone(),
-            place: "Course ▸ Player logo".to_owned(),
-            slide: None,
-            object: None,
-        });
-    }
-    for resource in &course.resources {
-        if let ResourceTarget::File { src } = &resource.target
-            && !src.is_empty()
-        {
-            out.push(MediaReference {
-                src: src.clone(),
-                place: format!("Resources ▸ {}", resource.title),
-                slide: None,
-                object: None,
-            });
-        }
-    }
-    let mut number = 0usize;
-    for scene in &course.scenes {
-        for slide in &scene.slides {
-            number = number.saturating_add(1);
-            walk_slide_media_references(&mut out, slide, &format!("Slide {number}"));
-        }
-    }
-    for master in &course.masters {
-        let name = slide_place_name(&master.title, &master.id);
-        walk_slide_media_references(&mut out, master, &format!("Master \"{name}\""));
-    }
-    for template in &course.templates {
-        let name = slide_place_name(&template.title, &template.id);
-        walk_slide_media_references(&mut out, template, &format!("Template \"{name}\""));
-    }
-    for bank in &course.banks {
-        let name = slide_place_name(&bank.title, &bank.id);
-        for slide in &bank.slides {
-            walk_slide_media_references(&mut out, slide, &format!("Bank \"{name}\""));
-        }
-    }
+    });
     out
 }
 
 fn slide_place_name<'a>(title: &'a str, id: &'a str) -> &'a str {
     if title.is_empty() { id } else { title }
-}
-
-fn walk_slide_media_references(out: &mut Vec<MediaReference>, slide: &Slide, place: &str) {
-    for object in &slide.objects {
-        walk_object_media_references(out, slide, place, object);
-    }
-    for layer in &slide.layers {
-        let name = slide_place_name(&layer.name, &layer.id);
-        let layer_place = format!("{place} ▸ Layer \"{name}\"");
-        for object in &layer.objects {
-            walk_object_media_references(out, slide, &layer_place, object);
-        }
-    }
-}
-
-fn walk_object_media_references(
-    out: &mut Vec<MediaReference>,
-    slide: &Slide,
-    place: &str,
-    object: &Object,
-) {
-    let name = slide_place_name(&object.name, &object.id);
-    let object_place = format!("{place} ▸ {name}");
-    let mut push = |src: &str| {
-        if !src.is_empty() {
-            out.push(MediaReference {
-                src: src.to_owned(),
-                place: object_place.clone(),
-                slide: Some(slide.id.clone()),
-                object: Some(object.id.clone()),
-            });
-        }
-    };
-    match &object.kind {
-        ObjectKind::Image { src, .. } | ObjectKind::Lottie { src, .. } => push(src),
-        ObjectKind::Audio { src, captions, .. } => {
-            push(src);
-            if let Some(captions) = captions {
-                push(captions);
-            }
-        }
-        ObjectKind::Video {
-            src,
-            captions,
-            poster,
-            ..
-        } => {
-            push(src);
-            if let Some(captions) = captions {
-                push(captions);
-            }
-            if let Some(poster) = poster {
-                push(poster);
-            }
-        }
-        ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
-            if let Some(src) = fill_style.as_ref().and_then(FillStyle::picture_src) {
-                push(src);
-            }
-        }
-        ObjectKind::Path { path } => {
-            if let Some(src) = path.fill_style.as_ref().and_then(FillStyle::picture_src) {
-                push(src);
-            }
-        }
-        ObjectKind::Web {
-            source: WebSource::Folder { path, .. },
-        } => push(&format!("{path}/")),
-        _ => {}
-    }
-    for state in &object.states {
-        let place = || format!("{object_place} ▸ State \"{}\"", state.name);
-        if let Some(src) = &state.src
-            && !src.is_empty()
-        {
-            out.push(MediaReference {
-                src: src.clone(),
-                place: place(),
-                slide: Some(slide.id.clone()),
-                object: Some(object.id.clone()),
-            });
-        }
-        if let Some(src) = state.fill_style.as_ref().and_then(FillStyle::picture_src)
-            && !src.is_empty()
-        {
-            out.push(MediaReference {
-                src: src.to_owned(),
-                place: place(),
-                slide: Some(slide.id.clone()),
-                object: Some(object.id.clone()),
-            });
-        }
-        for extra in &state.extras {
-            let extra_src = match &extra.kind {
-                StateExtraKind::Image { src, .. } => Some(src.as_str()),
-                StateExtraKind::Shape { fill_style, .. } => {
-                    fill_style.as_ref().and_then(FillStyle::picture_src)
-                }
-                StateExtraKind::Path { path } => {
-                    path.fill_style.as_ref().and_then(FillStyle::picture_src)
-                }
-                StateExtraKind::Text { .. } => None,
-            };
-            if let Some(src) = extra_src
-                && !src.is_empty()
-            {
-                out.push(MediaReference {
-                    src: src.to_owned(),
-                    place: place(),
-                    slide: Some(slide.id.clone()),
-                    object: Some(object.id.clone()),
-                });
-            }
-        }
-    }
 }
 
 /// The `schema_version` of a course file when it is newer than this build reads.

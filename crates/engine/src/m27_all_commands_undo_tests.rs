@@ -1929,9 +1929,10 @@ fn u05_scoped_validation_matches_full_validation_across_all_commands() {
     use crate::delta::UndoScope;
 
     // Every command whitelisted for scoped slide validation must be a mutating
-    // SingleSlide command.
+    // SingleSlide command, and non-mutating commands must keep FullCourse scope
+    // without slide_validation.
     for cmd in registry() {
-        if crate::commands::can_use_slide_validation(cmd.id) {
+        if cmd.can_use_slide_validation() {
             assert!(
                 cmd.mutates,
                 "can_use_slide_validation({}) must have mutates == true",
@@ -1941,6 +1942,19 @@ fn u05_scoped_validation_matches_full_validation_across_all_commands() {
                 cmd.scope(),
                 UndoScope::SingleSlide,
                 "can_use_slide_validation({}) must have UndoScope::SingleSlide",
+                cmd.id
+            );
+        }
+        if !cmd.mutates {
+            assert_eq!(
+                cmd.scope(),
+                UndoScope::FullCourse,
+                "non-mutating command {} must have UndoScope::FullCourse",
+                cmd.id
+            );
+            assert!(
+                !cmd.can_use_slide_validation(),
+                "non-mutating command {} must not enable slide_validation",
                 cmd.id
             );
         }

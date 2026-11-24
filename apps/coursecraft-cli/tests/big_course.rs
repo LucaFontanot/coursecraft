@@ -10,12 +10,14 @@
 //! `/usr/bin/time -l` reports the overall peak memory (no `unsafe` here).
 
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use coursecraft_course::{Course, Severity};
 use coursecraft_format::{
-    FolderRecord, Limits, open_project_folder, open_project_with_limits, save_project_folder,
+    FolderRecord, Limits, open_project_folder, open_project_from_with_limits, save_project_folder,
     save_project_to,
 };
 use coursecraft_logic::{Input, Player};
@@ -282,14 +284,14 @@ fn big_course_speed() -> Result<(), String> {
     // Generate.
     let t = Instant::now();
     let mut rng = Lcg(0x5EED);
-    let mut media: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut media: Vec<(String, Arc<[u8]>)> = Vec::new();
     for n in 0..SLIDES {
-        media.push((format!("img/p{n}.png"), random_png(&mut rng)));
+        media.push((format!("img/p{n}.png"), Arc::from(random_png(&mut rng))));
     }
     for v in 0..VIDEOS {
         let mut blob = vec![0u8; VIDEO_BYTES];
         rng.fill(&mut blob);
-        media.push((format!("video/v{v}.mp4"), blob));
+        media.push((format!("video/v{v}.mp4"), Arc::from(blob)));
     }
     let course = build_course()?;
     let media_total: usize = media.iter().map(|(_, b)| b.len()).sum();
@@ -375,7 +377,7 @@ fn big_course_speed() -> Result<(), String> {
     // Publish SCORM 1.2 and the manifest-free zip, from the in-memory media.
     let player = vec![PackageFile {
         path: "index.html".into(),
-        bytes: b"<html></html>".to_vec(),
+        bytes: Arc::from(b"<html></html>".as_slice()),
     }];
     let course_json = course.to_json().map_err(|e| e.to_string())?;
     for (name, standard) in [
@@ -389,11 +391,9 @@ fn big_course_speed() -> Result<(), String> {
             break;
         }
         let t = Instant::now();
-        let lookup: HashMap<&str, &[u8]> = media
-            .iter()
-            .map(|(n, b)| (n.as_str(), b.as_slice()))
-            .collect();
-        let resolve = |src: &str| lookup.get(src).map(|b| b.to_vec());
+        let lookup: HashMap<&str, &Arc<[u8]>> =
+            media.iter().map(|(n, b)| (n.as_str(), b)).collect();
+        let resolve = |src: &str| lookup.get(src).map(|b| Arc::clone(b));
         let input = PackageInput {
             course: &course,
             course_json: &course_json,
@@ -403,7 +403,9 @@ fn big_course_speed() -> Result<(), String> {
         let files = build_package_standard_with_folders(&input, standard, &|_| None)
             .map_err(|e| e.to_string())?;
         let out = std::fs::File::create(dir.join("out.zip")).map_err(|e| e.to_string())?;
-        zip_package_to(&files, out).map_err(|e| e.to_string())?;
+        let mut out = std::io::BufWriter::with_capacity(256 * 1024, out);
+        zip_package_to(&files, &mut out).map_err(|e| e.to_string())?;
+        out.flush().map_err(|e| e.to_string())?;
         let size = std::fs::metadata(dir.join("out.zip")).map_or(0, |m| m.len());
         row(
             name,
@@ -429,15 +431,18 @@ fn big_course_speed() -> Result<(), String> {
 fn open_stage(dir: &std::path::Path) -> Result<(), String> {
     let file = dir.join("big.ccraft");
     let t = Instant::now();
-    let bytes = std::fs::read(&file).map_err(|e| e.to_string())?;
-    let project = open_project_with_limits(&bytes, Limits::default()).map_err(|e| e.to_string())?;
+    let reader = std::io::BufReader::with_capacity(
+        256 * 1024,
+        std::fs::File::open(&file).map_err(|e| e.to_string())?,
+    );
+    let project =
+        open_project_from_with_limits(reader, Limits::default()).map_err(|e| e.to_string())?;
     row(
         "open .ccraft (<= 5 s)",
         t.elapsed(),
         5000.0,
         &format!("{} media files", project.media.len()),
     );
-    drop(bytes);
     drop(project.media);
     let course = project.course;
 

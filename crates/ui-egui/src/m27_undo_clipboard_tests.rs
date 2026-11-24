@@ -847,7 +847,7 @@ fn d5_9_undo_while_crop_layer_settings_or_trigger_editor_open() {
     let mut h = TestHarness::new(make_base_course());
     h.editor
         .media
-        .push(("hero.png".to_owned(), std::sync::Arc::from(make_tiny_png())));
+        .push("hero.png".to_owned(), std::sync::Arc::from(make_tiny_png()));
     h.idle_frame();
     h.editor
         .run(

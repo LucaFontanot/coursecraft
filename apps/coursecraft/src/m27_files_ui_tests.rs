@@ -350,10 +350,7 @@ fn d13_1_ccraft_save_edit_save_reopen_fidelity_and_no_tmp() {
 
     let mut h = AppHarness::new(course.clone(), Some(cfg.clone()));
     for (name, bytes) in &media {
-        h.app
-            .editor
-            .media
-            .push((name.clone(), bytes.clone().into()));
+        h.app.editor.media.push(name.clone(), bytes.clone().into());
     }
     h.app.test_save_as_path = Some(proj_path.clone());
     assert!(h.app.perform_save_as());
@@ -411,10 +408,7 @@ fn d13_2_folder_project_incremental_save_and_reopen_parity() {
 
     let mut h = AppHarness::new(course, Some(cfg.clone()));
     for (name, bytes) in &media {
-        h.app
-            .editor
-            .media
-            .push((name.clone(), bytes.clone().into()));
+        h.app.editor.media.push(name.clone(), bytes.clone().into());
     }
     h.app.test_save_as_folder_path = Some(folder.clone());
     assert!(h.app.perform_save_as_folder());

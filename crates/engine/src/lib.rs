@@ -179,13 +179,20 @@ pub struct Command {
     pub params: &'static str,
     /// Mutating commands snapshot the course for undo and roll back on error.
     pub mutates: bool,
+    pub(crate) scope: UndoScope,
+    pub(crate) slide_validation: bool,
     pub run: fn(&mut Session, &Json) -> Result<Json>,
 }
 
 impl Command {
     #[must_use]
     pub(crate) fn scope(&self) -> UndoScope {
-        commands::undo_scope(self.id)
+        self.scope
+    }
+
+    #[must_use]
+    pub(crate) fn can_use_slide_validation(&self) -> bool {
+        self.slide_validation
     }
 }
 
@@ -396,12 +403,12 @@ impl Session {
         }
     }
 
-    fn scoped_slide_for(cmd_id: &str, loc: SlideLoc) -> Option<SlideLoc> {
+    fn scoped_slide_for(cmd: &Command, loc: SlideLoc) -> Option<SlideLoc> {
         #[cfg(test)]
         if FORCE_FULL_VALIDATION.get() {
             return None;
         }
-        commands::can_use_slide_validation(cmd_id).then_some(loc)
+        cmd.can_use_slide_validation().then_some(loc)
     }
 
     /// Whether the course currently passes validation without errors.
@@ -471,7 +478,7 @@ impl Session {
         let verify_before = VERIFY_SCOPE.get().then(|| self.course.clone());
         self.skip_undo = false;
         self.validated_in_cmd = false;
-        self.active_single_slide = Self::scoped_slide_for(cmd.id, loc);
+        self.active_single_slide = Self::scoped_slide_for(cmd, loc);
         let outcome = (cmd.run)(self, params);
         self.active_single_slide = None;
         let skip_undo = std::mem::take(&mut self.skip_undo);
@@ -748,7 +755,7 @@ impl Session {
 
             self.skip_undo = false;
             self.validated_in_cmd = false;
-            self.active_single_slide = Self::scoped_slide_for(cmd.id, loc);
+            self.active_single_slide = Self::scoped_slide_for(cmd, loc);
             let outcome = (cmd.run)(self, params);
             self.active_single_slide = None;
             let skip_undo = std::mem::take(&mut self.skip_undo);

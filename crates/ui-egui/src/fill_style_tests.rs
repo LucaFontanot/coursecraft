@@ -171,7 +171,7 @@ fn picture_menu_offers_choose_a_file_and_lists_only_pictures() {
     harness
         .editor
         .media
-        .push(("voice.mp3".to_owned(), std::sync::Arc::from(&b"ID3"[..])));
+        .push("voice.mp3".to_owned(), std::sync::Arc::from(&b"ID3"[..]));
     select_start_button(&mut harness);
     harness.pick_combo("Solid", "Picture");
     assert!(

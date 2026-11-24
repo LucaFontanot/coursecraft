@@ -6,9 +6,9 @@
 
 ## Add a command
 
-1. Write `fn my_cmd(s: &mut Session, p: &Json) -> Result<Json>` in `crates/engine/src/commands.rs`. Parse params with `req`/`opt`. Return `Err`, never panic.
+1. Write `fn my_cmd(s: &mut Session, p: &Json) -> Result<Json>` in the matching domain module under `crates/engine/src/commands/`. Parse params with `req`/`opt`. Return `Err`, never panic.
 2. If it mutates, set `mutates: true` and call `keep_valid(s, was_valid)` before returning.
-3. Add a row to `REGISTRY` (id `area.verb`, label, menu path, shortcut, params doc).
+3. Add a row to `REGISTRY` in `crates/engine/src/commands/mod.rs` declaring `id` (`area.verb`), `label`, `menu`, `shortcut`, `params`, `mutates`, `scope`, and `slide_validation` in one row.
 4. Add a test. `panic_hunt` covers hostile params automatically.
 5. Add its line to the command list in `docs/cli.md`, from `coursecraft-cli commands`. A test holds this.
 

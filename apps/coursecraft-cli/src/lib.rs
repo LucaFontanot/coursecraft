@@ -11,7 +11,7 @@ use coursecraft_course::{AuditReport, AuditSeverity, Course, Severity};
 use coursecraft_engine::{Session, registry};
 use coursecraft_logic::{Effect, Input, Player};
 use coursecraft_publish::{
-    PackageFile, PackageStandard, SharedPackageInput, build_package_shared, zip_shared_package_to,
+    PackageFile, PackageInput, PackageStandard, build_package_standard_with_folders, zip_package_to,
 };
 use coursecraft_scorm::Standard;
 use coursecraft_xapi::Flavor;
@@ -790,7 +790,7 @@ fn collect_files_recursive(base: &Path, current: &Path, out: &mut Vec<PackageFil
             let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             out.push(PackageFile {
                 path: rel_str,
-                bytes,
+                bytes: std::sync::Arc::from(bytes),
             });
         }
     }
@@ -1301,7 +1301,7 @@ fn run_publish(
     };
 
     // `src` is relative to the project's `media/` folder (docs/spec/course-model.md);
-    // `build_package_shared` checks it is a safe relative path before asking for it.
+    // `build_package_standard_with_folders` checks it is a safe relative path before asking for it.
     let embedded_map: std::collections::HashMap<String, std::sync::Arc<[u8]>> = embedded_files
         .into_iter()
         .map(|(face, bytes)| (face.src, std::sync::Arc::from(bytes)))
@@ -1315,14 +1315,14 @@ fn run_publish(
     };
     let web_folders = |path: &str| collect_web_folder_files(&course_dir.join("media"), path);
 
-    let pkg_input = SharedPackageInput {
+    let pkg_input = PackageInput {
         course: &published_course,
         course_json: &published_course_text,
         player_files: &player_files,
         media: &media_resolver,
     };
 
-    let files = build_package_shared(&pkg_input, standard, &web_folders)
+    let files = build_package_standard_with_folders(&pkg_input, standard, &web_folders)
         .map_err(|e| format!("publish error: {e}"))?;
 
     if !embedded_families.is_empty() {
@@ -1352,7 +1352,7 @@ fn run_publish(
         let file =
             std::fs::File::create(zip_path).map_err(|e| format!("{}: {e}", zip_path.display()))?;
         let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
-        zip_shared_package_to(&files, &mut writer).map_err(|e| format!("zip error: {e}"))?;
+        zip_package_to(&files, &mut writer).map_err(|e| format!("zip error: {e}"))?;
         std::io::Write::flush(&mut writer).map_err(|e| format!("{}: {e}", zip_path.display()))?;
         std::fs::metadata(zip_path).map_or(0, |m| m.len())
     } else {

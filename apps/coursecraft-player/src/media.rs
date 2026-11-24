@@ -79,14 +79,11 @@ pub fn slide_image_srcs(
     course: &coursecraft_course::Course,
     slide: &coursecraft_course::Slide,
 ) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_slide_srcs(slide, false, &mut out);
-    if let Some(master_id) = &slide.master
-        && let Some(master) = course.master(master_id)
-    {
-        collect_slide_srcs(master, false, &mut out);
-    }
-    out
+    collect_slide_media_srcs(
+        course,
+        slide,
+        coursecraft_course::MediaRole::is_player_image,
+    )
 }
 
 /// Collect all web-fetched media `src` paths referenced by `slide` (images,
@@ -98,125 +95,32 @@ pub fn slide_media_srcs(
     course: &coursecraft_course::Course,
     slide: &coursecraft_course::Slide,
 ) -> Vec<String> {
+    collect_slide_media_srcs(
+        course,
+        slide,
+        coursecraft_course::MediaRole::is_player_fetched,
+    )
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn collect_slide_media_srcs(
+    course: &coursecraft_course::Course,
+    slide: &coursecraft_course::Slide,
+    include_role: fn(coursecraft_course::MediaRole) -> bool,
+) -> Vec<String> {
     let mut out = Vec::new();
-    collect_slide_srcs(slide, true, &mut out);
+    let mut collect = |r: coursecraft_course::MediaRef<'_>| {
+        if !r.src.is_empty() && include_role(r.role) {
+            out.push(r.src.to_owned());
+        }
+    };
+    coursecraft_course::visit_slide_media(slide, &mut collect);
     if let Some(master_id) = &slide.master
         && let Some(master) = course.master(master_id)
     {
-        collect_slide_srcs(master, true, &mut out);
+        coursecraft_course::visit_slide_media(master, &mut collect);
     }
     out
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-fn collect_slide_srcs(
-    slide: &coursecraft_course::Slide,
-    include_non_image: bool,
-    out: &mut Vec<String>,
-) {
-    for object in &slide.objects {
-        collect_object_srcs(object, include_non_image, out);
-    }
-    for layer in &slide.layers {
-        for object in &layer.objects {
-            collect_object_srcs(object, include_non_image, out);
-        }
-    }
-}
-
-#[cfg(any(target_arch = "wasm32", test))]
-fn collect_object_srcs(
-    object: &coursecraft_course::Object,
-    include_non_image: bool,
-    out: &mut Vec<String>,
-) {
-    use coursecraft_course::{FillStyle, ObjectKind, StateExtraKind};
-    match &object.kind {
-        ObjectKind::Image { src, .. } => {
-            if !src.is_empty() {
-                out.push(src.clone());
-            }
-        }
-        ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
-            if let Some(src) = fill_style.as_ref().and_then(FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                out.push(src.to_owned());
-            }
-        }
-        ObjectKind::Path { path } => {
-            if let Some(src) = path.fill_style.as_ref().and_then(FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                out.push(src.to_owned());
-            }
-        }
-        ObjectKind::Lottie { src, .. } if include_non_image => {
-            if !src.is_empty() {
-                out.push(src.clone());
-            }
-        }
-        ObjectKind::Audio { captions, .. } => {
-            if include_non_image
-                && let Some(captions) = captions
-                && !captions.is_empty()
-            {
-                out.push(captions.clone());
-            }
-        }
-        ObjectKind::Video {
-            captions, poster, ..
-        } => {
-            if let Some(poster) = poster
-                && !poster.is_empty()
-            {
-                out.push(poster.clone());
-            }
-            if include_non_image
-                && let Some(captions) = captions
-                && !captions.is_empty()
-            {
-                out.push(captions.clone());
-            }
-        }
-        _ => {}
-    }
-    for state in &object.states {
-        if let Some(state_src) = &state.src
-            && !state_src.is_empty()
-        {
-            out.push(state_src.clone());
-        }
-        if let Some(src) = state.fill_style.as_ref().and_then(FillStyle::picture_src)
-            && !src.is_empty()
-        {
-            out.push(src.to_owned());
-        }
-        for extra in &state.extras {
-            match &extra.kind {
-                StateExtraKind::Image { src, .. } => {
-                    if !src.is_empty() {
-                        out.push(src.clone());
-                    }
-                }
-                StateExtraKind::Shape { fill_style, .. } => {
-                    if let Some(src) = fill_style.as_ref().and_then(FillStyle::picture_src)
-                        && !src.is_empty()
-                    {
-                        out.push(src.to_owned());
-                    }
-                }
-                StateExtraKind::Path { path } => {
-                    if let Some(src) = path.fill_style.as_ref().and_then(FillStyle::picture_src)
-                        && !src.is_empty()
-                    {
-                        out.push(src.to_owned());
-                    }
-                }
-                StateExtraKind::Text { .. } => {}
-            }
-        }
-    }
 }
 
 /// Web media source that fetches `media/<src>` relative to the page with at most 6 in-flight requests.

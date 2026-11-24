@@ -5,13 +5,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use coursecraft_course::{Course, FontFace, FontStyle};
+use coursecraft_course::Course;
 #[cfg(not(target_arch = "wasm32"))]
-use coursecraft_publish::zip_shared_package_to;
+use coursecraft_course::{FontFace, FontStyle};
 use coursecraft_publish::{
-    PackageFile, PackageStandard, PublishError, PublishFontLookup, PublishFontProvider,
-    SharedPackageFile, SharedPackageInput, auto_embed_fonts, build_package_shared,
-    zip_shared_package,
+    PackageFile, PackageInput, PackageStandard, PublishError, build_package_standard_with_folders,
+    zip_package,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use coursecraft_publish::{
+    PublishFontLookup, PublishFontProvider, auto_embed_fonts, zip_package_to,
 };
 use coursecraft_scorm::Standard;
 use coursecraft_ui_egui::PublishStandard;
@@ -60,12 +63,12 @@ pub fn package_standard(standard: PublishStandard) -> PackageStandard {
 /// # Errors
 /// Returns a plain sentence naming the object and file when media is missing,
 /// or describing another package problem.
-pub(crate) fn package_files_shared_from(
+pub(crate) fn package_files_from(
     course: &Course,
     media: &[(String, Arc<[u8]>)],
     standard: PackageStandard,
     player: &[PackageFile],
-) -> Result<Vec<SharedPackageFile>, String> {
+) -> Result<Vec<PackageFile>, String> {
     let course_json = course
         .to_json_compact()
         .map_err(|e| format!("Couldn't prepare the course for publishing: {e}"))?;
@@ -85,36 +88,13 @@ pub(crate) fn package_files_shared_from(
         (!files.is_empty()).then_some(files)
     };
 
-    let input = SharedPackageInput {
+    let input = PackageInput {
         course,
         course_json: &course_json,
         player_files: player,
         media: &resolve,
     };
-    build_package_shared(&input, standard, &folder).map_err(readable_error)
-}
-
-/// Build the package files for a course and its in-memory media, resolving
-/// media from the in-memory items exactly like the CLI's `.ccraft` path.
-///
-/// # Errors
-/// Returns a plain sentence naming the object and file when media is missing,
-/// or describing another package problem.
-#[cfg(any(test, target_arch = "wasm32"))]
-pub(crate) fn package_files_from(
-    course: &Course,
-    media: &[(String, Arc<[u8]>)],
-    standard: PackageStandard,
-    player: &[PackageFile],
-) -> Result<Vec<PackageFile>, String> {
-    let shared = package_files_shared_from(course, media, standard, player)?;
-    Ok(shared
-        .into_iter()
-        .map(|f| PackageFile {
-            path: f.path,
-            bytes: f.bytes.to_vec(),
-        })
-        .collect())
+    build_package_standard_with_folders(&input, standard, &folder).map_err(readable_error)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -132,8 +112,8 @@ pub fn run_publish_bytes(
     standard: PackageStandard,
     player: &[PackageFile],
 ) -> Result<Vec<u8>, String> {
-    let files = package_files_shared_from(course, media, standard, player)?;
-    zip_shared_package(&files).map_err(|e| format!("Couldn't create the zip file: {e}"))
+    let files = package_files_from(course, media, standard, player)?;
+    zip_package(&files).map_err(|e| format!("Couldn't create the zip file: {e}"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -212,7 +192,7 @@ pub fn run_publish_job_with_fonts(
             pending_save_fonts.push((face, arc));
         }
     }
-    let files = package_files_shared_from(&job.course, &job.media, job.standard, &job.player)?;
+    let files = package_files_from(&job.course, &job.media, job.standard, &job.player)?;
 
     if let Some(parent) = job.out.parent()
         && !parent.as_os_str().is_empty()
@@ -234,7 +214,7 @@ pub fn run_publish_job_with_fonts(
         .map_err(|e| format!("Couldn't write {}: {e}", job.out.display()))
         .and_then(|file| {
             let mut file = std::io::BufWriter::with_capacity(256 * 1024, file);
-            zip_shared_package_to(&files, &mut file)
+            zip_package_to(&files, &mut file)
                 .map_err(|e| format!("Couldn't create the zip file: {e}"))?;
             std::io::Write::flush(&mut file)
                 .map_err(|e| format!("Couldn't write {}: {e}", job.out.display()))
@@ -283,7 +263,7 @@ mod tests {
         let course = Session::blank("Web Publish Test").course;
         let player = vec![PackageFile {
             path: "index.html".to_string(),
-            bytes: b"<!doctype html><html></html>".to_vec(),
+            bytes: Arc::from(b"<!doctype html><html></html>".as_slice()),
         }];
         let files = package_files_from(
             &course,

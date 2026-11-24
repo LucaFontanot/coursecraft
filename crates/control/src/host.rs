@@ -510,8 +510,9 @@ impl ControlHost for HeadlessHost {
             .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
 
         let course = if is_ccraft {
-            let bytes = std::fs::read(path).map_err(|e| HostError::Io(e.to_string()))?;
-            let proj = coursecraft_format::open_project(&bytes)
+            let file = std::fs::File::open(path).map_err(|e| HostError::Io(e.to_string()))?;
+            let reader = std::io::BufReader::with_capacity(256 * 1024, file);
+            let proj = coursecraft_format::open_project_from(reader)
                 .map_err(|e| HostError::Engine(e.to_string()))?;
             self.media_source.set_in_memory(&proj.media);
             proj.course

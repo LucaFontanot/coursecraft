@@ -307,7 +307,7 @@ pub fn snapshot_editor(
     select: SnapshotSelect,
 ) -> Result<RgbaImage, RenderError> {
     let mut editor = Editor::new(course);
-    editor.media = media;
+    editor.media.set_all(media);
     select.apply(&mut editor);
 
     render_ui(

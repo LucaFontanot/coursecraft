@@ -192,9 +192,9 @@ fn window_body(editor: &mut Editor, ui: &mut Ui) -> Option<Action> {
             action = Some(Action::Replace(src));
         }
 
-        let selected_unused = selected.as_deref().is_some_and(|src| {
-            editor.media.iter().any(|(name, _)| name == src) && used_count(&references, src) == 0
-        });
+        let selected_unused = selected
+            .as_deref()
+            .is_some_and(|src| editor.media.contains(src) && used_count(&references, src) == 0);
         let delete = ui.add_enabled(selected_unused, Button::new("Delete"));
         let delete = if selected.is_none() {
             delete.on_disabled_hover_text("Select an unused file to delete")
@@ -416,9 +416,7 @@ fn apply(editor: &mut Editor, action: Option<Action>) {
         Action::Replace(src) => editor.request(EditorRequest::ReplaceMediaFile { src }),
         Action::DeleteSelected(src) => {
             let references = media_references(&editor.session.course);
-            if editor.media.iter().any(|(name, _)| name == &src)
-                && used_count(&references, &src) == 0
-            {
+            if editor.media.contains(&src) && used_count(&references, &src) == 0 {
                 editor.ui.media_library.confirm = Some(DeleteTarget::Selected(src));
             } else {
                 editor.set_status("That file is used; remove its references first.");
@@ -441,8 +439,7 @@ fn show_confirm(editor: &mut Editor, ctx: &Context) {
     let to_delete = match &target {
         DeleteTarget::Selected(src) => {
             let references = media_references(&editor.session.course);
-            if editor.media.iter().any(|(name, _)| name == src) && used_count(&references, src) == 0
-            {
+            if editor.media.contains(src) && used_count(&references, src) == 0 {
                 vec![src.clone()]
             } else {
                 Vec::new()
@@ -613,11 +610,7 @@ fn paint_thumbnail(
     ui.painter()
         .rect_filled(rect, egui::CornerRadius::same(RADIUS_SM as u8), p.hover);
     if kind == MediaKindFilter::Images {
-        let source = MemoryMediaSource::from_parts(
-            &editor.media,
-            &editor.media_index,
-            editor.media_index_len,
-        );
+        let source = MemoryMediaSource::from_store(&editor.media);
         if let MediaView::Ready { texture, .. } =
             editor
                 .media_cache

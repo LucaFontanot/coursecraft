@@ -5887,3 +5887,558 @@ fn u04_validate_slide_errors_matches_full_validate_for_slide_mutations() {
         assert_eq!(actual, expected, "template validate_slide_errors mismatch");
     }
 }
+
+fn r1_01_comprehensive_media_course() -> Course {
+    let json = r##"{
+        "schema_version": 1,
+        "id": "r1-01-course",
+        "title": "R1-01 Media Course",
+        "slide_size": { "w": 1280, "h": 720 },
+        "fonts": [
+            { "family": "Lato", "style": "regular", "src": "fonts/lato.ttf" },
+            { "family": "   ", "style": "bold", "src": "fonts/unnamed.ttf" },
+            { "family": "EmptySrc", "style": "italic", "src": "" }
+        ],
+        "background_audio": { "src": "bgm.mp3" },
+        "player": { "logo": "logo.png" },
+        "resources": [
+            { "id": "res-file", "title": "Handout", "target": { "kind": "file", "src": "handout.pdf" } },
+            { "id": "res-url", "title": "Docs", "target": { "kind": "url", "url": "https://example.com" } }
+        ],
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide One",
+                "duration_ms": 5000,
+                "objects": [
+                    {
+                        "id": "obj-img",
+                        "name": "Hero",
+                        "kind": { "type": "image", "src": "hero.png", "alt": "Hero" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-lot",
+                        "name": "Anim",
+                        "kind": { "type": "lottie", "src": "anim.json" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-aud",
+                        "name": "Voice",
+                        "kind": { "type": "audio", "src": "voice.mp3", "captions": "voice.vtt" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 }
+                    },
+                    {
+                        "id": "obj-vid",
+                        "name": "Clip",
+                        "kind": {
+                            "type": "video",
+                            "src": "clip.mp4",
+                            "captions": "clip.vtt",
+                            "poster": "clip-poster.png"
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 320.0, "h": 180.0 }
+                    },
+                    {
+                        "id": "obj-shp",
+                        "name": "ShapePic",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "rectangle",
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "shape-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-btn",
+                        "name": "BtnPic",
+                        "kind": {
+                            "type": "button",
+                            "label": "Go",
+                            "fill_style": { "type": "picture", "src": "btn-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 44.0 }
+                    },
+                    {
+                        "id": "obj-path",
+                        "name": "PathPic",
+                        "kind": {
+                            "type": "path",
+                            "points": [
+                                { "x": 0.0, "y": 0.0 },
+                                { "x": 1.0, "y": 0.0 },
+                                { "x": 0.5, "y": 1.0 }
+                            ],
+                            "closed": true,
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "path-fill.png" },
+                            "outline": { "color": "#000000", "width": 1.0 }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-web",
+                        "name": "DemoWeb",
+                        "kind": {
+                            "type": "web",
+                            "source": { "type": "folder", "path": "web/demo", "entry": "index.html" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 400.0, "h": 300.0 }
+                    },
+                    {
+                        "id": "obj-st",
+                        "name": "Stateful",
+                        "kind": { "type": "image", "src": "base-state.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+                        "states": [{
+                            "name": "hover",
+                            "src": "state-img.png",
+                            "fill_style": { "type": "picture", "src": "state-fill.png" },
+                            "extras": [
+                                {
+                                    "id": "ex-img",
+                                    "kind": { "type": "image", "src": "extra-img.png" },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-shp",
+                                    "kind": {
+                                        "type": "shape",
+                                        "shape": "ellipse",
+                                        "fill": "#ffffff",
+                                        "fill_style": { "type": "picture", "src": "extra-shape-fill.png" }
+                                    },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-path",
+                                    "kind": {
+                                        "type": "path",
+                                        "points": [
+                                            { "x": 0.0, "y": 0.0 },
+                                            { "x": 1.0, "y": 0.0 },
+                                            { "x": 0.5, "y": 1.0 }
+                                        ],
+                                        "closed": true,
+                                        "fill": "#ffffff",
+                                        "fill_style": { "type": "picture", "src": "extra-path-fill.png" },
+                                        "outline": { "color": "#000000", "width": 1.0 }
+                                    },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-txt",
+                                    "kind": { "type": "text", "text": "Caption" },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 60.0, "h": 20.0 }
+                                }
+                            ]
+                        }]
+                    }
+                ],
+                "layers": [{
+                    "id": "l1",
+                    "name": "Layer One",
+                    "objects": [{
+                        "id": "l-img",
+                        "name": "LayerPic",
+                        "kind": { "type": "image", "src": "layer-pic.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 80.0 }
+                    }]
+                }]
+            }]
+        }],
+        "masters": [{
+            "id": "m1",
+            "title": "Main Master",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "m-img",
+                "name": "MasterBg",
+                "kind": { "type": "image", "src": "master-base.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }],
+            "layers": [{
+                "id": "ml1",
+                "name": "Master Overlay",
+                "objects": [{
+                    "id": "ml-img",
+                    "name": "MasterBadge",
+                    "kind": { "type": "image", "src": "master-layer.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 40.0 }
+                }]
+            }]
+        }],
+        "templates": [{
+            "id": "t1",
+            "title": "Card Template",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "t-img",
+                "name": "TemplateHero",
+                "kind": { "type": "image", "src": "template-pic.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }]
+        }],
+        "banks": [{
+            "id": "b1",
+            "title": "Quiz Bank",
+            "slides": [{
+                "id": "bs1",
+                "title": "Bank Q1",
+                "duration_ms": 5000,
+                "objects": [{
+                    "id": "b-img",
+                    "name": "BankPic",
+                    "kind": { "type": "image", "src": "bank-base.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                }],
+                "layers": [{
+                    "id": "bl1",
+                    "name": "Feedback",
+                    "objects": [{
+                        "id": "bl-img",
+                        "name": "BankLayerPic",
+                        "kind": { "type": "image", "src": "bank-layer.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+                    }]
+                }]
+            }]
+        }]
+    }"##;
+    Course::from_json(json).expect("valid R1-01 test course")
+}
+
+#[test]
+fn r1_01_media_references_golden_and_visitors() {
+    let course = r1_01_comprehensive_media_course();
+    let refs = crate::media_references(&course);
+
+    let m =
+        |src: &str, place: &str, slide: Option<&str>, object: Option<&str>| crate::MediaReference {
+            src: src.to_owned(),
+            place: place.to_owned(),
+            slide: slide.map(str::to_owned),
+            object: object.map(str::to_owned),
+        };
+
+    let expected = vec![
+        m("fonts/lato.ttf", "Fonts ▸ Lato", None, None),
+        m("fonts/unnamed.ttf", "Fonts ▸ fonts/unnamed.ttf", None, None),
+        m("bgm.mp3", "Course ▸ Background audio", None, None),
+        m("logo.png", "Course ▸ Player logo", None, None),
+        m("handout.pdf", "Resources ▸ Handout", None, None),
+        m("hero.png", "Slide 1 ▸ Hero", Some("s1"), Some("obj-img")),
+        m("anim.json", "Slide 1 ▸ Anim", Some("s1"), Some("obj-lot")),
+        m("voice.mp3", "Slide 1 ▸ Voice", Some("s1"), Some("obj-aud")),
+        m("voice.vtt", "Slide 1 ▸ Voice", Some("s1"), Some("obj-aud")),
+        m("clip.mp4", "Slide 1 ▸ Clip", Some("s1"), Some("obj-vid")),
+        m("clip.vtt", "Slide 1 ▸ Clip", Some("s1"), Some("obj-vid")),
+        m(
+            "clip-poster.png",
+            "Slide 1 ▸ Clip",
+            Some("s1"),
+            Some("obj-vid"),
+        ),
+        m(
+            "shape-fill.png",
+            "Slide 1 ▸ ShapePic",
+            Some("s1"),
+            Some("obj-shp"),
+        ),
+        m(
+            "btn-fill.png",
+            "Slide 1 ▸ BtnPic",
+            Some("s1"),
+            Some("obj-btn"),
+        ),
+        m(
+            "path-fill.png",
+            "Slide 1 ▸ PathPic",
+            Some("s1"),
+            Some("obj-path"),
+        ),
+        m(
+            "web/demo/",
+            "Slide 1 ▸ DemoWeb",
+            Some("s1"),
+            Some("obj-web"),
+        ),
+        m(
+            "base-state.png",
+            "Slide 1 ▸ Stateful",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "state-img.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "state-fill.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "extra-img.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "extra-shape-fill.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "extra-path-fill.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "layer-pic.png",
+            "Slide 1 ▸ Layer \"Layer One\" ▸ LayerPic",
+            Some("s1"),
+            Some("l-img"),
+        ),
+        m(
+            "master-base.png",
+            "Master \"Main Master\" ▸ MasterBg",
+            Some("m1"),
+            Some("m-img"),
+        ),
+        m(
+            "master-layer.png",
+            "Master \"Main Master\" ▸ Layer \"Master Overlay\" ▸ MasterBadge",
+            Some("m1"),
+            Some("ml-img"),
+        ),
+        m(
+            "template-pic.png",
+            "Template \"Card Template\" ▸ TemplateHero",
+            Some("t1"),
+            Some("t-img"),
+        ),
+        m(
+            "bank-base.png",
+            "Bank \"Quiz Bank\" ▸ BankPic",
+            Some("bs1"),
+            Some("b-img"),
+        ),
+        m(
+            "bank-layer.png",
+            "Bank \"Quiz Bank\" ▸ Layer \"Feedback\" ▸ BankLayerPic",
+            Some("bs1"),
+            Some("bl-img"),
+        ),
+    ];
+
+    assert_eq!(refs, expected);
+}
+
+#[test]
+fn r1_01_visit_media_scopes_and_roles() {
+    use crate::{
+        MediaOwner, MediaRole, MediaScope, SlideContainer, visit_course_media, visit_object_media,
+        visit_slide_media,
+    };
+
+    let course = r1_01_comprehensive_media_course();
+
+    // AllIncludingTemplates includes template refs and empty-src font slot.
+    let mut all_srcs = Vec::new();
+    visit_course_media(&course, MediaScope::AllIncludingTemplates, &mut |r| {
+        all_srcs.push((r.src.to_owned(), r.role, r.web_entry.map(str::to_owned)));
+    });
+    assert!(
+        all_srcs
+            .iter()
+            .any(|(src, role, _)| src == "template-pic.png" && *role == MediaRole::Image),
+        "AllIncludingTemplates must include template media"
+    );
+    assert!(
+        all_srcs
+            .iter()
+            .any(|(src, role, _)| src.is_empty() && *role == MediaRole::Font),
+        "visitor must emit populated empty-src slots"
+    );
+    assert!(
+        all_srcs.iter().any(|(src, role, entry)| {
+            src == "web/demo"
+                && *role == MediaRole::WebFolder
+                && entry.as_deref() == Some("index.html")
+        }),
+        "WebFolder must carry folder path and web_entry"
+    );
+
+    // Publishable excludes templates while keeping scenes, masters, banks, and course-level refs.
+    let mut pub_srcs = Vec::new();
+    visit_course_media(&course, MediaScope::Publishable, &mut |r| {
+        pub_srcs.push(r.src.to_owned());
+    });
+    assert!(
+        !pub_srcs.iter().any(|src| src == "template-pic.png"),
+        "Publishable must exclude templates"
+    );
+    assert!(pub_srcs.iter().any(|src| src == "hero.png"));
+    assert!(pub_srcs.iter().any(|src| src == "master-base.png"));
+    assert!(pub_srcs.iter().any(|src| src == "bank-base.png"));
+    assert!(pub_srcs.iter().any(|src| src == "bgm.mp3"));
+
+    // visit_slide_media visits base and layer objects with SlideContainer::Detached and slide: Some(slide).
+    let slide = &course.scenes[0].slides[0];
+    let mut slide_seen = Vec::new();
+    visit_slide_media(slide, &mut |r| match r.owner {
+        MediaOwner::Object {
+            container,
+            slide: owner_slide,
+            layer,
+            object,
+            state_name,
+        } => {
+            assert_eq!(container, SlideContainer::Detached);
+            assert_eq!(owner_slide, Some(slide));
+            slide_seen.push((
+                r.src.to_owned(),
+                layer.map(|l| l.id.clone()),
+                object.id.clone(),
+                state_name.map(str::to_owned),
+            ));
+        }
+        other => panic!("unexpected non-object owner from visit_slide_media: {other:?}"),
+    });
+    assert!(
+        slide_seen
+            .iter()
+            .any(|(src, layer, obj, st)| src == "hero.png"
+                && layer.is_none()
+                && obj == "obj-img"
+                && st.is_none())
+    );
+    assert!(
+        slide_seen
+            .iter()
+            .any(|(src, layer, obj, st)| src == "layer-pic.png"
+                && layer.as_deref() == Some("l1")
+                && obj == "l-img"
+                && st.is_none())
+    );
+    assert!(
+        slide_seen
+            .iter()
+            .any(|(src, layer, obj, st)| src == "extra-path-fill.png"
+                && layer.is_none()
+                && obj == "obj-st"
+                && st.as_deref() == Some("hover"))
+    );
+
+    // visit_object_media visits the object and its states/extras with SlideContainer::Detached and slide: None.
+    let stateful_obj = slide
+        .objects
+        .iter()
+        .find(|o| o.id == "obj-st")
+        .expect("stateful object");
+    let mut obj_seen = Vec::new();
+    visit_object_media(stateful_obj, &mut |r| match r.owner {
+        MediaOwner::Object {
+            container,
+            slide: owner_slide,
+            layer,
+            object,
+            state_name,
+        } => {
+            assert_eq!(container, SlideContainer::Detached);
+            assert!(owner_slide.is_none());
+            assert!(layer.is_none());
+            assert_eq!(object.id, "obj-st");
+            obj_seen.push((r.src.to_owned(), r.role, state_name.map(str::to_owned)));
+        }
+        other => panic!("unexpected non-object owner from visit_object_media: {other:?}"),
+    });
+    assert_eq!(
+        obj_seen,
+        vec![
+            ("base-state.png".into(), MediaRole::Image, None),
+            (
+                "state-img.png".into(),
+                MediaRole::StateImage,
+                Some("hover".into())
+            ),
+            (
+                "state-fill.png".into(),
+                MediaRole::PictureFill,
+                Some("hover".into())
+            ),
+            (
+                "extra-img.png".into(),
+                MediaRole::StateExtraImage,
+                Some("hover".into())
+            ),
+            (
+                "extra-shape-fill.png".into(),
+                MediaRole::StateExtraImage,
+                Some("hover".into())
+            ),
+            (
+                "extra-path-fill.png".into(),
+                MediaRole::StateExtraImage,
+                Some("hover".into())
+            ),
+        ]
+    );
+
+    // Exhaustive check of MediaRole::is_player_image and MediaRole::is_player_fetched.
+    let roles = [
+        (MediaRole::Image, true, true),
+        (MediaRole::PictureFill, true, true),
+        (MediaRole::StateImage, true, true),
+        (MediaRole::StateExtraImage, true, true),
+        (MediaRole::VideoPoster, true, true),
+        (MediaRole::Lottie, false, true),
+        (MediaRole::Caption, false, true),
+        (MediaRole::Audio, false, false),
+        (MediaRole::Video, false, false),
+        (MediaRole::WebFolder, false, false),
+        (MediaRole::Font, false, false),
+        (MediaRole::BackgroundAudio, false, false),
+        (MediaRole::PlayerLogo, false, false),
+        (MediaRole::ResourceFile, false, false),
+    ];
+    for (role, expect_image, expect_fetched) in roles {
+        // Exhaustive match ensures a compile error if a new MediaRole variant is added without updating this test.
+        match role {
+            MediaRole::Image
+            | MediaRole::PictureFill
+            | MediaRole::StateImage
+            | MediaRole::StateExtraImage
+            | MediaRole::VideoPoster
+            | MediaRole::Lottie
+            | MediaRole::Audio
+            | MediaRole::Video
+            | MediaRole::Caption
+            | MediaRole::WebFolder
+            | MediaRole::Font
+            | MediaRole::BackgroundAudio
+            | MediaRole::PlayerLogo
+            | MediaRole::ResourceFile => {}
+        }
+        assert_eq!(
+            role.is_player_image(),
+            expect_image,
+            "is_player_image mismatch for {role:?}"
+        );
+        assert_eq!(
+            role.is_player_fetched(),
+            expect_fetched,
+            "is_player_fetched mismatch for {role:?}"
+        );
+    }
+}

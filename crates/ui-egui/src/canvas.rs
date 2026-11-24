@@ -7222,7 +7222,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             missing_images_as_placeholders(
                 &mut composed,
                 &editor.media,
-                editor.media_index_if_synced(),
+                Some(editor.media.index()),
             );
             if let Some(edit_obj_id) = editing_state {
                 for item in &mut composed {
@@ -7498,11 +7498,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         if editor.timeline_playback.needs_repaint(playhead_ms) {
             ui.ctx().request_repaint();
         }
-        let memory = crate::MemoryMediaSource::from_parts(
-            &editor.media,
-            &editor.media_index,
-            editor.media_index_len,
-        );
+        let memory = crate::MemoryMediaSource::from_store(&editor.media);
         let source = crate::TimelineMediaSource {
             inner: &memory,
             playback: &editor.timeline_playback,

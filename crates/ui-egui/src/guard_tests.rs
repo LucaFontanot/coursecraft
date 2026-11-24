@@ -1339,59 +1339,85 @@ fn g06_check_spelling_ignore_and_add_run_zero_speller_checks() {
     assert_eq!(h.editor.ui.spell_check.issues.len(), SLIDES);
 }
 
-/// Regression test (`M34-12`): direct same-length replacements of `Editor::media`
-/// (including middle-entry renames) must never leave `media_index` stale.
-#[test]
-fn s11_media_index_detects_same_length_replacement() {
+fn assert_editor_media_ready(editor: &crate::Editor, name: &str, expected: &[u8]) {
     use coursecraft_render::{MediaFetch, MediaSource};
+    assert!(matches!(editor.get(name), MediaFetch::Ready(ref b) if b.as_ref() == expected));
+    let src = crate::MemoryMediaSource::from_store(&editor.media);
+    assert!(matches!(src.get(name), MediaFetch::Ready(ref b) if b.as_ref() == expected));
+}
 
+fn assert_editor_media_missing(editor: &crate::Editor, name: &str) {
+    use coursecraft_render::{MediaFetch, MediaSource};
+    assert!(matches!(editor.get(name), MediaFetch::Missing));
+    let src = crate::MemoryMediaSource::from_store(&editor.media);
+    assert!(matches!(src.get(name), MediaFetch::Missing));
+}
+
+fn has_missing_media_issue(editor: &mut crate::Editor) -> bool {
+    editor.refresh_validate_only();
+    editor
+        .ui
+        .validation_issues
+        .iter()
+        .any(|i| i.message.contains("Missing media"))
+}
+
+/// Regression test (`R1-06`): `Editor::media` (`MediaStore`) keeps its index,
+/// `total_bytes`, `MediaSource::get`, `MemoryMediaSource::from_store`, and
+/// missing-media validation exact across `set_all`, `push`, `replace`, `retain`,
+/// and `truncate`.
+#[test]
+fn r1_06_media_store_stays_exact_across_all_mutations() {
     let course = Course::from_json(
-        r#"{"schema_version":1,"id":"s11-media","title":"S11 Media","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[{"id":"img0","kind":{"type":"image","src":"mid-new.png","alt":""},"frame":{"x":0,"y":0,"w":100,"h":100}}]}]}]}"#,
+        r#"{"schema_version":1,"id":"r1-06-media","title":"R1-06 Media","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[{"id":"img0","kind":{"type":"image","src":"mid-new.png","alt":""},"frame":{"x":0,"y":0,"w":100,"h":100}}]}]}]}"#,
     )
     .expect("course parses");
     let mut h = TestHarness::new(course);
     let bytes_a: std::sync::Arc<[u8]> = std::sync::Arc::from(b"aaa".as_slice());
-    let bytes_b: std::sync::Arc<[u8]> = std::sync::Arc::from(b"bbb".as_slice());
-    let bytes_c: std::sync::Arc<[u8]> = std::sync::Arc::from(b"ccc".as_slice());
+    let bytes_b: std::sync::Arc<[u8]> = std::sync::Arc::from(b"bbbb".as_slice());
+    let bytes_c: std::sync::Arc<[u8]> = std::sync::Arc::from(b"ccccc".as_slice());
+    let bytes_d: std::sync::Arc<[u8]> = std::sync::Arc::from(b"dddddd".as_slice());
+
+    // set_all (same-length replacement) is immediately visible without a frame.
+    h.editor
+        .media
+        .set_all(vec![("old.png".to_owned(), bytes_a.clone())]);
+    assert_eq!(h.editor.media.total_bytes(), 3);
+    assert_editor_media_ready(&h.editor, "old.png", b"aaa");
 
     h.editor
-        .set_media(vec![("old.png".to_owned(), bytes_a.clone())]);
-    let _ = h.idle_frame();
-    assert!(h.editor.media_contains("old.png"));
+        .media
+        .set_all(vec![("new.png".to_owned(), bytes_b)]);
+    assert_eq!(h.editor.media.total_bytes(), 4);
+    assert_editor_media_ready(&h.editor, "new.png", b"bbbb");
+    assert_editor_media_missing(&h.editor, "old.png");
 
-    // Same-length full replacement before any frame runs.
-    h.editor.media = vec![("new.png".to_owned(), bytes_b.clone())];
-    assert!(
-        matches!(h.editor.get("new.png"), MediaFetch::Ready(ref b) if b.as_ref() == b"bbb"),
-        "same-length replacement must be visible immediately via MediaSource::get"
-    );
-    assert!(matches!(h.editor.get("old.png"), MediaFetch::Missing));
+    // push + replace update index, total_bytes, and validation immediately.
+    h.editor.media.push("mid-new.png".to_owned(), bytes_c);
+    h.editor.media.push("tail.png".to_owned(), bytes_a);
+    assert_eq!(h.editor.media.total_bytes(), 12);
+    assert!(h.editor.media.replace("mid-new.png", bytes_d));
+    assert_eq!(h.editor.media.total_bytes(), 13);
+    assert_editor_media_ready(&h.editor, "mid-new.png", b"dddddd");
+    assert!(!has_missing_media_issue(&mut h.editor));
 
-    // Sync a 3-item list, then replace only the middle entry's name (same length & ends).
-    h.editor.set_media(vec![
-        ("first.png".to_owned(), bytes_a.clone()),
-        ("mid-old.png".to_owned(), bytes_b.clone()),
-        ("last.png".to_owned(), bytes_c.clone()),
-    ]);
-    let _ = h.idle_frame();
-    assert!(h.editor.media_contains("mid-old.png"));
+    // retain removes entries and keeps remaining lookups + total_bytes exact.
+    h.editor.media.retain(|(name, _)| name != "new.png");
+    assert_eq!(h.editor.media.total_bytes(), 9);
+    assert_editor_media_missing(&h.editor, "new.png");
+    assert_editor_media_ready(&h.editor, "mid-new.png", b"dddddd");
+    assert_editor_media_ready(&h.editor, "tail.png", b"aaa");
 
-    h.editor.media[1] = ("mid-new.png".to_owned(), bytes_b);
-    let _ = h.idle_frame();
-    assert!(
-        matches!(h.editor.get("mid-new.png"), MediaFetch::Ready(ref b) if b.as_ref() == b"bbb"),
-        "sync_media_index must detect same-length middle-entry replacement"
-    );
-    assert!(!h.editor.media_contains("mid-old.png"));
-    h.editor.refresh_validate_only();
-    assert!(
-        !h.editor
-            .ui
-            .validation_issues
-            .iter()
-            .any(|i| i.message.contains("Missing media")),
-        "mid-new.png must not be flagged as missing media"
-    );
+    // truncate drops tail and then all entries; validation reports missing media.
+    h.editor.media.truncate(1);
+    assert_eq!(h.editor.media.total_bytes(), 6);
+    assert_editor_media_missing(&h.editor, "tail.png");
+    assert_editor_media_ready(&h.editor, "mid-new.png", b"dddddd");
+
+    h.editor.media.truncate(0);
+    assert_eq!(h.editor.media.total_bytes(), 0);
+    assert_editor_media_missing(&h.editor, "mid-new.png");
+    assert!(has_missing_media_issue(&mut h.editor));
 }
 
 /// Regression test (`M34-12`): `add_issue_word` removes Unicode case variants

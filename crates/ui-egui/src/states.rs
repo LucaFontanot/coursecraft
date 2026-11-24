@@ -594,11 +594,7 @@ pub fn show_states_section(
                                     egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
                                     p.hover,
                                 );
-                                let source = crate::MemoryMediaSource::from_parts(
-                                    &editor.media,
-                                    &editor.media_index,
-                                    editor.media_index_len,
-                                );
+                                let source = crate::MemoryMediaSource::from_store(&editor.media);
                                 if let coursecraft_render::MediaView::Ready { texture, .. } = editor
                                     .media_cache
                                     .texture_for(ui.ctx(), src, &source, (28, 28))
@@ -926,7 +922,7 @@ fn paint_state_thumbnail(
     crate::canvas::missing_images_as_placeholders(
         &mut items,
         &editor.media,
-        editor.media_index_if_synced(),
+        Some(editor.media.index()),
     );
 
     let mut min_x = f32::INFINITY;
@@ -962,11 +958,7 @@ fn paint_state_thumbnail(
     ) else {
         return;
     };
-    let source = crate::MemoryMediaSource::from_parts(
-        &editor.media,
-        &editor.media_index,
-        editor.media_index_len,
-    );
+    let source = crate::MemoryMediaSource::from_store(&editor.media);
     paint(
         &painter,
         &t,
