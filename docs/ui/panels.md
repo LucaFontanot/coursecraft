@@ -44,9 +44,9 @@ Other Panels in Group); a floating window draws a ×. View › Panels reopens an
 |---|---|
 | Home › Font | disabled: "the Font dialog" |
 | Home › Paragraph | disabled: "the Paragraph dialog" |
-| Home › Drawing | Format inspector |
+| Home › Drawing | Shape Style panel at Fill ✅ |
 | Design › Background | Slide inspector |
-| Animations › Size and Position | Format inspector |
+| Animations › Size and Position | Size and Position panel at Size ✅ (the button too) |
 | Contextual: Shape Styles, Button Styles, Picture Styles, Size and Position (×3), Video Options, Audio Options, Background | listed in [contextual-tabs.md](contextual-tabs.md), not wired |
 
 Every other group has no ↘.
@@ -153,7 +153,7 @@ The panels are the base for the customization testers ask for. In order:
 |---|---|---|
 | 1 ✅ | Registry (`panels.rs`: families, sections), `UiAction::PanelAt`, the tolerant layout loader (`dock::forget_unknown_panels`), View › Panels in family order, opening by itself (rule 10), floating windows with docking off, `panels_tests.rs`; every launcher moved to `PanelAt` | the infrastructure |
 | 2 🟡 | **Text** panel (Font, Paragraph, Text Box sections); Font ↘ and Paragraph ↘ switched on; space before and after a paragraph (only in this panel). Still disabled: caps, highlight, underline styles, tab stops, columns. Still to do: the Format inspector's text rows in quick mode, a ↘ on its Text header | Font and Paragraph dialogs (M38) |
-| 3 | **Size and Position** and **Shape Style**; Drawing ↘ and the contextual launchers | Size and Position dialog, Format Shape (M38) |
+| 3 🟡 | **Size and Position** (✅ `size_panel.rs`: Size with aspect lock, Rotate with flips, Position from the top left or the centre, lock; one object for size and place, every selected object for rotation, flips and lock) and **Shape Style** (✅ Fill, Outline, Effects through the inspector's `shape_fill_rows`, `shape_outline_rows` and effect rows, state edits included); Drawing ↘ and Animations › Size and Position switched on. Still to do: the contextual launchers (with the contextual tabs), scale %, reset to original size, button and picture fills | Size and Position dialog, Format Shape (M38) |
 | 4 🟡 | **Triggers**, **States**, **Variables**, **Question** as dock panels of their own (✅: tabbed with Timeline by default; a saved layout gains them beside Timeline; `ui.bottom_tab` brings its panel forward; in Master View they say why they are empty). **Slide Layers** (✅, right of the Timeline's group) and **Notes** (✅, a tab of that group; the Slide inspector leaves the notes to it while it is open) out of the Timeline panel; a saved layout gains both. Still to do: Triggers, Variables and Question as settings panels with ↘ launchers | shell step 6 (M40) |
 | 5 | **Animation** and **Transition** | M41 |
 | 6 🟡 | **Grid and Guides** (✅, `grid_panel.rs`, View › Show ↘), **Slide Properties**, **Theme**, **Course and Player** | M40 |

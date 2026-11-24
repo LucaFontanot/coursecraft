@@ -478,3 +478,132 @@ fn view_show_launcher_opens_grid_and_guides_and_its_settings_undo() {
     h.editor.run("edit.undo", serde_json::json!({}));
     assert_eq!(h.editor.session.course.editor.guides.len(), 1, "undone");
 }
+
+fn shape_harness() -> TestHarness {
+    let json = serde_json::json!({
+        "schema_version": 1,
+        "id": "panels-shape",
+        "title": "Shape panels",
+        "slide_size": { "w": 1000, "h": 600 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "sl1",
+                "title": "Slide 1",
+                "duration_ms": 5000,
+                "objects": [{
+                    "id": "sh1",
+                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                    "frame": { "x": 100, "y": 100, "w": 200, "h": 120 }
+                }]
+            }]
+        }]
+    });
+    let course = Course::from_json(&json.to_string()).expect("valid course");
+    let mut h = TestHarness::new_with_size(course, (1600.0, 900.0));
+    h.editor.ui.dock.enabled = true;
+    h.editor.ui.ribbon.visible = true;
+    h.editor.selection = crate::Selection::new("sl1");
+    h.editor.selection.object = Some("sh1".into());
+    frames(&mut h, 3);
+    h
+}
+
+fn shape(h: &TestHarness) -> coursecraft_course::Object {
+    let slide = h.editor.session.course.slide("sl1").expect("slide");
+    slide.object("sh1").expect("shape").0.clone()
+}
+
+#[test]
+fn size_and_position_sets_the_frame_with_the_aspect_locked_and_flips() {
+    let mut h = shape_harness();
+    let spec = crate::ribbon::spec::tab("animations")
+        .and_then(|t| t.groups.iter().find(|g| g.id == "animations.size"))
+        .expect("group");
+    let opens = crate::ribbon::spec::Action::Ui(crate::ribbon::spec::UiAction::PanelAt(
+        Panel::SizePosition,
+        Some(panels::Section::Size),
+    ));
+    assert_eq!(spec.launcher, Some(opens));
+    assert_eq!(spec.items[0].action, opens);
+    panels::open_at(
+        &mut h.editor,
+        Panel::SizePosition,
+        Some(panels::Section::Size),
+    );
+    frames(&mut h, 3);
+    let rect = h.editor.ui.dock.rect(Panel::SizePosition).expect("drawn");
+    let lock = h.find_text_in("Lock aspect ratio", rect).expect("lock");
+    h.click_at(lock);
+    let width = h
+        .find_text_containing("200")
+        .filter(|p| rect.contains(*p))
+        .expect("the width field");
+    h.set_field(width, "400");
+    frames(&mut h, 2);
+    let frame = shape(&h).frame;
+    assert!((frame.w - 400.0).abs() < 0.01, "{frame:?}");
+    assert!((frame.h - 240.0).abs() < 0.01, "height follows: {frame:?}");
+    let flip = h.find_text_in("Flip horizontal", rect).expect("flip");
+    h.click_at(flip);
+    frames(&mut h, 2);
+    assert!(shape(&h).flip_h);
+    let locked = h
+        .find_text_in("Lock position and size", rect)
+        .expect("lock position");
+    h.click_at(locked);
+    frames(&mut h, 2);
+    assert!(shape(&h).locked);
+}
+
+#[test]
+fn shape_style_opens_from_drawing_and_edits_the_shapes_outline() {
+    let mut h = shape_harness();
+    let drawing = crate::ribbon::spec::tab("home")
+        .and_then(|t| t.groups.iter().find(|g| g.id == "drawing"))
+        .expect("group");
+    assert_eq!(
+        drawing.launcher,
+        Some(crate::ribbon::spec::Action::Ui(
+            crate::ribbon::spec::UiAction::PanelAt(Panel::ShapeStyle, Some(panels::Section::Fill))
+        ))
+    );
+    panels::open_at(
+        &mut h.editor,
+        Panel::ShapeStyle,
+        Some(panels::Section::Fill),
+    );
+    frames(&mut h, 3);
+    let rect = h.editor.ui.dock.rect(Panel::ShapeStyle).expect("drawn");
+    for heading in ["Fill", "Outline", "Effects"] {
+        assert!(h.find_text_in(heading, rect).is_some(), "{heading}");
+    }
+    assert!(!matches!(
+        shape(&h).kind,
+        coursecraft_course::ObjectKind::Shape {
+            outline: Some(_),
+            ..
+        }
+    ));
+    // The Outline row's checkbox sits to the right of its label.
+    let outline = h.find_text_in("Outline", rect).expect("Outline");
+    let rows = h.find_texts("Outline");
+    let label = rows
+        .into_iter()
+        .find(|p| rect.contains(*p) && p.y > outline.y + 1.0)
+        .expect("the Outline row under its heading");
+    let checkbox = egui::pos2(label.x + crate::properties::LABEL_COL_WIDTH + 4.0, label.y);
+    h.click_at(checkbox);
+    frames(&mut h, 2);
+    assert!(
+        matches!(
+            shape(&h).kind,
+            coursecraft_course::ObjectKind::Shape {
+                outline: Some(_),
+                ..
+            }
+        ),
+        "outline switched on"
+    );
+}

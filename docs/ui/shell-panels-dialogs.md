@@ -106,7 +106,7 @@ States tab: Edit States button, Initial state combo, one thumbnail per state, bu
 | Replace Picture ▸ / Export Picture ▸ | `object.update` / `ui:media.export` | 🟡 |
 | Show in Media Library… | `ui:mediaLibrary.reveal` | ⛔ |
 | Rename "<name>" | `ui:rename` | ✅ |
-| Size and Position… | `ui:dialog.sizePosition` | ⛔ (inspector today) |
+| Size and Position… | `UiAction::PanelAt(SizePosition)` | ✅ (a settings panel, [panels.md](panels.md) step 3) |
 | Accessibility… | `ui:altText` | ✅ (`alt_text.rs`) |
 | Edit States… | `ui:states` | ✅ (M29) |
 | Format Shape / Picture… | `ui:inspector.format` | ✅ |
@@ -136,7 +136,7 @@ New Slide ▸, New Scene, Apply Layout ▸, Duplicate, Delete, Rename, Move to S
 | Player Properties | Home › Player | `course_settings.rs` | 🟡 own ribbon (Features, Menu, Resources, Glossary, Colors & Effects, Text Labels, Other) and live preview |
 | Publish | Home › Publish | `publish.rs` | 🟡 left list: Share for Review 🚫, Web ✅, Video ✅, Word ✅, LMS (SCORM 1.2, SCORM 2004, cmi5, xAPI) ✅; Properties links (Player, Quality, Publish scope, Tracking) |
 | Font, Paragraph | ↘ launchers | Text settings panel (`panels.rs`) | 🟡 caps, highlight, underline styles, tab stops, columns to come ([panels.md](panels.md)) |
-| Size and Position | ↘ launcher, context menu | inspector | ⛔ the Size and Position panel ([panels.md](panels.md) step 3) |
+| Size and Position | ↘ launcher, context menu | the Size and Position panel | 🟡 built and opened from Animations; the context menu entry is still to do |
 | Find and Replace | Home › Find / Replace | `find.rs` | ✅ |
 | Characters, Photos, Illustrations, Videos | Insert › Library | — | 🚫 |
 | Media Library | Insert › Picture ▾ | `media_library.rs` | ✅ |

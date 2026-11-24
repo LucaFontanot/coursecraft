@@ -48,7 +48,7 @@ Modes replace the tab strip:
 | | Group | SS | `object.group`, `object.ungroup` | ✅ | |
 | | Rotate | SS | `object.set_rotation`, `object.flip` | ✅ | |
 | | align grid (9) | S | `object.align`, `object.distribute`, `object.match_size` | ✅ | Align to Slide toggle |
-| Size and Position ↘ | X, Y, Width, Height | N | `object.update` | ✅ | ↘ opens Size and Position dialog ⛔ (inspector today) |
+| Size and Position ↘ | X, Y, Width, Height | N | `object.update` | ✅ | ↘ will open the Size and Position panel (built; Animations › Size and Position opens it today) |
 | Publish | Preview | LS | | ✅ | |
 
 ## Button Tools › Format

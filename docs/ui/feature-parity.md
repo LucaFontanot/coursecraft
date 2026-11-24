@@ -16,7 +16,7 @@
 | Project and file | 7 | 2 | 1 | 2 |
 | Structure: scenes, slides, masters | 8 | 3 | 7 | 0 |
 | Text | 13 | 3 | 8 | 0 |
-| Shapes, pictures and buttons | 13 | 5 | 11 | 0 |
+| Shapes, pictures and buttons | 14 | 5 | 10 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
 | Animation, transitions, timeline | 10 | 3 | 9 | 0 |
@@ -25,7 +25,7 @@
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **107** | **39** | **62** | **12** |
+| **Total** | **108** | **39** | **61** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -122,7 +122,7 @@ Counted from the tables below; recount when a row changes.
 | When Clicked Action on a button | trigger editor | 🟡 not pre-filled | M39 |
 | Reflection, soft edges | — | ⛔ | M39 |
 | Change shape (keep format) | — | ⛔ | M39 |
-| Size and Position dialog | inspector | ⛔ dialog | M38 |
+| Size and Position dialog | the Size and Position panel (`size_panel.rs`): width and height with an aspect lock, rotation, flips, position from the top left or the centre, lock | ✅ | — |
 | Brightness, contrast | — | ⛔ | M39 |
 | Picture styles (frames, bevels) | — | ⛔ | M39 |
 | Crop to shape | — | ⛔ | M39 |

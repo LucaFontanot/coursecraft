@@ -176,7 +176,7 @@ Shown when the Course Map view tab is active.
 | | Shape Fill | SS | `object.set_fill_style` | ✅ | |
 | | Shape Outline | SS | `object.update` `{outline}` | ✅ | |
 | | Shape Effect | SS | `object.set_shadow`, `object.set_glow` | 🟡 | Shadow ✅, Glow ✅, Reflection ⛔, Soft Edges ⛔ |
-| | ↘ Format Shape | — | `UiAction::PanelAt(Format)` | ✅ | opens the Format inspector panel until the Shape Style panel exists |
+| | ↘ Format Shape | — | `UiAction::PanelAt(ShapeStyle, Fill)` | ✅ | opens the Shape Style settings panel: Fill, Outline and Effects, with the Format inspector's own rows ([panels.md](panels.md)) |
 | Publish | Player / Preview / Publish | | as Course Map | ✅ | |
 
 ## Insert
@@ -276,7 +276,7 @@ Not shown in the tutorial; standard layout.
 | Motion Paths | Add Motion Path | LS | `object.add_motion_path` | ✅ | |
 | | Duration, Name | N, C | `object.update_motion_path` | ✅ | |
 | | Path Options | LS | `object.update_motion_path` | 🟡 | |
-| Size and Position ↘ | X, Y, Width, Height | N×4 | `object.update` | ✅ | |
+| Size and Position ↘ | Size and Position | L | `UiAction::PanelAt(SizePosition, Size)` | ✅ | the button and ↘ open the Size and Position settings panel (`object.set_frame`, `object.set_rotation`, `object.flip`, `object.lock`) |
 | Publish | Preview | LS | | ✅ | |
 
 ## View

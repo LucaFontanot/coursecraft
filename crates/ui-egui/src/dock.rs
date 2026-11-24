@@ -52,10 +52,16 @@ pub enum Panel {
     /// The Grid and Guides settings panel (View › Show ↘).
     #[serde(rename = "grid_guides")]
     GridGuides,
+    /// The Size and Position settings panel (Animations › Size and Position).
+    #[serde(rename = "size_position")]
+    SizePosition,
+    /// The Shape Style settings panel (Home › Drawing ↘).
+    #[serde(rename = "shape_style")]
+    ShapeStyle,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 15] = [
+    pub const ALL: [Panel; 17] = [
         Panel::Slides,
         Panel::Canvas,
         Panel::Timeline,
@@ -70,6 +76,8 @@ impl Panel {
         Panel::SlideInspector,
         Panel::CourseInspector,
         Panel::Text,
+        Panel::SizePosition,
+        Panel::ShapeStyle,
         Panel::GridGuides,
     ];
 
@@ -108,7 +116,9 @@ impl Panel {
             | Panel::Question
             | Panel::Layers
             | Panel::Notes
-            | Panel::GridGuides => None,
+            | Panel::GridGuides
+            | Panel::SizePosition
+            | Panel::ShapeStyle => None,
         }
     }
 
@@ -130,7 +140,9 @@ impl Panel {
             | Panel::Text
             | Panel::Layers
             | Panel::Notes
-            | Panel::GridGuides => None,
+            | Panel::GridGuides
+            | Panel::SizePosition
+            | Panel::ShapeStyle => None,
         }
     }
 
@@ -176,6 +188,8 @@ impl Panel {
             Panel::Layers => "Slide Layers",
             Panel::Notes => "Notes",
             Panel::GridGuides => "Grid and Guides",
+            Panel::SizePosition => "Size and Position",
+            Panel::ShapeStyle => "Shape Style",
         }
     }
 
@@ -201,7 +215,9 @@ impl Panel {
             | Panel::Question
             | Panel::Layers
             | Panel::Notes
-            | Panel::GridGuides => Permissions::default(),
+            | Panel::GridGuides
+            | Panel::SizePosition
+            | Panel::ShapeStyle => Permissions::default(),
         }
     }
 
@@ -221,7 +237,9 @@ impl Panel {
             | Panel::SlideInspector
             | Panel::CourseInspector
             | Panel::Text
-            | Panel::GridGuides => vec2(260.0, 200.0),
+            | Panel::GridGuides
+            | Panel::SizePosition
+            | Panel::ShapeStyle => vec2(260.0, 200.0),
         };
         PanelLimits {
             min,
@@ -506,7 +524,9 @@ impl DockContent<Panel> for Content<'_> {
                     self.editor.inspector_body(ui, Some(tab));
                 }
             }
-            Panel::Text | Panel::GridGuides => crate::panels::body(self.editor, ui, *panel),
+            Panel::Text | Panel::GridGuides | Panel::SizePosition | Panel::ShapeStyle => {
+                crate::panels::body(self.editor, ui, *panel);
+            }
             Panel::Layers => {
                 if self.editor.ui.master_view {
                     ui.add_space(8.0);

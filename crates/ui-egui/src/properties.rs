@@ -8397,95 +8397,18 @@ fn show_object_properties(
             let eff_fill = state_ctx_ref
                 .and_then(|ctx| ctx.state.fill.as_ref())
                 .unwrap_or(fill);
-            let has_fill = eff_fill.0 != "#00000000";
-            let fill_overridden = state_ctx_ref.is_some_and(|ctx| ctx.state.fill.is_some());
-            inspector_row_state(
+            shape_fill_rows(
                 ui,
-                "Fill",
+                props,
+                slide,
+                obj,
+                shape,
+                fill,
                 state_ctx_ref,
-                fill_overridden,
-                "Fill",
-                serde_json::json!({ "fill": null }),
+                &lists.media_names,
                 actions_to_run,
-                |ui| {
-                    let mut checked = has_fill;
-                    if ui.checkbox(&mut checked, "").changed() {
-                        let next = if !checked {
-                            "#00000000".to_owned()
-                        } else if props.shape_fill.trim().is_empty()
-                            || props.shape_fill.trim() == "#00000000"
-                        {
-                            "#D0D7DE".to_owned()
-                        } else {
-                            props.shape_fill.trim().to_owned()
-                        };
-                        props.shape_fill = next.clone();
-                        if let Some(ctx) = state_ctx_ref {
-                            action_to_run =
-                                Some(patch_state_action(ctx, serde_json::json!({ "fill": next })));
-                        } else {
-                            let mut kind = kind_with(*shape, &next);
-                            if !checked {
-                                kind["fill_style"] = Json::Null;
-                            }
-                            action_to_run = Some((
-                                "object.update",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "kind": kind,
-                                }),
-                            ));
-                        }
-                    }
-                    if has_fill {
-                        let (cr, valid_color) =
-                            show_color_field(ui, "", &mut props.shape_fill, "prop_shape_fill");
-                        props.color_rect = Some(cr.rect);
-                        if is_committed(&cr, ui)
-                            && valid_color
-                            && props.shape_fill.trim() != eff_fill.0
-                        {
-                            if let Some(ctx) = state_ctx_ref {
-                                action_to_run = Some(patch_state_action(
-                                    ctx,
-                                    serde_json::json!({ "fill": props.shape_fill.trim() }),
-                                ));
-                            } else {
-                                action_to_run = Some((
-                                    "object.update",
-                                    serde_json::json!({
-                                        "slide": slide.id,
-                                        "object": obj.id,
-                                        "kind": kind_with(*shape, props.shape_fill.trim()),
-                                    }),
-                                ));
-                            }
-                        }
-                    }
-                },
+                &mut action_to_run,
             );
-
-            if has_fill {
-                let base_fill_style_some = matches!(
-                    &obj.kind,
-                    ObjectKind::Shape {
-                        fill_style: Some(_),
-                        ..
-                    }
-                );
-                show_fill_style_editor(
-                    ui,
-                    props,
-                    &eff_fill.0,
-                    &slide.id,
-                    &obj.id,
-                    &lists.media_names,
-                    state_ctx_ref,
-                    base_fill_style_some,
-                    actions_to_run,
-                );
-            }
 
             if !adjust.is_empty() {
                 ui.add_enabled_ui(!state_edit_locked, |ui| {
@@ -8509,168 +8432,18 @@ fn show_object_properties(
             }
 
             inspector_separator(ui);
-            let shape_outline_overridden = state_ctx_ref
-                .is_some_and(|ctx| ctx.state.outline.is_some() || ctx.state.clear_outline);
-            let build_shape_outline = |props: &PropertiesState| {
-                outline_json(
-                    &props.shape_outline_color,
-                    props.shape_outline_width,
-                    props.shape_outline_dash,
-                    &props.shape_outline_dash_pattern,
-                    props.shape_outline_join,
-                )
-            };
-            inspector_row_state(
+            shape_outline_rows(
                 ui,
-                "Outline",
+                props,
+                slide,
+                obj,
+                shape,
+                fill,
+                outline,
                 state_ctx_ref,
-                shape_outline_overridden,
-                "Outline",
-                serde_json::json!({ "outline": null, "clear_outline": false }),
                 actions_to_run,
-                |ui| {
-                    let mut has_outline = props.shape_outline_enabled;
-                    if ui.checkbox(&mut has_outline, "").changed() {
-                        props.shape_outline_enabled = has_outline;
-                        if let Some(ctx) = state_ctx_ref {
-                            let patch = if has_outline {
-                                serde_json::json!({ "outline": build_shape_outline(props) })
-                            } else if outline.is_some() {
-                                serde_json::json!({ "clear_outline": true })
-                            } else {
-                                serde_json::json!({ "outline": null, "clear_outline": false })
-                            };
-                            action_to_run = Some(patch_state_action(ctx, patch));
-                        } else {
-                            let out_json = if has_outline {
-                                build_shape_outline(props)
-                            } else {
-                                Json::Null
-                            };
-                            let mut kind = kind_with(*shape, &fill.0);
-                            kind["outline"] = out_json;
-                            action_to_run = Some((
-                                "object.update",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "kind": kind,
-                                }),
-                            ));
-                        }
-                    }
-                },
+                &mut action_to_run,
             );
-
-            if props.shape_outline_enabled {
-                inspector_row(ui, "Colour", |ui| {
-                    let (cr, valid_color) = show_color_field(
-                        ui,
-                        "",
-                        &mut props.shape_outline_color,
-                        "prop_shape_outline_color",
-                    );
-                    props.color_rect = Some(cr.rect);
-                    if is_committed(&cr, ui) && valid_color {
-                        if let Some(ctx) = state_ctx_ref {
-                            action_to_run = Some(patch_state_action(
-                                ctx,
-                                serde_json::json!({ "outline": build_shape_outline(props) }),
-                            ));
-                        } else {
-                            let mut kind = kind_with(*shape, &fill.0);
-                            kind["outline"] = build_shape_outline(props);
-                            action_to_run = Some((
-                                "object.update",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "kind": kind,
-                                }),
-                            ));
-                        }
-                    }
-                });
-
-                inspector_row(ui, "Width", |ui| {
-                    let rem_w = ui.available_width().max(30.0);
-                    let r = add_drag_left(
-                        ui,
-                        [rem_w, coursecraft_render::CONTROL_COMPACT],
-                        DragValue::new(&mut props.shape_outline_width)
-                            .speed(0.25)
-                            .range(0.0..=50.0)
-                            .suffix(" px"),
-                    );
-                    let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if (r.drag_stopped() || r.lost_focus() || enter)
-                        && props.shape_outline_width.is_finite()
-                        && (0.0..=50.0).contains(&props.shape_outline_width)
-                    {
-                        if let Some(ctx) = state_ctx_ref {
-                            action_to_run = Some(patch_state_action(
-                                ctx,
-                                serde_json::json!({ "outline": build_shape_outline(props) }),
-                            ));
-                        } else {
-                            let mut kind = kind_with(*shape, &fill.0);
-                            kind["outline"] = build_shape_outline(props);
-                            action_to_run = Some((
-                                "object.update",
-                                serde_json::json!({
-                                    "slide": slide.id,
-                                    "object": obj.id,
-                                    "kind": kind,
-                                }),
-                            ));
-                        }
-                    }
-                });
-
-                if show_dash_controls(
-                    ui,
-                    "prop_shape_outline",
-                    &mut props.shape_outline_dash,
-                    &mut props.shape_outline_dash_pattern,
-                    &mut props.shape_outline_dash_length,
-                    &mut props.shape_outline_gap,
-                ) {
-                    if let Some(ctx) = state_ctx_ref {
-                        action_to_run = Some(patch_state_action(
-                            ctx,
-                            serde_json::json!({ "outline": build_shape_outline(props) }),
-                        ));
-                    } else {
-                        let mut kind = kind_with(*shape, &fill.0);
-                        kind["outline"] = build_shape_outline(props);
-                        action_to_run = Some((
-                            "object.update",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "kind": kind,
-                            }),
-                        ));
-                    }
-                }
-                if show_corners_control(ui, "prop_shape_outline", &mut props.shape_outline_join) {
-                    if let Some(ctx) = state_ctx_ref {
-                        action_to_run = Some(patch_state_action(
-                            ctx,
-                            serde_json::json!({ "outline": build_shape_outline(props) }),
-                        ));
-                    } else {
-                        action_to_run = Some((
-                            "object.set_outline_join",
-                            serde_json::json!({
-                                "slide": slide.id,
-                                "object": obj.id,
-                                "join": props.shape_outline_join,
-                            }),
-                        ));
-                    }
-                }
-            }
 
             if coursecraft_course::shape_allows_text(*shape) {
                 inspector_separator(ui);
@@ -9912,6 +9685,433 @@ fn show_object_properties(
 
     if let Some(act) = action_to_run {
         actions_to_run.push(act);
+    }
+}
+
+/// The Shape Style settings panel: Fill, Outline and Effects of the selected
+/// object, drawn with the Format inspector's own rows (state edits included).
+/// Fill and Outline are for shapes; Effects are for any object.
+pub fn show_shape_style_panel(editor: &mut Editor, ui: &mut Ui) {
+    prepare(editor, ui);
+    let mut actions_to_run: Vec<(&'static str, Json)> = Vec::new();
+    let avail_w = ui.available_width();
+    egui::ScrollArea::vertical()
+        .id_salt("shape_style_panel_scroll")
+        .max_width(avail_w)
+        .max_height(ui.available_height())
+        .animated(false)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Frame::NONE
+                .inner_margin(egui::Margin::same(coursecraft_render::PANEL_MARGIN as i8))
+                .show(ui, |ui| {
+                    shape_style_sections(editor, ui, &mut actions_to_run)
+                });
+        });
+    finish(editor, actions_to_run);
+}
+
+fn shape_style_sections(
+    editor: &mut Editor,
+    ui: &mut Ui,
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+) {
+    use crate::panels::{Section, section_header};
+    let focus = &mut editor.ui.panels;
+    let props = &mut editor.ui.properties;
+    let lists = &editor.ui.properties_lists;
+    let slide = editor.session.course.slide(&editor.selection.slide);
+    let obj = if editor.selection.is_multi() {
+        None
+    } else {
+        slide.and_then(|slide| {
+            editor
+                .selection
+                .object
+                .as_ref()
+                .and_then(|id| slide.object(id))
+                .map(|(obj, _)| obj)
+        })
+    };
+    let (Some(slide), Some(obj)) = (slide, obj) else {
+        section_header(focus, ui, Section::Fill);
+        ui.label(
+            RichText::new(tl!("Select one object to style it."))
+                .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+        );
+        return;
+    };
+    let state = editor
+        .ui
+        .editing_state
+        .as_ref()
+        .filter(|s| s.slide_id == editor.selection.slide && s.object_id == obj.id)
+        .and_then(|s| obj.states.iter().find(|st| st.name == s.state_name));
+    let state_ctx = state.map(|state| StateEditCtx {
+        slide_id: &slide.id,
+        object_id: &obj.id,
+        state_name: &state.name,
+        state,
+    });
+    let state_ctx_ref = state_ctx.as_ref();
+    let mut action_to_run: Option<(&'static str, Json)> = None;
+    match &obj.kind {
+        ObjectKind::Shape {
+            shape,
+            fill,
+            outline,
+            ..
+        } => {
+            section_header(focus, ui, Section::Fill);
+            shape_fill_rows(
+                ui,
+                props,
+                slide,
+                obj,
+                shape,
+                fill,
+                state_ctx_ref,
+                &lists.media_names,
+                actions_to_run,
+                &mut action_to_run,
+            );
+            inspector_separator(ui);
+            section_header(focus, ui, Section::Outline);
+            shape_outline_rows(
+                ui,
+                props,
+                slide,
+                obj,
+                shape,
+                fill,
+                outline,
+                state_ctx_ref,
+                actions_to_run,
+                &mut action_to_run,
+            );
+        }
+        _ => {
+            section_header(focus, ui, Section::Fill);
+            ui.label(
+                RichText::new(tl!(
+                    "Fill and outline are for shapes; the Format panel styles this object."
+                ))
+                .color(coursecraft_render::palette(ui.ctx()).text_secondary),
+            );
+        }
+    }
+    // Draws its own Effects heading.
+    show_effect_controls(
+        ui,
+        props,
+        &slide.id,
+        &obj.id,
+        state_ctx_ref,
+        obj.shadow.is_some(),
+        obj.glow.is_some(),
+        actions_to_run,
+    );
+    if let Some(action) = action_to_run {
+        actions_to_run.push(action);
+    }
+}
+
+/// A shape's Fill rows: the fill on or off, its colour, and the fill style
+/// (gradient, picture). Shared by the Format inspector and the Shape Style panel.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn shape_fill_rows(
+    ui: &mut Ui,
+    props: &mut PropertiesState,
+    slide: &coursecraft_course::Slide,
+    obj: &coursecraft_course::Object,
+    shape: &ShapeKind,
+    fill: &Color,
+    state_ctx_ref: Option<&StateEditCtx<'_>>,
+    media_names: &[String],
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+    action_to_run: &mut Option<(&'static str, Json)>,
+) {
+    let base_kind = serde_json::to_value(&obj.kind).unwrap_or(Json::Null);
+    let kind_with = |shape: ShapeKind, fill: &str| -> Json {
+        let mut kind = base_kind.clone();
+        kind["shape"] = serde_json::json!(shape);
+        kind["fill"] = serde_json::json!(fill);
+        kind
+    };
+    let eff_fill = state_ctx_ref
+        .and_then(|ctx| ctx.state.fill.as_ref())
+        .unwrap_or(fill);
+    let has_fill = eff_fill.0 != "#00000000";
+    let fill_overridden = state_ctx_ref.is_some_and(|ctx| ctx.state.fill.is_some());
+    inspector_row_state(
+        ui,
+        "Fill",
+        state_ctx_ref,
+        fill_overridden,
+        "Fill",
+        serde_json::json!({ "fill": null }),
+        actions_to_run,
+        |ui| {
+            let mut checked = has_fill;
+            if ui.checkbox(&mut checked, "").changed() {
+                let next = if !checked {
+                    "#00000000".to_owned()
+                } else if props.shape_fill.trim().is_empty()
+                    || props.shape_fill.trim() == "#00000000"
+                {
+                    "#D0D7DE".to_owned()
+                } else {
+                    props.shape_fill.trim().to_owned()
+                };
+                props.shape_fill = next.clone();
+                if let Some(ctx) = state_ctx_ref {
+                    *action_to_run =
+                        Some(patch_state_action(ctx, serde_json::json!({ "fill": next })));
+                } else {
+                    let mut kind = kind_with(*shape, &next);
+                    if !checked {
+                        kind["fill_style"] = Json::Null;
+                    }
+                    *action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            }
+            if has_fill {
+                let (cr, valid_color) =
+                    show_color_field(ui, "", &mut props.shape_fill, "prop_shape_fill");
+                props.color_rect = Some(cr.rect);
+                if is_committed(&cr, ui) && valid_color && props.shape_fill.trim() != eff_fill.0 {
+                    if let Some(ctx) = state_ctx_ref {
+                        *action_to_run = Some(patch_state_action(
+                            ctx,
+                            serde_json::json!({ "fill": props.shape_fill.trim() }),
+                        ));
+                    } else {
+                        *action_to_run = Some((
+                            "object.update",
+                            serde_json::json!({
+                                "slide": slide.id,
+                                "object": obj.id,
+                                "kind": kind_with(*shape, props.shape_fill.trim()),
+                            }),
+                        ));
+                    }
+                }
+            }
+        },
+    );
+
+    if has_fill {
+        let base_fill_style_some = matches!(
+            &obj.kind,
+            ObjectKind::Shape {
+                fill_style: Some(_),
+                ..
+            }
+        );
+        show_fill_style_editor(
+            ui,
+            props,
+            &eff_fill.0,
+            &slide.id,
+            &obj.id,
+            media_names,
+            state_ctx_ref,
+            base_fill_style_some,
+            actions_to_run,
+        );
+    }
+}
+
+/// A shape's Outline rows: on or off, colour, width, dash and corners. Shared
+/// by the Format inspector and the Shape Style panel.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn shape_outline_rows(
+    ui: &mut Ui,
+    props: &mut PropertiesState,
+    slide: &coursecraft_course::Slide,
+    obj: &coursecraft_course::Object,
+    shape: &ShapeKind,
+    fill: &Color,
+    outline: &Option<coursecraft_course::Outline>,
+    state_ctx_ref: Option<&StateEditCtx<'_>>,
+    actions_to_run: &mut Vec<(&'static str, Json)>,
+    action_to_run: &mut Option<(&'static str, Json)>,
+) {
+    let base_kind = serde_json::to_value(&obj.kind).unwrap_or(Json::Null);
+    let kind_with = |shape: ShapeKind, fill: &str| -> Json {
+        let mut kind = base_kind.clone();
+        kind["shape"] = serde_json::json!(shape);
+        kind["fill"] = serde_json::json!(fill);
+        kind
+    };
+    let shape_outline_overridden =
+        state_ctx_ref.is_some_and(|ctx| ctx.state.outline.is_some() || ctx.state.clear_outline);
+    let build_shape_outline = |props: &PropertiesState| {
+        outline_json(
+            &props.shape_outline_color,
+            props.shape_outline_width,
+            props.shape_outline_dash,
+            &props.shape_outline_dash_pattern,
+            props.shape_outline_join,
+        )
+    };
+    inspector_row_state(
+        ui,
+        "Outline",
+        state_ctx_ref,
+        shape_outline_overridden,
+        "Outline",
+        serde_json::json!({ "outline": null, "clear_outline": false }),
+        actions_to_run,
+        |ui| {
+            let mut has_outline = props.shape_outline_enabled;
+            if ui.checkbox(&mut has_outline, "").changed() {
+                props.shape_outline_enabled = has_outline;
+                if let Some(ctx) = state_ctx_ref {
+                    let patch = if has_outline {
+                        serde_json::json!({ "outline": build_shape_outline(props) })
+                    } else if outline.is_some() {
+                        serde_json::json!({ "clear_outline": true })
+                    } else {
+                        serde_json::json!({ "outline": null, "clear_outline": false })
+                    };
+                    *action_to_run = Some(patch_state_action(ctx, patch));
+                } else {
+                    let out_json = if has_outline {
+                        build_shape_outline(props)
+                    } else {
+                        Json::Null
+                    };
+                    let mut kind = kind_with(*shape, &fill.0);
+                    kind["outline"] = out_json;
+                    *action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            }
+        },
+    );
+
+    if props.shape_outline_enabled {
+        inspector_row(ui, "Colour", |ui| {
+            let (cr, valid_color) = show_color_field(
+                ui,
+                "",
+                &mut props.shape_outline_color,
+                "prop_shape_outline_color",
+            );
+            props.color_rect = Some(cr.rect);
+            if is_committed(&cr, ui) && valid_color {
+                if let Some(ctx) = state_ctx_ref {
+                    *action_to_run = Some(patch_state_action(
+                        ctx,
+                        serde_json::json!({ "outline": build_shape_outline(props) }),
+                    ));
+                } else {
+                    let mut kind = kind_with(*shape, &fill.0);
+                    kind["outline"] = build_shape_outline(props);
+                    *action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            }
+        });
+
+        inspector_row(ui, "Width", |ui| {
+            let rem_w = ui.available_width().max(30.0);
+            let r = add_drag_left(
+                ui,
+                [rem_w, coursecraft_render::CONTROL_COMPACT],
+                DragValue::new(&mut props.shape_outline_width)
+                    .speed(0.25)
+                    .range(0.0..=50.0)
+                    .suffix(" px"),
+            );
+            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (r.drag_stopped() || r.lost_focus() || enter)
+                && props.shape_outline_width.is_finite()
+                && (0.0..=50.0).contains(&props.shape_outline_width)
+            {
+                if let Some(ctx) = state_ctx_ref {
+                    *action_to_run = Some(patch_state_action(
+                        ctx,
+                        serde_json::json!({ "outline": build_shape_outline(props) }),
+                    ));
+                } else {
+                    let mut kind = kind_with(*shape, &fill.0);
+                    kind["outline"] = build_shape_outline(props);
+                    *action_to_run = Some((
+                        "object.update",
+                        serde_json::json!({
+                            "slide": slide.id,
+                            "object": obj.id,
+                            "kind": kind,
+                        }),
+                    ));
+                }
+            }
+        });
+
+        if show_dash_controls(
+            ui,
+            "prop_shape_outline",
+            &mut props.shape_outline_dash,
+            &mut props.shape_outline_dash_pattern,
+            &mut props.shape_outline_dash_length,
+            &mut props.shape_outline_gap,
+        ) {
+            if let Some(ctx) = state_ctx_ref {
+                *action_to_run = Some(patch_state_action(
+                    ctx,
+                    serde_json::json!({ "outline": build_shape_outline(props) }),
+                ));
+            } else {
+                let mut kind = kind_with(*shape, &fill.0);
+                kind["outline"] = build_shape_outline(props);
+                *action_to_run = Some((
+                    "object.update",
+                    serde_json::json!({
+                        "slide": slide.id,
+                        "object": obj.id,
+                        "kind": kind,
+                    }),
+                ));
+            }
+        }
+        if show_corners_control(ui, "prop_shape_outline", &mut props.shape_outline_join) {
+            if let Some(ctx) = state_ctx_ref {
+                *action_to_run = Some(patch_state_action(
+                    ctx,
+                    serde_json::json!({ "outline": build_shape_outline(props) }),
+                ));
+            } else {
+                *action_to_run = Some((
+                    "object.set_outline_join",
+                    serde_json::json!({
+                        "slide": slide.id,
+                        "object": obj.id,
+                        "join": props.shape_outline_join,
+                    }),
+                ));
+            }
+        }
     }
 }
 

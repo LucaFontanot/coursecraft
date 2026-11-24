@@ -45,6 +45,11 @@ pub enum Section {
     Grid,
     Guides,
     Rulers,
+    Size,
+    Rotate,
+    Position,
+    Fill,
+    Outline,
 }
 
 impl Section {
@@ -58,6 +63,11 @@ impl Section {
             Section::Grid => "Grid",
             Section::Guides => "Guides",
             Section::Rulers => "Rulers",
+            Section::Size => "Size",
+            Section::Rotate => "Rotate",
+            Section::Position => "Position",
+            Section::Fill => "Fill",
+            Section::Outline => "Outline",
         }
     }
 
@@ -67,6 +77,8 @@ impl Section {
         match self {
             Section::Font | Section::Paragraph | Section::TextBox => Panel::Text,
             Section::Grid | Section::Guides | Section::Rulers => Panel::GridGuides,
+            Section::Size | Section::Rotate | Section::Position => Panel::SizePosition,
+            Section::Fill | Section::Outline => Panel::ShapeStyle,
         }
     }
 }
@@ -87,7 +99,9 @@ pub fn family(panel: Panel) -> Family {
         Panel::Format | Panel::Animate | Panel::SlideInspector | Panel::CourseInspector => {
             Family::Inspectors
         }
-        Panel::Text | Panel::GridGuides => Family::Settings,
+        Panel::Text | Panel::GridGuides | Panel::SizePosition | Panel::ShapeStyle => {
+            Family::Settings
+        }
     }
 }
 
@@ -97,6 +111,8 @@ pub fn sections(panel: Panel) -> &'static [Section] {
     match panel {
         Panel::Text => &[Section::Font, Section::Paragraph, Section::TextBox],
         Panel::GridGuides => &[Section::Grid, Section::Guides, Section::Rulers],
+        Panel::SizePosition => &[Section::Size, Section::Rotate, Section::Position],
+        Panel::ShapeStyle => &[Section::Fill, Section::Outline],
         Panel::Slides
         | Panel::Canvas
         | Panel::Timeline
@@ -192,6 +208,8 @@ pub fn body(editor: &mut Editor, ui: &mut egui::Ui, panel: Panel) {
     match panel {
         Panel::Text => crate::properties::show_text_panel(editor, ui),
         Panel::GridGuides => crate::grid_panel::show(editor, ui),
+        Panel::SizePosition => crate::size_panel::show(editor, ui),
+        Panel::ShapeStyle => crate::properties::show_shape_style_panel(editor, ui),
         Panel::Slides
         | Panel::Canvas
         | Panel::Timeline

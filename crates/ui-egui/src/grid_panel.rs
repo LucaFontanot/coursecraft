@@ -150,11 +150,22 @@ fn view_toggle(
 /// A number in slide pixels, edited by dragging or typing. While the author
 /// drags or types, the value lives here; it comes back once, when the drag
 /// ends or the field loses focus, so one edit is one undo step.
-fn committed_value(
+pub(crate) fn committed_value(
     ui: &mut Ui,
     id: egui::Id,
     current: f32,
     range: std::ops::RangeInclusive<f32>,
+) -> Option<f32> {
+    committed_number(ui, id, current, range, " px")
+}
+
+/// [`committed_value`] with its own unit suffix (" px", "°", "%").
+pub(crate) fn committed_number(
+    ui: &mut Ui,
+    id: egui::Id,
+    current: f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
 ) -> Option<f32> {
     let mut value = ui
         .data(|d| d.get_temp::<f32>(id))
@@ -165,7 +176,7 @@ fn committed_value(
             .range(range)
             .speed(1.0)
             .max_decimals(1)
-            .suffix(" px"),
+            .suffix(suffix),
     );
     let editing = resp.dragged() || resp.has_focus();
     let done = resp.drag_stopped()

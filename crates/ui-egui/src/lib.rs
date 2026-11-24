@@ -48,6 +48,7 @@ pub mod panels;
 pub mod ribbon;
 #[cfg(test)]
 mod scroll_audit;
+pub mod size_panel;
 
 /// `(slide, object, selection_range, cursor_pos)` captured from an active inline text edit.
 pub type InlineEditSelection = (String, String, Option<(usize, usize)>, usize);

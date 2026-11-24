@@ -711,7 +711,10 @@ const HOME_SLIDE: &[Group] = &[
     Group {
         id: "drawing",
         label: "Drawing",
-        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Format, None))),
+        launcher: Some(Ui(UiAction::PanelAt(
+            crate::dock::Panel::ShapeStyle,
+            Some(crate::panels::Section::Fill),
+        ))),
         items: &[
             split(
                 "drawing.arrange",
@@ -1857,13 +1860,19 @@ const ANIMATIONS: &[Group] = &[
     Group {
         id: "animations.size",
         label: "Size and Position",
-        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Format, None))),
+        launcher: Some(Ui(UiAction::PanelAt(
+            crate::dock::Panel::SizePosition,
+            Some(crate::panels::Section::Size),
+        ))),
         items: &[item(
             "animations.size_position",
             "Size and Position",
             Icon::CornersOut,
             Large,
-            Ui(UiAction::FormatInspector),
+            Ui(UiAction::PanelAt(
+                crate::dock::Panel::SizePosition,
+                Some(crate::panels::Section::Size),
+            )),
         )],
     },
     PUBLISH,
