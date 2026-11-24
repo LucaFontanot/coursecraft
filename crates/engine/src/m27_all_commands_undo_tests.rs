@@ -2195,3 +2195,123 @@ fn u05_scoped_validation_matches_full_validation_across_all_commands() {
         failures.join("\n")
     );
 }
+
+#[test]
+fn pt_07_point_text_single_step_undo() {
+    let mut s = Session::blank("Point Text Undo");
+    assert_eq!(s.undo_len(), 0);
+
+    // 1. Insert point text = 1 undo step.
+    s.execute(
+        "object.add",
+        &json!({
+            "slide": "slide1",
+            "id": "pt1",
+            "kind": { "type": "text", "text": "Next", "point_text": true },
+            "frame": { "x": 100.0, "y": 100.0, "w": 300.0, "h": 60.0 }
+        }),
+    )
+    .expect("add point text");
+    assert_eq!(s.undo_len(), 1);
+    let after_add = s.course.clone();
+    let initial_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt1")
+        .unwrap()
+        .0
+        .frame;
+    assert!(initial_frame.w < 120.0);
+
+    // 2. text.set (text + refitted frame) = 1 undo step.
+    s.execute(
+        "text.set",
+        &json!({
+            "slide": "slide1",
+            "object": "pt1",
+            "text": "Continue to Module 2"
+        }),
+    )
+    .expect("text.set");
+    assert_eq!(s.undo_len(), 2);
+    let after_edit = s.course.clone();
+    let edited_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt1")
+        .unwrap()
+        .0
+        .frame;
+    assert!(edited_frame.w > initial_frame.w * 2.0);
+
+    // 3. Width resize conversion = 1 undo step.
+    let resized_w = edited_frame.w + 80.0;
+    s.execute(
+        "object.set_frame",
+        &json!({
+            "slide": "slide1",
+            "object": "pt1",
+            "frame": {
+                "x": edited_frame.x,
+                "y": edited_frame.y,
+                "w": resized_w,
+                "h": edited_frame.h
+            }
+        }),
+    )
+    .expect("resize width");
+    assert_eq!(s.undo_len(), 3);
+    let after_convert = s.course.clone();
+    match &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("pt1")
+        .unwrap()
+        .0
+        .kind
+    {
+        ObjectKind::Text {
+            point_text, style, ..
+        } => {
+            assert!(!*point_text);
+            assert!(style.wrap);
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+
+    // Undo resize conversion in 1 step -> restores point_text = true, wrap = false, old width.
+    s.execute("edit.undo", &json!({})).expect("undo resize");
+    assert_eq!(s.course, after_edit);
+    let (obj_after_undo_resize, _) = s.course.slide("slide1").unwrap().object("pt1").unwrap();
+    assert_eq!(obj_after_undo_resize.frame, edited_frame);
+    assert!(matches!(
+        &obj_after_undo_resize.kind,
+        ObjectKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    // Undo text.set in 1 step -> restores both old text AND old fitted frame.
+    s.execute("edit.undo", &json!({})).expect("undo text.set");
+    assert_eq!(s.course, after_add);
+    let (obj_after_undo_edit, _) = s.course.slide("slide1").unwrap().object("pt1").unwrap();
+    assert_eq!(obj_after_undo_edit.frame, initial_frame);
+    assert!(matches!(
+        &obj_after_undo_edit.kind,
+        ObjectKind::Text { text, point_text: true, style, .. }
+            if text == "Next" && !style.wrap
+    ));
+
+    // Undo insert in 1 step -> object removed.
+    s.execute("edit.undo", &json!({})).expect("undo add");
+    assert!(s.course.slide("slide1").unwrap().object("pt1").is_none());
+
+    // Redo all 3 steps restores exact states.
+    s.execute("edit.redo", &json!({})).expect("redo add");
+    assert_eq!(s.course, after_add);
+    s.execute("edit.redo", &json!({})).expect("redo text.set");
+    assert_eq!(s.course, after_edit);
+    s.execute("edit.redo", &json!({})).expect("redo resize");
+    assert_eq!(s.course, after_convert);
+}

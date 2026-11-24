@@ -551,6 +551,28 @@ pub(super) fn object_state_add_extra(s: &mut Session, p: &Json) -> Result<Json> 
     if extra.id.trim().is_empty() {
         extra.id = next_extra_id(&st.extras);
     }
+    if let coursecraft_course::StateExtraKind::Text {
+        text,
+        style,
+        runs,
+        paragraphs,
+        autofit,
+        point_text: true,
+        ..
+    } = &mut extra.kind
+    {
+        style.wrap = false;
+        *autofit = coursecraft_course::Autofit::None;
+        super::text::fit_point_text_frame(
+            &mut extra.frame,
+            text,
+            runs,
+            style,
+            paragraphs,
+            super::text::parse_measured_size(p),
+            true,
+        );
+    }
     let id = extra.id.clone();
     st.extras.push(extra);
     keep_valid(s, was_valid)?;
@@ -598,6 +620,11 @@ pub(super) fn object_state_update_extra(s: &mut Session, p: &Json) -> Result<Jso
             ))
         })?;
 
+    let old_w = target.frame.w;
+    let frame_supplied = patch_map.contains_key("frame");
+    let kind_supplied = patch_map.contains_key("kind");
+    let measured = super::text::parse_measured_size(p);
+
     patch_req(C, patch_map, "name", &mut target.name)?;
     patch_req(C, patch_map, "frame", &mut target.frame)?;
     patch_req(C, patch_map, "kind", &mut target.kind)?;
@@ -621,6 +648,50 @@ pub(super) fn object_state_update_extra(s: &mut Session, p: &Json) -> Result<Jso
     }
     patch_opt(C, patch_map, "shadow", &mut target.shadow)?;
     patch_opt(C, patch_map, "glow", &mut target.glow)?;
+
+    let width_changed = frame_supplied
+        && target.frame.w.is_finite()
+        && old_w.is_finite()
+        && (target.frame.w - old_w).abs() > 0.5;
+    let mut refit_extra = false;
+    if let coursecraft_course::StateExtraKind::Text {
+        style,
+        autofit,
+        point_text,
+        ..
+    } = &mut target.kind
+        && *point_text
+    {
+        if style.wrap || width_changed || *autofit == coursecraft_course::Autofit::Shrink {
+            *point_text = false;
+            if width_changed {
+                style.wrap = true;
+            }
+        } else {
+            style.wrap = false;
+            *autofit = coursecraft_course::Autofit::None;
+            refit_extra = kind_supplied || measured.is_some();
+        }
+    }
+    if refit_extra
+        && let coursecraft_course::StateExtraKind::Text {
+            text,
+            style,
+            runs,
+            paragraphs,
+            ..
+        } = &target.kind
+    {
+        super::text::fit_point_text_frame(
+            &mut target.frame,
+            text,
+            runs,
+            style,
+            paragraphs,
+            measured,
+            false,
+        );
+    }
 
     keep_valid(s, was_valid)?;
     Ok(Json::Null)

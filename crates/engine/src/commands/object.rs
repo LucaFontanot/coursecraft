@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use coursecraft_course::{
-    Color, CropRect, FillStyle, Glow, Glue, Object, ObjectKind, Outline, RadioOption, Rect, Shadow,
-    Slide, TextRun, TextStyle, Timing, Trigger, Trim, WebSource,
+    Autofit, Color, CropRect, FillStyle, Glow, Glue, Object, ObjectKind, Outline, RadioOption,
+    Rect, Shadow, Slide, TextRun, TextStyle, Timing, Trigger, Trim, WebSource,
 };
 use serde_json::{Value as Json, json};
 
@@ -22,7 +22,29 @@ pub(super) fn object_add(s: &mut Session, p: &Json) -> Result<Json> {
     let layer: Option<String> = opt(C, p, "layer")?;
     let mut kind: ObjectKind = req(C, p, "kind")?;
     clamp_shape_adjust(&mut kind);
-    let frame: Rect = req(C, p, "frame")?;
+    let mut frame: Rect = req(C, p, "frame")?;
+    if let ObjectKind::Text {
+        text,
+        style,
+        runs,
+        paragraphs,
+        autofit,
+        point_text: true,
+        ..
+    } = &mut kind
+    {
+        style.wrap = false;
+        *autofit = Autofit::None;
+        super::text::fit_point_text_frame(
+            &mut frame,
+            text,
+            runs,
+            style,
+            paragraphs,
+            super::text::parse_measured_size(p),
+            true,
+        );
+    }
     let name: Option<String> = opt(C, p, "name")?;
     let timing: Option<Timing> = opt(C, p, "timing")?;
     let id: Option<String> = opt(C, p, "id")?;
@@ -162,7 +184,41 @@ pub(super) fn object_update(s: &mut Session, p: &Json) -> Result<Json> {
     }
     if let Some(mut k) = kind {
         keep_text_style_link(&obj.kind, &mut k, kind_omits_text_style(p));
+        let mut should_refit = false;
+        if let ObjectKind::Text {
+            style,
+            autofit,
+            point_text,
+            ..
+        } = &mut k
+            && *point_text
+        {
+            if style.wrap || *autofit == Autofit::Shrink {
+                *point_text = false;
+            } else {
+                should_refit = true;
+            }
+        }
         obj.kind = k;
+        if should_refit
+            && let ObjectKind::Text {
+                text,
+                style,
+                runs,
+                paragraphs,
+                ..
+            } = &obj.kind
+        {
+            super::text::fit_point_text_frame(
+                &mut obj.frame,
+                text,
+                runs,
+                style,
+                paragraphs,
+                None,
+                false,
+            );
+        }
     }
     if let Some(t) = timing {
         obj.timing = t;
@@ -972,7 +1028,19 @@ pub(super) fn object_set_frame(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     let was_valid = s.is_playable();
-    find_object_mut(slide_mut(s, &sid)?, &oid)?.frame = frame;
+    let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+    let width_changed =
+        frame.w.is_finite() && obj.frame.w.is_finite() && (frame.w - obj.frame.w).abs() > 0.5;
+    obj.frame = frame;
+    if width_changed
+        && let ObjectKind::Text {
+            point_text, style, ..
+        } = &mut obj.kind
+        && *point_text
+    {
+        *point_text = false;
+        style.wrap = true;
+    }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
 }
@@ -1178,10 +1246,19 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
     object.shadow = look.shadow.clone();
     object.glow = look.glow.clone();
     match &mut object.kind {
-        ObjectKind::Text { style, runs, .. } => {
+        ObjectKind::Text {
+            style,
+            runs,
+            point_text,
+            ..
+        } => {
             if let Some(src) = &look.text_style {
+                let was_point_text = *point_text;
                 *style = src.clone();
                 clear_run_look(runs);
+                if was_point_text {
+                    style.wrap = false;
+                }
             }
         }
         ObjectKind::Shape {
@@ -1233,6 +1310,27 @@ fn apply_look(object: &mut Object, look: &Look) -> bool {
             }
         }
         _ => {}
+    }
+    if look.text_style.is_some()
+        && let ObjectKind::Text {
+            text,
+            style,
+            runs,
+            paragraphs,
+            point_text: true,
+            ..
+        } = &object.kind
+        && !style.wrap
+    {
+        super::text::fit_point_text_frame(
+            &mut object.frame,
+            text,
+            runs,
+            style,
+            paragraphs,
+            None,
+            false,
+        );
     }
     *object != before
 }

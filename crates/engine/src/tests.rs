@@ -12820,3 +12820,821 @@ fn r5_02_interaction_insert_golden_all_eight_kinds() {
         );
     }
 }
+
+#[test]
+fn pt_03_headless_point_text_add_and_refit() {
+    use coursecraft_course::{Align, Autofit};
+
+    let mut s = Session::blank("Point Text");
+    let added = ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "lbl",
+            "kind": {
+                "type": "text",
+                "text": "Next",
+                "point_text": true,
+                "autofit": "shrink",
+                "style": { "wrap": true, "size": 20.0 }
+            },
+            "frame": { "x": 100.0, "y": 100.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    assert_eq!(added["id"], "lbl");
+
+    let (next_frame, next_point, next_wrap, next_autofit) = {
+        let slide = s.course.slide("slide1").expect("slide1");
+        let (obj, _) = slide.object("lbl").expect("lbl");
+        match &obj.kind {
+            ObjectKind::Text {
+                point_text,
+                style,
+                autofit,
+                ..
+            } => (obj.frame, *point_text, style.wrap, *autofit),
+            other => panic!("expected text, got {other:?}"),
+        }
+    };
+    assert!(next_point, "point_text must stay true on add");
+    assert!(!next_wrap, "point_text must force style.wrap = false");
+    assert_eq!(
+        next_autofit,
+        Autofit::None,
+        "point_text must force autofit = None"
+    );
+    assert_eq!(next_frame.x, 100.0, "initial add keeps x top-left anchor");
+    assert_eq!(next_frame.y, 100.0, "initial add keeps y top-left anchor");
+    assert!(
+        next_frame.w < 120.0 && next_frame.w >= 20.0,
+        "fitted 'Next' width ({}) must be much smaller than 300",
+        next_frame.w
+    );
+    assert!(
+        next_frame.h < 50.0 && next_frame.h >= 20.0,
+        "fitted 'Next' height ({}) must be smaller than 60",
+        next_frame.h
+    );
+
+    // Growing text widens frame.w on one line (same height).
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": "slide1", "object": "lbl", "text": "Continue to Module 2" }),
+    );
+    let long_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert!(
+        long_frame.w > next_frame.w * 2.0,
+        "longer text ({}) must widen box beyond 'Next' ({})",
+        long_frame.w,
+        next_frame.w
+    );
+    assert_eq!(
+        long_frame.h, next_frame.h,
+        "single-line text.set must keep height identical"
+    );
+
+    // Shrinking back to "Go" narrows frame.w.
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": "slide1", "object": "lbl", "text": "Go" }),
+    );
+    let short_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert!(
+        short_frame.w < next_frame.w,
+        "'Go' ({}) must be narrower than 'Next' ({})",
+        short_frame.w,
+        next_frame.w
+    );
+    assert_eq!(short_frame.h, next_frame.h);
+
+    // Align::Center preserves center X across text edits.
+    ok(
+        &mut s,
+        "text.set_paragraph",
+        json!({ "slide": "slide1", "object": "lbl", "align": "center" }),
+    );
+    let before_center = {
+        let f = s
+            .course
+            .slide("slide1")
+            .unwrap()
+            .object("lbl")
+            .unwrap()
+            .0
+            .frame;
+        assert_eq!(
+            match &s
+                .course
+                .slide("slide1")
+                .unwrap()
+                .object("lbl")
+                .unwrap()
+                .0
+                .kind
+            {
+                ObjectKind::Text { style, .. } => style.align,
+                _ => panic!("expected text"),
+            },
+            Align::Center
+        );
+        f.x + f.w * 0.5
+    };
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": "slide1", "object": "lbl", "text": "Centered Heading Label" }),
+    );
+    let centered_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    let after_center = centered_frame.x + centered_frame.w * 0.5;
+    assert!(
+        (after_center - before_center).abs() <= 1.0,
+        "Align::Center must preserve center X: before={before_center}, after={after_center}"
+    );
+
+    // text.style_range increasing font size grows both width and height.
+    ok(
+        &mut s,
+        "text.style_range",
+        json!({
+            "slide": "slide1",
+            "object": "lbl",
+            "start": 0,
+            "end": 8,
+            "size": 44.0
+        }),
+    );
+    let big_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert!(
+        big_frame.w > centered_frame.w && big_frame.h > centered_frame.h,
+        "text.style_range increasing size must grow frame: before={centered_frame:?}, after={big_frame:?}"
+    );
+}
+
+#[test]
+fn pt_03_paragraphs_apply_style_and_hostile_measured_size() {
+    let mut s = Session::blank("Point Text Refit");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "lbl",
+            "kind": {
+                "type": "text",
+                "text": "Heading Label",
+                "point_text": true,
+                "style": { "size": 28.0 }
+            },
+            "frame": { "x": 100.0, "y": 100.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    let base_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+
+    // text.set_paragraphs increasing line_spacing and adding bullet indent grows frame.
+    ok(
+        &mut s,
+        "text.set_paragraphs",
+        json!({
+            "slide": "slide1",
+            "object": "lbl",
+            "list": "bullet",
+            "line_spacing": 2.0
+        }),
+    );
+    let para_frame = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert!(
+        para_frame.w > base_frame.w && para_frame.h > base_frame.h,
+        "text.set_paragraphs must refit point text: before={base_frame:?}, after={para_frame:?}"
+    );
+
+    // object.apply_style copies style and refits while keeping point_text = true, wrap = false.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "src_area",
+            "kind": {
+                "type": "text",
+                "text": "Source",
+                "style": { "size": 14.0, "wrap": true }
+            },
+            "frame": { "x": 10.0, "y": 10.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.apply_style",
+        json!({
+            "slide": "slide1",
+            "source_slide": "slide1",
+            "source": "src_area",
+            "object": "lbl"
+        }),
+    );
+    let (styled_frame, still_point, still_nowrap) = {
+        let (obj, _) = s.course.slide("slide1").unwrap().object("lbl").unwrap();
+        match &obj.kind {
+            ObjectKind::Text {
+                point_text, style, ..
+            } => (obj.frame, *point_text, !style.wrap),
+            _ => panic!("expected text"),
+        }
+    };
+    assert!(still_point && still_nowrap);
+    assert!(
+        styled_frame.h < para_frame.h,
+        "applying smaller text style must shrink fitted height"
+    );
+
+    // Hostile measured_size values never panic: invalid ones fall back to skrifa, huge ones clamp.
+    for hostile in [
+        json!({ "w": -10.0, "h": 20.0 }),
+        json!({ "w": 0.0, "h": 20.0 }),
+        json!({ "w": "bad", "h": 20.0 }),
+        json!(null),
+    ] {
+        ok(
+            &mut s,
+            "text.set",
+            json!({
+                "slide": "slide1",
+                "object": "lbl",
+                "text": "Safe",
+                "measured_size": hostile
+            }),
+        );
+        let f = s
+            .course
+            .slide("slide1")
+            .unwrap()
+            .object("lbl")
+            .unwrap()
+            .0
+            .frame;
+        assert!(f.w.is_finite() && (20.0..=10_000.0).contains(&f.w));
+        assert!(f.h.is_finite() && (1.0..=10_000.0).contains(&f.h));
+    }
+    ok(
+        &mut s,
+        "text.set",
+        json!({
+            "slide": "slide1",
+            "object": "lbl",
+            "text": "Clamped",
+            "measured_size": { "w": 999_999.0, "h": 999_999.0 }
+        }),
+    );
+    let clamped = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("lbl")
+        .unwrap()
+        .0
+        .frame;
+    assert_eq!(clamped.w, 10_000.0);
+    assert_eq!(clamped.h, 10_000.0);
+}
+
+#[test]
+fn pt_04_point_text_converts_to_area_text() {
+    use coursecraft_course::Autofit;
+
+    let mut s = Session::blank("Convert Point Text");
+    for id in ["t_wrap", "t_resize", "t_shrink", "t_update"] {
+        ok(
+            &mut s,
+            "object.add",
+            json!({
+                "slide": "slide1",
+                "id": id,
+                "kind": { "type": "text", "text": "Hello", "point_text": true },
+                "frame": { "x": 50.0, "y": 50.0, "w": 300.0, "h": 60.0 }
+            }),
+        );
+    }
+
+    // (a) text.set_paragraph { wrap: true } -> point_text = false, wrap = true, width preserved.
+    let wrap_before = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_wrap")
+        .unwrap()
+        .0
+        .frame;
+    ok(
+        &mut s,
+        "text.set_paragraph",
+        json!({ "slide": "slide1", "object": "t_wrap", "wrap": true }),
+    );
+    let (obj_wrap, _) = s.course.slide("slide1").unwrap().object("t_wrap").unwrap();
+    assert_eq!(
+        obj_wrap.frame.w, wrap_before.w,
+        "wrap-on must preserve width"
+    );
+    match &obj_wrap.kind {
+        ObjectKind::Text {
+            point_text, style, ..
+        } => {
+            assert!(!*point_text, "wrap=true must clear point_text");
+            assert!(style.wrap, "wrap must be true");
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+
+    // (b) object.set_frame changing w -> point_text = false, wrap = true.
+    let resize_before = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_resize")
+        .unwrap()
+        .0
+        .frame;
+    let new_w = resize_before.w + 120.0;
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "t_resize",
+            "frame": {
+                "x": resize_before.x,
+                "y": resize_before.y,
+                "w": new_w,
+                "h": resize_before.h
+            }
+        }),
+    );
+    let (obj_resize, _) = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_resize")
+        .unwrap();
+    assert_eq!(obj_resize.frame.w, new_w);
+    match &obj_resize.kind {
+        ObjectKind::Text {
+            point_text, style, ..
+        } => {
+            assert!(!*point_text, "width resize must clear point_text");
+            assert!(style.wrap, "width resize must enable wrap");
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+
+    // (c) object.set_autofit { autofit: "shrink" } -> point_text = false.
+    ok(
+        &mut s,
+        "object.set_autofit",
+        json!({ "slide": "slide1", "object": "t_shrink", "autofit": "shrink" }),
+    );
+    let (obj_shrink, _) = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_shrink")
+        .unwrap();
+    match &obj_shrink.kind {
+        ObjectKind::Text {
+            point_text,
+            autofit,
+            ..
+        } => {
+            assert!(!*point_text, "autofit=shrink must clear point_text");
+            assert_eq!(*autofit, Autofit::Shrink);
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+
+    // (d) object.update setting wrap: true clears point_text.
+    ok(
+        &mut s,
+        "object.update",
+        json!({
+            "slide": "slide1",
+            "object": "t_update",
+            "kind": {
+                "type": "text",
+                "text": "Hello",
+                "point_text": true,
+                "style": { "wrap": true }
+            }
+        }),
+    );
+    let (obj_upd, _) = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t_update")
+        .unwrap();
+    match &obj_upd.kind {
+        ObjectKind::Text {
+            point_text, style, ..
+        } => {
+            assert!(
+                !*point_text,
+                "object.update with wrap=true must clear point_text"
+            );
+            assert!(style.wrap);
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+#[test]
+fn pt_05_move_align_distribute_preserve_point_text() {
+    let mut s = Session::blank("Move Align Distribute");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "btn",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+            "frame": { "x": 200.0, "y": 300.0, "w": 160.0, "h": 48.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "next_lbl",
+            "kind": { "type": "text", "text": "Next", "point_text": true },
+            "frame": { "x": 10.0, "y": 10.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "back_lbl",
+            "kind": { "type": "text", "text": "Back", "point_text": true },
+            "frame": { "x": 40.0, "y": 10.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "mid_lbl",
+            "kind": { "type": "text", "text": "Save", "point_text": true },
+            "frame": { "x": 500.0, "y": 10.0, "w": 300.0, "h": 60.0 }
+        }),
+    );
+
+    // 1. Pure move via object.set_frame preserves point_text = true and wrap = false.
+    let before = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("next_lbl")
+        .unwrap()
+        .0
+        .frame;
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "next_lbl",
+            "frame": { "x": 220.0, "y": 310.0, "w": before.w, "h": before.h }
+        }),
+    );
+    let (moved_obj, _) = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("next_lbl")
+        .unwrap();
+    assert_eq!(moved_obj.frame.x, 220.0);
+    assert_eq!(moved_obj.frame.y, 310.0);
+    assert!(matches!(
+        &moved_obj.kind,
+        ObjectKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    // 2. Aligning "Next" and "Back" onto the button centers accurately and preserves point_text.
+    for lbl in ["next_lbl", "back_lbl"] {
+        ok(
+            &mut s,
+            "object.align",
+            json!({ "slide": "slide1", "objects": ["btn", lbl], "edge": "center" }),
+        );
+        ok(
+            &mut s,
+            "object.align",
+            json!({ "slide": "slide1", "objects": ["btn", lbl], "edge": "middle" }),
+        );
+        let btn_f = s
+            .course
+            .slide("slide1")
+            .unwrap()
+            .object("btn")
+            .unwrap()
+            .0
+            .frame;
+        let (lbl_obj, _) = s.course.slide("slide1").unwrap().object(lbl).unwrap();
+        let btn_cx = btn_f.x + btn_f.w * 0.5;
+        let btn_cy = btn_f.y + btn_f.h * 0.5;
+        let lbl_cx = lbl_obj.frame.x + lbl_obj.frame.w * 0.5;
+        let lbl_cy = lbl_obj.frame.y + lbl_obj.frame.h * 0.5;
+        assert!(
+            (lbl_cx - btn_cx).abs() < 1.0 && (lbl_cy - btn_cy).abs() < 1.0,
+            "{lbl} must center on btn: btn=({btn_cx}, {btn_cy}), lbl=({lbl_cx}, {lbl_cy})"
+        );
+        assert!(matches!(
+            &lbl_obj.kind,
+            ObjectKind::Text { point_text: true, style, .. } if !style.wrap
+        ));
+    }
+
+    // 3. Distributing 3 point-text objects preserves point_text and wrap = false.
+    let back_f = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("back_lbl")
+        .unwrap()
+        .0
+        .frame;
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "back_lbl",
+            "frame": { "x": 40.0, "y": 100.0, "w": back_f.w, "h": back_f.h }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.distribute",
+        json!({
+            "slide": "slide1",
+            "objects": ["back_lbl", "next_lbl", "mid_lbl"],
+            "axis": "horizontal"
+        }),
+    );
+    for lbl in ["back_lbl", "next_lbl", "mid_lbl"] {
+        let (obj, _) = s.course.slide("slide1").unwrap().object(lbl).unwrap();
+        assert!(
+            matches!(
+                &obj.kind,
+                ObjectKind::Text { point_text: true, style, .. } if !style.wrap
+            ),
+            "{lbl} must remain point text after distribute"
+        );
+    }
+}
+
+#[test]
+fn pt_06_state_extra_point_text_fits_and_converts() {
+    use coursecraft_course::{Autofit, StateExtraKind};
+
+    let mut s = Session::blank("State Extra Point Text");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "card",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#EEEEEE" },
+            "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 100.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": { "name": "hover" }
+        }),
+    );
+
+    // 1. Add point-text state extra: fits on insert and normalizes wrap=false, autofit=None.
+    let res = ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": {
+                "id": "badge_txt",
+                "name": "Badge",
+                "kind": {
+                    "type": "text",
+                    "text": "New",
+                    "point_text": true,
+                    "autofit": "shrink",
+                    "style": { "wrap": true, "size": 18.0 }
+                },
+                "frame": { "x": 10.0, "y": 10.0, "w": 300.0, "h": 60.0 }
+            }
+        }),
+    );
+    assert_eq!(res["id"], "badge_txt");
+
+    let get_extra = |s: &Session, extra_id: &str| {
+        let (obj, _) = s.course.slide("slide1").unwrap().object("card").unwrap();
+        let st = obj.states.iter().find(|st| st.name == "hover").unwrap();
+        st.extras.iter().find(|e| e.id == extra_id).unwrap().clone()
+    };
+
+    let added_extra = get_extra(&s, "badge_txt");
+    assert!(added_extra.frame.w < 120.0 && added_extra.frame.w >= 20.0);
+    assert!(added_extra.frame.h < 50.0);
+    match &added_extra.kind {
+        StateExtraKind::Text {
+            point_text,
+            style,
+            autofit,
+            ..
+        } => {
+            assert!(*point_text);
+            assert!(!style.wrap);
+            assert_eq!(*autofit, Autofit::None);
+        }
+        other => panic!("expected text extra, got {other:?}"),
+    }
+
+    // 2. Update text on point-text extra refits its frame.
+    ok(
+        &mut s,
+        "object.state_update_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": "badge_txt",
+            "patch": {
+                "kind": {
+                    "type": "text",
+                    "text": "Featured Module",
+                    "point_text": true,
+                    "style": { "wrap": false, "size": 18.0 }
+                }
+            }
+        }),
+    );
+    let grown_extra = get_extra(&s, "badge_txt");
+    assert!(
+        grown_extra.frame.w > added_extra.frame.w * 2.0,
+        "updating extra text must widen fitted frame"
+    );
+    assert!(matches!(
+        &grown_extra.kind,
+        StateExtraKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    // 3. Turning wrap on converts extra to area text at current width.
+    ok(
+        &mut s,
+        "object.state_update_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": "badge_txt",
+            "patch": {
+                "kind": {
+                    "type": "text",
+                    "text": "Featured Module",
+                    "point_text": true,
+                    "style": { "wrap": true, "size": 18.0 }
+                }
+            }
+        }),
+    );
+    let wrapped_extra = get_extra(&s, "badge_txt");
+    assert_eq!(wrapped_extra.frame.w, grown_extra.frame.w);
+    assert!(matches!(
+        &wrapped_extra.kind,
+        StateExtraKind::Text { point_text: false, style, .. } if style.wrap
+    ));
+
+    // 4. Second point-text extra converts on width resize (and preserves on pure move).
+    ok(
+        &mut s,
+        "object.state_add_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": {
+                "id": "resize_txt",
+                "name": "Tag",
+                "kind": {
+                    "type": "text",
+                    "text": "Tip",
+                    "point_text": true,
+                    "style": { "wrap": false, "size": 18.0 }
+                },
+                "frame": { "x": 10.0, "y": 40.0, "w": 300.0, "h": 60.0 }
+            }
+        }),
+    );
+    let before_move = get_extra(&s, "resize_txt");
+    ok(
+        &mut s,
+        "object.state_update_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": "resize_txt",
+            "patch": {
+                "frame": {
+                    "x": 25.0,
+                    "y": 45.0,
+                    "w": before_move.frame.w,
+                    "h": before_move.frame.h
+                }
+            }
+        }),
+    );
+    let after_move = get_extra(&s, "resize_txt");
+    assert_eq!(after_move.frame.x, 25.0);
+    assert!(matches!(
+        &after_move.kind,
+        StateExtraKind::Text { point_text: true, style, .. } if !style.wrap
+    ));
+
+    let resized_w = after_move.frame.w + 90.0;
+    ok(
+        &mut s,
+        "object.state_update_extra",
+        json!({
+            "slide": "slide1",
+            "object": "card",
+            "state": "hover",
+            "extra": "resize_txt",
+            "patch": {
+                "frame": {
+                    "x": after_move.frame.x,
+                    "y": after_move.frame.y,
+                    "w": resized_w,
+                    "h": after_move.frame.h
+                }
+            }
+        }),
+    );
+    let after_resize = get_extra(&s, "resize_txt");
+    assert_eq!(after_resize.frame.w, resized_w);
+    assert!(matches!(
+        &after_resize.kind,
+        StateExtraKind::Text { point_text: false, style, .. } if style.wrap
+    ));
+}
