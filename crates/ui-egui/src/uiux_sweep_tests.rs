@@ -673,3 +673,552 @@ fn ui07_update_status_bar_hint_handles_narrow_width() {
         violations.join("\n")
     );
 }
+
+fn m37_sweep_course() -> (Course, String, String, Vec<String>) {
+    let mut course = showcase();
+    let slide_id = course
+        .scenes
+        .first()
+        .and_then(|sc| sc.slides.first())
+        .map(|sl| sl.id.clone())
+        .unwrap_or_else(|| panic!("showcase must have a first slide"));
+    if let Some(slide) = course
+        .scenes
+        .first_mut()
+        .and_then(|sc| sc.slides.first_mut())
+    {
+        slide.objects.clear();
+        slide.triggers.clear();
+        slide.layers.clear();
+        slide.groups.clear();
+    }
+
+    let mut editor = crate::Editor::new(course);
+    let point_text_id = editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "id": "m37-pt-label",
+                "name": "Next label",
+                "kind": {
+                    "type": "text",
+                    "text": "Next",
+                    "point_text": true,
+                    "style": { "wrap": false }
+                },
+                "frame": { "x": 120.0, "y": 80.0, "w": 64.0, "h": 30.0 }
+            }),
+        )
+        .unwrap_or_else(|| panic!("add point text"))
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("point text id"))
+        .to_owned();
+
+    let bg_id = editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "id": "m37-gb-bg",
+                "name": "Back background",
+                "kind": {
+                    "type": "shape",
+                    "shape": "rounded_rectangle",
+                    "fill": "#2563EB"
+                },
+                "frame": { "x": 120.0, "y": 180.0, "w": 180.0, "h": 48.0 }
+            }),
+        )
+        .unwrap_or_else(|| panic!("add group bg"))
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("group bg id"))
+        .to_owned();
+    let icon_id = editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "id": "m37-gb-icon",
+                "name": "Back arrow",
+                "kind": {
+                    "type": "shape",
+                    "shape": "triangle",
+                    "fill": "#FFFFFF"
+                },
+                "frame": { "x": 136.0, "y": 194.0, "w": 16.0, "h": 20.0 }
+            }),
+        )
+        .unwrap_or_else(|| panic!("add group icon"))
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("group icon id"))
+        .to_owned();
+    let label_id = editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "id": "m37-gb-label",
+                "name": "Back text",
+                "kind": {
+                    "type": "text",
+                    "text": "Back",
+                    "point_text": true,
+                    "style": { "color": "#FFFFFF", "wrap": false }
+                },
+                "frame": { "x": 164.0, "y": 190.0, "w": 64.0, "h": 28.0 }
+            }),
+        )
+        .unwrap_or_else(|| panic!("add group label"))
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("group label id"))
+        .to_owned();
+
+    assert!(
+        editor
+            .run(
+                "object.add_state",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": bg_id,
+                    "state": { "name": "hover", "opacity": 0.9 }
+                }),
+            )
+            .is_some(),
+        "add hover state on group bg"
+    );
+    assert!(
+        editor
+            .run(
+                "object.add_state",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": bg_id,
+                    "state": { "name": "selected", "opacity": 0.8 }
+                }),
+            )
+            .is_some(),
+        "add selected state on group bg"
+    );
+
+    let member_ids = vec![bg_id, icon_id, label_id];
+    let group_id = editor
+        .run(
+            "object.group",
+            serde_json::json!({
+                "slide": slide_id,
+                "objects": member_ids,
+            }),
+        )
+        .unwrap_or_else(|| panic!("group 3 members"))
+        .get("group")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| panic!("group id"))
+        .to_owned();
+
+    assert!(
+        editor
+            .run(
+                "group.set_interactive",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "group": group_id,
+                    "interactive": true,
+                    "name": "Back button",
+                }),
+            )
+            .is_some(),
+        "make group interactive"
+    );
+    assert!(
+        editor
+            .run(
+                "group.update",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "group": group_id,
+                    "name": "Back button",
+                    "description": "Return to previous slide",
+                }),
+            )
+            .is_some(),
+        "update interactive group metadata"
+    );
+    let group_trigger = coursecraft_course::Trigger {
+        when: coursecraft_course::Event::Click {
+            object: group_id.clone(),
+        },
+        action: coursecraft_course::Action::JumpToSlide {
+            target: coursecraft_course::SlideTarget::Previous,
+        },
+        condition: None,
+        disabled: false,
+    };
+    assert!(
+        editor
+            .run(
+                "trigger.add",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "trigger": group_trigger,
+                }),
+            )
+            .is_some(),
+        "add click trigger on interactive group"
+    );
+
+    let problems = editor.session.course.validate();
+    assert!(
+        problems.is_empty(),
+        "m37 sweep fixture must validate cleanly: {problems:?}"
+    );
+
+    (editor.session.course, slide_id, point_text_id, member_ids)
+}
+
+struct M37SweepFixture {
+    course: Course,
+    slide_id: String,
+    point_text_id: String,
+    member_ids: Vec<String>,
+}
+
+struct M37SweepCase {
+    label: &'static str,
+    bottom_tab: BottomTab,
+    select_group: bool,
+    scroll_target: Option<&'static str>,
+    required_needles: &'static [&'static str],
+}
+
+#[derive(Clone, Copy)]
+struct M37Viewport {
+    size: (f32, f32),
+    mode: ThemeMode,
+    scale: f32,
+    file_ops: bool,
+}
+
+fn setup_m37_harness(
+    fx: &M37SweepFixture,
+    bottom_tab: BottomTab,
+    select_group: bool,
+    scroll_target: Option<&str>,
+    vp: M37Viewport,
+) -> TestHarness {
+    let mut h =
+        TestHarness::new_with_config(fx.course.clone(), vp.size, vp.mode, vp.scale, vp.file_ops);
+    SnapshotSelect {
+        slide: Some(fx.slide_id.clone()),
+        object: (!select_group).then(|| fx.point_text_id.clone()),
+        inspector_tab: Some(InspectorTab::Format),
+        bottom_tab: Some(bottom_tab),
+        ..Default::default()
+    }
+    .apply(&mut h.editor);
+    if select_group {
+        h.editor.selection.set_many(fx.member_ids.clone());
+    }
+    if let Some(target_text) = scroll_target {
+        h.idle_frame();
+        h.idle_frame();
+        let right = h.right_panel_rect();
+        let inspector_pos = right.center();
+        for _ in 0..8 {
+            if h.find_text_in(target_text, right).is_some() {
+                break;
+            }
+            h.scroll_over(inspector_pos, -80.0);
+        }
+    }
+    h
+}
+
+fn check_m37_trailing_colons(texts: &[String], ctx: &str, violations: &mut Vec<String>) {
+    for t in texts {
+        let trimmed = t.trim();
+        if matches!(
+            trimmed,
+            "Wrap:"
+                | "Wrap text:"
+                | "Act as one button:"
+                | "Name:"
+                | "Initial state:"
+                | "Accessible description:"
+                | "Focus order:"
+        ) {
+            violations.push(format!(
+                "[UX-11] {ctx}: trailing colon on label \"{trimmed}\""
+            ));
+        }
+    }
+}
+
+fn audit_m37_case_frame(
+    fx: &M37SweepFixture,
+    case: &M37SweepCase,
+    vp: M37Viewport,
+    violations: &mut Vec<String>,
+    missing: &mut Vec<String>,
+) {
+    let mut h = setup_m37_harness(
+        fx,
+        case.bottom_tab,
+        case.select_group,
+        case.scroll_target,
+        vp,
+    );
+    let report = h.audit_surface_report(3, vp.mode);
+    let ctx = format!(
+        "{} {}x{} {:?} scale={} file_ops={}",
+        case.label, vp.size.0, vp.size.1, vp.mode, vp.scale, vp.file_ops
+    );
+    if vp.scale <= 1.0 && vp.file_ops {
+        for &needle in case.required_needles {
+            if !report.painted(needle) {
+                missing.push(format!("{ctx}: \"{needle}\" was not painted"));
+            }
+        }
+    }
+    check_m37_trailing_colons(&report.texts, &ctx, violations);
+    for f in report.findings {
+        let (rule, detail) = parse_rule_prefix(&f);
+        if match_allowlist(rule, case.label, detail).is_some() {
+            continue;
+        }
+        violations.push(format!("[{rule}] {ctx}: {detail}"));
+    }
+}
+
+fn audit_m37_tooltips_and_popups(
+    fx: &M37SweepFixture,
+    violations: &mut Vec<String>,
+    missing: &mut Vec<String>,
+) {
+    for (label, select_group) in [
+        ("m37-point-text-tooltips", false),
+        ("m37-interactive-group-tooltips", true),
+    ] {
+        for &(mode, _) in &MATRIX_THEMES {
+            let vp = M37Viewport {
+                size: (1280.0, 800.0),
+                mode,
+                scale: 1.0,
+                file_ops: true,
+            };
+            let mut h = setup_m37_harness(fx, BottomTab::Timeline, select_group, None, vp);
+            let _ = h.audit_surface_report(3, mode);
+            for f in h.check_tooltips_and_disabled() {
+                violations.push(format!("[UX-08/UX-10] {label} {mode:?}: {f}"));
+            }
+        }
+    }
+
+    for &(mode, _) in &MATRIX_THEMES {
+        let vp = M37Viewport {
+            size: (1280.0, 800.0),
+            mode,
+            scale: 1.0,
+            file_ops: true,
+        };
+        let mut h = setup_m37_harness(fx, BottomTab::Timeline, true, None, vp);
+        h.idle_frame();
+        h.idle_frame();
+        for f in h.audit_combo("Normal") {
+            violations.push(format!(
+                "[UX-03/UX-13] m37-group-initial-state-combo {mode:?}: {f}"
+            ));
+        }
+
+        if let Some(pos) = h.find_text("Add trigger…") {
+            h.click_at(pos);
+            let report = h.audit_surface_report(3, mode);
+            if !report.painted("Back button (button group)") {
+                missing.push(format!(
+                    "m37-group-trigger-editor {mode:?}: \"Back button (button group)\" was not painted"
+                ));
+            }
+            for f in report.findings {
+                let (rule, detail) = parse_rule_prefix(&f);
+                violations.push(format!(
+                    "[{rule}] m37-group-trigger-editor 1280x800 {mode:?}: {detail}"
+                ));
+            }
+            h.press(egui::Key::Escape, egui::Modifiers::NONE);
+            h.idle_frame();
+        } else {
+            missing.push(format!(
+                "m37-group-trigger-editor {mode:?}: \"Add trigger…\" button not found"
+            ));
+        }
+
+        if let Some(arrange_pos) = h.find_text("Arrange") {
+            h.click_at(arrange_pos);
+            let report = h.audit_surface_report(2, mode);
+            if !report.painted("Remove button behaviour") {
+                missing.push(format!(
+                    "m37-group-arrange-menu {mode:?}: \"Remove button behaviour\" was not painted"
+                ));
+            }
+            for f in report.findings {
+                let (rule, detail) = parse_rule_prefix(&f);
+                violations.push(format!(
+                    "[{rule}] m37-group-arrange-menu 1280x800 {mode:?}: {detail}"
+                ));
+            }
+            h.press(egui::Key::Escape, egui::Modifiers::NONE);
+            h.idle_frame();
+        } else {
+            missing.push(format!(
+                "m37-group-arrange-menu {mode:?}: \"Arrange\" menu not found"
+            ));
+        }
+    }
+}
+
+/// GB-14: M28 automated UI/UX sweep for point text (`Wrap text` row) and interactive
+/// button groups (Group Inspector, Timeline folder row + `Button` badge, and Triggers tab)
+/// across all matrix sizes, themes, scales, and web mode with 0 MUST violations.
+#[test]
+fn gb_14_m37_point_text_and_interactive_group_uiux_sweep() {
+    let (course, slide_id, point_text_id, member_ids) = m37_sweep_course();
+    let fx = M37SweepFixture {
+        course,
+        slide_id,
+        point_text_id,
+        member_ids,
+    };
+    let mut violations = Vec::new();
+    let mut missing = Vec::new();
+    let mut total_frames = 0usize;
+
+    let cases = [
+        M37SweepCase {
+            label: "m37-point-text-format",
+            bottom_tab: BottomTab::Timeline,
+            select_group: false,
+            scroll_target: None,
+            required_needles: &[],
+        },
+        M37SweepCase {
+            label: "m37-point-text-format-scrolled",
+            bottom_tab: BottomTab::Timeline,
+            select_group: false,
+            scroll_target: Some("Wrap text"),
+            required_needles: &["Wrap text"],
+        },
+        M37SweepCase {
+            label: "m37-interactive-group-timeline",
+            bottom_tab: BottomTab::Timeline,
+            select_group: true,
+            scroll_target: None,
+            required_needles: &[
+                "Act as one button",
+                "Back button",
+                "Button",
+                "Initial state",
+            ],
+        },
+        M37SweepCase {
+            label: "m37-interactive-group-scrolled",
+            bottom_tab: BottomTab::Timeline,
+            select_group: true,
+            scroll_target: Some("Add trigger…"),
+            required_needles: &["Focus order", "Add trigger…"],
+        },
+        M37SweepCase {
+            label: "m37-interactive-group-triggers",
+            bottom_tab: BottomTab::Triggers,
+            select_group: true,
+            scroll_target: None,
+            required_needles: &["Act as one button", "Back button (button group)"],
+        },
+    ];
+
+    for case in &cases {
+        for &size in &MATRIX_SIZES {
+            for &(mode, _) in &MATRIX_THEMES {
+                for &scale in &MATRIX_SCALES {
+                    let effective_size = if scale > 1.0 && size == (1024.0, 600.0) {
+                        (1536.0, 900.0)
+                    } else {
+                        size
+                    };
+                    total_frames += 1;
+                    audit_m37_case_frame(
+                        &fx,
+                        case,
+                        M37Viewport {
+                            size: effective_size,
+                            mode,
+                            scale,
+                            file_ops: true,
+                        },
+                        &mut violations,
+                        &mut missing,
+                    );
+                }
+            }
+        }
+        for &(mode, _) in &MATRIX_THEMES {
+            total_frames += 1;
+            audit_m37_case_frame(
+                &fx,
+                case,
+                M37Viewport {
+                    size: (1280.0, 800.0),
+                    mode,
+                    scale: 1.0,
+                    file_ops: false,
+                },
+                &mut violations,
+                &mut missing,
+            );
+        }
+    }
+
+    // Scale 2.0 stress pass for point text and interactive group.
+    for case in [&cases[0], &cases[2]] {
+        for size in [(2048.0, 1200.0), (1920.0, 1080.0)] {
+            for &(mode, _) in &MATRIX_THEMES {
+                total_frames += 1;
+                audit_m37_case_frame(
+                    &fx,
+                    case,
+                    M37Viewport {
+                        size,
+                        mode,
+                        scale: 2.0,
+                        file_ops: true,
+                    },
+                    &mut violations,
+                    &mut missing,
+                );
+            }
+        }
+    }
+
+    audit_m37_tooltips_and_popups(&fx, &mut violations, &mut missing);
+
+    assert!(
+        missing.is_empty(),
+        "M37 UI/UX sweep missing expected painted controls ({}):\n{}",
+        missing.len(),
+        missing.join("\n")
+    );
+    assert!(
+        violations.is_empty(),
+        "M37 UI/UX sweep found {} violations across {total_frames} audited frames:\n{}",
+        violations.len(),
+        violations
+            .iter()
+            .take(50)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
