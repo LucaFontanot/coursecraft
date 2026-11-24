@@ -3,6 +3,11 @@
 //! All networking, version parsing, and Downloads I/O for CourseCraft updates
 //! live in this module behind `#[cfg(not(target_arch = "wasm32"))]`.
 
+use std::fs::File;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// Minimum elapsed seconds between automatic startup update checks (24 hours).
 pub const CHECK_INTERVAL_SECS: u64 = 86_400;
 
@@ -496,13 +501,615 @@ pub fn parse_sha256sums_line(text: &str, filename: &str) -> Option<String> {
     None
 }
 
+const FALLBACK_RELEASES_URL: &str = "https://github.com/ad1-kamath/coursecraft/releases";
+const MAX_ASSET_FILENAME_CHARS: usize = 200;
+const MAX_UNIQUE_DOWNLOAD_ATTEMPTS: u32 = 1000;
+const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
+
+fn is_valid_subdomain_prefix(sub: &str) -> bool {
+    if sub.is_empty() {
+        return false;
+    }
+    sub.split('.').all(|label| {
+        !label.is_empty()
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    })
+}
+
+fn extract_https_host(url: &str) -> Option<&str> {
+    if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return None;
+    }
+    let rest = url.strip_prefix("https://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    match authority.split_once(':') {
+        Some((host, "443")) => Some(host),
+        Some(_) => None,
+        None => Some(authority),
+    }
+}
+
+/// Validate that an update or redirect URL uses `https://` and targets an
+/// allowlisted GitHub host (`api.github.com`, `github.com`, or
+/// `*.githubusercontent.com`).
+#[must_use]
+pub fn is_allowed_update_url(url: &str) -> bool {
+    let Some(host) = extract_https_host(url) else {
+        return false;
+    };
+    let lower = host.to_ascii_lowercase();
+    if lower == "api.github.com" || lower == "github.com" {
+        return true;
+    }
+    lower
+        .strip_suffix(".githubusercontent.com")
+        .is_some_and(is_valid_subdomain_prefix)
+}
+
+/// Resolve an HTTP `Location` header relative to `base`, rejecting empty values,
+/// whitespace/control characters, and non-HTTPS schemes.
+#[must_use]
+pub fn resolve_redirect_url(base: &str, location: &str) -> Option<String> {
+    if location.is_empty()
+        || location
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace())
+    {
+        return None;
+    }
+    if location.starts_with("https://") {
+        return Some(location.to_owned());
+    }
+    if let Some(rest) = location.strip_prefix("//") {
+        if rest.is_empty() || rest.starts_with('/') {
+            return None;
+        }
+        return Some(format!("https:{location}"));
+    }
+    if location.starts_with('/') {
+        if base.chars().any(|c| c.is_control() || c.is_whitespace()) {
+            return None;
+        }
+        let rest = base.strip_prefix("https://")?;
+        let authority = rest.split(['/', '?', '#']).next()?;
+        if authority.is_empty() {
+            return None;
+        }
+        return Some(format!("https://{authority}{location}"));
+    }
+    None
+}
+
+/// Validate a release asset filename before joining it onto a local directory.
+#[must_use]
+pub fn safe_asset_filename(name: &str) -> Option<String> {
+    if name.is_empty()
+        || name.trim().is_empty()
+        || name.chars().count() > MAX_ASSET_FILENAME_CHARS
+        || name.starts_with('.')
+        || name.contains("..")
+    {
+        return None;
+    }
+    if name
+        .chars()
+        .any(|c| matches!(c, '/' | '\\' | ':' | '\0') || c.is_control())
+    {
+        return None;
+    }
+    Some(name.to_owned())
+}
+
+fn path_is_occupied(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok() || path.exists()
+}
+
+fn split_filename_stem_ext(filename: &str) -> (&str, &str) {
+    let lower = filename.to_ascii_lowercase();
+    for compound in [".tar.gz", ".tar.xz", ".tar.bz2", ".tar.zst"] {
+        if lower.ends_with(compound) && filename.len() > compound.len() {
+            let split_at = filename.len() - compound.len();
+            if let (Some(stem), Some(ext)) = (filename.get(..split_at), filename.get(split_at..)) {
+                return (stem, ext);
+            }
+        }
+    }
+    if let Some(dot) = filename.rfind('.')
+        && dot > 0
+        && let (Some(stem), Some(ext)) = (filename.get(..dot), filename.get(dot..))
+    {
+        return (stem, ext);
+    }
+    (filename, "")
+}
+
+/// Pick a collision-free destination path under `dir` without overwriting any
+/// existing file. Preserves compound extensions such as `.tar.gz`.
+#[must_use]
+pub fn unique_download_path(dir: &Path, filename: &str) -> PathBuf {
+    let initial = dir.join(filename);
+    if !path_is_occupied(&initial) {
+        return initial;
+    }
+    let (stem, ext) = split_filename_stem_ext(filename);
+    for n in 1..=MAX_UNIQUE_DOWNLOAD_ATTEMPTS {
+        let candidate = dir.join(format!("{stem} ({n}){ext}"));
+        if !path_is_occupied(&candidate) {
+            return candidate;
+        }
+    }
+    dir.join(format!(
+        "{stem} ({}){ext}",
+        MAX_UNIQUE_DOWNLOAD_ATTEMPTS + 1
+    ))
+}
+
+fn part_path_for(dest: &Path) -> PathBuf {
+    let mut os = dest.as_os_str().to_os_string();
+    os.push(".part");
+    PathBuf::from(os)
+}
+
+/// Kind of HTTP request made by the update subsystem (selects timeouts/headers).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestKind {
+    /// GitHub Releases metadata JSON query.
+    Metadata,
+    /// `SHA256SUMS.txt` checksum manifest fetch.
+    Checksums,
+    /// Installer package binary stream.
+    Download,
+}
+
+/// Minimal HTTP response surface returned by [`UpdateHttp`].
+pub struct HttpResponse {
+    /// Numeric HTTP status code (e.g. `200`, `302`, `429`).
+    pub status: u16,
+    /// Value of the `Location` header, if present.
+    pub location: Option<String>,
+    /// Parsed `Content-Length` header value, if present.
+    pub content_length: Option<u64>,
+    /// Parsed `X-RateLimit-Remaining` header value, if present.
+    pub rate_limit_remaining: Option<u64>,
+    /// Streaming response body reader.
+    pub body: Box<dyn Read + Send>,
+}
+
+/// Testable HTTP transport seam for update checks and downloads.
+pub trait UpdateHttp: Send + Sync {
+    /// Perform a single non-redirecting HTTPS `GET` request.
+    ///
+    /// # Errors
+    /// Returns [`UpdateError`] on transport failures or timeouts.
+    fn get(
+        &self,
+        url: &str,
+        accept: &str,
+        user_agent: &str,
+        kind: RequestKind,
+    ) -> Result<HttpResponse, UpdateError>;
+}
+
+/// Execute an HTTPS `GET` while manually following up to [`MAX_REDIRECTS`]
+/// redirects and validating every hop with [`is_allowed_update_url`].
+///
+/// # Errors
+/// Returns [`UpdateError::DisallowedUrl`] if any hop or `Location` header is
+/// disallowed, [`UpdateError::TooManyRedirects`] if redirects exceed
+/// [`MAX_REDIRECTS`], or any transport error from `http`.
+pub fn follow_get_redirects(
+    http: &dyn UpdateHttp,
+    url: &str,
+    accept: &str,
+    user_agent: &str,
+    kind: RequestKind,
+) -> Result<HttpResponse, UpdateError> {
+    let mut current_url = url.to_owned();
+    for hop in 0..=MAX_REDIRECTS {
+        if !is_allowed_update_url(&current_url) {
+            return Err(UpdateError::DisallowedUrl);
+        }
+        let resp = http.get(&current_url, accept, user_agent, kind)?;
+        if !matches!(resp.status, 301 | 302 | 303 | 307 | 308) {
+            return Ok(resp);
+        }
+        if hop == MAX_REDIRECTS {
+            return Err(UpdateError::TooManyRedirects);
+        }
+        let Some(location) = resp.location.as_deref() else {
+            return Err(UpdateError::DisallowedUrl);
+        };
+        let Some(next_url) = resolve_redirect_url(&current_url, location) else {
+            return Err(UpdateError::DisallowedUrl);
+        };
+        current_url = next_url;
+    }
+    Err(UpdateError::TooManyRedirects)
+}
+
+fn check_http_status(status: u16, rate_limit_remaining: Option<u64>) -> Result<(), UpdateError> {
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    if status == 429 || (status == 403 && rate_limit_remaining == Some(0)) {
+        return Err(UpdateError::RateLimited);
+    }
+    Err(UpdateError::HttpStatus(status))
+}
+
+fn read_capped_bytes(reader: &mut dyn Read, max_bytes: usize) -> Result<Vec<u8>, UpdateError> {
+    let limit = (max_bytes as u64).saturating_add(1);
+    let mut buf = Vec::new();
+    let mut limited = reader.take(limit);
+    limited.read_to_end(&mut buf).map_err(|err| {
+        if err.kind() == io::ErrorKind::TimedOut {
+            UpdateError::Timeout
+        } else {
+            UpdateError::Network(err.to_string())
+        }
+    })?;
+    if buf.len() > max_bytes {
+        return Err(UpdateError::InvalidResponse);
+    }
+    Ok(buf)
+}
+
+/// Matched installer asset resolved from a GitHub release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAsset {
+    /// Release asset filename.
+    pub name: String,
+    /// Direct download URL for the asset.
+    pub download_url: String,
+    /// Declared byte size from GitHub.
+    pub size: u64,
+    /// Normalized lowercase 64-char SHA-256 hex digest from `asset.digest`, if valid.
+    pub sha256_digest: Option<String>,
+}
+
+/// Resolved update metadata ready for display or download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedUpdate {
+    /// New SemVer version string (without leading `v`).
+    pub version: String,
+    /// Currently running SemVer version string.
+    pub current_version: String,
+    /// Validated HTTPS release page URL on GitHub.
+    pub release_url: String,
+    /// Raw Markdown release notes body.
+    pub notes_markdown: String,
+    /// ISO-8601 publication timestamp, if provided.
+    pub published_at: Option<String>,
+    /// Platform-matched installer asset, if one exists for the target OS/CPU.
+    pub asset: Option<ResolvedAsset>,
+    /// Download URL for `SHA256SUMS.txt` if present on the release.
+    pub checksums_url: Option<String>,
+}
+
+/// Outcome of checking GitHub Releases for a newer CourseCraft version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+pub enum CheckOutcome {
+    /// Running version is already at or ahead of the latest eligible release.
+    UpToDate,
+    /// A newer eligible release is available.
+    Available(ResolvedUpdate),
+}
+
+/// Query GitHub Releases via `http` and resolve whether an update is available
+/// for the given current version and target platform.
+///
+/// # Errors
+/// Returns [`UpdateError`] on disallowed URLs, rate limits, HTTP/network errors,
+/// or malformed/oversized responses.
+pub fn check_for_update_with(
+    http: &dyn UpdateHttp,
+    api_url: &str,
+    current: &semver::Version,
+    os: &str,
+    arch: &str,
+    prefer_portable: bool,
+) -> Result<CheckOutcome, UpdateError> {
+    let current_str = current.to_string();
+    let ua = user_agent(&current_str);
+    let mut resp = follow_get_redirects(
+        http,
+        api_url,
+        "application/vnd.github+json",
+        &ua,
+        RequestKind::Metadata,
+    )?;
+    check_http_status(resp.status, resp.rate_limit_remaining)?;
+    let bytes = read_capped_bytes(&mut *resp.body, MAX_API_RESPONSE_BYTES)?;
+    let releases = parse_releases_json(&bytes)?;
+
+    let Some((version, release)) = select_latest_update(releases, current) else {
+        return Ok(CheckOutcome::UpToDate);
+    };
+
+    let asset =
+        pick_asset(&release.assets, os, arch, prefer_portable).map(|picked| ResolvedAsset {
+            name: picked.name.clone(),
+            download_url: picked.browser_download_url.clone(),
+            size: picked.size,
+            sha256_digest: picked.digest.as_deref().and_then(parse_sha256_digest),
+        });
+    let checksums_url = find_checksums_asset(&release.assets)
+        .map(|a| a.browser_download_url.clone())
+        .filter(|u| !u.trim().is_empty());
+    let release_url = if is_allowed_update_url(&release.html_url) {
+        release.html_url
+    } else {
+        FALLBACK_RELEASES_URL.to_string()
+    };
+
+    Ok(CheckOutcome::Available(ResolvedUpdate {
+        version: version.to_string(),
+        current_version: current_str,
+        release_url,
+        notes_markdown: release.body,
+        published_at: release.published_at,
+        asset,
+        checksums_url,
+    }))
+}
+
+/// Parameters for a streaming, verified installer download.
+pub struct DownloadSpec<'a> {
+    /// Asset download URL (must satisfy [`is_allowed_update_url`]).
+    pub url: &'a str,
+    /// Declared byte size from GitHub, if known.
+    pub expected_size: Option<u64>,
+    /// Expected SHA-256 digest (either 64-char hex or `"sha256:<64-hex>"`), if known.
+    pub expected_sha256: Option<&'a str>,
+    /// Optional fallback URL to a `SHA256SUMS.txt` manifest.
+    pub checksums_url: Option<&'a str>,
+    /// Local destination directory (typically the user's Downloads folder).
+    pub dest_dir: &'a Path,
+    /// Asset filename (validated via [`safe_asset_filename`]).
+    pub filename: &'a str,
+    /// Privacy-preserving `User-Agent` header value.
+    pub user_agent: &'a str,
+}
+
+/// Result of a completed and verified installer download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadResult {
+    /// Final saved file path in `dest_dir`.
+    pub path: PathBuf,
+    /// Exact number of bytes written.
+    pub bytes: u64,
+    /// Whether the file was verified against a SHA-256 digest.
+    pub sha256_verified: bool,
+}
+
+fn encode_hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(char::from(HEX[usize::from(b >> 4)]));
+        out.push(char::from(HEX[usize::from(b & 0x0f)]));
+    }
+    out
+}
+
+fn normalize_expected_sha256(raw: &str) -> Option<String> {
+    if let Some(parsed) = parse_sha256_digest(raw) {
+        return Some(parsed);
+    }
+    let trimmed = raw.trim();
+    if is_valid_sha256_hex(trimmed) {
+        Some(trimmed.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+fn resolve_expected_sha256(
+    http: &dyn UpdateHttp,
+    spec: &DownloadSpec<'_>,
+    safe_name: &str,
+) -> Result<Option<String>, UpdateError> {
+    if let Some(expected) = spec.expected_sha256 {
+        let normalized = normalize_expected_sha256(expected).ok_or(UpdateError::InvalidResponse)?;
+        return Ok(Some(normalized));
+    }
+    let Some(sums_url) = spec.checksums_url else {
+        return Ok(None);
+    };
+    let mut resp = follow_get_redirects(
+        http,
+        sums_url,
+        "text/plain, */*",
+        spec.user_agent,
+        RequestKind::Checksums,
+    )?;
+    check_http_status(resp.status, resp.rate_limit_remaining)?;
+    let bytes = read_capped_bytes(&mut *resp.body, MAX_SUMS_BYTES)?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| UpdateError::InvalidResponse)?;
+    Ok(parse_sha256sums_line(text, safe_name))
+}
+
+struct StreamTarget<'a> {
+    part_path: &'a Path,
+    expected_size: Option<u64>,
+    content_length: Option<u64>,
+    expected_sha256: Option<&'a str>,
+}
+
+fn verify_stream_completion(
+    downloaded: u64,
+    target: &StreamTarget<'_>,
+    actual_hex: &str,
+) -> Result<bool, UpdateError> {
+    if let Some(expected) = target.expected_size {
+        if downloaded < expected {
+            return Err(UpdateError::DownloadTruncated);
+        }
+    } else if let Some(cl) = target.content_length
+        && downloaded < cl
+    {
+        return Err(UpdateError::DownloadTruncated);
+    }
+
+    if let Some(expected_hex) = target.expected_sha256 {
+        if actual_hex != expected_hex {
+            return Err(UpdateError::ChecksumMismatch);
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn stream_to_part_file(
+    reader: &mut dyn Read,
+    target: &StreamTarget<'_>,
+    cancel: &AtomicBool,
+    on_progress: &mut impl FnMut(u64, Option<u64>),
+) -> Result<(u64, bool), UpdateError> {
+    let mut file = File::create(target.part_path).map_err(|e| UpdateError::Io(e.to_string()))?;
+    let mut buf = vec![0_u8; DOWNLOAD_CHUNK_BYTES];
+    let mut hasher = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut downloaded: u64 = 0;
+    let total = target.expected_size.or(target.content_length);
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(UpdateError::Cancelled);
+        }
+        let n = match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) if err.kind() == io::ErrorKind::TimedOut => return Err(UpdateError::Timeout),
+            Err(err) => return Err(UpdateError::Network(err.to_string())),
+        };
+        downloaded = downloaded.saturating_add(n as u64);
+        if downloaded > MAX_DOWNLOAD_BYTES
+            || target.expected_size.is_some_and(|exp| downloaded > exp)
+        {
+            return Err(UpdateError::DownloadTooLarge);
+        }
+        let Some(chunk) = buf.get(..n) else {
+            return Err(UpdateError::InvalidResponse);
+        };
+        file.write_all(chunk)
+            .map_err(|e| UpdateError::Io(e.to_string()))?;
+        hasher.update(chunk);
+        on_progress(downloaded, total);
+    }
+
+    if cancel.load(Ordering::Relaxed) {
+        return Err(UpdateError::Cancelled);
+    }
+    file.flush().map_err(|e| UpdateError::Io(e.to_string()))?;
+    let actual_hex = encode_hex_lower(hasher.finish().as_ref());
+    let sha256_verified = verify_stream_completion(downloaded, target, &actual_hex)?;
+    Ok((downloaded, sha256_verified))
+}
+
+/// Stream a release installer to a `.part` file under `spec.dest_dir`, verify
+/// size limits and SHA-256 (from `expected_sha256` or `SHA256SUMS.txt`), and
+/// atomically rename to a collision-free final path. Removes `.part` on any
+/// error or cancellation.
+///
+/// # Errors
+/// Returns [`UpdateError`] on invalid filename/URL, cancellation, size limit or
+/// truncation failure, SHA-256 mismatch, HTTP/network failure, or local I/O error.
+pub fn download_asset_verified(
+    http: &dyn UpdateHttp,
+    spec: &DownloadSpec<'_>,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(u64, Option<u64>),
+) -> Result<DownloadResult, UpdateError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(UpdateError::Cancelled);
+    }
+    let safe_name = safe_asset_filename(spec.filename).ok_or(UpdateError::InvalidResponse)?;
+    if !is_allowed_update_url(spec.url) {
+        return Err(UpdateError::DisallowedUrl);
+    }
+    if spec.expected_size.is_some_and(|s| s > MAX_DOWNLOAD_BYTES) {
+        return Err(UpdateError::DownloadTooLarge);
+    }
+
+    let expected_sha256 = resolve_expected_sha256(http, spec, &safe_name)?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(UpdateError::Cancelled);
+    }
+
+    let mut resp = follow_get_redirects(
+        http,
+        spec.url,
+        "application/octet-stream",
+        spec.user_agent,
+        RequestKind::Download,
+    )?;
+    check_http_status(resp.status, resp.rate_limit_remaining)?;
+    if resp
+        .content_length
+        .is_some_and(|cl| cl > MAX_DOWNLOAD_BYTES)
+        || spec
+            .expected_size
+            .is_some_and(|exp| resp.content_length.is_some_and(|cl| cl > exp))
+    {
+        return Err(UpdateError::DownloadTooLarge);
+    }
+
+    let dest = unique_download_path(spec.dest_dir, &safe_name);
+    let part = part_path_for(&dest);
+    let target = StreamTarget {
+        part_path: &part,
+        expected_size: spec.expected_size,
+        content_length: resp.content_length,
+        expected_sha256: expected_sha256.as_deref(),
+    };
+
+    let (bytes, sha256_verified) =
+        match stream_to_part_file(&mut *resp.body, &target, cancel, &mut on_progress) {
+            Ok(res) => res,
+            Err(err) => {
+                let _ = std::fs::remove_file(&part);
+                return Err(err);
+            }
+        };
+
+    if let Err(err) = std::fs::rename(&part, &dest) {
+        let _ = std::fs::remove_file(&part);
+        return Err(UpdateError::Io(err.to_string()));
+    }
+
+    Ok(DownloadResult {
+        path: dest,
+        bytes,
+        sha256_verified,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::io::{self, Cursor, Read};
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
     use super::{
-        CHECK_INTERVAL_SECS, GitHubAsset, GitHubRelease, MAX_API_RESPONSE_BYTES, UpdateError,
-        auto_check_suppressed_by_env, current_version, find_checksums_asset, is_release_eligible,
-        parse_releases_json, parse_sha256_digest, parse_sha256sums_line, parse_tag_version,
-        pick_asset, select_latest_update, should_auto_check, user_agent,
+        CHECK_INTERVAL_SECS, CheckOutcome, DownloadSpec, GitHubAsset, GitHubRelease, HttpResponse,
+        MAX_API_RESPONSE_BYTES, MAX_DOWNLOAD_BYTES, MAX_SUMS_BYTES, RequestKind, UpdateError,
+        UpdateHttp, auto_check_suppressed_by_env, check_for_update_with, current_version,
+        download_asset_verified, encode_hex_lower, find_checksums_asset, follow_get_redirects,
+        is_allowed_update_url, is_release_eligible, parse_releases_json, parse_sha256_digest,
+        parse_sha256sums_line, parse_tag_version, pick_asset, resolve_redirect_url,
+        safe_asset_filename, select_latest_update, should_auto_check, unique_download_path,
+        user_agent,
     };
 
     const V043_RELEASES_JSON: &str = r#"[
@@ -963,5 +1570,736 @@ mod tests {
 
         assert_eq!(user_agent("0.4.3"), "CourseCraft/0.4.3");
         assert!(current_version().is_some());
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedRequest {
+        url: String,
+        accept: String,
+        user_agent: String,
+        kind: RequestKind,
+    }
+
+    struct FakeHttp {
+        requests: Mutex<Vec<RecordedRequest>>,
+        responses: Mutex<VecDeque<Result<HttpResponse, UpdateError>>>,
+    }
+
+    impl FakeHttp {
+        fn new(responses: Vec<Result<HttpResponse, UpdateError>>) -> Self {
+            Self {
+                requests: Mutex::new(Vec::new()),
+                responses: Mutex::new(VecDeque::from(responses)),
+            }
+        }
+
+        fn recorded(&self) -> Vec<RecordedRequest> {
+            self.requests.lock().expect("requests lock").clone()
+        }
+    }
+
+    impl UpdateHttp for FakeHttp {
+        fn get(
+            &self,
+            url: &str,
+            accept: &str,
+            user_agent: &str,
+            kind: RequestKind,
+        ) -> Result<HttpResponse, UpdateError> {
+            self.requests
+                .lock()
+                .expect("requests lock")
+                .push(RecordedRequest {
+                    url: url.to_string(),
+                    accept: accept.to_string(),
+                    user_agent: user_agent.to_string(),
+                    kind,
+                });
+            self.responses
+                .lock()
+                .expect("responses lock")
+                .pop_front()
+                .expect("unexpected extra HTTP request in FakeHttp")
+        }
+    }
+
+    fn ok_response(body: Vec<u8>) -> HttpResponse {
+        let len = body.len() as u64;
+        HttpResponse {
+            status: 200,
+            location: None,
+            content_length: Some(len),
+            rate_limit_remaining: Some(59),
+            body: Box::new(Cursor::new(body)),
+        }
+    }
+
+    fn redirect_response(status: u16, location: Option<&str>) -> HttpResponse {
+        HttpResponse {
+            status,
+            location: location.map(str::to_owned),
+            content_length: Some(0),
+            rate_limit_remaining: Some(59),
+            body: Box::new(Cursor::new(Vec::new())),
+        }
+    }
+
+    fn status_response(status: u16, rate_limit_remaining: Option<u64>) -> HttpResponse {
+        HttpResponse {
+            status,
+            location: None,
+            content_length: Some(0),
+            rate_limit_remaining,
+            body: Box::new(Cursor::new(Vec::new())),
+        }
+    }
+
+    struct TempTestDir {
+        path: PathBuf,
+    }
+
+    impl TempTestDir {
+        fn new(label: &str) -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "coursecraft-m35-{label}-{}-{n}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).expect("create temp test dir");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn entries(&self) -> Vec<String> {
+            std::fs::read_dir(&self.path)
+                .expect("read temp dir")
+                .map(|e| {
+                    e.expect("dir entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect()
+        }
+    }
+
+    impl Drop for TempTestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn sha256_hex(data: &[u8]) -> String {
+        let digest = ring::digest::digest(&ring::digest::SHA256, data);
+        encode_hex_lower(digest.as_ref())
+    }
+
+    struct ChunkedReader {
+        data: Vec<u8>,
+        pos: usize,
+        max_chunk: usize,
+    }
+
+    impl Read for ChunkedReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let remaining = self.data.len().saturating_sub(self.pos);
+            if remaining == 0 {
+                return Ok(0);
+            }
+            let take = remaining.min(buf.len()).min(self.max_chunk);
+            buf[..take].copy_from_slice(&self.data[self.pos..self.pos + take]);
+            self.pos += take;
+            Ok(take)
+        }
+    }
+
+    #[test]
+    fn up06_url_allowlist_and_redirect_resolution() {
+        let allowed = [
+            "https://api.github.com/repos/ad1-kamath/coursecraft/releases?per_page=20",
+            "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-0.4.3-macos.dmg",
+            "https://objects.githubusercontent.com/github-production-release-asset-123/file.dmg?sig=abc",
+            "https://release-assets.githubusercontent.com/asset/file.dmg",
+            "https://a.b.githubusercontent.com/asset",
+            "https://API.GITHUB.COM/repos/foo",
+            "https://github.com:443/foo",
+        ];
+        for url in allowed {
+            assert!(is_allowed_update_url(url), "should allow {url}");
+        }
+
+        let rejected = [
+            "http://github.com/ad1-kamath/coursecraft/releases",
+            "file:///etc/passwd",
+            "https://evil.com/file.dmg",
+            "https://github.com.evil.com/file.dmg",
+            "https://127.0.0.1/file.dmg",
+            "https://localhost/file.dmg",
+            "https://[::1]/file.dmg",
+            "https://githubusercontent.com/file.dmg",
+            "https://.githubusercontent.com/file.dmg",
+            "https://a..b.githubusercontent.com/file.dmg",
+            "https://-bad.githubusercontent.com/file.dmg",
+            "https://user@github.com/file.dmg",
+            "https://github.com:8443/file.dmg",
+            "https://github.com:/file.dmg",
+            "https:///file.dmg",
+            "https://github.com/a b",
+            "https://github.com/a\nb",
+            "https://github.com/a\0b",
+        ];
+        for url in rejected {
+            assert!(!is_allowed_update_url(url), "should reject {url}");
+        }
+
+        let base = "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/a.dmg";
+        let resolved_cases = [
+            (
+                "https://objects.githubusercontent.com/blob",
+                Some("https://objects.githubusercontent.com/blob"),
+            ),
+            (
+                "//objects.githubusercontent.com/blob?x=1",
+                Some("https://objects.githubusercontent.com/blob?x=1"),
+            ),
+            (
+                "/releases/step2?token=abc",
+                Some("https://github.com/releases/step2?token=abc"),
+            ),
+            ("http://objects.githubusercontent.com/blob", None),
+            ("file:///tmp/x", None),
+            ("", None),
+            ("///bad", None),
+            ("relative/path", None),
+            ("https://github.com/has space", None),
+            ("https://github.com/has\r\ncrlf", None),
+        ];
+        for (location, expected) in resolved_cases {
+            assert_eq!(
+                resolve_redirect_url(base, location).as_deref(),
+                expected,
+                "redirect location {location:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn up07_safe_filename_and_unique_download_path() {
+        // Rejected filenames.
+        assert_eq!(safe_asset_filename(""), None);
+        assert_eq!(safe_asset_filename("   "), None);
+        assert_eq!(safe_asset_filename("../evil.dmg"), None);
+        assert_eq!(safe_asset_filename("foo..bar.dmg"), None);
+        assert_eq!(safe_asset_filename("a/b.dmg"), None);
+        assert_eq!(safe_asset_filename("a\\b.dmg"), None);
+        assert_eq!(safe_asset_filename("C:evil.exe"), None);
+        assert_eq!(safe_asset_filename(".hidden"), None);
+        assert_eq!(safe_asset_filename("bad\0name.dmg"), None);
+        assert_eq!(safe_asset_filename("bad\nname.dmg"), None);
+        let too_long = format!("{}.dmg", "a".repeat(197));
+        assert_eq!(too_long.chars().count(), 201);
+        assert_eq!(safe_asset_filename(&too_long), None);
+
+        // Accepted filenames.
+        assert_eq!(
+            safe_asset_filename("CourseCraft-0.4.4-macos.dmg"),
+            Some("CourseCraft-0.4.4-macos.dmg".to_string())
+        );
+        let exact_max = format!("{}.dmg", "a".repeat(196));
+        assert_eq!(exact_max.chars().count(), 200);
+        assert_eq!(safe_asset_filename(&exact_max), Some(exact_max));
+
+        // Unique download path avoids overwriting and preserves `.tar.gz`.
+        let tmp = TempTestDir::new("up07");
+        let p0 = unique_download_path(tmp.path(), "foo.dmg");
+        assert_eq!(p0, tmp.path().join("foo.dmg"));
+        std::fs::write(&p0, b"first").expect("write p0");
+
+        let p1 = unique_download_path(tmp.path(), "foo.dmg");
+        assert_eq!(p1, tmp.path().join("foo (1).dmg"));
+        std::fs::write(&p1, b"second").expect("write p1");
+
+        let p2 = unique_download_path(tmp.path(), "foo.dmg");
+        assert_eq!(p2, tmp.path().join("foo (2).dmg"));
+        assert_eq!(std::fs::read(&p0).expect("read p0"), b"first");
+        assert_eq!(std::fs::read(&p1).expect("read p1"), b"second");
+
+        let t0 = unique_download_path(tmp.path(), "app.tar.gz");
+        assert_eq!(t0, tmp.path().join("app.tar.gz"));
+        std::fs::write(&t0, b"tar0").expect("write t0");
+
+        let t1 = unique_download_path(tmp.path(), "app.tar.gz");
+        assert_eq!(t1, tmp.path().join("app (1).tar.gz"));
+        std::fs::write(&t1, b"tar1").expect("write t1");
+
+        let t2 = unique_download_path(tmp.path(), "app.tar.gz");
+        assert_eq!(t2, tmp.path().join("app (2).tar.gz"));
+    }
+
+    #[test]
+    fn dl01_happy_path_check_and_privacy_headers() {
+        let api_url = "https://api.github.com/repos/ad1-kamath/coursecraft/releases?per_page=20";
+        let current = semver::Version::new(0, 4, 2);
+        let http = FakeHttp::new(vec![Ok(ok_response(
+            V043_RELEASES_JSON.as_bytes().to_vec(),
+        ))]);
+
+        let outcome = check_for_update_with(&http, api_url, &current, "macos", "aarch64", false)
+            .expect("check succeeds");
+
+        let recorded = http.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].url, api_url);
+        assert_eq!(recorded[0].accept, "application/vnd.github+json");
+        assert_eq!(recorded[0].user_agent, "CourseCraft/0.4.2");
+        assert_eq!(recorded[0].kind, RequestKind::Metadata);
+        assert!(!recorded[0].user_agent.contains("macos"));
+        assert!(!recorded[0].user_agent.contains("aarch64"));
+
+        let CheckOutcome::Available(update) = outcome else {
+            panic!("expected CheckOutcome::Available");
+        };
+        assert_eq!(update.version, "0.4.3");
+        assert_eq!(update.current_version, "0.4.2");
+        assert_eq!(
+            update.release_url,
+            "https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.3"
+        );
+        assert!(update.notes_markdown.contains("Faster, lighter editor"));
+        assert_eq!(update.published_at.as_deref(), Some("2026-10-12T18:30:00Z"));
+        let asset = update.asset.expect("macOS asset matched");
+        assert_eq!(asset.name, "CourseCraft-0.4.3-macos.dmg");
+        assert_eq!(asset.size, 28_677_774);
+        assert_eq!(
+            asset.sha256_digest.as_deref(),
+            Some("f6caeb20ad874ade46c8bf992cb70e777d30ae273877667de6671b4acae051e3")
+        );
+
+        // Already at 0.4.3 -> UpToDate.
+        let http_up_to_date = FakeHttp::new(vec![Ok(ok_response(
+            V043_RELEASES_JSON.as_bytes().to_vec(),
+        ))]);
+        let same = check_for_update_with(
+            &http_up_to_date,
+            api_url,
+            &semver::Version::new(0, 4, 3),
+            "macos",
+            "aarch64",
+            false,
+        )
+        .expect("up to date check succeeds");
+        assert_eq!(same, CheckOutcome::UpToDate);
+
+        // Malformed html_url falls back to the canonical releases page.
+        let bad_url_json = br#"[{"tag_name":"v0.4.4","html_url":"http://evil.com/phish"}]"#;
+        let http_bad_url = FakeHttp::new(vec![Ok(ok_response(bad_url_json.to_vec()))]);
+        let fallback =
+            check_for_update_with(&http_bad_url, api_url, &current, "macos", "aarch64", false)
+                .expect("fallback check succeeds");
+        let CheckOutcome::Available(fallback_update) = fallback else {
+            panic!("expected Available with fallback URL");
+        };
+        assert_eq!(
+            fallback_update.release_url,
+            "https://github.com/ad1-kamath/coursecraft/releases"
+        );
+    }
+
+    #[test]
+    fn dl02_rate_limits_and_offline_errors() {
+        let api_url = "https://api.github.com/repos/ad1-kamath/coursecraft/releases?per_page=20";
+        let current = semver::Version::new(0, 4, 2);
+
+        // HTTP 403 with X-RateLimit-Remaining: 0 -> RateLimited.
+        let http_403_rl = FakeHttp::new(vec![Ok(status_response(403, Some(0)))]);
+        let err = check_for_update_with(&http_403_rl, api_url, &current, "macos", "aarch64", false)
+            .expect_err("403 rate limited");
+        assert_eq!(err, UpdateError::RateLimited);
+        assert!(!err.user_message().is_empty());
+
+        // HTTP 403 with remaining > 0 -> HttpStatus(403).
+        let http_403_plain = FakeHttp::new(vec![Ok(status_response(403, Some(10)))]);
+        let err = check_for_update_with(
+            &http_403_plain,
+            api_url,
+            &current,
+            "macos",
+            "aarch64",
+            false,
+        )
+        .expect_err("403 non-rate-limit");
+        assert_eq!(err, UpdateError::HttpStatus(403));
+        assert!(err.user_message().contains("403"));
+
+        // HTTP 429 -> RateLimited.
+        let http_429 = FakeHttp::new(vec![Ok(status_response(429, None))]);
+        let err = check_for_update_with(&http_429, api_url, &current, "macos", "aarch64", false)
+            .expect_err("429 rate limited");
+        assert_eq!(err, UpdateError::RateLimited);
+        assert!(!err.user_message().is_empty());
+
+        // Network failure -> UpdateError::Network with calm message.
+        let http_net = FakeHttp::new(vec![Err(UpdateError::Network(
+            "dns lookup failed: 127.0.0.1".to_string(),
+        ))]);
+        let err = check_for_update_with(&http_net, api_url, &current, "macos", "aarch64", false)
+            .expect_err("network error");
+        assert!(matches!(err, UpdateError::Network(_)));
+        assert!(!err.user_message().is_empty());
+        assert!(!err.user_message().contains("127.0.0.1"));
+
+        // Timeout -> UpdateError::Timeout with calm message.
+        let http_timeout = FakeHttp::new(vec![Err(UpdateError::Timeout)]);
+        let err =
+            check_for_update_with(&http_timeout, api_url, &current, "macos", "aarch64", false)
+                .expect_err("timeout error");
+        assert_eq!(err, UpdateError::Timeout);
+        assert!(!err.user_message().is_empty());
+
+        // Oversized API response (> MAX_API_RESPONSE_BYTES) -> InvalidResponse.
+        let mut oversized = vec![b' '; MAX_API_RESPONSE_BYTES + 1];
+        oversized[0] = b'[';
+        oversized[MAX_API_RESPONSE_BYTES] = b']';
+        let http_big = FakeHttp::new(vec![Ok(ok_response(oversized))]);
+        let err = check_for_update_with(&http_big, api_url, &current, "macos", "aarch64", false)
+            .expect_err("oversized api body");
+        assert_eq!(err, UpdateError::InvalidResponse);
+    }
+
+    #[test]
+    fn dl03_redirects_valid_and_hostile() {
+        let start_url =
+            "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft.dmg";
+        let payload = b"redirected-installer-bytes".to_vec();
+        let digest = sha256_hex(&payload);
+        let tmp = TempTestDir::new("dl03");
+
+        // 2 valid HTTPS redirects (origin-relative then scheme-relative to objects.githubusercontent.com).
+        let http_valid = FakeHttp::new(vec![
+            Ok(redirect_response(302, Some("/download/hop1"))),
+            Ok(redirect_response(
+                307,
+                Some("//objects.githubusercontent.com/assets/CourseCraft.dmg"),
+            )),
+            Ok(ok_response(payload.clone())),
+        ]);
+        let spec = DownloadSpec {
+            url: start_url,
+            expected_size: Some(payload.len() as u64),
+            expected_sha256: Some(&digest),
+            checksums_url: None,
+            dest_dir: tmp.path(),
+            filename: "CourseCraft.dmg",
+            user_agent: "CourseCraft/0.4.2",
+        };
+        let cancel = AtomicBool::new(false);
+        let result = download_asset_verified(&http_valid, &spec, &cancel, |_, _| {})
+            .expect("2 valid redirects succeed");
+        assert_eq!(result.bytes, payload.len() as u64);
+        assert!(result.sha256_verified);
+        assert_eq!(std::fs::read(&result.path).expect("read result"), payload);
+        let hops: Vec<String> = http_valid.recorded().into_iter().map(|r| r.url).collect();
+        assert_eq!(
+            hops,
+            vec![
+                start_url.to_string(),
+                "https://github.com/download/hop1".to_string(),
+                "https://objects.githubusercontent.com/assets/CourseCraft.dmg".to_string(),
+            ]
+        );
+
+        // HTTP downgrade rejected.
+        let http_downgrade = FakeHttp::new(vec![Ok(redirect_response(
+            302,
+            Some("http://objects.githubusercontent.com/assets/CourseCraft.dmg"),
+        ))]);
+        let err = follow_get_redirects(
+            &http_downgrade,
+            start_url,
+            "application/octet-stream",
+            "CourseCraft/0.4.2",
+            RequestKind::Download,
+        )
+        .err()
+        .expect("http downgrade rejected");
+        assert_eq!(err, UpdateError::DisallowedUrl);
+
+        // Disallowed host rejected without contacting evil.com.
+        let http_evil = FakeHttp::new(vec![Ok(redirect_response(
+            302,
+            Some("https://evil.com/CourseCraft.dmg"),
+        ))]);
+        let err = follow_get_redirects(
+            &http_evil,
+            start_url,
+            "application/octet-stream",
+            "CourseCraft/0.4.2",
+            RequestKind::Download,
+        )
+        .err()
+        .expect("disallowed redirect host rejected");
+        assert_eq!(err, UpdateError::DisallowedUrl);
+        assert_eq!(http_evil.recorded().len(), 1);
+
+        // Missing Location header rejected.
+        let http_missing_loc = FakeHttp::new(vec![Ok(redirect_response(302, None))]);
+        let err = follow_get_redirects(
+            &http_missing_loc,
+            start_url,
+            "application/octet-stream",
+            "CourseCraft/0.4.2",
+            RequestKind::Download,
+        )
+        .err()
+        .expect("missing location rejected");
+        assert_eq!(err, UpdateError::DisallowedUrl);
+
+        // > 5 hops (6 redirects) rejected with TooManyRedirects.
+        let http_loop = FakeHttp::new(vec![
+            Ok(redirect_response(302, Some("https://github.com/hop1"))),
+            Ok(redirect_response(302, Some("https://github.com/hop2"))),
+            Ok(redirect_response(302, Some("https://github.com/hop3"))),
+            Ok(redirect_response(302, Some("https://github.com/hop4"))),
+            Ok(redirect_response(302, Some("https://github.com/hop5"))),
+            Ok(redirect_response(302, Some("https://github.com/hop6"))),
+        ]);
+        let err = follow_get_redirects(
+            &http_loop,
+            start_url,
+            "application/octet-stream",
+            "CourseCraft/0.4.2",
+            RequestKind::Download,
+        )
+        .err()
+        .expect("too many redirects");
+        assert_eq!(err, UpdateError::TooManyRedirects);
+    }
+
+    #[test]
+    fn dl04_streaming_download_verifies_asset_digest() {
+        let tmp = TempTestDir::new("dl04");
+        let payload: Vec<u8> = (0..150_000_usize).map(|i| (i % 251) as u8).collect();
+        let digest = format!("sha256:{}", sha256_hex(&payload));
+        let http = FakeHttp::new(vec![Ok(ok_response(payload.clone()))]);
+        let spec = DownloadSpec {
+            url: "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-0.4.3-macos.dmg",
+            expected_size: Some(payload.len() as u64),
+            expected_sha256: Some(&digest),
+            checksums_url: None,
+            dest_dir: tmp.path(),
+            filename: "CourseCraft-0.4.3-macos.dmg",
+            user_agent: "CourseCraft/0.4.2",
+        };
+        let cancel = AtomicBool::new(false);
+        let mut progress_events = Vec::new();
+
+        let result = download_asset_verified(&http, &spec, &cancel, |done, total| {
+            progress_events.push((done, total));
+        })
+        .expect("verified download succeeds");
+
+        assert_eq!(result.path, tmp.path().join("CourseCraft-0.4.3-macos.dmg"));
+        assert_eq!(result.bytes, payload.len() as u64);
+        assert!(result.sha256_verified);
+        assert_eq!(std::fs::read(&result.path).expect("read file"), payload);
+        assert!(
+            progress_events.len() >= 2,
+            "expected multiple 64 KiB chunks"
+        );
+        assert_eq!(
+            progress_events.last().copied(),
+            Some((payload.len() as u64, Some(payload.len() as u64)))
+        );
+        let entries = tmp.entries();
+        assert_eq!(entries, vec!["CourseCraft-0.4.3-macos.dmg".to_string()]);
+    }
+
+    #[test]
+    fn dl05_fallback_sha256sums_verification() {
+        let tmp = TempTestDir::new("dl05");
+        let payload = b"installer-verified-via-sha256sums".to_vec();
+        let digest = sha256_hex(&payload);
+        let sums_body = format!(
+            "# CourseCraft checksums\n\
+             0000000000000000000000000000000000000000000000000000000000000000  other.exe\n\
+             {digest}  CourseCraft-v0.4.3-setup.exe\n"
+        );
+        let sums_url =
+            "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/SHA256SUMS.txt";
+        let asset_url = "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft-v0.4.3-setup.exe";
+
+        let http = FakeHttp::new(vec![
+            Ok(ok_response(sums_body.into_bytes())),
+            Ok(ok_response(payload.clone())),
+        ]);
+        let spec = DownloadSpec {
+            url: asset_url,
+            expected_size: Some(payload.len() as u64),
+            expected_sha256: None,
+            checksums_url: Some(sums_url),
+            dest_dir: tmp.path(),
+            filename: "CourseCraft-v0.4.3-setup.exe",
+            user_agent: "CourseCraft/0.4.2",
+        };
+        let cancel = AtomicBool::new(false);
+        let result = download_asset_verified(&http, &spec, &cancel, |_, _| {})
+            .expect("fallback SHA256SUMS download succeeds");
+        assert!(result.sha256_verified);
+        assert_eq!(result.bytes, payload.len() as u64);
+        assert_eq!(std::fs::read(&result.path).expect("read setup"), payload);
+
+        let recorded = http.recorded();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[0].kind, RequestKind::Checksums);
+        assert_eq!(recorded[1].kind, RequestKind::Download);
+
+        // Oversized SHA256SUMS.txt (> MAX_SUMS_BYTES) is rejected safely before downloading asset.
+        let tmp_big = TempTestDir::new("dl05-big");
+        let huge_sums = vec![b'a'; MAX_SUMS_BYTES + 1];
+        let http_big = FakeHttp::new(vec![Ok(ok_response(huge_sums))]);
+        let spec_big = DownloadSpec {
+            dest_dir: tmp_big.path(),
+            ..spec
+        };
+        let err = download_asset_verified(&http_big, &spec_big, &cancel, |_, _| {})
+            .expect_err("oversized SHA256SUMS rejected");
+        assert_eq!(err, UpdateError::InvalidResponse);
+        assert_eq!(http_big.recorded().len(), 1);
+        assert!(tmp_big.entries().is_empty());
+    }
+
+    #[test]
+    fn dl06_checksum_mismatch_truncated_and_oversized_cleanup() {
+        let asset_url =
+            "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft.dmg";
+        let cancel = AtomicBool::new(false);
+
+        // 1. Checksum mismatch removes `.part` and leaves no final file.
+        let tmp_bad_hash = TempTestDir::new("dl06-hash");
+        let payload = b"tampered-installer-payload".to_vec();
+        let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+        let http_hash = FakeHttp::new(vec![Ok(ok_response(payload.clone()))]);
+        let spec_hash = DownloadSpec {
+            url: asset_url,
+            expected_size: Some(payload.len() as u64),
+            expected_sha256: Some(wrong_hash),
+            checksums_url: None,
+            dest_dir: tmp_bad_hash.path(),
+            filename: "CourseCraft.dmg",
+            user_agent: "CourseCraft/0.4.2",
+        };
+        let err = download_asset_verified(&http_hash, &spec_hash, &cancel, |_, _| {})
+            .expect_err("checksum mismatch fails");
+        assert_eq!(err, UpdateError::ChecksumMismatch);
+        assert!(tmp_bad_hash.entries().is_empty());
+
+        // 2. Truncated stream (`downloaded < expected_size`) fails and removes `.part`.
+        let tmp_trunc = TempTestDir::new("dl06-trunc");
+        let short_body = b"only-half".to_vec();
+        let http_trunc = FakeHttp::new(vec![Ok(ok_response(short_body.clone()))]);
+        let spec_trunc = DownloadSpec {
+            url: asset_url,
+            expected_size: Some(100),
+            expected_sha256: None,
+            checksums_url: None,
+            dest_dir: tmp_trunc.path(),
+            filename: "CourseCraft.dmg",
+            user_agent: "CourseCraft/0.4.2",
+        };
+        let err = download_asset_verified(&http_trunc, &spec_trunc, &cancel, |_, _| {})
+            .expect_err("truncated download fails");
+        assert_eq!(err, UpdateError::DownloadTruncated);
+        assert!(tmp_trunc.entries().is_empty());
+
+        // 3. Oversized stream (`downloaded > expected_size`) fails and removes `.part`.
+        let tmp_over = TempTestDir::new("dl06-over");
+        let extra_body = vec![0xAB_u8; 200];
+        let http_over = FakeHttp::new(vec![Ok(HttpResponse {
+            status: 200,
+            location: None,
+            content_length: None,
+            rate_limit_remaining: Some(59),
+            body: Box::new(Cursor::new(extra_body)),
+        })]);
+        let spec_over = DownloadSpec {
+            url: asset_url,
+            expected_size: Some(100),
+            expected_sha256: None,
+            checksums_url: None,
+            dest_dir: tmp_over.path(),
+            filename: "CourseCraft.dmg",
+            user_agent: "CourseCraft/0.4.2",
+        };
+        let err = download_asset_verified(&http_over, &spec_over, &cancel, |_, _| {})
+            .expect_err("oversized stream fails");
+        assert_eq!(err, UpdateError::DownloadTooLarge);
+        assert!(tmp_over.entries().is_empty());
+
+        // 4. Expected size exceeding MAX_DOWNLOAD_BYTES fails immediately.
+        let tmp_huge = TempTestDir::new("dl06-huge");
+        let http_huge = FakeHttp::new(vec![]);
+        let spec_huge = DownloadSpec {
+            url: asset_url,
+            expected_size: Some(MAX_DOWNLOAD_BYTES + 1),
+            expected_sha256: None,
+            checksums_url: None,
+            dest_dir: tmp_huge.path(),
+            filename: "CourseCraft.dmg",
+            user_agent: "CourseCraft/0.4.2",
+        };
+        let err = download_asset_verified(&http_huge, &spec_huge, &cancel, |_, _| {})
+            .expect_err("over MAX_DOWNLOAD_BYTES fails");
+        assert_eq!(err, UpdateError::DownloadTooLarge);
+        assert!(http_huge.recorded().is_empty());
+        assert!(tmp_huge.entries().is_empty());
+    }
+
+    #[test]
+    fn dl07_mid_download_cancellation_removes_part() {
+        let tmp = TempTestDir::new("dl07");
+        let payload = vec![0x5A_u8; 256 * 1024];
+        let total = payload.len() as u64;
+        let reader = ChunkedReader {
+            data: payload,
+            pos: 0,
+            max_chunk: 64 * 1024,
+        };
+        let http = FakeHttp::new(vec![Ok(HttpResponse {
+            status: 200,
+            location: None,
+            content_length: Some(total),
+            rate_limit_remaining: Some(59),
+            body: Box::new(reader),
+        })]);
+        let spec = DownloadSpec {
+            url: "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft.dmg",
+            expected_size: Some(total),
+            expected_sha256: None,
+            checksums_url: None,
+            dest_dir: tmp.path(),
+            filename: "CourseCraft.dmg",
+            user_agent: "CourseCraft/0.4.2",
+        };
+        let cancel = AtomicBool::new(false);
+        let mut chunks_seen = 0_usize;
+
+        let err = download_asset_verified(&http, &spec, &cancel, |_done, _total| {
+            chunks_seen += 1;
+            if chunks_seen == 1 {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        })
+        .expect_err("mid-download cancel returns Err");
+
+        assert_eq!(err, UpdateError::Cancelled);
+        assert_eq!(chunks_seen, 1);
+        assert!(
+            tmp.entries().is_empty(),
+            "no .part or final file should remain after cancellation"
+        );
     }
 }
