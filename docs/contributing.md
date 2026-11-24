@@ -21,7 +21,8 @@
 ## Clean-room rules
 
 - Study other authoring tools for **behaviour only**: what happens when you click, the order triggers fire in. Design our own look and layout from `DESIGN.md`.
-- Never copy another product's code, player JS/CSS, icons, templates, fonts, characters or other assets (Articulate, Adobe or anyone else). Never decompile or unpack their players.
+- Never copy another product's code, player JS/CSS, icons, templates, fonts, characters or other assets from closed-source or commercial tools (Articulate, Adobe or any other). Never decompile or unpack their players.
+- **Open-source code is welcome** when its licence is compatible with ours (Apache-2.0 / MIT; for example the ArtCraft Crafting Apps such as DeckCraft). Keep the original copyright and licence notice on copied files, credit the source in the PR and the changelog, and check the licence first: GPL or other copyleft code can't come in without changing CourseCraft's licence.
 - Use our own names in the UI. Generic terms (layer, trigger, state, lightbox, seekbar) are fine; a competitor's coined terms are not (we renamed "Story view" to "Course map" and "Freeform" to "Custom question").
 - In docs, competitor names may describe comparable features ("what a Storyline author expects"), never "copied from" or "in the style of". The README carries the trademark notice.
 - Build parity test cases from courses **you made yourself**. Never use client or employer courses.
