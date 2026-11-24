@@ -242,3 +242,40 @@ fn clicking_bold_on_the_ribbon_keeps_the_text_being_edited_open() {
     h.click_at(bold);
     assert!(h.editor.ui.inline_edit.is_some(), "still editing");
 }
+
+#[test]
+fn the_ribbon_font_box_opens_the_inspectors_font_picker() {
+    let mut h = harness();
+    let font = text_format::state(&h.editor)
+        .and_then(|s| s.font)
+        .expect("the title has one font");
+    let ribbon = h.editor.ui.ribbon.rect;
+    let combo = h.find_text_in(&font, ribbon).expect("the Font box");
+    h.click_at(combo);
+    h.idle_frame();
+    assert!(
+        h.find_text("Search fonts").is_some(),
+        "the picker's search field"
+    );
+    assert!(
+        h.find_text("Add font…").is_some(),
+        "the picker's Add font… button"
+    );
+}
+
+#[test]
+fn the_ribbon_font_color_opens_the_full_colour_picker() {
+    let mut h = harness();
+    let ribbon = h.editor.ui.ribbon.rect;
+    let button = h
+        .find_icon(coursecraft_render::Icon::Palette)
+        .filter(|p| ribbon.contains(*p))
+        .expect("the ribbon's Font Color");
+    h.click_at(button);
+    h.idle_frame();
+    assert!(
+        h.find_text_containing("Eyedropper").is_some(),
+        "the picker's eyedropper"
+    );
+    assert!(h.find_text("Theme").is_some(), "the theme swatches");
+}

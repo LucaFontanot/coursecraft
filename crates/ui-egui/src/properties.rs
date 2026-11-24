@@ -1637,69 +1637,8 @@ pub(crate) fn color_swatch_picker(
         .id(popup_id)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            let max_h = (ui.ctx().content_rect().height() - 24.0).max(160.0);
-            egui::ScrollArea::vertical()
-                .id_salt((popup_id, "color_picker_scroll"))
-                .max_height(max_h)
-                .auto_shrink([true, true])
-                .show(ui, |ui| {
-                    ui.spacing_mut().slider_width = 220.0;
-                    let eyedropper = ui
-                        .add(
-                            egui::Button::new(coursecraft_render::icon_text(
-                                coursecraft_render::Icon::Target,
-                                "Eyedropper",
-                            ))
-                            .min_size(egui::vec2(120.0, 0.0)),
-                        )
-                        .on_hover_text("Pick a colour from anywhere in the window (Esc cancels)");
-                    if eyedropper.clicked() {
-                        egui::Popup::close_id(ui.ctx(), popup_id);
-                        crate::eyedropper::start_pick(ui.ctx(), field_key.clone());
-                    }
-                    ui.add_space(4.0);
-                    let palette: Vec<(String, String)> = ui
-                        .ctx()
-                        .data(|d| d.get_temp(palette_colors_id()))
-                        .unwrap_or_default();
-                    if let Some(hex) = swatch_row(ui, "Palette", &palette) {
-                        *color_hex = hex;
-                        pending = true;
-                        swatch_picked = true;
-                    }
-                    let theme: Vec<(String, String)> = ui
-                        .ctx()
-                        .data(|d| d.get_temp(theme_colors_id()))
-                        .unwrap_or_default();
-                    if let Some(hex) = swatch_row(ui, "Theme", &theme) {
-                        *color_hex = hex;
-                        pending = true;
-                        swatch_picked = true;
-                    }
-                    let recent: Vec<(String, String)> = recent_colors(ui.ctx())
-                        .into_iter()
-                        .map(|hex| (hex.clone(), hex))
-                        .collect();
-                    if let Some(hex) = swatch_row(ui, "Recent", &recent) {
-                        *color_hex = hex;
-                        pending = true;
-                        swatch_picked = true;
-                    }
-                    // "No fill" and an empty field have no colour to start from, and
-                    // dragging from invisible would stay invisible.
-                    let mut color = match parsed {
-                        Some(color) if color.a() > 0 || pending => color,
-                        _ => Color32::WHITE,
-                    };
-                    if egui::color_picker::color_picker_color32(
-                        ui,
-                        &mut color,
-                        egui::color_picker::Alpha::OnlyBlend,
-                    ) {
-                        *color_hex = color_to_hex(color);
-                        pending = true;
-                    }
-                });
+            swatch_picked |=
+                color_picker_body(ui, color_hex, parsed, popup_id, &field_key, &mut pending);
         });
     let picked = swatch_picked || (pending && !ui.input(|i| i.pointer.any_down()));
     if picked {
@@ -1708,6 +1647,87 @@ pub(crate) fn color_swatch_picker(
     }
     ui.data_mut(|d| d.insert_temp(pending_id, pending));
     picked
+}
+
+/// The inside of a colour popup: the eyedropper, the palette, theme and recent
+/// swatches, and the colour wheel. Shared by [`color_swatch_picker`] and the
+/// ribbon's Font Color. Returns true when a swatch was picked; dragging the
+/// wheel writes `color_hex` and sets `pending` until the pointer is released.
+/// The eyedropper closes the popup; its pick arrives through
+/// `eyedropper::take_pending(field_key)` on a later frame.
+pub(crate) fn color_picker_body(
+    ui: &mut Ui,
+    color_hex: &mut String,
+    parsed: Option<Color32>,
+    id_salt: egui::Id,
+    field_key: &str,
+    pending: &mut bool,
+) -> bool {
+    let mut swatch_picked = false;
+    let max_h = (ui.ctx().content_rect().height() - 24.0).max(160.0);
+    egui::ScrollArea::vertical()
+        .id_salt((id_salt, "color_picker_scroll"))
+        .max_height(max_h)
+        .auto_shrink([true, true])
+        .show(ui, |ui| {
+            ui.spacing_mut().slider_width = 220.0;
+            let eyedropper = ui
+                .add(
+                    egui::Button::new(coursecraft_render::icon_text(
+                        coursecraft_render::Icon::Target,
+                        "Eyedropper",
+                    ))
+                    .min_size(egui::vec2(120.0, 0.0)),
+                )
+                .on_hover_text("Pick a colour from anywhere in the window (Esc cancels)");
+            if eyedropper.clicked() {
+                ui.close();
+                crate::eyedropper::start_pick(ui.ctx(), field_key.to_owned());
+            }
+            ui.add_space(4.0);
+            let palette: Vec<(String, String)> = ui
+                .ctx()
+                .data(|d| d.get_temp(palette_colors_id()))
+                .unwrap_or_default();
+            if let Some(hex) = swatch_row(ui, "Palette", &palette) {
+                *color_hex = hex;
+                *pending = true;
+                swatch_picked = true;
+            }
+            let theme: Vec<(String, String)> = ui
+                .ctx()
+                .data(|d| d.get_temp(theme_colors_id()))
+                .unwrap_or_default();
+            if let Some(hex) = swatch_row(ui, "Theme", &theme) {
+                *color_hex = hex;
+                *pending = true;
+                swatch_picked = true;
+            }
+            let recent: Vec<(String, String)> = recent_colors(ui.ctx())
+                .into_iter()
+                .map(|hex| (hex.clone(), hex))
+                .collect();
+            if let Some(hex) = swatch_row(ui, "Recent", &recent) {
+                *color_hex = hex;
+                *pending = true;
+                swatch_picked = true;
+            }
+            // "No fill" and an empty field have no colour to start from, and
+            // dragging from invisible would stay invisible.
+            let mut color = match parsed {
+                Some(color) if color.a() > 0 || *pending => color,
+                _ => Color32::WHITE,
+            };
+            if egui::color_picker::color_picker_color32(
+                ui,
+                &mut color,
+                egui::color_picker::Alpha::OnlyBlend,
+            ) {
+                *color_hex = color_to_hex(color);
+                *pending = true;
+            }
+        });
+    swatch_picked
 }
 
 /// Most recent colours kept for the picker.

@@ -973,6 +973,16 @@ fn control(
             run(editor, item.action, &main, requests);
         }
     }
+    if item.action == Action::Text(spec::TextOp::Color)
+        && let Some(color) = crate::eyedropper::take_pending(
+            ui.ctx(),
+            &crate::eyedropper::field_key(&TEXT_COLOR_FIELD),
+        )
+    {
+        let hex = crate::properties::color_to_hex(color);
+        crate::properties::remember_color(ui.ctx(), &hex);
+        crate::text_format::apply(editor, &crate::text_format::Change::Color(hex));
+    }
     if let (Some(arrow), Action::Text(op)) = (&arrow, item.action) {
         let arrow = arrow.clone().on_hover_text(&tip);
         widgets::split_popup(&main, &arrow, op.has_menu() && enabled)
@@ -1064,6 +1074,9 @@ fn text_change(editor: &Editor, op: spec::TextOp) -> Option<crate::text_format::
     })
 }
 
+/// The eyedropper's name for the ribbon's Font Color.
+const TEXT_COLOR_FIELD: &str = "ribbon_text_color";
+
 /// The ▾ list of a text control; a pick applies at once.
 fn text_menu(editor: &mut Editor, ui: &mut Ui, op: spec::TextOp) {
     use crate::text_format::{Change, LINE_SPACINGS, SIZES, SPACINGS};
@@ -1082,25 +1095,38 @@ fn text_menu(editor: &mut Editor, ui: &mut Ui, op: spec::TextOp) {
             return;
         }
         TextOp::Font => {
-            let mut fonts = editor.ui.properties_lists.font_families.clone();
-            let theme = editor.session.course.theme.font.clone();
-            fonts.retain(|f| *f != theme);
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(tl!("Theme font"))
-                            .small()
-                            .color(coursecraft_render::palette(ui.ctx()).text_secondary),
-                    );
-                    let on = st.font.as_deref() == Some(theme.as_str());
-                    item(ui, &theme, on, Change::Font(theme.clone()));
-                    ui.separator();
-                    for font in fonts {
-                        let on = st.font.as_deref() == Some(font.as_str());
-                        item(ui, &font, on, Change::Font(font.clone()));
-                    }
-                });
+            // The inspector's font picker list: search, the course's fonts,
+            // recent and installed fonts, Add font….
+            use crate::font_picker::FontPickerAction;
+            let shown = st.font.clone().unwrap_or_default();
+            let mut requests = Vec::new();
+            let state = &mut editor.ui;
+            let action = crate::font_picker::show_font_list(
+                ui,
+                "ribbon_font",
+                &shown,
+                &state.properties_lists.font_families,
+                &mut state.properties.recent_fonts,
+                state.system_fonts.as_deref(),
+                &mut state.properties.system_fonts_list_requested,
+                &mut state.properties.system_font_search,
+                &mut requests,
+            );
+            match action {
+                Some(FontPickerAction::PickCourseOrRecent(name)) => {
+                    picked = Some(Change::Font(name));
+                }
+                Some(FontPickerAction::PickSystem(name)) => {
+                    requests.push(EditorRequest::AddSystemFont {
+                        family: name.clone(),
+                        apply: None,
+                    });
+                    picked = Some(Change::Font(name));
+                }
+                Some(FontPickerAction::AddFont) => requests.push(EditorRequest::PickFonts),
+                None => {}
+            }
+            editor.pending_requests.append(&mut requests);
         }
         TextOp::Size => {
             egui::ScrollArea::vertical()
@@ -1145,67 +1171,38 @@ fn text_menu(editor: &mut Editor, ui: &mut Ui, op: spec::TextOp) {
             }
         }
         TextOp::Color => {
-            let theme = &editor.session.course.theme;
-            let mut colors: Vec<(String, String)> = vec![
-                (tl!("Text").to_owned(), theme.text.0.clone()),
-                (tl!("Accent").to_owned(), theme.accent.0.clone()),
-                (tl!("Background").to_owned(), theme.background.0.clone()),
-            ];
-            colors.extend(
-                theme
-                    .palette
-                    .iter()
-                    .map(|c| (c.name.clone(), c.color.0.clone())),
+            // The inspector's colour picker: eyedropper, palette, theme and
+            // recent swatches, the colour wheel.
+            let pending_id = egui::Id::unique("ribbon_text_color_pending");
+            let (mut hex, mut pending) = ui
+                .ctx()
+                .data(|d| d.get_temp::<(String, bool)>(pending_id))
+                .filter(|(_, pending)| *pending)
+                .unwrap_or_else(|| (st.color.clone().unwrap_or_default(), false));
+            let parsed =
+                coursecraft_render::parse_color(&coursecraft_course::Color(hex.trim().to_owned()));
+            let swatch = crate::properties::color_picker_body(
+                ui,
+                &mut hex,
+                parsed,
+                pending_id,
+                &crate::eyedropper::field_key(&TEXT_COLOR_FIELD),
+                &mut pending,
             );
-            for (name, hex) in [
-                ("Black", "#000000"),
-                ("White", "#FFFFFF"),
-                ("Red", "#C00000"),
-                ("Orange", "#ED7D31"),
-                ("Yellow", "#FFC000"),
-                ("Green", "#00B050"),
-                ("Blue", "#0070C0"),
-                ("Purple", "#7030A0"),
-            ] {
-                colors.push((tl!(name).to_owned(), hex.to_owned()));
+            if swatch {
+                picked = Some(Change::Color(hex.clone()));
+                pending = false;
+            } else if pending && !ui.input(|i| i.pointer.any_down()) {
+                // A drag across the wheel is one change, applied on release;
+                // the popup stays open for another try.
+                crate::properties::remember_color(ui.ctx(), &hex);
+                crate::text_format::apply(editor, &Change::Color(hex.clone()));
+                pending = false;
             }
-            ui.horizontal_wrapped(|ui| {
-                ui.set_max_width(8.0 * 24.0);
-                for (name, hex) in colors {
-                    let fill =
-                        coursecraft_render::parse_color(&coursecraft_course::Color(hex.clone()))
-                            .unwrap_or(egui::Color32::TRANSPARENT);
-                    let (rect, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
-                    ui.painter().rect_filled(rect, 2.0, fill);
-                    let on = st
-                        .color
-                        .as_deref()
-                        .is_some_and(|c| c.eq_ignore_ascii_case(&hex));
-                    let p = coursecraft_render::palette(ui.ctx());
-                    let stroke = if on || resp.hovered() {
-                        p.accent
-                    } else {
-                        p.border
-                    };
-                    ui.painter().rect_stroke(
-                        rect,
-                        2.0,
-                        egui::Stroke::new(if on { 2.0 } else { 1.0 }, stroke),
-                        egui::StrokeKind::Inside,
-                    );
-                    if resp.on_hover_text(format!("{name} {hex}")).clicked() {
-                        picked = Some(Change::Color(hex.clone()));
-                    }
-                }
-            });
-            ui.separator();
-            if ui.button(tl!("More Colors…")).clicked() {
-                crate::panels::open_at(
-                    editor,
-                    crate::dock::Panel::Text,
-                    Some(crate::panels::Section::Font),
-                );
-                ui.close();
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(pending_id, (hex.clone(), pending)));
+            if swatch {
+                crate::properties::remember_color(ui.ctx(), &hex);
             }
         }
         _ => {}

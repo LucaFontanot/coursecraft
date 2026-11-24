@@ -149,7 +149,7 @@ Shown when the Course Map view tab is active.
 | | Focus Order | S | `ui:focusOrder` | 🟡 | focus order exists (`focus_order`); needs its own dialog |
 | | Duplicate | S | `slide.duplicate` | ✅ | |
 | Font ↘ | Text Styles | LS | `text_style.apply`, `text_style.create` | ✅ | ▾ course styles, New Style from Selection, Manage Styles… |
-| | Font family | C | `text.style_range` `{font}` | ✅ | ▾ theme font, then the course fonts; Add Font in the Text panel |
+| | Font family | C | `text.style_range` `{font}` | ✅ | ▾ the inspector's font picker (`font_picker::show_font_list`): search, the course's fonts, recent and installed fonts, Add font… |
 | | Font size | C | `text.style_range` `{size}` | ✅ | ▾ 8–96 |
 | | Grow Font / Shrink Font | S | `text.style_range` `{size}` | ✅ | next size in the list |
 | | Clear Formatting | S | `text.style_range` (reset) | ⛔ | |
@@ -159,7 +159,7 @@ Shown when the Course Map view tab is active.
 | | Character Spacing | SS | `text.style_range` `{letter_spacing}` | ✅ | ▾ Very Tight … Very Loose; exact value in the Text panel |
 | | Change Case | SS | — | ⛔ | Sentence, lower, UPPER, Capitalize, tOGGLE |
 | | Highlight | SS | `text.style_range` `{highlight}` (new field) | ⛔ | text runs have no highlight colour yet |
-| | Font Color | SS | `text.style_range` `{color}` | ✅ | ▾ theme and palette colours, standard colours; More Colors… opens the Text panel (picker, eyedropper) |
+| | Font Color | SS | `text.style_range` `{color}` | ✅ | ▾ the inspector's colour picker (`properties::color_picker_body`): eyedropper, palette, theme and recent swatches, colour wheel (one change per drag) |
 | | Spelling | S | `ui:spellCheck` | ✅ | `spell_check.rs` |
 | | ↘ Font | — | `UiAction::PanelAt(Text, Font)` | ✅ | opens the Text settings panel at Font ([panels.md](panels.md)) |
 | Paragraph ↘ | Bullets | SS | `text.set_paragraphs` `{list}` | ✅ | toggles on the paragraphs at the selection; bullet symbols in the Text panel |
