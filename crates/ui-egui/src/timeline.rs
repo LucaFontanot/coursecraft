@@ -431,6 +431,11 @@ impl TimelineState {
         if self.last_synced_selection.slide != selection.slide {
             self.object_rename = None;
         }
+        if self.last_synced_selection.slide != selection.slide
+            || self.last_synced_selection.layer != selection.layer
+        {
+            self.group_drag = None;
+        }
         self.last_synced_revision.set(revision);
         self.last_synced_selection = selection.clone();
 
@@ -1810,7 +1815,9 @@ fn render_object_rows(
         // While the group's bar is dragged, its members' bars show the shift too.
         let shift = group_drag_shift(editor, oid);
         let eff_start = shifted_ms(timing.start_ms, shift);
-        let eff_end = shifted_ms(timing.end_ms.unwrap_or(duration_ms), shift);
+        let eff_end = timing
+            .end_ms
+            .map_or(duration_ms, |end| shifted_ms(end, shift));
         let bar_x1 = ms_to_x(eff_start);
         let bar_x2 = ms_to_x(eff_end).max(bar_x1 + 6.0);
         let bar_rect = Rect::from_min_max(pos2(bar_x1, row_y + 4.0), pos2(bar_x2, row_y + 24.0));
@@ -1849,7 +1856,7 @@ fn render_object_rows(
             format_seconds(u64::from(eff_start)),
             timing
                 .end_ms
-                .map(|e| format_seconds(u64::from(e)))
+                .map(|e| format_seconds(u64::from(shifted_ms(e, shift))))
                 .unwrap_or_else(|| "end".to_owned())
         );
         ui.interact(
@@ -2112,7 +2119,9 @@ fn group_drag_shift(editor: &Editor, oid: &str) -> i64 {
 
 /// `ms` moved by `shift`, kept inside `u32`.
 fn shifted_ms(ms: u32, shift: i64) -> u32 {
-    (i64::from(ms) + shift).clamp(0, i64::from(u32::MAX)) as u32
+    i64::from(ms)
+        .saturating_add(shift)
+        .clamp(0, i64::from(u32::MAX)) as u32
 }
 
 /// The shifts that keep every member inside `0..=duration_ms`.
@@ -2127,11 +2136,14 @@ fn group_shift_limits(
     let mut max_delta = i64::MAX;
     for (_, timing) in members {
         let start = i64::from(timing.start_ms);
-        min_delta = min_delta.max(-start);
-        let room = match timing.end_ms {
-            Some(end) => duration - i64::from(end),
-            None => duration - i64::from(min_len_ms) - start,
+        let (lo, room) = match timing.end_ms {
+            Some(end) => {
+                let end = i64::from(end);
+                (-start.min(end), duration - end.max(start))
+            }
+            None => (-start, duration - i64::from(min_len_ms) - start),
         };
+        min_delta = min_delta.max(lo);
         max_delta = max_delta.min(room);
     }
     if members.is_empty() || max_delta < min_delta {
@@ -2141,12 +2153,22 @@ fn group_shift_limits(
 }
 
 /// The earliest start and latest end of the members, as drawn on the track.
-fn group_span(objects: &[CachedTimelineObject], members: &[usize], duration_ms: u32) -> (u32, u32) {
+/// Open-ended members (`end_ms: None`) remain pinned to `duration_ms` during a shift.
+fn group_span(
+    objects: &[CachedTimelineObject],
+    members: &[usize],
+    duration_ms: u32,
+    shift: i64,
+) -> (u32, u32) {
     let mut start = u32::MAX;
     let mut end = 0;
     for (_, _, timing, _) in members.iter().filter_map(|&i| objects.get(i)) {
-        start = start.min(timing.start_ms);
-        end = end.max(timing.end_ms.unwrap_or(duration_ms));
+        let s = shifted_ms(timing.start_ms, shift);
+        let e = timing
+            .end_ms
+            .map_or(duration_ms, |end_ms| shifted_ms(end_ms, shift));
+        start = start.min(s);
+        end = end.max(e);
     }
     if start == u32::MAX {
         return (0, 0);
@@ -2159,7 +2181,13 @@ fn handle_group_drag(editor: &mut Editor, ui: &Ui, duration_ms: u32, track_width
     if editor.ui.timeline.group_drag.is_none() {
         return;
     }
-    if ui.input(|i| i.key_pressed(Key::Escape)) {
+    // Consume Escape so cancelling a group bar drag does not also clear the canvas selection.
+    let escaped = ui.input_mut(|i| {
+        i.consume_key(egui::Modifiers::NONE, Key::Escape)
+            || i.consume_key(egui::Modifiers::SHIFT, Key::Escape)
+            || i.key_pressed(Key::Escape)
+    });
+    if escaped {
         editor.ui.timeline.group_drag = None;
         return;
     }
@@ -2472,7 +2500,6 @@ fn render_group_row(
     );
 
     let duration_ms = g.duration_ms.max(1);
-    let (span_start, span_end) = group_span(objects, members, g.duration_ms);
     let dragging_this = editor
         .ui
         .timeline
@@ -2486,10 +2513,11 @@ fn render_group_row(
         .as_ref()
         .filter(|drag| drag.group == group)
         .map_or(0, |drag| drag.delta_ms);
+    let (span_start, span_end) = group_span(objects, members, g.duration_ms, shift);
     let ms_to_x =
         |ms: u32| -> f32 { g.track_rect.min.x + (ms as f32 / duration_ms as f32) * g.track_width };
-    let x1 = ms_to_x(shifted_ms(span_start, shift));
-    let x2 = ms_to_x(shifted_ms(span_end, shift)).max(x1 + 6.0);
+    let x1 = ms_to_x(span_start);
+    let x2 = ms_to_x(span_end).max(x1 + 6.0);
     let bar_rect = Rect::from_min_max(pos2(x1, row_y + 7.0), pos2(x2, row_y + 21.0));
     editor
         .ui
@@ -2647,7 +2675,7 @@ const TIMELINE_MAX_ZOOM: f32 = 20.0;
 fn zoom_and_scroll_track(editor: &mut Editor, ui: &Ui, area: Rect, track: Rect) {
     let state = &mut editor.ui.timeline;
     let width = track.width();
-    if ui.rect_contains_pointer(area) && state.active_drag.is_none() {
+    if ui.rect_contains_pointer(area) && state.active_drag.is_none() && state.group_drag.is_none() {
         let (delta, scroll, pointer) = ui.input(|i| {
             (
                 i.zoom_delta(),
