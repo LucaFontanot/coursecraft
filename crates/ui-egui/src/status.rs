@@ -347,6 +347,49 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
             ui.label(coursecraft_render::small("Automation on").color(p.success))
                 .on_hover_text(format!("Port {port}"));
         }
+
+        // Slide size pill (right-aligned, hidden on ultra-narrow bars per RISK-05)
+        let slide_size = editor.session.course.slide_size;
+        let size_text = format!("{} × {} px", slide_size.w, slide_size.h);
+        let ratio = crate::slide_size_dialog::format_aspect_ratio(slide_size.w, slide_size.h);
+        let size_font = egui::TextStyle::Small.resolve(ui.style());
+        let size_galley = ui
+            .painter()
+            .layout_no_wrap(size_text, size_font, p.text_secondary);
+        let pill_w = 10.0 + size_galley.size().x + 10.0;
+        let pill_h = 24.0;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.available_width() >= pill_w.max(96.0) {
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(pill_w, pill_h), egui::Sense::click());
+                let bg = if resp.is_pointer_button_down_on() {
+                    p.pressed
+                } else if resp.hovered() {
+                    p.hover
+                } else {
+                    p.input
+                };
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(12), bg);
+                let text_pos = egui::pos2(
+                    rect.min.x + 10.0,
+                    rect.center().y - size_galley.size().y / 2.0,
+                );
+                ui.painter().galley(text_pos, size_galley, p.text_secondary);
+                if resp
+                    .on_hover_text(format!("Slide size ({ratio}) — click to change"))
+                    .clicked()
+                {
+                    editor.open_slide_size_dialog();
+                }
+            }
+            if editor.updates_available && editor.ui.update.has_available_hint() {
+                let hint_w = crate::update_dialog::status_bar_hint_width(ui);
+                if ui.available_width() >= hint_w + 8.0 {
+                    crate::update_dialog::show_status_bar_hint(editor, ui);
+                }
+            }
+        });
     });
 
     // Validation issues popup window
@@ -362,7 +405,7 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
             .audit_findings
             .iter()
             .any(|finding| finding.check == "alt-text");
-        Dialog::new("Check Course")
+        Dialog::new("Check course")
             .open(&mut editor.ui.show_validation_window)
             .default_size([500.0, 300.0])
             .resizable(true)
@@ -497,7 +540,7 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
 
     // Error history popup window
     if editor.ui.show_error_history_window {
-        Dialog::new("Error History")
+        Dialog::new("Error history")
             .open(&mut editor.ui.show_error_history_window)
             .default_size([500.0, 300.0])
             .resizable(true)
@@ -516,7 +559,7 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
     if let Some(ref report) = editor.ui.pptx_import_report.clone() {
         let mut open = true;
         let mut dismissed = false;
-        Dialog::new("PowerPoint Import Report")
+        Dialog::new("PowerPoint import report")
             .open(&mut open)
             .default_size([450.0, 220.0])
             .resizable(true)

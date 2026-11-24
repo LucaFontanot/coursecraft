@@ -1,4 +1,4 @@
-//! The docked panel workspace (M30 step 1): default arrangement, drawing, and
+//! The docked panel workspace (M37 step 1): default arrangement, drawing, and
 //! layout changes through the workspace.
 
 use craft_ui::docking::{Action, Placement};

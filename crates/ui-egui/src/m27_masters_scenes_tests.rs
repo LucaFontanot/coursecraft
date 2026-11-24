@@ -742,7 +742,7 @@ fn d9_9_shared_library_templates_requests_and_delete_confirm() {
         .expect("toolbar caret");
     h.click_at(caret);
     h.idle_frame();
-    let del_btn = h.find_text("Delete").expect("Delete button");
+    let del_btn = h.find_text_last("Delete").expect("Delete button");
     h.click_at(del_btn);
     h.idle_frame();
     let cancel_btn = h.find_text("Cancel").expect("Cancel button");
@@ -754,7 +754,7 @@ fn d9_9_shared_library_templates_requests_and_delete_confirm() {
     );
 
     // Delete -> Confirm emits DeleteLibraryTemplate.
-    let del_btn = h.find_text("Delete").expect("Delete button");
+    let del_btn = h.find_text_last("Delete").expect("Delete button");
     h.click_at(del_btn);
     h.idle_frame();
     let confirm_btn = h.find_text("Confirm").expect("Confirm button");

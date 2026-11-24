@@ -86,3 +86,110 @@ fn huge_frame_numbers_do_not_panic_and_the_course_still_validates() {
         }
     }
 }
+
+fn assert_hostile_frame_parity(frame: serde_json::Value) {
+    let mut s = hello();
+    let before_json = s.course.to_json().expect("before json");
+    let before_rev = s.revision;
+    match add_rect(&mut s, frame.clone()) {
+        Err(_) => {
+            assert_eq!(
+                s.course.to_json().expect("rollback json"),
+                before_json,
+                "failed hostile frame {frame} must roll back byte-identically"
+            );
+            assert!(s.undo_names().is_empty());
+            assert!(s.redo_names().is_empty());
+            assert_eq!(s.revision, before_rev);
+        }
+        Ok(_) => {
+            let after_json = s.course.to_json().expect("after json");
+            let after_undo_names: Vec<String> =
+                s.undo_names().into_iter().map(str::to_owned).collect();
+            let expected_names: Vec<&str> = after_undo_names.iter().map(String::as_str).collect();
+            assert_eq!(after_undo_names.len(), 1);
+            assert!(s.redo_names().is_empty());
+            assert_eq!(s.revision, before_rev + 1);
+
+            s.undo().expect("undo hostile frame");
+            assert_eq!(
+                s.course.to_json().expect("undone json"),
+                before_json,
+                "undo after hostile frame {frame} must restore byte-identical JSON"
+            );
+            assert!(s.undo_names().is_empty());
+            assert_eq!(s.redo_names(), expected_names);
+            assert_eq!(s.revision, before_rev + 2);
+
+            s.redo().expect("redo hostile frame");
+            assert_eq!(
+                s.course.to_json().expect("redone json"),
+                after_json,
+                "redo after hostile frame {frame} must restore byte-identical JSON"
+            );
+            assert_eq!(s.undo_names(), expected_names);
+            assert!(s.redo_names().is_empty());
+            assert_eq!(s.revision, before_rev + 3);
+        }
+    }
+}
+
+/// DF-04: Byte-identical JSON, undo/redo name lists, and revision parity on
+/// failed commands, empty undo/redo, and hostile huge/negative frames.
+#[test]
+fn df_04_failed_and_hostile_commands_byte_identical_parity() {
+    let mut s = hello();
+    let baseline_json = s.course.to_json().expect("baseline json");
+    let baseline_rev = s.revision;
+
+    // Empty undo and redo fail without altering course JSON, history names, or revision.
+    assert_eq!(s.undo(), Err(crate::EngineError::NothingTo("undo")));
+    assert_eq!(s.redo(), Err(crate::EngineError::NothingTo("redo")));
+    assert_eq!(
+        s.course.to_json().expect("after empty undo/redo"),
+        baseline_json
+    );
+    assert!(s.undo_names().is_empty());
+    assert!(s.redo_names().is_empty());
+    assert_eq!(s.revision, baseline_rev);
+
+    // Failed mutating commands roll back byte-identically with no history or revision change.
+    assert!(
+        s.execute(
+            "object.delete",
+            &json!({ "slide": "s-intro", "object": "missing-id" })
+        )
+        .is_err()
+    );
+    assert!(
+        s.execute(
+            "trigger.add",
+            &json!({
+                "slide": "s-intro",
+                "trigger": {
+                    "action": { "action": "show_layer", "layer": "ghost-layer" },
+                    "when": { "event": "submit" }
+                }
+            })
+        )
+        .is_err()
+    );
+    assert_eq!(
+        s.course.to_json().expect("after failed cmds"),
+        baseline_json
+    );
+    assert!(s.undo_names().is_empty());
+    assert!(s.redo_names().is_empty());
+    assert_eq!(s.revision, baseline_rev);
+
+    // Hostile huge/negative frames: either cleanly rejected with byte-identical rollback,
+    // or accepted with byte-identical undo/redo roundtrips.
+    for frame in [
+        json!({ "x": 1e38, "y": 1e38, "w": 1e38, "h": 1e38 }),
+        json!({ "x": -1e38, "y": -1e38, "w": 1e30, "h": 1e30 }),
+        json!({ "x": 0.0, "y": 0.0, "w": -50.0, "h": -50.0 }),
+        json!({ "x": -1000.0, "y": -1000.0, "w": 200.0, "h": 100.0 }),
+    ] {
+        assert_hostile_frame_parity(frame);
+    }
+}

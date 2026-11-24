@@ -161,8 +161,8 @@ fn a_missing_model_says_so_and_offers_open_ai_settings() {
     );
     assert!(h.find_text("Generate").is_none(), "nothing can be sent");
     let button = h
-        .find_text("Open AI Settings")
-        .expect("Open AI Settings button");
+        .find_text("Open AI settings")
+        .expect("Open AI settings button");
     let requests = click_for_requests(&mut h, button);
     assert!(
         !requests

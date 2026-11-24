@@ -183,3 +183,45 @@ fn walker_and_xliff_agree_on_a_rich_states_course_with_extras() {
     assert!(xliff.iter().any(|t| t == "Extra alt"));
     assert_eq!(walked, xliff, "walker and XLIFF disagree on state extras");
 }
+
+#[test]
+fn walker_and_xliff_agree_on_a_course_with_glossary() {
+    let course: Course = serde_json::from_value(json!({
+        "schema_version": 1,
+        "id": "glossary-parity",
+        "title": "Glossary Parity",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "scene-1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide 1",
+                "objects": []
+            }]
+        }],
+        "glossary": [
+            {
+                "id": "g1",
+                "term": "SCORM",
+                "definition": "Sharable Content Object Reference Model."
+            },
+            {
+                "id": "g2",
+                "term": "XLIFF",
+                "definition": "XML Localization Interchange File Format."
+            }
+        ]
+    }))
+    .expect("valid course");
+
+    let xliff = xliff_texts(&course);
+    let walked = walker_texts(&course);
+    assert!(xliff.iter().any(|t| t == "SCORM"));
+    assert!(
+        xliff
+            .iter()
+            .any(|t| t == "XML Localization Interchange File Format.")
+    );
+    assert_eq!(walked, xliff, "walker and XLIFF disagree on glossary");
+}

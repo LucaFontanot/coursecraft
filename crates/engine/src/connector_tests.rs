@@ -728,3 +728,48 @@ fn big_slide_reroutes_quickly() {
         "rerouting a 2200-object slide took {elapsed:?}"
     );
 }
+
+/// DF-03: Moving a shape with a glued connector reroutes the connector in the
+/// same undo step; undo and redo restore byte-identical JSON.
+#[test]
+fn df_03_glued_connector_reroute_undo_redo_byte_identical() {
+    let mut s = Session::blank("Connectors DF-03");
+    let target = add_shape(&mut s, 200.0, 100.0, 100.0, 80.0);
+    let connector = add_connector(&mut s, &target, 3);
+    let before_json = s.course.to_json().expect("before json");
+    let before_end = endpoint(&s, &connector);
+
+    s.execute(
+        "object.set_frame",
+        &json!({
+            "slide": "slide1",
+            "object": target,
+            "frame": { "x": 360.0, "y": 220.0, "w": 100.0, "h": 80.0 }
+        }),
+    )
+    .expect("move shape");
+    let moved_end = endpoint(&s, &connector);
+    assert_near(moved_end, site(&s, &target, 3));
+    assert!(
+        (moved_end.x - before_end.x).abs() > 1.0 || (moved_end.y - before_end.y).abs() > 1.0,
+        "connector endpoint should move with shape"
+    );
+    let after_json = s.course.to_json().expect("after json");
+    assert_ne!(after_json, before_json);
+
+    s.undo().expect("undo");
+    assert_eq!(
+        s.course.to_json().expect("undone json"),
+        before_json,
+        "undo must restore byte-identical shape and original connector points"
+    );
+    assert_near(endpoint(&s, &connector), before_end);
+
+    s.redo().expect("redo");
+    assert_eq!(
+        s.course.to_json().expect("redone json"),
+        after_json,
+        "redo must restore byte-identical moved shape and rerouted connector points"
+    );
+    assert_near(endpoint(&s, &connector), moved_end);
+}

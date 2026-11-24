@@ -13,7 +13,7 @@ An open-source, clean-room alternative to Articulate Storyline 360, written in p
 The sample course "Healthy Habits at Work" was built entirely with `coursecraft-cli` commands; its pictures were made with AI. Tap or click any picture below to see it full size.
 
 <details>
-<summary><b>All screenshots (17)</b></summary>
+<summary><b>All screenshots (18)</b></summary>
 <br>
 <table>
 <tr><td width="50%" align="center"><a href="docs/screenshots/editor.jpg"><img src="docs/screenshots/editor.jpg" alt="The editor"></a><br><sub>The editor</sub></td><td width="50%" align="center"><a href="docs/screenshots/editor-dark-light.jpg"><img src="docs/screenshots/editor-dark-light.jpg" alt="Dark and light themes"></a><br><sub>Dark and light themes</sub></td></tr>
@@ -24,7 +24,7 @@ The sample course "Healthy Habits at Work" was built entirely with `coursecraft-
 <tr><td width="50%" align="center"><a href="docs/screenshots/triggers-dark-light.jpg"><img src="docs/screenshots/triggers-dark-light.jpg" alt="Triggers, dark and light"></a><br><sub>Triggers, dark and light</sub></td><td width="50%" align="center"><a href="docs/screenshots/steps-dark-light.jpg"><img src="docs/screenshots/steps-dark-light.jpg" alt="Process steps, dark and light"></a><br><sub>Process steps, dark and light</sub></td></tr>
 <tr><td width="50%" align="center"><a href="docs/screenshots/player-title.jpg"><img src="docs/screenshots/player-title.jpg" alt="Learner player"></a><br><sub>Learner player</sub></td><td width="50%" align="center"><a href="docs/screenshots/player-flip-cards.jpg"><img src="docs/screenshots/player-flip-cards.jpg" alt="Flip cards"></a><br><sub>Flip cards</sub></td></tr>
 <tr><td width="50%" align="center"><a href="docs/screenshots/player-quiz.jpg"><img src="docs/screenshots/player-quiz.jpg" alt="A quiz question"></a><br><sub>A quiz question</sub></td><td width="50%" align="center"><a href="docs/screenshots/player-menu.jpg"><img src="docs/screenshots/player-menu.jpg" alt="Slide menu"></a><br><sub>Slide menu</sub></td></tr>
-<tr><td width="50%" align="center"><a href="docs/screenshots/player-finish.jpg"><img src="docs/screenshots/player-finish.jpg" alt="Finish slide"></a><br><sub>Finish slide</sub></td></tr>
+<tr><td width="50%" align="center"><a href="docs/screenshots/player-finish.jpg"><img src="docs/screenshots/player-finish.jpg" alt="Finish slide"></a><br><sub>Finish slide</sub></td><td width="50%" align="center"><a href="docs/screenshots/slide-size-dark-light.jpg"><img src="docs/screenshots/slide-size-dark-light.jpg" alt="Slide size, dark and light"></a><br><sub>Slide size, dark and light</sub></td></tr>
 </table>
 </details>
 
@@ -50,7 +50,10 @@ Built to the conventions of the [ArtCraft](https://github.com/storytold) Craftin
 ## What it does
 
 - **A visual editor** on the desktop and in the browser: multi-select, align and distribute, smart guides, grouping, copy and paste, slide masters, layouts and templates, find and replace, image crop, a timeline, and PowerPoint import.
-- **Interactive courses:** layers, states, triggers, variables, animation, and twelve question types with feedback, question banks and results slides.
+- **Interactive courses:** layers, triggers, variables, animation, and twelve question types with feedback, question banks and results slides.
+- **Rich object states:** hover, pressed, selected, visited and your own states, each a full second look for an object (picture, text, fill, outline, shadow, glow, rotation and items of its own), all side by side in the States tab and edited right on the canvas.
+- **Any slide size:** Full HD, HD, 4:3, square or portrait, or your own; resize a whole course with a live preview of how content fits.
+- **A calm, consistent editor** in dark and light, checked screen by screen against the same UI rules, and a learner player with a seekbar you can lock and a Play button before a web course starts.
 - **Publish from the editor** (desktop) to SCORM 1.2, SCORM 2004 4th edition, cmi5, xAPI or LTI 1.3, with validation and accessibility checks first.
 - **Teams and automation:** keep a project as a folder in git, see changes in plain words with `coursecraft-cli diff`, run one script over many courses, and let an AI agent drive the editor through the same commands you use. See [docs/cli.md](docs/cli.md) and [docs/git.md](docs/git.md).
 - **Accessible output:** keyboard use, screen reader support, captions, and translation through XLIFF.

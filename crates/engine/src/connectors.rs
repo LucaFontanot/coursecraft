@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use coursecraft_course::{
-    Course, Glue, Object, ObjectKind, Point, Rect, connector_site, path_frame_and_points,
+    Course, Glue, Object, ObjectKind, Point, Rect, Slide, connector_site, path_frame_and_points,
     route_connector,
 };
 
@@ -18,6 +18,14 @@ const SITE_EPSILON: f32 = 1.0;
 struct Target {
     frame: Rect,
     connector: bool,
+}
+
+/// Re-route every glued connector whose target moved inside one slide and its layers.
+pub(crate) fn reroute_connectors_in_slide(slide: &mut Slide) {
+    reroute_owner(&mut slide.objects);
+    for layer in &mut slide.layers {
+        reroute_owner(&mut layer.objects);
+    }
 }
 
 /// Re-route every glued connector whose target moved, in every slide and layer.
@@ -38,10 +46,7 @@ pub fn reroute_connectors(course: &mut Course) {
                 .flat_map(|bank| bank.slides.iter_mut()),
         )
     {
-        reroute_owner(&mut slide.objects);
-        for layer in &mut slide.layers {
-            reroute_owner(&mut layer.objects);
-        }
+        reroute_connectors_in_slide(slide);
     }
 }
 

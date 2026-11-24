@@ -2,6 +2,86 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.4.5
+
+Groups are easier to work with on the timeline, and the code underneath is tidier.
+
+**Timeline** (part of issue #8):
+- A group now shows as a **folder row** above its members. Click the arrow, or double-click the name, to collapse or expand it; this only changes your view, not the course.
+- Drag the folder row's bar to move all the members' timing together (snaps to 100 ms, 10 ms with Shift, Escape cancels). It's one undo step.
+- The eye and lock on the folder row show, hide, lock or unlock every member at once.
+
+**Under the hood:**
+- Media is tracked in one place, so new kinds of media can't be missed when saving, publishing or checking a course.
+- Publishing shares media instead of copying it, and the command code is split into smaller files by area. Nothing changes in how CourseCraft works or what it saves.
+
+## 0.4.4
+
+CourseCraft is now much lighter on low-end computers, and it can tell you when an update is out.
+
+**Faster everyday editing** (measured on a 300-slide test course):
+- **Undo and redo: 3× faster** (8.8 ms → 2.9 ms), and inserting an interaction and undoing it went from 3.3 ms to 1.2 ms. Each edit now re-checks only what it changed instead of the whole course.
+- **Moving between slides with pictures: about 7× faster** (3.3 ms → 0.44 ms). Pictures are decoded at the size they're shown, and the same picture used on many slides is kept in memory only once.
+- **Check Spelling's Ignore: about 16× faster** (9.3 ms → 0.56 ms).
+- **Published courses and Preview no longer redraw when nothing moves**, so a learner reading a slide uses almost no CPU or battery. They still wake for timers, media, animations and clicks.
+- Saving in the background (autosave) no longer pauses the editor; opening and publishing big courses use much less memory; text, shapes and slides are cached instead of redrawn every frame; the published player is smaller.
+- New **Performance mode** in Preferences (Auto, Standard, Lite). Lite uses less memory on weak computers and never changes how a published course looks.
+
+**Check for updates** (thanks to aplannersguide for the idea):
+- **Help → Check for updates…** shows the new version and what's new in it. CourseCraft can also check quietly once a day; turn that off in Preferences.
+- **Download update** picks the right file for your computer, checks it's complete and genuine, and shows it in your Downloads folder. CourseCraft only asks GitHub for the version list and sends nothing about you.
+- Each release now includes `SHA256SUMS.txt`.
+
+## 0.4.3
+
+Big courses are now much lighter and faster, and the menus are tidier.
+
+**Faster, lighter editor** (measured on a 300-slide test course):
+- **Undo memory: about 250 times smaller.** Each edit used to keep a full copy of the course for undo; now it keeps only what changed. 200 edits used +392 MB before and +1.6 MB now; on a course full of pictures and objects, +1.9 GB before and well under 1 MB now.
+- **Editing is faster:** 200 edits took 397 ms before and 278 ms now (2.1 s → 1.1 s on the picture-heavy course), and undo or redo itself is instant.
+- **The slide list only draws what you can see.** It used to redraw all 300 thumbnails every frame; now it redraws none while you're just looking, and only the one slide you change. An idle frame takes about a third of the time it did.
+
+**Easier to find things:**
+- New **Preview** menu with Preview this slide, **Preview from here** (Cmd+F12 on macOS, Ctrl+F12 elsewhere), Preview selected slides and Preview whole course.
+- **File → Import** gathers PowerPoint, course from document, slides from outline, questions from a spreadsheet, translation (XLIFF), media files and fonts; **File → Export** sits next to it.
+- Tooltips show the keyboard shortcut for every button and menu item that has one.
+- Hovering a greyed-out button tells you why it's unavailable.
+- Labels use sentence case everywhere, and each action has one name in every place it appears.
+
+## 0.4.2
+
+An urgent update that fixes ways to lose work, crashes and a wrong LMS result. Please update.
+
+**Your work is safer:**
+- **Ctrl+S saves** (Cmd+S on macOS). Ctrl+Shift+S is Save As, Ctrl+O opens and Ctrl+N starts a new course; they're shown in the File menu and in Keyboard shortcuts.
+- In the web editor, New, Open, examples, templates and PowerPoint import ask before replacing a course with unsaved changes.
+- Opening a `.ccraft` file through the MCP server (for AI agents) keeps its pictures and media, so saving no longer writes the file without them.
+
+**Fixes:**
+- **LMS results:** with SCORM 1.2 and a "Report status as" choice, a pass or completion that was already reported is never replaced by a later fail or lower score, in the same session or after resuming.
+- Publishing works when a state's picture is empty; Check Course warns about it.
+- The editor no longer crashes when inserting an input or interaction on a very small slide, or using Fit to content on a very tall scroll panel, and many similar edge cases are now safe.
+- **Last visited slide** no longer bounces between the same two slides.
+- Publishing from the web editor no longer freezes the browser tab and shows its progress.
+
+## 0.4.1
+
+**New: change a course's slide size** (thanks to PhilOB). A redesigned **Slide size** dialog has presets for Full HD, HD, 16:10, 4:3, square and portrait, or your own size, with an aspect-ratio lock. Choose **Scale to fit**, **Fill slide** or **Keep as is**, and a live preview shows where the content lands and how many objects would end up outside the slide before you apply. **Use as default for new courses** makes any size the starting size. Resizing now scales everything, including states and the items inside them. Open it from the File or Slide menu, the Course tab, Course settings, or the size shown in the status bar. Check Course warns about any object left completely outside the slide.
+
+**New, small things:**
+- The glossary is included in Find and Replace, Spell Check and translation (XLIFF), and can be sorted A to Z.
+- **Show all** and **Unlock all** in the timeline and the View menu, each undone in one step.
+
+**Fixes:**
+- Reset overrides on a state no longer deletes the items inside it.
+- In a published web course, web objects and videos no longer cover the Play button, the menu or the end screen, and keyboard shortcuts wait until the learner starts.
+- A pressed button keeps its gradient or picture fill.
+- Renaming the state you are editing keeps you in that state.
+- The Timer uses a state's text style.
+- Items inside a rotated or flipped object are placed, edited and rotated correctly.
+- Dragging the seekbar to the end counts as watching the slide, so Next stays unlocked.
+- The Seekbar setting is greyed out, with a reason, when the player bar or seekbar is off.
+
 ## 0.4.0
 
 **New: rich object states.** States grow from a colour swap into a full second look for an object. Thanks to Noe for the feedback that shaped this.

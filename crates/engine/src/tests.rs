@@ -453,27 +453,27 @@ fn undo_names_follow_commands_and_move_with_undo_redo() {
     assert!(s.redo_names().is_empty());
 
     ok(&mut s, "course.set_title", json!({ "title": "B" }));
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
     assert!(s.redo_names().is_empty());
 
     // A no-change command adds no name.
     ok(&mut s, "course.set_title", json!({ "title": "B" }));
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
 
     ok(&mut s, "slide.add", json!({ "title": "Slide 2" }));
-    assert_eq!(s.undo_names(), vec!["New Slide", "Course Title"]);
+    assert_eq!(s.undo_names(), vec!["New slide", "Course title"]);
 
     s.undo().expect("undo 1");
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
-    assert_eq!(s.redo_names(), vec!["New Slide"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
+    assert_eq!(s.redo_names(), vec!["New slide"]);
 
     s.undo().expect("undo 2");
     assert!(s.undo_names().is_empty());
-    assert_eq!(s.redo_names(), vec!["Course Title", "New Slide"]);
+    assert_eq!(s.redo_names(), vec!["Course title", "New slide"]);
 
     s.redo().expect("redo 1");
-    assert_eq!(s.undo_names(), vec!["Course Title"]);
-    assert_eq!(s.redo_names(), vec!["New Slide"]);
+    assert_eq!(s.undo_names(), vec!["Course title"]);
+    assert_eq!(s.redo_names(), vec!["New slide"]);
 }
 
 #[test]
@@ -486,14 +486,14 @@ fn execute_batch_uses_first_changing_step_label_and_named_batch_overrides() {
         ("scene.add".to_string(), json!({ "title": "Scene 2" })),
     ];
     s.execute_batch(&steps).expect("batch");
-    assert_eq!(s.undo_names(), vec!["New Slide"]);
+    assert_eq!(s.undo_names(), vec!["New slide"]);
 
     s.execute_batch_named(
         "Import deck",
         &[("slide.add".to_string(), json!({ "title": "Slide 3" }))],
     )
     .expect("named batch");
-    assert_eq!(s.undo_names(), vec!["Import deck", "New Slide"]);
+    assert_eq!(s.undo_names(), vec!["Import deck", "New slide"]);
 }
 
 #[test]
@@ -2817,6 +2817,13 @@ fn panic_hunt() {
         json!({ "name": "", "value": null }),
         json!({ "name": "x y", "value": [] }),
         json!({ "slide": "slide1", "question": { "kind": "multiple_choice", "prompt": "", "choices": [] } }),
+        json!({ "w": 1e308, "h": -5, "mode": "scale" }),
+        json!({ "w": 1e308, "h": -5, "mode": "fill" }),
+        json!({ "w": 7680, "h": 4320, "mode": "scale" }),
+        json!({ "w": 7680, "h": 4320, "mode": "fill" }),
+        json!({ "w": 100, "h": 4320, "mode": "fill" }),
+        json!({ "w": 7680, "h": 4320, "mode": 123 }),
+        json!({ "w": 0, "h": 0, "mode": "keep" }),
     ];
     for cmd in registry() {
         for p in &hostile {
@@ -2827,6 +2834,42 @@ fn panic_hunt() {
                     s.course, before,
                     "{} changed the course on error with {p}",
                     cmd.id
+                );
+            }
+        }
+    }
+
+    // M31-10: tiny and huge slide sizes across all insert commands.
+    let insert_cmds: &[(&str, serde_json::Value)] = &[
+        (
+            "object.add",
+            json!({
+                "slide": "slide1",
+                "kind": { "type": "rectangle" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+            }),
+        ),
+        ("question.insert", json!({ "slide": "slide1" })),
+        (
+            "interaction.insert",
+            json!({ "slide": "slide1", "kind": "tabs" }),
+        ),
+        (
+            "interaction.insert",
+            json!({ "slide": "slide1", "kind": "accordion" }),
+        ),
+        ("results.insert", json!({ "after": "slide1" })),
+        ("certificate.insert", json!({ "after": "slide1" })),
+    ];
+    for (w, h) in [(1u32, 1u32), (10, 10), (8192, 8192)] {
+        for (cmd_id, params) in insert_cmds {
+            let mut s = Session::blank("T");
+            s.course.slide_size = coursecraft_course::Size { w, h };
+            let before = s.course.clone();
+            if s.execute(cmd_id, params).is_err() {
+                assert_eq!(
+                    s.course, before,
+                    "{cmd_id} on {w}x{h} changed the course on error"
                 );
             }
         }
@@ -8233,6 +8276,51 @@ fn set_slide_size_scale_uses_one_factor_and_centres_everything() {
 }
 
 #[test]
+fn set_slide_size_fill_uses_max_factor_and_centres_overhang() {
+    // A-01: 1280x720 -> 1000x1000 with "fill" uses factor = max(1000/1280, 1000/720) = 1000/720.
+    let mut s = sized_course();
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 0, "y": 0, "w": 1280, "h": 720 }
+        }),
+    );
+    let before = s.course.to_json().unwrap();
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 1000, "h": 1000, "mode": "fill" }),
+    );
+    let f = (1000.0_f32 / 1280.0_f32).max(1000.0_f32 / 720.0_f32);
+    let dx = (1000.0 - 1280.0 * f) / 2.0;
+    let dy = (1000.0 - 720.0 * f) / 2.0;
+    assert!(dx < 0.0);
+    assert!(dy.abs() < 0.001);
+
+    let slide = s.course.slide("slide1").unwrap();
+    let bg = slide.object("bg").unwrap().0;
+    assert_eq!(bg.frame.x, dx.round());
+    assert_eq!(bg.frame.y, 0.0);
+    assert_eq!(bg.frame.w, (1280.0 * f).round());
+    assert_eq!(bg.frame.h, 1000.0);
+    let left_overhang = -bg.frame.x;
+    let right_overhang = bg.frame.x + bg.frame.w - 1000.0;
+    assert!((left_overhang - right_overhang).abs() <= 1.0);
+
+    let t = slide.object("t").unwrap().0;
+    assert_eq!(t.frame.x, (100.0 * f + dx).round());
+    assert_eq!(t.frame.y, (200.0 * f).round());
+    assert_eq!(t.frame.w, (400.0 * f).round());
+    assert_no_errors(&s);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+}
+
+#[test]
 fn set_slide_size_checks_bounds_mode_and_noop() {
     let mut s = sized_course();
     for p in [
@@ -8265,6 +8353,646 @@ fn set_slide_size_checks_bounds_mode_and_noop() {
         json!({ "w": 7680, "h": 4320, "mode": "scale" }),
     );
     assert_no_errors(&s);
+}
+
+fn build_test_state_with_all_extras() -> coursecraft_course::StateDef {
+    let base_text_style = coursecraft_course::TextStyle {
+        size: 20.0,
+        letter_spacing: 4.0,
+        insets: Some(coursecraft_course::TextInsets {
+            left: 4.0,
+            top: 6.0,
+            right: 8.0,
+            bottom: 10.0,
+        }),
+        ..coursecraft_course::TextStyle::default()
+    };
+    let base_runs = vec![coursecraft_course::TextRun {
+        text: "Hi".to_owned(),
+        bold: None,
+        italic: None,
+        underline: None,
+        strikethrough: None,
+        baseline: None,
+        letter_spacing: Some(2.0),
+        size: Some(16.0),
+        color: None,
+        link: None,
+        font: None,
+    }];
+    let base_paragraphs = vec![coursecraft_course::Paragraph {
+        space_before: 10.0,
+        space_after: 20.0,
+        bullet_size: Some(12.0),
+        ..coursecraft_course::Paragraph::default()
+    }];
+    let base_outline = coursecraft_course::Outline {
+        color: coursecraft_course::Color("#112233".to_owned()),
+        width: 4.0,
+        dash: coursecraft_course::DashStyle::Solid,
+        dash_pattern: None,
+        join: coursecraft_course::LineJoin::Miter,
+        miter_limit: None,
+    };
+    let base_shadow = coursecraft_course::Shadow {
+        color: coursecraft_course::Color("#00000080".to_owned()),
+        offset_x: 6.0,
+        offset_y: -8.0,
+        blur: 12.0,
+    };
+    let base_glow = coursecraft_course::Glow {
+        color: coursecraft_course::Color("#FFCC00".to_owned()),
+        size: 10.0,
+    };
+    let base_shape_text = coursecraft_course::ShapeText {
+        text: "Hi".to_owned(),
+        style: base_text_style.clone(),
+        runs: base_runs.clone(),
+        paragraphs: base_paragraphs.clone(),
+        autofit: coursecraft_course::Autofit::None,
+    };
+    let path_struct = coursecraft_course::Path {
+        points: vec![
+            coursecraft_course::PathPoint { x: 0.0, y: 0.0 },
+            coursecraft_course::PathPoint { x: 1.0, y: 1.0 },
+        ],
+        style: coursecraft_course::PathStyle::Straight,
+        closed: true,
+        subpaths: vec![],
+        fill: Some(coursecraft_course::Color("#AABBCC".to_owned())),
+        fill_style: None,
+        outline: base_outline.clone(),
+        start_end: coursecraft_course::LineEnd::None,
+        end_end: coursecraft_course::LineEnd::None,
+        connector: None,
+        start_glue: None,
+        end_glue: None,
+        text: Some(base_shape_text.clone()),
+    };
+    coursecraft_course::StateDef {
+        name: "Hover".to_owned(),
+        outline: Some(base_outline.clone()),
+        text_style: Some(base_text_style.clone()),
+        runs: Some(base_runs.clone()),
+        paragraphs: Some(base_paragraphs.clone()),
+        shadow: Some(base_shadow.clone()),
+        glow: Some(base_glow.clone()),
+        extras: vec![
+            coursecraft_course::StateExtra {
+                id: "ex_shape".to_owned(),
+                name: "Badge".to_owned(),
+                kind: coursecraft_course::StateExtraKind::Shape {
+                    shape: coursecraft_course::ShapeKind::Ellipse,
+                    fill: coursecraft_course::Color("#FF0000".to_owned()),
+                    fill_style: None,
+                    outline: Some(base_outline.clone()),
+                    text: Some(base_shape_text),
+                    adjust: vec![],
+                },
+                frame: coursecraft_course::Rect {
+                    x: -10.0,
+                    y: -20.0,
+                    w: 40.0,
+                    h: 30.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: Some(base_shadow),
+                glow: Some(base_glow),
+            },
+            coursecraft_course::StateExtra {
+                id: "ex_img".to_owned(),
+                name: "Icon".to_owned(),
+                kind: coursecraft_course::StateExtraKind::Image {
+                    src: "media/icon.png".to_owned(),
+                    alt: String::new(),
+                    crop: None,
+                    outline: Some(base_outline.clone()),
+                    shape: None,
+                },
+                frame: coursecraft_course::Rect {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 24.0,
+                    h: 24.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: None,
+                glow: None,
+            },
+            coursecraft_course::StateExtra {
+                id: "ex_txt".to_owned(),
+                name: "Tag".to_owned(),
+                kind: coursecraft_course::StateExtraKind::Text {
+                    text: "Hi".to_owned(),
+                    style: base_text_style,
+                    runs: base_runs,
+                    paragraphs: base_paragraphs,
+                    autofit: coursecraft_course::Autofit::None,
+                    outline: Some(base_outline),
+                },
+                frame: coursecraft_course::Rect {
+                    x: 0.0,
+                    y: 4.0,
+                    w: 60.0,
+                    h: 20.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: None,
+                glow: None,
+            },
+            coursecraft_course::StateExtra {
+                id: "ex_path".to_owned(),
+                name: "Arrow".to_owned(),
+                kind: coursecraft_course::StateExtraKind::Path { path: path_struct },
+                frame: coursecraft_course::Rect {
+                    x: 8.0,
+                    y: 12.0,
+                    w: 50.0,
+                    h: 50.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: None,
+                glow: None,
+            },
+        ],
+        ..coursecraft_course::StateDef::default()
+    }
+}
+
+fn assert_scaled_state_def(st: &coursecraft_course::StateDef) {
+    assert_eq!(st.outline.as_ref().unwrap().width, 6.0);
+    let ts = st.text_style.as_ref().unwrap();
+    assert_eq!(ts.size, 30.0);
+    assert_eq!(ts.letter_spacing, 6.0);
+    let ins = ts.insets.unwrap();
+    assert_eq!(
+        (ins.left, ins.top, ins.right, ins.bottom),
+        (6.0, 9.0, 12.0, 15.0)
+    );
+    assert_eq!(st.runs.as_ref().unwrap()[0].size, Some(24.0));
+    assert_eq!(st.runs.as_ref().unwrap()[0].letter_spacing, Some(3.0));
+    assert_eq!(st.paragraphs.as_ref().unwrap()[0].space_before, 15.0);
+    assert_eq!(st.paragraphs.as_ref().unwrap()[0].space_after, 30.0);
+    assert_eq!(st.paragraphs.as_ref().unwrap()[0].bullet_size, Some(18.0));
+    let sh = st.shadow.as_ref().unwrap();
+    assert_eq!((sh.offset_x, sh.offset_y, sh.blur), (9.0, -12.0, 18.0));
+    assert_eq!(st.glow.as_ref().unwrap().size, 15.0);
+}
+
+fn assert_scaled_state_extras(extras: &[coursecraft_course::StateExtra]) {
+    let ex0 = &extras[0];
+    assert_eq!(
+        ex0.frame,
+        coursecraft_course::Rect {
+            x: -15.0,
+            y: -30.0,
+            w: 60.0,
+            h: 45.0
+        }
+    );
+    assert_eq!(ex0.shadow.as_ref().unwrap().blur, 18.0);
+    assert_eq!(ex0.glow.as_ref().unwrap().size, 15.0);
+    if let coursecraft_course::StateExtraKind::Shape { outline, text, .. } = &ex0.kind {
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+        let t = text.as_ref().unwrap();
+        assert_eq!(t.style.size, 30.0);
+        assert_eq!(t.runs[0].letter_spacing, Some(3.0));
+        assert_eq!(t.paragraphs[0].bullet_size, Some(18.0));
+    } else {
+        panic!("expected shape extra");
+    }
+    if let coursecraft_course::StateExtraKind::Image { outline, .. } = &extras[1].kind {
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+    } else {
+        panic!("expected image extra");
+    }
+    if let coursecraft_course::StateExtraKind::Text {
+        style,
+        runs,
+        paragraphs,
+        outline,
+        ..
+    } = &extras[2].kind
+    {
+        assert_eq!(style.size, 30.0);
+        assert_eq!(style.letter_spacing, 6.0);
+        assert_eq!(runs[0].size, Some(24.0));
+        assert_eq!(paragraphs[0].bullet_size, Some(18.0));
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+    } else {
+        panic!("expected text extra");
+    }
+    if let coursecraft_course::StateExtraKind::Path { path } = &extras[3].kind {
+        assert_eq!(path.outline.width, 6.0);
+        assert_eq!(path.text.as_ref().unwrap().style.size, 30.0);
+    } else {
+        panic!("expected path extra");
+    }
+}
+
+fn assert_scaled_state_and_extras(st: &coursecraft_course::StateDef) {
+    assert_scaled_state_def(st);
+    assert_scaled_state_extras(&st.extras);
+}
+
+#[test]
+fn set_slide_size_scale_scales_states_and_state_extras() {
+    // A-02 (scale mode): rich-states fixture + synthetic fixture covering StateDef & all 4 StateExtraKind variants.
+    let rich_json = include_str!("../../../examples/rich-states/course.json");
+    let rich_course = coursecraft_course::Course::from_json(rich_json).unwrap();
+    let mut rich = Session::new(rich_course);
+    let rich_before = rich.course.to_json().unwrap();
+    ok(
+        &mut rich,
+        "course.set_slide_size",
+        json!({ "w": 1920, "h": 1080, "mode": "scale" }),
+    );
+    assert_no_errors(&rich);
+    rich.undo().unwrap();
+    assert_eq!(rich.course.to_json().unwrap(), rich_before);
+
+    // Non-16:9 target (1280x720 -> 1920x1620 => factor=1.5, dy=270.0) verifies parent-relative
+    // StateExtra.frame scales by factor without adding +dy.
+    let mut s = sized_course();
+    s.course.scenes[0].slides[0].objects[0]
+        .states
+        .push(build_test_state_with_all_extras());
+    let before = s.course.to_json().unwrap();
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 1920, "h": 1620, "mode": "scale" }),
+    );
+    let st = &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t")
+        .unwrap()
+        .0
+        .states[0];
+    assert_scaled_state_and_extras(st);
+    assert_no_errors(&s);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+
+    // "fill" mode on 1280x720 -> 1440x1080 => factor=max(1.125, 1.5)=1.5, dx=-240.0, dy=0.0.
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 1440, "h": 1080, "mode": "fill" }),
+    );
+    let st_fill = &s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object("t")
+        .unwrap()
+        .0
+        .states[0];
+    assert_scaled_state_and_extras(st_fill);
+    assert_no_errors(&s);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+}
+
+fn populate_missed_base_fields(s: &mut Session, crop: coursecraft_course::CropRect) {
+    let outline = coursecraft_course::Outline {
+        color: coursecraft_course::Color("#112233".to_owned()),
+        width: 4.0,
+        dash: coursecraft_course::DashStyle::Solid,
+        dash_pattern: None,
+        join: coursecraft_course::LineJoin::Miter,
+        miter_limit: None,
+    };
+    let text_style = coursecraft_course::TextStyle {
+        size: 20.0,
+        letter_spacing: 4.0,
+        insets: Some(coursecraft_course::TextInsets {
+            left: 2.0,
+            top: 4.0,
+            right: 6.0,
+            bottom: 8.0,
+        }),
+        ..coursecraft_course::TextStyle::default()
+    };
+    let runs = vec![coursecraft_course::TextRun {
+        text: "Ab".to_owned(),
+        bold: None,
+        italic: None,
+        underline: None,
+        strikethrough: None,
+        baseline: None,
+        letter_spacing: Some(2.0),
+        size: Some(16.0),
+        color: None,
+        link: None,
+        font: None,
+    }];
+    let paragraphs = vec![coursecraft_course::Paragraph {
+        space_before: 8.0,
+        space_after: 12.0,
+        bullet_size: Some(14.0),
+        ..coursecraft_course::Paragraph::default()
+    }];
+    if let ObjectKind::Text {
+        style,
+        runs: r,
+        paragraphs: p,
+        outline: o,
+        ..
+    } = &mut s.course.scenes[0].slides[0].objects[0].kind
+    {
+        *style = text_style.clone();
+        *r = runs.clone();
+        *p = paragraphs.clone();
+        *o = Some(outline.clone());
+    }
+    let slide = &mut s.course.scenes[0].slides[0];
+    let mut base_obj = slide.objects[0].clone();
+    base_obj.shadow = None;
+    base_obj.motion_paths.clear();
+    slide.objects.push(coursecraft_course::Object {
+        id: "img1".to_owned(),
+        name: "Image".to_owned(),
+        kind: ObjectKind::Image {
+            src: "media/a.png".to_owned(),
+            alt: String::new(),
+            crop: Some(crop),
+            outline: Some(outline.clone()),
+            shape: None,
+        },
+        frame: coursecraft_course::Rect {
+            x: 10.0,
+            y: 10.0,
+            w: 100.0,
+            h: 100.0,
+        },
+        ..base_obj.clone()
+    });
+    slide.objects.push(coursecraft_course::Object {
+        id: "path1".to_owned(),
+        name: "Path".to_owned(),
+        kind: ObjectKind::Path {
+            path: coursecraft_course::Path {
+                points: vec![
+                    coursecraft_course::PathPoint { x: 0.0, y: 0.0 },
+                    coursecraft_course::PathPoint { x: 1.0, y: 1.0 },
+                ],
+                style: coursecraft_course::PathStyle::Straight,
+                closed: true,
+                subpaths: vec![],
+                fill: Some(coursecraft_course::Color("#112233".to_owned())),
+                fill_style: None,
+                outline,
+                start_end: coursecraft_course::LineEnd::None,
+                end_end: coursecraft_course::LineEnd::None,
+                connector: None,
+                start_glue: None,
+                end_glue: None,
+                text: Some(coursecraft_course::ShapeText {
+                    text: "Ab".to_owned(),
+                    style: text_style.clone(),
+                    runs: runs.clone(),
+                    paragraphs: paragraphs.clone(),
+                    autofit: coursecraft_course::Autofit::None,
+                }),
+            },
+        },
+        frame: coursecraft_course::Rect {
+            x: 10.0,
+            y: 10.0,
+            w: 100.0,
+            h: 100.0,
+        },
+        ..base_obj.clone()
+    });
+    slide.objects.push(coursecraft_course::Object {
+        id: "timer1".to_owned(),
+        name: "Timer".to_owned(),
+        kind: ObjectKind::Timer {
+            duration_ms: 10_000,
+            format: coursecraft_course::TimerFormat::MmSs,
+            autostart: true,
+            style: text_style.clone(),
+        },
+        frame: coursecraft_course::Rect {
+            x: 10.0,
+            y: 10.0,
+            w: 100.0,
+            h: 40.0,
+        },
+        ..base_obj.clone()
+    });
+    slide.objects.push(coursecraft_course::Object {
+        id: "marker1".to_owned(),
+        name: "Marker".to_owned(),
+        kind: ObjectKind::Marker {
+            title: "M".to_owned(),
+            body: "Ab".to_owned(),
+            runs,
+            paragraphs: paragraphs.clone(),
+            icon: coursecraft_course::MarkerIcon::Info,
+            color: None,
+        },
+        frame: coursecraft_course::Rect {
+            x: 10.0,
+            y: 10.0,
+            w: 32.0,
+            h: 32.0,
+        },
+        ..base_obj
+    });
+    s.course
+        .text_styles
+        .push(coursecraft_course::NamedTextStyle {
+            id: "body".to_owned(),
+            name: "Body".to_owned(),
+            style: text_style,
+            paragraphs: Some(paragraphs[0].clone()),
+        });
+}
+
+fn assert_scaled_missed_base_fields(s: &Session, crop: coursecraft_course::CropRect) {
+    let sl = s.course.slide("slide1").unwrap();
+    if let ObjectKind::Text {
+        style,
+        runs,
+        paragraphs,
+        outline,
+        ..
+    } = &sl.object("t").unwrap().0.kind
+    {
+        assert_eq!(style.letter_spacing, 6.0);
+        let ins = style.insets.unwrap();
+        assert_eq!(
+            (ins.left, ins.top, ins.right, ins.bottom),
+            (3.0, 6.0, 9.0, 12.0)
+        );
+        assert_eq!(runs[0].letter_spacing, Some(3.0));
+        assert_eq!(paragraphs[0].bullet_size, Some(21.0));
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+    } else {
+        panic!("expected text");
+    }
+    if let ObjectKind::Image {
+        crop: c, outline, ..
+    } = &sl.object("img1").unwrap().0.kind
+    {
+        assert_eq!(c.unwrap(), crop);
+        assert_eq!(outline.as_ref().unwrap().width, 6.0);
+    } else {
+        panic!("expected image");
+    }
+    assert_scaled_path_timer_marker_and_named(s, sl);
+}
+
+fn assert_scaled_path_timer_marker_and_named(s: &Session, sl: &coursecraft_course::Slide) {
+    if let ObjectKind::Path { path } = &sl.object("path1").unwrap().0.kind {
+        let pt = path.text.as_ref().unwrap();
+        assert_eq!(pt.style.size, 30.0);
+        assert_eq!(pt.style.letter_spacing, 6.0);
+        assert_eq!(pt.runs[0].letter_spacing, Some(3.0));
+        assert_eq!(pt.paragraphs[0].bullet_size, Some(21.0));
+    } else {
+        panic!("expected path");
+    }
+    if let ObjectKind::Timer { style, .. } = &sl.object("timer1").unwrap().0.kind {
+        assert_eq!(style.size, 30.0);
+        assert_eq!(style.letter_spacing, 6.0);
+        assert_eq!(style.insets.unwrap().left, 3.0);
+    } else {
+        panic!("expected timer");
+    }
+    if let ObjectKind::Marker {
+        runs, paragraphs, ..
+    } = &sl.object("marker1").unwrap().0.kind
+    {
+        assert_eq!(runs[0].size, Some(24.0));
+        assert_eq!(runs[0].letter_spacing, Some(3.0));
+        assert_eq!(paragraphs[0].bullet_size, Some(21.0));
+    } else {
+        panic!("expected marker");
+    }
+    let named = &s.course.text_styles[0];
+    assert_eq!(named.style.letter_spacing, 6.0);
+    assert_eq!(named.style.insets.unwrap().bottom, 12.0);
+    assert_eq!(named.paragraphs.as_ref().unwrap().bullet_size, Some(21.0));
+}
+
+#[test]
+fn set_slide_size_scale_scales_previously_missed_base_fields() {
+    // A-03: Text.outline, Image.outline (crop untouched), Path.text, Timer.style,
+    // Marker.runs/paragraphs, TextStyle.{letter_spacing, insets}, TextRun.letter_spacing,
+    // Paragraph.bullet_size, and NamedTextStyle.{letter_spacing, insets, bullet_size}.
+    for mode in ["scale", "fill"] {
+        let mut s = sized_course();
+        let crop = coursecraft_course::CropRect {
+            x: 0.1,
+            y: 0.2,
+            w: 0.5,
+            h: 0.6,
+        };
+        populate_missed_base_fields(&mut s, crop);
+        ok(
+            &mut s,
+            "course.set_slide_size",
+            json!({ "w": 1920, "h": 1080, "mode": mode }),
+        );
+        assert_scaled_missed_base_fields(&s, crop);
+        assert_no_errors(&s);
+    }
+}
+
+#[test]
+fn set_slide_size_extreme_aspects_and_clamps_stay_valid() {
+    // A-04 (scale, fill, and keep modes + RISK-02 clamps)
+    for (w, h) in [(100, 4320), (7680, 100)] {
+        for mode in ["scale", "fill", "keep"] {
+            let mut s = sized_course();
+            let before = s.course.to_json().unwrap();
+            ok(
+                &mut s,
+                "course.set_slide_size",
+                json!({ "w": w, "h": h, "mode": mode }),
+            );
+            assert_no_errors(&s);
+            s.undo().unwrap();
+            assert_eq!(s.course.to_json().unwrap(), before);
+        }
+    }
+
+    // Extreme scale factor (100x100 -> 7680x4320, factor = 43.2) clamps frame w/h, coords, motion points, and guides.
+    let mut s = sized_course();
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 100, "h": 100, "mode": "scale" }),
+    );
+    s.course.scenes[0].slides[0].objects[0].frame = coursecraft_course::Rect {
+        x: 90_000.0,
+        y: -90_000.0,
+        w: 90_000.0,
+        h: 90_000.0,
+    };
+    s.course.scenes[0].slides[0].objects[0].motion_paths[0].points = vec![
+        coursecraft_course::Point {
+            x: 90_000.0,
+            y: -90_000.0,
+        },
+        coursecraft_course::Point {
+            x: 95_000.0,
+            y: 95_000.0,
+        },
+    ];
+    s.course.editor.guides.push(coursecraft_course::Guide {
+        vertical: true,
+        at: 90_000.0,
+    });
+    let before = s.course.to_json().unwrap();
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 7680, "h": 4320, "mode": "scale" }),
+    );
+    assert_no_errors(&s);
+    let obj = s.course.slide("slide1").unwrap().object("t").unwrap().0;
+    assert_eq!(obj.frame.x, 100_000.0);
+    assert_eq!(obj.frame.y, -100_000.0);
+    assert_eq!(obj.frame.w, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
+    assert_eq!(obj.frame.h, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
+    assert_eq!(obj.motion_paths[0].points[0].x, 100_000.0);
+    assert_eq!(obj.motion_paths[0].points[0].y, -100_000.0);
+    assert_eq!(s.course.editor.guides[0].at, 100_000.0);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
+
+    // Extreme "fill" factor (100x100 -> 7680x4320, factor = 76.8) also clamps and round-trips.
+    ok(
+        &mut s,
+        "course.set_slide_size",
+        json!({ "w": 7680, "h": 4320, "mode": "fill" }),
+    );
+    assert_no_errors(&s);
+    let obj_fill = s.course.slide("slide1").unwrap().object("t").unwrap().0;
+    assert_eq!(obj_fill.frame.x, 100_000.0);
+    assert_eq!(obj_fill.frame.y, -100_000.0);
+    assert_eq!(obj_fill.frame.w, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
+    assert_eq!(obj_fill.frame.h, coursecraft_course::MAX_OBJECT_FRAME_SIZE);
+    s.undo().unwrap();
+    assert_eq!(s.course.to_json().unwrap(), before);
 }
 
 #[test]
@@ -8593,6 +9321,53 @@ fn glossary_commands_add_update_move_remove_with_undo() {
     assert_eq!(s.course.glossary.len(), 1);
     s.undo().unwrap();
     assert_eq!(s.course.glossary.len(), 2);
+}
+
+#[test]
+fn glossary_sort_sorts_case_insensitively_with_undo_and_skips_when_already_sorted() {
+    // C-05: glossary.sort sorts ["Zebra", "alpha", "Beta"] -> ["alpha", "Beta", "Zebra"]
+    // in one undo step, and sets skip_undo = true when already sorted.
+    let mut s = Session::blank("Glossary Sort");
+    ok(&mut s, "glossary.add", json!({ "term": "Zebra" }));
+    ok(&mut s, "glossary.add", json!({ "term": "alpha" }));
+    ok(&mut s, "glossary.add", json!({ "term": "Beta" }));
+
+    let before: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(before, vec!["Zebra", "alpha", "Beta"]);
+
+    ok(&mut s, "glossary.sort", json!({}));
+    let sorted: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(sorted, vec!["alpha", "Beta", "Zebra"]);
+
+    // Sorting an already-sorted list is a no-op with skip_undo = true,
+    // so edit.undo still undoes the earlier sort in one step.
+    ok(&mut s, "glossary.sort", json!({}));
+    assert_eq!(
+        s.course
+            .glossary
+            .iter()
+            .map(|g| g.term.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "Beta", "Zebra"]
+    );
+
+    s.undo().unwrap();
+    let undone: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(undone, vec!["Zebra", "alpha", "Beta"]);
+
+    s.redo().unwrap();
+    let redone: Vec<String> = s.course.glossary.iter().map(|g| g.term.clone()).collect();
+    assert_eq!(redone, vec!["alpha", "Beta", "Zebra"]);
+
+    // On a fresh already-sorted session, glossary.sort pushes nothing to the undo stack.
+    let mut s2 = Session::blank("Already Sorted");
+    ok(&mut s2, "glossary.add", json!({ "term": "Alpha" }));
+    ok(&mut s2, "glossary.add", json!({ "term": "Beta" }));
+    s2.execute("glossary.sort", &json!({})).unwrap();
+    assert_eq!(s2.course.glossary.len(), 2);
+    // Undoing now undoes the second glossary.add rather than an empty sort step.
+    s2.undo().unwrap();
+    assert_eq!(s2.course.glossary.len(), 1);
 }
 
 #[test]
@@ -9855,5 +10630,2192 @@ fn text_style_range_toggles_cleanly_and_undo_restores_exact_runs() {
             other => panic!("{other:?}"),
         };
         assert_eq!(after_undo, baseline_runs, "undo must restore exact runs");
+    }
+}
+
+#[test]
+fn course_find_and_replace_on_glossary_entries() {
+    let mut s = Session::blank("Glossary Replace");
+    ok(
+        &mut s,
+        "glossary.add",
+        json!({
+            "id": "g1",
+            "term": "Acme Token",
+            "definition": "An Acme security token."
+        }),
+    );
+
+    let found = ok(&mut s, "course.find", json!({ "query": "Acme" }));
+    assert_eq!(found["hits"].as_array().unwrap().len(), 2);
+
+    let replaced = ok(
+        &mut s,
+        "course.replace",
+        json!({ "query": "Acme", "replacement": "CourseCraft" }),
+    );
+    assert_eq!(replaced["replaced"], 2);
+    assert_eq!(s.course.glossary[0].term, "CourseCraft Token");
+    assert_eq!(
+        s.course.glossary[0].definition,
+        "An CourseCraft security token."
+    );
+
+    // One undo step restores both term and definition.
+    s.undo().unwrap();
+    assert_eq!(s.course.glossary[0].term, "Acme Token");
+    assert_eq!(s.course.glossary[0].definition, "An Acme security token.");
+
+    // RISK-09: replacing a glossary term with "" would violate validation, so it must fail
+    // cleanly without mutating the course.
+    let err = s
+        .execute(
+            "course.replace",
+            &json!({ "query": "Acme Token", "replacement": "" }),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("glossary term is empty"), "{err}");
+    assert_eq!(s.course.glossary[0].term, "Acme Token");
+    assert_eq!(s.course.glossary[0].definition, "An Acme security token.");
+}
+
+/// L-01: Every command `label` and `menu` leaf in `REGISTRY` uses sentence case,
+/// with zero empty labels and the expected command count.
+#[test]
+fn registry_labels_and_menu_leaves_use_sentence_case() {
+    const ALLOWED_CAPS: &[&str] = &[
+        "CourseCraft",
+        "PowerPoint",
+        "PPTX",
+        "Word",
+        "PDF",
+        "MP4",
+        "CSV",
+        "XLIFF",
+        "SCORM",
+        "LTI",
+        "xAPI",
+        "cmi5",
+        "HTML5",
+        "AI",
+        "Lottie",
+        "GitHub",
+        "Inter",
+        "OK",
+        "ID",
+        "A–Z",
+        "Web",
+    ];
+
+    let check_phrase = |phrase: &str, context: &str| {
+        assert!(!phrase.trim().is_empty(), "{context}: empty label");
+        let first_char = phrase.chars().next().expect("non-empty phrase");
+        assert!(
+            first_char.is_uppercase(),
+            "{context}: {phrase:?} must start with an uppercase letter"
+        );
+        let tokens: Vec<&str> = phrase
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .filter(|t| !t.is_empty())
+            .collect();
+        for &token in tokens.iter().skip(1) {
+            let trimmed = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '–');
+            if trimmed.is_empty() || ALLOWED_CAPS.contains(&trimmed) {
+                continue;
+            }
+            assert!(
+                !trimmed.chars().any(char::is_uppercase),
+                "{context}: unexpected Title Case token {trimmed:?} in {phrase:?}"
+            );
+        }
+    };
+
+    let cmds = crate::registry();
+    assert_eq!(cmds.len(), 186, "unexpected registry command count");
+
+    for cmd in cmds {
+        check_phrase(cmd.label, &format!("label for {}", cmd.id));
+        if !cmd.menu.is_empty() {
+            let leaf = cmd.menu.rsplit('/').next().unwrap_or(cmd.menu);
+            check_phrase(leaf, &format!("menu leaf for {}", cmd.id));
+        }
+    }
+
+    let course_update = cmds
+        .iter()
+        .find(|c| c.id == "course.update")
+        .expect("course.update");
+    assert_eq!(course_update.menu, "Project/Course settings…");
+}
+
+struct Df02LegacyOracle {
+    course: coursecraft_course::Course,
+    undo: Vec<(coursecraft_course::Course, String)>,
+    redo: Vec<(coursecraft_course::Course, String)>,
+    revision: u64,
+    history_truncated: bool,
+}
+
+impl Df02LegacyOracle {
+    fn new(course: coursecraft_course::Course) -> Self {
+        Self {
+            course,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            revision: 0,
+            history_truncated: false,
+        }
+    }
+
+    fn undo_names(&self) -> Vec<&str> {
+        self.undo.iter().rev().map(|(_, n)| n.as_str()).collect()
+    }
+
+    fn redo_names(&self) -> Vec<&str> {
+        self.redo.iter().rev().map(|(_, n)| n.as_str()).collect()
+    }
+
+    fn push_undo(&mut self, snapshot: coursecraft_course::Course, label: String) {
+        self.undo.push((snapshot, label));
+        if self.undo.len() > crate::MAX_HISTORY {
+            self.undo.remove(0);
+            self.history_truncated = true;
+        }
+        self.redo.clear();
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    fn execute(&mut self, id: &str, params: &Json) -> crate::Result<Json> {
+        if id == "edit.undo" {
+            return self.undo().map(|()| json!({}));
+        }
+        if id == "edit.redo" {
+            return self.redo().map(|()| json!({}));
+        }
+        let cmd = registry()
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| EngineError::UnknownCommand(id.to_owned()))?;
+        let snapshot = self.course.clone();
+        let mut tmp = Session::new(self.course.clone());
+        if !cmd.mutates {
+            return (cmd.run)(&mut tmp, params);
+        }
+        tmp.skip_undo = false;
+        let val = (cmd.run)(&mut tmp, params)?;
+        let unchanged = std::mem::take(&mut tmp.skip_undo) || tmp.course == snapshot;
+        if !unchanged {
+            crate::reroute_connectors(&mut tmp.course);
+            self.course = tmp.course;
+            self.push_undo(snapshot, cmd.label.to_owned());
+        }
+        Ok(val)
+    }
+
+    fn execute_batch_with_name(
+        &mut self,
+        name: Option<&str>,
+        steps: &[(String, Json)],
+    ) -> crate::Result<Vec<Json>> {
+        if steps.is_empty() {
+            return Ok(Vec::new());
+        }
+        for (i, (id, _)) in steps.iter().enumerate() {
+            if matches!(id.as_str(), "edit.undo" | "edit.redo") {
+                return Err(EngineError::BatchFailed {
+                    step: i,
+                    command: id.clone(),
+                    error: Box::new(EngineError::Invalid(format!(
+                        "{id} is not allowed inside a batch"
+                    ))),
+                });
+            }
+        }
+        let snapshot = self.course.clone();
+        let mut tmp = Session::new(self.course.clone());
+        let mut results = Vec::with_capacity(steps.len());
+        let mut any_changed = false;
+        let mut first_label: Option<&'static str> = None;
+
+        for (i, (id, params)) in steps.iter().enumerate() {
+            let cmd = registry()
+                .iter()
+                .find(|c| c.id == id.as_str())
+                .ok_or_else(|| EngineError::BatchFailed {
+                    step: i,
+                    command: id.clone(),
+                    error: Box::new(EngineError::UnknownCommand(id.clone())),
+                })?;
+            let step_snapshot = (name.is_none() && first_label.is_none() && cmd.mutates)
+                .then(|| tmp.course.clone());
+            tmp.skip_undo = false;
+            let outcome = (cmd.run)(&mut tmp, params);
+            if cmd.mutates {
+                tmp.valid_at_revision = None;
+            }
+            if std::mem::take(&mut tmp.skip_undo) {
+                // Nothing to record for this step.
+            } else if cmd.mutates {
+                any_changed = true;
+                if let Some(before) = step_snapshot
+                    && tmp.course != before
+                {
+                    first_label = Some(cmd.label);
+                }
+            }
+            match outcome {
+                Ok(res) => results.push(res),
+                Err(e) => {
+                    return Err(EngineError::BatchFailed {
+                        step: i,
+                        command: id.clone(),
+                        error: Box::new(e),
+                    });
+                }
+            }
+        }
+
+        if any_changed && tmp.course != snapshot {
+            crate::reroute_connectors(&mut tmp.course);
+            let label = name
+                .map(str::to_owned)
+                .or_else(|| first_label.map(str::to_owned))
+                .unwrap_or_else(|| "Batch".to_owned());
+            self.course = tmp.course;
+            self.push_undo(snapshot, label);
+        }
+        Ok(results)
+    }
+
+    fn undo(&mut self) -> crate::Result<()> {
+        let (prev, name) = self.undo.pop().ok_or(EngineError::NothingTo("undo"))?;
+        let current = std::mem::replace(&mut self.course, prev);
+        self.redo.push((current, name));
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    fn redo(&mut self) -> crate::Result<()> {
+        let (next, name) = self.redo.pop().ok_or(EngineError::NothingTo("redo"))?;
+        let current = std::mem::replace(&mut self.course, next);
+        self.undo.push((current, name));
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    fn undo_steps(&mut self, n: usize) -> crate::Result<()> {
+        if n > self.undo.len() {
+            return Err(EngineError::NothingTo("undo"));
+        }
+        for _ in 0..n {
+            self.undo()?;
+        }
+        Ok(())
+    }
+
+    fn redo_steps(&mut self, n: usize) -> crate::Result<()> {
+        if n > self.redo.len() {
+            return Err(EngineError::NothingTo("redo"));
+        }
+        for _ in 0..n {
+            self.redo()?;
+        }
+        Ok(())
+    }
+}
+
+fn df_02_assert_parity(s: &Session, o: &Df02LegacyOracle, step: usize, op: &str) {
+    assert_eq!(
+        s.course.to_json().expect("session json"),
+        o.course.to_json().expect("oracle json"),
+        "step {step} ({op}): Course::to_json() mismatch"
+    );
+    assert_eq!(
+        s.undo_names(),
+        o.undo_names(),
+        "step {step} ({op}): undo_names mismatch"
+    );
+    assert_eq!(
+        s.redo_names(),
+        o.redo_names(),
+        "step {step} ({op}): redo_names mismatch"
+    );
+    assert_eq!(
+        s.revision, o.revision,
+        "step {step} ({op}): revision mismatch"
+    );
+    assert_eq!(
+        s.history_truncated(),
+        o.history_truncated,
+        "step {step} ({op}): history_truncated mismatch"
+    );
+}
+
+fn df_02_exec_both(s: &mut Session, o: &mut Df02LegacyOracle, id: &str, p: &Json) {
+    let sr = s.execute(id, p);
+    let or = o.execute(id, p);
+    assert!(
+        sr.is_ok() && or.is_ok(),
+        "expected {id} to succeed in DF-02: session={sr:?}, oracle={or:?}"
+    );
+}
+
+fn df_02_phase1_single_slide(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    bucket: usize,
+) -> &'static str {
+    if bucket < 12 {
+        #[allow(clippy::cast_precision_loss)]
+        let x = 10.0 + ((step * 7) % 400) as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let y = 10.0 + ((step * 11) % 300) as f64;
+        let p = json!({
+            "slide": "slide1",
+            "object": "perm_shape",
+            "frame": { "x": x, "y": y, "w": 120.0, "h": 60.0 }
+        });
+        df_02_exec_both(s, o, "object.set_frame", &p);
+        "object.set_frame"
+    } else if bucket < 20 {
+        #[allow(clippy::cast_precision_loss)]
+        let x = 30.0 + ((step * 5) % 300) as f64;
+        let p = json!({
+            "slide": "slide1",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#557799" },
+            "frame": { "x": x, "y": 160.0, "w": 50.0, "h": 50.0 }
+        });
+        df_02_exec_both(s, o, "object.add", &p);
+        "object.add"
+    } else if bucket < 28 {
+        let removable = s.course.slide("slide1").and_then(|sl| {
+            sl.objects
+                .iter()
+                .rev()
+                .find(|obj| obj.id != "perm_shape" && obj.id != "perm_text")
+                .map(|obj| obj.id.clone())
+        });
+        if let Some(obj_id) = removable {
+            let p = json!({ "slide": "slide1", "object": obj_id });
+            df_02_exec_both(s, o, "object.delete", &p);
+            "object.delete"
+        } else {
+            let p = json!({
+                "slide": "slide1",
+                "object": "perm_text",
+                "text": format!("Step {step}")
+            });
+            df_02_exec_both(s, o, "text.set", &p);
+            "text.set"
+        }
+    } else {
+        let p = json!({
+            "slide": "slide1",
+            "object": "perm_text",
+            "text": format!("Copy step {step}")
+        });
+        df_02_exec_both(s, o, "text.set", &p);
+        "text.set"
+    }
+}
+
+fn df_02_phase1_step(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    bucket: usize,
+    counts: &mut [usize; 14],
+) -> &'static str {
+    if bucket < 36 {
+        counts[0] += 1;
+        return df_02_phase1_single_slide(s, o, step, bucket);
+    }
+    if bucket < 59 {
+        counts[1] += 1;
+        let (id, p) = if bucket < 45 {
+            (
+                "course.set_title",
+                json!({ "title": format!("Course {step}") }),
+            )
+        } else if bucket < 52 {
+            (
+                "glossary.add",
+                json!({
+                    "term": format!("Term{step}"),
+                    "definition": format!("Definition for step {step}")
+                }),
+            )
+        } else {
+            (
+                "variable.add",
+                json!({ "name": format!("v_{step}"), "value": step }),
+            )
+        };
+        df_02_exec_both(s, o, id, &p);
+        return id;
+    }
+    if bucket < 79 {
+        counts[2] += 1;
+        let (id, p) = if bucket < 67 {
+            (
+                "slide.add",
+                json!({ "scene": "scene1", "title": format!("Slide {step}") }),
+            )
+        } else if bucket < 74 {
+            let last_slide = s.course.scenes[0]
+                .slides
+                .last()
+                .map(|sl| sl.id.clone())
+                .expect("non-empty scene1");
+            (
+                "slide.move",
+                json!({ "slide": last_slide, "scene": "scene1", "index": 0 }),
+            )
+        } else {
+            ("scene.add", json!({ "title": format!("Scene {step}") }))
+        };
+        df_02_exec_both(s, o, id, &p);
+        return id;
+    }
+    df_02_phase1_batch_or_edge(s, o, step, bucket, counts)
+}
+
+fn df_02_phase1_batch_or_edge(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    bucket: usize,
+    counts: &mut [usize; 14],
+) -> &'static str {
+    if bucket < 88 {
+        counts[3] += 1;
+        #[allow(clippy::cast_precision_loss)]
+        let x = 25.0 + ((step * 13) % 350) as f64;
+        let steps = vec![
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": s.course.title.clone() }),
+            ),
+            (
+                "object.set_frame".to_owned(),
+                json!({
+                    "slide": "slide1",
+                    "object": "perm_shape",
+                    "frame": { "x": x, "y": 40.0, "w": 110.0, "h": 55.0 }
+                }),
+            ),
+            (
+                "text.set".to_owned(),
+                json!({
+                    "slide": "slide1",
+                    "object": "perm_text",
+                    "text": format!("Batch {step}")
+                }),
+            ),
+        ];
+        let sr = s.execute_batch(&steps);
+        let or = o.execute_batch_with_name(None, &steps);
+        assert!(
+            sr.is_ok() && or.is_ok(),
+            "execute_batch failed at step {step}: session={sr:?}, oracle={or:?}"
+        );
+        "execute_batch"
+    } else if bucket < 96 {
+        counts[4] += 1;
+        let steps = vec![
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": format!("Named {step}") }),
+            ),
+            (
+                "text.set".to_owned(),
+                json!({
+                    "slide": "slide1",
+                    "object": "perm_text",
+                    "text": format!("Named text {step}")
+                }),
+            ),
+        ];
+        let sr = s.execute_batch_named("Named tweak", &steps);
+        let or = o.execute_batch_with_name(Some("Named tweak"), &steps);
+        assert!(
+            sr.is_ok() && or.is_ok(),
+            "execute_batch_named failed at step {step}: session={sr:?}, oracle={or:?}"
+        );
+        "execute_batch_named"
+    } else if bucket < 98 {
+        counts[5] += 1;
+        let (cmd_id, p) = if step.is_multiple_of(2) {
+            (
+                "course.set_title",
+                json!({ "title": s.course.title.clone() }),
+            )
+        } else {
+            (
+                "course.replace",
+                json!({ "query": "__no_such_text__", "replacement": "x" }),
+            )
+        };
+        df_02_exec_both(s, o, cmd_id, &p);
+        "noop"
+    } else if bucket == 98 {
+        counts[6] += 1;
+        let p = json!({ "slide": "slide1", "object": "missing_obj" });
+        let sr = s.execute("object.delete", &p);
+        let or = o.execute("object.delete", &p);
+        assert!(sr.is_err(), "expected failing_single to error");
+        assert_eq!(sr, or);
+        "failing_single"
+    } else {
+        counts[7] += 1;
+        let steps = vec![
+            (
+                "course.set_title".to_owned(),
+                json!({ "title": "Rolled back title" }),
+            ),
+            (
+                "object.delete".to_owned(),
+                json!({ "slide": "slide1", "object": "missing_obj" }),
+            ),
+        ];
+        let sr = s.execute_batch(&steps);
+        let or = o.execute_batch_with_name(None, &steps);
+        assert!(sr.is_err(), "expected failing_batch to error");
+        assert_eq!(sr, or);
+        "failing_batch"
+    }
+}
+
+fn df_02_phase2_step(
+    s: &mut Session,
+    o: &mut Df02LegacyOracle,
+    step: usize,
+    counts: &mut [usize; 14],
+) -> &'static str {
+    match step - 218 {
+        0 | 1 | 2 | 12 | 25 => {
+            counts[8] += 1;
+            assert_eq!(s.undo(), Ok(()));
+            assert_eq!(o.undo(), Ok(()));
+            "undo"
+        }
+        3 | 13 | 26 => {
+            counts[9] += 1;
+            assert_eq!(s.redo(), Ok(()));
+            assert_eq!(o.redo(), Ok(()));
+            "redo"
+        }
+        4 | 14 | 20 => {
+            counts[10] += 1;
+            assert_eq!(s.undo_steps(5), Ok(()));
+            assert_eq!(o.undo_steps(5), Ok(()));
+            "undo_steps_ok"
+        }
+        5 | 21 => {
+            counts[11] += 1;
+            let n = s.undo_len() + 1;
+            assert_eq!(s.undo_steps(n), Err(EngineError::NothingTo("undo")));
+            assert_eq!(o.undo_steps(n), Err(EngineError::NothingTo("undo")));
+            "undo_steps_oob"
+        }
+        6 | 15 | 22 => {
+            counts[12] += 1;
+            assert_eq!(s.redo_steps(3), Ok(()));
+            assert_eq!(o.redo_steps(3), Ok(()));
+            "redo_steps_ok"
+        }
+        7 | 23 => {
+            counts[13] += 1;
+            let n = s.redo_names().len() + 1;
+            assert_eq!(s.redo_steps(n), Err(EngineError::NothingTo("redo")));
+            assert_eq!(o.redo_steps(n), Err(EngineError::NothingTo("redo")));
+            "redo_steps_oob"
+        }
+        8 | 16 => {
+            counts[5] += 1;
+            let p = json!({ "query": "__never_present__", "replacement": "z" });
+            df_02_exec_both(s, o, "course.replace", &p);
+            "noop_preserves_redo"
+        }
+        9 | 17 => {
+            counts[6] += 1;
+            let p = json!({ "slide": "slide1", "object": "missing_obj" });
+            let sr = s.execute("object.delete", &p);
+            let or = o.execute("object.delete", &p);
+            assert!(sr.is_err(), "expected failing_single_phase2 to error");
+            assert_eq!(sr, or);
+            "failing_single_phase2"
+        }
+        10 | 18 => {
+            counts[7] += 1;
+            let steps = vec![
+                (
+                    "course.set_title".to_owned(),
+                    json!({ "title": "Will fail" }),
+                ),
+                (
+                    "object.delete".to_owned(),
+                    json!({ "slide": "slide1", "object": "missing_obj" }),
+                ),
+            ];
+            let sr = s.execute_batch(&steps);
+            let or = o.execute_batch_with_name(None, &steps);
+            assert!(sr.is_err(), "expected failing_batch_phase2 to error");
+            assert_eq!(sr, or);
+            "failing_batch_phase2"
+        }
+        11 | 19 | 24 => {
+            counts[1] += 1;
+            let p = json!({ "title": format!("Post-undo {step}") });
+            df_02_exec_both(s, o, "course.set_title", &p);
+            "edit_clears_redo"
+        }
+        _ => {
+            counts[8] += 1;
+            assert_eq!(s.undo(), Ok(()));
+            assert_eq!(o.undo(), Ok(()));
+            "undo_tail"
+        }
+    }
+}
+
+/// DF-02: 250-step deterministic pseudo-random mixed sequence verified step-by-step
+/// against a legacy full-snapshot undo/redo oracle, including MAX_HISTORY eviction,
+/// `undo_steps`/`redo_steps`, `skip_undo`, no-ops, batches, and rollbacks.
+#[test]
+fn df_02_differential_250_step_mixed_sequence_with_eviction() {
+    let mut seed = Session::blank("DF-02 Seed");
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "perm_shape",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 20.0, "y": 20.0, "w": 120.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "perm_text",
+            "kind": { "type": "text", "text": "Initial" },
+            "frame": { "x": 20.0, "y": 100.0, "w": 240.0, "h": 40.0 }
+        }),
+    );
+    ok(&mut seed, "slide.add", json!({ "title": "Seed Slide 2" }));
+
+    let initial_course = seed.course;
+    let mut s = Session::new(initial_course.clone());
+    let mut o = Df02LegacyOracle::new(initial_course);
+
+    let mut lcg: u64 = 0x5EED_DF02_0000_0001;
+    let mut counts = [0usize; 14];
+
+    for step in 0..250usize {
+        lcg = lcg
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let bucket = ((lcg >> 33) as usize) % 100;
+        let op_label = if step < 218 {
+            df_02_phase1_step(&mut s, &mut o, step, bucket, &mut counts)
+        } else {
+            df_02_phase2_step(&mut s, &mut o, step, &mut counts)
+        };
+        df_02_assert_parity(&s, &o, step, op_label);
+    }
+
+    assert!(
+        s.history_truncated(),
+        "MAX_HISTORY ({}) eviction must occur during DF-02",
+        crate::MAX_HISTORY
+    );
+    assert!(o.history_truncated);
+    for (idx, count) in counts.iter().enumerate() {
+        assert!(*count > 0, "DF-02 operation category {idx} never executed");
+    }
+}
+
+#[test]
+fn undo_estimated_bytes_tracks_undo_and_redo_deltas() {
+    let mut s = Session::blank("Bytes");
+    assert_eq!(s.undo_estimated_bytes(), 0);
+
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "rect1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    let after_add = s.undo_estimated_bytes();
+    assert!(after_add > 0);
+
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "rect1",
+            "frame": { "x": 50.0, "y": 20.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    let after_move = s.undo_estimated_bytes();
+    assert!(after_move > after_add);
+
+    // Moving a delta from undo to redo keeps it accounted for in undo_estimated_bytes.
+    s.undo().expect("undo move");
+    assert_eq!(s.undo_estimated_bytes(), after_move);
+
+    // Undoing all steps empties undo; non-zero bytes prove redo deltas are counted.
+    s.undo().expect("undo add");
+    assert!(!s.can_undo());
+    assert!(s.can_redo());
+    let after_undo_all = s.undo_estimated_bytes();
+    assert!(after_undo_all > after_move);
+
+    // A new small edit clears redo so the larger object deltas are dropped.
+    ok(&mut s, "course.set_title", json!({ "title": "Renamed" }));
+    assert!(!s.can_redo());
+    let after_rename = s.undo_estimated_bytes();
+    assert!(after_rename > 0);
+    assert!(after_rename < after_undo_all);
+}
+
+#[test]
+fn undo_steps_and_redo_steps_unwind_atomically_on_mid_loop_delta_error() {
+    let mut s = Session::blank("Atomic Unwind");
+    ok(&mut s, "course.set_title", json!({ "title": "One" }));
+    ok(&mut s, "course.set_title", json!({ "title": "Two" }));
+    ok(&mut s, "course.set_title", json!({ "title": "Three" }));
+
+    // Corrupt the second step from the top (index 1) so step 0 succeeds and step 1 fails.
+    let bad_delta = crate::delta::CourseDelta::SlideChange {
+        loc: crate::delta::SlideLoc::SceneSlide {
+            scene: 99,
+            slide: 0,
+        },
+        change: crate::delta::SlideDelta::ObjectInserted {
+            layer: None,
+            index: 0,
+        },
+    };
+    let saved_good = std::mem::replace(&mut s.undo[1].0, bad_delta.clone());
+
+    let before_course = s.course.clone();
+    let before_rev = s.revision;
+    let before_undo: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    let before_redo: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+
+    let err = s.undo_steps(3).expect_err("corrupted mid-loop undo fails");
+    assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    assert_eq!(s.course, before_course);
+    assert_eq!(s.revision, before_rev);
+    assert_eq!(s.undo_names(), before_undo);
+    assert_eq!(s.redo_names(), before_redo);
+
+    // Restore good delta, undo all 3, then test redo_steps mid-loop unwind.
+    s.undo[1].0 = saved_good;
+    s.undo_steps(3).expect("valid undo_steps(3)");
+    s.redo[1].0 = bad_delta;
+
+    let before_course = s.course.clone();
+    let before_rev = s.revision;
+    let before_undo: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    let before_redo: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+
+    let err = s.redo_steps(3).expect_err("corrupted mid-loop redo fails");
+    assert!(matches!(err, EngineError::Invalid(_)), "{err:?}");
+    assert_eq!(s.course, before_course);
+    assert_eq!(s.revision, before_rev);
+    assert_eq!(s.undo_names(), before_undo);
+    assert_eq!(s.redo_names(), before_redo);
+}
+
+/// SC-01: Pilot `SingleSlide` (`object.set_frame`, `object.update`, `text.set`)
+/// and `CourseHeader` (`course.set_title`) commands execute and roll back with
+/// zero full-course clones and byte-identical undo/redo.
+#[test]
+fn sc_01_pilot_scoped_commands_zero_full_clones_and_isolated() {
+    let mut s = Session::blank("Pilot Scope");
+    ok(&mut s, "slide.add", json!({ "title": "Slide 2" }));
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "shape1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+            "frame": { "x": 10.0, "y": 20.0, "w": 100.0, "h": 60.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "text1",
+            "kind": { "type": "text", "text": "Hello" },
+            "frame": { "x": 10.0, "y": 100.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide2",
+            "id": "other_shape",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#993333" },
+            "frame": { "x": 5.0, "y": 5.0, "w": 50.0, "h": 50.0 }
+        }),
+    );
+
+    let success_cases = [
+        (
+            "object.set_frame",
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 45.0, "y": 55.0, "w": 120.0, "h": 70.0 }
+            }),
+        ),
+        (
+            "object.update",
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "Hero Box",
+                "description": "Primary callout",
+                "focus_order": 2
+            }),
+        ),
+        (
+            "text.set",
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "Updated copy"
+            }),
+        ),
+        ("course.set_title", json!({ "title": "Renamed Pilot" })),
+    ];
+
+    for (cmd, params) in &success_cases {
+        let before_json = s.course.to_json().expect("before json");
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        ok(&mut s, cmd, params.clone());
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "{cmd} must not clone the full course"
+        );
+
+        let after_json = s.course.to_json().expect("after json");
+        assert_ne!(after_json, before_json, "{cmd} should mutate course");
+
+        // Re-running with identical params is a no-op with 0 full-course clones
+        // and preserves any existing redo stack.
+        s.undo().expect("undo");
+        assert_eq!(
+            s.course.to_json().expect("undone json"),
+            before_json,
+            "undo of {cmd} must restore byte-identical JSON"
+        );
+        s.redo().expect("redo");
+        assert_eq!(
+            s.course.to_json().expect("redone json"),
+            after_json,
+            "redo of {cmd} must restore byte-identical JSON"
+        );
+
+        let rev_after = s.revision;
+        let undo_after = s.undo_len();
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+        ok(&mut s, cmd, params.clone());
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "no-op {cmd} must not clone the full course"
+        );
+        assert_eq!(s.revision, rev_after);
+        assert_eq!(s.undo_len(), undo_after);
+    }
+
+    // Verify no-op on both SingleSlide and CourseHeader preserves an active redo stack.
+    s.undo().expect("undo to populate redo");
+    assert!(s.can_redo());
+    let redo_before: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+    let current_title = s.course.title.clone();
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    ok(
+        &mut s,
+        "course.set_title",
+        json!({ "title": current_title }),
+    );
+    ok(
+        &mut s,
+        "text.set",
+        json!({ "slide": "slide1", "object": "text1", "text": "Updated copy" }),
+    );
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    assert_eq!(s.redo_names(), redo_before);
+    s.redo().expect("redo still works after scoped no-ops");
+
+    // Error rollback cases for each pilot command: 0 full-course clones and untouched course.
+    let error_cases = [
+        (
+            "object.set_frame",
+            json!({
+                "slide": "slide1",
+                "object": "missing_object",
+                "frame": { "x": 1.0, "y": 2.0, "w": 10.0, "h": 10.0 }
+            }),
+        ),
+        (
+            "object.update",
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "MustRollBack",
+                "initial_state": "   "
+            }),
+        ),
+        (
+            "text.set",
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "x".repeat(5000)
+            }),
+        ),
+        ("course.set_title", json!({ "title": "   " })),
+    ];
+
+    for (cmd, params) in &error_cases {
+        let before_json = s.course.to_json().expect("before error json");
+        let before_rev = s.revision;
+        let before_undo = s.undo_len();
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        let err = s.execute(cmd, params);
+        assert!(err.is_err(), "{cmd} error case must fail");
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "error rollback of {cmd} must not clone the full course"
+        );
+        assert_eq!(
+            s.course.to_json().expect("after error json"),
+            before_json,
+            "error rollback of {cmd} must leave course byte-identical"
+        );
+        assert_eq!(s.revision, before_rev);
+        assert_eq!(s.undo_len(), before_undo);
+    }
+}
+
+/// SC-02: Same-slide batch of `SingleSlide` edits takes zero full-course clones,
+/// commits one atomic undo step, and rolls back atomically on mid-batch error.
+#[test]
+fn sc_02_same_slide_batch_zero_full_clones_and_atomic_rollback() {
+    let mut seed = Session::blank("Same-Slide Batch");
+    ok(&mut seed, "slide.add", json!({ "title": "Slide 2" }));
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "shape1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "text1",
+            "kind": { "type": "text", "text": "Start" },
+            "frame": { "x": 10.0, "y": 80.0, "w": 200.0, "h": 40.0 }
+        }),
+    );
+
+    let mut s = Session::new(seed.course);
+    let before_json = s.course.to_json().expect("before batch json");
+
+    let steps = vec![
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 20.0, "y": 15.0, "w": 90.0, "h": 45.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "Step Two"
+            }),
+        ),
+        (
+            "text.set".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "Step Three"
+            }),
+        ),
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 60.0, "y": 30.0, "w": 110.0, "h": 55.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "description": "Batch caption"
+            }),
+        ),
+    ];
+
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    let results = s.execute_batch(&steps).expect("same-slide batch succeeds");
+    assert_eq!(results.len(), 5);
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        crate::test_counts::full_course_clones(),
+        0,
+        "same-slide batch must not clone the full course"
+    );
+    assert_eq!(s.undo_len(), 1);
+
+    let after_json = s.course.to_json().expect("after batch json");
+    assert_ne!(after_json, before_json);
+
+    s.undo().expect("undo batch");
+    assert_eq!(s.course.to_json().expect("undone batch json"), before_json);
+    s.redo().expect("redo batch");
+    assert_eq!(s.course.to_json().expect("redone batch json"), after_json);
+
+    // Failing 4th step rolls back steps 1-3 atomically with zero full-course clones.
+    let before_fail_json = s.course.to_json().expect("before fail json");
+    let before_fail_rev = s.revision;
+    let before_undo_names: Vec<String> = s.undo_names().into_iter().map(str::to_owned).collect();
+    let before_redo_names: Vec<String> = s.redo_names().into_iter().map(str::to_owned).collect();
+
+    let failing_steps = vec![
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "frame": { "x": 150.0, "y": 150.0, "w": 80.0, "h": 40.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "name": "Should Not Stick"
+            }),
+        ),
+        (
+            "text.set".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "text1",
+                "text": "Rolled back"
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "slide1",
+                "object": "shape1",
+                "initial_state": "   "
+            }),
+        ),
+    ];
+
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    let err = s
+        .execute_batch(&failing_steps)
+        .expect_err("step 4 must fail");
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        crate::test_counts::full_course_clones(),
+        0,
+        "failed same-slide batch must not clone the full course"
+    );
+    assert!(
+        matches!(err, EngineError::BatchFailed { step: 3, .. }),
+        "expected BatchFailed at step 3, got {err:?}"
+    );
+    assert_eq!(
+        s.course.to_json().expect("after fail json"),
+        before_fail_json
+    );
+    assert_eq!(s.revision, before_fail_rev);
+    assert_eq!(s.undo_names(), before_undo_names);
+    assert_eq!(s.redo_names(), before_redo_names);
+}
+
+/// SC-03: Missing, non-string, or unknown `"slide"` param on a `SingleSlide`
+/// command falls back safely without panicking and leaves the course untouched.
+#[test]
+fn sc_03_single_slide_missing_or_unknown_slide_falls_back_safely() {
+    let mut s = Session::blank("SC-03 Fallback");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "shape1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+
+    let before_json = s.course.to_json().expect("before json");
+    let before_rev = s.revision;
+    let before_undo = s.undo_len();
+
+    let missing = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "object": "shape1",
+                "frame": { "x": 50.0, "y": 50.0, "w": 80.0, "h": 40.0 }
+            }),
+        )
+        .expect_err("missing slide must error");
+    assert!(
+        matches!(missing, EngineError::BadParams { .. }),
+        "{missing:?}"
+    );
+
+    let non_string = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "slide": 123,
+                "object": "shape1",
+                "frame": { "x": 50.0, "y": 50.0, "w": 80.0, "h": 40.0 }
+            }),
+        )
+        .expect_err("non-string slide must error");
+    assert!(
+        matches!(non_string, EngineError::BadParams { .. }),
+        "{non_string:?}"
+    );
+
+    let unknown = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "slide": "does-not-exist",
+                "object": "shape1",
+                "frame": { "x": 50.0, "y": 50.0, "w": 80.0, "h": 40.0 }
+            }),
+        )
+        .expect_err("unknown slide must error");
+    assert!(matches!(unknown, EngineError::NotFound(_)), "{unknown:?}");
+
+    assert_eq!(s.course.to_json().expect("after json"), before_json);
+    assert_eq!(s.revision, before_rev);
+    assert_eq!(s.undo_len(), before_undo);
+}
+
+/// SingleSlide lookup must match `Course::slide_mut` precedence (scenes -> banks
+/// -> masters, never templates), even on malformed courses where a bank slide
+/// shares an id with a master or template.
+#[test]
+fn sc_03_single_slide_matches_course_slide_mut_precedence_with_duplicate_ids() {
+    let mut seed = Session::blank("Duplicate ID Precedence");
+    ok(&mut seed, "master.add", json!({ "id": "dup_bank_master" }));
+    let bank_id = ok(&mut seed, "bank.create", json!({ "title": "B1" }))["id"]
+        .as_str()
+        .expect("bank id")
+        .to_owned();
+    let bank_slide_id = ok(
+        &mut seed,
+        "bank.add_question",
+        json!({ "bank": bank_id, "title": "Bank Slide" }),
+    )["id"]
+        .as_str()
+        .expect("bank slide id")
+        .to_owned();
+    ok(
+        &mut seed,
+        "object.add",
+        json!({
+            "slide": bank_slide_id,
+            "id": "bank_shape",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+
+    // Construct a malformed course where the bank slide has the same id as the
+    // master AND a template, plus a template-only id.
+    let mut course = seed.course;
+    let mut tpl = course.scenes[0].slides[0].clone();
+    tpl.id = "dup_bank_master".into();
+    course.templates.push(tpl);
+    let mut tpl_only = course.scenes[0].slides[0].clone();
+    tpl_only.id = "template_only".into();
+    course.templates.push(tpl_only);
+    course.banks[0].slides[0].id = "dup_bank_master".into();
+
+    let mut s = Session::new(course);
+    let before_json = s.course.to_json().expect("before json");
+
+    // SingleSlide edit must target the bank slide (matching Course::slide_mut),
+    // take 0 full-course clones, pass scope isolation, and undo/redo cleanly.
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    ok(
+        &mut s,
+        "object.set_frame",
+        json!({
+            "slide": "dup_bank_master",
+            "object": "bank_shape",
+            "frame": { "x": 75.0, "y": 85.0, "w": 90.0, "h": 50.0 }
+        }),
+    );
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    assert_eq!(s.undo_len(), 1);
+    let after_json = s.course.to_json().expect("after json");
+    assert_ne!(after_json, before_json);
+
+    s.undo().expect("undo bank edit");
+    assert_eq!(s.course.to_json().expect("undone json"), before_json);
+    s.redo().expect("redo bank edit");
+    assert_eq!(s.course.to_json().expect("redone json"), after_json);
+
+    // Partial-mutation error on the bank slide must roll back the bank slide.
+    let before_err_json = s.course.to_json().expect("before err json");
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    let err = s
+        .execute(
+            "object.update",
+            &json!({
+                "slide": "dup_bank_master",
+                "object": "bank_shape",
+                "name": "ShouldRollBack",
+                "initial_state": "   "
+            }),
+        )
+        .expect_err("invalid initial_state must fail");
+    assert!(matches!(err, EngineError::BadParams { .. }), "{err:?}");
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    assert_eq!(s.course.to_json().expect("after err json"), before_err_json);
+
+    // Same-slide batch targeting the bank slide must also match slide_mut.
+    #[cfg(debug_assertions)]
+    crate::test_counts::reset();
+    s.execute_batch(&[
+        (
+            "object.set_frame".to_owned(),
+            json!({
+                "slide": "dup_bank_master",
+                "object": "bank_shape",
+                "frame": { "x": 120.0, "y": 130.0, "w": 90.0, "h": 50.0 }
+            }),
+        ),
+        (
+            "object.update".to_owned(),
+            json!({
+                "slide": "dup_bank_master",
+                "object": "bank_shape",
+                "name": "Batch Bank Shape"
+            }),
+        ),
+    ])
+    .expect("same-slide batch on bank slide");
+    #[cfg(debug_assertions)]
+    assert_eq!(crate::test_counts::full_course_clones(), 0);
+    s.undo().expect("undo batch");
+    assert_eq!(
+        s.course.to_json().expect("undone batch json"),
+        before_err_json
+    );
+
+    // Template-only id is not editable via Course::slide_mut and falls back cleanly.
+    let tpl_err = s
+        .execute(
+            "object.set_frame",
+            &json!({
+                "slide": "template_only",
+                "object": "bank_shape",
+                "frame": { "x": 1.0, "y": 2.0, "w": 10.0, "h": 10.0 }
+            }),
+        )
+        .expect_err("template slide is not editable");
+    assert!(matches!(tpl_err, EngineError::NotFound(_)), "{tpl_err:?}");
+    assert_eq!(
+        s.course.to_json().expect("after template err json"),
+        before_err_json
+    );
+}
+
+fn assert_u07_repeated_move_merge(s: &mut Session) {
+    let pre_first_json = s.course.to_json().expect("pre first json");
+    for step in 1..=5 {
+        ok(
+            s,
+            "object.set_frame",
+            json!({
+                "slide": "slide1",
+                "object": "box1",
+                "frame": {
+                    "x": 10.0 + (step as f64) * 20.0,
+                    "y": 10.0 + (step as f64) * 10.0,
+                    "w": 80.0,
+                    "h": 40.0
+                }
+            }),
+        );
+    }
+    assert_eq!(s.undo_len(), 5);
+    let post_fifth_json = s.course.to_json().expect("post fifth json");
+    assert_ne!(pre_first_json, post_fifth_json);
+
+    let rev_before_merge = s.revision;
+    for _ in 0..4 {
+        assert!(s.merge_last_two_undos(Some("Move object")));
+    }
+    assert_eq!(
+        s.revision, rev_before_merge,
+        "merging must not bump revision"
+    );
+    assert_eq!(s.undo_len(), 1);
+    assert_eq!(s.undo_names(), vec!["Move object"]);
+    assert!(!s.merge_last_two_undos(Some("Too few")));
+
+    s.undo().expect("undo merged moves");
+    assert_eq!(s.course.to_json().expect("undone json"), pre_first_json);
+    s.redo().expect("redo merged moves");
+    assert_eq!(s.course.to_json().expect("redone json"), post_fifth_json);
+}
+
+fn assert_u07_mixed_merge_preserves_label_and_redo(s2: &mut Session) {
+    let mixed_before_json = s2.course.to_json().expect("mixed before json");
+    ok(
+        s2,
+        "object.set_frame",
+        json!({
+            "slide": "slide1",
+            "object": "box1",
+            "frame": { "x": 220.0, "y": 140.0, "w": 95.0, "h": 55.0 }
+        }),
+    );
+    let older_label = s2.undo_names()[0].to_owned();
+    ok(
+        s2,
+        "course.set_title",
+        json!({ "title": "Renamed After Move" }),
+    );
+    let mixed_after_json = s2.course.to_json().expect("mixed after json");
+    assert_ne!(mixed_before_json, mixed_after_json);
+
+    // Push a third edit and undo it so redo stack is non-empty when merging.
+    ok(
+        s2,
+        "course.set_title",
+        json!({ "title": "Temporary Redo Title" }),
+    );
+    s2.undo().expect("undo third edit to populate redo");
+    let expected_redo_names: Vec<String> = s2.redo_names().into_iter().map(str::to_owned).collect();
+    assert_eq!(expected_redo_names.len(), 1);
+    let rev_before_mixed_merge = s2.revision;
+
+    assert!(s2.merge_last_two_undos(None));
+    assert_eq!(s2.revision, rev_before_mixed_merge);
+    assert_eq!(s2.undo_len(), 1);
+    assert_eq!(s2.undo_names(), vec![older_label.as_str()]);
+    assert_eq!(
+        s2.redo_names(),
+        expected_redo_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        "merging must not clear redo"
+    );
+
+    s2.undo().expect("undo merged mixed");
+    assert_eq!(
+        s2.course.to_json().expect("undone mixed json"),
+        mixed_before_json
+    );
+    s2.redo().expect("redo merged mixed");
+    assert_eq!(
+        s2.course.to_json().expect("redone mixed json"),
+        mixed_after_json
+    );
+}
+
+/// U-07: `Session::merge_last_two_undos` returns `false` when `< 2` steps exist,
+/// merges repeated `object.set_frame` edits into one step with custom label,
+/// preserves `revision` and `redo`, and merges mixed edits keeping older label
+/// when `label = None` with byte-identical `undo()` / `redo()`.
+#[test]
+fn u_07_session_merge_last_two_undos_roundtrip() {
+    let mut s = Session::blank("U-07 Merge");
+    let rev0 = s.revision;
+    assert!(!s.merge_last_two_undos(Some("Nope")));
+    assert_eq!(s.revision, rev0);
+    assert_eq!(s.undo_len(), 0);
+
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#224466" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    let rev1 = s.revision;
+    assert!(!s.merge_last_two_undos(None));
+    assert_eq!(s.revision, rev1);
+    assert_eq!(s.undo_len(), 1);
+
+    let mut s_moves = Session::new(s.course);
+    assert_u07_repeated_move_merge(&mut s_moves);
+
+    let mut s_mixed = Session::new(s_moves.course);
+    assert_u07_mixed_merge_preserves_label_and_redo(&mut s_mixed);
+}
+
+/// GD-02 (`M33-08`, `M33-09`): 200 single-object edits on a 300-slide course
+/// (`perf300`) perform zero full-course clones, keep all 200 undo deltas under
+/// 512 KiB, and roundtrip byte-identically across `undo_steps(200)` and
+/// `redo_steps(200)`.
+#[test]
+fn two_hundred_edits_on_300_slide_course_zero_full_clones_and_small_deltas() {
+    let mut s = Session::new(crate::undo_perf_tests::perf300());
+    let orig_json = s.course.to_json().expect("initial perf300 JSON");
+
+    crate::with_scope_verifier_disabled(|| {
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        for i in 0..200 {
+            ok(
+                &mut s,
+                "object.set_frame",
+                json!({
+                    "slide": "s-150",
+                    "object": "h150",
+                    "frame": {
+                        "x": 60.0 + (i + 1) as f64,
+                        "y": 520.0,
+                        "w": 200.0,
+                        "h": 80.0
+                    }
+                }),
+            );
+        }
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "200 single-slide edits must perform zero full-course clones"
+        );
+        assert_eq!(s.undo_len(), 200);
+        let est_bytes = s.undo_estimated_bytes();
+        assert!(
+            est_bytes < 512 * 1024,
+            "200 single-object deltas must use < 512 KiB, got {est_bytes} bytes"
+        );
+
+        let after_json = s.course.to_json().expect("after-200 perf300 JSON");
+        assert_ne!(after_json, orig_json);
+
+        s.undo_steps(200).expect("undo_steps(200) succeeds");
+        assert_eq!(
+            s.course.to_json().expect("undone perf300 JSON"),
+            orig_json,
+            "undo_steps(200) must restore original perf300 JSON byte-identically"
+        );
+
+        s.redo_steps(200).expect("redo_steps(200) succeeds");
+        assert_eq!(
+            s.course.to_json().expect("redone perf300 JSON"),
+            after_json,
+            "redo_steps(200) must restore post-edit perf300 JSON byte-identically"
+        );
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_clones(),
+            0,
+            "undo_steps(200) and redo_steps(200) must also perform zero full-course clones"
+        );
+    });
+}
+
+/// G-07 (`M34-07`): On a 300-slide course (`perf300`), warming playability,
+/// running a real `object.set_frame` edit, and running a no-op `object.set_frame`
+/// with the same frame perform zero full-course validations.
+#[test]
+fn g07_single_slide_frame_edit_and_noop_zero_full_validations() {
+    let mut s = Session::new(crate::undo_perf_tests::perf300());
+    assert!(s.is_playable(), "perf300 fixture should be playable");
+
+    crate::with_scope_verifier_disabled(|| {
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        let moved_frame = json!({
+            "slide": "s-150",
+            "object": "h150",
+            "frame": { "x": 75.0, "y": 530.0, "w": 200.0, "h": 80.0 }
+        });
+
+        // 1. Actual move uses scoped slide validation (0 full-course validations).
+        ok(&mut s, "object.set_frame", moved_frame.clone());
+        assert_eq!(s.revision, 1);
+        assert_eq!(s.undo_len(), 1);
+        let obj_frame = s
+            .course
+            .slide("s-150")
+            .and_then(|slide| slide.object("h150"))
+            .map(|(obj, _)| obj.frame)
+            .expect("h150 exists");
+        assert!((obj_frame.x - 75.0).abs() < 0.01);
+        assert!((obj_frame.y - 530.0).abs() < 0.01);
+
+        // 2. No-op with identical frame short-circuits before validation and undo.
+        ok(&mut s, "object.set_frame", moved_frame);
+        assert_eq!(s.revision, 1, "no-op frame edit must not bump revision");
+        assert_eq!(s.undo_len(), 1, "no-op frame edit must not add undo step");
+
+        #[cfg(debug_assertions)]
+        assert_eq!(
+            crate::test_counts::full_course_validations(),
+            0,
+            "single-slide frame move and no-op must run zero full-course validations"
+        );
+    });
+}
+
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
+}
+
+#[test]
+fn r5_01_registry_golden_lock() {
+    use crate::delta::UndoScope;
+
+    let reg = registry();
+    assert_eq!(reg.len(), 186);
+
+    const EXPECTED: &[(&str, bool, UndoScope, bool)] = &[
+        ("course.info", false, UndoScope::FullCourse, false),
+        ("course.map", false, UndoScope::FullCourse, false),
+        ("course.validate", false, UndoScope::FullCourse, false),
+        ("course.audit", false, UndoScope::FullCourse, false),
+        ("course.update", true, UndoScope::CourseHeader, false),
+        ("course.set_slide_size", true, UndoScope::FullCourse, false),
+        ("course.set_title", true, UndoScope::CourseHeader, false),
+        ("course.set_player", true, UndoScope::CourseHeader, false),
+        ("course.set_quiz", true, UndoScope::CourseHeader, false),
+        (
+            "course.set_publish_settings",
+            true,
+            UndoScope::CourseHeader,
+            false,
+        ),
+        (
+            "course.set_background_audio",
+            true,
+            UndoScope::CourseHeader,
+            false,
+        ),
+        ("theme.set_palette", true, UndoScope::CourseHeader, false),
+        (
+            "theme.set_palette_color",
+            true,
+            UndoScope::FullCourse,
+            false,
+        ),
+        ("course.recolor", true, UndoScope::FullCourse, false),
+        ("text_style.create", true, UndoScope::FullCourse, false),
+        ("text_style.update", true, UndoScope::FullCourse, false),
+        ("text_style.delete", true, UndoScope::FullCourse, false),
+        ("text_style.apply", true, UndoScope::SingleSlide, true),
+        (
+            "course.add_finish_button",
+            true,
+            UndoScope::FullCourse,
+            false,
+        ),
+        ("course.set_theme", true, UndoScope::CourseHeader, false),
+        ("course.add_font", true, UndoScope::CourseHeader, false),
+        ("course.remove_font", true, UndoScope::CourseHeader, false),
+        ("course.export_xliff", false, UndoScope::FullCourse, false),
+        ("course.import_xliff", true, UndoScope::FullCourse, false),
+        ("edit.undo", false, UndoScope::FullCourse, false),
+        ("edit.redo", false, UndoScope::FullCourse, false),
+        ("edit.history", false, UndoScope::FullCourse, false),
+        ("scene.add", true, UndoScope::FullCourse, false),
+        ("scene.update", true, UndoScope::FullCourse, false),
+        ("scene.delete", true, UndoScope::FullCourse, false),
+        ("slide.add", true, UndoScope::FullCourse, false),
+        ("slide.update", true, UndoScope::SingleSlide, true),
+        ("slide.delete", true, UndoScope::FullCourse, false),
+        ("slide.move", true, UndoScope::FullCourse, false),
+        ("slide.duplicate", true, UndoScope::FullCourse, false),
+        ("slide.paste", true, UndoScope::FullCourse, false),
+        ("slide.set_duration", true, UndoScope::SingleSlide, true),
+        ("slide.set_background", true, UndoScope::SingleSlide, true),
+        ("slide.set_transition", true, UndoScope::SingleSlide, true),
+        (
+            "slide.set_player_overrides",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("master.add", true, UndoScope::FullCourse, false),
+        ("master.delete", true, UndoScope::FullCourse, false),
+        ("slide.set_master", true, UndoScope::FullCourse, false),
+        ("bank.create", true, UndoScope::FullCourse, false),
+        ("bank.update", true, UndoScope::FullCourse, false),
+        ("bank.delete", true, UndoScope::FullCourse, false),
+        ("bank.add_question", true, UndoScope::FullCourse, false),
+        ("bank.import_csv", true, UndoScope::FullCourse, false),
+        ("bank.move_slide", true, UndoScope::FullCourse, false),
+        ("bank.remove_slide", true, UndoScope::FullCourse, false),
+        ("draw.insert", true, UndoScope::FullCourse, false),
+        ("draw.update", true, UndoScope::SingleSlide, false),
+        ("slide.add_from_layout", true, UndoScope::FullCourse, false),
+        ("course.import_outline", true, UndoScope::FullCourse, false),
+        ("template.save", true, UndoScope::FullCourse, false),
+        ("template.add_slide", true, UndoScope::FullCourse, false),
+        ("template.delete", true, UndoScope::FullCourse, false),
+        ("layer.add", true, UndoScope::SingleSlide, true),
+        ("layer.update", true, UndoScope::SingleSlide, true),
+        ("layer.delete", true, UndoScope::SingleSlide, true),
+        ("layer.move", true, UndoScope::SingleSlide, true),
+        ("layer.duplicate", true, UndoScope::SingleSlide, true),
+        ("object.add", true, UndoScope::SingleSlide, true),
+        ("object.update", true, UndoScope::SingleSlide, true),
+        ("object.reorder", true, UndoScope::SingleSlide, true),
+        ("object.align", true, UndoScope::SingleSlide, true),
+        ("object.distribute", true, UndoScope::SingleSlide, true),
+        ("object.match_size", true, UndoScope::SingleSlide, true),
+        ("object.group", true, UndoScope::SingleSlide, true),
+        ("object.ungroup", true, UndoScope::SingleSlide, true),
+        ("object.duplicate", true, UndoScope::SingleSlide, true),
+        ("object.paste", true, UndoScope::SingleSlide, true),
+        ("object.set_frame", true, UndoScope::SingleSlide, true),
+        ("object.set_rotation", true, UndoScope::SingleSlide, true),
+        ("object.flip", true, UndoScope::SingleSlide, true),
+        ("object.lock", true, UndoScope::SingleSlide, true),
+        ("object.hide_in_editor", true, UndoScope::SingleSlide, true),
+        ("view.set", true, UndoScope::CourseHeader, false),
+        ("view.guides.add", true, UndoScope::CourseHeader, false),
+        ("view.guides.move", true, UndoScope::CourseHeader, false),
+        ("view.guides.remove", true, UndoScope::CourseHeader, false),
+        ("object.set_opacity", true, UndoScope::SingleSlide, true),
+        (
+            "object.set_outline_join",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("object.set_fill_style", true, UndoScope::SingleSlide, true),
+        ("object.set_shadow", true, UndoScope::SingleSlide, true),
+        ("object.set_glow", true, UndoScope::SingleSlide, true),
+        ("object.apply_style", true, UndoScope::SingleSlide, true),
+        ("object.set_drag", true, UndoScope::SingleSlide, true),
+        ("object.set_lottie", true, UndoScope::SingleSlide, true),
+        ("object.set_web_source", true, UndoScope::SingleSlide, true),
+        ("object.set_input", true, UndoScope::SingleSlide, true),
+        ("object.set_marker", true, UndoScope::SingleSlide, true),
+        ("object.set_panel", true, UndoScope::SingleSlide, true),
+        (
+            "object.set_scroll_panel",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("object.set_timer", true, UndoScope::SingleSlide, true),
+        ("object.set_meter", true, UndoScope::SingleSlide, true),
+        ("object.set_path", true, UndoScope::SingleSlide, true),
+        ("object.set_crop", true, UndoScope::SingleSlide, true),
+        ("object.set_captions", true, UndoScope::SingleSlide, true),
+        ("object.set_media", true, UndoScope::SingleSlide, true),
+        ("video.add_cue", true, UndoScope::SingleSlide, true),
+        ("video.set_cue", true, UndoScope::SingleSlide, true),
+        ("video.remove_cue", true, UndoScope::SingleSlide, true),
+        (
+            "video.add_question_cue",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("slide.add_cue", true, UndoScope::SingleSlide, true),
+        ("slide.set_cue", true, UndoScope::SingleSlide, true),
+        ("slide.remove_cue", true, UndoScope::SingleSlide, true),
+        ("object.add_state", true, UndoScope::SingleSlide, true),
+        ("object.update_state", true, UndoScope::SingleSlide, true),
+        ("object.patch_state", true, UndoScope::SingleSlide, true),
+        ("object.delete_state", true, UndoScope::SingleSlide, true),
+        ("object.duplicate_state", true, UndoScope::SingleSlide, true),
+        ("object.rename_state", true, UndoScope::SingleSlide, true),
+        ("object.reorder_state", true, UndoScope::SingleSlide, true),
+        ("object.state_add_extra", true, UndoScope::SingleSlide, true),
+        (
+            "object.state_update_extra",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        (
+            "object.state_delete_extra",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        (
+            "object.state_reorder_extra",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("object.delete", true, UndoScope::SingleSlide, true),
+        ("object.set_animation", true, UndoScope::SingleSlide, true),
+        ("object.add_motion_path", true, UndoScope::SingleSlide, true),
+        (
+            "object.update_motion_path",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        (
+            "object.remove_motion_path",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("text.set", true, UndoScope::SingleSlide, true),
+        ("text.style_range", true, UndoScope::SingleSlide, true),
+        ("text.set_paragraph", true, UndoScope::SingleSlide, true),
+        ("text.set_paragraphs", true, UndoScope::SingleSlide, true),
+        ("text.set_link", true, UndoScope::SingleSlide, true),
+        ("object.set_autofit", true, UndoScope::SingleSlide, true),
+        ("table.set_cell", true, UndoScope::SingleSlide, true),
+        ("table.insert_row", true, UndoScope::SingleSlide, true),
+        ("table.delete_row", true, UndoScope::SingleSlide, true),
+        ("table.insert_column", true, UndoScope::SingleSlide, true),
+        ("table.delete_column", true, UndoScope::SingleSlide, true),
+        ("table.resize", true, UndoScope::SingleSlide, true),
+        ("table.merge", true, UndoScope::SingleSlide, true),
+        ("table.split", true, UndoScope::SingleSlide, true),
+        ("table.set_borders", true, UndoScope::SingleSlide, true),
+        ("table.set_header_row", true, UndoScope::SingleSlide, true),
+        ("trigger.add", true, UndoScope::SingleSlide, false),
+        ("trigger.update", true, UndoScope::SingleSlide, false),
+        ("trigger.move", true, UndoScope::SingleSlide, false),
+        ("trigger.delete", true, UndoScope::SingleSlide, false),
+        ("resource.add", true, UndoScope::CourseHeader, false),
+        ("resource.update", true, UndoScope::CourseHeader, false),
+        ("resource.remove", true, UndoScope::CourseHeader, false),
+        ("resource.move", true, UndoScope::CourseHeader, false),
+        ("glossary.add", true, UndoScope::CourseHeader, false),
+        ("glossary.update", true, UndoScope::CourseHeader, false),
+        ("glossary.remove", true, UndoScope::CourseHeader, false),
+        ("glossary.move", true, UndoScope::CourseHeader, false),
+        ("glossary.sort", true, UndoScope::CourseHeader, false),
+        ("variable.add", true, UndoScope::CourseHeader, false),
+        ("variable.set_value", true, UndoScope::CourseHeader, false),
+        ("variable.delete", true, UndoScope::FullCourse, false),
+        ("interaction.insert", true, UndoScope::FullCourse, false),
+        ("question.insert", true, UndoScope::SingleSlide, false),
+        ("results.insert", true, UndoScope::FullCourse, false),
+        ("certificate.insert", true, UndoScope::FullCourse, false),
+        (
+            "question.add_submit_button",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.add_feedback_layers",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.add_try_again_layer",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("question.set", true, UndoScope::SingleSlide, false),
+        ("question.delete", true, UndoScope::SingleSlide, false),
+        ("question.set_kind", true, UndoScope::SingleSlide, false),
+        ("question.add_accepted", true, UndoScope::SingleSlide, false),
+        (
+            "question.remove_accepted",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.update_accepted",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.set_case_sensitive",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("question.add_pair", true, UndoScope::SingleSlide, false),
+        ("question.remove_pair", true, UndoScope::SingleSlide, false),
+        ("question.update_pair", true, UndoScope::SingleSlide, false),
+        ("question.reorder_pair", true, UndoScope::SingleSlide, false),
+        (
+            "question.reorder_sequence",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.set_hotspot_image",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("question.add_region", true, UndoScope::SingleSlide, false),
+        (
+            "question.update_region",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.remove_region",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("question.set_markers", true, UndoScope::SingleSlide, false),
+        (
+            "question.add_drag_item",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.update_drag_item",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.remove_drag_item",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.set_drop_targets",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.set_drag_options",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("course.find", false, UndoScope::FullCourse, false),
+        ("course.replace", true, UndoScope::FullCourse, false),
+    ];
+
+    let actual: Vec<(&str, bool, UndoScope, bool)> = reg
+        .iter()
+        .map(|cmd| {
+            (
+                cmd.id,
+                cmd.mutates,
+                cmd.scope(),
+                cmd.can_use_slide_validation(),
+            )
+        })
+        .collect();
+    assert_eq!(actual.as_slice(), EXPECTED);
+
+    let mut table = String::new();
+    for cmd in reg {
+        let slide_val = cmd.can_use_slide_validation();
+        table.push_str(&format!(
+            "{}\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{}\n",
+            cmd.id,
+            cmd.label,
+            cmd.menu,
+            cmd.shortcut,
+            cmd.params,
+            cmd.mutates,
+            cmd.scope(),
+            slide_val
+        ));
+    }
+    assert_eq!(table.len(), 23_881, "registry golden table byte length");
+    assert_eq!(
+        fnv1a_64(table.as_bytes()),
+        0xde91_1e13_87d0_bfef,
+        "registry golden table FNV-1a hash"
+    );
+}
+
+#[test]
+fn r5_02_interaction_insert_golden_all_eight_kinds() {
+    type Expected = (
+        &'static str,
+        u64,
+        usize,
+        u64,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        Option<&'static str>,
+        Option<&'static str>,
+        Option<&'static str>,
+        Option<&'static str>,
+    );
+
+    const EXPECTED: &[Expected] = &[
+        (
+            "tabs",
+            0x8229_23c6_b2f7_4d9a,
+            223,
+            0xb24d_ef9c_81d3_6c76,
+            9571,
+            3,
+            3,
+            0,
+            13,
+            Some("tab_button1"),
+            Some("tab_button3"),
+            Some("tab_layer1"),
+            Some("tab_layer3"),
+        ),
+        (
+            "accordion",
+            0xed37_98ae_b36e_3636,
+            460,
+            0x6e5c_8ecd_32d7_4669,
+            16858,
+            3,
+            3,
+            0,
+            3,
+            Some("accordion_header1"),
+            Some("accordion_header3"),
+            Some("accordion_layer11"),
+            Some("accordion_layer31"),
+        ),
+        (
+            "flip_cards",
+            0x3b23_f9ad_626f_2cb2,
+            172,
+            0x1c45_77d7_939b_9ee0,
+            8378,
+            3,
+            0,
+            3,
+            9,
+            Some("flip_card1"),
+            Some("flip_card3"),
+            None,
+            None,
+        ),
+        (
+            "hotspot_reveal",
+            0xd0fc_58aa_f9ce_d2bb,
+            522,
+            0xf76c_230c_92df_9d57,
+            17172,
+            4,
+            3,
+            0,
+            6,
+            Some("hotspot_picture1"),
+            Some("hotspot_marker3"),
+            Some("hotspot_layer1"),
+            Some("hotspot_layer3"),
+        ),
+        (
+            "process_steps",
+            0x4f93_b7a3_a657_6f9b,
+            720,
+            0x1891_058d_2117_b5a0,
+            34043,
+            13,
+            4,
+            1,
+            29,
+            Some("step_line1"),
+            Some("step_next1"),
+            Some("step_layer1"),
+            Some("step_layer4"),
+        ),
+        (
+            "timeline",
+            0xaf44_cbac_ec25_ccff,
+            1059,
+            0xddf5_f6c8_45a1_1c8d,
+            27602,
+            16,
+            5,
+            0,
+            10,
+            Some("timeline_line1"),
+            Some("timeline_title5"),
+            Some("timeline_layer1"),
+            Some("timeline_layer5"),
+        ),
+        (
+            "reveal_grid",
+            0x5a9d_2d57_e41a_5620,
+            410,
+            0xa7a4_295f_475c_90d4,
+            22524,
+            7,
+            0,
+            7,
+            31,
+            Some("grid_tile_shape1"),
+            Some("grid_counter1"),
+            None,
+            None,
+        ),
+        (
+            "scenario_choice",
+            0x6715_89b0_5895_80ad,
+            605,
+            0xf2b0_c8ee_d764_2f0e,
+            15097,
+            6,
+            3,
+            0,
+            3,
+            Some("scenario_panel1"),
+            Some("scenario_choice3"),
+            Some("scenario_layer1"),
+            Some("scenario_layer3"),
+        ),
+    ];
+
+    for &(
+        kind,
+        exp_ret_hash,
+        exp_ret_len,
+        exp_course_hash,
+        exp_course_len,
+        exp_objs,
+        exp_layers,
+        exp_vars,
+        exp_triggers,
+        exp_first_obj,
+        exp_last_obj,
+        exp_first_layer,
+        exp_last_layer,
+    ) in EXPECTED
+    {
+        let mut s = Session::blank("Interaction Golden");
+        let ret = ok(
+            &mut s,
+            "interaction.insert",
+            json!({ "slide": "slide1", "kind": kind }),
+        );
+        let ret_str = serde_json::to_string(&ret).expect("serialize return");
+        let course_str = s.course.to_json().expect("serialize course");
+        let slide = s.course.slide("slide1").expect("slide1 exists");
+
+        assert_eq!(ret_str.len(), exp_ret_len, "{kind}: return json len");
+        assert_eq!(
+            fnv1a_64(ret_str.as_bytes()),
+            exp_ret_hash,
+            "{kind}: return json hash"
+        );
+        assert_eq!(course_str.len(), exp_course_len, "{kind}: course json len");
+        assert_eq!(
+            fnv1a_64(course_str.as_bytes()),
+            exp_course_hash,
+            "{kind}: course json hash"
+        );
+        assert_eq!(slide.objects.len(), exp_objs, "{kind}: object count");
+        assert_eq!(slide.layers.len(), exp_layers, "{kind}: layer count");
+        assert_eq!(s.course.variables.len(), exp_vars, "{kind}: variable count");
+        assert_eq!(slide.triggers.len(), exp_triggers, "{kind}: trigger count");
+        assert_eq!(
+            slide.objects.first().map(|o| o.id.as_str()),
+            exp_first_obj,
+            "{kind}: first object id"
+        );
+        assert_eq!(
+            slide.objects.last().map(|o| o.id.as_str()),
+            exp_last_obj,
+            "{kind}: last object id"
+        );
+        assert_eq!(
+            slide.layers.first().map(|l| l.id.as_str()),
+            exp_first_layer,
+            "{kind}: first layer id"
+        );
+        assert_eq!(
+            slide.layers.last().map(|l| l.id.as_str()),
+            exp_last_layer,
+            "{kind}: last layer id"
+        );
     }
 }

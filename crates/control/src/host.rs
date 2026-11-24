@@ -234,6 +234,34 @@ impl HeadlessHost {
         }
     }
 
+    /// Open a course file (`.ccraft`, `.ccraft-folder`, or `course.json`) into a new headless host.
+    pub fn open_path(path: &Path) -> Result<Self, HostError> {
+        let mut host = Self::new(Session::blank(""), None);
+        ControlHost::open(&mut host, path, true)?;
+        Ok(host)
+    }
+
+    fn collect_media_for_save(&self) -> Vec<(String, Vec<u8>)> {
+        use coursecraft_render::{MediaFetch, MediaSource};
+
+        let mut media = self.media_source.snapshot_in_memory();
+        let mut seen: std::collections::HashSet<String> =
+            media.iter().map(|(k, _)| k.clone()).collect();
+
+        for r in coursecraft_course::media_references(&self.session.course) {
+            if r.src.ends_with('/') || seen.contains(&r.src) {
+                continue;
+            }
+            if let MediaFetch::Ready(bytes) = self.media_source.get(&r.src) {
+                seen.insert(r.src.clone());
+                media.push((r.src, bytes.to_vec()));
+            }
+        }
+
+        media.sort_by(|a, b| a.0.cmp(&b.0));
+        media
+    }
+
     fn select_created(&mut self, command: &str, result: &Json) {
         let Some(new_id) = result.get("id").and_then(Json::as_str) else {
             return;
@@ -404,7 +432,7 @@ impl ControlHost for HeadlessHost {
             .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
 
         if is_ccraft {
-            let media = self.media_source.snapshot_in_memory();
+            let media = self.collect_media_for_save();
             let file_name = target
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -436,6 +464,7 @@ impl ControlHost for HeadlessHost {
                 let _ = std::fs::remove_file(&tmp);
             }
             result?;
+            self.media_source.set_in_memory(&media);
         } else {
             let is_dir = target.is_dir()
                 || target
@@ -443,7 +472,7 @@ impl ControlHost for HeadlessHost {
                     .and_then(|ext| ext.to_str())
                     .is_none_or(|e| !e.eq_ignore_ascii_case("json"));
             if is_dir {
-                let media = self.media_source.snapshot_in_memory();
+                let media = self.collect_media_for_save();
                 let mut record = coursecraft_format::FolderRecord::default();
                 coursecraft_format::save_project_folder(
                     &target,
@@ -452,6 +481,7 @@ impl ControlHost for HeadlessHost {
                     &mut record,
                 )
                 .map_err(|e| HostError::Engine(format!("save failed: {e}")))?;
+                self.media_source.set_in_memory(&media);
             } else {
                 let json_text = self
                     .session
@@ -464,6 +494,7 @@ impl ControlHost for HeadlessHost {
         }
 
         self.path = Some(target.clone());
+        self.media_source.set_path(Some(target.clone()));
         self.saved_revision = self.session.revision;
         Ok(target)
     }
@@ -479,8 +510,9 @@ impl ControlHost for HeadlessHost {
             .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
 
         let course = if is_ccraft {
-            let bytes = std::fs::read(path).map_err(|e| HostError::Io(e.to_string()))?;
-            let proj = coursecraft_format::open_project(&bytes)
+            let file = std::fs::File::open(path).map_err(|e| HostError::Io(e.to_string()))?;
+            let reader = std::io::BufReader::with_capacity(256 * 1024, file);
+            let proj = coursecraft_format::open_project_from(reader)
                 .map_err(|e| HostError::Engine(e.to_string()))?;
             self.media_source.set_in_memory(&proj.media);
             proj.course

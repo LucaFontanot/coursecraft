@@ -200,6 +200,39 @@ impl From<coursecraft_ui_egui::SpeechSource> for SpeechSourcePref {
     }
 }
 
+/// User editor performance mode stored in `prefs.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PerformanceModePref {
+    /// Automatically pick Lite on constrained devices or large courses.
+    #[default]
+    Auto,
+    /// Standard cache ceilings and full editor preview detail.
+    Standard,
+    /// Reduced editor cache ceilings and preview detail.
+    Lite,
+}
+
+impl From<coursecraft_ui_egui::coursecraft_render::PerformanceMode> for PerformanceModePref {
+    fn from(mode: coursecraft_ui_egui::coursecraft_render::PerformanceMode) -> Self {
+        match mode {
+            coursecraft_ui_egui::coursecraft_render::PerformanceMode::Auto => Self::Auto,
+            coursecraft_ui_egui::coursecraft_render::PerformanceMode::Standard => Self::Standard,
+            coursecraft_ui_egui::coursecraft_render::PerformanceMode::Lite => Self::Lite,
+        }
+    }
+}
+
+impl From<PerformanceModePref> for coursecraft_ui_egui::coursecraft_render::PerformanceMode {
+    fn from(mode: PerformanceModePref) -> Self {
+        match mode {
+            PerformanceModePref::Auto => Self::Auto,
+            PerformanceModePref::Standard => Self::Standard,
+            PerformanceModePref::Lite => Self::Lite,
+        }
+    }
+}
+
 /// Persisted user preferences.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prefs {
@@ -228,13 +261,25 @@ pub struct Prefs {
     pub versions_to_keep: u32,
     /// Slide size of a new course.
     #[serde(default)]
-    pub default_slide: SlidePreset,
+    pub default_slide: DefaultSlideSize,
     /// Underline misspellings while editing text.
     #[serde(default = "default_true")]
     pub spell_check_as_you_type: bool,
     /// Words added to the personal dictionary.
     #[serde(default)]
     pub spell_words: Vec<String>,
+    /// Editor performance mode (`auto` / `standard` / `lite`).
+    #[serde(default)]
+    pub performance_mode: PerformanceModePref,
+    /// Check GitHub at most once a day on startup for a newer desktop version.
+    #[serde(default = "default_true")]
+    pub auto_check_updates: bool,
+    /// Unix timestamp (seconds) of the last completed or rate-limited update check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_update_check_unix: Option<u64>,
+    /// Semver version string the user chose to skip (e.g. `"0.4.4"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_update_version: Option<String>,
     /// Interface language: `"auto"` follows the system, else a language code.
     #[serde(default = "default_language")]
     pub language: String,
@@ -305,6 +350,110 @@ impl SlidePreset {
     }
 }
 
+/// Default slide size for new courses (16:9 HD).
+pub const DEFAULT_SLIDE_SIZE: (u32, u32) = (1280, 720);
+
+/// Allowed slide width range in pixels.
+pub const SLIDE_W_RANGE: std::ops::RangeInclusive<u32> = 100..=7680;
+
+/// Allowed slide height range in pixels.
+pub const SLIDE_H_RANGE: std::ops::RangeInclusive<u32> = 100..=4320;
+
+/// Backward-compatible default slide size stored in `prefs.json`.
+///
+/// Accepts both legacy [`SlidePreset`] strings (`"wide16x9"`, `"wide16x10"`,
+/// `"standard4x3"`, `"square"`) and `{ "w": u32, "h": u32 }` custom sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DefaultSlideSize {
+    pub w: u32,
+    pub h: u32,
+}
+
+impl Default for DefaultSlideSize {
+    fn default() -> Self {
+        Self {
+            w: DEFAULT_SLIDE_SIZE.0,
+            h: DEFAULT_SLIDE_SIZE.1,
+        }
+    }
+}
+
+impl From<SlidePreset> for DefaultSlideSize {
+    fn from(preset: SlidePreset) -> Self {
+        let (w, h) = preset.size();
+        Self { w, h }
+    }
+}
+
+impl DefaultSlideSize {
+    /// Construct a [`DefaultSlideSize`] if `(w, h)` is within `100..=7680` × `100..=4320`.
+    #[must_use]
+    pub fn from_valid_size((w, h): (u32, u32)) -> Option<Self> {
+        if SLIDE_W_RANGE.contains(&w) && SLIDE_H_RANGE.contains(&h) {
+            Some(Self { w, h })
+        } else {
+            None
+        }
+    }
+
+    /// Width and height in pixels.
+    #[must_use]
+    pub fn size(self) -> (u32, u32) {
+        (self.w, self.h)
+    }
+}
+
+impl Serialize for DefaultSlideSize {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let Some(preset) = SlidePreset::from_size(self.size()) {
+            preset.serialize(serializer)
+        } else {
+            #[derive(Serialize)]
+            struct RawSize {
+                w: u32,
+                h: u32,
+            }
+            RawSize {
+                w: self.w,
+                h: self.h,
+            }
+            .serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DefaultSlideSize {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let Ok(val) = serde_json::Value::deserialize(deserializer) else {
+            return Ok(Self::default());
+        };
+        if let Some(s) = val.as_str() {
+            if let Ok(preset) =
+                serde_json::from_value::<SlidePreset>(serde_json::Value::String(s.to_owned()))
+            {
+                return Ok(Self::from(preset));
+            }
+            return Ok(Self::default());
+        }
+        if let Some(obj) = val.as_object() {
+            let w = obj
+                .get("w")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok());
+            let h = obj
+                .get("h")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok());
+            if let (Some(w), Some(h)) = (w, h)
+                && let Some(valid) = Self::from_valid_size((w, h))
+            {
+                return Ok(valid);
+            }
+        }
+        Ok(Self::default())
+    }
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Self {
@@ -317,13 +466,17 @@ impl Default for Prefs {
             speech_source: SpeechSourcePref::default(),
             autosave_minutes: default_autosave_minutes(),
             versions_to_keep: default_versions_to_keep(),
-            default_slide: SlidePreset::default(),
+            default_slide: DefaultSlideSize::default(),
             spell_check_as_you_type: true,
             spell_words: Vec::new(),
             language: default_language(),
             ribbon: true,
             docked_panels: true,
             panel_layout: None,
+            performance_mode: PerformanceModePref::default(),
+            auto_check_updates: true,
+            last_update_check_unix: None,
+            skipped_update_version: None,
         }
     }
 }
@@ -444,4 +597,72 @@ pub fn save_prefs(config_dir: &Path, prefs: &Prefs) -> Result<(), String> {
             .map_err(|e| format!("Failed to secure preferences: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PerformanceModePref, Prefs, load_prefs, save_prefs};
+
+    #[test]
+    fn performance_mode_defaults_to_auto_on_older_json_and_round_trips() {
+        let dir = std::env::temp_dir().join(format!(
+            "coursecraft-prefs-perf-mode-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // Older prefs.json without `performance_mode` must default to Auto.
+        std::fs::write(dir.join("prefs.json"), r#"{"recent": []}"#).expect("write old prefs");
+        let old = load_prefs(&dir);
+        assert_eq!(old.performance_mode, PerformanceModePref::Auto);
+
+        for mode in [
+            PerformanceModePref::Standard,
+            PerformanceModePref::Lite,
+            PerformanceModePref::Auto,
+        ] {
+            let prefs = Prefs {
+                performance_mode: mode,
+                ..Prefs::default()
+            };
+            save_prefs(&dir, &prefs).expect("save prefs");
+            let loaded = load_prefs(&dir);
+            assert_eq!(loaded.performance_mode, mode);
+            let render_mode: coursecraft_ui_egui::coursecraft_render::PerformanceMode = mode.into();
+            assert_eq!(PerformanceModePref::from(render_mode), mode);
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn up09_update_prefs_backward_compat_and_round_trip() {
+        let dir =
+            std::env::temp_dir().join(format!("coursecraft-prefs-up09-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // Legacy prefs.json lacking the 3 update fields must load with defaults.
+        std::fs::write(dir.join("prefs.json"), r#"{"recent": []}"#).expect("write legacy prefs");
+        let legacy = load_prefs(&dir);
+        assert!(legacy.auto_check_updates);
+        assert_eq!(legacy.last_update_check_unix, None);
+        assert_eq!(legacy.skipped_update_version, None);
+
+        // Saving and reloading with all 3 fields populated must preserve them exactly.
+        let populated = Prefs {
+            auto_check_updates: false,
+            last_update_check_unix: Some(1_700_000_000),
+            skipped_update_version: Some("0.4.4".to_owned()),
+            ..Prefs::default()
+        };
+        save_prefs(&dir, &populated).expect("save prefs");
+        let reloaded = load_prefs(&dir);
+        assert!(!reloaded.auto_check_updates);
+        assert_eq!(reloaded.last_update_check_unix, Some(1_700_000_000));
+        assert_eq!(reloaded.skipped_update_version.as_deref(), Some("0.4.4"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

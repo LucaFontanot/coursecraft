@@ -21,7 +21,6 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use coursecraft_control::{HeadlessHost, default_config_dir};
-use coursecraft_course::Course;
 use coursecraft_engine::Session;
 use serde_json::Value as Json;
 
@@ -37,7 +36,7 @@ const ACCEPTED_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
     about = "CourseCraft MCP server over stdio"
 )]
 struct Args {
-    /// Open a course file (.ccraft or course.json) in headless mode.
+    /// Open a course file (.ccraft, .ccraft-folder, or course.json) in headless mode.
     #[arg(long)]
     course: Option<PathBuf>,
 
@@ -54,21 +53,8 @@ struct Args {
     config_dir: Option<PathBuf>,
 }
 
-fn load_course(path: &Path) -> Result<Course, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"))
-    {
-        let proj = coursecraft_format::open_project(&bytes)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(proj.course)
-    } else {
-        let text = std::str::from_utf8(&bytes)
-            .map_err(|e| format!("{}: non-utf8 course.json ({e})", path.display()))?;
-        Course::from_json(text).map_err(|e| format!("{}: {e}", path.display()))
-    }
+pub(crate) fn open_headless_host(path: &Path) -> Result<HeadlessHost, String> {
+    HeadlessHost::open_path(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Process JSON-RPC messages from `reader` and send responses to `writer`.
@@ -246,11 +232,8 @@ pub fn main_with_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Exi
     let args = Args::parse_from(args);
 
     let mut backend: Box<dyn McpBackend> = if let Some(ref course_path) = args.course {
-        match load_course(course_path) {
-            Ok(course) => {
-                let session = Session::new(course);
-                Box::new(HeadlessHost::new(session, Some(course_path.clone())))
-            }
+        match open_headless_host(course_path) {
+            Ok(host) => Box::new(host),
             Err(e) => {
                 eprintln!("failed to load course: {e}");
                 return ExitCode::FAILURE;

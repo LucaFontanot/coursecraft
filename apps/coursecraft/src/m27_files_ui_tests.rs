@@ -88,6 +88,18 @@ impl AppHarness {
         out.drop_without_applying_deltas();
     }
 
+    fn wait_for_autosave(&mut self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while self.app.autosave_rx.is_some() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+            self.idle_frame();
+        }
+        assert!(
+            self.app.autosave_rx.is_none(),
+            "background autosave did not finish within timeout"
+        );
+    }
+
     fn find_texts(&mut self, label: &str) -> Vec<Pos2> {
         fn walk(shape: &egui::epaint::Shape, label: &str, out: &mut Vec<Pos2>) {
             match shape {
@@ -338,10 +350,7 @@ fn d13_1_ccraft_save_edit_save_reopen_fidelity_and_no_tmp() {
 
     let mut h = AppHarness::new(course.clone(), Some(cfg.clone()));
     for (name, bytes) in &media {
-        h.app
-            .editor
-            .media
-            .push((name.clone(), bytes.clone().into()));
+        h.app.editor.media.push(name.clone(), bytes.clone().into());
     }
     h.app.test_save_as_path = Some(proj_path.clone());
     assert!(h.app.perform_save_as());
@@ -399,10 +408,7 @@ fn d13_2_folder_project_incremental_save_and_reopen_parity() {
 
     let mut h = AppHarness::new(course, Some(cfg.clone()));
     for (name, bytes) in &media {
-        h.app
-            .editor
-            .media
-            .push((name.clone(), bytes.clone().into()));
+        h.app.editor.media.push(name.clone(), bytes.clone().into());
     }
     h.app.test_save_as_folder_path = Some(folder.clone());
     assert!(h.app.perform_save_as_folder());
@@ -542,6 +548,7 @@ fn d13_5_untitled_autosave_write_restore_discard_and_cleanup_on_save() {
     // Advance virtual clock past 60s and run frame to trigger update_autosave.
     h.advance_time(65.0);
     h.idle_frame();
+    h.wait_for_autosave();
     assert!(
         untitled_auto.is_file(),
         "untitled autosave should be written"
@@ -567,6 +574,7 @@ fn d13_5_untitled_autosave_write_restore_discard_and_cleanup_on_save() {
         serde_json::json!({ "title": "Recovered Untitled 2" }),
     );
     h.idle_frame();
+    h.wait_for_autosave();
     assert!(untitled_auto.is_file());
 
     let mut h_restore = AppHarness::new(initial_course(true), Some(cfg));
@@ -614,6 +622,7 @@ fn d13_6_named_and_folder_autosave_recovery() {
     );
     h.advance_time(65.0);
     h.idle_frame();
+    h.wait_for_autosave();
     let named_auto = autosave_path_for_project(Some(&named), &cfg);
     assert!(named_auto.is_file());
 
@@ -644,6 +653,7 @@ fn d13_6_named_and_folder_autosave_recovery() {
     );
     hf.advance_time(65.0);
     hf.idle_frame();
+    hf.wait_for_autosave();
     let folder_auto = autosave_path_for_project(Some(&folder), &cfg);
     assert!(folder_auto.is_file());
 
@@ -692,12 +702,12 @@ fn d13_7_changed_on_disk_conflict_modal_for_ccraft_and_folder() {
     assert!(h.app.conflict_prompt.is_none());
     assert_eq!(open_from(&conflict).unwrap().0.title, "External Edit");
 
-    // 2. Save a Copy leaves external file intact
+    // 2. Save a copy leaves external file intact
     assert!(!h.app.perform_save());
     assert!(h.app.conflict_prompt.is_some());
     let copy_path = dir.join("conflict-copy.ccraft");
     h.app.test_save_as_path = Some(copy_path.clone());
-    h.click_button("Save a Copy");
+    h.click_button("Save a copy");
     assert!(h.app.conflict_prompt.is_none());
     assert_eq!(open_from(&conflict).unwrap().0.title, "External Edit");
     assert_eq!(open_from(&copy_path).unwrap().0.title, "Local Edit");
@@ -734,7 +744,7 @@ fn d13_7_changed_on_disk_conflict_modal_for_ccraft_and_folder() {
     assert!(hf.app.conflict_prompt.is_some());
     let folder_copy = dir.join("conflict-folder-copy");
     hf.app.test_save_as_folder_path = Some(folder_copy.clone());
-    hf.click_button("Save a Copy");
+    hf.click_button("Save a copy");
     assert!(hf.app.conflict_prompt.is_none());
     assert_eq!(
         open_folder_from(&folder).unwrap().0.0.title,
@@ -982,8 +992,8 @@ fn d13_11_damaged_and_future_schema_open_and_latest_version_offer() {
 
     h.idle_frame();
     let texts = h.all_texts();
-    assert!(texts.iter().any(|t| t == "Open Latest Version"));
-    h.click_button("Open Latest Version");
+    assert!(texts.iter().any(|t| t == "Open latest version"));
+    h.click_button("Open latest version");
     assert!(h.app.error_modal.is_none());
     assert!(h.app.open_latest_offer.is_none());
     assert!(h.app.project.path.is_none());
@@ -1054,5 +1064,71 @@ fn d13_12_rapid_20x_save_burst_and_stale_temp_and_verify_guard() {
         open_from(&proj).unwrap().0.title,
         "Burst 20",
         "last known-good file must remain intact"
+    );
+}
+
+/// L-05: App shell modal buttons use sentence case while keeping platform-standard `"Don't Save"`.
+#[test]
+fn app_shell_modals_use_sentence_case_and_keep_dont_save() {
+    let dir = scratch_dir("l05-app-shell-modals");
+    let cfg = dir.join("cfg");
+    let proj = dir.join("modal-copy.ccraft");
+
+    let mut c_init = Course::from_json(HELLO_JSON).unwrap();
+    c_init.title = "Initial".into();
+    let mut h = AppHarness::new(c_init.clone(), Some(cfg.clone()));
+    h.app.test_save_as_path = Some(proj.clone());
+    assert!(h.app.perform_save_as());
+
+    // 1. Unsaved-changes modal keeps platform-standard "Don't Save".
+    h.app.editor.run(
+        "course.set_title",
+        serde_json::json!({ "title": "Unsaved Edit" }),
+    );
+    h.app.handle_request(EditorRequest::New, &h.ctx);
+    h.idle_frame();
+    let unsaved_texts = h.all_texts();
+    assert!(
+        unsaved_texts.iter().any(|t| t == "Don't Save"),
+        "unsaved-changes modal must keep platform-standard \"Don't Save\": {unsaved_texts:?}"
+    );
+    h.click_button("Cancel");
+
+    // 2. Conflict modal shows sentence-case "Save a copy" (never "Save a Copy").
+    std::thread::sleep(Duration::from_millis(50));
+    let mut c_ext = Course::from_json(HELLO_JSON).unwrap();
+    c_ext.title = "External".into();
+    save_to(&proj, &c_ext, &[]).unwrap();
+    assert!(!h.app.perform_save());
+    assert!(h.app.conflict_prompt.is_some());
+    h.idle_frame();
+    let conflict_texts = h.all_texts();
+    assert!(
+        conflict_texts.iter().any(|t| t == "Save a copy"),
+        "conflict modal must show 'Save a copy': {conflict_texts:?}"
+    );
+    assert!(
+        !conflict_texts.iter().any(|t| t == "Save a Copy"),
+        "conflict modal must not show Title Case 'Save a Copy'"
+    );
+    h.click_button("Cancel");
+
+    // 3. Error modal with a kept version shows sentence-case "Open latest version".
+    let corrupt = dir.join("corrupt-l05.ccraft");
+    save_to(&corrupt, &c_init, &[]).unwrap();
+    versions::snapshot_before_save(&cfg, &corrupt, 5, &c_init.title).unwrap();
+    std::fs::write(&corrupt, b"PK\x03\x04truncated").unwrap();
+    h.app.finish_open(&corrupt, Some(corrupt.clone()), false);
+    assert!(h.app.error_modal.is_some());
+    assert!(h.app.open_latest_offer.is_some());
+    h.idle_frame();
+    let error_texts = h.all_texts();
+    assert!(
+        error_texts.iter().any(|t| t == "Open latest version"),
+        "error modal must show 'Open latest version': {error_texts:?}"
+    );
+    assert!(
+        !error_texts.iter().any(|t| t == "Open Latest Version"),
+        "error modal must not show Title Case 'Open Latest Version'"
     );
 }

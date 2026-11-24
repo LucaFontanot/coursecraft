@@ -4,7 +4,7 @@
 use crate::test_harness::TestHarness;
 use crate::{DrawTool, EditorRequest, PendingImagePick, PlacementTool};
 use coursecraft_course::{Course, ShapeKind, StateExtraKind};
-use egui::{Key, Modifiers, Pos2, pos2};
+use egui::{Key, Modifiers, Pos2, pos2, vec2};
 
 fn course_with_button_and_hover_state() -> Course {
     let raw = serde_json::json!({
@@ -756,5 +756,218 @@ fn u19_used_media_and_media_library_places_include_state_extra_image() {
     assert!(
         h.find_text("Places using this file").is_some(),
         "Media Library must show Places using this file for state extra image"
+    );
+}
+
+#[test]
+fn b04_extra_inspector_cache_key_includes_state_name() {
+    let mut course = course_with_button_and_hover_state();
+    let extra_1: coursecraft_course::StateExtra = serde_json::from_value(serde_json::json!({
+        "id": "extra_1",
+        "name": "Hover Badge",
+        "kind": { "type": "text", "text": "Hover" },
+        "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 24.0 }
+    }))
+    .expect("valid text extra");
+    course.slide_mut("s1").expect("s1").objects[0].states[0]
+        .extras
+        .push(extra_1);
+
+    let mut h = TestHarness::new(course);
+    h.editor
+        .run(
+            "object.duplicate_state",
+            serde_json::json!({
+                "slide": "s1",
+                "object": "btn1",
+                "name": "hover",
+                "new_name": "visited",
+            }),
+        )
+        .expect("duplicate_state");
+    h.editor
+        .run(
+            "object.state_update_extra",
+            serde_json::json!({
+                "slide": "s1",
+                "object": "btn1",
+                "state": "visited",
+                "extra": "extra_1",
+                "patch": {
+                    "frame": { "x": 90.0, "y": 10.0, "w": 80.0, "h": 24.0 },
+                    "kind": { "type": "text", "text": "Visited" },
+                }
+            }),
+        )
+        .expect("state_update_extra");
+
+    h.editor.enter_edit_state("s1", "btn1", "hover");
+    if let Some(session) = h.editor.ui.editing_state.as_mut() {
+        session.selected_extra = Some("extra_1".to_owned());
+    }
+    h.idle_frame();
+    assert_eq!(h.editor.ui.properties.extra_x, 10.0);
+    assert_eq!(h.editor.ui.properties.extra_text, "Hover");
+
+    // Switch to "visited" at the exact same course revision.
+    let rev_before = h.editor.session.revision;
+    if let Some(session) = h.editor.ui.editing_state.as_mut() {
+        session.state_name = "visited".to_owned();
+        session.selected_extra = Some("extra_1".to_owned());
+    }
+    h.editor.ui.preview_state = Some("visited".to_owned());
+    h.idle_frame();
+
+    assert_eq!(h.editor.session.revision, rev_before);
+    assert_eq!(
+        h.editor.ui.properties.extra_x, 90.0,
+        "inspector must refresh extra_x when switching states at the same revision"
+    );
+    assert_eq!(
+        h.editor.ui.properties.extra_text, "Visited",
+        "inspector must refresh extra_text when switching states at the same revision"
+    );
+}
+
+#[test]
+fn b06_state_extra_placement_inline_edit_and_rotate_preview_respect_parent_transform() {
+    let mut course = course_with_button_and_hover_state();
+    {
+        let obj = &mut course.slide_mut("s1").expect("s1").objects[0];
+        obj.frame = coursecraft_course::Rect {
+            x: 300.0,
+            y: 200.0,
+            w: 200.0,
+            h: 80.0,
+        };
+        obj.rotation = 90.0;
+        obj.flip_h = true;
+    }
+
+    let mut h = TestHarness::new(course);
+    h.editor.enter_edit_state("s1", "btn1", "hover");
+    h.idle_frame();
+
+    // 1. Place a Shape extra on the 90°-rotated, horizontally-flipped parent at slide point P.
+    let p_shape = pos2(620.0, 260.0);
+    let shape_size = vec2(80.0, 40.0);
+    h.editor.ui.placement_tool = Some(PlacementTool::Shape(
+        coursecraft_course::ShapeKind::Rectangle,
+    ));
+    let drag_start = slide_to_screen(&h, p_shape - shape_size * 0.5);
+    let drag_end = slide_to_screen(&h, p_shape + shape_size * 0.5);
+    h.drag_by(drag_start, drag_end - drag_start, 5, Modifiers::NONE);
+    h.idle_frame();
+
+    let obj = &h.editor.session.course.slide("s1").expect("s1").objects[0];
+    let shape_extra = obj.states[0].extras.last().expect("placed shape extra");
+    let (shape_world, shape_rot) =
+        crate::canvas::state_extra_world_geometry(obj, "hover", shape_extra);
+    assert!(
+        (shape_world.center().x - p_shape.x).abs() <= 2.0
+            && (shape_world.center().y - p_shape.y).abs() <= 2.0,
+        "placed shape extra world center {:?} must match {p_shape:?}",
+        shape_world.center()
+    );
+    assert!(
+        shape_rot.abs() < 0.01 || (shape_rot - 360.0).abs() < 0.01,
+        "placed shape extra world rotation must be 0, got {shape_rot}"
+    );
+    let picked = crate::canvas::pick_state_extra(&h.editor, p_shape);
+    assert_eq!(
+        picked.as_ref().map(|(id, _, _)| id.as_str()),
+        Some(shape_extra.id.as_str()),
+        "pick_state_extra must hit newly placed shape extra at {p_shape:?}"
+    );
+
+    // 2. Place a Path extra via Scribble draw tool at slide point P2.
+    let p_path = pos2(700.0, 340.0);
+    h.editor.ui.placement_tool = Some(PlacementTool::Draw(DrawTool::Scribble));
+    let path_start = slide_to_screen(&h, pos2(p_path.x - 40.0, p_path.y - 20.0));
+    let path_end = slide_to_screen(&h, pos2(p_path.x + 40.0, p_path.y + 20.0));
+    h.drag_by(path_start, path_end - path_start, 6, Modifiers::NONE);
+    h.idle_frame();
+
+    let obj = &h.editor.session.course.slide("s1").expect("s1").objects[0];
+    assert_eq!(obj.states[0].extras.len(), 2, "path extra must be added");
+    let path_extra = &obj.states[0].extras[1];
+    let (path_world, _) = crate::canvas::state_extra_world_geometry(obj, "hover", path_extra);
+    assert!(
+        (path_world.center().x - p_path.x).abs() <= 2.0
+            && (path_world.center().y - p_path.y).abs() <= 2.0,
+        "placed path extra world center {:?} must match {p_path:?}",
+        path_world.center()
+    );
+    let picked_path = crate::canvas::pick_state_extra(&h.editor, p_path);
+    assert_eq!(
+        picked_path.as_ref().map(|(id, _, _)| id.as_str()),
+        Some(path_extra.id.as_str()),
+        "pick_state_extra must hit newly placed path extra at {p_path:?}"
+    );
+
+    // 3. Double-click a Text extra on the rotated+flipped parent -> inline_edit_slide_rect uses world geometry.
+    let p_text = pos2(520.0, 160.0);
+    h.editor.ui.placement_tool = Some(PlacementTool::TextBox);
+    let text_start = slide_to_screen(&h, pos2(p_text.x - 50.0, p_text.y - 16.0));
+    let text_end = slide_to_screen(&h, pos2(p_text.x + 50.0, p_text.y + 16.0));
+    h.drag_by(text_start, text_end - text_start, 5, Modifiers::NONE);
+    h.idle_frame();
+
+    let text_world = {
+        let obj = &h.editor.session.course.slide("s1").expect("s1").objects[0];
+        let text_extra = obj.states[0].extras.last().expect("text extra");
+        crate::canvas::state_extra_world_geometry(obj, "hover", text_extra).0
+    };
+    h.double_click_at(slide_to_screen(&h, text_world.center()));
+    h.idle_frame();
+
+    let obj = &h.editor.session.course.slide("s1").expect("s1").objects[0];
+    let edit = h
+        .editor
+        .ui
+        .inline_edit
+        .as_ref()
+        .expect("double-clicking text extra must open InlineEdit");
+    let edit_rect = crate::canvas::inline_edit_slide_rect(obj, edit).expect("inline edit rect");
+    assert!(
+        (edit_rect.center().x - text_world.center().x).abs() <= 1.0
+            && (edit_rect.center().y - text_world.center().y).abs() <= 1.0,
+        "inline_edit_slide_rect center {:?} must match world rect center {:?}",
+        edit_rect.center(),
+        text_world.center()
+    );
+    h.editor.ui.inline_edit = None;
+
+    // 4. Live parent rotate preview must leave is_state_extra item rotations intact.
+    h.editor.exit_edit_state();
+    let obj = &h.editor.session.course.slide("s1").expect("s1").objects[0];
+    let mut items = coursecraft_render::compose_object_items(
+        obj,
+        "hover",
+        Some(&h.editor.session.course.theme),
+        crate::states::course_input_value(&h.editor.session.course, obj),
+    );
+    let initial_extra_rotations: Vec<f32> = items
+        .iter()
+        .filter(|it| it.is_state_extra)
+        .map(|it| it.rotation)
+        .collect();
+    assert_eq!(initial_extra_rotations.len(), 3);
+
+    crate::canvas::apply_rotate_preview(&mut items, "btn1", 135.0);
+
+    let parent_item = items
+        .iter()
+        .find(|it| !it.is_state_extra && it.hit == coursecraft_render::Hit::Object("btn1".into()))
+        .expect("parent draw item");
+    assert_eq!(parent_item.rotation, 135.0);
+    let after_extra_rotations: Vec<f32> = items
+        .iter()
+        .filter(|it| it.is_state_extra)
+        .map(|it| it.rotation)
+        .collect();
+    assert_eq!(
+        after_extra_rotations, initial_extra_rotations,
+        "live parent rotate preview must not overwrite is_state_extra item rotations"
     );
 }

@@ -84,3 +84,33 @@ fn clicking_publish_preserves_chosen_lms_status() {
         Some(LmsStatus::PassedFailed)
     );
 }
+
+#[test]
+fn m31_21_publish_busy_renders_optional_percentage() {
+    let mut harness = TestHarness::new(hello());
+    harness.editor.set_publish_available(true);
+    harness.editor.set_publish_busy();
+    harness.idle_frame();
+    assert!(
+        harness.find_text("Publishing…").is_some(),
+        "plain busy label must render when progress is None"
+    );
+
+    harness.editor.set_publish_progress(Some(0.45));
+    harness.idle_frame();
+    assert!(
+        harness.find_text("Publishing… 45%").is_some(),
+        "percentage label must render when progress is Some"
+    );
+
+    harness.editor.set_publish_progress(None);
+    harness.idle_frame();
+    assert!(
+        harness.find_text("Publishing… 45%").is_none(),
+        "percentage must disappear when progress is cleared"
+    );
+    assert!(harness.find_text("Publishing…").is_some());
+
+    harness.editor.set_publish_success("course.zip", 1024);
+    assert_eq!(harness.editor.ui.publish.progress, None);
+}

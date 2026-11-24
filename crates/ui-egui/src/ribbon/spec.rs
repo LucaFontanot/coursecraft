@@ -263,7 +263,7 @@ pub enum UiMenu {
     Questions,
 }
 
-/// Why a control whose feature exists is not wired to the ribbon yet (M30 step 2).
+/// Why a control whose feature exists is not wired to the ribbon yet (M37 step 2).
 pub const WIRING_FORMAT: &str = "ribbon wiring (use the Format inspector)";
 const WIRING_SLIDE: &str = "ribbon wiring (use the Slide inspector)";
 const WIRING_BANKS: &str = "ribbon wiring (use Question banks in the slides panel)";

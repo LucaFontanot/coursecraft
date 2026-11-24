@@ -106,7 +106,7 @@ pub struct PropertiesState {
     pub last_synced_revision: u64,
     pub last_synced_selection: crate::Selection,
     pub last_synced_editing_state: Option<String>,
-    pub extra_cache_key: (u64, String),
+    pub extra_cache_key: (u64, String, String, String, String),
     pub extra_name: String,
     pub extra_text: String,
     pub extra_alt: String,
@@ -393,7 +393,13 @@ impl Default for PropertiesState {
             last_synced_revision: u64::MAX,
             last_synced_selection: crate::Selection::default(),
             last_synced_editing_state: None,
-            extra_cache_key: (u64::MAX, String::new()),
+            extra_cache_key: (
+                u64::MAX,
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
             extra_name: String::new(),
             extra_text: String::new(),
             extra_alt: String::new(),
@@ -2457,8 +2463,14 @@ fn prepare(editor: &mut Editor, ui: &Ui) -> bool {
     // Spell data is computed once per frame here, where the editor is mutable,
     // and read by the Text Content box without threading `Editor` through the
     // whole inspector.
-    let spell_text = editor.ui.properties.text_body.clone();
-    let spelled = editor.spell_words(&spell_text);
+    let spelled = if editor.ui.inspector_tab == InspectorTab::Format
+        && !editor.ui.properties.text_body.is_empty()
+    {
+        let spell_text = editor.ui.properties.text_body.clone();
+        editor.spell_words(&spell_text)
+    } else {
+        Vec::new()
+    };
     // Suggestions are slow to work out, so only when the word menu is open
     // or about to open (a secondary press arrives a frame before the menu).
     let menu_coming = editor.ui.properties.spell_menu_pos.is_some()
@@ -2880,12 +2892,12 @@ fn show_arrange_icons(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
         for (icon, label, edge) in [
-            (Icon::TextAlignLeft, "Align Left", "left"),
-            (Icon::TextAlignCenter, "Align Center", "center"),
-            (Icon::TextAlignRight, "Align Right", "right"),
-            (Icon::ArrowUp, "Align Top", "top"),
-            (Icon::ArrowsDownUp, "Align Middle", "middle"),
-            (Icon::ArrowDown, "Align Bottom", "bottom"),
+            (Icon::TextAlignLeft, "Align left", "left"),
+            (Icon::TextAlignCenter, "Align center", "center"),
+            (Icon::TextAlignRight, "Align right", "right"),
+            (Icon::ArrowUp, "Align top", "top"),
+            (Icon::ArrowsDownUp, "Align middle", "middle"),
+            (Icon::ArrowDown, "Align bottom", "bottom"),
         ] {
             let params = crate::menu::align_params(editor, edge);
             let enabled = !state_edit_locked && params.is_some();
@@ -2915,8 +2927,8 @@ fn show_arrange_icons(
         );
         egui::Popup::menu(&more).show(|ui| {
             for (label, axis) in [
-                ("Distribute Horizontally", "horizontal"),
-                ("Distribute Vertically", "vertical"),
+                ("Distribute horizontally", "horizontal"),
+                ("Distribute vertically", "vertical"),
             ] {
                 let params = crate::menu::distribute_params(editor, axis);
                 let enabled = params.is_some();
@@ -2931,7 +2943,7 @@ fn show_arrange_icons(
                 }
             }
             ui.separator();
-            for (label, dimension) in [("Match Width", "width"), ("Match Height", "height")] {
+            for (label, dimension) in [("Match width", "width"), ("Match height", "height")] {
                 let params = crate::menu::match_size_params(editor, dimension);
                 let enabled = params.is_some();
                 if ui
@@ -3074,8 +3086,19 @@ fn show_state_extra_properties(
     let mut replace_image_requested = false;
     let props = &mut editor.ui.properties;
     let rev = editor.session.revision;
-    if props.extra_cache_key.0 != rev || props.extra_cache_key.1 != extra.id {
-        props.extra_cache_key = (rev, extra.id.clone());
+    if props.extra_cache_key.0 != rev
+        || props.extra_cache_key.1 != slide_id
+        || props.extra_cache_key.2 != object_id
+        || props.extra_cache_key.3 != state_name
+        || props.extra_cache_key.4 != extra.id
+    {
+        props.extra_cache_key = (
+            rev,
+            slide_id.to_owned(),
+            object_id.to_owned(),
+            state_name.to_owned(),
+            extra.id.clone(),
+        );
         props.extra_name = extra.name.clone();
         props.extra_x = extra.frame.x;
         props.extra_y = extra.frame.y;
@@ -3143,7 +3166,7 @@ fn show_state_extra_properties(
     });
 
     inspector_separator(ui);
-    inspector_section_header(ui, "Position & Size");
+    inspector_section_header(ui, "Position & size");
 
     let mut frame_changed = false;
     inspector_row(ui, "X / Y", |ui| {
@@ -3152,13 +3175,15 @@ fn show_state_extra_properties(
             [w, coursecraft_render::CONTROL_COMPACT],
             egui::DragValue::new(&mut props.extra_x)
                 .speed(1.0)
-                .prefix("X "),
+                .prefix("X ")
+                .suffix(" px"),
         );
         let ry = ui.add_sized(
             [w, coursecraft_render::CONTROL_COMPACT],
             egui::DragValue::new(&mut props.extra_y)
                 .speed(1.0)
-                .prefix("Y "),
+                .prefix("Y ")
+                .suffix(" px"),
         );
         if rx.drag_stopped() || rx.lost_focus() || ry.drag_stopped() || ry.lost_focus() {
             frame_changed = true;
@@ -3171,14 +3196,16 @@ fn show_state_extra_properties(
             egui::DragValue::new(&mut props.extra_w)
                 .speed(1.0)
                 .range(1.0..=10000.0)
-                .prefix("W "),
+                .prefix("W ")
+                .suffix(" px"),
         );
         let rh = ui.add_sized(
             [w, coursecraft_render::CONTROL_COMPACT],
             egui::DragValue::new(&mut props.extra_h)
                 .speed(1.0)
                 .range(1.0..=10000.0)
-                .prefix("H "),
+                .prefix("H ")
+                .suffix(" px"),
         );
         if rw.drag_stopped() || rw.lost_focus() || rh.drag_stopped() || rh.lost_focus() {
             frame_changed = true;
@@ -3789,8 +3816,15 @@ fn show_multi_properties(
         });
 
         inspector_row(ui, "Style", |ui| {
+            let bold_tip = crate::menu::tooltip_with_shortcut(
+                ui.ctx(),
+                "Bold",
+                Some(crate::shortcuts::shortcut_for_action(
+                    crate::shortcuts::ShortcutAction::Bold,
+                )),
+            );
             let bold = props.multi_bold;
-            if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), bold, "Bold (Ctrl+B)")
+            if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), bold, &bold_tip)
                 .clicked()
             {
                 let value = bold != Some(true);
@@ -3813,14 +3847,16 @@ fn show_multi_properties(
                     }
                 }
             }
+            let italic_tip = crate::menu::tooltip_with_shortcut(
+                ui.ctx(),
+                "Italic",
+                Some(crate::shortcuts::shortcut_for_action(
+                    crate::shortcuts::ShortcutAction::Italic,
+                )),
+            );
             let italic = props.multi_italic;
-            if crate::widgets::mixed_toggle(
-                ui,
-                RichText::new("I").italics(),
-                italic,
-                "Italic (Ctrl+I)",
-            )
-            .clicked()
+            if crate::widgets::mixed_toggle(ui, RichText::new("I").italics(), italic, &italic_tip)
+                .clicked()
             {
                 let value = italic != Some(true);
                 for object in &objects {
@@ -3842,12 +3878,19 @@ fn show_multi_properties(
                     }
                 }
             }
+            let underline_tip = crate::menu::tooltip_with_shortcut(
+                ui.ctx(),
+                "Underline",
+                Some(crate::shortcuts::shortcut_for_action(
+                    crate::shortcuts::ShortcutAction::Underline,
+                )),
+            );
             let underline = props.multi_underline;
             if crate::widgets::mixed_toggle(
                 ui,
                 RichText::new("U").underline(),
                 underline,
-                "Underline (Ctrl+U)",
+                &underline_tip,
             )
             .clicked()
             {
@@ -4372,94 +4415,98 @@ fn show_animate_tab(
     actions_to_run: &mut Vec<(&'static str, Json)>,
 ) {
     let p = coursecraft_render::palette(ui.ctx());
-    if editor.ui.editing_state.is_some() {
+    let state_edit_locked = editor.ui.editing_state.is_some();
+    if state_edit_locked {
         ui.label(RichText::new(crate::STATE_LOCK_TOOLTIP).color(p.text_secondary));
         ui.add_space(6.0);
-        ui.disable();
     }
 
-    if editor.selection.is_multi() {
-        let slide_id = editor.selection.slide.clone();
-        let ids = editor.selection.ids();
-        let props = &mut editor.ui.properties;
-        let mut entrance_action: Option<(&'static str, Json)> = None;
-        let mut exit_action: Option<(&'static str, Json)> = None;
-        show_anim_row(
-            ui,
-            "Entrance Animation",
-            "entrance",
-            &mut props.entrance_effect,
-            &mut props.entrance_direction,
-            &mut props.entrance_duration_ms,
-            &mut props.entrance_easing,
-            &slide_id,
-            "",
-            &mut entrance_action,
-        );
-        inspector_separator(ui);
-        show_anim_row(
-            ui,
-            "Exit Animation",
-            "exit",
-            &mut props.exit_effect,
-            &mut props.exit_direction,
-            &mut props.exit_duration_ms,
-            &mut props.exit_easing,
-            &slide_id,
-            "",
-            &mut exit_action,
-        );
-        if entrance_action.is_some() {
-            for id in &ids {
-                actions_to_run.push(animation_command(
-                    "entrance",
-                    &props.entrance_effect,
-                    props.entrance_direction,
-                    props.entrance_duration_ms,
-                    props.entrance_easing,
-                    &slide_id,
-                    id,
-                ));
-            }
-        }
-        if exit_action.is_some() {
-            for id in &ids {
-                actions_to_run.push(animation_command(
-                    "exit",
-                    &props.exit_effect,
-                    props.exit_direction,
-                    props.exit_duration_ms,
-                    props.exit_easing,
-                    &slide_id,
-                    id,
-                ));
-            }
-        }
-        inspector_separator(ui);
-    } else if editor.selection.object.is_some() {
-        show_animations_section(editor, ui, actions_to_run);
-        inspector_separator(ui);
-    } else {
-        ui.vertical_centered(|ui| {
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("Select an object to animate it")
-                    .color(p.text_secondary)
-                    .size(coursecraft_render::SIZE_BODY),
+    ui.add_enabled_ui(!state_edit_locked, |ui| {
+        if editor.selection.is_multi() {
+            let slide_id = editor.selection.slide.clone();
+            let ids = editor.selection.ids();
+            let props = &mut editor.ui.properties;
+            let mut entrance_action: Option<(&'static str, Json)> = None;
+            let mut exit_action: Option<(&'static str, Json)> = None;
+            show_anim_row(
+                ui,
+                "Entrance animation",
+                "entrance",
+                &mut props.entrance_effect,
+                &mut props.entrance_direction,
+                &mut props.entrance_duration_ms,
+                &mut props.entrance_easing,
+                &slide_id,
+                "",
+                &mut entrance_action,
             );
-            ui.add_space(8.0);
-        });
-        inspector_separator(ui);
-    }
-
-    inspector_section_header(ui, "Transition");
-    if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {
-        let mut action = None;
-        show_transition_section(&mut editor.ui.properties, slide, ui, &mut action);
-        if let Some(act) = action {
-            actions_to_run.push(act);
+            inspector_separator(ui);
+            show_anim_row(
+                ui,
+                "Exit animation",
+                "exit",
+                &mut props.exit_effect,
+                &mut props.exit_direction,
+                &mut props.exit_duration_ms,
+                &mut props.exit_easing,
+                &slide_id,
+                "",
+                &mut exit_action,
+            );
+            if entrance_action.is_some() {
+                for id in &ids {
+                    actions_to_run.push(animation_command(
+                        "entrance",
+                        &props.entrance_effect,
+                        props.entrance_direction,
+                        props.entrance_duration_ms,
+                        props.entrance_easing,
+                        &slide_id,
+                        id,
+                    ));
+                }
+            }
+            if exit_action.is_some() {
+                for id in &ids {
+                    actions_to_run.push(animation_command(
+                        "exit",
+                        &props.exit_effect,
+                        props.exit_direction,
+                        props.exit_duration_ms,
+                        props.exit_easing,
+                        &slide_id,
+                        id,
+                    ));
+                }
+            }
+            inspector_separator(ui);
+        } else if editor.selection.object.is_some() {
+            show_animations_section(editor, ui, actions_to_run);
+            inspector_separator(ui);
+        } else {
+            ui.vertical_centered(|ui| {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Select an object to animate it")
+                        .color(p.text_secondary)
+                        .size(coursecraft_render::SIZE_BODY),
+                );
+                ui.add_space(8.0);
+            });
+            inspector_separator(ui);
         }
-    }
+
+        inspector_section_header(ui, "Transition");
+        if let Some(slide) = editor.session.course.slide(&editor.selection.slide) {
+            let mut action = None;
+            show_transition_section(&mut editor.ui.properties, slide, ui, &mut action);
+            if let Some(act) = action {
+                actions_to_run.push(act);
+            }
+        }
+    })
+    .response
+    .on_disabled_hover_text(crate::STATE_LOCK_TOOLTIP);
 }
 
 fn show_slide_tab(
@@ -4651,6 +4698,16 @@ fn show_course_tab(
     });
     inspector_row(ui, "Slides", |ui| {
         ui.label(format!("{slide_count} slides"));
+    });
+    let slide_size = editor.session.course.slide_size;
+    let ratio = crate::slide_size_dialog::format_aspect_ratio(slide_size.w, slide_size.h);
+    inspector_row(ui, "Slide size", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("{} × {} px ({ratio})", slide_size.w, slide_size.h));
+            if ui.button("Change…").clicked() {
+                editor.open_slide_size_dialog();
+            }
+        });
     });
     if let Some(q) = quiz {
         inspector_row(ui, "Pass mark", |ui| {
@@ -4917,7 +4974,14 @@ fn show_text_controls(
         };
     inspector_row(ui, "Style", |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
-        if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), tri_bold, "Bold (Ctrl+B)")
+        let bold_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Bold",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Bold,
+            )),
+        );
+        if crate::widgets::mixed_toggle(ui, RichText::new("B").strong(), tri_bold, &bold_tip)
             .clicked()
         {
             let next = tri_bold != Some(true);
@@ -4936,13 +5000,15 @@ fn show_text_controls(
                 ));
             }
         }
-        if crate::widgets::mixed_toggle(
-            ui,
-            RichText::new("I").italics(),
-            tri_italic,
-            "Italic (Ctrl+I)",
-        )
-        .clicked()
+        let italic_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Italic",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Italic,
+            )),
+        );
+        if crate::widgets::mixed_toggle(ui, RichText::new("I").italics(), tri_italic, &italic_tip)
+            .clicked()
         {
             let next = tri_italic != Some(true);
             if let TextStyleTarget::Caret(pos) = target {
@@ -4960,11 +5026,18 @@ fn show_text_controls(
                 ));
             }
         }
+        let underline_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Underline",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Underline,
+            )),
+        );
         if crate::widgets::mixed_toggle(
             ui,
             RichText::new("U").underline(),
             tri_underline,
-            "Underline (Ctrl+U)",
+            &underline_tip,
         )
         .clicked()
         {
@@ -5249,7 +5322,7 @@ fn show_text_controls(
         }
     });
 
-    inspector_row(ui, "Text Content", |ui| {
+    inspector_row(ui, "Text content", |ui| {
         let rem_w = ui.available_width().max(30.0);
         let output = TextEdit::multiline(&mut props.text_body)
             .id(text_edit_id)
@@ -7290,33 +7363,54 @@ fn show_timer_controls(
     });
     inspector_row(ui, "Style", |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
+        let bold_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Bold",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Bold,
+            )),
+        );
         if crate::widgets::mixed_toggle(
             ui,
             RichText::new("B").strong(),
             Some(props.text_bold),
-            "Bold (Ctrl+B)",
+            &bold_tip,
         )
         .clicked()
         {
             props.text_bold = !props.text_bold;
             action_to_run = Some(commit(props));
         }
+        let italic_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Italic",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Italic,
+            )),
+        );
         if crate::widgets::mixed_toggle(
             ui,
             RichText::new("I").italics(),
             Some(props.text_italic),
-            "Italic (Ctrl+I)",
+            &italic_tip,
         )
         .clicked()
         {
             props.text_italic = !props.text_italic;
             action_to_run = Some(commit(props));
         }
+        let underline_tip = crate::menu::tooltip_with_shortcut(
+            ui.ctx(),
+            "Underline",
+            Some(crate::shortcuts::shortcut_for_action(
+                crate::shortcuts::ShortcutAction::Underline,
+            )),
+        );
         if crate::widgets::mixed_toggle(
             ui,
             RichText::new("U").underline(),
             Some(props.text_underline),
-            "Underline (Ctrl+U)",
+            &underline_tip,
         )
         .clicked()
         {
@@ -7528,10 +7622,15 @@ fn show_scroll_panel_controls(
     actions: &mut Vec<(&'static str, Json)>,
 ) {
     inspector_row(ui, "Content height", |ui| {
+        let lo = coursecraft_course::safe_clamp(
+            frame_height,
+            0.0,
+            coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT,
+        );
         let r = ui.add(
             DragValue::new(&mut props.scroll_content_height)
                 .speed(1.0)
-                .range(frame_height..=coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT)
+                .range(lo..=coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT)
                 .suffix(" px"),
         );
         props.scroll_content_height_rect = Some(r.rect);
@@ -7562,7 +7661,8 @@ fn show_scroll_panel_controls(
         }
     });
     if ui.button("Fit to content").clicked() {
-        let height = fit_height.clamp(
+        let height = coursecraft_course::safe_clamp(
+            fit_height,
             frame_height.max(0.0),
             coursecraft_course::MAX_SCROLL_CONTENT_HEIGHT,
         );
@@ -10406,7 +10506,7 @@ fn show_image_properties(
     let state_ctx = target.state_ctx;
     if let Some(ctx) = state_ctx {
         let src_overridden = ctx.state.src.is_some();
-        let display_src = ctx.state.src.as_deref().unwrap_or("Same as Normal");
+        let display_src = ctx.state.src.as_deref().unwrap_or("Same as normal");
         inspector_row_state(
             ui,
             "Image",
@@ -10712,7 +10812,7 @@ pub fn show_animations_section(
 
     show_anim_row(
         ui,
-        "Entrance Animation",
+        "Entrance animation",
         "entrance",
         &mut props.entrance_effect,
         &mut props.entrance_direction,
@@ -10725,7 +10825,7 @@ pub fn show_animations_section(
     inspector_separator(ui);
     show_anim_row(
         ui,
-        "Exit Animation",
+        "Exit animation",
         "exit",
         &mut props.exit_effect,
         &mut props.exit_direction,
@@ -10736,7 +10836,7 @@ pub fn show_animations_section(
         &mut action_to_run,
     );
     inspector_separator(ui);
-    inspector_section_header(ui, "Motion Paths");
+    inspector_section_header(ui, "Motion paths");
     if crate::quiet_button(ui, "+ Add motion path", crate::QuietTone::Accent, true).clicked() {
         action_to_run = Some((
             "object.add_motion_path",

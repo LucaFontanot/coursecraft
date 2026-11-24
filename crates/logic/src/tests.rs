@@ -9317,6 +9317,50 @@ fn seekbar_unlocks_when_the_timeline_ends_and_stays_unlocked_on_return() {
 }
 
 #[test]
+fn b11_free_seekbar_forward_seek_to_end_records_timeline_completion() {
+    let course = nav_course(serde_json::json!({
+        "seekbar": "free",
+        "next_requires": { "kind": "timeline_ends" }
+    }));
+    let mut p = Player::new(&course).unwrap();
+    p.handle(&Input::Start);
+    assert!(!p.can_next());
+
+    let fx_end = p.handle(&Input::PlayerSeek { ms: 2000 });
+    assert!(!warned(&fx_end));
+    assert!(p.can_next());
+
+    let fx_back = p.handle(&Input::PlayerSeek { ms: 500 });
+    assert!(!warned(&fx_back));
+    assert!(
+        p.can_next(),
+        "scrubbing back after seeking to the end must keep Next unlocked"
+    );
+
+    let fx_next = p.handle(&Input::Next);
+    assert!(!warned(&fx_next));
+    assert_eq!(p.current_slide().unwrap().id, "s2");
+}
+
+#[test]
+fn b11_locked_and_until_timeline_ends_refuse_forward_seek_to_end() {
+    for seekbar in ["locked", "until_timeline_ends"] {
+        let course = nav_course(serde_json::json!({
+            "seekbar": seekbar,
+            "next_requires": { "kind": "timeline_ends" }
+        }));
+        let mut p = Player::new(&course).unwrap();
+        p.handle(&Input::Start);
+        assert!(!p.can_next());
+
+        let fx = p.handle(&Input::PlayerSeek { ms: 2000 });
+        assert!(warned(&fx), "{seekbar} seekbar must refuse seek to end");
+        assert_eq!(p.slide_elapsed_ms(), 0);
+        assert!(!p.can_next(), "{seekbar} seekbar must keep Next locked");
+    }
+}
+
+#[test]
 fn seekbar_setting_round_trips_and_defaults_to_free() {
     let course = nav_course(serde_json::json!({}));
     assert_eq!(
@@ -11138,4 +11182,630 @@ fn every_exit_effect_with_and_without_transition_and_entrance_exit() {
             assert!(p.sample_object("obj").is_none());
         }
     }
+}
+
+#[test]
+fn m31_17_last_visited_after_bank_redraw_drains_stale_entries_and_never_loops() {
+    use coursecraft_course::SlideTarget;
+
+    let mut c = course_with_draw(10, 2, "draw1");
+    // Add btn-back (LastVisited) to s-intro, every bank slide, and a trailing s-results slide.
+    let back_btn: Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-back",
+        "kind": { "type": "button", "label": "Back" },
+        "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+    }))
+    .expect("btn-back");
+    let back_trigger = Trigger {
+        action: Action::JumpToSlide {
+            target: SlideTarget::LastVisited,
+        },
+        when: Event::Click {
+            object: "btn-back".into(),
+        },
+        condition: None,
+        disabled: false,
+    };
+
+    for slide in &mut c.scenes[0].slides {
+        slide.objects.push(back_btn.clone());
+        slide.triggers.push(back_trigger.clone());
+        if slide.id == "s-results" {
+            slide.objects.push(
+                serde_json::from_value::<Object>(serde_json::json!({
+                    "id": "btn-retry",
+                    "kind": { "type": "button", "label": "Retry" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 40.0 }
+                }))
+                .expect("btn-retry"),
+            );
+            slide.triggers.push(Trigger {
+                action: Action::RetryQuiz,
+                when: Event::Click {
+                    object: "btn-retry".into(),
+                },
+                condition: None,
+                disabled: false,
+            });
+        }
+    }
+    for slide in &mut c.banks[0].slides {
+        slide.objects.push(back_btn.clone());
+        slide.triggers.push(back_trigger.clone());
+    }
+
+    let mut p = Player::with_draw_seed(&c, 1).expect("player");
+    p.handle(&Input::Start);
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-intro"));
+
+    // Visit s-intro -> s-tabs -> bank1 -> bank2 -> s-results.
+    p.handle(&Input::Next);
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-tabs"));
+    p.handle(&Input::Next);
+    let q1 = p.current_slide().expect("q1").id.clone();
+    p.handle(&Input::Next);
+    let q2 = p.current_slide().expect("q2").id.clone();
+    p.handle(&Input::Next);
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-results"));
+    assert_eq!(
+        p.state().visit_history,
+        vec![
+            "s-intro".to_owned(),
+            "s-tabs".to_owned(),
+            q1.clone(),
+            q2.clone()
+        ]
+    );
+
+    // Retry quiz redraws the bank (replacing q1/q2) and enters the first redrawn slide.
+    p.handle(&click("btn-retry"));
+    let q3 = p.current_slide().expect("q3").id.clone();
+    assert_ne!(q3, q1);
+    assert_ne!(q3, q2);
+    assert!(p.slide_position(&q1).is_none(), "old q1 must be gone");
+    assert!(p.slide_position(&q2).is_none(), "old q2 must be gone");
+
+    // LastVisited #1 on q3 -> pops "s-results", enters s-results.
+    let fx1 = p.handle(&click("btn-back"));
+    assert!(has(&fx1, &slide_entered("s-results")));
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-results"));
+
+    // LastVisited #2 on s-results -> drains stale q2, q1, pops "s-tabs", enters s-tabs.
+    let fx2 = p.handle(&click("btn-back"));
+    assert!(has(&fx2, &slide_entered("s-tabs")));
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-tabs"));
+    assert_eq!(p.state().visit_history, vec!["s-intro".to_owned()]);
+
+    // LastVisited #3 on s-tabs -> pops "s-intro", enters s-intro, drains history to [].
+    let fx3 = p.handle(&click("btn-back"));
+    assert!(has(&fx3, &slide_entered("s-intro")));
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-intro"));
+    assert!(
+        p.state().visit_history.is_empty(),
+        "stale entries must be drained, got {:?}",
+        p.state().visit_history
+    );
+
+    // LastVisited #4 on s-intro (index 0) -> does NOT re-enter s-intro.
+    let fx4 = p.handle(&click("btn-back"));
+    assert!(
+        !fx4.iter().any(|e| matches!(e, Effect::SlideEntered { .. })),
+        "LastVisited on slide 0 with empty history must not loop/re-enter, got {fx4:?}"
+    );
+    assert_eq!(p.current_slide().map(|s| s.id.as_str()), Some("s-intro"));
+}
+
+#[test]
+fn m31_17_last_visited_skips_self_duplicates_and_handles_preview_subset() {
+    use coursecraft_course::SlideTarget;
+
+    let mut c = course_with_draw(10, 1, "draw1");
+    let back_btn: Object = serde_json::from_value(serde_json::json!({
+        "id": "btn-back",
+        "kind": { "type": "button", "label": "Back" },
+        "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+    }))
+    .expect("btn-back");
+    let back_trigger = Trigger {
+        action: Action::JumpToSlide {
+            target: SlideTarget::LastVisited,
+        },
+        when: Event::Click {
+            object: "btn-back".into(),
+        },
+        condition: None,
+        disabled: false,
+    };
+    for slide in &mut c.scenes[0].slides {
+        slide.objects.push(back_btn.clone());
+        slide.triggers.clear();
+        slide.triggers.push(back_trigger.clone());
+        if slide.id == "s-results" {
+            slide.objects.push(
+                serde_json::from_value::<Object>(serde_json::json!({
+                    "id": "btn-retry",
+                    "kind": { "type": "button", "label": "Retry" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 40.0 }
+                }))
+                .expect("btn-retry"),
+            );
+            slide.triggers.push(Trigger {
+                action: Action::RetryQuiz,
+                when: Event::Click {
+                    object: "btn-retry".into(),
+                },
+                condition: None,
+                disabled: false,
+            });
+        }
+    }
+    for slide in &mut c.banks[0].slides {
+        slide.objects.push(back_btn.clone());
+        slide.triggers.clear();
+        slide.triggers.push(back_trigger.clone());
+    }
+
+    // Case 1: consecutive/self-matching entries in visit_history are skipped until a different slide.
+    let mut p2 = Player::with_draw_seed(&c, 1).expect("player2");
+    p2.handle(&Input::Start);
+    p2.handle(&Input::Jump {
+        slide: "s-results".into(),
+    });
+    p2.handle(&Input::Jump {
+        slide: "s-intro".into(),
+    });
+    p2.handle(&Input::Jump {
+        slide: "s-tabs".into(),
+    });
+    p2.handle(&Input::Next); // q1
+    let q1_id = p2.current_slide().expect("q1").id.clone();
+    p2.handle(&Input::Jump {
+        slide: "s-results".into(),
+    });
+    p2.handle(&click("btn-retry")); // removes q1_id, pushes "s-results", enters q2.
+    let q2_id = p2.current_slide().expect("q2").id.clone();
+    assert_ne!(q1_id, q2_id);
+
+    // LastVisited on q2 -> pops "s-results", enters s-results.
+    let fx_q2 = p2.handle(&click("btn-back"));
+    assert!(has(&fx_q2, &slide_entered("s-results")));
+    // LastVisited on s-results -> drains missing q1_id, pops "s-tabs", enters s-tabs.
+    let fx_back = p2.handle(&click("btn-back"));
+    assert!(has(&fx_back, &slide_entered("s-tabs")));
+    assert_eq!(p2.current_slide().map(|s| s.id.as_str()), Some("s-tabs"));
+    assert_eq!(
+        p2.state().visit_history,
+        vec![
+            "s-intro".to_owned(),
+            "s-results".to_owned(),
+            "s-intro".to_owned()
+        ]
+    );
+    // Next LastVisited from s-tabs pops "s-intro" and enters s-intro.
+    let fx_intro1 = p2.handle(&click("btn-back"));
+    assert!(has(&fx_intro1, &slide_entered("s-intro")));
+    // Next LastVisited from s-intro pops "s-results" and enters s-results.
+    let fx_res = p2.handle(&click("btn-back"));
+    assert!(has(&fx_res, &slide_entered("s-results")));
+    // Next LastVisited from s-results pops "s-intro" and enters s-intro, draining history.
+    let fx_intro2 = p2.handle(&click("btn-back"));
+    assert!(has(&fx_intro2, &slide_entered("s-intro")));
+    assert!(p2.state().visit_history.is_empty());
+
+    // Case 2: preview subset with single slide hits preview boundary on LastVisited at index 0.
+    let mut prev =
+        Player::with_preview_subset(&c, 0, &["s-intro".to_owned()]).expect("preview subset");
+    prev.handle(&Input::Start);
+    let fx_prev = prev.handle(&click("btn-back"));
+    assert!(
+        !fx_prev
+            .iter()
+            .any(|e| matches!(e, Effect::SlideEntered { .. }))
+    );
+    assert!(prev.preview_boundary_hit);
+}
+
+/// W-01: `Player::next_wake_ms` returns `None` before start, while paused,
+/// after the slide timeline finishes, and after the course exits.
+#[test]
+fn w01_next_wake_ms_none_when_not_started_paused_ended_or_finished() {
+    let mut c = Course::from_json(
+        r#"{
+          "schema_version": 1,
+          "id": "w01-idle",
+          "title": "W01 Idle",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 2000,
+              "objects": [{
+                "id": "btn-exit",
+                "kind": { "type": "button", "label": "Exit" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 40.0 }
+              }],
+              "triggers": [{
+                "when": { "event": "click", "object": "btn-exit" },
+                "action": { "action": "exit_course" }
+              }]
+            }]
+          }]
+        }"#,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+
+    let mut p = Player::new(&c).expect("player");
+    assert_eq!(p.next_wake_ms(), None, "not started yet");
+
+    p.handle(&Input::Start);
+    assert_eq!(p.next_wake_ms(), Some(2000), "running towards timeline end");
+
+    p.handle(&Input::PlayerPause);
+    assert_eq!(p.next_wake_ms(), None, "paused by learner");
+
+    p.handle(&Input::PlayerResume);
+    assert_eq!(p.next_wake_ms(), Some(2000), "resumed");
+
+    p.handle(&Input::Tick { ms: 2000 });
+    assert_eq!(p.next_wake_ms(), None, "timeline finished");
+
+    // Start a fresh player and exit while timeline is still active.
+    let mut p2 = Player::new(&c).expect("player2");
+    p2.handle(&Input::Start);
+    assert!(p2.next_wake_ms().is_some());
+    p2.handle(&click("btn-exit"));
+    assert!(p2.state().exited);
+    assert_eq!(p2.next_wake_ms(), None, "course exited");
+}
+
+/// W-01: `Player::next_wake_ms` returns `Some(0)` during active entrance,
+/// exit, and motion path animations, and sleeps between them.
+#[test]
+fn w01_next_wake_ms_immediate_during_entrance_exit_and_motion_path() {
+    use coursecraft_course::{AnimEffect, Animation, Easing, MotionPath, Point};
+
+    let mut c = Course::from_json(
+        r##"{
+          "schema_version": 1,
+          "id": "w01-anim",
+          "title": "W01 Anim",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 5000,
+              "objects": [
+                {
+                  "id": "box1",
+                  "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                  "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 100.0 },
+                  "timing": { "start_ms": 1000, "end_ms": 3000 }
+                },
+                {
+                  "id": "btn-move",
+                  "kind": { "type": "button", "label": "Move" },
+                  "frame": { "x": 200.0, "y": 10.0, "w": 100.0, "h": 40.0 }
+                }
+              ],
+              "triggers": [{
+                "when": { "event": "click", "object": "btn-move" },
+                "action": { "action": "move_on_path", "object": "btn-move", "path": "p1" }
+              }]
+            }]
+          }]
+        }"##,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+
+    let slide = c.slide_mut("s1").expect("s1");
+    let box1 = slide
+        .objects
+        .iter_mut()
+        .find(|o| o.id == "box1")
+        .expect("box1");
+    box1.entrance = Some(Animation {
+        effect: AnimEffect::Fade,
+        duration_ms: 400,
+        easing: Easing::Linear,
+    });
+    box1.exit = Some(Animation {
+        effect: AnimEffect::Fade,
+        duration_ms: 300,
+        easing: Easing::Linear,
+    });
+    let btn = slide
+        .objects
+        .iter_mut()
+        .find(|o| o.id == "btn-move")
+        .expect("btn-move");
+    btn.motion_paths = vec![MotionPath {
+        id: "p1".into(),
+        points: vec![Point { x: 0.0, y: 0.0 }, Point { x: 120.0, y: 0.0 }],
+        duration_ms: 600,
+        easing: Easing::Linear,
+        relative: true,
+    }];
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+
+    // Waiting for box1 entrance at 1000 ms.
+    assert_eq!(p.next_wake_ms(), Some(1000));
+    p.handle(&Input::Tick { ms: 1000 });
+    // Entrance runs [1000, 1400).
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 200 });
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 200 });
+    // Now at 1400; exit starts at 3000 - 300 = 2700 -> delta 1300.
+    assert_eq!(p.next_wake_ms(), Some(1300));
+    p.handle(&Input::Tick { ms: 1300 });
+    // Exit runs [2700, 3000).
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 300 });
+    // Now at 3000; slide ends at 5000 -> delta 2000.
+    assert_eq!(p.next_wake_ms(), Some(2000));
+
+    // Start a motion path on btn-move -> immediate wake while running.
+    p.handle(&click("btn-move"));
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 300 });
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::Tick { ms: 300 });
+    // Path finished at t = 3600; 1400 ms remain until slide ends at 5000.
+    assert_eq!(p.next_wake_ms(), Some(1400));
+}
+
+/// W-01: `Player::next_wake_ms` returns exact delays to object start, cue point,
+/// `timeline_reaches`, and timeline end, and caps at 100 ms when the seekbar is visible.
+#[test]
+fn w01_next_wake_ms_exact_delay_to_object_start_cue_point_and_timeline_reaches() {
+    let mut c = Course::from_json(
+        r##"{
+          "schema_version": 1,
+          "id": "w01-delays",
+          "title": "W01 Delays",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 8000,
+              "objects": [{
+                "id": "late-box",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 100.0 },
+                "timing": { "start_ms": 1500 }
+              }],
+              "cue_points": [
+                { "id": "cue1", "name": "Cue 1", "at_ms": 2500 }
+              ],
+              "triggers": [{
+                "when": { "event": "timeline_reaches", "ms": 4000 },
+                "action": { "action": "change_state", "object": "late-box", "state": "normal" }
+              }]
+            }]
+          }]
+        }"##,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+
+    assert_eq!(p.next_wake_ms(), Some(1500), "delay to object start");
+    p.handle(&Input::Tick { ms: 1500 });
+    assert_eq!(p.next_wake_ms(), Some(1000), "delay to cue point at 2500");
+    p.handle(&Input::Tick { ms: 1000 });
+    assert_eq!(
+        p.next_wake_ms(),
+        Some(1500),
+        "delay to timeline_reaches at 4000"
+    );
+    p.handle(&Input::Tick { ms: 1500 });
+    assert_eq!(
+        p.next_wake_ms(),
+        Some(4000),
+        "delay to timeline end at 8000"
+    );
+
+    // With seekbar visible, the wake delay caps at 100 ms (10 fps seekbar).
+    c.player.show_seekbar = true;
+    let mut p_seek = Player::new(&c).expect("player with seekbar");
+    p_seek.handle(&Input::Start);
+    assert_eq!(p_seek.next_wake_ms(), Some(100));
+}
+
+/// W-01: `Player::next_wake_ms` covers running timers, visible layer clocks,
+/// and playing video, Lottie, and audio (captioned and uncaptioned).
+#[test]
+fn w01_next_wake_ms_covers_timers_visible_layer_clocks_and_playing_media() {
+    let mut c = Course::from_json(
+        r#"{
+          "schema_version": 1,
+          "id": "w01-sources",
+          "title": "W01 Sources",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 10000,
+              "objects": [
+                {
+                  "id": "t1",
+                  "kind": { "type": "timer", "duration_ms": 5000, "autostart": true },
+                  "frame": { "x": 10.0, "y": 10.0, "w": 120.0, "h": 40.0 }
+                },
+                {
+                  "id": "btn-layer",
+                  "kind": { "type": "button", "label": "Layer" },
+                  "frame": { "x": 10.0, "y": 60.0, "w": 100.0, "h": 40.0 }
+                },
+                {
+                  "id": "aud-plain",
+                  "kind": { "type": "audio", "src": "voice.mp3", "autoplay": false },
+                  "frame": { "x": 10.0, "y": 110.0, "w": 48.0, "h": 48.0 }
+                },
+                {
+                  "id": "aud-cc",
+                  "kind": { "type": "audio", "src": "voice.mp3", "autoplay": false, "captions": "voice.vtt" },
+                  "frame": { "x": 70.0, "y": 110.0, "w": 48.0, "h": 48.0 }
+                },
+                {
+                  "id": "vid1",
+                  "kind": { "type": "video", "src": "clip.mp4", "autoplay": false },
+                  "frame": { "x": 130.0, "y": 110.0, "w": 200.0, "h": 120.0 }
+                },
+                {
+                  "id": "lot1",
+                  "kind": { "type": "lottie", "src": "anim.json", "autoplay": false },
+                  "frame": { "x": 350.0, "y": 110.0, "w": 120.0, "h": 120.0 }
+                }
+              ],
+              "layers": [{
+                "id": "l1",
+                "name": "Layer 1",
+                "duration_ms": 2000,
+                "cue_points": [{ "id": "lcue", "name": "Layer Cue", "at_ms": 700 }]
+              }],
+              "triggers": [
+                {
+                  "when": { "event": "click", "object": "btn-layer" },
+                  "action": { "action": "show_layer", "layer": "l1" }
+                },
+                {
+                  "when": { "event": "click", "object": "aud-plain" },
+                  "action": { "action": "play_media", "object": "aud-plain" }
+                },
+                {
+                  "when": { "event": "click", "object": "aud-cc" },
+                  "action": { "action": "play_media", "object": "aud-cc" }
+                },
+                {
+                  "when": { "event": "click", "object": "vid1" },
+                  "action": { "action": "play_media", "object": "vid1" }
+                },
+                {
+                  "when": { "event": "click", "object": "lot1" },
+                  "action": { "action": "play_media", "object": "lot1" }
+                }
+              ]
+            }]
+          }]
+        }"#,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+
+    // Running countdown timer caps wake at 100 ms for crisp second updates.
+    assert_eq!(p.next_wake_ms(), Some(100));
+    p.handle(&Input::Tick { ms: 4960 });
+    assert_eq!(p.next_wake_ms(), Some(40), "remaining timer < 100 ms");
+    p.handle(&Input::Tick { ms: 40 });
+    // Timer finished at t = 5000; 5000 ms left on base slide.
+    assert_eq!(p.next_wake_ms(), Some(5000));
+    // Finish base slide.
+    p.handle(&Input::Tick { ms: 5000 });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Showing a visible layer wakes for the layer's cue point and end.
+    p.handle(&click("btn-layer"));
+    assert_eq!(p.next_wake_ms(), Some(700));
+    p.handle(&Input::Tick { ms: 700 });
+    assert_eq!(p.next_wake_ms(), Some(1300));
+    p.handle(&Input::Tick { ms: 1300 });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Playing plain audio wakes at 50 ms polling cadence.
+    p.handle(&click("aud-plain"));
+    assert_eq!(p.next_wake_ms(), Some(50));
+    p.handle(&Input::MediaEnded {
+        object: "aud-plain".into(),
+    });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Playing captioned audio wakes immediately.
+    p.handle(&click("aud-cc"));
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::MediaEnded {
+        object: "aud-cc".into(),
+    });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Playing video wakes immediately.
+    p.handle(&click("vid1"));
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::MediaEnded {
+        object: "vid1".into(),
+    });
+    assert_eq!(p.next_wake_ms(), None);
+
+    // Playing Lottie wakes immediately.
+    p.handle(&click("lot1"));
+    assert_eq!(p.next_wake_ms(), Some(0));
+    p.handle(&Input::MediaEnded {
+        object: "lot1".into(),
+    });
+    assert_eq!(p.next_wake_ms(), None);
+}
+
+/// W-01: `Player::next_wake_ms` scales non-zero wake delays by playback speed.
+#[test]
+fn w01_next_wake_ms_scales_with_playback_speed() {
+    let mut c = Course::from_json(
+        r##"{
+          "schema_version": 1,
+          "id": "w01-speed",
+          "title": "W01 Speed",
+          "slide_size": { "w": 960, "h": 540 },
+          "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+              "id": "s1",
+              "title": "Slide 1",
+              "duration_ms": 4000,
+              "objects": [{
+                "id": "late",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 100.0 },
+                "timing": { "start_ms": 1000 }
+              }]
+            }]
+          }]
+        }"##,
+    )
+    .expect("valid course");
+    c.player.show_seekbar = false;
+    c.player.show_speed = true;
+
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    assert_eq!(p.next_wake_ms(), Some(1000));
+
+    p.handle(&Input::SetSpeed { rate: 2.0 });
+    assert_eq!(p.next_wake_ms(), Some(500));
+
+    p.handle(&Input::SetSpeed { rate: 0.5 });
+    assert_eq!(p.next_wake_ms(), Some(2000));
+
+    p.handle(&Input::SetSpeed { rate: 1.5 });
+    assert_eq!(p.next_wake_ms(), Some(667));
 }

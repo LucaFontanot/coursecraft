@@ -85,24 +85,70 @@ pub(crate) fn end_press_guard(ctx: &egui::Context) {
 /// Quiet at rest (no background fill), `hover` fill on hover, and `pressed` fill when pressed.
 /// Displays the icon in `text_secondary`, turning `text` on hover.
 pub fn icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
-    icon_button_impl(ui, icon, false, IconTone::Secondary, true, tooltip)
+    icon_button_impl(ui, icon, false, IconTone::Secondary, true, tooltip, tooltip)
 }
 
 /// A compact 26×26 icon button with explicit enabled state.
 pub fn icon_button_enabled(ui: &mut Ui, icon: Icon, enabled: bool, tooltip: &str) -> Response {
-    icon_button_impl(ui, icon, false, IconTone::Secondary, enabled, tooltip)
+    icon_button_impl(
+        ui,
+        icon,
+        false,
+        IconTone::Secondary,
+        enabled,
+        tooltip,
+        tooltip,
+    )
+}
+
+/// A compact 26×26 icon button with explicit enabled state and a separate disabled hover reason.
+pub fn icon_button_enabled_reason(
+    ui: &mut Ui,
+    icon: Icon,
+    enabled: bool,
+    tooltip: &str,
+    disabled_reason: &str,
+) -> Response {
+    icon_button_impl(
+        ui,
+        icon,
+        false,
+        IconTone::Secondary,
+        enabled,
+        tooltip,
+        disabled_reason,
+    )
 }
 
 /// A compact 26×26 icon button with danger tone on hover (e.g. delete actions).
 pub fn icon_button_danger(ui: &mut Ui, icon: Icon, enabled: bool, tooltip: &str) -> Response {
-    icon_button_impl(ui, icon, false, IconTone::Danger, enabled, tooltip)
+    icon_button_impl(ui, icon, false, IconTone::Danger, enabled, tooltip, tooltip)
+}
+
+/// A compact 26×26 icon button with danger tone on hover and a separate disabled hover reason.
+pub fn icon_button_danger_reason(
+    ui: &mut Ui,
+    icon: Icon,
+    enabled: bool,
+    tooltip: &str,
+    disabled_reason: &str,
+) -> Response {
+    icon_button_impl(
+        ui,
+        icon,
+        false,
+        IconTone::Danger,
+        enabled,
+        tooltip,
+        disabled_reason,
+    )
 }
 
 /// A compact 26×26 icon toggle button.
 ///
 /// When active, uses the filled icon in `accent_text` on `accent_subtle` background fill.
 pub fn icon_toggle(ui: &mut Ui, icon: Icon, active: bool, tooltip: &str) -> Response {
-    icon_button_impl(ui, icon, active, IconTone::Accent, true, tooltip)
+    icon_button_impl(ui, icon, active, IconTone::Accent, true, tooltip, tooltip)
 }
 
 /// How long a control takes to fade between its rest, hover and active fills.
@@ -135,6 +181,7 @@ fn icon_button_impl(
     tone: IconTone,
     enabled: bool,
     tooltip: &str,
+    disabled_reason: &str,
 ) -> Response {
     let p = palette(ui.ctx());
     let size = vec2(CONTROL_COMPACT, CONTROL_COMPACT);
@@ -193,9 +240,9 @@ fn icon_button_impl(
             }
             resp
         })
-        .inner;
-
-    let resp = resp.on_hover_text(tooltip).on_disabled_hover_text(tooltip);
+        .inner
+        .on_hover_text(tooltip)
+        .on_disabled_hover_text(disabled_reason);
     if enabled {
         resp.on_hover_cursor(CursorIcon::PointingHand)
     } else {

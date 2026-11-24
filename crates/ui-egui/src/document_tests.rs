@@ -66,17 +66,20 @@ fn start_generation(harness: &mut TestHarness) -> Vec<EditorRequest> {
 }
 
 #[test]
-fn insert_menu_opens_course_from_document() {
+fn file_import_menu_opens_course_from_document() {
     let mut h = harness();
     h.idle_frame();
     assert!(!h.editor.document_dialog_open_for_test());
 
-    let insert = h.find_text("Insert").expect("Insert menu");
-    h.click_at(insert);
+    let file = h.find_text("File").expect("File menu");
+    h.click_at(file);
+    h.idle_frame();
+    let import = h.find_text_last("Import").expect("Import submenu");
+    h.click_at(import);
     h.idle_frame();
     let item = h
-        .find_text_last("Course from Document…")
-        .expect("Course from Document menu item");
+        .find_text_last("Course from document…")
+        .expect("Course from document menu item");
     h.click_at(item);
     h.idle_frame();
 
@@ -92,8 +95,8 @@ fn not_ready_shows_the_settings_button_and_sends_nothing() {
     h.idle_frame();
 
     let button = h
-        .find_text("Open AI Settings")
-        .expect("Open AI Settings button");
+        .find_text("Open AI settings")
+        .expect("Open AI settings button");
     assert!(h.find_text("Generate outline").is_none());
     let requests = click_for_requests(&mut h, button);
     assert!(

@@ -137,7 +137,7 @@ fn a10_3_changing_question_kind_from_right_panel() {
     h.idle_frame();
     h.idle_frame();
 
-    h.pick_combo("Multiple Choice", "True / False");
+    h.pick_combo("Multiple choice", "True / false");
     assert_eq!(
         h.editor
             .session
@@ -151,7 +151,7 @@ fn a10_3_changing_question_kind_from_right_panel() {
         QuestionKind::TrueFalse
     );
 
-    h.pick_combo("True / False", "Fill in");
+    h.pick_combo("True / false", "Fill in");
     assert_eq!(
         h.editor
             .session
@@ -246,7 +246,7 @@ fn a10_7_both_bottom_question_tab_and_right_panel_open_simultaneously() {
     h.idle_frame();
 
     let rev = h.editor.session.revision;
-    h.pick_combo("Multiple Choice", "True / False");
+    h.pick_combo("Multiple choice", "True / false");
     assert_eq!(
         h.editor.session.revision,
         rev + 1,

@@ -1,7 +1,7 @@
 # Settings panels: what the ↘ launcher opens
 
 > Part of [the ribbon plan](README.md). **Status:** step 1 built, steps 2 (Text) and 4 (bottom tabs) partly built.
-> **Written:** 2026-11-23. Status marks as in README. Long-term plan: it starts in M30 and grows with every milestone after it.
+> **Written:** 2026-11-23. Status marks as in README. Long-term plan: it starts in M37 and grows with every milestone after it.
 
 In Storyline the ↘ in a group's caption opens a modal dialog (Font, Paragraph, Size and Position,
 Format Shape). CourseCraft opens a **dock panel** instead: the same settings, and more, in a panel
@@ -67,23 +67,23 @@ panel holds that nothing holds today.
 
 | Panel | Opened by ↘ in | Today | Adds | Milestone |
 |---|---|---|---|---|
-| **Text** (sections Font, Paragraph, Text Box) | Home › Font, Home › Paragraph, Drawing Tools text groups | Format › Text | character spacing, caps, super/subscript, highlight, underline style; indents, spacing before and after, exact line spacing, tab stops; autofit, margins, columns, direction, vertical alignment | M31 |
-| **Shape Style** (Fill, Outline, Effects) | Home › Drawing, Shape Styles, Button Styles, Picture Styles | Format › Shape, Effects | gradient stop editor, dash, caps and joins, every shadow, glow, reflection, soft edge and bevel parameter, save as style | M31, M32 |
-| **Size and Position** | Size and Position (Drawing, Button, Picture tools), Animations › Size and Position | Format › Position & Size, Rotate, Frame | lock aspect ratio, scale %, reset to original size, numeric crop, anchor point, zoom picture | M31, M32 |
-| **Media** (Picture, Video, Audio) | Video Options, Audio Options | Format › Image, Frame; Timeline › media timing | volume, fade in and out, trim, playback and controls, captions, compression | M32 |
-| **Table** | Table Tools groups | Format › Rows, Columns, Cell, Borders | cell margins, merge and split, banded rows, border presets | M32 |
-| **Animation** | Animations › Entrance, Exit, Emphasis, Motion, Advanced | Animate › Animations, Motion Paths | easing, sequence by paragraph, path orientation and relative start, timing in seconds | M34 |
-| **Transition** | Transitions › Timing | Animate › Transition | per-layer transitions, direction options | M34 |
-| **Slide Properties** | Design › Background, Design › Options, Slides › Slide | Slide inspector | background styles (gradient, picture), hide background graphics, swipe, player overrides | M33 |
-| **Theme** | Design › Themes | `theme_dialog.rs` window | every colour slot, theme fonts, save and share a theme | M31, M33 |
-| **Course and Player** | Design › Setup | Course inspector, `course_settings.rs` window | player features, menu, resources, glossary, text labels | M33 |
-| **Triggers** | Insert › Interactive | Timeline › Triggers tab | the trigger form as a panel (Action, target, When, Object, Conditions) | M33 |
-| **States** | Drawing Tools › States | Timeline › States tab | — (moves out) | M33 |
-| **Variables** | Triggers › Variables | Timeline › Variables tab | — (moves out) | M33 |
-| **Question** | Slides › Questions, Question Tools | Timeline › Question tab, Format › Question | feedback, scoring and attempts in one place | M33 |
-| **Accessibility** | context menu Accessibility…, Home › Drawing | `alt_text.rs` window, Format › Accessibility | focus order, tab order, contrast check | M31 |
-| **Grid and Guides** | View › Show | View toggles | grid spacing, snap options, guide list, ruler units | M30 |
-| **AI** | AI › Write, Media, Assess, Agents | `ai_settings.rs`, `connect_agent.rs` windows | chat with the connected agent, generation history, voices | M35 |
+| **Text** (sections Font, Paragraph, Text Box) | Home › Font, Home › Paragraph, Drawing Tools text groups | Format › Text | character spacing, caps, super/subscript, highlight, underline style; indents, spacing before and after, exact line spacing, tab stops; autofit, margins, columns, direction, vertical alignment | M38 |
+| **Shape Style** (Fill, Outline, Effects) | Home › Drawing, Shape Styles, Button Styles, Picture Styles | Format › Shape, Effects | gradient stop editor, dash, caps and joins, every shadow, glow, reflection, soft edge and bevel parameter, save as style | M38, M39 |
+| **Size and Position** | Size and Position (Drawing, Button, Picture tools), Animations › Size and Position | Format › Position & Size, Rotate, Frame | lock aspect ratio, scale %, reset to original size, numeric crop, anchor point, zoom picture | M38, M39 |
+| **Media** (Picture, Video, Audio) | Video Options, Audio Options | Format › Image, Frame; Timeline › media timing | volume, fade in and out, trim, playback and controls, captions, compression | M39 |
+| **Table** | Table Tools groups | Format › Rows, Columns, Cell, Borders | cell margins, merge and split, banded rows, border presets | M39 |
+| **Animation** | Animations › Entrance, Exit, Emphasis, Motion, Advanced | Animate › Animations, Motion Paths | easing, sequence by paragraph, path orientation and relative start, timing in seconds | M41 |
+| **Transition** | Transitions › Timing | Animate › Transition | per-layer transitions, direction options | M41 |
+| **Slide Properties** | Design › Background, Design › Options, Slides › Slide | Slide inspector | background styles (gradient, picture), hide background graphics, swipe, player overrides | M40 |
+| **Theme** | Design › Themes | `theme_dialog.rs` window | every colour slot, theme fonts, save and share a theme | M38, M40 |
+| **Course and Player** | Design › Setup | Course inspector, `course_settings.rs` window | player features, menu, resources, glossary, text labels | M40 |
+| **Triggers** | Insert › Interactive | Timeline › Triggers tab | the trigger form as a panel (Action, target, When, Object, Conditions) | M40 |
+| **States** | Drawing Tools › States | Timeline › States tab | — (moves out) | M40 |
+| **Variables** | Triggers › Variables | Timeline › Variables tab | — (moves out) | M40 |
+| **Question** | Slides › Questions, Question Tools | Timeline › Question tab, Format › Question | feedback, scoring and attempts in one place | M40 |
+| **Accessibility** | context menu Accessibility…, Home › Drawing | `alt_text.rs` window, Format › Accessibility | focus order, tab order, contrast check | M38 |
+| **Grid and Guides** | View › Show | View toggles | grid spacing, snap options, guide list, ruler units | M37 |
+| **AI** | AI › Write, Media, Assess, Agents | `ai_settings.rs`, `connect_agent.rs` windows | chat with the connected agent, generation history, voices | M42 |
 
 Layers and Notes move from the Timeline panel to Workspace panels of their own, as
 [shell-panels-dialogs.md](shell-panels-dialogs.md) › step 6 already plans.
@@ -152,14 +152,14 @@ The panels are the base for the customization testers ask for. In order:
 | Step | What | Closes |
 |---|---|---|
 | 1 ✅ | Registry (`panels.rs`: families, sections), `UiAction::PanelAt`, the tolerant layout loader (`dock::forget_unknown_panels`), View › Panels in family order, opening by itself (rule 10), floating windows with docking off, `panels_tests.rs`; every launcher moved to `PanelAt` | the infrastructure |
-| 2 🟡 | **Text** panel (Font, Paragraph, Text Box sections); Font ↘ and Paragraph ↘ switched on; space before and after a paragraph (only in this panel). Still disabled: caps, highlight, underline styles, tab stops, columns. Still to do: the Format inspector's text rows in quick mode, a ↘ on its Text header | Font and Paragraph dialogs (M31) |
-| 3 | **Size and Position** and **Shape Style**; Drawing ↘ and the contextual launchers | Size and Position dialog, Format Shape (M31) |
-| 4 🟡 | **Triggers**, **States**, **Variables**, **Question** as dock panels of their own (✅: tabbed with Timeline by default; a saved layout gains them beside Timeline; `ui.bottom_tab` brings its panel forward; in Master View they say why they are empty). Still to do: **Layers** and **Notes** out of the Timeline panel; Triggers, Variables and Question as settings panels with ↘ launchers | shell step 6 (M33) |
-| 5 | **Animation** and **Transition** | M34 |
-| 6 | **Slide Properties**, **Theme**, **Course and Player**, **Grid and Guides** | M33 |
-| 7 | **Media**, **Table**, **Accessibility** | M32 |
-| 8 | **AI** panel with agent chat | M35 |
-| 9 | Customization 1–3 | after M35 |
+| 2 🟡 | **Text** panel (Font, Paragraph, Text Box sections); Font ↘ and Paragraph ↘ switched on; space before and after a paragraph (only in this panel). Still disabled: caps, highlight, underline styles, tab stops, columns. Still to do: the Format inspector's text rows in quick mode, a ↘ on its Text header | Font and Paragraph dialogs (M38) |
+| 3 | **Size and Position** and **Shape Style**; Drawing ↘ and the contextual launchers | Size and Position dialog, Format Shape (M38) |
+| 4 🟡 | **Triggers**, **States**, **Variables**, **Question** as dock panels of their own (✅: tabbed with Timeline by default; a saved layout gains them beside Timeline; `ui.bottom_tab` brings its panel forward; in Master View they say why they are empty). Still to do: **Layers** and **Notes** out of the Timeline panel; Triggers, Variables and Question as settings panels with ↘ launchers | shell step 6 (M40) |
+| 5 | **Animation** and **Transition** | M41 |
+| 6 | **Slide Properties**, **Theme**, **Course and Player**, **Grid and Guides** | M40 |
+| 7 | **Media**, **Table**, **Accessibility** | M39 |
+| 8 | **AI** panel with agent chat | M42 |
+| 9 | Customization 1–3 | after M42 |
 
 Each step updates this file, [ribbon.md](ribbon.md) or [contextual-tabs.md](contextual-tabs.md),
 and [feature-parity.md](feature-parity.md) in the same commit.

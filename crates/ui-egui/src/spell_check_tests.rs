@@ -194,13 +194,13 @@ fn right_clicking_a_squiggle_opens_the_word_menu() {
     harness.right_click_at(center);
     harness.idle_frame();
     assert!(
-        harness.find_text("Add to Dictionary").is_some(),
+        harness.find_text("Add to dictionary").is_some(),
         "egui's text-edit context menu is used for the word actions"
     );
     assert!(harness.find_text("Ignore").is_some());
 
     let add = harness
-        .find_text("Add to Dictionary")
+        .find_text("Add to dictionary")
         .expect("add to dictionary item");
     harness.click_at(add);
     harness.idle_frame();
@@ -366,5 +366,30 @@ fn check_spelling_change_all_and_add_to_dictionary() {
             .iter()
             .all(|issue| issue.misspelling.word != "recieve"),
         "an added word is no longer reported"
+    );
+}
+
+#[test]
+fn spell_check_flags_misspelled_words_in_glossary_definitions() {
+    let mut session = coursecraft_engine::Session::blank("Glossary Spell");
+    session
+        .execute(
+            "glossary.add",
+            &serde_json::json!({
+                "id": "g1",
+                "term": "Widget",
+                "definition": "A teh widget definition."
+            }),
+        )
+        .expect("add glossary");
+    let mut editor = Editor::new(session.course);
+    let issues = spell_check::collect_issues(&mut editor);
+    assert!(
+        issues.iter().any(|issue| {
+            issue.item.location.field.starts_with("glossary/")
+                && issue.item.location.field.ends_with("/definition")
+                && issue.misspelling.word == "teh"
+        }),
+        "expected misspelled word in glossary definition: {issues:?}"
     );
 }

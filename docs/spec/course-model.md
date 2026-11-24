@@ -668,3 +668,11 @@ Any breaking change bumps `SCHEMA_VERSION` and ships a migration in `coursecraft
 
 - `standard`: last chosen publish target (`"scorm12"`, `"scorm2004"`, `"cmi5"`, `"xapi"`, `"lti"`, `"web"`).
 - `lms_status` (optional, default `"auto"`, omitted when default): how SCORM 1.2 maps runtime completion (`Passed`, `Failed`, `Completed`, `Incomplete`) to `cmi.core.lesson_status` (`"auto"`, `"passed_incomplete"`, `"passed_failed"`, `"completed_incomplete"`, `"completed_failed"`). Ignored by SCORM 2004, cmi5, xAPI, LTI, and Web.
+
+## Slide size
+
+`slide_size` stores `{w, h}` in slide pixels, defaulting to `1280×720`. Valid dimensions are `100..=7680` wide by `100..=4320` high. `course.set_slide_size` accepts `{"w", "h", "mode"}` with three resize modes:
+
+- `"scale"`: scales all slides, masters, templates, banks, guides, and text styles by `min(w / old_w, h / old_h)` centred in the new frame (adds letterbox/pillarbox margins when aspect ratio changes).
+- `"fill"`: scales by `max(w / old_w, h / old_h)` centred in the new frame so the old canvas fills the new slide edge-to-edge (edges along the longer axis extend past the slide).
+- `"keep"`: updates `slide_size` only, leaving all objects, guides, and styles at their existing positions and sizes.

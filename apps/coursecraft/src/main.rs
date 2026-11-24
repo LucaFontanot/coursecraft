@@ -37,7 +37,11 @@ pub mod system_fonts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod template_library;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod updates;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod versions;
+#[cfg(any(target_arch = "wasm32", test))]
+pub mod web_state;
 
 #[cfg(test)]
 mod bughunt_m24_preview;
@@ -51,6 +55,8 @@ mod m27_files_ui_tests;
 mod tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod u16_shell_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod updates_ui_tests;
 #[cfg(test)]
 mod versions_tests;
 
@@ -125,6 +131,14 @@ struct ConflictPrompt {
     files: Vec<String>,
 }
 
+/// Result sent back from the background autosave thread.
+#[cfg(not(target_arch = "wasm32"))]
+struct AutosaveOutcome {
+    revision: u64,
+    epoch: u64,
+    result: Result<bool, String>,
+}
+
 struct EditorApp {
     editor: Editor,
     /// One background AI call at a time, on both desktop and web.
@@ -140,6 +154,14 @@ struct EditorApp {
     config_dir: Option<PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
     autosaver: Autosaver,
+    /// A background autosave receiver while one is running.
+    #[cfg(not(target_arch = "wasm32"))]
+    autosave_rx: Option<std::sync::mpsc::Receiver<AutosaveOutcome>>,
+    /// Monotonically incremented on manual Save, Save As, Save Folder, Open, New,
+    /// and autosaver resets so an in-flight background autosave never commits
+    /// after a newer explicit user action.
+    #[cfg(not(target_arch = "wasm32"))]
+    save_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_action: Option<PendingAction>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -187,6 +209,18 @@ struct EditorApp {
     /// Local HTTP server for "Open in browser" after a publish.
     #[cfg(not(target_arch = "wasm32"))]
     preview_server: Option<preview_server::PreviewServer>,
+    /// Background desktop update checker and verified downloader.
+    #[cfg(not(target_arch = "wasm32"))]
+    updates: updates::UpdateClient,
+    /// Latest resolved update from GitHub, if a newer version is available.
+    #[cfg(not(target_arch = "wasm32"))]
+    available_update: Option<updates::ResolvedUpdate>,
+    /// Verified installer saved to Downloads, for "Show in folder".
+    #[cfg(not(target_arch = "wasm32"))]
+    downloaded_update_path: Option<PathBuf>,
+    /// True when the user opened a manual check while a check was already in flight.
+    #[cfg(not(target_arch = "wasm32"))]
+    manual_update_check_pending: bool,
     /// A file returned by the export save dialog in tests instead of opening a dialog.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     test_export_path: Option<PathBuf>,
@@ -211,6 +245,9 @@ struct EditorApp {
     /// A folder returned by Open Folder in tests instead of opening a native dialog.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     test_open_folder_path: Option<PathBuf>,
+    /// Destination folder override for update downloads in tests.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    test_downloads_dir: Option<PathBuf>,
     /// The egui context control requests repaint, so an idle editor still answers them.
     #[cfg(not(target_arch = "wasm32"))]
     repaint_ctx: std::sync::Arc<std::sync::Mutex<Option<egui::Context>>>,
@@ -233,6 +270,23 @@ struct EditorApp {
     project_open_tx: std::sync::mpsc::Sender<(String, Vec<u8>)>,
     #[cfg(target_arch = "wasm32")]
     project_open_rx: std::sync::mpsc::Receiver<(String, Vec<u8>)>,
+    /// Unsaved-changes guard and pending action for the web editor.
+    #[cfg(target_arch = "wasm32")]
+    web_unsaved: web_state::WebUnsavedState,
+    /// Active frame-chunked web publish job.
+    #[cfg(target_arch = "wasm32")]
+    web_publish: Option<WebPublishJob>,
+}
+
+#[cfg(target_arch = "wasm32")]
+enum WebPublishJob {
+    Preparing {
+        standard: coursecraft_ui_egui::PublishStandard,
+    },
+    Zipping {
+        standard: coursecraft_ui_egui::PublishStandard,
+        zipper: coursecraft_publish::PackageZipper,
+    },
 }
 
 /// Whether a close request must be intercepted to ask about unsaved changes.
@@ -330,6 +384,34 @@ fn autosave_time_str(auto_path: &Path) -> String {
         .unwrap_or_else(|_| "recent session".to_string())
 }
 
+/// Current wall-clock timestamp in Unix seconds (0 if the system clock precedes the Unix epoch).
+#[cfg(not(target_arch = "wasm32"))]
+fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Convert a desktop [`updates::ResolvedUpdate`] into the pure-UI [`UpdateInfo`] payload.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolved_to_update_info(
+    resolved: &updates::ResolvedUpdate,
+) -> coursecraft_ui_egui::update_dialog::UpdateInfo {
+    coursecraft_ui_egui::update_dialog::UpdateInfo {
+        version: resolved.version.clone(),
+        current_version: resolved.current_version.clone(),
+        release_url: resolved.release_url.clone(),
+        notes_markdown: resolved.notes_markdown.clone(),
+        asset: resolved.asset.as_ref().map(|a| {
+            coursecraft_ui_egui::update_dialog::UpdateAssetInfo {
+                name: a.name.clone(),
+                size: a.size,
+            }
+        }),
+        published_at: resolved.published_at.clone(),
+    }
+}
+
 /// Wakes the editor's UI thread when a control request arrives.
 #[cfg(not(target_arch = "wasm32"))]
 fn control_waker(
@@ -369,6 +451,8 @@ impl EditorApp {
         }
         editor.set_publish_available(player_bundle::has_player());
         editor.set_automation_available(true);
+        editor.set_updates_available(true);
+        editor.set_auto_check_updates(prefs.auto_check_updates);
         editor.set_agent_exe_path(
             std::env::current_exe()
                 .ok()
@@ -382,6 +466,7 @@ impl EditorApp {
         editor.set_preferences(prefs.autosave_minutes_clamped(), prefs.default_slide.size());
         editor.set_versions_to_keep(prefs.versions_to_keep_clamped());
         editor.set_spell_preferences(prefs.spell_check_as_you_type, prefs.spell_words.clone());
+        editor.set_performance_mode(prefs.performance_mode.into());
         editor.set_ai_config(prefs.ai.as_ref().map(prefs::AiPrefs::to_config));
         editor.set_ai_source(
             prefs
@@ -442,6 +527,8 @@ impl EditorApp {
                 interval_minutes: Some(autosave_minutes),
                 ..Autosaver::new()
             },
+            autosave_rx: None,
+            save_epoch: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pending_action: None,
             restore_prompt: None,
             error_modal: None,
@@ -457,6 +544,10 @@ impl EditorApp {
             system_font_index: None,
             published_path: None,
             preview_server: None,
+            updates: updates::UpdateClient::new(),
+            available_update: None,
+            downloaded_update_path: None,
+            manual_update_check_pending: false,
             #[cfg(test)]
             test_export_path: None,
             #[cfg(test)]
@@ -473,6 +564,8 @@ impl EditorApp {
             test_open_path: None,
             #[cfg(test)]
             test_open_folder_path: None,
+            #[cfg(test)]
+            test_downloads_dir: None,
             repaint_ctx,
         }
     }
@@ -620,6 +713,12 @@ impl EditorApp {
         if let Some(note) = self.config_dir.as_deref().and_then(crash::read_crash_note) {
             self.editor.set_crash_note(Some(note));
         }
+        if !cfg!(test)
+            && !updates::is_ci_or_headless_env()
+            && let Some(ctx) = self.repaint_ctx.lock().ok().and_then(|g| g.clone())
+        {
+            self.maybe_start_auto_update_check(&ctx, now_unix_secs());
+        }
         if blank {
             self.editor.ui.show_welcome = false;
             self.editor.ui.has_loaded_course = true;
@@ -660,7 +759,15 @@ impl EditorApp {
         }
 
         let media = self.editor.used_media();
-        let saved = match save_kind(&path, self.project.folder.is_some(), !media.is_empty()) {
+        let kind = save_kind(&path, self.project.folder.is_some(), !media.is_empty());
+        if kind == SaveKind::JsonNeedsSaveAs {
+            self.editor.set_status(
+                "Plain JSON files cannot store imported media; save as a .ccraft project instead.",
+            );
+            return self.perform_save_as();
+        }
+        self.bump_save_epoch();
+        let saved = match kind {
             SaveKind::Folder => {
                 // A folder is kept in git, so there is no version history for it.
                 let mut record = self.project.folder.take().unwrap_or_default();
@@ -673,12 +780,7 @@ impl EditorApp {
                 self.project.folder = Some(record);
                 result.map(|_| ())
             }
-            SaveKind::JsonNeedsSaveAs => {
-                self.editor.set_status(
-                    "Plain JSON files cannot store imported media; save as a .ccraft project instead.",
-                );
-                return self.perform_save_as();
-            }
+            SaveKind::JsonNeedsSaveAs => return self.perform_save_as(),
             SaveKind::Json => {
                 self.keep_version(&path);
                 self.editor
@@ -778,7 +880,13 @@ impl EditorApp {
         }
     }
 
+    fn bump_save_epoch(&self) {
+        self.save_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
     fn reset_autosaver(&mut self) {
+        self.bump_save_epoch();
         self.autosaver = Autosaver::new();
         self.autosaver.interval_minutes = Some(self.prefs.autosave_minutes_clamped());
     }
@@ -1030,21 +1138,55 @@ impl EditorApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn update_autosave(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = self.autosave_rx.take() {
+            match rx.try_recv() {
+                Ok(outcome) => {
+                    let current_epoch = self.save_epoch.load(std::sync::atomic::Ordering::Acquire);
+                    if matches!(outcome.result, Ok(true)) && outcome.epoch == current_epoch {
+                        self.autosaver.last_autosaved_revision = Some(outcome.revision);
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.autosave_rx = Some(rx);
+                }
+            }
+        }
+
         let current_time = ctx.input(|i| i.time);
         let is_dirty = self.project.is_dirty(&self.editor.session);
         let rev = self.editor.session.revision;
-        let editor = &self.editor;
-        self.autosaver.maybe_autosave_arc(
-            current_time,
-            is_dirty,
-            rev,
-            autosave::AutosaveTarget {
-                project_path: self.project.path.as_deref(),
-                config_dir: self.config_dir.as_deref(),
-                course: &self.editor.session.course,
-            },
-            || editor.used_media(),
-        );
+        if self.autosave_rx.is_none()
+            && self.autosaver.take_due(current_time, is_dirty, rev)
+            && let Some(auto_path) = autosave::autosave_target_path(
+                self.project.path.as_deref(),
+                self.config_dir.as_deref(),
+            )
+        {
+            let course = self.editor.session.course.clone();
+            let media = self.editor.used_media();
+            let epoch = self.save_epoch.load(std::sync::atomic::Ordering::Acquire);
+            let epoch_ref = std::sync::Arc::clone(&self.save_epoch);
+            let ctx_wake = ctx.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            if std::thread::Builder::new()
+                .name("coursecraft-autosave".into())
+                .spawn(move || {
+                    let result = autosave::write_autosave_arc_guarded(
+                        &course, &media, &auto_path, &epoch_ref, epoch,
+                    );
+                    let _ = tx.send(AutosaveOutcome {
+                        revision: rev,
+                        epoch,
+                        result,
+                    });
+                    ctx_wake.request_repaint();
+                })
+                .is_ok()
+            {
+                self.autosave_rx = Some(rx);
+            }
+        }
         if is_dirty && let Some(wait) = self.autosaver.secs_until_next(current_time) {
             // Autosave is a timer, so never wake the UI more often than once
             // a second just to check it. The extra half second is the usual
@@ -1081,7 +1223,7 @@ impl EditorApp {
         match files::import_web_folder(&path, &existing) {
             Ok(import) => {
                 for (name, bytes) in import.files {
-                    self.editor.media.push((name, bytes.into()));
+                    self.editor.add_raw_media(name, bytes.into());
                 }
                 coursecraft_ui_egui::insert_web_object(
                     &mut self.editor,
@@ -1113,7 +1255,27 @@ impl EditorApp {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn is_blocked_file_request(&self, req: &EditorRequest) -> bool {
+        let modal_open = self.pending_action.is_some()
+            || self.conflict_prompt.is_some()
+            || self.restore_prompt.is_some()
+            || self.error_modal.is_some();
+        modal_open
+            && matches!(
+                req,
+                EditorRequest::New
+                    | EditorRequest::Open
+                    | EditorRequest::Save
+                    | EditorRequest::SaveAs
+            )
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn handle_request(&mut self, req: EditorRequest, ctx: &egui::Context) {
+        if self.is_blocked_file_request(&req) {
+            return;
+        }
         match req {
             EditorRequest::New => self.guard_unsaved(PendingAction::New, ctx),
             EditorRequest::Open => self.guard_unsaved(PendingAction::Open, ctx),
@@ -1355,13 +1517,16 @@ impl EditorApp {
                 default_slide,
                 spell_check_as_you_type,
                 spell_words,
+                performance_mode,
             } => {
                 self.prefs.autosave_minutes = autosave_minutes.min(prefs::MAX_AUTOSAVE_MINUTES);
                 self.prefs.versions_to_keep = versions_to_keep.min(prefs::MAX_VERSIONS_TO_KEEP);
                 self.prefs.spell_check_as_you_type = spell_check_as_you_type;
                 self.prefs.spell_words = spell_words;
-                if let Some(preset) = prefs::SlidePreset::from_size(default_slide) {
-                    self.prefs.default_slide = preset;
+                self.prefs.performance_mode = performance_mode.into();
+                self.editor.set_performance_mode(performance_mode);
+                if let Some(size) = prefs::DefaultSlideSize::from_valid_size(default_slide) {
+                    self.prefs.default_slide = size;
                 }
                 self.autosaver.interval_minutes = Some(self.prefs.autosave_minutes_clamped());
                 if let Some(ref dir) = self.config_dir {
@@ -1451,6 +1616,12 @@ impl EditorApp {
             EditorRequest::AddSystemFont { family, apply } => {
                 self.add_system_font(&family, apply);
             }
+            EditorRequest::CheckForUpdates => self.start_manual_update_check(ctx),
+            EditorRequest::DownloadUpdate => self.start_update_download(ctx),
+            EditorRequest::CancelUpdateDownload => self.updates.cancel_download(),
+            EditorRequest::SkipUpdateVersion(ver) => self.skip_update_version(ver),
+            EditorRequest::RevealDownloadedUpdate => self.reveal_downloaded_update(),
+            EditorRequest::SetAutoCheckUpdates(enabled) => self.set_auto_check_updates(enabled),
         }
     }
 
@@ -2170,6 +2341,235 @@ impl EditorApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_prefs(&self) {
+        if let Some(ref dir) = self.config_dir {
+            let _ = prefs::save_prefs(dir, &self.prefs);
+        }
+    }
+
+    /// Start a silent startup update check if enabled and the daily interval has elapsed.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn maybe_start_auto_update_check(&mut self, ctx: &egui::Context, now_unix: u64) {
+        if updates::should_auto_check(
+            self.prefs.auto_check_updates,
+            self.prefs.last_update_check_unix,
+            now_unix,
+        ) {
+            let _ = self.updates.start_check(false, ctx);
+        }
+    }
+
+    /// Open the Software update dialog and trigger a manual GitHub Releases check.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_manual_update_check(&mut self, ctx: &egui::Context) {
+        use coursecraft_ui_egui::update_dialog::{UpdateCheckStatus, UpdateDownloadState};
+        self.editor.ui.update.open = true;
+        match self.updates.busy() {
+            updates::UpdateBusy::Downloading => {}
+            updates::UpdateBusy::Checking => {
+                // Promote the in-flight silent startup check so its outcome populates the dialog.
+                self.manual_update_check_pending = true;
+                self.editor.ui.update.status = UpdateCheckStatus::Checking;
+                self.editor.ui.update.download = UpdateDownloadState::Idle;
+            }
+            updates::UpdateBusy::Idle => {
+                self.editor.ui.update.download = UpdateDownloadState::Idle;
+                if self.updates.start_check(true, ctx) {
+                    self.manual_update_check_pending = true;
+                    self.editor.ui.update.status = UpdateCheckStatus::Checking;
+                } else {
+                    self.editor.ui.update.status = UpdateCheckStatus::Error(
+                        "Couldn't check for updates right now. Try again or open the releases page in your browser."
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Resolve the destination directory for verified installer downloads.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn update_downloads_dir(&self) -> Option<PathBuf> {
+        #[cfg(test)]
+        {
+            self.test_downloads_dir.clone()
+        }
+        #[cfg(not(test))]
+        {
+            updates::downloads_dir()
+        }
+    }
+
+    /// Start streaming and verifying the matched installer asset in the background.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_update_download(&mut self, ctx: &egui::Context) {
+        let Some(resolved) = self.available_update.as_ref() else {
+            return;
+        };
+        let Some(asset) = resolved.asset.clone() else {
+            return;
+        };
+        let checksums_url = resolved.checksums_url.clone();
+        let Some(dest_dir) = self.update_downloads_dir() else {
+            self.editor.ui.update.download =
+                coursecraft_ui_egui::update_dialog::UpdateDownloadState::Failed(
+                    "Couldn't locate your Downloads folder. Open the releases page in your browser instead."
+                        .to_owned(),
+                );
+            return;
+        };
+        let total = Some(asset.size);
+        if self
+            .updates
+            .start_download(asset, checksums_url, dest_dir, ctx)
+        {
+            self.downloaded_update_path = None;
+            self.editor.ui.update.download =
+                coursecraft_ui_egui::update_dialog::UpdateDownloadState::Downloading {
+                    downloaded: 0,
+                    total,
+                };
+        }
+    }
+
+    /// Remember a skipped release version in `prefs.json` and close the update dialog.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn skip_update_version(&mut self, version: String) {
+        self.prefs.skipped_update_version = Some(version.clone());
+        self.save_prefs();
+        self.editor.ui.update.dismissed_version = Some(version);
+        self.editor.ui.update.open = false;
+    }
+
+    /// Reveal the verified installer in the system file manager (never runs or opens it).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reveal_downloaded_update(&mut self) {
+        if let Some(ref path) = self.downloaded_update_path
+            && let Err(message) = reveal_in_folder(path)
+        {
+            self.editor.set_status(message);
+        }
+    }
+
+    /// Persist the automatic update check preference.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn set_auto_check_updates(&mut self, enabled: bool) {
+        self.prefs.auto_check_updates = enabled;
+        self.editor.set_auto_check_updates(enabled);
+        self.save_prefs();
+    }
+
+    /// Drain background update check and download events without blocking the UI.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_updates(&mut self, ctx: &egui::Context) {
+        let events = self.updates.poll();
+        if events.is_empty() {
+            return;
+        }
+        for event in events {
+            match event {
+                updates::UpdateEvent::CheckFinished { manual, result } => {
+                    self.handle_update_check_finished(manual, result);
+                }
+                updates::UpdateEvent::DownloadProgress { downloaded, total } => {
+                    self.editor.ui.update.download =
+                        coursecraft_ui_egui::update_dialog::UpdateDownloadState::Downloading {
+                            downloaded,
+                            total,
+                        };
+                }
+                updates::UpdateEvent::DownloadFinished(result) => {
+                    self.handle_update_download_finished(result);
+                }
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn handle_update_check_finished(
+        &mut self,
+        manual: bool,
+        result: Result<updates::CheckOutcome, updates::UpdateError>,
+    ) {
+        use coursecraft_ui_egui::update_dialog::{UpdateCheckStatus, UpdateDownloadState};
+        let manual = manual || std::mem::take(&mut self.manual_update_check_pending);
+        match result {
+            Ok(updates::CheckOutcome::UpToDate) => {
+                self.prefs.last_update_check_unix = Some(now_unix_secs());
+                self.save_prefs();
+                self.available_update = None;
+                self.downloaded_update_path = None;
+                if manual {
+                    self.editor.ui.update.status = UpdateCheckStatus::UpToDate;
+                }
+            }
+            Ok(updates::CheckOutcome::Available(resolved)) => {
+                self.prefs.last_update_check_unix = Some(now_unix_secs());
+                self.save_prefs();
+                if !manual
+                    && self.prefs.skipped_update_version.as_deref()
+                        == Some(resolved.version.as_str())
+                {
+                    return;
+                }
+                let info = resolved_to_update_info(&resolved);
+                self.available_update = Some(resolved);
+                self.downloaded_update_path = None;
+                self.editor.ui.update.status = UpdateCheckStatus::Available(info);
+                self.editor.ui.update.download = UpdateDownloadState::Idle;
+                if manual {
+                    self.editor.ui.update.dismissed_version = None;
+                } else if self.restore_prompt.is_none()
+                    && !self.editor.ui.report.crash_prompt
+                    && self.editor.session.revision == 0
+                {
+                    self.editor.ui.update.open = true;
+                }
+            }
+            Err(err) => {
+                if matches!(err, updates::UpdateError::RateLimited) {
+                    self.prefs.last_update_check_unix = Some(now_unix_secs());
+                    self.save_prefs();
+                }
+                if manual {
+                    self.editor.ui.update.status = UpdateCheckStatus::Error(err.user_message());
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn handle_update_download_finished(
+        &mut self,
+        result: Result<updates::DownloadResult, updates::UpdateError>,
+    ) {
+        use coursecraft_ui_egui::update_dialog::UpdateDownloadState;
+        match result {
+            Ok(done) => {
+                let filename = done
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("CourseCraft-update")
+                    .to_owned();
+                self.downloaded_update_path = Some(done.path);
+                self.editor.ui.update.download = UpdateDownloadState::Verified {
+                    filename,
+                    folder_display: "Downloads".to_owned(),
+                    sha256_verified: done.sha256_verified,
+                };
+            }
+            Err(updates::UpdateError::Cancelled) => {
+                self.editor.ui.update.download = UpdateDownloadState::Idle;
+            }
+            Err(err) => {
+                self.editor.ui.update.download = UpdateDownloadState::Failed(err.user_message());
+            }
+        }
+    }
 }
 
 /// Open the system file browser at `path`, without a shell.
@@ -2451,6 +2851,8 @@ impl EditorApp {
                     self.project.saved_revision = u64::MAX;
                     self.reset_autosaver();
                 }
+                #[cfg(target_arch = "wasm32")]
+                self.web_unsaved.mark_dirty_after_import();
                 let summary = imported.report.summary_window_text();
                 self.editor.set_import_report(summary);
             }
@@ -2507,6 +2909,7 @@ struct EditorHostAdapter<'a> {
     project: &'a mut Project,
     config_dir: Option<&'a Path>,
     prefs: &'a mut Prefs,
+    save_epoch: &'a std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2649,6 +3052,8 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
         let media = self.editor.used_media();
         let is_ccraft = has_extension_ignore_ascii_case(&target, "ccraft");
         let is_project_folder = control_save_is_folder(&target, self.project);
+        self.save_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 
         if is_project_folder {
             // Keep the record when saving over the folder that is already open.
@@ -2745,6 +3150,8 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
                     let _ = prefs::save_prefs(dir, self.prefs);
                 }
                 self.editor.set_recent(self.prefs.recent.clone());
+                self.save_epoch
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                 Ok(title)
             }
             Err(e) => Err(coursecraft_control::HostError::Engine(e)),
@@ -2823,6 +3230,7 @@ impl EditorApp {
             self.poll_export(ui.ctx());
             self.poll_export_review(ui.ctx());
             self.poll_system_fonts(ui.ctx());
+            self.poll_updates(ui.ctx());
 
             // 3. System theme synchronization
             let desired_mode = self.prefs.theme.resolve(ui.ctx());
@@ -2858,6 +3266,7 @@ impl EditorApp {
                     project: &mut self.project,
                     config_dir: self.config_dir.as_deref(),
                     prefs: &mut self.prefs,
+                    save_epoch: &self.save_epoch,
                 };
                 if server.poll(&mut host) > 0 {
                     ui.ctx().request_repaint();
@@ -2875,6 +3284,16 @@ impl EditorApp {
             || self.conflict_prompt.is_some()
             || self.error_modal.is_some())
             && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+
+        #[cfg(target_arch = "wasm32")]
+        let web_modal_esc = {
+            self.step_web_publish(ui.ctx());
+            let is_dirty = self.web_unsaved.is_dirty(self.editor.session.revision);
+            let name = self.web_unsaved.file_name_display().to_owned();
+            self.editor.set_title_info(name, is_dirty);
+            self.web_unsaved.pending.is_some()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        };
 
         // 4. Editor main UI
         let _requests = self.editor.show(ui);
@@ -2990,7 +3409,7 @@ impl EditorApp {
                                 saved = self.save_project_file(true);
                                 done = true;
                             }
-                            if ui.button("Save a Copy").clicked() {
+                            if ui.button("Save a copy").clicked() {
                                 saved = if self.project.is_folder() {
                                     self.perform_save_as_folder()
                                 } else {
@@ -3040,6 +3459,7 @@ impl EditorApp {
                                 dismiss = true;
                             }
                             if ui.button("Discard").clicked() {
+                                self.bump_save_epoch();
                                 autosave::delete_autosave(&prompt.autosave_path);
                                 if let Some(ref file_path) = prompt.file_path {
                                     self.finish_open(file_path, Some(file_path.clone()), false);
@@ -3068,7 +3488,7 @@ impl EditorApp {
                         ui.horizontal(|ui| {
                             if let Some(version) = self.open_latest_offer.clone()
                                 && ui
-                                    .button("Open Latest Version")
+                                    .button("Open latest version")
                                     .on_hover_text(
                                         "Open the newest kept version of this file as a copy",
                                     )
@@ -3149,6 +3569,20 @@ impl EditorApp {
             }
 
             for req in _requests {
+                if self.web_unsaved.pending.is_some()
+                    && matches!(
+                        req,
+                        EditorRequest::New
+                            | EditorRequest::Open
+                            | EditorRequest::Save
+                            | EditorRequest::SaveAs
+                            | EditorRequest::OpenExample(_)
+                            | EditorRequest::OpenTemplate(_)
+                            | EditorRequest::PickPptx
+                    )
+                {
+                    continue;
+                }
                 match req {
                     EditorRequest::PickImage => {
                         let tx = self.import_tx.clone();
@@ -3258,20 +3692,7 @@ impl EditorApp {
                         });
                     }
                     EditorRequest::PickPptx => {
-                        let tx = self.import_tx.clone();
-                        let ctx = ui.ctx().clone();
-                        wasm_bindgen_futures::spawn_local(async move {
-                            let file = rfd::AsyncFileDialog::new()
-                                .add_filter("PowerPoint (*.pptx)", &["pptx"])
-                                .pick_file()
-                                .await;
-                            if let Some(file) = file {
-                                let name = file.file_name();
-                                let bytes = file.read().await;
-                                let _ = tx.send((name, bytes));
-                                ctx.request_repaint();
-                            }
-                        });
+                        self.guard_web_unsaved(web_state::WebPendingAction::ImportPptx, ui.ctx());
                     }
                     EditorRequest::PickDocument => {
                         let tx = self.document_tx.clone();
@@ -3302,14 +3723,19 @@ impl EditorApp {
                         coursecraft_ui_egui::coursecraft_render::apply_style(ui.ctx(), mode);
                     }
                     EditorRequest::New => {
-                        let course = Session::blank("Untitled course").course;
-                        self.editor.replace_course(course);
+                        self.guard_web_unsaved(web_state::WebPendingAction::New, ui.ctx());
                     }
                     EditorRequest::OpenExample(id) => {
-                        self.editor.open_example(id);
+                        self.guard_web_unsaved(
+                            web_state::WebPendingAction::OpenExample(id),
+                            ui.ctx(),
+                        );
                     }
                     EditorRequest::OpenTemplate(id) => {
-                        self.editor.open_template(id);
+                        self.guard_web_unsaved(
+                            web_state::WebPendingAction::OpenTemplate(id),
+                            ui.ctx(),
+                        );
                     }
                     EditorRequest::AiChat { purpose, request } => {
                         self.start_ai(purpose, request, ui.ctx());
@@ -3358,85 +3784,60 @@ impl EditorApp {
                     }
                     EditorRequest::AddSystemFont { .. } => {}
                     EditorRequest::Open => {
-                        let tx = self.project_open_tx.clone();
-                        let ctx = ui.ctx().clone();
-                        wasm_bindgen_futures::spawn_local(async move {
-                            let file = rfd::AsyncFileDialog::new()
-                                .add_filter(
-                                    "CourseCraft Project (*.ccraft, *.json)",
-                                    &["ccraft", "json"],
-                                )
-                                .pick_file()
-                                .await;
-                            if let Some(file) = file {
-                                let name = file.file_name();
-                                let bytes = file.read().await;
-                                let _ = tx.send((name, bytes));
-                                ctx.request_repaint();
-                            }
-                        });
+                        self.guard_web_unsaved(web_state::WebPendingAction::Open, ui.ctx());
                     }
                     EditorRequest::Save | EditorRequest::SaveAs => {
-                        let media = self.editor.used_media();
-                        match coursecraft_format::save_project(&self.editor.session.course, &media)
-                        {
-                            Ok(bytes) => {
-                                let stem = sanitize_filename_stem(
-                                    &self.editor.session.course.title,
-                                    "Untitled",
-                                );
-                                let file_name = format!("{stem}.ccraft");
-                                match web_download_bytes(
-                                    &file_name,
-                                    &bytes,
-                                    "application/octet-stream",
-                                ) {
-                                    Ok(()) => {
-                                        self.editor.set_status(format!("Downloaded {file_name}"))
-                                    }
-                                    Err(err) => self.editor.set_status(format!(
-                                        "Couldn't download {file_name}: {err}"
-                                    )),
-                                }
-                            }
-                            Err(err) => {
-                                self.editor
-                                    .set_status(format!("Couldn't save project: {err}"));
-                            }
-                        }
+                        self.perform_web_save();
                     }
                     EditorRequest::Publish { standard } => {
-                        self.editor.set_publish_busy();
-                        let pkg_standard = publish::package_standard(standard);
-                        let player = player_bundle::player_files();
-                        match publish::run_publish_bytes(
-                            &self.editor.session.course,
-                            &self.editor.media,
-                            pkg_standard,
-                            &player,
-                        ) {
-                            Ok(bytes) => {
-                                let stem = sanitize_filename_stem(
-                                    &self.editor.session.course.title,
-                                    "course",
-                                );
-                                let file_name = format!("{stem}-{}.zip", standard.file_stem());
-                                match web_download_bytes(&file_name, &bytes, "application/zip") {
-                                    Ok(()) => self
-                                        .editor
-                                        .set_publish_success(file_name, bytes.len() as u64),
-                                    Err(err) => self.editor.set_publish_failure(format!(
-                                        "Couldn't download {file_name}: {err}"
-                                    )),
-                                }
-                            }
-                            Err(err) => self.editor.set_publish_failure(err),
+                        if self.web_publish.is_none() {
+                            self.editor.set_publish_busy();
+                            self.web_publish = Some(WebPublishJob::Preparing { standard });
+                            ui.ctx().request_repaint();
                         }
                     }
                     EditorRequest::SaveImage { .. } => {
                         self.editor.set_status("Saving works in the desktop app.");
                     }
                     _ => {}
+                }
+            }
+
+            // Unsaved changes confirmation modal
+            if self.web_unsaved.pending.is_some() {
+                let modal_id = egui::Id::unique("web_unsaved_changes_modal");
+                let mode = resolve_web_theme(ui.ctx());
+                let modal = egui::Modal::new(modal_id)
+                    .backdrop_color(coursecraft_ui_egui::modal_backdrop_color(mode))
+                    .show(ui.ctx(), |ui| {
+                        ui.set_max_width(480.0);
+                        let name = self.web_unsaved.file_name_display().to_owned();
+                        ui.heading(format!("Save changes to {name}?"));
+                        ui.add_space(8.0);
+                        ui.add(
+                            egui::Label::new("Your changes will be lost if you don't save them.")
+                                .wrap(),
+                        );
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if coursecraft_ui_egui::primary_button(ui, "Save").clicked()
+                                && self.perform_web_save()
+                                && let Some(action) = self.web_unsaved.take_pending()
+                            {
+                                self.execute_web_pending_action(action, ui.ctx());
+                            }
+                            if ui.button("Don't Save").clicked()
+                                && let Some(action) = self.web_unsaved.take_pending()
+                            {
+                                self.execute_web_pending_action(action, ui.ctx());
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.web_unsaved.cancel();
+                            }
+                        });
+                    });
+                if modal.should_close() || web_modal_esc {
+                    self.web_unsaved.cancel();
                 }
             }
         }
@@ -3555,12 +3956,53 @@ fn run_editor_window() -> eframe::Result {
     )
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn should_prevent_browser_file_shortcut(
+    ctrl_or_meta: bool,
+    alt: bool,
+    shift: bool,
+    key: &str,
+) -> bool {
+    if !ctrl_or_meta || alt {
+        return false;
+    }
+    match key.to_ascii_lowercase().as_str() {
+        "s" => true,
+        "o" | "n" => !shift,
+        _ => false,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_web_file_shortcut_guard(window: &web_sys::Window) {
+    use eframe::wasm_bindgen::{JsCast as _, closure::Closure};
+
+    let listener = Closure::<dyn FnMut(web_sys::Event)>::new(|event: web_sys::Event| {
+        if let Ok(kb) = event.dyn_into::<web_sys::KeyboardEvent>()
+            && should_prevent_browser_file_shortcut(
+                kb.ctrl_key() || kb.meta_key(),
+                kb.alt_key(),
+                kb.shift_key(),
+                &kb.key(),
+            )
+        {
+            kb.prevent_default();
+        }
+    });
+    let target: &web_sys::EventTarget = window.as_ref();
+    let _ = target.add_event_listener_with_callback("keydown", listener.as_ref().unchecked_ref());
+    listener.forget();
+}
+
 #[cfg(target_arch = "wasm32")]
 fn main() {
     use eframe::wasm_bindgen::JsCast as _;
 
     wasm_bindgen_futures::spawn_local(async {
         let window = web_sys::window();
+        if let Some(ref w) = window {
+            install_web_file_shortcut_guard(w);
+        }
         let blank = window
             .as_ref()
             .and_then(|w| w.location().search().ok())
@@ -3576,6 +4018,24 @@ fn main() {
 
         let (course, media) = initial_course_and_media(blank);
         let mut editor = Editor::new(course);
+        let low_memory = web_sys::window().is_some_and(|window| {
+            js_sys::Reflect::get(
+                window.as_ref(),
+                &eframe::wasm_bindgen::JsValue::from_str("navigator"),
+            )
+            .ok()
+            .filter(|nav| !nav.is_null() && !nav.is_undefined())
+            .and_then(|nav| {
+                js_sys::Reflect::get(
+                    &nav,
+                    &eframe::wasm_bindgen::JsValue::from_str("deviceMemory"),
+                )
+                .ok()
+            })
+            .and_then(|v| v.as_f64())
+            .is_some_and(|gb| gb.is_finite() && gb > 0.0 && gb <= 4.0)
+        });
+        editor.set_low_memory_device(low_memory);
         editor.set_media(media);
         editor.set_publish_available(player_bundle::has_player());
         editor.set_coach_marks_done(false);
@@ -3588,6 +4048,7 @@ fn main() {
         let (background_audio_tx, background_audio_rx) = std::sync::mpsc::channel();
         let (document_tx, document_rx) = std::sync::mpsc::channel();
         let (project_open_tx, project_open_rx) = std::sync::mpsc::channel();
+        let web_unsaved = web_state::WebUnsavedState::new(editor.session.revision);
         if let Err(e) = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -3609,6 +4070,8 @@ fn main() {
                         document_rx,
                         project_open_tx,
                         project_open_rx,
+                        web_unsaved,
+                        web_publish: None,
                     }))
                 }),
             )
@@ -3621,6 +4084,163 @@ fn main() {
 
 #[cfg(target_arch = "wasm32")]
 impl EditorApp {
+    fn step_web_publish(&mut self, ctx: &egui::Context) {
+        const CHUNK_BYTES: usize = 256 * 1024;
+        let Some(job) = self.web_publish.take() else {
+            return;
+        };
+        match job {
+            WebPublishJob::Preparing { standard } => {
+                let pkg_standard = publish::package_standard(standard);
+                let player = player_bundle::player_files();
+                match publish::package_files_from(
+                    &self.editor.session.course,
+                    &self.editor.media,
+                    pkg_standard,
+                    &player,
+                ) {
+                    Ok(files) => {
+                        self.editor.set_publish_progress(Some(0.0));
+                        self.web_publish = Some(WebPublishJob::Zipping {
+                            standard,
+                            zipper: coursecraft_publish::PackageZipper::new(files),
+                        });
+                        ctx.request_repaint();
+                    }
+                    Err(err) => {
+                        self.editor.set_publish_failure(err);
+                    }
+                }
+            }
+            WebPublishJob::Zipping {
+                standard,
+                mut zipper,
+            } => match zipper.step(CHUNK_BYTES) {
+                Ok(coursecraft_publish::ZipStep::InProgress {
+                    bytes_done,
+                    bytes_total,
+                }) => {
+                    let progress = if bytes_total == 0 {
+                        1.0
+                    } else {
+                        bytes_done as f32 / bytes_total as f32
+                    };
+                    self.editor.set_publish_progress(Some(progress));
+                    self.web_publish = Some(WebPublishJob::Zipping { standard, zipper });
+                    ctx.request_repaint();
+                }
+                Ok(coursecraft_publish::ZipStep::Done(bytes)) => {
+                    let stem = sanitize_filename_stem(&self.editor.session.course.title, "course");
+                    let file_name = format!("{stem}-{}.zip", standard.file_stem());
+                    match web_download_bytes(&file_name, &bytes, "application/zip") {
+                        Ok(()) => self
+                            .editor
+                            .set_publish_success(file_name, bytes.len() as u64),
+                        Err(err) => self
+                            .editor
+                            .set_publish_failure(format!("Couldn't download {file_name}: {err}")),
+                    }
+                }
+                Err(err) => {
+                    self.editor
+                        .set_publish_failure(format!("Couldn't create the zip file: {err}"));
+                }
+            },
+        }
+    }
+
+    fn guard_web_unsaved(&mut self, action: web_state::WebPendingAction, ctx: &egui::Context) {
+        let rev = self.editor.session.revision;
+        if let Some(ready) = self.web_unsaved.request_or_run(action, rev) {
+            self.execute_web_pending_action(ready, ctx);
+        }
+    }
+
+    fn execute_web_pending_action(
+        &mut self,
+        action: web_state::WebPendingAction,
+        ctx: &egui::Context,
+    ) {
+        match action {
+            web_state::WebPendingAction::New => {
+                let course = Session::blank("Untitled course").course;
+                self.editor.replace_course(course);
+                self.web_unsaved.reset_for_new(self.editor.session.revision);
+            }
+            web_state::WebPendingAction::Open => {
+                let tx = self.project_open_tx.clone();
+                let ctx = ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter(
+                            "CourseCraft Project (*.ccraft, *.json)",
+                            &["ccraft", "json"],
+                        )
+                        .pick_file()
+                        .await;
+                    if let Some(file) = file {
+                        let name = file.file_name();
+                        let bytes = file.read().await;
+                        let _ = tx.send((name, bytes));
+                        ctx.request_repaint();
+                    }
+                });
+            }
+            web_state::WebPendingAction::OpenExample(id) => {
+                self.editor.open_example(id);
+                self.web_unsaved.reset_for_new(self.editor.session.revision);
+            }
+            web_state::WebPendingAction::OpenTemplate(id) => {
+                self.editor.open_template(id);
+                self.web_unsaved.reset_for_new(self.editor.session.revision);
+            }
+            web_state::WebPendingAction::ImportPptx => {
+                let tx = self.import_tx.clone();
+                let ctx = ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let file = rfd::AsyncFileDialog::new()
+                        .add_filter("PowerPoint (*.pptx)", &["pptx"])
+                        .pick_file()
+                        .await;
+                    if let Some(file) = file {
+                        let name = file.file_name();
+                        let bytes = file.read().await;
+                        let _ = tx.send((name, bytes));
+                        ctx.request_repaint();
+                    }
+                });
+            }
+        }
+    }
+
+    fn perform_web_save(&mut self) -> bool {
+        let media = self.editor.used_media();
+        match coursecraft_format::save_project(&self.editor.session.course, &media) {
+            Ok(bytes) => {
+                let stem = sanitize_filename_stem(&self.editor.session.course.title, "Untitled");
+                let file_name = format!("{stem}.ccraft");
+                match web_download_bytes(&file_name, &bytes, "application/octet-stream") {
+                    Ok(()) => {
+                        self.web_unsaved
+                            .mark_saved_as(self.editor.session.revision, file_name.clone());
+                        self.editor.set_status(format!("Downloaded {file_name}"));
+                        true
+                    }
+                    Err(err) => {
+                        self.editor
+                            .set_status(format!("Couldn't download {file_name}: {err}"));
+                        false
+                    }
+                }
+            }
+            Err(err) => {
+                self.editor
+                    .set_status(format!("Couldn't save project: {err}"));
+                false
+            }
+        }
+    }
+
     fn open_web_project_bytes(&mut self, name: &str, bytes: &[u8]) {
         let lower = name.to_ascii_lowercase();
         if lower.ends_with(".ccraft") {
@@ -3628,6 +4248,8 @@ impl EditorApp {
                 Ok(project) => {
                     self.editor.replace_course(project.course);
                     self.editor.set_media(into_arc_media(project.media));
+                    self.web_unsaved
+                        .mark_saved_as(self.editor.session.revision, name.to_owned());
                     self.editor.set_status(format!("Opened {name}"));
                 }
                 Err(err) => {
@@ -3643,6 +4265,8 @@ impl EditorApp {
                 Ok(course) => {
                     self.editor.replace_course(course);
                     self.editor.set_media(Vec::new());
+                    self.web_unsaved
+                        .mark_saved_as(self.editor.session.revision, name.to_owned());
                     self.editor.set_status(format!("Opened {name}"));
                 }
                 Err(err) => {

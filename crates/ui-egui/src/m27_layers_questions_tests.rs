@@ -1240,10 +1240,10 @@ fn d8_3_matching_pairs_and_sequence_reorder_with_bounds() {
 #[test]
 fn d8_4_hotspot_image_regions_canvas_handle_drag_and_markers() {
     let mut h = setup_harness(base_course());
-    h.editor.media.push((
+    h.editor.media.push(
         "media/map.png".into(),
         std::sync::Arc::from(vec![0x89, 0x50, 0x4E, 0x47]),
-    ));
+    );
     let q_slide = insert_question_slide(&mut h, "hotspot");
     select_slide(&mut h, &q_slide);
     switch_to_question_tab(&mut h);

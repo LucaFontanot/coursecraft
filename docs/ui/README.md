@@ -1,6 +1,6 @@
 # UI parity: the ribbon editor
 
-> **Status:** planned (M30). **Written:** 2026-11-23. **Sources:** public beginner tutorials for
+> **Status:** planned (M37). **Written:** 2026-11-23. **Sources:** public beginner tutorials for
 > Storyline 360, watched frame by frame (see [Sources](#sources)). Observations are of layout and
 > behaviour only (see [Clean-room](#clean-room)).
 
@@ -20,7 +20,7 @@ feature lands, the button is switched on; nothing moves.
 | File | What it holds |
 |---|---|
 | [storyline-observed.md](storyline-observed.md) | What the tutorials show, tab by tab and panel by panel. The reference. |
-| [feature-parity.md](feature-parity.md) | One row per feature: CourseCraft status and the milestone (M30–M35) that closes it. The summary the roadmap follows. |
+| [feature-parity.md](feature-parity.md) | One row per feature: CourseCraft status and the milestone (M37–M42) that closes it. The summary the roadmap follows. |
 | [ribbon.md](ribbon.md) | CourseCraft's main tabs: every group and control, its CourseCraft label, kind, command id and status. |
 | [contextual-tabs.md](contextual-tabs.md) | Tabs that appear for a selection or a mode: Drawing Tools, Picture Tools, Audio/Video Tools, Question Tools, Table Tools, Slide Master, Feedback Master, Preview, question form view. |
 | [shell-panels-dialogs.md](shell-panels-dialogs.md) | Window layout around the ribbon: title bar, quick access toolbar, view tabs, panels (Scenes, Timeline/States/Notes, Triggers, Slide Layers, Slide Properties), status bar, context menus and dialogs. |

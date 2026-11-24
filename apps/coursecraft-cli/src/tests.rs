@@ -12,7 +12,7 @@ use coursecraft_logic::{Effect, Input, Player};
 use coursecraft_pptx::zip;
 use coursecraft_render::{MediaFetch, MediaSource, RenderMode, RenderOptions, render_slide_rgba};
 
-use crate::{Cli, Cmd, StandardArg, run, run_simulate};
+use crate::{Cli, Cmd, StandardArg, load, needs_system_font_scan, run, run_simulate, run_validate};
 
 const HELLO_JSON: &str = include_str!("../../../examples/hello-course/course.json");
 const SHOWCASE_JSON: &str = include_str!("../../../examples/showcase/course.json");
@@ -2004,5 +2004,204 @@ fn simulate_strict_click_on_an_object_not_on_screen_fails() {
     assert!(
         stderr.contains("about-panel"),
         "expected first warning message in stderr, got: {stderr:?}"
+    );
+}
+
+#[test]
+fn m31_18_simulate_last_visited_after_bank_redraw_does_not_loop() {
+    let bank_slides: Vec<serde_json::Value> = (1..=6)
+        .map(|i| {
+            serde_json::json!({
+                "id": format!("bq{i}"),
+                "title": format!("BQ{i}"),
+                "question": {
+                    "kind": "multiple_choice",
+                    "prompt": "Pick one",
+                    "choices": [
+                        { "id": "a", "text": "A" },
+                        { "id": "b", "text": "B", "correct": true }
+                    ],
+                    "attempts": 1
+                },
+                "objects": [{
+                    "id": "btn-back",
+                    "kind": { "type": "button", "label": "Back" },
+                    "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+                }],
+                "triggers": [{
+                    "action": { "action": "jump_to_slide", "target": "last_visited" },
+                    "when": { "event": "click", "object": "btn-back" }
+                }]
+            })
+        })
+        .collect();
+    let course_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "m31-18-last-visited",
+        "title": "M31-18 Last Visited",
+        "scenes": [{
+            "id": "sc",
+            "title": "Scene",
+            "slides": [
+                {
+                    "id": "s-intro",
+                    "title": "Intro",
+                    "objects": [{
+                        "id": "btn-back",
+                        "kind": { "type": "button", "label": "Back" },
+                        "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+                    }],
+                    "triggers": [{
+                        "action": { "action": "jump_to_slide", "target": "last_visited" },
+                        "when": { "event": "click", "object": "btn-back" }
+                    }]
+                },
+                { "id": "s-draw", "title": "Draw", "draw": { "bank": "bank1", "count": 2 } },
+                {
+                    "id": "s-results",
+                    "title": "Results",
+                    "objects": [
+                        {
+                            "id": "btn-retry",
+                            "kind": { "type": "button", "label": "Retry" },
+                            "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 40.0 }
+                        },
+                        {
+                            "id": "btn-back",
+                            "kind": { "type": "button", "label": "Back" },
+                            "frame": { "x": 0.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+                        }
+                    ],
+                    "triggers": [
+                        {
+                            "action": { "action": "retry_quiz" },
+                            "when": { "event": "click", "object": "btn-retry" }
+                        },
+                        {
+                            "action": { "action": "jump_to_slide", "target": "last_visited" },
+                            "when": { "event": "click", "object": "btn-back" }
+                        }
+                    ]
+                }
+            ]
+        }],
+        "banks": [{ "id": "bank1", "title": "Bank One", "slides": bank_slides }]
+    });
+    let inputs_json = serde_json::json!([
+        { "input": "start" },
+        { "input": "next" },
+        { "input": "next" },
+        { "input": "next" },
+        { "input": "click", "object": "btn-retry" },
+        { "input": "click", "object": "btn-back" },
+        { "input": "click", "object": "btn-back" },
+        { "input": "click", "object": "btn-back" },
+        { "input": "click", "object": "btn-back" }
+    ]);
+
+    let scratch = scratch_dir("test-cli-m31-18-last-visited");
+    let course_path = scratch.join("course.json");
+    let inputs_path = scratch.join("inputs.json");
+    std::fs::write(&course_path, course_json.to_string()).expect("write course");
+    std::fs::write(&inputs_path, inputs_json.to_string()).expect("write inputs");
+
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    let code =
+        run_simulate(&course_path, &inputs_path, 1, true, &mut out, &mut err).expect("simulate");
+    assert_eq!(
+        code,
+        ExitCode::SUCCESS,
+        "stderr: {}",
+        String::from_utf8_lossy(&err)
+    );
+
+    let stdout = String::from_utf8(out).expect("utf8 stdout");
+    let entered: Vec<String> = stdout
+        .lines()
+        .filter_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            if v.get("effect")?.as_str()? == "slide_entered" {
+                v.get("slide")?.as_str().map(str::to_owned)
+            } else {
+                None
+            }
+        })
+        .collect();
+    // Final btn-back on s-intro (index 0) must NOT emit another slide_entered: "s-intro".
+    assert_eq!(entered.first().map(String::as_str), Some("s-intro"));
+    assert_eq!(entered.last().map(String::as_str), Some("s-intro"));
+    assert_eq!(
+        entered.iter().filter(|s| s.as_str() == "s-intro").count(),
+        2,
+        "expected s-intro entered only at start and once on LastVisited, got {entered:?}"
+    );
+}
+
+/// U-10 (`M34-13`): `validate` skips OS font scanning on Inter-only courses and
+/// still reports the exact missing-font warning for an unembedded non-Inter font.
+#[test]
+fn u10_cli_validate_skips_font_scan_for_inter_and_warns_for_unknown_system_font() {
+    let hello_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello-course/course.json");
+    let hello_course = load(&hello_path).expect("hello course loads");
+    assert!(
+        !needs_system_font_scan(&hello_course),
+        "hello-course uses only Inter and must not trigger OS font scanning"
+    );
+    let mut hello_out = Vec::new();
+    let code = run_validate(&hello_path, &mut hello_out).expect("validate hello-course");
+    assert_eq!(code, ExitCode::SUCCESS);
+    let hello_stdout = String::from_utf8(hello_out).expect("utf8 output");
+    assert!(
+        !hello_stdout.contains("warning: /fonts"),
+        "Inter-only hello-course must emit no font warnings: {hello_stdout}"
+    );
+
+    let custom_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "u10-unknown-font",
+        "title": "U-10 Unknown Font",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [{
+                "id": "s0",
+                "title": "Slide 0",
+                "objects": [{
+                    "id": "t0",
+                    "kind": {
+                        "type": "text",
+                        "text": "Hello in a missing font",
+                        "style": { "font": "NonExistentTestFont", "size": 32 }
+                    },
+                    "frame": { "x": 80, "y": 80, "w": 600, "h": 120 }
+                }]
+            }]
+        }]
+    });
+    let scratch = scratch_dir("test-cli-u10-unknown-font");
+    let custom_path = scratch.join("course.json");
+    std::fs::write(&custom_path, custom_json.to_string()).expect("write course");
+    let custom_course = load(&custom_path).expect("custom course loads");
+    assert!(
+        needs_system_font_scan(&custom_course),
+        "course referencing unembedded NonExistentTestFont must trigger OS font scan"
+    );
+
+    let mut custom_out = Vec::new();
+    let code = run_validate(&custom_path, &mut custom_out).expect("validate custom course");
+    assert_eq!(code, ExitCode::SUCCESS);
+    let custom_stdout = String::from_utf8(custom_out).expect("utf8 output");
+    assert!(
+        custom_stdout
+            .contains("warning: /fonts — Learners without NonExistentTestFont will see Inter."),
+        "validate must report the exact font warning, got: {custom_stdout}"
+    );
+    let expected_warnings = custom_course.validate().len() + 1;
+    assert!(
+        custom_stdout.contains(&format!("0 error(s), {expected_warnings} warning(s)")),
+        "warning count must include the font warning, got: {custom_stdout}"
     );
 }

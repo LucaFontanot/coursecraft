@@ -1,13 +1,15 @@
 //! Changing the slide size, with or without scaling the content.
 
 use coursecraft_course::{
-    Course, Object, ObjectKind, Outline, Paragraph, Size, Slide, TextRun, TextStyle,
+    Course, Glow, MAX_OBJECT_FRAME_SIZE, Object, ObjectKind, Outline, Paragraph, Shadow, ShapeText,
+    Size, Slide, StateDef, StateExtra, StateExtraKind, TextRun, TextStyle, clamp_letter_spacing,
 };
 
 /// Smallest and largest slide sides the command accepts, in pixels.
 pub(crate) const MIN_SIDE: u32 = 100;
 pub(crate) const MAX_W: u32 = 7680;
 pub(crate) const MAX_H: u32 = 4320;
+const MAX_COORD: f32 = 100_000.0;
 
 /// How a content-aware resize maps old coordinates to new ones.
 #[derive(Clone, Copy)]
@@ -39,22 +41,49 @@ impl Map {
     }
 }
 
+fn clamp_coord(v: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(-MAX_COORD, MAX_COORD)
+    } else {
+        0.0
+    }
+}
+
 fn round_len(v: f32, min: f32) -> f32 {
     if v.is_finite() {
-        v.round().max(min)
+        v.round().clamp(min, MAX_OBJECT_FRAME_SIZE)
     } else {
         min
     }
 }
 
-fn scale_size(style: &mut TextStyle, m: Map) {
+fn scale_inset(v: f32, m: Map) -> f32 {
+    let scaled = m.len(v);
+    if scaled.is_finite() {
+        scaled.clamp(0.0, MAX_COORD)
+    } else {
+        0.0
+    }
+}
+
+fn scale_text_style(style: &mut TextStyle, m: Map) {
     style.size = m.len(style.size).clamp(1.0, 400.0);
+    style.letter_spacing = clamp_letter_spacing(m.len(style.letter_spacing));
+    if let Some(insets) = style.insets.as_mut() {
+        insets.left = scale_inset(insets.left, m);
+        insets.top = scale_inset(insets.top, m);
+        insets.right = scale_inset(insets.right, m);
+        insets.bottom = scale_inset(insets.bottom, m);
+    }
 }
 
 fn scale_runs(runs: &mut [TextRun], m: Map) {
     for run in runs {
         if let Some(size) = run.size {
             run.size = Some(m.len(size).clamp(1.0, 400.0));
+        }
+        if let Some(spacing) = run.letter_spacing {
+            run.letter_spacing = Some(clamp_letter_spacing(m.len(spacing)));
         }
     }
 }
@@ -66,6 +95,9 @@ fn scale_outline(outline: &mut Outline, m: Map) {
 fn scale_paragraph(paragraph: &mut Paragraph, m: Map) {
     paragraph.space_before = m.len(paragraph.space_before).clamp(0.0, 200.0);
     paragraph.space_after = m.len(paragraph.space_after).clamp(0.0, 200.0);
+    if let Some(bullet_size) = paragraph.bullet_size {
+        paragraph.bullet_size = Some(m.len(bullet_size).clamp(1.0, 400.0));
+    }
 }
 
 fn scale_paragraphs(paragraphs: &mut [Paragraph], m: Map) {
@@ -74,58 +106,170 @@ fn scale_paragraphs(paragraphs: &mut [Paragraph], m: Map) {
     }
 }
 
+fn scale_shape_text(text: &mut ShapeText, m: Map) {
+    scale_text_style(&mut text.style, m);
+    scale_runs(&mut text.runs, m);
+    scale_paragraphs(&mut text.paragraphs, m);
+}
+
+fn scale_shadow(shadow: &mut Shadow, m: Map) {
+    shadow.offset_x = m.len(shadow.offset_x).clamp(-200.0, 200.0);
+    shadow.offset_y = m.len(shadow.offset_y).clamp(-200.0, 200.0);
+    shadow.blur = m.len(shadow.blur).clamp(0.0, 100.0);
+}
+
+fn scale_glow(glow: &mut Glow, m: Map) {
+    glow.size = m.len(glow.size).clamp(0.0, 100.0);
+}
+
+fn scale_state_extra(extra: &mut StateExtra, m: Map) {
+    // Parent-relative coordinates scale by `m.len` without slide centring offsets.
+    extra.frame.x = clamp_coord(m.len(extra.frame.x).round());
+    extra.frame.y = clamp_coord(m.len(extra.frame.y).round());
+    extra.frame.w = round_len(m.len(extra.frame.w), 1.0);
+    extra.frame.h = round_len(m.len(extra.frame.h), 1.0);
+    if let Some(shadow) = extra.shadow.as_mut() {
+        scale_shadow(shadow, m);
+    }
+    if let Some(glow) = extra.glow.as_mut() {
+        scale_glow(glow, m);
+    }
+    match &mut extra.kind {
+        StateExtraKind::Shape { outline, text, .. } => {
+            if let Some(outline) = outline {
+                scale_outline(outline, m);
+            }
+            if let Some(text) = text {
+                scale_shape_text(text, m);
+            }
+        }
+        StateExtraKind::Image { outline, .. } => {
+            if let Some(outline) = outline {
+                scale_outline(outline, m);
+            }
+        }
+        StateExtraKind::Text {
+            style,
+            runs,
+            paragraphs,
+            outline,
+            ..
+        } => {
+            scale_text_style(style, m);
+            scale_runs(runs, m);
+            scale_paragraphs(paragraphs, m);
+            if let Some(outline) = outline {
+                scale_outline(outline, m);
+            }
+        }
+        StateExtraKind::Path { path } => {
+            scale_outline(&mut path.outline, m);
+            if let Some(text) = path.text.as_mut() {
+                scale_shape_text(text, m);
+            }
+        }
+    }
+}
+
+fn scale_state(state: &mut StateDef, m: Map) {
+    if let Some(outline) = state.outline.as_mut() {
+        scale_outline(outline, m);
+    }
+    if let Some(style) = state.text_style.as_mut() {
+        scale_text_style(style, m);
+    }
+    if let Some(runs) = state.runs.as_mut() {
+        scale_runs(runs, m);
+    }
+    if let Some(paragraphs) = state.paragraphs.as_mut() {
+        scale_paragraphs(paragraphs, m);
+    }
+    if let Some(shadow) = state.shadow.as_mut() {
+        scale_shadow(shadow, m);
+    }
+    if let Some(glow) = state.glow.as_mut() {
+        scale_glow(glow, m);
+    }
+    for extra in &mut state.extras {
+        scale_state_extra(extra, m);
+    }
+}
+
 fn scale_object(o: &mut Object, m: Map) {
     let f = &mut o.frame;
-    f.x = m.x(f.x).round();
-    f.y = m.y(f.y).round();
+    f.x = clamp_coord(m.x(f.x).round());
+    f.y = clamp_coord(m.y(f.y).round());
     f.w = round_len(m.len(f.w), 1.0);
     f.h = round_len(m.len(f.h), 1.0);
     let frame_h = f.h;
     if let Some(shadow) = o.shadow.as_mut() {
-        shadow.offset_x = m.len(shadow.offset_x).clamp(-200.0, 200.0);
-        shadow.offset_y = m.len(shadow.offset_y).clamp(-200.0, 200.0);
-        shadow.blur = m.len(shadow.blur).clamp(0.0, 100.0);
+        scale_shadow(shadow, m);
     }
     if let Some(glow) = o.glow.as_mut() {
-        glow.size = m.len(glow.size).clamp(0.0, 100.0);
+        scale_glow(glow, m);
     }
     for path in &mut o.motion_paths {
         for point in &mut path.points {
             if path.relative {
-                point.x = m.len(point.x);
-                point.y = m.len(point.y);
+                point.x = clamp_coord(m.len(point.x));
+                point.y = clamp_coord(m.len(point.y));
             } else {
-                point.x = m.x(point.x);
-                point.y = m.y(point.y);
+                point.x = clamp_coord(m.x(point.x));
+                point.y = clamp_coord(m.y(point.y));
             }
         }
+    }
+    for state in &mut o.states {
+        scale_state(state, m);
     }
     match &mut o.kind {
         ObjectKind::Text {
             style,
             runs,
             paragraphs,
+            outline,
             ..
         } => {
-            scale_size(style, m);
+            scale_text_style(style, m);
             scale_runs(runs, m);
             scale_paragraphs(paragraphs, m);
+            if let Some(outline) = outline {
+                scale_outline(outline, m);
+            }
         }
         ObjectKind::Shape { outline, text, .. } => {
             if let Some(outline) = outline {
                 scale_outline(outline, m);
             }
             if let Some(text) = text {
-                scale_size(&mut text.style, m);
-                scale_runs(&mut text.runs, m);
-                scale_paragraphs(&mut text.paragraphs, m);
+                scale_shape_text(text, m);
             }
         }
-        ObjectKind::Path { path } => scale_outline(&mut path.outline, m),
+        ObjectKind::Image {
+            outline: Some(outline),
+            ..
+        } => {
+            scale_outline(outline, m);
+        }
+        ObjectKind::Path { path } => {
+            scale_outline(&mut path.outline, m);
+            if let Some(text) = path.text.as_mut() {
+                scale_shape_text(text, m);
+            }
+        }
+        ObjectKind::Timer { style, .. } => {
+            scale_text_style(style, m);
+        }
+        ObjectKind::Marker {
+            runs, paragraphs, ..
+        } => {
+            scale_runs(runs, m);
+            scale_paragraphs(paragraphs, m);
+        }
         ObjectKind::Table { rows, borders, .. } => {
             for row in rows {
                 for cell in &mut row.cells {
-                    scale_size(&mut cell.style, m);
+                    scale_text_style(&mut cell.style, m);
                     scale_runs(&mut cell.runs, m);
                     scale_paragraphs(&mut cell.paragraphs, m);
                 }
@@ -158,12 +302,23 @@ fn scale_slide(slide: &mut Slide, m: Map) {
     }
     if let Some(question) = slide.question.as_mut() {
         for region in &mut question.regions {
-            region.x = m.x(region.x).round();
-            region.y = m.y(region.y).round();
+            region.x = clamp_coord(m.x(region.x).round());
+            region.y = clamp_coord(m.y(region.y).round());
             region.w = round_len(m.len(region.w), 1.0);
             region.h = round_len(m.len(region.h), 1.0);
         }
     }
+}
+
+/// How `set_slide_size` handles existing slide content when dimensions change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResizeMode {
+    /// Uniformly fit the old canvas inside the new size, adding margins if the aspect changes.
+    Scale,
+    /// Uniformly fill the new size edge-to-edge; edges may extend past the slide.
+    Fill,
+    /// Change only `course.slide_size`, leaving all objects, guides, and styles untouched.
+    Keep,
 }
 
 /// Check the requested size against the bounds.
@@ -171,15 +326,20 @@ pub(crate) fn size_in_bounds(w: u32, h: u32) -> bool {
     (MIN_SIDE..=MAX_W).contains(&w) && (MIN_SIDE..=MAX_H).contains(&h)
 }
 
-/// Change the slide size. With `scale`, content follows by one uniform factor
-/// and is centred. Returns false when nothing changed.
-pub(crate) fn set_slide_size(course: &mut Course, w: u32, h: u32, scale: bool) -> bool {
+/// Change the slide size according to `mode`. Returns false when nothing changed.
+pub(crate) fn set_slide_size(course: &mut Course, w: u32, h: u32, mode: ResizeMode) -> bool {
     let old = course.slide_size;
     if old.w == w && old.h == h {
         return false;
     }
-    if scale && old.w > 0 && old.h > 0 {
-        let factor = (w as f32 / old.w as f32).min(h as f32 / old.h as f32);
+    if mode != ResizeMode::Keep && old.w > 0 && old.h > 0 {
+        let sx = w as f32 / old.w as f32;
+        let sy = h as f32 / old.h as f32;
+        let factor = match mode {
+            ResizeMode::Scale => sx.min(sy),
+            ResizeMode::Fill => sx.max(sy),
+            ResizeMode::Keep => 1.0,
+        };
         if factor.is_finite() && factor > 0.0 {
             let m = Map {
                 factor,
@@ -200,14 +360,14 @@ pub(crate) fn set_slide_size(course: &mut Course, w: u32, h: u32, scale: bool) -
                 }
             }
             for guide in &mut course.editor.guides {
-                guide.at = if guide.vertical {
+                guide.at = clamp_coord(if guide.vertical {
                     m.x(guide.at).round()
                 } else {
                     m.y(guide.at).round()
-                };
+                });
             }
             for named in &mut course.text_styles {
-                scale_size(&mut named.style, m);
+                scale_text_style(&mut named.style, m);
                 if let Some(paragraph) = named.paragraphs.as_mut() {
                     scale_paragraph(paragraph, m);
                 }

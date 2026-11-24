@@ -1,4 +1,4 @@
-//! The editor's panels in a `craft_ui::docking` workspace (M30 step 1).
+//! The editor's panels in a `craft_ui::docking` workspace (M37 step 1).
 //!
 //! On by default (Preferences › Interface › Docked panels): the slides panel, the
 //! canvas, the timeline and the Inspector are dock panels the user can move, stack,

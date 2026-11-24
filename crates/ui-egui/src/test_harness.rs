@@ -1771,7 +1771,7 @@ mod tests {
         let file_pos = h.find_text("File").expect("File menu");
         h.click_at(file_pos);
         h.idle_frame();
-        let save_as_pos = h.find_text_last("Save As…").expect("Save As menu item");
+        let save_as_pos = h.find_text_last("Save as…").expect("Save as menu item");
         let reqs = h.click_at_requests(save_as_pos);
         assert!(reqs.iter().any(|r| matches!(r, EditorRequest::SaveAs)));
     }
@@ -1804,6 +1804,7 @@ mod tests {
         mut ui_fn: impl FnMut(&mut egui::Ui),
     ) -> (Vec<WidgetNode>, LayoutReport, Vec<String>) {
         let ctx = Context::default();
+        coursecraft_render::install_fonts(&ctx);
         ctx.enable_accesskit();
         ctx.set_zoom_factor(zoom_factor);
         let mut style = (*ctx.global_style()).clone();
@@ -1886,7 +1887,10 @@ mod tests {
     #[test]
     fn harness_catches_small_hit_target_button() {
         let (nodes, _, _) = run_synthetic_scene((400.0, 200.0), 1.0, |ui| {
-            let _ = ui.add_sized(vec2(18.0, 18.0), egui::Button::new("Tiny"));
+            let _ = ui.add_sized(
+                vec2(18.0, 18.0),
+                egui::Button::new(egui::RichText::new("Tiny").size(10.0)),
+            );
         });
         let findings = check_hit_targets(&nodes, vec2(24.0, 24.0));
         assert!(

@@ -7,7 +7,7 @@ This is the page to give Claude Code, Codex or any other agent. It says how to g
 The CourseCraft app contains both agent tools, so there is nothing else to install.
 
 1. Open the app.
-2. Choose **Help ▸ Connect an AI agent**. This opens **AI Settings** on its **Agents** tab.
+2. Choose **Help ▸ Connect an AI agent**. This opens **AI settings** on its **Agents** tab.
 3. Connect the agent, or open **Set up by hand** and copy the line for your agent to run once in a terminal.
 
 The lines look like this, with your app's real location filled in:
@@ -71,7 +71,7 @@ Their `publish` uses `target/player-dist` when present (or `--player <folder>`),
 
 | Symptom | Fix |
 |---|---|
-| Command not found | The app moved. In **AI Settings ▸ Agents**, open **Set up by hand**, copy a new line and run it |
+| Command not found | The app moved. In **AI settings ▸ Agents**, open **Set up by hand**, copy a new line and run it |
 | "CourseCraft isn't reachable" | Open the desktop app. The web version has no automation channel |
 | Still not reachable | In the app, turn on **Help ▸ Allow automation**. The status bar shows "Automation on" |
 | macOS blocks the app | Open it once from Finder and allow it in System Settings ▸ Privacy & Security |
@@ -134,7 +134,7 @@ courses/old.ccraft     failed: step 0 (course.recolor): ...
 
 **Recipes** for agents are in `docs/recipes/`: [build-from-pdf](recipes/build-from-pdf.md), [accessibility-fix](recipes/accessibility-fix.md), [translate-and-check](recipes/translate-and-check.md), [rebrand-many](recipes/rebrand-many.md).
 
-**`import-questions`** reads a CSV with a header row (case-insensitive, any order): `type` (`multiple_choice`, `multiple_response`, `true_false`, `fill_in`), `question`, `choice1` to `choice10`, `correct` (choice numbers such as `2` or `1;3`; `true` or `false`; or accepted answers separated by `;` for fill-in), and optional `feedback_correct`, `feedback_incorrect`, `points`. Each row becomes a question slide in a new bank, or in the bank named by `--bank`. If any row is wrong nothing is imported and every problem is listed with its row number (the header is row 1). The file may be up to 5 MB and 2,000 rows. The app has File, Import, Questions from CSV.
+**`import-questions`** reads a CSV with a header row (case-insensitive, any order): `type` (`multiple_choice`, `multiple_response`, `true_false`, `fill_in`), `question`, `choice1` to `choice10`, `correct` (choice numbers such as `2` or `1;3`; `true` or `false`; or accepted answers separated by `;` for fill-in), and optional `feedback_correct`, `feedback_incorrect`, `points`. Each row becomes a question slide in a new bank, or in the bank named by `--bank`. If any row is wrong nothing is imported and every problem is listed with its row number (the header is row 1). The file may be up to 5 MB and 2,000 rows. The app has File, Import, Questions from spreadsheet (CSV)…
 
 **`diff`** lists one line per change, grouped by slide in course order. It matches slides, objects, layers, variables and the rest by id, so moving a slide shows as a move. When both sides have media (a `.ccraft`, or a `media/` folder beside `course.json`) it also reports files added, removed or with different content.
 
@@ -238,12 +238,12 @@ The columns are the id, its place in the menus, its shortcut, and its parameters
 ```text
 course.info          -                        -          {}
 course.map           -                        -          {}
-course.validate      File/Check Course        -          {}
+course.validate      File/Check course        -          {}
 course.audit         -                        -          {}
-course.update        File/Course Properties   -          {"title"?: string, "id"?: string, "start_slide"?: id|null, "language"?: string|null}
+course.update        Project/Course settings… -          {"title"?: string, "id"?: string, "start_slide"?: id|null, "language"?: string|null}
 course.set_title     -                        -          {"title": string}
-course.set_player    Project/Player Settings  -          {"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}, "seekbar"?: "free"|"locked"|"until_timeline_ends"}
-course.set_quiz      Project/Quiz Settings    -          {"passing_percent": 0..=100|null}
+course.set_player    Project/Player settings… -          {"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}, "seekbar"?: "free"|"locked"|"until_timeline_ends"}
+course.set_quiz      Project/Quiz settings…   -          {"passing_percent": 0..=100|null}
 course.set_publish_settings -                 -          {"standard"?: string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}
 course.set_background_audio -                        -          {"src"?: string | null, "volume"?: number, "loop"?: bool}
 course.add_finish_button -                        -          {}
@@ -262,12 +262,12 @@ course.import_xliff  -                        -          {"xliff": string}
 edit.undo            Edit/Undo                Ctrl+Z     {}
 edit.redo            Edit/Redo                Ctrl+Y     {}
 edit.history         Edit/History…            -          {}
-scene.add            Insert/New Scene         -          {"id"?: id, "title"?: string}
+scene.add            Insert/New scene         -          {"id"?: id, "title"?: string}
 scene.update         -                        -          {"scene": id, "title"?: string}
-scene.delete         Edit/Delete Scene        -          {"scene": id}
-slide.add            Insert/New Slide         Ctrl+M     {"id"?: id, "scene"?: id, "after"?: slide id, "title"?: string}
+scene.delete         Edit/Delete scene        -          {"scene": id}
+slide.add            Insert/New slide         Ctrl+M     {"id"?: id, "scene"?: id, "after"?: slide id, "title"?: string}
 slide.update         -                        -          {"slide": id, "title"?: string, "duration_ms"?: u32, "revisit"?: "auto"|"reset"|"resume", "notes"?: string}
-slide.delete         Edit/Delete Slide        -          {"slide": id}
+slide.delete         Edit/Delete slide        -          {"slide": id}
 slide.move           -                        -          {"slide": id, "scene"?: id, "index": usize}
 slide.duplicate      -                        -          {"slide": id, "after"?: slide id}
 slide.paste          -                        -          {"scene"?: id, "after"?: slide id, "slide": Slide}
@@ -291,18 +291,18 @@ bank.remove_slide    -                        -          {"slide": id}
 draw.insert          -                        -          {"bank": id, "count": u32, "scene"?: id, "index"?: usize}
 draw.update          -                        -          {"slide": id, "bank"?: id, "count"?: u32}
 slide.add_from_layout -                        -          {"layout": "blank"|"title"|"title_content"|"two_columns"|"picture_text"|"question", "after"?: slide id, "scene"?: id, "master"?: id}
-course.import_outline Insert/Slides from Outline… -          {"outline": {"title"?: string|null, "scenes": [{"title": string, "slides": [{"title": string, "body"?: [string], "notes"?: string|null, "question"?: {"prompt": string, "choices": [{"text": string, "correct": bool}]}}]}]}, "after"?: slide id}
+course.import_outline File/Import/Slides from outline… -          {"outline": {"title"?: string|null, "scenes": [{"title": string, "slides": [{"title": string, "body"?: [string], "notes"?: string|null, "question"?: {"prompt": string, "choices": [{"text": string, "correct": bool}]}}]}]}, "after"?: slide id}
 template.save        -                        -          {"slide": id, "title"?: string}
 template.add_slide   -                        -          {"template": id, "after"?: slide id, "scene"?: id}
 template.delete      -                        -          {"template": id}
-layer.add            Insert/New Layer         -          {"id"?: id, "slide": id, "name"?: string}
+layer.add            Insert/New layer         -          {"id"?: id, "slide": id, "name"?: string}
 layer.update         -                        -          {"slide": id, "layer": id, "name"?: string, "duration_ms"?: u32, "hide_other_layers"?: bool, "pause_base_timeline"?: bool, "prevent_base_clicks"?: bool, "hide_base_objects"?: bool, "hide_when_timeline_ends"?: bool, "allow_seek"?: "auto"|"yes"|"no", "revisit"?: "auto"|"reset"|"resume"}
-layer.delete         Edit/Delete Layer        -          {"slide": id, "layer": id}
+layer.delete         Edit/Delete layer        -          {"slide": id, "layer": id}
 layer.move           -                        -          {"slide": id, "layer": id, "to": usize}
 layer.duplicate      -                        -          {"slide": id, "layer": id}
 object.add           -                        -          {"id"?: id, "slide": id, "layer"?: id, "kind": ObjectKind, "frame": Rect, "name"?: string, "timing"?: Timing}
 object.update        -                        -          {"slide": id, "object": id, "name"?: string, "kind"?: ObjectKind, "timing"?: Timing, "initial_state"?: string, "focus_order"?: u32|null, "decorative"?: bool, "description"?: string|null}
-object.reorder       Arrange/Bring Forward    -          {"slide": id, "object": id, "index": usize}
+object.reorder       Arrange/Bring forward    -          {"slide": id, "object": id, "index": usize}
 object.align         -                        -          {"slide": id, "objects": id[], "edge": "left"|"center"|"right"|"top"|"middle"|"bottom", "to"?: "selection"|"slide"}
 object.distribute    -                        -          {"slide": id, "objects": id[], "axis": "horizontal"|"vertical"}
 object.match_size    -                        -          {"slide": id, "objects": id[], "dimension": "width"|"height"|"both"}
@@ -325,7 +325,7 @@ object.set_fill_style -                       -          {"slide": id, "object"?
 object.set_shadow    -                        -          {"slide": id, "object"?: id, "objects"?: id[], "shadow": Shadow|null}
 object.set_glow      -                        -          {"slide": id, "object"?: id, "objects"?: id[], "glow": Glow|null}
 object.apply_style    -                        -          {"slide": id, "source_slide": id, "source": id, "objects": id[]}
-course.set_slide_size  -                       -          {"w": number, "h": number, "mode": "scale"|"keep"}
+course.set_slide_size  -                       -          {"w": number, "h": number, "mode": "scale"|"fill"|"keep"}
 object.set_drag      -                        -          {"slide": id, "object"?: id, "objects"?: id[], "drag": DragSpec|null}
 object.set_drag      -                        -          {"slide": id, "object"?: id, "objects"?: id[], "drag": DragSpec|null}
 object.set_lottie    -                        -          {"slide": id, "object"?: id, "objects"?: id[], "loop"?: bool, "autoplay"?: bool, "speed"?: number}
@@ -389,17 +389,18 @@ glossary.add         -                        -          {"term": string, "defin
 glossary.update      -                        -          {"id": id, "term"?: string, "definition"?: string}
 glossary.remove      -                        -          {"id": id}
 glossary.move        -                        -          {"id": id, "to": usize}
+glossary.sort        -                        -          {}
 variable.add         Project/Variables        -          {"name": string, "value": bool|number|string}
 variable.set_value   -                        -          {"name": string, "value": bool|number|string}
 variable.delete      -                        -          {"name": string}
 question.insert      Insert/Question          -          {"slide": id, "kind"?: QuestionKind}
-results.insert       Insert/Results Slide     -          {"after"?: slide id}
-certificate.insert   Insert/Certificate Slide -          {"after"?: slide id}
+results.insert       Insert/Results slide     -          {"after"?: slide id}
+certificate.insert   Insert/Certificate slide -          {"after"?: slide id}
 question.add_submit_button -                        -          {"slide": id}
 question.add_feedback_layers -                        -          {"slide": id}
 question.add_try_again_layer -                        -          {"slide": id}
 question.set         -                        -          {"slide": id, "question": Question}
-question.delete      Edit/Delete Question     -          {"slide": id}
+question.delete      Edit/Delete question     -          {"slide": id}
 question.set_kind    -                        -          {"slide": id, "kind": QuestionKind}
 question.add_accepted -                        -          {"slide": id, "text"?: string}
 question.remove_accepted -                        -          {"slide": id, "index": number}
@@ -420,7 +421,7 @@ question.update_drag_item -                        -          {"slide": id, "ite
 question.remove_drag_item -                        -          {"slide": id, "item": string}
 question.set_drop_targets -                        -          {"slide": id, "targets": [string]}
 question.set_drag_options -                        -          {"slide": id, "snap_to_center"?: bool, "return_if_wrong"?: bool, "one_per_target"?: bool}
-course.find          Edit/Find and Replace…   Ctrl+F     {"query": string, "case"?: bool, "whole_word"?: bool}
+course.find          Edit/Find and replace…   Ctrl+F     {"query": string, "case"?: bool, "whole_word"?: bool}
 course.replace       -                        -          {"query": string, "replacement": string, "case"?: bool, "whole_word"?: bool, "only"?: [{"slide"?: id, "object"?: id, "layer"?: id, "field": string}]}
 ```
 

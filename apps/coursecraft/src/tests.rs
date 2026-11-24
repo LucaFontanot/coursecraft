@@ -921,11 +921,11 @@ fn fake_player() -> Vec<PackageFile> {
     vec![
         PackageFile {
             path: "index.html".to_string(),
-            bytes: b"<!doctype html><html></html>".to_vec(),
+            bytes: std::sync::Arc::from(b"<!doctype html><html></html>".as_slice()),
         },
         PackageFile {
             path: "assets/app.js".to_string(),
-            bytes: b"console.log('player');".to_vec(),
+            bytes: std::sync::Arc::from(b"console.log('player');".as_slice()),
         },
     ]
 }
@@ -1023,31 +1023,31 @@ fn publish_job_builds_all_standards_with_correct_marker_and_manifest() {
             }
             PackageStandard::Scorm(Standard::Scorm2004) => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"scorm2004"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"scorm2004"}"#);
                 let manifest = find_file(&files, "imsmanifest.xml").expect("manifest");
                 let xml = std::str::from_utf8(&manifest.bytes).expect("manifest is UTF-8");
                 assert!(xml.contains("<schemaversion>2004 4th Edition</schemaversion>"));
             }
             PackageStandard::Xapi(Flavor::Cmi5) => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"cmi5"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"cmi5"}"#);
                 assert!(find_file(&files, "cmi5.xml").is_some());
                 assert!(find_file(&files, "imsmanifest.xml").is_none());
             }
             PackageStandard::Xapi(Flavor::Xapi) => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"xapi"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"xapi"}"#);
                 assert!(find_file(&files, "tincan.xml").is_some());
                 assert!(find_file(&files, "imsmanifest.xml").is_none());
             }
             PackageStandard::Lti => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"lti"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"lti"}"#);
                 assert!(find_file(&files, "imsmanifest.xml").is_none());
             }
             PackageStandard::Web => {
                 let marker = find_file(&files, PACKAGE_MARKER).expect("marker");
-                assert_eq!(marker.bytes.as_slice(), br#"{"standard":"web"}"#);
+                assert_eq!(marker.bytes.as_ref(), br#"{"standard":"web"}"#);
                 assert!(find_file(&files, "imsmanifest.xml").is_none());
             }
         }
@@ -1078,7 +1078,7 @@ fn publish_job_puts_in_memory_media_under_media_prefix() {
     };
     let files = package_files(&job).expect("package files");
     let packaged = find_file(&files, "media/photo.png").expect("media file");
-    assert_eq!(packaged.bytes, image);
+    assert_eq!(packaged.bytes.as_ref(), image.as_slice());
 
     let outcome = run_publish_job(job).expect("publish");
     assert!(outcome.path.exists());
@@ -1374,27 +1374,89 @@ fn finished_export_sets_the_status() {
 
 #[test]
 fn preferences_round_trip_and_bad_values_fall_back() {
-    use crate::prefs::SlidePreset;
+    use crate::prefs::{DefaultSlideSize, SlidePreset};
     let dir = scratch_dir("prefs-m16");
     let prefs = Prefs {
         autosave_minutes: 5,
-        default_slide: SlidePreset::Standard4x3,
+        default_slide: DefaultSlideSize::from(SlidePreset::Standard4x3),
         ..Prefs::default()
     };
     save_prefs(&dir, &prefs).unwrap();
     let loaded = load_prefs(&dir);
     assert_eq!(loaded.autosave_minutes, 5);
-    assert_eq!(loaded.default_slide, SlidePreset::Standard4x3);
+    assert_eq!(loaded.default_slide.size(), (960, 720));
 
     // Old files without the keys load with defaults; broken files too.
     std::fs::write(dir.join("prefs.json"), "{\"recent\": []}").unwrap();
     let old = load_prefs(&dir);
     assert_eq!(old.autosave_minutes, 1);
-    assert_eq!(old.default_slide, SlidePreset::Wide16x9);
+    assert_eq!(old.default_slide.size(), (1280, 720));
     std::fs::write(dir.join("prefs.json"), "{ not json").unwrap();
     assert_eq!(load_prefs(&dir), Prefs::default());
     std::fs::write(dir.join("prefs.json"), "{\"autosave_minutes\": 9999}").unwrap();
     assert_eq!(load_prefs(&dir).autosave_minutes_clamped(), 60);
+}
+
+#[test]
+fn preferences_default_slide_backward_compatible_and_custom_sizes() {
+    use crate::prefs::DefaultSlideSize;
+    let dir = scratch_dir("prefs-m30-a09");
+
+    // Legacy preset strings load accurately.
+    for (legacy, expected) in [
+        ("wide16x9", (1280, 720)),
+        ("standard4x3", (960, 720)),
+        ("wide16x10", (1280, 800)),
+        ("square", (1080, 1080)),
+    ] {
+        std::fs::write(
+            dir.join("prefs.json"),
+            format!("{{\"default_slide\": \"{legacy}\"}}"),
+        )
+        .unwrap();
+        assert_eq!(load_prefs(&dir).default_slide.size(), expected);
+    }
+
+    // Full HD, Portrait, and Custom sizes save and reload.
+    for custom in [(1920, 1080), (1080, 1920), (1600, 900)] {
+        let prefs = Prefs {
+            default_slide: DefaultSlideSize::from_valid_size(custom).expect("valid custom size"),
+            ..Prefs::default()
+        };
+        save_prefs(&dir, &prefs).unwrap();
+        assert_eq!(load_prefs(&dir).default_slide.size(), custom);
+    }
+
+    // Out-of-range size falls back cleanly to (1280, 720).
+    std::fs::write(
+        dir.join("prefs.json"),
+        "{\"default_slide\": {\"w\": 50, \"h\": 99999}}",
+    )
+    .unwrap();
+    assert_eq!(load_prefs(&dir).default_slide.size(), (1280, 720));
+}
+
+#[test]
+fn preferences_default_slide_hostile_inputs_never_panic() {
+    let dir = scratch_dir("prefs-m30-fz03");
+    let hostile_payloads = [
+        "{\"default_slide\": {\"w\": -10, \"h\": 720}}",
+        "{\"default_slide\": {\"w\": 0, \"h\": 0}}",
+        "{\"default_slide\": {\"w\": 999999, \"h\": 720}}",
+        "{\"default_slide\": 12345}",
+        "{\"default_slide\": true}",
+        "{\"default_slide\": [1920, 1080]}",
+        "{\"default_slide\": \"unknownPreset\"}",
+        "{\"default_slide\": {\"w\": \"1920\", \"h\": \"1080\"}}",
+    ];
+    for payload in hostile_payloads {
+        std::fs::write(dir.join("prefs.json"), payload).unwrap();
+        assert_eq!(
+            load_prefs(&dir).default_slide.size(),
+            (1280, 720),
+            "hostile payload must fall back to 1280x720: {payload}"
+        );
+    }
 }
 
 #[test]
@@ -1446,13 +1508,24 @@ fn autosave_interval_is_respected_and_zero_turns_it_off() {
 
 #[test]
 fn a_new_course_uses_the_default_slide_size() {
-    use crate::prefs::SlidePreset;
+    use crate::prefs::{DefaultSlideSize, SlidePreset};
     let prefs = Prefs {
-        default_slide: SlidePreset::Square,
+        default_slide: DefaultSlideSize::from(SlidePreset::Square),
         ..Prefs::default()
     };
     let course = prefs.blank_course();
     assert_eq!((course.slide_size.w, course.slide_size.h), (1080, 1080));
+
+    let custom_prefs = Prefs {
+        default_slide: DefaultSlideSize { w: 1600, h: 900 },
+        ..Prefs::default()
+    };
+    let custom_course = custom_prefs.blank_course();
+    assert_eq!(
+        (custom_course.slide_size.w, custom_course.slide_size.h),
+        (1600, 900)
+    );
+
     let default = Prefs::default().blank_course();
     assert_eq!((default.slide_size.w, default.slide_size.h), (1280, 720));
 }
@@ -1537,4 +1610,74 @@ fn layout_preferences_default_on_and_round_trip() {
         coursecraft_ui_egui::dock::Panel::Timeline
     ));
     assert!(!reopened.ui.ribbon.visible);
+}
+
+#[test]
+fn m31_19_web_unsaved_clean_runs_immediately_and_dirty_queues_pending() {
+    use crate::web_state::{WebPendingAction, WebUnsavedState};
+    use coursecraft_ui_egui::{ExampleId, TemplateId};
+
+    let actions = [
+        WebPendingAction::New,
+        WebPendingAction::Open,
+        WebPendingAction::OpenExample(ExampleId::HealthyHabits),
+        WebPendingAction::OpenTemplate(TemplateId::Blank),
+        WebPendingAction::ImportPptx,
+    ];
+
+    for action in actions {
+        let mut state = WebUnsavedState::new(10);
+        assert!(!state.is_dirty(10));
+        assert_eq!(state.file_name_display(), "Untitled");
+        assert_eq!(state.request_or_run(action, 10), Some(action));
+        assert_eq!(state.pending, None);
+
+        // Advance revision -> dirty -> queues pending instead of running immediately
+        assert!(state.is_dirty(11));
+        assert_eq!(state.request_or_run(action, 11), None);
+        assert_eq!(state.pending, Some(action));
+    }
+}
+
+#[test]
+fn m31_19_web_unsaved_save_dont_save_cancel_and_pptx_import() {
+    use crate::web_state::{WebPendingAction, WebUnsavedState};
+
+    let mut state = WebUnsavedState::new(0);
+    assert_eq!(state.request_or_run(WebPendingAction::New, 3), None);
+    assert_eq!(state.pending, Some(WebPendingAction::New));
+
+    // Cancel / Escape clears pending without marking clean
+    state.cancel();
+    assert_eq!(state.pending, None);
+    assert!(state.is_dirty(3));
+
+    // Save marks clean, updates display name, and continues with pending action
+    assert_eq!(state.request_or_run(WebPendingAction::Open, 3), None);
+    state.mark_saved_as(3, "course.ccraft");
+    assert!(!state.is_dirty(3));
+    assert_eq!(state.file_name_display(), "course.ccraft");
+    assert_eq!(state.take_pending(), Some(WebPendingAction::Open));
+    assert_eq!(state.pending, None);
+
+    // Don't Save discards changes and continues, then reset_for_new clears file name
+    assert_eq!(state.request_or_run(WebPendingAction::New, 5), None);
+    assert_eq!(state.take_pending(), Some(WebPendingAction::New));
+    state.reset_for_new(0);
+    assert!(!state.is_dirty(0));
+    assert_eq!(state.file_name_display(), "Untitled");
+
+    // PPTX import marks dirty even at revision 0 and clears file name
+    state.mark_saved_as(0, "old.ccraft");
+    state.mark_dirty_after_import();
+    assert!(state.is_dirty(0));
+    assert_eq!(state.file_name_display(), "Untitled");
+    assert_eq!(state.request_or_run(WebPendingAction::ImportPptx, 0), None);
+    assert_eq!(state.pending, Some(WebPendingAction::ImportPptx));
+
+    // mark_saved preserves existing file name
+    state.mark_saved_as(1, "saved.ccraft");
+    state.mark_saved(2);
+    assert!(!state.is_dirty(2));
+    assert_eq!(state.file_name_display(), "saved.ccraft");
 }

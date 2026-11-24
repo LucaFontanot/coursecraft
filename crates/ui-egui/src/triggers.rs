@@ -1568,7 +1568,7 @@ pub fn show_triggers_tab(
                         );
                     }
                     if can_paste
-                        && crate::quiet_button(ui, "Paste Triggers", crate::QuietTone::Accent, true)
+                        && crate::quiet_button(ui, "Paste triggers", crate::QuietTone::Accent, true)
                             .clicked()
                     {
                         paste_clicked = true;
@@ -1637,10 +1637,11 @@ pub fn show_triggers_tab(
 
         if !triggers.is_empty() {
             ui.horizontal(|ui| {
+                let filter_w = (ui.available_width() - 180.0).clamp(140.0, 220.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut editor_ui.triggers.filter)
                         .hint_text("Filter triggers…")
-                        .desired_width(140.0),
+                        .desired_width(filter_w),
                 );
                 if !editor_ui.triggers.filter.is_empty()
                     && crate::widgets::icon_button(ui, coursecraft_render::Icon::X, "Clear filter")
@@ -1956,11 +1957,12 @@ pub fn show_triggers_tab(
                                         });
 
                                         // Delete
-                                        if crate::widgets::icon_button_danger(
+                                        if crate::widgets::icon_button_danger_reason(
                                             ui,
                                             coursecraft_render::Icon::Trash,
                                             !form_open,
                                             "Delete trigger",
+                                            "Close the trigger editor first",
                                         )
                                         .clicked()
                                         {
@@ -2228,9 +2230,9 @@ pub fn show_trigger_editor_window(editor: &mut crate::Editor, ctx: &egui::Contex
     }
 
     let title = if form.editing_index.is_some() {
-        "Edit Trigger"
+        "Edit trigger"
     } else {
-        "New Trigger"
+        "New trigger"
     };
 
     let course = &editor.session.course;
@@ -2361,7 +2363,7 @@ const TRIGGER_ROW_LABELS: &[&str] = &[
     "Variable",
     "Operator",
     "Value",
-    "Media Object",
+    "Media object",
     "Status",
     "URL",
     "Path",
@@ -2372,7 +2374,7 @@ const TRIGGER_ROW_LABELS: &[&str] = &[
     "Cue",
     "Key",
     "Object (optional)",
-    "Draggable Object",
+    "Draggable object",
     "Object A",
     "Object B",
     "Animation",
@@ -2676,7 +2678,7 @@ fn render_action_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide,
             }
         }
         ActionTag::PlayMedia | ActionTag::PauseMedia | ActionTag::StopMedia => {
-            trigger_row(ui, "Media Object", |ui| {
+            trigger_row(ui, "Media object", |ui| {
                 tall_combo(ui, "action_media_obj_combo")
                     .selected_text(media_object_label(slide, &form.media_object))
                     .show_ui(ui, |ui| {
@@ -2877,13 +2879,13 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                 let is_base = form.event_layer.is_none();
                 let display = match form.event_layer.as_deref() {
                     Some(id) => format!("Layer: {}", layer_name(slide, id)),
-                    None => "Slide Base Timeline".to_owned(),
+                    None => "Slide base timeline".to_owned(),
                 };
                 tall_combo(ui, "event_layer_combo")
                     .selected_text(display)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_label(is_base, "Slide Base Timeline")
+                            .selectable_label(is_base, "Slide base timeline")
                             .clicked()
                         {
                             form.event_layer = None;
@@ -2903,13 +2905,13 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                 let is_base = form.event_layer.is_none();
                 let display = match form.event_layer.as_deref() {
                     Some(id) => format!("Layer: {}", layer_name(slide, id)),
-                    None => "Slide Base Timeline".to_owned(),
+                    None => "Slide base timeline".to_owned(),
                 };
                 tall_combo(ui, "event_reach_layer_combo")
                     .selected_text(display)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_label(is_base, "Slide Base Timeline")
+                            .selectable_label(is_base, "Slide base timeline")
                             .clicked()
                         {
                             form.event_layer = None;
@@ -3035,7 +3037,7 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
             });
         }
         EventKindTag::MediaEnds => {
-            trigger_row(ui, "Media Object", |ui| {
+            trigger_row(ui, "Media object", |ui| {
                 tall_combo(ui, "event_media_ends_obj_combo")
                     .selected_text(media_object_label(slide, &form.event_object))
                     .show_ui(ui, |ui| {
@@ -3156,7 +3158,7 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                     .map(|object| object.id.clone())
                     .unwrap_or_default();
             }
-            trigger_row(ui, "Draggable Object", |ui| {
+            trigger_row(ui, "Draggable object", |ui| {
                 tall_combo(ui, "event_dropped_on_obj_combo")
                     .selected_text(object_label(slide, &form.event_object))
                     .show_ui(ui, |ui| {

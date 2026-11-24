@@ -404,14 +404,14 @@ fn the_ribbon_replaces_the_toolbar_and_the_insert_menu() {
     for _ in 0..2 {
         h.idle_frame();
     }
-    // The toolbar's "Add slide" and the inspector switch are gone; the
+    // The toolbar's "New slide" and the inspector switch are gone; the
     // inspector draws its own tabs.
-    assert!(h.find_text("Add slide").is_none());
+    assert!(h.find_text("New slide").is_none());
     assert!(h.find_text("Animate").is_some(), "inspector tabs");
     h.editor.ui.ribbon.visible = false;
     h.idle_frame();
     assert!(
-        h.find_text("Add slide").is_some(),
+        h.find_text("New slide").is_some(),
         "the old toolbar comes back"
     );
 }

@@ -1,6 +1,6 @@
 //! The ribbon: tab strip and the open tab's groups, drawn from [`spec`].
 //!
-//! M30 step 1 (docs/ui/implementation.md § 6): the ribbon is drawn beside the old
+//! M37 step 1 (docs/ui/implementation.md § 6): the ribbon is drawn beside the old
 //! menu bar and toolbar, behind View › Ribbon. Every control comes from the spec;
 //! one whose feature is missing is drawn disabled with its reason in the tooltip.
 
@@ -1237,7 +1237,7 @@ fn menu(
             }
         }
         Menu::Ui(UiMenu::NewSlide) => crate::slides::show_new_slide_popup(ui, editor),
-        Menu::Ui(UiMenu::Preview) => crate::toolbar::preview_menu(ui, editor, requests),
+        Menu::Ui(UiMenu::Preview) => crate::menu::show_preview_menu_items(editor, ui, requests),
         Menu::Ui(UiMenu::Shapes) => shapes_menu(editor, ui),
         Menu::Ui(UiMenu::Questions) => {
             for kind in crate::question::ALL_QUESTION_KINDS {

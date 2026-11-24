@@ -805,15 +805,17 @@ impl<'c> Player<'c> {
     fn jump(&mut self, target: &SlideTarget, q: &mut Queue, out: &mut Vec<Effect>) {
         let cur = self.st.slide;
         if matches!(target, SlideTarget::LastVisited) {
-            let prev_idx = self
-                .st
-                .visit_history
-                .iter()
-                .rev()
-                .find_map(|id| self.slide_position(id))
-                .or_else(|| cur.checked_sub(1));
+            let mut prev_idx = None;
+            while let Some(id) = self.st.visit_history.pop() {
+                if let Some(idx) = self.slide_position(&id)
+                    && idx != cur
+                {
+                    prev_idx = Some(idx);
+                    break;
+                }
+            }
+            let prev_idx = prev_idx.or_else(|| cur.checked_sub(1));
             if let Some(idx) = prev_idx {
-                self.st.visit_history.pop();
                 if self.st.lightbox.is_some() {
                     self.close_lightbox(false, out);
                 }
@@ -3100,6 +3102,9 @@ impl<'c> Player<'c> {
                 ended: next.ended,
                 paused,
             };
+            if self.st.epoch == epoch && !self.st.exited {
+                self.note_timeline_completed();
+            }
         } else if target < old {
             self.st.base = Clock {
                 ms: target,

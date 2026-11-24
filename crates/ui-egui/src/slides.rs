@@ -2,13 +2,350 @@
 
 use crate::Editor;
 use crate::dialog::Dialog;
-use coursecraft_course::Course;
-use coursecraft_render::{Highlight, SlideTransform, compose_authoring, paint};
+use coursecraft_course::{Course, Slide};
+use coursecraft_render::{DrawItem, Highlight, SlideTransform, compose_authoring, paint};
 use egui::{
     Align2, Color32, CornerRadius, FontId, Id, Key, Rect, ScrollArea, Sense, Stroke, StrokeKind,
     TextEdit, Ui, pos2, vec2,
 };
 use serde_json::Value as Json;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Maximum number of composed thumbnails retained in [`ThumbnailCache`].
+pub(crate) const MAX_CACHED_THUMBNAILS: usize = 128;
+
+/// Deterministic 64-bit FNV-1a hasher used for thumbnail fingerprints.
+struct Fnv1a64(u64);
+
+impl Fnv1a64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn new() -> Self {
+        Self(Self::OFFSET)
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 ^= u64::from(byte);
+            self.0 = self.0.wrapping_mul(Self::PRIME);
+        }
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.write_bytes(&value.to_le_bytes());
+    }
+
+    fn write_sep(&mut self, tag: u8) {
+        self.write_bytes(&[tag]);
+    }
+
+    fn finish(self) -> u64 {
+        self.0
+    }
+}
+
+impl std::io::Write for Fnv1a64 {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.write_bytes(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+macro_rules! fnv_hash_json {
+    ($hasher:expr, $tag:expr, $value:expr) => {{
+        $hasher.write_sep($tag);
+        if serde_json::to_writer(&mut $hasher, $value).is_err() {
+            let _ = std::io::Write::write_fmt(&mut $hasher, format_args!("{:?}", $value));
+        }
+    }};
+}
+
+/// Deterministic 64-bit fingerprint of course-level visual state that affects thumbnails.
+fn course_visual_fingerprint(course: &Course) -> u64 {
+    let mut h = Fnv1a64::new();
+    fnv_hash_json!(h, 1, &course.slide_size);
+    fnv_hash_json!(h, 2, &course.theme);
+    fnv_hash_json!(h, 3, &course.text_styles);
+    fnv_hash_json!(h, 4, &course.variables);
+    fnv_hash_json!(h, 5, &course.strings);
+    h.finish()
+}
+
+/// Deterministic 64-bit fingerprint of one slide, its master, and `course_visual_fp`.
+fn thumbnail_fingerprint(course: &Course, slide: &Slide, course_visual_fp: u64) -> u64 {
+    let mut h = Fnv1a64::new();
+    h.write_u64(course_visual_fp);
+    fnv_hash_json!(h, 10, &slide.background);
+    fnv_hash_json!(h, 11, &slide.master);
+    fnv_hash_json!(h, 12, &slide.objects);
+    fnv_hash_json!(h, 13, &slide.question);
+    fnv_hash_json!(h, 14, &slide.draw);
+    if let Some(draw) = slide.draw.as_ref() {
+        h.write_sep(15);
+        if let Some(bank) = course.bank(&draw.bank) {
+            h.write_bytes(bank.title.as_bytes());
+            h.write_sep(0);
+            h.write_u64(bank.slides.len() as u64);
+        }
+    }
+    if let Some(master) = slide.master.as_deref().and_then(|id| course.master(id)) {
+        fnv_hash_json!(h, 16, &master.background);
+        fnv_hash_json!(h, 17, &master.objects);
+    }
+    h.finish()
+}
+
+struct CachedThumbnail {
+    verified_revision: u64,
+    fingerprint: u64,
+    bg: Color32,
+    items: Arc<[DrawItem]>,
+    last_used: u64,
+}
+
+/// Bounded LRU cache of composed authoring thumbnails, keyed by slide id and
+/// validated cheaply by session revision and deterministic content fingerprint.
+pub(crate) struct ThumbnailCache {
+    visual_revision: Option<u64>,
+    course_visual_fp: u64,
+    /// True when `course_visual_fp` at `visual_revision` matched the previous revision.
+    course_visual_unchanged: bool,
+    tick: u64,
+    max_entries: usize,
+    entries: HashMap<String, CachedThumbnail>,
+}
+
+impl Default for ThumbnailCache {
+    fn default() -> Self {
+        Self {
+            visual_revision: None,
+            course_visual_fp: 0,
+            course_visual_unchanged: false,
+            tick: 0,
+            max_entries: MAX_CACHED_THUMBNAILS,
+            entries: HashMap::new(),
+        }
+    }
+}
+
+impl ThumbnailCache {
+    /// Drop all cached thumbnails (called when replacing the open course).
+    pub(crate) fn clear(&mut self) {
+        self.visual_revision = None;
+        self.course_visual_fp = 0;
+        self.course_visual_unchanged = false;
+        self.tick = 0;
+        self.entries.clear();
+    }
+
+    /// Configure the maximum number of cached thumbnails, evicting oldest entries if needed.
+    pub(crate) fn set_max_entries(&mut self, max_entries: usize) {
+        self.max_entries = max_entries.max(1);
+        while self.entries.len() > self.max_entries {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest_key);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Return the cached background colour and composed authoring items for `slide`,
+    /// composing only when the slide (or its master / course visual settings) changed.
+    pub(crate) fn get_or_compose(
+        &mut self,
+        revision: u64,
+        last_changed_slide: Option<&str>,
+        course: &Course,
+        slide: &Slide,
+    ) -> (Color32, Arc<[DrawItem]>) {
+        // Fast path: already verified at this course revision (0 hashing, 0 composes).
+        if let Some(entry) = self.entries.get_mut(&slide.id)
+            && entry.verified_revision == revision
+        {
+            self.tick = self.tick.saturating_add(1);
+            entry.last_used = self.tick;
+            return (entry.bg, Arc::clone(&entry.items));
+        }
+
+        if self.visual_revision != Some(revision) {
+            let new_fp = course_visual_fingerprint(course);
+            self.course_visual_unchanged = self.visual_revision == Some(revision.wrapping_sub(1))
+                && self.course_visual_fp == new_fp;
+            self.course_visual_fp = new_fp;
+            self.visual_revision = Some(revision);
+        }
+
+        // Single-slide edit fast path: if course-level visual state did not change
+        // and only a different slide (not this slide or its master) was edited,
+        // bump `verified_revision` in O(1) without hashing this slide.
+        if self.course_visual_unchanged
+            && let Some(changed_id) = last_changed_slide
+            && slide.id != changed_id
+            && slide.master.as_deref() != Some(changed_id)
+            && let Some(entry) = self.entries.get_mut(&slide.id)
+            && entry.verified_revision == revision.wrapping_sub(1)
+        {
+            self.tick = self.tick.saturating_add(1);
+            entry.verified_revision = revision;
+            entry.last_used = self.tick;
+            return (entry.bg, Arc::clone(&entry.items));
+        }
+
+        let fp = thumbnail_fingerprint(course, slide, self.course_visual_fp);
+        if let Some(entry) = self.entries.get_mut(&slide.id)
+            && entry.fingerprint == fp
+        {
+            self.tick = self.tick.saturating_add(1);
+            entry.verified_revision = revision;
+            entry.last_used = self.tick;
+            return (entry.bg, Arc::clone(&entry.items));
+        }
+
+        #[cfg(test)]
+        crate::guard_counters::note_thumbnail_compose();
+        let items: Arc<[DrawItem]> = compose_authoring(course, slide, None).into();
+        let bg = coursecraft_render::parse_color(course.slide_background(slide))
+            .unwrap_or(Color32::WHITE);
+        self.tick = self.tick.saturating_add(1);
+        let used = self.tick;
+        self.entries.insert(
+            slide.id.clone(),
+            CachedThumbnail {
+                verified_revision: revision,
+                fingerprint: fp,
+                bg,
+                items: Arc::clone(&items),
+                last_used: used,
+            },
+        );
+        while self.entries.len() > self.max_entries {
+            let Some(oldest_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest_key);
+        }
+        (bg, items)
+    }
+}
+
+struct SlideSummary {
+    id: String,
+    title: String,
+    is_question: bool,
+}
+
+struct SceneSummary {
+    id: String,
+    title: String,
+    slides: Vec<SlideSummary>,
+}
+
+struct BankSlideSummary {
+    id: String,
+    title: String,
+}
+
+struct BankSummary {
+    id: String,
+    title: String,
+    slides: Vec<BankSlideSummary>,
+}
+
+#[derive(Default)]
+struct NavigatorData {
+    scenes: Vec<SceneSummary>,
+    bank_menu: Vec<(String, String)>,
+    banks: Vec<BankSummary>,
+    total_course_slides: usize,
+}
+
+/// Revision-cached summary of scenes, slides, and question banks for the navigator,
+/// avoiding per-frame 300-slide string clones on idle and scroll frames.
+#[derive(Default)]
+pub(crate) struct NavigatorIndex {
+    revision: crate::SyncRevision,
+    data: Arc<NavigatorData>,
+}
+
+impl NavigatorIndex {
+    pub(crate) fn clear(&mut self) {
+        self.revision = crate::SyncRevision::default();
+        self.data = Arc::default();
+    }
+
+    fn snapshot(&mut self, revision: u64, course: &Course) -> Arc<NavigatorData> {
+        if !self.revision.is(revision) {
+            let scenes: Vec<SceneSummary> = course
+                .scenes
+                .iter()
+                .map(|scene| SceneSummary {
+                    id: scene.id.clone(),
+                    title: scene.title.clone(),
+                    slides: scene
+                        .slides
+                        .iter()
+                        .map(|slide| SlideSummary {
+                            id: slide.id.clone(),
+                            title: slide.title.clone(),
+                            is_question: slide.question.is_some(),
+                        })
+                        .collect(),
+                })
+                .collect();
+            let bank_menu: Vec<(String, String)> = course
+                .banks
+                .iter()
+                .map(|bank| (bank.id.clone(), bank.title.clone()))
+                .collect();
+            let banks: Vec<BankSummary> = course
+                .banks
+                .iter()
+                .map(|bank| BankSummary {
+                    id: bank.id.clone(),
+                    title: bank.title.clone(),
+                    slides: bank
+                        .slides
+                        .iter()
+                        .map(|slide| BankSlideSummary {
+                            id: slide.id.clone(),
+                            title: slide.title.clone(),
+                        })
+                        .collect(),
+                })
+                .collect();
+            let total_course_slides = course.slides().count();
+            self.data = Arc::new(NavigatorData {
+                scenes,
+                bank_menu,
+                banks,
+                total_course_slides,
+            });
+            self.revision.set(revision);
+        }
+        Arc::clone(&self.data)
+    }
+}
 
 /// In-place rename of a scene header in the navigator.
 #[derive(Debug, Clone, PartialEq)]
@@ -236,7 +573,7 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
             ui.painter().text(
                 close_rect.center(),
                 Align2::CENTER_CENTER,
-                "Close Master View",
+                "Close slide masters",
                 FontId::new(
                     coursecraft_render::SIZE_BODY,
                     egui::FontFamily::Name("inter-bold".into()),
@@ -260,8 +597,10 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
             );
             y += SCENE_HEADER_HEIGHT + SCENE_BOTTOM_GAP;
 
-            let masters = editor.session.course.masters.clone();
-            if masters.is_empty() {
+            let clip_rect = ui.clip_rect();
+            let revision = editor.session.revision;
+            let master_count = editor.session.course.masters.len();
+            if master_count == 0 {
                 ui.painter().text(
                     pos2(thumb_x, y),
                     Align2::LEFT_TOP,
@@ -302,45 +641,75 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                 y += row_height;
             }
 
-            for master in &masters {
+            for master_idx in 0..master_count {
+                let Some((master_id, master_title)) = editor
+                    .session
+                    .course
+                    .masters
+                    .get(master_idx)
+                    .map(|m| (m.id.clone(), m.title.clone()))
+                else {
+                    continue;
+                };
                 let thumb_rect = Rect::from_min_size(pos2(thumb_x, y), vec2(thumb_w, thumb_h));
-                let is_selected = editor.selection.slide == master.id;
-
-                let items = compose_authoring(&editor.session.course, master, None);
-                let thumb_bg =
-                    coursecraft_render::parse_color(editor.session.course.slide_background(master))
-                        .unwrap_or(Color32::WHITE);
-                let painter = ui.painter_at(thumb_rect);
-                painter.rect_filled(
-                    thumb_rect,
-                    CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
-                    thumb_bg,
+                let title_rect = Rect::from_min_size(
+                    pos2(thumb_x, thumb_rect.max.y + TITLE_GAP),
+                    vec2(thumb_w, TITLE_HEIGHT),
                 );
-                if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
-                    #[cfg(test)]
-                    crate::guard_counters::note_thumbnail_paint(&master.id, master);
-                    let source = crate::MemoryMediaSource {
-                        media: &editor.media,
-                    };
-                    paint(
-                        &painter,
-                        &t,
-                        &items,
-                        Highlight::default(),
-                        Some((&mut editor.media_cache, &source)),
-                        Some(&editor.session.course.theme),
-                        Some(editor.session.course.slide_background(master)),
+                let row_rect = Rect::from_min_max(thumb_rect.min, title_rect.max);
+                let renaming = editor
+                    .ui
+                    .master_rename
+                    .as_ref()
+                    .is_some_and(|state| state.scene == master_id);
+                if !row_rect.expand(4.0).intersects(clip_rect) && !renaming {
+                    y += row_height;
+                    continue;
+                }
+
+                let is_selected = editor.selection.slide == master_id;
+
+                if thumb_rect.intersects(clip_rect)
+                    && let Some(master) = editor.session.course.masters.get(master_idx)
+                {
+                    let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
+                        revision,
+                        editor.session.last_changed_slide(),
+                        &editor.session.course,
+                        master,
                     );
+                    let painter = ui.painter_at(thumb_rect);
+                    painter.rect_filled(
+                        thumb_rect,
+                        CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
+                        thumb_bg,
+                    );
+                    if let Some(t) =
+                        SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
+                    {
+                        #[cfg(test)]
+                        crate::guard_counters::note_thumbnail_paint(&master_id, master);
+                        let source = crate::MemoryMediaSource::from_store(&editor.media);
+                        paint(
+                            &painter,
+                            &t,
+                            &items,
+                            Highlight::default(),
+                            Some((&mut editor.media_cache, &source)),
+                            Some(&editor.session.course.theme),
+                            Some(editor.session.course.slide_background(master)),
+                        );
+                    }
                 }
 
                 let resp = ui.interact(
                     thumb_rect,
-                    ui.scope_id().with("master_thumb").with(&master.id),
+                    ui.scope_id().with("master_thumb").with(&master_id),
                     Sense::click(),
                 );
                 if resp.clicked() {
                     editor.ui.last_active_area = crate::ActiveArea::Navigator;
-                    select = Some(master.id.clone());
+                    select = Some(master_id.clone());
                 }
 
                 let border = if resp.hovered() && !is_selected {
@@ -368,7 +737,7 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                     pos2(thumb_rect.max.x - 24.0 - 4.0, thumb_rect.min.y + 4.0),
                     vec2(24.0, 24.0),
                 );
-                let more_id = ui.scope_id().with("master_more").with(&master.id);
+                let more_id = ui.scope_id().with("master_more").with(&master_id);
                 let is_menu_open = egui::Popup::is_id_open(ui.ctx(), more_id);
                 if resp.hovered() || is_selected || is_menu_open {
                     ui.painter().rect_filled(
@@ -403,26 +772,17 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                     );
                     egui::Popup::menu(&more).show(|ui| {
                         if ui.button("Rename").clicked() {
-                            rename = Some(master.id.clone());
+                            rename = Some(master_id.clone());
                             ui.close();
                         }
                         if ui.button("Delete").clicked() {
-                            delete = Some(master.id.clone());
+                            delete = Some(master_id.clone());
                             ui.close();
                         }
                     });
                 }
 
                 // Title below the thumbnail, or an in-place rename field.
-                let title_rect = Rect::from_min_size(
-                    pos2(thumb_x, thumb_rect.max.y + TITLE_GAP),
-                    vec2(thumb_w, TITLE_HEIGHT),
-                );
-                let renaming = editor
-                    .ui
-                    .master_rename
-                    .as_ref()
-                    .is_some_and(|state| state.scene == master.id);
                 if renaming {
                     show_master_rename_editor(editor, ui, title_rect);
                 } else {
@@ -432,7 +792,7 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                         p.text_secondary
                     };
                     let mut job = egui::text::LayoutJob::simple_singleline(
-                        master.title.clone(),
+                        master_title.clone(),
                         FontId::new(
                             coursecraft_render::SIZE_SMALL,
                             egui::FontFamily::Name("inter".into()),
@@ -448,10 +808,10 @@ fn show_masters_panel(editor: &mut Editor, ui: &mut Ui, _panel_rect: Rect) {
                     if elided {
                         ui.interact(
                             title_rect,
-                            ui.scope_id().with("master_title").with(&master.id),
+                            ui.scope_id().with("master_title").with(&master_id),
                             Sense::hover(),
                         )
-                        .on_hover_text(&master.title);
+                        .on_hover_text(&master_title);
                     }
                 }
 
@@ -763,7 +1123,7 @@ pub fn show_new_slide_popup(ui: &mut Ui, editor: &mut Editor) {
                             );
                             ui.close();
                         }
-                        if crate::quiet_button(ui, "Remove", crate::QuietTone::Danger, true)
+                        if crate::quiet_button(ui, "Delete", crate::QuietTone::Danger, true)
                             .clicked()
                         {
                             add = Some((
@@ -869,9 +1229,15 @@ fn show_slide_menu_items(
     action_to_run: &mut Option<(&'static str, Json)>,
     slide_action: &mut Option<SlideMenuAction>,
 ) {
-    let new_after = egui::Button::new("New slide after")
-        .shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+M"));
-    if ui.add(new_after).clicked() {
+    if crate::menu::menu_button(
+        ui,
+        "New slide after",
+        crate::shortcuts::shortcut_for_command("slide.add"),
+        true,
+        None,
+    )
+    .clicked()
+    {
         *action_to_run = Some((
             "slide.add",
             serde_json::json!({
@@ -886,9 +1252,16 @@ fn show_slide_menu_items(
         *action_to_run = Some(("slide.duplicate", serde_json::json!({ "slide": slide_id })));
         ui.close();
     }
-    if ui
-        .add(egui::Button::new("Rename").shortcut_text("F2"))
-        .clicked()
+    if crate::menu::menu_button(
+        ui,
+        "Rename",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::RenameSlide,
+        )),
+        true,
+        None,
+    )
+    .clicked()
     {
         *slide_action = Some(SlideMenuAction::Rename(slide_id.to_owned()));
         ui.close();
@@ -896,28 +1269,44 @@ fn show_slide_menu_items(
     ui.separator();
 
     let can_cut = total_slides > 1;
-    let cut =
-        egui::Button::new("Cut").shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+X"));
-    if ui
-        .add_enabled(can_cut, cut)
-        .on_disabled_hover_text("A course needs at least one slide")
-        .clicked()
+    if crate::menu::menu_button(
+        ui,
+        "Cut",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Cut,
+        )),
+        can_cut,
+        Some("A course needs at least one slide"),
+    )
+    .clicked()
     {
         *slide_action = Some(SlideMenuAction::Cut(slide_id.to_owned()));
         ui.close();
     }
-    let copy =
-        egui::Button::new("Copy").shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+C"));
-    if ui.add(copy).clicked() {
+    if crate::menu::menu_button(
+        ui,
+        "Copy",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Copy,
+        )),
+        true,
+        None,
+    )
+    .clicked()
+    {
         *slide_action = Some(SlideMenuAction::Copy(slide_id.to_owned()));
         ui.close();
     }
-    let paste =
-        egui::Button::new("Paste").shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+V"));
-    if ui
-        .add_enabled(can_paste, paste)
-        .on_disabled_hover_text("Nothing copied yet")
-        .clicked()
+    if crate::menu::menu_button(
+        ui,
+        "Paste",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Paste,
+        )),
+        can_paste,
+        Some("Nothing copied yet"),
+    )
+    .clicked()
     {
         *slide_action = Some(SlideMenuAction::Paste);
         ui.close();
@@ -927,6 +1316,7 @@ fn show_slide_menu_items(
     let can_up = slide_idx > 0;
     if ui
         .add_enabled(can_up, egui::Button::new("Move up"))
+        .on_disabled_hover_text("Slide is already at the top of this scene")
         .clicked()
     {
         *action_to_run = Some((
@@ -942,6 +1332,7 @@ fn show_slide_menu_items(
     let can_down = slide_idx + 1 < total_in_scene;
     if ui
         .add_enabled(can_down, egui::Button::new("Move down"))
+        .on_disabled_hover_text("Slide is already at the bottom of this scene")
         .clicked()
     {
         *action_to_run = Some((
@@ -956,7 +1347,7 @@ fn show_slide_menu_items(
     }
     ui.separator();
 
-    if ui.button("Save as Template").clicked() {
+    if ui.button("Save as template").clicked() {
         *action_to_run = Some(("template.save", serde_json::json!({ "slide": slide_id })));
         ui.close();
     }
@@ -981,6 +1372,7 @@ fn show_slide_menu_items(
             multi_selected && selected_count >= 2,
             egui::Button::new("Preview selected slides"),
         )
+        .on_disabled_hover_text("Select two or more slides to preview them")
         .clicked()
     {
         *slide_action = Some(SlideMenuAction::PreviewSelected);
@@ -1114,9 +1506,15 @@ fn show_scene_header_menu(
         *scene_to_rename = Some(scene_id.to_owned());
         ui.close();
     }
-    let new_slide = egui::Button::new("New slide")
-        .shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+M"));
-    if ui.add(new_slide).clicked() {
+    if crate::menu::menu_button(
+        ui,
+        "New slide",
+        crate::shortcuts::shortcut_for_command("slide.add"),
+        true,
+        None,
+    )
+    .clicked()
+    {
         *action_to_run = Some((
             "slide.add",
             serde_json::json!({
@@ -1156,12 +1554,16 @@ fn show_slides_empty_menu(editor: &mut Editor, ui: &mut Ui) {
         ui.close();
     }
     let can_paste = editor.ui.clipboard.is_some();
-    let paste =
-        egui::Button::new("Paste").shortcut_text(crate::menu::shortcut_label(ui.ctx(), "Ctrl+V"));
-    if ui
-        .add_enabled(can_paste, paste)
-        .on_disabled_hover_text("Nothing copied yet")
-        .clicked()
+    if crate::menu::menu_button(
+        ui,
+        "Paste",
+        Some(crate::shortcuts::shortcut_for_action(
+            crate::shortcuts::ShortcutAction::Paste,
+        )),
+        can_paste,
+        Some("Nothing copied yet"),
+    )
+    .clicked()
     {
         crate::clipboard::paste_private(editor);
         ui.close();
@@ -1178,62 +1580,29 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
     let mut scene_to_rename: Option<String> = None;
     let mut scene_to_delete: Option<String> = None;
     let mut bank_to_rename: Option<String> = None;
-    // Every slide row laid out this frame, for slide drag-and-drop.
+    // Every slide row laid out this frame when a slide drag is active.
+    let dragging_slide = editor.ui.slide_drag.is_some();
     let mut slide_rows: Vec<(String, String, usize, Rect)> = Vec::new();
 
     let p = coursecraft_render::palette(ui.ctx());
     let mode = coursecraft_render::theme_mode(ui.ctx());
+    let clip_rect = ui.clip_rect();
     let thumb_w = (panel_rect.width() - GUTTER_WIDTH - coursecraft_render::PANEL_MARGIN).max(64.0);
     let thumb_h = (thumb_w * 9.0 / 16.0).round();
     let row_height = thumb_h + TITLE_GAP + TITLE_HEIGHT + ROW_GAP;
     let thumb_x = panel_rect.min.x + GUTTER_WIDTH;
 
-    struct SlideSummary {
-        id: String,
-        title: String,
-        is_question: bool,
-    }
-    struct SceneSummary {
-        id: String,
-        title: String,
-        slides: Vec<SlideSummary>,
-    }
-
-    let total_course_slides = editor.session.course.slides().count();
-    let scene_count = editor.session.course.scenes.len();
-    // Copy only the ids, titles and question flags so the loop can still
-    // mutate `editor.ui` and `editor.media_cache` without cloning whole `Slide`s.
-    let scenes: Vec<SceneSummary> = editor
-        .session
-        .course
-        .scenes
-        .iter()
-        .map(|scene| SceneSummary {
-            id: scene.id.clone(),
-            title: scene.title.clone(),
-            slides: scene
-                .slides
-                .iter()
-                .map(|slide| SlideSummary {
-                    id: slide.id.clone(),
-                    title: slide.title.clone(),
-                    is_question: slide.question.is_some(),
-                })
-                .collect(),
-        })
-        .collect();
-    // Question banks for the "Move to bank" submenu.
-    let bank_menu: Vec<(String, String)> = editor
-        .session
-        .course
-        .banks
-        .iter()
-        .map(|bank| (bank.id.clone(), bank.title.clone()))
-        .collect();
+    let revision = editor.session.revision;
+    let nav = editor
+        .ui
+        .navigator_index
+        .snapshot(revision, &editor.session.course);
+    let total_course_slides = nav.total_course_slides;
+    let scene_count = nav.scenes.len();
     let mut current_y = panel_rect.min.y;
     let mut global_slide_idx: usize = 0;
 
-    for (scene_idx, scene) in scenes.iter().enumerate() {
+    for (scene_idx, scene) in nav.scenes.iter().enumerate() {
         if scene_idx == 0 {
             current_y += SCENE_FIRST_TOP_GAP;
         } else {
@@ -1243,75 +1612,82 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
         // Scene caption header: double-click renames, right-click gives rename/delete.
         let header_rect =
             Rect::from_min_size(pos2(thumb_x, current_y), vec2(thumb_w, SCENE_HEADER_HEIGHT));
-        let header_id = ui.scope_id().with("scene_header").with(&scene.id);
-        let header_resp = ui.interact(header_rect, header_id, Sense::click());
-        if header_resp.double_clicked() {
-            scene_to_rename = Some(scene.id.clone());
-        }
-        header_resp.context_menu(|ui| {
-            show_scene_header_menu(
-                ui,
-                &scene.id,
-                scene_count > 1,
-                &crate::toolbar::next_slide_title(&editor.session.course),
-                &mut action_to_run,
-                &mut scene_to_rename,
-                &mut scene_to_delete,
-            );
-        });
-
         let renaming = editor
             .ui
             .scene_rename
             .as_ref()
             .is_some_and(|rename| rename.scene == scene.id);
-        if renaming {
-            show_scene_rename_editor(editor, ui, header_rect);
-        } else {
-            let painter = ui.painter_at(header_rect);
-            // One line, ending in "…" before the + so a long title never
-            // runs under it.
-            let mut job = egui::text::LayoutJob::simple_singleline(
-                scene.title.clone(),
-                FontId::new(
-                    coursecraft_render::SIZE_CAPTION,
-                    egui::FontFamily::Name("inter-bold".into()),
-                ),
-                p.text_secondary,
-            );
-            job.wrap =
-                egui::text::TextWrapping::truncate_at_width((header_rect.width() - 28.0).max(16.0));
-            let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-            let elided = galley.elided;
-            let title_pos = pos2(
-                header_rect.min.x,
-                header_rect.center().y - galley.size().y * 0.5,
-            );
-            painter.galley(title_pos, galley, p.text_secondary);
-            if elided {
-                header_resp.on_hover_text(&scene.title);
+        if header_rect.expand(4.0).intersects(clip_rect) || renaming {
+            let header_id = ui.scope_id().with("scene_header").with(&scene.id);
+            let header_resp = ui.interact(header_rect, header_id, Sense::click());
+            if header_resp.double_clicked() {
+                scene_to_rename = Some(scene.id.clone());
             }
-            // "+" at the right of the header: a new slide at the end of this
-            // scene, so a slide never has to be made elsewhere and dragged in.
-            let add_size = vec2(26.0, 26.0);
-            let add_rect = Rect::from_center_size(
-                pos2(header_rect.max.x - add_size.x * 0.5, header_rect.center().y),
-                add_size,
-            );
-            let add_tooltip = format!("New slide in {}", scene.title);
-            let add_resp = ui
-                .scope_builder(egui::UiBuilder::new().max_rect(add_rect), |ui| {
-                    crate::widgets::icon_button(ui, coursecraft_render::Icon::Plus, &add_tooltip)
-                })
-                .inner;
-            if add_resp.clicked() && !editor.ui.master_view {
-                action_to_run = Some((
-                    "slide.add",
-                    serde_json::json!({
-                        "scene": scene.id,
-                        "title": crate::toolbar::next_slide_title(&editor.session.course),
-                    }),
-                ));
+            header_resp.context_menu(|ui| {
+                show_scene_header_menu(
+                    ui,
+                    &scene.id,
+                    scene_count > 1,
+                    &crate::toolbar::next_slide_title(&editor.session.course),
+                    &mut action_to_run,
+                    &mut scene_to_rename,
+                    &mut scene_to_delete,
+                );
+            });
+
+            if renaming {
+                show_scene_rename_editor(editor, ui, header_rect);
+            } else {
+                let painter = ui.painter_at(header_rect);
+                // One line, ending in "…" before the + so a long title never
+                // runs under it.
+                let mut job = egui::text::LayoutJob::simple_singleline(
+                    scene.title.clone(),
+                    FontId::new(
+                        coursecraft_render::SIZE_CAPTION,
+                        egui::FontFamily::Name("inter-bold".into()),
+                    ),
+                    p.text_secondary,
+                );
+                job.wrap = egui::text::TextWrapping::truncate_at_width(
+                    (header_rect.width() - 28.0).max(16.0),
+                );
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                let elided = galley.elided;
+                let title_pos = pos2(
+                    header_rect.min.x,
+                    header_rect.center().y - galley.size().y * 0.5,
+                );
+                painter.galley(title_pos, galley, p.text_secondary);
+                if elided {
+                    header_resp.on_hover_text(&scene.title);
+                }
+                // "+" at the right of the header: a new slide at the end of this
+                // scene, so a slide never has to be made elsewhere and dragged in.
+                let add_size = vec2(26.0, 26.0);
+                let add_rect = Rect::from_center_size(
+                    pos2(header_rect.max.x - add_size.x * 0.5, header_rect.center().y),
+                    add_size,
+                );
+                let add_tooltip = format!("New slide in {}", scene.title);
+                let add_resp = ui
+                    .scope_builder(egui::UiBuilder::new().max_rect(add_rect), |ui| {
+                        crate::widgets::icon_button(
+                            ui,
+                            coursecraft_render::Icon::Plus,
+                            &add_tooltip,
+                        )
+                    })
+                    .inner;
+                if add_resp.clicked() && !editor.ui.master_view {
+                    action_to_run = Some((
+                        "slide.add",
+                        serde_json::json!({
+                            "scene": scene.id,
+                            "title": crate::toolbar::next_slide_title(&editor.session.course),
+                        }),
+                    ));
+                }
             }
         }
         current_y += SCENE_HEADER_HEIGHT + SCENE_BOTTOM_GAP;
@@ -1320,13 +1696,36 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
         for (slide_idx, slide) in scene.slides.iter().enumerate() {
             global_slide_idx += 1;
             let thumb_rect = Rect::from_min_size(pos2(thumb_x, current_y), vec2(thumb_w, thumb_h));
-            let is_selected = editor.selection.is_slide_selected(&slide.id);
+            let title_rect = Rect::from_min_size(
+                pos2(thumb_x, thumb_rect.max.y + TITLE_GAP),
+                vec2(thumb_w, TITLE_HEIGHT),
+            );
+            let row_rect = Rect::from_min_max(
+                pos2(panel_rect.min.x, thumb_rect.min.y),
+                pos2(thumb_rect.max.x, title_rect.max.y),
+            );
             if editor.selection.slide == slide.id {
                 selected_rect = Some(Rect::from_min_size(
                     thumb_rect.min,
                     vec2(thumb_w, thumb_h + TITLE_GAP + TITLE_HEIGHT),
                 ));
             }
+            if dragging_slide {
+                slide_rows.push((scene.id.clone(), slide.id.clone(), slide_idx, thumb_rect));
+            }
+
+            let visible = row_rect.expand(4.0).intersects(clip_rect);
+            let renaming = editor
+                .ui
+                .slide_rename
+                .as_ref()
+                .is_some_and(|state| state.scene == slide.id);
+            if !visible && !renaming {
+                current_y += row_height;
+                continue;
+            }
+
+            let is_selected = editor.selection.is_slide_selected(&slide.id);
 
             // Gutter with slide number (vertically centred on the thumbnail)
             let num_pos = pos2(panel_rect.min.x + GUTTER_WIDTH - 4.0, thumb_rect.center().y);
@@ -1355,37 +1754,31 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 );
             }
 
-            // Thumbnail background & items
-            if let Some(slide_ref) = editor
-                .session
-                .course
-                .scenes
-                .get(scene_idx)
-                .and_then(|sc| sc.slides.get(slide_idx))
+            // Thumbnail background & items (composed only when visible in viewport)
+            if thumb_rect.intersects(clip_rect)
+                && let Some(slide_ref) = editor
+                    .session
+                    .course
+                    .scenes
+                    .get(scene_idx)
+                    .and_then(|sc| sc.slides.get(slide_idx))
             {
-                let items = compose_authoring(&editor.session.course, slide_ref, None);
-                let thumb_bg = coursecraft_render::parse_color(
-                    editor.session.course.slide_background(slide_ref),
-                )
-                .unwrap_or(Color32::WHITE);
+                let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
+                    revision,
+                    editor.session.last_changed_slide(),
+                    &editor.session.course,
+                    slide_ref,
+                );
                 let painter = ui.painter_at(thumb_rect);
                 painter.rect_filled(
                     thumb_rect,
                     CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
                     thumb_bg,
                 );
-                // Off-screen thumbnails are clipped away by the scroll area anyway.
-                // Skipping their paint keeps their pictures from being handed out
-                // (and pinned as "used this frame") on every frame.
-                if thumb_rect.intersects(ui.clip_rect())
-                    && let Some(t) =
-                        SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
-                {
+                if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
                     #[cfg(test)]
                     crate::guard_counters::note_thumbnail_paint(&slide.id, slide_ref);
-                    let source = crate::MemoryMediaSource {
-                        media: &editor.media,
-                    };
+                    let source = crate::MemoryMediaSource::from_store(&editor.media);
                     paint(
                         &painter,
                         &t,
@@ -1398,8 +1791,10 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                 }
             }
 
-            crate::content_region::mark_content_region(ui.ctx(), ui.layer_id(), thumb_rect);
-            slide_rows.push((scene.id.clone(), slide.id.clone(), slide_idx, thumb_rect));
+            let visible_thumb = thumb_rect.intersect(clip_rect);
+            if visible_thumb.is_positive() {
+                crate::content_region::mark_content_region(ui.ctx(), ui.layer_id(), visible_thumb);
+            }
 
             // Thumbnail click, drag and context menu interaction
             let thumb_response =
@@ -1470,7 +1865,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     selected_slide_count,
                     can_paste,
                     slide.is_question,
-                    &bank_menu,
+                    &nav.bank_menu,
                     &mut action_to_run,
                     &mut slide_action,
                 );
@@ -1557,7 +1952,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                         selected_slide_count,
                         can_paste,
                         slide.is_question,
-                        &bank_menu,
+                        &nav.bank_menu,
                         &mut action_to_run,
                         &mut slide_action,
                     );
@@ -1565,15 +1960,6 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
             }
 
             // Slide title below thumbnail, or an in-place rename field.
-            let title_rect = Rect::from_min_size(
-                pos2(thumb_x, thumb_rect.max.y + TITLE_GAP),
-                vec2(thumb_w, TITLE_HEIGHT),
-            );
-            let renaming = editor
-                .ui
-                .slide_rename
-                .as_ref()
-                .is_some_and(|state| state.scene == slide.id);
             if renaming {
                 show_slide_rename_editor(editor, ui, title_rect);
             } else {
@@ -1612,7 +1998,7 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                         selected_slide_count,
                         can_paste,
                         slide.is_question,
-                        &bank_menu,
+                        &nav.bank_menu,
                         &mut action_to_run,
                         &mut slide_action,
                     );
@@ -1649,115 +2035,118 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
     current_y += SCENE_TOP_GAP;
     let banks_header_rect =
         Rect::from_min_size(pos2(thumb_x, current_y), vec2(thumb_w, SCENE_HEADER_HEIGHT));
-    ui.painter_at(banks_header_rect).text(
-        banks_header_rect.left_center(),
-        Align2::LEFT_CENTER,
-        "Question banks",
-        FontId::new(
-            coursecraft_render::SIZE_CAPTION,
-            egui::FontFamily::Name("inter-bold".into()),
-        ),
-        p.text_secondary,
-    );
-    let plus_rect = Rect::from_min_size(
-        pos2(banks_header_rect.max.x - 24.0, current_y),
-        vec2(24.0, SCENE_HEADER_HEIGHT),
-    );
-    let plus_resp = ui.interact(plus_rect, ui.scope_id().with("bank_create"), Sense::click());
-    ui.painter_at(plus_rect).text(
-        plus_rect.center(),
-        Align2::CENTER_CENTER,
-        "+",
-        FontId::new(
-            coursecraft_render::SIZE_BODY,
-            egui::FontFamily::Name("inter-bold".into()),
-        ),
-        p.accent_text,
-    );
-    if plus_resp.clicked() {
-        action_to_run = Some(("bank.create", serde_json::json!({})));
+    if banks_header_rect.expand(4.0).intersects(clip_rect) {
+        ui.painter_at(banks_header_rect).text(
+            banks_header_rect.left_center(),
+            Align2::LEFT_CENTER,
+            "Question banks",
+            FontId::new(
+                coursecraft_render::SIZE_CAPTION,
+                egui::FontFamily::Name("inter-bold".into()),
+            ),
+            p.text_secondary,
+        );
+        let plus_rect = Rect::from_min_size(
+            pos2(banks_header_rect.max.x - 24.0, current_y),
+            vec2(24.0, SCENE_HEADER_HEIGHT),
+        );
+        let plus_resp = ui.interact(plus_rect, ui.scope_id().with("bank_create"), Sense::click());
+        ui.painter_at(plus_rect).text(
+            plus_rect.center(),
+            Align2::CENTER_CENTER,
+            "+",
+            FontId::new(
+                coursecraft_render::SIZE_BODY,
+                egui::FontFamily::Name("inter-bold".into()),
+            ),
+            p.accent_text,
+        );
+        if plus_resp.clicked() {
+            action_to_run = Some(("bank.create", serde_json::json!({})));
+        }
     }
     current_y += SCENE_HEADER_HEIGHT + SCENE_BOTTOM_GAP;
 
-    let banks = editor.session.course.banks.clone();
-    for bank in &banks {
+    for (bank_idx, bank) in nav.banks.iter().enumerate() {
         let header_rect =
             Rect::from_min_size(pos2(thumb_x, current_y), vec2(thumb_w, SCENE_HEADER_HEIGHT));
         let expanded = editor.ui.bank_expanded.contains(&bank.id);
-        let header_resp = ui.interact(
-            header_rect,
-            ui.scope_id().with("bank_header").with(&bank.id),
-            Sense::click(),
-        );
-        if header_resp.clicked() && !header_resp.double_clicked() {
-            if expanded {
-                editor.ui.bank_expanded.retain(|id| id != &bank.id);
-            } else {
-                editor.ui.bank_expanded.push(bank.id.clone());
-            }
-        }
-        if header_resp.double_clicked() {
-            bank_to_rename = Some(bank.id.clone());
-        }
-        let draw_params = draw_insert_params(editor, &bank.id);
-        header_resp.context_menu(|ui| {
-            show_bank_header_menu(ui, &bank.id, draw_params, &mut action_to_run);
-        });
-
         let renaming = editor
             .ui
             .bank_rename
             .as_ref()
             .is_some_and(|rename| rename.scene == bank.id);
-        if renaming {
-            show_bank_rename_editor(editor, ui, header_rect);
-        } else {
-            // Disclosure triangle (drawn, so no icon-font glyph is needed).
-            let tri_cx = thumb_x + 6.0;
-            let tri_cy = header_rect.center().y;
-            let tri = if expanded {
-                [
-                    pos2(tri_cx - 5.0, tri_cy - 3.0),
-                    pos2(tri_cx + 5.0, tri_cy - 3.0),
-                    pos2(tri_cx, tri_cy + 4.0),
-                ]
+        if header_rect.expand(4.0).intersects(clip_rect) || renaming {
+            let header_resp = ui.interact(
+                header_rect,
+                ui.scope_id().with("bank_header").with(&bank.id),
+                Sense::click(),
+            );
+            if header_resp.clicked() && !header_resp.double_clicked() {
+                if expanded {
+                    editor.ui.bank_expanded.retain(|id| id != &bank.id);
+                } else {
+                    editor.ui.bank_expanded.push(bank.id.clone());
+                }
+            }
+            if header_resp.double_clicked() {
+                bank_to_rename = Some(bank.id.clone());
+            }
+            let draw_params = draw_insert_params(editor, &bank.id);
+            header_resp.context_menu(|ui| {
+                show_bank_header_menu(ui, &bank.id, draw_params, &mut action_to_run);
+            });
+
+            if renaming {
+                show_bank_rename_editor(editor, ui, header_rect);
             } else {
-                [
-                    pos2(tri_cx - 3.0, tri_cy - 5.0),
-                    pos2(tri_cx - 3.0, tri_cy + 5.0),
-                    pos2(tri_cx + 4.0, tri_cy),
-                ]
-            };
-            let tri_painter = ui.painter();
-            tri_painter.line_segment([tri[0], tri[1]], Stroke::new(1.5, p.text_secondary));
-            tri_painter.line_segment([tri[1], tri[2]], Stroke::new(1.5, p.text_secondary));
-            tri_painter.line_segment([tri[2], tri[0]], Stroke::new(1.5, p.text_secondary));
-            let title_painter = ui.painter_at(header_rect);
-            title_painter.text(
-                pos2(thumb_x + 16.0, header_rect.center().y),
-                Align2::LEFT_CENTER,
-                &bank.title,
-                FontId::new(
-                    coursecraft_render::SIZE_CAPTION,
-                    egui::FontFamily::Name("inter-bold".into()),
-                ),
-                p.text_secondary,
-            );
-            title_painter.text(
-                header_rect.right_center(),
-                Align2::RIGHT_CENTER,
-                format!("{} questions", bank.slides.len()),
-                FontId::new(
-                    coursecraft_render::SIZE_SMALL,
-                    egui::FontFamily::Name("inter".into()),
-                ),
-                p.text_tertiary,
-            );
+                // Disclosure triangle (drawn, so no icon-font glyph is needed).
+                let tri_cx = thumb_x + 6.0;
+                let tri_cy = header_rect.center().y;
+                let tri = if expanded {
+                    [
+                        pos2(tri_cx - 5.0, tri_cy - 3.0),
+                        pos2(tri_cx + 5.0, tri_cy - 3.0),
+                        pos2(tri_cx, tri_cy + 4.0),
+                    ]
+                } else {
+                    [
+                        pos2(tri_cx - 3.0, tri_cy - 5.0),
+                        pos2(tri_cx - 3.0, tri_cy + 5.0),
+                        pos2(tri_cx + 4.0, tri_cy),
+                    ]
+                };
+                let tri_painter = ui.painter();
+                tri_painter.line_segment([tri[0], tri[1]], Stroke::new(1.5, p.text_secondary));
+                tri_painter.line_segment([tri[1], tri[2]], Stroke::new(1.5, p.text_secondary));
+                tri_painter.line_segment([tri[2], tri[0]], Stroke::new(1.5, p.text_secondary));
+                let title_painter = ui.painter_at(header_rect);
+                title_painter.text(
+                    pos2(thumb_x + 16.0, header_rect.center().y),
+                    Align2::LEFT_CENTER,
+                    &bank.title,
+                    FontId::new(
+                        coursecraft_render::SIZE_CAPTION,
+                        egui::FontFamily::Name("inter-bold".into()),
+                    ),
+                    p.text_secondary,
+                );
+                title_painter.text(
+                    header_rect.right_center(),
+                    Align2::RIGHT_CENTER,
+                    format!("{} questions", bank.slides.len()),
+                    FontId::new(
+                        coursecraft_render::SIZE_SMALL,
+                        egui::FontFamily::Name("inter".into()),
+                    ),
+                    p.text_tertiary,
+                );
+            }
         }
         current_y += SCENE_HEADER_HEIGHT + SCENE_BOTTOM_GAP;
 
         if expanded {
-            for slide in &bank.slides {
+            for (bank_slide_idx, slide) in bank.slides.iter().enumerate() {
                 let thumb_rect =
                     Rect::from_min_size(pos2(thumb_x, current_y), vec2(thumb_w, thumb_h));
                 let title_rect = Rect::from_min_size(
@@ -1770,34 +2159,45 @@ fn show_slides_content(editor: &mut Editor, ui: &mut Ui, panel_rect: Rect) {
                     selected_rect = Some(hit_rect);
                 }
 
-                let items = compose_authoring(&editor.session.course, slide, None);
-                let thumb_bg =
-                    coursecraft_render::parse_color(editor.session.course.slide_background(slide))
-                        .unwrap_or(Color32::WHITE);
-                let painter = ui.painter_at(thumb_rect);
-                painter.rect_filled(
-                    thumb_rect,
-                    CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
-                    thumb_bg,
-                );
-                // Same as the slides panel: don't hand out pictures for
-                // thumbnails the scroll area clips away.
-                if thumb_rect.intersects(ui.clip_rect())
-                    && let Some(t) =
-                        SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
+                if !hit_rect.expand(4.0).intersects(clip_rect) {
+                    current_y += row_height;
+                    continue;
+                }
+
+                if thumb_rect.intersects(clip_rect)
+                    && let Some(slide_ref) = editor
+                        .session
+                        .course
+                        .banks
+                        .get(bank_idx)
+                        .and_then(|b| b.slides.get(bank_slide_idx))
                 {
-                    let source = crate::MemoryMediaSource {
-                        media: &editor.media,
-                    };
-                    paint(
-                        &painter,
-                        &t,
-                        &items,
-                        Highlight::default(),
-                        Some((&mut editor.media_cache, &source)),
-                        Some(&editor.session.course.theme),
-                        Some(editor.session.course.slide_background(slide)),
+                    let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
+                        revision,
+                        editor.session.last_changed_slide(),
+                        &editor.session.course,
+                        slide_ref,
                     );
+                    let painter = ui.painter_at(thumb_rect);
+                    painter.rect_filled(
+                        thumb_rect,
+                        CornerRadius::same(coursecraft_render::RADIUS_MD as u8),
+                        thumb_bg,
+                    );
+                    if let Some(t) =
+                        SlideTransform::fit(thumb_rect, editor.session.course.slide_size)
+                    {
+                        let source = crate::MemoryMediaSource::from_store(&editor.media);
+                        paint(
+                            &painter,
+                            &t,
+                            &items,
+                            Highlight::default(),
+                            Some((&mut editor.media_cache, &source)),
+                            Some(&editor.session.course.theme),
+                            Some(editor.session.course.slide_background(slide_ref)),
+                        );
+                    }
                 }
 
                 let row_resp = ui.interact(
@@ -2194,10 +2594,7 @@ pub fn show_scene_delete_dialog(editor: &mut Editor, ctx: &egui::Context) {
         }
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(true, egui::Button::new("Delete scene"))
-                .clicked()
-            {
+            if ui.button("Delete scene").clicked() {
                 delete = true;
             }
             if ui.button("Cancel").clicked() {
@@ -2213,5 +2610,164 @@ pub fn show_scene_delete_dialog(editor: &mut Editor, ctx: &egui::Context) {
         editor.ui.pending_delete_scene = None;
     } else if close {
         editor.ui.pending_delete_scene = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_CACHED_THUMBNAILS, slide_thumbnail_rect};
+    use crate::guard_counters as gc;
+    use crate::test_harness::TestHarness;
+    use coursecraft_course::Course;
+    use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, pos2, vec2};
+
+    fn slides_course(n: usize) -> Course {
+        let mut slides = Vec::with_capacity(n);
+        for i in 0..n {
+            slides.push(format!(
+                r##"{{"id":"s-{i}","title":"Slide {i}","objects":[{{"id":"t{i}","kind":{{"type":"text","text":"Slide {i}"}},"frame":{{"x":80,"y":80,"w":400,"h":80}}}}]}}"##
+            ));
+        }
+        let json = format!(
+            r#"{{"schema_version":1,"id":"slides-{n}","title":"Slides","slide_size":{{"w":1280,"h":720}},"scenes":[{{"id":"sc0","title":"Scene 0","slides":[{}]}}]}}"#,
+            slides.join(",")
+        );
+        Course::from_json(&json).expect("generated slides course parses")
+    }
+
+    fn wheel(dy: f32) -> Event {
+        Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            delta: vec2(0.0, dy),
+            phase: TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    /// SL-05: ThumbnailCache stays capped at 128 in Standard mode (and 32 in Lite mode)
+    /// across a 300-slide scroll, empties on `replace_course`, keeps off-screen
+    /// `scroll_to_rect` working, and preserves slide drag-reorder.
+    #[test]
+    fn thumbnail_cache_cap_reset_scroll_to_rect_and_drag_reorder() {
+        let mut h = TestHarness::new(slides_course(300));
+        // 300 slides triggers Auto -> Lite (32); explicitly test Standard (128) here.
+        h.editor
+            .set_performance_mode(coursecraft_render::PerformanceMode::Standard);
+        for _ in 0..3 {
+            let _ = h.idle_frame();
+        }
+        assert!(
+            h.editor.ui.thumbnail_cache.len() > 0
+                && h.editor.ui.thumbnail_cache.len() <= MAX_CACHED_THUMBNAILS,
+            "initial visible slides should populate bounded cache"
+        );
+
+        // Idle frames after settling perform zero thumbnail composes.
+        gc::reset();
+        for _ in 0..5 {
+            let _ = h.idle_frame();
+        }
+        assert_eq!(
+            gc::thumbnail_composes(),
+            0,
+            "settled idle frames should not compose thumbnails"
+        );
+
+        // (a) Scroll across all 300 slides and verify the cache never exceeds 128 entries.
+        let list_pos = h.find_text("Slide 0").unwrap_or_else(|| pos2(90.0, 200.0));
+        h.frame(vec![Event::PointerMoved(list_pos)]);
+        for _ in 0..80 {
+            h.frame(vec![wheel(-600.0)]);
+            assert!(
+                h.editor.ui.thumbnail_cache.len() <= MAX_CACHED_THUMBNAILS,
+                "cache exceeded cap: {}",
+                h.editor.ui.thumbnail_cache.len()
+            );
+        }
+        assert_eq!(
+            h.editor.ui.thumbnail_cache.len(),
+            MAX_CACHED_THUMBNAILS,
+            "scrolling through 300 slides should fill cache up to the 128-entry cap"
+        );
+
+        // Switching to Lite (or Auto on 300 slides) shrinks the cache to its 32-entry ceiling.
+        h.editor
+            .set_performance_mode(coursecraft_render::PerformanceMode::Lite);
+        assert_eq!(
+            h.editor.ui.thumbnail_cache.len(),
+            32,
+            "Lite mode must evict thumbnail cache down to 32 entries"
+        );
+        h.editor
+            .set_performance_mode(coursecraft_render::PerformanceMode::Standard);
+
+        // (b) `replace_course` empties the thumbnail cache.
+        h.editor.replace_course(slides_course(300));
+        assert_eq!(
+            h.editor.ui.thumbnail_cache.len(),
+            0,
+            "replace_course must clear thumbnail_cache"
+        );
+        // Scrolling back to s-0 is animated; give it time to settle.
+        for _ in 0..90 {
+            let _ = h.idle_frame();
+            if h.editor.ui.slides_scrolled_to.as_deref() == Some("s-0") {
+                break;
+            }
+        }
+        assert!(
+            h.editor.ui.slides_scroll_y < 100.0 && h.find_text("Slide 0").is_some(),
+            "fresh course should scroll back near the top and paint Slide 0, got y={}",
+            h.editor.ui.slides_scroll_y
+        );
+
+        // (c) Selecting off-screen slide "s-250" computes selected_rect and scrolls it into view.
+        h.editor.selection.slide = "s-250".into();
+        for _ in 0..90 {
+            let _ = h.idle_frame();
+            if h.editor.ui.slides_scrolled_to.as_deref() == Some("s-250") {
+                break;
+            }
+        }
+        assert!(
+            h.editor.ui.slides_scroll_y > 1000.0,
+            "selecting off-screen s-250 should scroll the list down, got y={}",
+            h.editor.ui.slides_scroll_y
+        );
+        assert_eq!(
+            h.editor.ui.slides_scrolled_to.as_deref(),
+            Some("s-250"),
+            "s-250 should settle into the scroll viewport"
+        );
+        assert!(
+            h.find_text("Slide 250").is_some(),
+            "Slide 250 should be painted once scrolled into view"
+        );
+
+        // (d) Dragging slide 0 past slide 2 reorders slide 0 to index 2.
+        let mut h_drag = TestHarness::new(slides_course(10));
+        for _ in 0..3 {
+            let _ = h_drag.idle_frame();
+        }
+        let left = h_drag.left_panel_rect();
+        let r0 =
+            slide_thumbnail_rect(&h_drag.editor.session.course, left, "s-0").expect("s-0 rect");
+        let r2 =
+            slide_thumbnail_rect(&h_drag.editor.session.course, left, "s-2").expect("s-2 rect");
+        let delta = vec2(0.0, (r2.center().y + 20.0) - r0.center().y);
+        h_drag.drag_by(r0.center(), delta, 6, Modifiers::NONE);
+        let _ = h_drag.idle_frame();
+        let order: Vec<&str> = h_drag.editor.session.course.scenes[0]
+            .slides
+            .iter()
+            .take(3)
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            vec!["s-1", "s-2", "s-0"],
+            "dragging slide 0 past slide 2 should reorder it cleanly"
+        );
     }
 }

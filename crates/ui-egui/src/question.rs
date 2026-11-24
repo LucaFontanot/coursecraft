@@ -1,6 +1,6 @@
 //! Question bottom panel: kind, prompt, per-kind answers, attempts/points, and layer targets.
 
-use crate::widgets::{icon_button_danger, icon_button_enabled};
+use crate::widgets::{icon_button_danger_reason, icon_button_enabled_reason};
 use coursecraft_course::{
     Action, Choice, Condition, DragItem, Event, HotspotRegion, HotspotShape, MatchPair, ObjectKind,
     Question, QuestionKind, Scoring, Slide, Trigger,
@@ -13,9 +13,9 @@ use serde_json::Value as Json;
 #[must_use]
 pub fn question_kind_name(kind: QuestionKind) -> &'static str {
     match kind {
-        QuestionKind::MultipleChoice => "Multiple Choice",
-        QuestionKind::MultipleResponse => "Multiple Response",
-        QuestionKind::TrueFalse => "True / False",
+        QuestionKind::MultipleChoice => "Multiple choice",
+        QuestionKind::MultipleResponse => "Multiple response",
+        QuestionKind::TrueFalse => "True / false",
         QuestionKind::FillIn => "Fill in",
         QuestionKind::Sequence => "Sequence",
         QuestionKind::Matching => "Matching",
@@ -901,24 +901,44 @@ fn show_choice_rows(
             }
 
             if list_edit {
-                if icon_button_enabled(ui, Icon::ArrowUp, idx > 0, "Move up").clicked() {
+                if icon_button_enabled_reason(
+                    ui,
+                    Icon::ArrowUp,
+                    idx > 0,
+                    "Move up",
+                    "Already first",
+                )
+                .clicked()
+                {
                     choice_to_swap = Some((idx, idx - 1));
                 }
-                if icon_button_enabled(ui, Icon::ArrowDown, idx + 1 < choices_count, "Move down")
-                    .clicked()
+                if icon_button_enabled_reason(
+                    ui,
+                    Icon::ArrowDown,
+                    idx + 1 < choices_count,
+                    "Move down",
+                    "Already last",
+                )
+                .clicked()
                 {
                     choice_to_swap = Some((idx, idx + 1));
                 }
                 let min_choices = if marks { 2 } else { 1 };
                 let can_remove = choices_count > min_choices;
-                let remove_tip = if can_remove {
-                    "Remove choice"
-                } else if min_choices == 2 {
-                    "At least 2 choices are required"
+                let remove_reason = if min_choices == 2 {
+                    "At least two choices are required"
                 } else {
-                    "At least 1 choice is required"
+                    "At least one choice is required"
                 };
-                if icon_button_danger(ui, Icon::Trash, can_remove, remove_tip).clicked() {
+                if icon_button_danger_reason(
+                    ui,
+                    Icon::Trash,
+                    can_remove,
+                    "Remove choice",
+                    remove_reason,
+                )
+                .clicked()
+                {
                     choice_to_remove = Some(idx);
                 }
             }
@@ -990,7 +1010,15 @@ fn show_fill_in(
             if singleline_done(ui, &response) && current != saved {
                 *committed = true;
             }
-            if icon_button_danger(ui, Icon::Trash, n > 1, "Remove answer").clicked() {
+            if icon_button_danger_reason(
+                ui,
+                Icon::Trash,
+                n > 1,
+                "Remove answer",
+                "At least one answer is required",
+            )
+            .clicked()
+            {
                 remove = Some(idx);
             }
         });
@@ -1079,13 +1107,31 @@ fn show_sequence(
             if text_committed && current != saved {
                 *committed = true;
             }
-            if icon_button_enabled(ui, Icon::ArrowUp, idx > 0, "Move up").clicked() {
+            if icon_button_enabled_reason(ui, Icon::ArrowUp, idx > 0, "Move up", "Already first")
+                .clicked()
+            {
                 reorder = Some((cid.clone(), idx - 1));
             }
-            if icon_button_enabled(ui, Icon::ArrowDown, idx + 1 < n, "Move down").clicked() {
+            if icon_button_enabled_reason(
+                ui,
+                Icon::ArrowDown,
+                idx + 1 < n,
+                "Move down",
+                "Already last",
+            )
+            .clicked()
+            {
                 reorder = Some((cid, idx + 1));
             }
-            if icon_button_danger(ui, Icon::Trash, n > 2, "Remove choice").clicked() {
+            if icon_button_danger_reason(
+                ui,
+                Icon::Trash,
+                n > 2,
+                "Remove choice",
+                "At least two choices are required",
+            )
+            .clicked()
+            {
                 remove = Some(idx);
             }
         });
@@ -1137,13 +1183,37 @@ fn show_pairs(
         if narrow {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(format!("{}.", idx + 1)).strong());
-                if icon_button_enabled(ui, Icon::ArrowUp, idx > 0, "Move up").clicked() {
+                if icon_button_enabled_reason(
+                    ui,
+                    Icon::ArrowUp,
+                    idx > 0,
+                    "Move up",
+                    "Already first",
+                )
+                .clicked()
+                {
                     reorder = Some((pair_id.clone(), idx - 1));
                 }
-                if icon_button_enabled(ui, Icon::ArrowDown, idx + 1 < n, "Move down").clicked() {
+                if icon_button_enabled_reason(
+                    ui,
+                    Icon::ArrowDown,
+                    idx + 1 < n,
+                    "Move down",
+                    "Already last",
+                )
+                .clicked()
+                {
                     reorder = Some((pair_id.clone(), idx + 1));
                 }
-                if icon_button_danger(ui, Icon::Trash, n > 2, "Remove pair").clicked() {
+                if icon_button_danger_reason(
+                    ui,
+                    Icon::Trash,
+                    n > 2,
+                    "Remove pair",
+                    "At least two pairs are required",
+                )
+                .clicked()
+                {
                     remove = Some(pair_id.clone());
                 }
             });
@@ -1239,13 +1309,31 @@ fn show_pairs(
             if singleline_done(ui, &right_res) && current != saved {
                 *committed = true;
             }
-            if icon_button_enabled(ui, Icon::ArrowUp, idx > 0, "Move up").clicked() {
+            if icon_button_enabled_reason(ui, Icon::ArrowUp, idx > 0, "Move up", "Already first")
+                .clicked()
+            {
                 reorder = Some((pair_id.clone(), idx - 1));
             }
-            if icon_button_enabled(ui, Icon::ArrowDown, idx + 1 < n, "Move down").clicked() {
+            if icon_button_enabled_reason(
+                ui,
+                Icon::ArrowDown,
+                idx + 1 < n,
+                "Move down",
+                "Already last",
+            )
+            .clicked()
+            {
                 reorder = Some((pair_id.clone(), idx + 1));
             }
-            if icon_button_danger(ui, Icon::Trash, n > 2, "Remove pair").clicked() {
+            if icon_button_danger_reason(
+                ui,
+                Icon::Trash,
+                n > 2,
+                "Remove pair",
+                "At least two pairs are required",
+            )
+            .clicked()
+            {
                 remove = Some(pair_id);
             }
         });
@@ -1604,7 +1692,20 @@ fn show_hotspot(
 
                 let can_delete =
                     n > 1 && (!r.correct || regions.iter().filter(|reg| reg.correct).count() > 1);
-                if icon_button_danger(ui, Icon::Trash, can_delete, "Remove region").clicked() {
+                let remove_reason = if n <= 1 {
+                    "At least one region is required"
+                } else {
+                    "At least one region must be marked correct"
+                };
+                if icon_button_danger_reason(
+                    ui,
+                    Icon::Trash,
+                    can_delete,
+                    "Remove region",
+                    remove_reason,
+                )
+                .clicked()
+                {
                     remove_region = Some(r.id.clone());
                 }
             }
@@ -1677,7 +1778,20 @@ fn show_hotspot(
 
                 let can_delete =
                     n > 1 && (!r.correct || regions.iter().filter(|reg| reg.correct).count() > 1);
-                if icon_button_danger(ui, Icon::Trash, can_delete, "Remove region").clicked() {
+                let remove_reason = if n <= 1 {
+                    "At least one region is required"
+                } else {
+                    "At least one region must be marked correct"
+                };
+                if icon_button_danger_reason(
+                    ui,
+                    Icon::Trash,
+                    can_delete,
+                    "Remove region",
+                    remove_reason,
+                )
+                .clicked()
+                {
                     remove_region = Some(r.id.clone());
                 }
             });
@@ -1842,7 +1956,15 @@ fn show_drag_drop(
                     }
                 });
 
-            if icon_button_danger(ui, Icon::Trash, n > 1, "Remove item").clicked() {
+            if icon_button_danger_reason(
+                ui,
+                Icon::Trash,
+                n > 1,
+                "Remove item",
+                "At least one drag item is required",
+            )
+            .clicked()
+            {
                 remove_item = Some(d.item.clone());
             }
         });
@@ -1873,10 +1995,9 @@ fn show_drag_drop(
         let mut is_checked = updated_targets.contains(&o.id);
         let name = if o.name.is_empty() { &o.id } else { &o.name };
 
-        let mut cb = ui.add_enabled(!is_required, egui::Checkbox::new(&mut is_checked, name));
-        if is_required {
-            cb = cb.on_hover_text("This target is required because a drag item targets it");
-        }
+        let cb = ui
+            .add_enabled(!is_required, egui::Checkbox::new(&mut is_checked, name))
+            .on_disabled_hover_text("Required because a drag item targets this object");
         if cb.changed() {
             if is_checked && !updated_targets.contains(&o.id) {
                 if updated_targets.len() < 20 {

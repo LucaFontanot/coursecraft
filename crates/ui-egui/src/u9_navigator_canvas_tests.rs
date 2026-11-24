@@ -312,9 +312,8 @@ fn t4_4_master_view_banner_has_high_contrast_exit_and_restores_slide_selection()
 
             let p = palette(&h.ctx);
             let exit_pos = h
-                .find_text("Close Master View")
-                .or_else(|| h.find_text("Exit Master View"))
-                .expect("Master View exit button visible");
+                .find_text("Close slide masters")
+                .expect("Slide masters exit button visible");
             let c_rest = contrast_ratio(p.accent_text, p.input);
             assert!(
                 c_rest >= 4.5,
@@ -637,7 +636,7 @@ fn t5_5_crop_mode_escape_cancels_and_enter_commits_in_one_undo() {
         .expect("encode png");
     h.editor
         .media
-        .push(("test.png".to_owned(), std::sync::Arc::from(png_bytes)));
+        .push("test.png".to_owned(), std::sync::Arc::from(png_bytes));
     h.editor.selection.object = Some("obj_img".to_owned());
     h.idle_frame();
 

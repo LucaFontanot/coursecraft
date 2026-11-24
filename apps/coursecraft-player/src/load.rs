@@ -35,6 +35,14 @@ pub fn debug_logging_from_query(search: &str) -> bool {
     query.split('&').any(|pair| pair == "debug=1")
 }
 
+/// Whether the page query string requests lite cache caps (`lite=1`).
+#[cfg(any(target_arch = "wasm32", test))]
+#[must_use]
+pub fn lite_mode_from_query(search: &str) -> bool {
+    let query = search.strip_prefix('?').unwrap_or(search);
+    query.split('&').any(|pair| pair == "lite=1")
+}
+
 /// Read `debug=1` from the browser's query string; returns `false` if unavailable.
 #[cfg(target_arch = "wasm32")]
 #[must_use]
@@ -42,6 +50,48 @@ pub fn web_log_effects() -> bool {
     web_sys::window()
         .and_then(|window| window.location().search().ok())
         .is_some_and(|search| debug_logging_from_query(&search))
+}
+
+/// Return `true` on web when `?lite=1` is set, the viewport is narrow (`<= 640 px`),
+/// or `navigator.deviceMemory <= 4`. Used only to lower runtime cache ceilings.
+#[cfg(target_arch = "wasm32")]
+#[must_use]
+pub fn web_is_constrained_device() -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    if window
+        .location()
+        .search()
+        .ok()
+        .is_some_and(|search| lite_mode_from_query(&search))
+    {
+        return true;
+    }
+    if window
+        .inner_width()
+        .ok()
+        .and_then(|v| v.as_f64())
+        .is_some_and(|w| w.is_finite() && w > 0.0 && w <= 640.0)
+    {
+        return true;
+    }
+    let Ok(navigator) = js_sys::Reflect::get(
+        window.as_ref(),
+        &eframe::wasm_bindgen::JsValue::from_str("navigator"),
+    ) else {
+        return false;
+    };
+    if navigator.is_null() || navigator.is_undefined() {
+        return false;
+    }
+    js_sys::Reflect::get(
+        &navigator,
+        &eframe::wasm_bindgen::JsValue::from_str("deviceMemory"),
+    )
+    .ok()
+    .and_then(|v| v.as_f64())
+    .is_some_and(|gb| gb.is_finite() && gb > 0.0 && gb <= 4.0)
 }
 
 #[cfg(any(target_arch = "wasm32", test))]

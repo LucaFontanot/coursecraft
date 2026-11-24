@@ -26,8 +26,8 @@ CourseCraft theme values and the document views. When something generic is missi
 | `craft-ui` `combo`, `localized` | `ComboBox`; number fields in the user's region (X, Y, Width, Height, Duration spinners) | ribbon combos and spinners |
 | `craft-ui` `focus`, `ime`, `text`, `theme`, `fonts` | keyboard focus, input methods, text helpers, theme mechanisms, font install | everywhere |
 | `craft-i18n` | every interface string, plurals, numbers, language names, system locale | [localization.md](localization.md) |
-| later: `craft-menu`, `craft-keymap` | native macOS menu, customisable shortcuts | M30 step 8 or after |
-| later: `craft-window`, `craft-dialogs`, `craft-settings` | app-drawn title bar with the QAT, non-blocking file dialogs, settings storage | after M30 |
+| later: `craft-menu`, `craft-keymap` | native macOS menu, customisable shortcuts | M37 step 8 or after |
+| later: `craft-window`, `craft-dialogs`, `craft-settings` | app-drawn title bar with the QAT, non-blocking file dialogs, settings storage | after M37 |
 
 **Pins.** Like DeckCraft, add each crate as a git dependency pinned to one craft-libs `rev` in
 `[workspace.dependencies]`, all on the same rev, and bump them together:
@@ -157,7 +157,7 @@ returns to Home when the current contextual tab goes.
 A small `cargo xtask ui-spec` (optional) can print the spec as Markdown tables so the docs can be
 diffed against the code.
 
-## 6. Order of work (M30)
+## 6. Order of work (M37)
 
 Each step is one commit, `cargo xtask ci` green, docs status updated in the same commit.
 

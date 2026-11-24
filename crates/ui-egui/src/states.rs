@@ -363,7 +363,7 @@ pub fn show_states_section(
             if normal_is_initial {
                 ui.label(RichText::new("(initial)").italics());
             } else {
-                let btn = ui.button("Set Initial");
+                let btn = ui.button("Set initial");
                 if btn.clicked() {
                     actions.push((
                         "object.update",
@@ -434,7 +434,7 @@ pub fn show_states_section(
 
                 ui.horizontal(|ui| {
                     if !is_initial {
-                        let btn = ui.button("Set Initial");
+                        let btn = ui.button("Set initial");
                         buf.set_initial_rect = Some(btn.rect);
                         if btn.clicked() {
                             actions.push((
@@ -594,9 +594,7 @@ pub fn show_states_section(
                                     egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
                                     p.hover,
                                 );
-                                let source = crate::MemoryMediaSource {
-                                    media: &editor.media,
-                                };
+                                let source = crate::MemoryMediaSource::from_store(&editor.media);
                                 if let coursecraft_render::MediaView::Ready { texture, .. } = editor
                                     .media_cache
                                     .texture_for(ui.ctx(), src, &source, (28, 28))
@@ -635,7 +633,7 @@ pub fn show_states_section(
                             }
                         } else {
                             ui.label(
-                                RichText::new("Same as Normal")
+                                RichText::new("Same as normal")
                                     .color(p.text_secondary)
                                     .size(coursecraft_render::SIZE_BODY),
                             );
@@ -921,7 +919,11 @@ fn paint_state_thumbnail(
     if items.is_empty() {
         return;
     }
-    crate::canvas::missing_images_as_placeholders(&mut items, &editor.media);
+    crate::canvas::missing_images_as_placeholders(
+        &mut items,
+        &editor.media,
+        Some(editor.media.index()),
+    );
 
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
@@ -956,9 +958,7 @@ fn paint_state_thumbnail(
     ) else {
         return;
     };
-    let source = crate::MemoryMediaSource {
-        media: &editor.media,
-    };
+    let source = crate::MemoryMediaSource::from_store(&editor.media);
     paint(
         &painter,
         &t,
@@ -1115,7 +1115,12 @@ fn show_state_card(
                                 }),
                             ));
                             if editor.ui.preview_state.as_deref() == Some(state_name) {
-                                editor.ui.preview_state = Some(trimmed);
+                                editor.ui.preview_state = Some(trimmed.clone());
+                            }
+                            if let Some(session) = editor.ui.editing_state.as_mut()
+                                && session.state_name == state_name
+                            {
+                                session.state_name = trimmed;
                             }
                             editor.ui.states.renaming_state = None;
                         }
@@ -1772,7 +1777,7 @@ pub fn show_states_tab(editor: &mut Editor, ui: &mut Ui, actions: &mut Vec<(&'st
                         }
                     } else {
                         ui.label(
-                            RichText::new("Same as Normal")
+                            RichText::new("Same as normal")
                                 .color(p.text_secondary)
                                 .size(coursecraft_render::SIZE_BODY),
                         );

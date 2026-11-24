@@ -594,8 +594,8 @@ fn d5_5_history_panel_click_jump_and_reselects_restored_slide_bug_d4() {
     // Click step 2 from bottom (i.e. undo 4 steps: past Edit 6, Edit 5, Edit 4, and Delete slide)
     // In history.rs, undo_names()[3] is "Delete slide" (0=Edit 6, 1=Edit 5, 2=Edit 4, 3=Delete slide).
     let delete_label_pos = h
-        .find_text("Delete Slide")
-        .expect("Delete Slide row in History");
+        .find_text("Delete slide")
+        .expect("Delete slide row in History");
     h.click_at(delete_label_pos);
 
     assert_eq!(h.editor.session.undo_len(), 2);
@@ -847,7 +847,7 @@ fn d5_9_undo_while_crop_layer_settings_or_trigger_editor_open() {
     let mut h = TestHarness::new(make_base_course());
     h.editor
         .media
-        .push(("hero.png".to_owned(), std::sync::Arc::from(make_tiny_png())));
+        .push("hero.png".to_owned(), std::sync::Arc::from(make_tiny_png()));
     h.idle_frame();
     h.editor
         .run(
@@ -1103,26 +1103,26 @@ fn d5_12_edit_menu_dynamic_labels() {
     assert!(h.find_text("Redo").is_some());
     h.press(Key::Escape, Modifiers::NONE);
 
-    // After "New Slide" -> "Undo New Slide"
+    // After "New slide" -> "Undo new slide"
     h.editor
         .run("slide.add", serde_json::json!({ "title": "New Slide" }))
         .unwrap();
     let edit_pos = h.find_text("Edit").expect("Edit menu");
     h.click_at(edit_pos);
     assert!(
-        h.find_text("Undo New Slide").is_some(),
-        "Edit menu must show 'Undo New Slide'"
+        h.find_text("Undo new slide").is_some(),
+        "Edit menu must show 'Undo new slide'"
     );
     h.press(Key::Escape, Modifiers::NONE);
 
-    // After undo -> "Redo New Slide"
+    // After undo -> "Redo new slide"
     h.editor.session.undo().unwrap();
     h.editor.check_revision();
     let edit_pos = h.find_text("Edit").expect("Edit menu");
     h.click_at(edit_pos);
     assert!(
-        h.find_text("Redo New Slide").is_some(),
-        "Edit menu must show 'Redo New Slide'"
+        h.find_text("Redo new slide").is_some(),
+        "Edit menu must show 'Redo new slide'"
     );
 }
 
@@ -1936,22 +1936,22 @@ fn d6_11_master_view_guards_for_clipboard_vs_duplicate() {
     clipboard::copy(&mut h.editor);
     assert_eq!(
         h.editor.ui.status_message.as_ref().map(|(m, _)| m.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
     clipboard::cut(&mut h.editor);
     assert_eq!(
         h.editor.ui.status_message.as_ref().map(|(m, _)| m.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
     clipboard::paste_text(&mut h.editor, "hello");
     assert_eq!(
         h.editor.ui.status_message.as_ref().map(|(m, _)| m.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
     assert!(!h.editor.paste_image_png(&make_tiny_png()));
     assert_eq!(
         h.editor.ui.status_message.as_ref().map(|(m, _)| m.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
 
     // Ctrl+D on master shape works cleanly and undoes

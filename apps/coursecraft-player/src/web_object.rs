@@ -40,15 +40,14 @@ impl WebObjects {
     }
 
     /// Position the current slide's web frames, creating or removing elements as
-    /// objects appear, change source, or leave the slide.
-    pub fn layout(&mut self, player: &Player<'_>, view: &SlideView) {
-        // The dim backdrop and box draw over the page, so every iframe hides
-        // while a lightbox is open.
-        if player.lightbox_open() {
-            for id in self.frames.keys().cloned().collect::<Vec<_>>() {
-                if let Some(frame) = self.frames.get(&id) {
-                    layout_frame(&frame.element, None);
-                }
+    /// objects appear, change source, or leave the slide. When `hide_overlays`
+    /// is true, existing frames are hidden and no new iframes are created.
+    pub fn layout(&mut self, player: &Player<'_>, view: &SlideView, hide_overlays: bool) {
+        // The start gate, drawer, ended card, and lightbox draw over the page,
+        // so every iframe hides while any of them is active.
+        if hide_overlays || player.lightbox_open() {
+            for frame in self.frames.values() {
+                layout_frame(&frame.element, None);
             }
             self.laid_out.clear();
             return;

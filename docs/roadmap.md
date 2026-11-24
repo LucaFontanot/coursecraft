@@ -315,7 +315,58 @@ From Noe's feedback; design in `docs/testing/m28-noe-states-analysis.md` (Sugges
 - Contributions from Luca: seekbar behaviour and the web Play button.
 - Released as 0.4.0.
 
-## M30 Ribbon UI parity (planned)
+## M30 Slide size, 0.4.0 fixes and polish ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m30-plan.md`; log: `docs/bug-hunt/2026-11-23-m30.md`; report: `docs/testing/m30-report.md`.
+
+- Slide size, from a tester request (PhilOB): a redesigned dialog (presets including Full HD and portrait, aspect lock, use as default for new courses, Scale to fit / Fill slide / Keep as is, live preview), resizing that scales everything including states and state items, a Check Course warning for objects left outside the slide, and the dialog reachable from the Slide menu, Course tab, Course settings and status bar.
+- Eight 0.4.0 bugs fixed (states, the web start gate, seekbar completion).
+- Glossary in Find and Replace, Spell Check and translation; sort the glossary A to Z; Timeline Show all and Unlock all.
+- Released as 0.4.1.
+
+## M31 Urgent fixes from an external review ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m31-plan.md`; log: `docs/bug-hunt/2026-11-23-m31.md`; report: `docs/testing/m31-report.md`.
+
+- Save, Save As, Open and New shortcuts; MCP keeps a `.ccraft` file's media; no crashes on tiny slides, tall scroll panels or crossed clamp bounds; publish with an empty state picture; SCORM 1.2 never downgrades a reported pass or completion; Last visited slide never loops; the web editor asks before replacing unsaved changes and publishes without freezing the tab.
+- Released as 0.4.2.
+
+## M32 UI quick wins and a faster slide list ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m32-plan.md`; report: `docs/testing/m32-report.md`.
+
+- Sentence-case labels with one name per action; shortcuts in tooltips from one table; a reason on every disabled control; a Preview menu with Preview from here; File → Import and Export; the slide list composes only visible thumbnails and caches them by revision.
+- Released as 0.4.3.
+
+## M33 Undo that stores changes, not copies ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m33-plan.md`; report: `docs/testing/m33-report.md`.
+
+- Undo stores a delta per edit (one slide, the course settings, or the whole course when in doubt) instead of a full course copy; 140 commands annotated; a differential test checks every command against the old full-copy undo.
+- Released as 0.4.3.
+
+## M34 Fast on low-end hardware ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m34-plan.md`; report: `docs/testing/m34-report.md`; refactor proposal (awaiting owner approval): `docs/testing/refactor-proposal.md`.
+
+- Player and Preview repaint only when something changes; pictures decoded at display size and shared; scoped, allocation-free validation; streaming Open and Publish; autosave off the UI thread; text, shape and canvas caches; faster Check Spelling; Performance mode (Auto, Standard, Lite).
+- Released as 0.4.4.
+
+## M35 Check for updates ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m35-plan.md`; report: `docs/testing/m35-report.md`. From GitHub issue #5.
+
+- Desktop-only Help → Check for updates… plus an optional daily check; release notes in the app; Download update picks the right installer, verifies its SHA-256 and reveals it; releases publish `SHA256SUMS.txt`.
+- Released as 0.4.4.
+
+## M36 Refactor A ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m36-plan.md`; report: `docs/testing/m36-report.md`. Implemented and reviewed by Gemini 4 Neon.
+
+- One shared media walker and an indexed `MediaStore`; one zero-copy publish path; `crates/engine/src/commands.rs` split into modules by area, with each command's undo scope and validation declared in the registry. No behaviour change.
+- Splitting `apps/coursecraft/src/main.rs` (R8) waits until after the dockable-windows UI overhaul.
+
+## M37 Ribbon UI parity (planned)
 
 A Storyline 360 author should find every command where they look for it. Plan and full inventory:
 `docs/ui/` (start at `docs/ui/README.md`), taken from public beginner tutorials. Feature-level
@@ -360,17 +411,17 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
 6. Dialog front-ends over existing commands: Trigger, Insert Slide / Insert Question, Player
    Properties, Publish.
 7. Settings panels (`docs/ui/panels.md`): every ↘ launcher opens a closable dock panel with all
-   the settings of its category, in place of Storyline's dialogs. M30 builds the registry, the
-   launcher wiring and Grid and Guides; the category panels follow in M31–M35, then
+   the settings of its category, in place of Storyline's dialogs. M37 builds the registry, the
+   launcher wiring and Grid and Guides; the category panels follow in M38–M42, then
    customization (sections, pinning, workspaces). **Built (2026-11-23):** the registry, every
    launcher opening a panel, saved layouts that survive new panels, and the Text panel (Font ↘,
    Paragraph ↘), which also opens by itself when text editing starts on the canvas.
 
-The milestones after M30 switch the disabled buttons on, one area at a time. Each one moves rows
+The milestones after M37 switch the disabled buttons on, one area at a time. Each one moves rows
 in `docs/ui/feature-parity.md` to ✅ and flips the matching `NotYet` actions in the ribbon spec.
 Order follows what testers ask for; this is the default.
 
-## M31 Text and formatting gaps (planned)
+## M38 Text and formatting gaps (planned)
 
 Clear formatting, text shadow, change case, highlight colour (new run field), text direction,
 numbering styles, vertical alignment in the ribbon, paste options (keep source, text only, Paste
@@ -378,7 +429,7 @@ Special), the Text and Size and Position settings panels that the Font, Paragrap
 Position ↘ launchers open (`docs/ui/panels.md`), Create New Theme Fonts dialog, slide
 number field, symbol picker, insert variable reference, focus order dialog.
 
-## M32 Pictures, buttons and media polish (planned)
+## M39 Pictures, buttons and media polish (planned)
 
 Brightness and contrast, picture styles, crop to shape, zoom picture, recolor photos, reset
 picture, reflection and soft edges, change shape, button icons (gallery, align, colour, remove),
@@ -386,21 +437,21 @@ button sets, When Clicked Action pre-filled, callout shapes, export picture/audi
 video editor beyond trim, captions add/export/delete, compression, video in a new window, webcam
 recording, a bundled open-licence icon set.
 
-## M33 Structure, masters and questions (planned)
+## M40 Structure, masters and questions (planned)
 
 Starting scene (model field and runtime rule in `docs/spec/triggers.md`), scene index, reset slide
 to layout, master Preserve / Title / Insert Placeholder, hide background graphics, feedback master,
 swipe gestures (editor and player), custom mouse cursor, convert slide to custom question, question
 form view, feedback and scoring by choice, media per choice and feedback.
 
-## M34 Animation and timeline depth (planned)
+## M41 Animation and timeline depth (planned)
 
 Full entrance/exit gallery, emphasis animations, animation painter, sequence by paragraph with
 build steps on the timeline, transition effect options and Apply to All, path options, zoom
 regions, timeline menu (fit to longest, reset, align to playhead or cue point, Timing dialog),
 C adds a cue point while playing, Course Map scene collapse and branch lines.
 
-## M35 Preview and AI ribbon (planned)
+## M42 Preview and AI ribbon (planned)
 
 Preview device sizes and orientations, Replay scopes, Edit Slide and Inspect (variables and
 trigger log from the simulator), publish quality, LRS beside an LMS, editable player text labels,
@@ -409,7 +460,7 @@ summary from course content, insert and edit text, image, sound effects and musi
 
 ## After the first release
 
-- Interface translations: `coursecraft.tsv` catalogs in the craft-i18n data repository, starting with de, fr, es, it, pt-br, nl, pl (Latin script); the wiring lands in M30 (`docs/ui/localization.md`).
+- Interface translations: `coursecraft.tsv` catalogs in the craft-i18n data repository, starting with de, fr, es, it, pt-br, nl, pl (Latin script); the wiring lands in M37 (`docs/ui/localization.md`).
 - More languages: fonts and text layout for Hindi, Arabic, Chinese, Japanese and Korean, so more testers can join. Right-to-left interface languages wait for a mirrored layout. Until then, testing uses English and the other scripts the bundled font supports.
 - Phone-friendly, scrolling lessons, once CourseCraft can compete with Storyline 360. This is where it starts to stand apart from the competition.
 

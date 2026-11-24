@@ -6,6 +6,10 @@
 /// The project's home on GitHub.
 pub const REPO_URL: &str = "https://github.com/ad1-kamath/coursecraft";
 
+/// GitHub Releases API endpoint used by the desktop update checker.
+pub const RELEASES_API_URL: &str =
+    "https://api.github.com/repos/ad1-kamath/coursecraft/releases?per_page=20";
+
 /// Issue template file for a problem report.
 pub const BUG_TEMPLATE: &str = "bug_report.md";
 /// Issue template file for a feature idea.

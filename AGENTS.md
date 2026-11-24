@@ -25,7 +25,7 @@ It is built to the conventions of the ArtCraft Crafting Apps (storytold) so it c
 3. **One runtime.** Don't add play-time behaviour anywhere but `coursecraft-logic`.
 4. **Layering is enforced:** `cargo xtask layers`. Register new crates in `xtask/src/main.rs`.
 5. **Spec first.** A runtime behaviour change updates `docs/spec/triggers.md` in the same change.
-6. **Clean-room.** Match capabilities, never copy code, assets or look; mind the patent watch list. See `docs/contributing.md`.
+6. **Clean-room.** Match commercial tools' capabilities, never copy their code, assets or look; mind the patent watch list. Open-source code with a compatible licence (such as the ArtCraft apps) may be reused with its notice and credit. See `docs/contributing.md`.
 7. **Never break wasm** for L0–L5.
 8. **UI follows `docs/ui/`.** The ribbon layout is the contract: same tabs, groups and order; a
    control whose feature is missing is drawn disabled with its reason, never hidden. Wiring or

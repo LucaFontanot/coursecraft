@@ -129,6 +129,38 @@ fn open_layer_settings_first(editor: &mut Editor) {
     }
 }
 
+fn open_update_dialog_preview(editor: &mut Editor) {
+    editor.updates_available = true;
+    editor.ui.update = crate::update_dialog::UpdateState {
+        open: true,
+        status: crate::update_dialog::UpdateCheckStatus::Available(
+            crate::update_dialog::UpdateInfo {
+                version: "0.4.4".to_owned(),
+                current_version: env!("CARGO_PKG_VERSION").to_owned(),
+                release_url: "https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.4"
+                    .to_owned(),
+                notes_markdown: "\
+## Highlights
+
+**Faster, lighter editor** with smoother timeline scrolling and snappier canvas redraws.
+
+- **In-app updates** check GitHub Releases quietly and verify downloads with `SHA-256`.
+- **Accessibility improvements** for keyboard focus and screen-reader labels.
+- Read the full [release notes on GitHub](https://github.com/ad1-kamath/coursecraft/releases/tag/v0.4.4).
+"
+                .to_owned(),
+                asset: Some(crate::update_dialog::UpdateAssetInfo {
+                    name: "CourseCraft-0.4.4-macos.dmg".to_owned(),
+                    size: 28_677_774,
+                }),
+                published_at: Some("2026-11-24T00:00:00Z".to_owned()),
+            },
+        ),
+        download: crate::update_dialog::UpdateDownloadState::Idle,
+        dismissed_version: None,
+    };
+}
+
 /// Every window and dialog the editor can open, by `--window` name.
 pub const WINDOWS: &[WindowSpec] = &[
     window!("course-settings", "Course settings", |e| {
@@ -156,8 +188,8 @@ pub const WINDOWS: &[WindowSpec] = &[
         e.ui.current_coach_mark = Some(3);
     }),
     window!("preview", " / 12", |e| e.open_preview_at(None)),
-    window!("ai-settings", "AI Settings", |e| e.open_ai_settings()),
-    window!("agents", "AI Settings", |e| {
+    window!("ai-settings", "AI settings", |e| e.open_ai_settings()),
+    window!("agents", "AI settings", |e| {
         e.automation_available = true;
         e.automation_enabled = true;
         e.agent_exe_path =
@@ -168,7 +200,7 @@ pub const WINDOWS: &[WindowSpec] = &[
             row.status = coursecraft_ai::agents::AgentStatus::Found;
         }
     }),
-    window!("report", "Report a Problem", |e| e.open_report()),
+    window!("report", "Report a problem", |e| e.open_report()),
     window!("crash", "CourseCraft closed unexpectedly", |e| {
         e.set_crash_note(Some("The editor closed while saving.".to_owned()));
     }),
@@ -185,10 +217,10 @@ pub const WINDOWS: &[WindowSpec] = &[
     window!("export-review", "Export for review", |e| {
         e.open_export_review(crate::ReviewFormat::Pdf);
     }),
-    window!("export-translation", "Export Translation", |e| {
+    window!("export-translation", "Export translation", |e| {
         e.ui.show_export_translation = true;
     }),
-    window!("translation-report", "Translation Import Report", |e| {
+    window!("translation-report", "Translation import report", |e| {
         e.set_translation_report("Applied 3 unit(s).\nMissing target: s-intro.title");
     }),
     window!("media-library", "Media library", |e| {
@@ -202,29 +234,29 @@ pub const WINDOWS: &[WindowSpec] = &[
         e.ui.show_interaction_gallery = true;
     }),
     window!("web", "Insert web object", |e| e.ui.show_web_window = true),
-    window!("outline", "Slides from Outline", |e| e
+    window!("outline", "Slides from outline", |e| e
         .open_outline_dialog()),
     window!("find", "Find and replace", crate::find::open),
     window!("slide-size", "Slide size", |e| e.open_slide_size_dialog()),
-    window!("alt-text", "Suggest Alt Text", |e| e.open_alt_text_dialog()),
+    window!("alt-text", "Suggest alt text", |e| e.open_alt_text_dialog()),
     window!("translate", "Translate with AI", |e| {
         e.open_translate_dialog();
     }),
-    window!("record-narration", "Record Narration", |e| {
+    window!("record-narration", "Record narration", |e| {
         e.open_record_narration();
     }),
-    window!("speech", "Narration from Text", |e| e.open_speech_dialog()),
-    window!("document", "Course from Document", |e| {
+    window!("speech", "Narration from text", |e| e.open_speech_dialog()),
+    window!("document", "Course from document", |e| {
         e.open_document_dialog();
     }),
-    window!("validation", "Check Course", |e| {
+    window!("validation", "Check course", |e| {
         e.ui.show_validation_window = true;
     }),
-    window!("error-history", "Error History", |e| {
+    window!("error-history", "Error history", |e| {
         e.ui.error_history = vec!["Could not save the file.".to_owned()];
         e.ui.show_error_history_window = true;
     }),
-    window!("pptx-report", "PowerPoint Import Report", |e| {
+    window!("pptx-report", "PowerPoint import report", |e| {
         e.ui.pptx_import_report = Some("Imported 4 slides.".to_owned());
     }),
     window!("trigger-editor", "Trigger", open_trigger_editor),
@@ -233,6 +265,7 @@ pub const WINDOWS: &[WindowSpec] = &[
         let id = e.session.course.scenes.first().map(|s| s.id.clone());
         e.ui.pending_delete_scene = id;
     }),
+    window!("update", "Software update", open_update_dialog_preview),
 ];
 
 /// The names `--window` accepts, in table order.
@@ -274,7 +307,7 @@ pub fn snapshot_editor(
     select: SnapshotSelect,
 ) -> Result<RgbaImage, RenderError> {
     let mut editor = Editor::new(course);
-    editor.media = media;
+    editor.media.set_all(media);
     select.apply(&mut editor);
 
     render_ui(

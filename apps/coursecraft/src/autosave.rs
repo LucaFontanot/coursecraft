@@ -2,6 +2,8 @@
 
 use coursecraft_course::Course;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
 
 /// Compute the autosave path for a named or untitled project.
@@ -124,6 +126,79 @@ pub fn write_autosave_arc(
     write_autosave_slices(course, media, autosave_path)
 }
 
+/// Write an autosave archive to disk from `Arc`-shared media without copying,
+/// aborting before renaming over `autosave_path` if `save_epoch` has moved past
+/// `expected_epoch`.
+///
+/// Returns `Ok(true)` if the autosave was committed to `autosave_path`, or
+/// `Ok(false)` if it was aborted because `save_epoch` changed.
+///
+/// # Errors
+/// Returns an error if serialization, verification, or filesystem writing fails.
+pub fn write_autosave_arc_guarded(
+    course: &Course,
+    media: &[(String, Arc<[u8]>)],
+    autosave_path: &Path,
+    save_epoch: &Arc<AtomicU64>,
+    expected_epoch: u64,
+) -> Result<bool, String> {
+    write_autosave_slices_guarded_with_after_write(
+        course,
+        media,
+        autosave_path,
+        save_epoch,
+        expected_epoch,
+        &|_| Ok(()),
+    )
+}
+
+pub(crate) fn write_autosave_slices_guarded_with_after_write<B: AsRef<[u8]>>(
+    course: &Course,
+    media: &[(String, B)],
+    autosave_path: &Path,
+    save_epoch: &Arc<AtomicU64>,
+    expected_epoch: u64,
+    after_write: &dyn Fn(&Path) -> std::io::Result<()>,
+) -> Result<bool, String> {
+    if save_epoch.load(Ordering::Acquire) != expected_epoch {
+        return Ok(false);
+    }
+    if let Some(parent) = autosave_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let committed = AtomicBool::new(false);
+    let should_commit = || {
+        let ok = save_epoch.load(Ordering::Acquire) == expected_epoch;
+        committed.store(ok, Ordering::Release);
+        ok
+    };
+    let hooks = crate::files::Hooks {
+        after_write,
+        should_commit: &should_commit,
+        ..crate::files::Hooks::default()
+    };
+    // Stream the zip to a temp file and verify it before renaming over the
+    // previous autosave, avoiding holding the whole archive in memory.
+    crate::files::write_atomic_stream_with(
+        autosave_path,
+        &mut |file| {
+            let mut buf = std::io::BufWriter::with_capacity(256 * 1024, file);
+            coursecraft_format::save_project_to(course, media, &mut buf).map_err(|e| {
+                std::io::Error::other(format!("Autosave serialization failed: {e}"))
+            })?;
+            std::io::Write::flush(&mut buf)
+        },
+        Some(&crate::files::verify_ccraft_file),
+        &hooks,
+    )
+    .map_err(|e| format!("Autosave write failed: {e}"))?;
+    if !committed.load(Ordering::Acquire) {
+        return Ok(false);
+    }
+    crate::files::remove_stale_temps(autosave_path);
+    Ok(true)
+}
+
 fn write_autosave_slices<B: AsRef<[u8]>>(
     course: &Course,
     media: &[(String, B)],
@@ -137,7 +212,7 @@ fn write_autosave_slices<B: AsRef<[u8]>>(
     crate::files::write_atomic_stream_with(
         autosave_path,
         &mut |file| {
-            let mut buf = std::io::BufWriter::new(file);
+            let mut buf = std::io::BufWriter::with_capacity(256 * 1024, file);
             coursecraft_format::save_project_to(course, media, &mut buf).map_err(|e| {
                 std::io::Error::other(format!("Autosave serialization failed: {e}"))
             })?;
@@ -222,6 +297,21 @@ impl Autosaver {
         Some((interval - (current_time - self.last_autosave_time)).max(0.0))
     }
 
+    /// Check if an autosave is due now, advancing the timer when the interval has elapsed.
+    ///
+    /// Returns `true` when the autosave interval has elapsed, the project is dirty,
+    /// and `current_revision` has not already been autosaved.
+    pub fn take_due(&mut self, current_time: f64, is_dirty: bool, current_revision: u64) -> bool {
+        let Some(interval) = self.interval_secs() else {
+            return false;
+        };
+        if current_time - self.last_autosave_time < interval {
+            return false;
+        }
+        self.last_autosave_time = current_time;
+        is_dirty && self.last_autosaved_revision != Some(current_revision)
+    }
+
     /// Check if autosave should be performed and write it if so.
     ///
     /// `media` is only invoked when an autosave is actually about to be written, so
@@ -259,23 +349,15 @@ impl Autosaver {
         target: AutosaveTarget<'_>,
         media: impl FnOnce() -> Vec<(String, B)>,
     ) -> bool {
-        let Some(interval) = self.interval_secs() else {
-            return false;
-        };
-        if current_time - self.last_autosave_time < interval {
+        if !self.take_due(current_time, is_dirty, current_revision) {
             return false;
         }
-        self.last_autosave_time = current_time;
-
-        if is_dirty && self.last_autosaved_revision != Some(current_revision) {
-            let Some(auto_path) = autosave_target_path(target.project_path, target.config_dir)
-            else {
-                return false;
-            };
-            if write_autosave_slices(target.course, &media(), &auto_path).is_ok() {
-                self.last_autosaved_revision = Some(current_revision);
-                return true;
-            }
+        let Some(auto_path) = autosave_target_path(target.project_path, target.config_dir) else {
+            return false;
+        };
+        if write_autosave_slices(target.course, &media(), &auto_path).is_ok() {
+            self.last_autosaved_revision = Some(current_revision);
+            return true;
         }
         false
     }

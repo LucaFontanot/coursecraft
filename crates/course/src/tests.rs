@@ -5322,3 +5322,1123 @@ fn check_course_does_not_warn_on_last_slide_or_slide_with_next_trigger() {
         "unexpected player bar warning: {issues:#?}"
     );
 }
+
+#[test]
+fn off_slide_object_warnings_cover_base_layer_master_and_exclusions() {
+    use crate::{Color, Issue, ObjectKind, Rect, ScrollBar, ShapeKind, Size};
+    let mut course = Course::from_json(HELLO).expect("hello course");
+    course.slide_size = Size { w: 640, h: 360 };
+    let layer_template = course.scenes[0].slides[1].layers[0].clone();
+    let master_template = course.scenes[0].slides[0].clone();
+    course.scenes.truncate(1);
+    course.scenes[0].slides.truncate(1);
+    // Clear existing objects so only our test objects are evaluated.
+    course.scenes[0].slides[0].objects.clear();
+    course.scenes[0].slides[0].layers.clear();
+    course.scenes[0].slides[0].triggers.clear();
+
+    let template = master_template.objects[0].clone();
+
+    let make_shape = |id: &str, frame: Rect, rotation: f32| {
+        let mut obj = template.clone();
+        obj.id = id.to_owned();
+        obj.name = id.to_owned();
+        obj.kind = ObjectKind::Shape {
+            shape: ShapeKind::Rectangle,
+            fill: Color("#2F6FEB".to_owned()),
+            fill_style: None,
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        };
+        obj.frame = frame;
+        obj.rotation = rotation;
+        obj.panel = None;
+        obj.group = None;
+        obj
+    };
+
+    // 0: completely outside to the right (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "off-right",
+        Rect {
+            x: 700.0,
+            y: 40.0,
+            w: 100.0,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 1: completely outside to the left (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "off-left",
+        Rect {
+            x: -100.0,
+            y: 40.0,
+            w: 100.0,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 2: completely outside above (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "off-top",
+        Rect {
+            x: 40.0,
+            y: -120.0,
+            w: 100.0,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 3: completely outside below (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "off-bottom",
+        Rect {
+            x: 40.0,
+            y: 360.0,
+            w: 100.0,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 4: partially overlapping left edge (0 warnings)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "partial-edge",
+        Rect {
+            x: -64.0,
+            y: 40.0,
+            w: 281.6,
+            h: 80.0,
+        },
+        0.0,
+    ));
+    // 5: Audio completely outside (0 warnings)
+    let mut audio = make_shape(
+        "off-audio",
+        Rect {
+            x: -500.0,
+            y: -500.0,
+            w: 40.0,
+            h: 40.0,
+        },
+        0.0,
+    );
+    audio.kind = ObjectKind::Audio {
+        src: "media/welcome.mp3".to_owned(),
+        autoplay: false,
+        captions: None,
+        volume: 1.0,
+        trim: None,
+    };
+    course.scenes[0].slides[0].objects.push(audio);
+    // 6: ScrollPanel on slide + 7: ScrollPanel child completely outside (0 warnings)
+    let mut panel = make_shape(
+        "scroll-panel",
+        Rect {
+            x: 20.0,
+            y: 20.0,
+            w: 200.0,
+            h: 200.0,
+        },
+        0.0,
+    );
+    panel.kind = ObjectKind::ScrollPanel {
+        content_height: 1200.0,
+        bar: ScrollBar::Visible,
+    };
+    course.scenes[0].slides[0].objects.push(panel);
+    let mut panel_child = make_shape(
+        "panel-child",
+        Rect {
+            x: 30.0,
+            y: 900.0,
+            w: 150.0,
+            h: 40.0,
+        },
+        0.0,
+    );
+    panel_child.panel = Some("scroll-panel".to_owned());
+    course.scenes[0].slides[0].objects.push(panel_child);
+    // 8: unrotated frame is outside [-18, -6] x [100, 200], but rotated 45 deg
+    // its AABB reaches x > 0 so it touches the slide (0 warnings)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "rotated-touches",
+        Rect {
+            x: -18.0,
+            y: 100.0,
+            w: 12.0,
+            h: 100.0,
+        },
+        45.0,
+    ));
+    // 9: rotated object still completely outside (warn)
+    course.scenes[0].slides[0].objects.push(make_shape(
+        "rotated-outside",
+        Rect {
+            x: -200.0,
+            y: 100.0,
+            w: 40.0,
+            h: 40.0,
+        },
+        45.0,
+    ));
+
+    // Layer object completely outside (warn)
+    let mut layer = layer_template;
+    layer.id = "layer-off".to_owned();
+    layer.name = "Layer".to_owned();
+    layer.objects = vec![make_shape(
+        "layer-off-obj",
+        Rect {
+            x: 800.0,
+            y: 40.0,
+            w: 80.0,
+            h: 60.0,
+        },
+        0.0,
+    )];
+    layer.triggers.clear();
+    course.scenes[0].slides[0].layers.push(layer);
+
+    // Master object completely outside (warn)
+    let mut master = master_template;
+    master.id = "m-test".to_owned();
+    master.title = "Master".to_owned();
+    master.objects = vec![make_shape(
+        "master-off-obj",
+        Rect {
+            x: 800.0,
+            y: 40.0,
+            w: 80.0,
+            h: 60.0,
+        },
+        0.0,
+    )];
+    master.triggers.clear();
+    master.layers.clear();
+    master.question = None;
+    master.draw = None;
+    master.master = None;
+    course.masters.push(master);
+
+    let issues = course.validate();
+    let off_slide: Vec<&Issue> = issues
+        .iter()
+        .filter(|i| i.message.contains("lies outside"))
+        .collect();
+    assert!(
+        off_slide.iter().all(|i| i.severity == Severity::Warning),
+        "all off-slide issues must be warnings: {off_slide:#?}"
+    );
+    let paths: Vec<&str> = off_slide.iter().map(|i| i.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "/scenes/0/slides/0/objects/0/frame",
+            "/scenes/0/slides/0/objects/1/frame",
+            "/scenes/0/slides/0/objects/2/frame",
+            "/scenes/0/slides/0/objects/3/frame",
+            "/scenes/0/slides/0/objects/9/frame",
+            "/scenes/0/slides/0/layers/0/objects/0/frame",
+            "/masters/0/objects/0/frame",
+        ],
+        "unexpected off-slide warnings: {off_slide:#?}"
+    );
+}
+
+#[test]
+fn all_bundled_examples_emit_zero_off_slide_warnings() {
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    for name in [
+        "hello-course",
+        "showcase",
+        "reference-course",
+        "rich-states",
+        "healthy-habits",
+    ] {
+        let path = examples.join(name).join("course.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+        let course =
+            Course::from_json(&text).unwrap_or_else(|e| panic!("failed to parse {name}: {e}"));
+        let off_slide: Vec<_> = course
+            .validate()
+            .into_iter()
+            .filter(|i| i.message.contains("lies outside"))
+            .collect();
+        assert!(
+            off_slide.is_empty(),
+            "{name} emitted unexpected off-slide warnings: {off_slide:#?}"
+        );
+    }
+}
+
+/// U-04: `Course::first_error()` must match `Course::validate().into_iter().find(Error)`
+/// identically across valid courses, warning-only courses, and a broad matrix of invalid courses.
+#[test]
+fn u04_first_error_matches_validate_across_valid_and_invalid_courses() {
+    let assert_parity = |label: &str, course: &Course, expect_playable: bool| {
+        let full_first = course
+            .validate()
+            .into_iter()
+            .find(|i| i.severity == Severity::Error);
+        let fast_first = course.first_error();
+        assert_eq!(
+            fast_first, full_first,
+            "first_error mismatch for case {label}"
+        );
+        assert_eq!(
+            course.is_playable(),
+            expect_playable,
+            "is_playable mismatch for case {label} (error: {fast_first:?})"
+        );
+        assert_eq!(
+            course.is_playable(),
+            full_first.is_none(),
+            "is_playable disagrees with validate for case {label}"
+        );
+    };
+
+    // Valid bundled examples
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    for name in [
+        "hello-course",
+        "reference-course",
+        "showcase",
+        "rich-states",
+        "healthy-habits",
+    ] {
+        let text = std::fs::read_to_string(examples.join(name).join("course.json")).unwrap();
+        let course = Course::from_json(&text).unwrap();
+        assert_parity(name, &course, true);
+    }
+
+    let hello = Course::from_json(HELLO).unwrap();
+
+    // Warnings-only courses (unknown chrome string, unsupported script, missing master, off-slide)
+    {
+        let mut c = hello.clone();
+        c.strings.insert("not_a_real_key".into(), "oops".into());
+        c.theme.font = "NotARealFont".into();
+        c.scenes[0].slides[0].title = "مرحبا العالم".into();
+        c.scenes[0].slides[0].master = Some("missing-master".into());
+        assert!(
+            c.validate().iter().any(|i| i.severity == Severity::Warning),
+            "expected warnings-only course to emit warnings"
+        );
+        assert_parity("warnings_only", &c, true);
+    }
+
+    // Warnings preceding an error (first_error must skip warnings and find the exact error)
+    {
+        let mut c = hello.clone();
+        c.strings.insert("unknown_chrome".into(), "x".into());
+        c.scenes[0].slides[0].title = "مرحبا".into();
+        c.scenes[0].slides[0].objects[0].frame.w = -10.0;
+        assert_parity("warnings_then_error", &c, false);
+    }
+
+    // Invalid matrix
+    type CourseMutator = fn(&mut Course);
+    let invalid_cases: Vec<(&str, CourseMutator)> = vec![
+        ("bad_schema_version", |c| {
+            c.schema_version = 99;
+        }),
+        ("bad_course_id", |c| {
+            c.id = "bad id!".into();
+        }),
+        ("duplicate_slide_id", |c| {
+            let first_id = c.scenes[0].slides[0].id.clone();
+            c.scenes[0].slides[1].id = first_id;
+        }),
+        ("bad_theme_color", |c| {
+            c.theme.accent = crate::Color("not-hex".into());
+        }),
+        ("bad_object_color", |c| {
+            c.scenes[0].slides[0].background = Some(crate::Color("#12345".into()));
+        }),
+        ("bad_frame_nan", |c| {
+            c.scenes[0].slides[0].objects[0].frame.x = f32::NAN;
+        }),
+        ("bad_frame_negative", |c| {
+            c.scenes[0].slides[0].objects[0].frame.h = -1.0;
+        }),
+        ("bad_frame_zero_scroll_panel", |c| {
+            c.scenes[0].slides[0].objects[0].frame.w = 0.0;
+            c.scenes[0].slides[0].objects[0].frame.h = 100.0;
+            c.scenes[0].slides[0].objects[0].kind = crate::ObjectKind::ScrollPanel {
+                content_height: 10.0,
+                bar: crate::ScrollBar::Visible,
+            };
+        }),
+        ("invalid_jump_target", |c| {
+            c.scenes[0].slides[0].triggers.push(Trigger {
+                when: Event::TimelineStarts { layer: None },
+                action: crate::Action::JumpToSlide {
+                    target: crate::SlideTarget::Id("ghost-slide".into()),
+                },
+                condition: None,
+                disabled: false,
+            });
+        }),
+        ("invalid_variable_ref", |c| {
+            c.scenes[0].slides[0].triggers.push(Trigger {
+                when: Event::VariableChanges {
+                    variable: "missing_var".into(),
+                },
+                action: crate::Action::PauseTimeline,
+                condition: None,
+                disabled: false,
+            });
+        }),
+        ("bad_condition_depth", |c| {
+            let mut cond = crate::Condition::Compare {
+                variable: "tabs_seen".into(),
+                op: crate::CmpOp::Eq,
+                value: crate::Value::Number(1.0).into(),
+            };
+            for _ in 0..40 {
+                cond = crate::Condition::Not(Box::new(cond));
+            }
+            c.scenes[0].slides[1].triggers[0].condition = Some(cond);
+        }),
+        ("bad_master_trigger", |c| {
+            let mut master = c.scenes[0].slides[0].clone();
+            master.id = "m-bad".into();
+            master.title = "Bad Master".into();
+            master.layers.clear();
+            master.question = None;
+            c.masters.push(master);
+        }),
+        ("bad_master_object_frame", |c| {
+            let mut master = c.scenes[0].slides[0].clone();
+            master.id = "m-frame".into();
+            master.title = "Frame Master".into();
+            master.triggers.clear();
+            master.layers.clear();
+            master.question = None;
+            master.objects[0].frame.w = f32::INFINITY;
+            c.masters.push(master);
+        }),
+        ("bad_bank_draw_missing_bank", |c| {
+            c.scenes[0].slides[0].draw = Some(crate::BankDraw {
+                bank: "no-bank".into(),
+                count: 1,
+            });
+        }),
+        ("bad_bank_draw_count_exceeds", |c| {
+            let mut q_slide = c.slide("s-quiz").unwrap().clone();
+            q_slide.id = "b-q1".into();
+            c.banks.push(crate::QuestionBank {
+                id: "bank-1".into(),
+                title: "Bank 1".into(),
+                slides: vec![q_slide],
+            });
+            c.scenes[0].slides[0].draw = Some(crate::BankDraw {
+                bank: "bank-1".into(),
+                count: 2,
+            });
+        }),
+        ("bad_quiz_passing_percent", |c| {
+            c.quiz = Some(crate::QuizSettings {
+                passing_percent: 120,
+            });
+        }),
+        ("bad_quiz_question_choices", |c| {
+            let q = c.slide_mut("s-quiz").unwrap().question.as_mut().unwrap();
+            q.choices[0].correct = true;
+        }),
+    ];
+
+    for (label, mutate_fn) in invalid_cases {
+        let mut c = hello.clone();
+        mutate_fn(&mut c);
+        assert_parity(label, &c, false);
+    }
+}
+
+/// U-04: `Course::validate_slide_errors()` catches the exact same error (path + message)
+/// as `Course::first_error()` for single-slide mutations across scene slides, masters,
+/// bank slides, and templates.
+#[test]
+fn u04_validate_slide_errors_matches_full_validate_for_slide_mutations() {
+    let hello = Course::from_json(HELLO).unwrap();
+
+    // Valid slide (even with warnings-only) returns None
+    {
+        let mut c = hello.clone();
+        c.scenes[0].slides[0].title = "مرحبا العالم".into();
+        assert_eq!(
+            c.validate_slide_errors(&c.scenes[0].slides[0], "/scenes/0/slides/0"),
+            None
+        );
+    }
+
+    // Scene slide mutations
+    type CourseMutator = fn(&mut Course);
+    let scene_mutations: Vec<(&str, usize, CourseMutator)> = vec![
+        ("bad_object_frame", 0, |c| {
+            c.scenes[0].slides[0].objects[0].frame.w = f32::NAN;
+        }),
+        ("bad_object_color", 0, |c| {
+            if let crate::ObjectKind::Text { style, .. } =
+                &mut c.scenes[0].slides[0].objects[0].kind
+            {
+                style.color = crate::Color("invalid".into());
+            }
+        }),
+        ("invalid_jump_target", 0, |c| {
+            c.scenes[0].slides[0].triggers.push(Trigger {
+                when: Event::TimelineStarts { layer: None },
+                action: crate::Action::JumpToSlide {
+                    target: crate::SlideTarget::Id("does-not-exist".into()),
+                },
+                condition: None,
+                disabled: false,
+            });
+        }),
+        ("invalid_trigger_variable", 1, |c| {
+            c.scenes[0].slides[1].triggers[0].action = crate::Action::SetVariable {
+                variable: "nonexistent_var".into(),
+                op: crate::VarOp::Assign,
+                value: Some(crate::Value::Number(1.0).into()),
+            };
+        }),
+        ("bad_slide_next_requires", 0, |c| {
+            c.scenes[0].slides[0].player = Some(crate::SlidePlayerOverrides {
+                next_requires: Some(crate::NextRequirement::Variable {
+                    name: "tabs_seen".into(),
+                }),
+                ..Default::default()
+            });
+        }),
+        ("bad_slide_draw", 0, |c| {
+            c.scenes[0].slides[0].draw = Some(crate::BankDraw {
+                bank: "missing-bank".into(),
+                count: 1,
+            });
+        }),
+    ];
+
+    for (label, slide_idx, mutate_fn) in scene_mutations {
+        let mut c = hello.clone();
+        mutate_fn(&mut c);
+        let prefix = format!("/scenes/0/slides/{slide_idx}");
+        let expected = c.first_error();
+        assert!(expected.is_some(), "expected an error for {label}");
+        let actual = c.validate_slide_errors(&c.scenes[0].slides[slide_idx], &prefix);
+        assert_eq!(
+            actual, expected,
+            "validate_slide_errors mismatch for scene slide case {label}"
+        );
+    }
+
+    // Master slide mutation (including master label prefix on object errors)
+    {
+        let mut c = hello.clone();
+        let mut master = c.scenes[0].slides[0].clone();
+        master.id = "m-custom".into();
+        master.title = "Custom Master".into();
+        master.triggers.clear();
+        master.layers.clear();
+        master.question = None;
+        master.objects[0].frame.h = -5.0;
+        c.masters.push(master);
+        let expected = c.first_error();
+        assert!(expected.is_some());
+        let actual = c.validate_slide_errors(&c.masters[0], "/masters/0");
+        assert_eq!(actual, expected, "master validate_slide_errors mismatch");
+    }
+
+    // Bank slide mutation (missing question)
+    {
+        let mut c = hello.clone();
+        let mut b_slide = c.scenes[0].slides[0].clone();
+        b_slide.id = "b-no-q".into();
+        b_slide.question = None;
+        c.banks.push(crate::QuestionBank {
+            id: "bank-a".into(),
+            title: "Bank A".into(),
+            slides: vec![b_slide],
+        });
+        let expected = c.first_error();
+        assert!(expected.is_some());
+        let actual = c.validate_slide_errors(&c.banks[0].slides[0], "/banks/0/slides/0");
+        assert_eq!(
+            actual, expected,
+            "bank slide validate_slide_errors mismatch"
+        );
+    }
+
+    // Template slide mutation (draw not allowed)
+    {
+        let mut c = hello.clone();
+        let mut tmpl = c.scenes[0].slides[0].clone();
+        tmpl.id = "t-bad".into();
+        tmpl.draw = Some(crate::BankDraw {
+            bank: "any".into(),
+            count: 1,
+        });
+        c.templates.push(tmpl);
+        let expected = c.first_error();
+        assert!(expected.is_some());
+        let actual = c.validate_slide_errors(&c.templates[0], "/templates/0");
+        assert_eq!(actual, expected, "template validate_slide_errors mismatch");
+    }
+}
+
+fn r1_01_comprehensive_media_course() -> Course {
+    let json = r##"{
+        "schema_version": 1,
+        "id": "r1-01-course",
+        "title": "R1-01 Media Course",
+        "slide_size": { "w": 1280, "h": 720 },
+        "fonts": [
+            { "family": "Lato", "style": "regular", "src": "fonts/lato.ttf" },
+            { "family": "   ", "style": "bold", "src": "fonts/unnamed.ttf" },
+            { "family": "EmptySrc", "style": "italic", "src": "" }
+        ],
+        "background_audio": { "src": "bgm.mp3" },
+        "player": { "logo": "logo.png" },
+        "resources": [
+            { "id": "res-file", "title": "Handout", "target": { "kind": "file", "src": "handout.pdf" } },
+            { "id": "res-url", "title": "Docs", "target": { "kind": "url", "url": "https://example.com" } }
+        ],
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide One",
+                "duration_ms": 5000,
+                "objects": [
+                    {
+                        "id": "obj-img",
+                        "name": "Hero",
+                        "kind": { "type": "image", "src": "hero.png", "alt": "Hero" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-lot",
+                        "name": "Anim",
+                        "kind": { "type": "lottie", "src": "anim.json" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-aud",
+                        "name": "Voice",
+                        "kind": { "type": "audio", "src": "voice.mp3", "captions": "voice.vtt" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 }
+                    },
+                    {
+                        "id": "obj-vid",
+                        "name": "Clip",
+                        "kind": {
+                            "type": "video",
+                            "src": "clip.mp4",
+                            "captions": "clip.vtt",
+                            "poster": "clip-poster.png"
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 320.0, "h": 180.0 }
+                    },
+                    {
+                        "id": "obj-shp",
+                        "name": "ShapePic",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "rectangle",
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "shape-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-btn",
+                        "name": "BtnPic",
+                        "kind": {
+                            "type": "button",
+                            "label": "Go",
+                            "fill_style": { "type": "picture", "src": "btn-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 44.0 }
+                    },
+                    {
+                        "id": "obj-path",
+                        "name": "PathPic",
+                        "kind": {
+                            "type": "path",
+                            "points": [
+                                { "x": 0.0, "y": 0.0 },
+                                { "x": 1.0, "y": 0.0 },
+                                { "x": 0.5, "y": 1.0 }
+                            ],
+                            "closed": true,
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "path-fill.png" },
+                            "outline": { "color": "#000000", "width": 1.0 }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-web",
+                        "name": "DemoWeb",
+                        "kind": {
+                            "type": "web",
+                            "source": { "type": "folder", "path": "web/demo", "entry": "index.html" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 400.0, "h": 300.0 }
+                    },
+                    {
+                        "id": "obj-st",
+                        "name": "Stateful",
+                        "kind": { "type": "image", "src": "base-state.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+                        "states": [{
+                            "name": "hover",
+                            "src": "state-img.png",
+                            "fill_style": { "type": "picture", "src": "state-fill.png" },
+                            "extras": [
+                                {
+                                    "id": "ex-img",
+                                    "kind": { "type": "image", "src": "extra-img.png" },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-shp",
+                                    "kind": {
+                                        "type": "shape",
+                                        "shape": "ellipse",
+                                        "fill": "#ffffff",
+                                        "fill_style": { "type": "picture", "src": "extra-shape-fill.png" }
+                                    },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-path",
+                                    "kind": {
+                                        "type": "path",
+                                        "points": [
+                                            { "x": 0.0, "y": 0.0 },
+                                            { "x": 1.0, "y": 0.0 },
+                                            { "x": 0.5, "y": 1.0 }
+                                        ],
+                                        "closed": true,
+                                        "fill": "#ffffff",
+                                        "fill_style": { "type": "picture", "src": "extra-path-fill.png" },
+                                        "outline": { "color": "#000000", "width": 1.0 }
+                                    },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-txt",
+                                    "kind": { "type": "text", "text": "Caption" },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 60.0, "h": 20.0 }
+                                }
+                            ]
+                        }]
+                    }
+                ],
+                "layers": [{
+                    "id": "l1",
+                    "name": "Layer One",
+                    "objects": [{
+                        "id": "l-img",
+                        "name": "LayerPic",
+                        "kind": { "type": "image", "src": "layer-pic.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 80.0 }
+                    }]
+                }]
+            }]
+        }],
+        "masters": [{
+            "id": "m1",
+            "title": "Main Master",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "m-img",
+                "name": "MasterBg",
+                "kind": { "type": "image", "src": "master-base.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }],
+            "layers": [{
+                "id": "ml1",
+                "name": "Master Overlay",
+                "objects": [{
+                    "id": "ml-img",
+                    "name": "MasterBadge",
+                    "kind": { "type": "image", "src": "master-layer.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 40.0 }
+                }]
+            }]
+        }],
+        "templates": [{
+            "id": "t1",
+            "title": "Card Template",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "t-img",
+                "name": "TemplateHero",
+                "kind": { "type": "image", "src": "template-pic.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }]
+        }],
+        "banks": [{
+            "id": "b1",
+            "title": "Quiz Bank",
+            "slides": [{
+                "id": "bs1",
+                "title": "Bank Q1",
+                "duration_ms": 5000,
+                "objects": [{
+                    "id": "b-img",
+                    "name": "BankPic",
+                    "kind": { "type": "image", "src": "bank-base.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                }],
+                "layers": [{
+                    "id": "bl1",
+                    "name": "Feedback",
+                    "objects": [{
+                        "id": "bl-img",
+                        "name": "BankLayerPic",
+                        "kind": { "type": "image", "src": "bank-layer.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+                    }]
+                }]
+            }]
+        }]
+    }"##;
+    Course::from_json(json).expect("valid R1-01 test course")
+}
+
+#[test]
+fn r1_01_media_references_golden_and_visitors() {
+    let course = r1_01_comprehensive_media_course();
+    let refs = crate::media_references(&course);
+
+    let m =
+        |src: &str, place: &str, slide: Option<&str>, object: Option<&str>| crate::MediaReference {
+            src: src.to_owned(),
+            place: place.to_owned(),
+            slide: slide.map(str::to_owned),
+            object: object.map(str::to_owned),
+        };
+
+    let expected = vec![
+        m("fonts/lato.ttf", "Fonts ▸ Lato", None, None),
+        m("fonts/unnamed.ttf", "Fonts ▸ fonts/unnamed.ttf", None, None),
+        m("bgm.mp3", "Course ▸ Background audio", None, None),
+        m("logo.png", "Course ▸ Player logo", None, None),
+        m("handout.pdf", "Resources ▸ Handout", None, None),
+        m("hero.png", "Slide 1 ▸ Hero", Some("s1"), Some("obj-img")),
+        m("anim.json", "Slide 1 ▸ Anim", Some("s1"), Some("obj-lot")),
+        m("voice.mp3", "Slide 1 ▸ Voice", Some("s1"), Some("obj-aud")),
+        m("voice.vtt", "Slide 1 ▸ Voice", Some("s1"), Some("obj-aud")),
+        m("clip.mp4", "Slide 1 ▸ Clip", Some("s1"), Some("obj-vid")),
+        m("clip.vtt", "Slide 1 ▸ Clip", Some("s1"), Some("obj-vid")),
+        m(
+            "clip-poster.png",
+            "Slide 1 ▸ Clip",
+            Some("s1"),
+            Some("obj-vid"),
+        ),
+        m(
+            "shape-fill.png",
+            "Slide 1 ▸ ShapePic",
+            Some("s1"),
+            Some("obj-shp"),
+        ),
+        m(
+            "btn-fill.png",
+            "Slide 1 ▸ BtnPic",
+            Some("s1"),
+            Some("obj-btn"),
+        ),
+        m(
+            "path-fill.png",
+            "Slide 1 ▸ PathPic",
+            Some("s1"),
+            Some("obj-path"),
+        ),
+        m(
+            "web/demo/",
+            "Slide 1 ▸ DemoWeb",
+            Some("s1"),
+            Some("obj-web"),
+        ),
+        m(
+            "base-state.png",
+            "Slide 1 ▸ Stateful",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "state-img.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "state-fill.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "extra-img.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "extra-shape-fill.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "extra-path-fill.png",
+            "Slide 1 ▸ Stateful ▸ State \"hover\"",
+            Some("s1"),
+            Some("obj-st"),
+        ),
+        m(
+            "layer-pic.png",
+            "Slide 1 ▸ Layer \"Layer One\" ▸ LayerPic",
+            Some("s1"),
+            Some("l-img"),
+        ),
+        m(
+            "master-base.png",
+            "Master \"Main Master\" ▸ MasterBg",
+            Some("m1"),
+            Some("m-img"),
+        ),
+        m(
+            "master-layer.png",
+            "Master \"Main Master\" ▸ Layer \"Master Overlay\" ▸ MasterBadge",
+            Some("m1"),
+            Some("ml-img"),
+        ),
+        m(
+            "template-pic.png",
+            "Template \"Card Template\" ▸ TemplateHero",
+            Some("t1"),
+            Some("t-img"),
+        ),
+        m(
+            "bank-base.png",
+            "Bank \"Quiz Bank\" ▸ BankPic",
+            Some("bs1"),
+            Some("b-img"),
+        ),
+        m(
+            "bank-layer.png",
+            "Bank \"Quiz Bank\" ▸ Layer \"Feedback\" ▸ BankLayerPic",
+            Some("bs1"),
+            Some("bl-img"),
+        ),
+    ];
+
+    assert_eq!(refs, expected);
+}
+
+#[test]
+fn r1_01_visit_media_scopes_and_roles() {
+    use crate::{
+        MediaOwner, MediaRole, MediaScope, SlideContainer, visit_course_media, visit_object_media,
+        visit_slide_media,
+    };
+
+    let course = r1_01_comprehensive_media_course();
+
+    // AllIncludingTemplates includes template refs and empty-src font slot.
+    let mut all_srcs = Vec::new();
+    visit_course_media(&course, MediaScope::AllIncludingTemplates, &mut |r| {
+        all_srcs.push((r.src.to_owned(), r.role, r.web_entry.map(str::to_owned)));
+    });
+    assert!(
+        all_srcs
+            .iter()
+            .any(|(src, role, _)| src == "template-pic.png" && *role == MediaRole::Image),
+        "AllIncludingTemplates must include template media"
+    );
+    assert!(
+        all_srcs
+            .iter()
+            .any(|(src, role, _)| src.is_empty() && *role == MediaRole::Font),
+        "visitor must emit populated empty-src slots"
+    );
+    assert!(
+        all_srcs.iter().any(|(src, role, entry)| {
+            src == "web/demo"
+                && *role == MediaRole::WebFolder
+                && entry.as_deref() == Some("index.html")
+        }),
+        "WebFolder must carry folder path and web_entry"
+    );
+
+    // Publishable excludes templates while keeping scenes, masters, banks, and course-level refs.
+    let mut pub_srcs = Vec::new();
+    visit_course_media(&course, MediaScope::Publishable, &mut |r| {
+        pub_srcs.push(r.src.to_owned());
+    });
+    assert!(
+        !pub_srcs.iter().any(|src| src == "template-pic.png"),
+        "Publishable must exclude templates"
+    );
+    assert!(pub_srcs.iter().any(|src| src == "hero.png"));
+    assert!(pub_srcs.iter().any(|src| src == "master-base.png"));
+    assert!(pub_srcs.iter().any(|src| src == "bank-base.png"));
+    assert!(pub_srcs.iter().any(|src| src == "bgm.mp3"));
+
+    // visit_slide_media visits base and layer objects with SlideContainer::Detached and slide: Some(slide).
+    let slide = &course.scenes[0].slides[0];
+    let mut slide_seen = Vec::new();
+    visit_slide_media(slide, &mut |r| match r.owner {
+        MediaOwner::Object {
+            container,
+            slide: owner_slide,
+            layer,
+            object,
+            state_name,
+        } => {
+            assert_eq!(container, SlideContainer::Detached);
+            assert_eq!(owner_slide, Some(slide));
+            slide_seen.push((
+                r.src.to_owned(),
+                layer.map(|l| l.id.clone()),
+                object.id.clone(),
+                state_name.map(str::to_owned),
+            ));
+        }
+        other => panic!("unexpected non-object owner from visit_slide_media: {other:?}"),
+    });
+    assert!(
+        slide_seen
+            .iter()
+            .any(|(src, layer, obj, st)| src == "hero.png"
+                && layer.is_none()
+                && obj == "obj-img"
+                && st.is_none())
+    );
+    assert!(
+        slide_seen
+            .iter()
+            .any(|(src, layer, obj, st)| src == "layer-pic.png"
+                && layer.as_deref() == Some("l1")
+                && obj == "l-img"
+                && st.is_none())
+    );
+    assert!(
+        slide_seen
+            .iter()
+            .any(|(src, layer, obj, st)| src == "extra-path-fill.png"
+                && layer.is_none()
+                && obj == "obj-st"
+                && st.as_deref() == Some("hover"))
+    );
+
+    // visit_object_media visits the object and its states/extras with SlideContainer::Detached and slide: None.
+    let stateful_obj = slide
+        .objects
+        .iter()
+        .find(|o| o.id == "obj-st")
+        .expect("stateful object");
+    let mut obj_seen = Vec::new();
+    visit_object_media(stateful_obj, &mut |r| match r.owner {
+        MediaOwner::Object {
+            container,
+            slide: owner_slide,
+            layer,
+            object,
+            state_name,
+        } => {
+            assert_eq!(container, SlideContainer::Detached);
+            assert!(owner_slide.is_none());
+            assert!(layer.is_none());
+            assert_eq!(object.id, "obj-st");
+            obj_seen.push((r.src.to_owned(), r.role, state_name.map(str::to_owned)));
+        }
+        other => panic!("unexpected non-object owner from visit_object_media: {other:?}"),
+    });
+    assert_eq!(
+        obj_seen,
+        vec![
+            ("base-state.png".into(), MediaRole::Image, None),
+            (
+                "state-img.png".into(),
+                MediaRole::StateImage,
+                Some("hover".into())
+            ),
+            (
+                "state-fill.png".into(),
+                MediaRole::PictureFill,
+                Some("hover".into())
+            ),
+            (
+                "extra-img.png".into(),
+                MediaRole::StateExtraImage,
+                Some("hover".into())
+            ),
+            (
+                "extra-shape-fill.png".into(),
+                MediaRole::StateExtraImage,
+                Some("hover".into())
+            ),
+            (
+                "extra-path-fill.png".into(),
+                MediaRole::StateExtraImage,
+                Some("hover".into())
+            ),
+        ]
+    );
+
+    // Exhaustive check of MediaRole::is_player_image and MediaRole::is_player_fetched.
+    let roles = [
+        (MediaRole::Image, true, true),
+        (MediaRole::PictureFill, true, true),
+        (MediaRole::StateImage, true, true),
+        (MediaRole::StateExtraImage, true, true),
+        (MediaRole::VideoPoster, true, true),
+        (MediaRole::Lottie, false, true),
+        (MediaRole::Caption, false, true),
+        (MediaRole::Audio, false, false),
+        (MediaRole::Video, false, false),
+        (MediaRole::WebFolder, false, false),
+        (MediaRole::Font, false, false),
+        (MediaRole::BackgroundAudio, false, false),
+        (MediaRole::PlayerLogo, false, false),
+        (MediaRole::ResourceFile, false, false),
+    ];
+    for (role, expect_image, expect_fetched) in roles {
+        // Exhaustive match ensures a compile error if a new MediaRole variant is added without updating this test.
+        match role {
+            MediaRole::Image
+            | MediaRole::PictureFill
+            | MediaRole::StateImage
+            | MediaRole::StateExtraImage
+            | MediaRole::VideoPoster
+            | MediaRole::Lottie
+            | MediaRole::Audio
+            | MediaRole::Video
+            | MediaRole::Caption
+            | MediaRole::WebFolder
+            | MediaRole::Font
+            | MediaRole::BackgroundAudio
+            | MediaRole::PlayerLogo
+            | MediaRole::ResourceFile => {}
+        }
+        assert_eq!(
+            role.is_player_image(),
+            expect_image,
+            "is_player_image mismatch for {role:?}"
+        );
+        assert_eq!(
+            role.is_player_fetched(),
+            expect_fetched,
+            "is_player_fetched mismatch for {role:?}"
+        );
+    }
+}

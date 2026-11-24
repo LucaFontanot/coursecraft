@@ -70,7 +70,7 @@ fn t9_1_media_library_has_zero_nested_scrolls_and_grows_table_when_resized() {
         serde_json::from_value(serde_json::Value::Array(objects)).expect("objects");
 
     let mut h = TestHarness::new_with_size(course, (1280.0, 900.0));
-    h.editor.media = media;
+    h.editor.media.set_all(media);
     h.editor.ui.show_media_library = true;
     h.editor.ui.media_library.selected = Some("media/image_00.png".to_owned());
     h.idle_frame();
@@ -120,7 +120,9 @@ fn t9_2_media_library_kind_combo_long_filename_and_disabled_tooltips() {
         1.0,
         false, // web mode: Import… & Replace file… disabled
     );
-    h.editor.media = vec![(long_name.clone(), minimal_png_bytes())];
+    h.editor
+        .media
+        .set_all(vec![(long_name.clone(), minimal_png_bytes())]);
     h.editor.ui.show_media_library = true;
     h.idle_frame();
 
@@ -179,8 +181,8 @@ fn t9_2_media_library_kind_combo_long_filename_and_disabled_tooltips() {
         .probe_tooltip(insert_pos)
         .expect("Disabled 'Insert on slide' in Master View must show tooltip");
     assert!(
-        insert_tip.contains("Master View"),
-        "Expected Master View tooltip, got: {insert_tip}"
+        insert_tip.contains("slide masters"),
+        "Expected slide masters tooltip, got: {insert_tip}"
     );
 
     let del_unused_pos = h.find_text("Delete unused").expect("Delete unused");
@@ -204,7 +206,9 @@ fn t9_3_media_library_empty_state_and_delete_confirmation_escape() {
     );
 
     // Add an unused file, trigger Delete, and verify confirmation dialog is sentence-case and Esc closes only the confirmation.
-    h.editor.media = vec![("media/unused.png".to_owned(), minimal_png_bytes())];
+    h.editor
+        .media
+        .set_all(vec![("media/unused.png".to_owned(), minimal_png_bytes())]);
     h.editor.ui.media_library.selected = Some("media/unused.png".to_owned());
     h.idle_frame();
 

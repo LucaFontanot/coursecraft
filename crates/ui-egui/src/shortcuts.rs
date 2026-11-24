@@ -4,6 +4,8 @@
 //! Displays a two-column list grouped by menu category, showing action names and
 //! platform-formatted keycap chips.
 
+use std::borrow::Cow;
+
 use coursecraft_engine::registry;
 use coursecraft_render::{
     RADIUS_SM, RADIUS_XL, SIZE_BODY, SIZE_CAPTION, SIZE_HEADING, SIZE_SMALL, dialog_shadow,
@@ -17,10 +19,79 @@ use egui::{
 use crate::Editor;
 use crate::menu::shortcut_label;
 
+/// Non-registry editor and shell actions that have a canonical keyboard shortcut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShortcutAction {
+    NewCourse,
+    OpenCourse,
+    Save,
+    SaveAs,
+    Preferences,
+    Publish,
+    Cut,
+    Copy,
+    Paste,
+    SelectAll,
+    CheckSpelling,
+    CourseMap,
+    ZoomFit,
+    ZoomIn,
+    ZoomOut,
+    PreviewThisSlide,
+    PreviewFromHere,
+    PreviewWholeCourse,
+    FormatPainter,
+    RenameSlide,
+    KeyboardShortcuts,
+    Bold,
+    Italic,
+    Underline,
+}
+
+/// Return the canonical raw shortcut string for a non-registry editor or shell action.
+#[must_use]
+pub const fn shortcut_for_action(action: ShortcutAction) -> &'static str {
+    match action {
+        ShortcutAction::NewCourse => "Ctrl+N",
+        ShortcutAction::OpenCourse => "Ctrl+O",
+        ShortcutAction::Save => "Ctrl+S",
+        ShortcutAction::SaveAs => "Ctrl+Shift+S",
+        ShortcutAction::Preferences => "Ctrl+,",
+        ShortcutAction::Publish => "Ctrl+Shift+P",
+        ShortcutAction::Cut => "Ctrl+X",
+        ShortcutAction::Copy => "Ctrl+C",
+        ShortcutAction::Paste => "Ctrl+V",
+        ShortcutAction::SelectAll => "Ctrl+A",
+        ShortcutAction::CheckSpelling => "F7",
+        ShortcutAction::CourseMap => "Ctrl+Shift+M",
+        ShortcutAction::ZoomFit => "Ctrl+0",
+        ShortcutAction::ZoomIn => "Ctrl+=",
+        ShortcutAction::ZoomOut => "Ctrl+-",
+        ShortcutAction::PreviewThisSlide => "F12",
+        ShortcutAction::PreviewFromHere => "Ctrl+F12",
+        ShortcutAction::PreviewWholeCourse => "Shift+F12",
+        ShortcutAction::FormatPainter => "Ctrl+Alt+C",
+        ShortcutAction::RenameSlide => "F2",
+        ShortcutAction::KeyboardShortcuts => "?",
+        ShortcutAction::Bold => "Ctrl+B",
+        ShortcutAction::Italic => "Ctrl+I",
+        ShortcutAction::Underline => "Ctrl+U",
+    }
+}
+
+/// Return the canonical raw shortcut string for a registry command id, if it defines one.
+#[must_use]
+pub fn shortcut_for_command(id: &str) -> Option<&'static str> {
+    registry()
+        .iter()
+        .find(|cmd| cmd.id == id)
+        .and_then(|cmd| cmd.shortcut)
+}
+
 /// A shortcut entry representing an action and its platform-aware key description.
 pub(crate) struct ShortcutRow {
     pub(crate) action: &'static str,
-    pub(crate) shortcut: &'static str,
+    pub(crate) shortcut: Cow<'static, str>,
 }
 
 /// A group of shortcuts under a category header.
@@ -36,15 +107,15 @@ const DIALOG_MAX_HEIGHT_FRACTION: f32 = 0.8;
 /// Height reserved for the pinned title, hint, and separator above the list.
 const DIALOG_HEADER_HEIGHT: f32 = 100.0;
 /// Height of one shortcut row.
-const SHORTCUT_ROW_HEIGHT: f32 = 20.0;
+const SHORTCUT_ROW_HEIGHT: f32 = 18.0;
 /// Vertical gap between consecutive shortcut rows (`item_spacing.y`).
-const SHORTCUT_ROW_GAP: f32 = 3.0;
+const SHORTCUT_ROW_GAP: f32 = 2.0;
 /// Height of a category caption line.
 const SHORTCUT_GROUP_HEADER_HEIGHT: f32 = 15.0;
 /// Space above each category.
-const SHORTCUT_GROUP_TOP_SPACE: f32 = 8.0;
+const SHORTCUT_GROUP_TOP_SPACE: f32 = 5.0;
 /// Space below each category.
-const SHORTCUT_GROUP_BOTTOM_SPACE: f32 = 4.0;
+const SHORTCUT_GROUP_BOTTOM_SPACE: f32 = 2.0;
 
 /// Show the modal keyboard shortcuts dialog if `editor.ui.show_shortcuts_dialog` is true.
 pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
@@ -143,7 +214,7 @@ pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
                     .max_height(list_height)
                     .show(ui, |ui| {
                         for group in groups {
-                            ui.add_space(8.0);
+                            ui.add_space(SHORTCUT_GROUP_TOP_SPACE);
                             ui.label(
                                 RichText::new(group.category)
                                     .size(SIZE_CAPTION)
@@ -169,7 +240,7 @@ pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
                                     );
 
                                     // Formatted keycap chip on the right
-                                    let formatted_key = shortcut_label(ui.ctx(), item.shortcut);
+                                    let formatted_key = shortcut_label(ui.ctx(), &item.shortcut);
                                     draw_keycap_chip(
                                         ui,
                                         row_rect.max.x,
@@ -178,7 +249,7 @@ pub fn show_shortcuts_dialog(editor: &mut Editor, ctx: &egui::Context) {
                                     );
                                 }
                             }
-                            ui.add_space(4.0);
+                            ui.add_space(SHORTCUT_GROUP_BOTTOM_SPACE);
                         }
                     });
             });
@@ -220,7 +291,7 @@ fn draw_keycap_chip(ui: &mut Ui, right_x: f32, center_y: f32, key_text: &str) {
         .layout_no_wrap(key_text.to_owned(), font_id, p.text);
 
     let pad_x = 8.0f32;
-    let pad_y = 3.0f32;
+    let pad_y = 2.0f32;
     let chip_w = galley.size().x + pad_x * 2.0;
     let chip_h = galley.size().y + pad_y * 2.0;
 
@@ -242,15 +313,44 @@ fn draw_keycap_chip(ui: &mut Ui, right_x: f32, center_y: f32, key_text: &str) {
     ui.painter().galley(text_pos, galley, p.text);
 }
 
+fn join_actions(actions: &[ShortcutAction]) -> Cow<'static, str> {
+    Cow::Owned(
+        actions
+            .iter()
+            .map(|&a| shortcut_for_action(a))
+            .collect::<Vec<_>>()
+            .join(" / "),
+    )
+}
+
 pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
+    let file_items = vec![
+        ShortcutRow {
+            action: "New / Open",
+            shortcut: join_actions(&[ShortcutAction::NewCourse, ShortcutAction::OpenCourse]),
+        },
+        ShortcutRow {
+            action: "Save / Save as",
+            shortcut: join_actions(&[ShortcutAction::Save, ShortcutAction::SaveAs]),
+        },
+        ShortcutRow {
+            action: "Publish course",
+            shortcut: Cow::Borrowed(shortcut_for_action(ShortcutAction::Publish)),
+        },
+    ];
     let mut edit_items = vec![
         ShortcutRow {
             action: "Cut / Copy / Paste / Select all",
-            shortcut: "Ctrl+X / Ctrl+C / Ctrl+V / Ctrl+A",
+            shortcut: join_actions(&[
+                ShortcutAction::Cut,
+                ShortcutAction::Copy,
+                ShortcutAction::Paste,
+                ShortcutAction::SelectAll,
+            ]),
         },
         ShortcutRow {
             action: "Check spelling",
-            shortcut: "F7",
+            shortcut: Cow::Borrowed(shortcut_for_action(ShortcutAction::CheckSpelling)),
         },
     ];
     let mut slide_items = Vec::new();
@@ -263,17 +363,17 @@ pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
         if let Some(sub) = cmd.menu.strip_prefix("Edit/") {
             edit_items.push(ShortcutRow {
                 action: sub,
-                shortcut: sc,
+                shortcut: Cow::Borrowed(sc),
             });
         } else if let Some(sub) = cmd.menu.strip_prefix("Slide/") {
             slide_items.push(ShortcutRow {
                 action: sub,
-                shortcut: sc,
+                shortcut: Cow::Borrowed(sc),
             });
         } else if let Some(sub) = cmd.menu.strip_prefix("Arrange/") {
             arrange_items.push(ShortcutRow {
                 action: sub,
-                shortcut: sc,
+                shortcut: Cow::Borrowed(sc),
             });
         }
     }
@@ -281,52 +381,62 @@ pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
     // Editor-only shortcuts
     let view_items = vec![
         ShortcutRow {
-            action: "Zoom to fit",
-            shortcut: "Ctrl+0",
+            action: "Course map / Zoom to fit",
+            shortcut: join_actions(&[ShortcutAction::CourseMap, ShortcutAction::ZoomFit]),
         },
         ShortcutRow {
             action: "Zoom in / out",
-            shortcut: "Ctrl+= / Ctrl+-",
+            shortcut: join_actions(&[ShortcutAction::ZoomIn, ShortcutAction::ZoomOut]),
         },
         ShortcutRow {
-            action: "Preview this slide / from the start",
-            shortcut: "F12 / Shift+F12",
+            action: "Preview this slide / from here",
+            shortcut: join_actions(&[
+                ShortcutAction::PreviewThisSlide,
+                ShortcutAction::PreviewFromHere,
+            ]),
+        },
+        ShortcutRow {
+            action: "Preview whole course",
+            shortcut: Cow::Borrowed(shortcut_for_action(ShortcutAction::PreviewWholeCourse)),
         },
     ];
 
     let general_items = vec![
         ShortcutRow {
             action: "Delete selected objects",
-            shortcut: "Delete",
+            shortcut: Cow::Borrowed(shortcut_for_command("object.delete").unwrap_or("Delete")),
         },
         ShortcutRow {
             action: "Nudge selection (Shift: 10 px)",
-            shortcut: "Arrow keys",
+            shortcut: Cow::Borrowed("Arrow keys"),
         },
         ShortcutRow {
             action: "Keep proportions while resizing",
-            shortcut: "Shift+drag a handle",
+            shortcut: Cow::Borrowed("Shift+drag a handle"),
         },
         ShortcutRow {
             action: "Add to selection / marquee select",
-            shortcut: "Shift+click / Ctrl+click / drag",
+            shortcut: Cow::Borrowed("Shift+click / Ctrl+click / drag"),
         },
         ShortcutRow {
             action: "Cancel tool / close dialog / clear selection",
-            shortcut: "Escape",
+            shortcut: Cow::Borrowed("Escape"),
         },
         ShortcutRow {
             action: "Keyboard shortcuts cheat sheet / Preferences",
-            shortcut: "? / Ctrl+,",
-        },
-        ShortcutRow {
-            action: "Publish course",
-            shortcut: "Ctrl+Shift+P",
+            shortcut: join_actions(&[
+                ShortcutAction::KeyboardShortcuts,
+                ShortcutAction::Preferences,
+            ]),
         },
     ];
 
     // Never show an empty heading: a category with no commands disappears.
     vec![
+        ShortcutGroup {
+            category: "File",
+            items: file_items,
+        },
         ShortcutGroup {
             category: "Edit",
             items: edit_items,
@@ -340,7 +450,7 @@ pub(crate) fn build_shortcut_groups() -> Vec<ShortcutGroup> {
             items: arrange_items,
         },
         ShortcutGroup {
-            category: "View & Canvas",
+            category: "View & canvas",
             items: view_items,
         },
         ShortcutGroup {

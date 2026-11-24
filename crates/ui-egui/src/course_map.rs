@@ -11,7 +11,7 @@
 
 use crate::{Editor, slides::SceneRename};
 use coursecraft_course::{Course, CourseMap, MapEdgeKind};
-use coursecraft_render::{Highlight, SlideTransform, compose_authoring, paint};
+use coursecraft_render::{Highlight, SlideTransform, paint};
 use egui::epaint::CubicBezierShape;
 use egui::{
     Align2, Color32, CornerRadius, FontId, Id, Key, Modifiers, Rect, ScrollArea, Sense, Stroke,
@@ -321,22 +321,29 @@ fn show_map_thumbnail(
     selected: &str,
     unreachable: bool,
 ) {
+    let title_rect = Rect::from_min_size(
+        pos2(thumb_rect.min.x, thumb_rect.max.y + 4.0),
+        vec2(MAP_THUMB_W, MAP_TITLE_H),
+    );
+    let hit_rect = Rect::from_min_max(thumb_rect.min, title_rect.max);
+    if !hit_rect.expand(4.0).intersects(ui.clip_rect()) {
+        return;
+    }
+
     let p = coursecraft_render::palette(ui.ctx());
     let Some(slide) = editor.session.course.play_slide(slide_id) else {
         return;
     };
     let slide_title = slide.title.clone();
     let is_selected = selected == slide_id;
-    let title_rect = Rect::from_min_size(
-        pos2(thumb_rect.min.x, thumb_rect.max.y + 4.0),
-        vec2(MAP_THUMB_W, MAP_TITLE_H),
-    );
-    let hit_rect = Rect::from_min_max(thumb_rect.min, title_rect.max);
 
-    // The existing thumbnail rendering and cache, as in the navigator.
-    let items = compose_authoring(&editor.session.course, slide, None);
-    let thumb_bg = coursecraft_render::parse_color(editor.session.course.slide_background(slide))
-        .unwrap_or(Color32::WHITE);
+    // Shared revision/fingerprint-keyed thumbnail cache, as in the navigator.
+    let (thumb_bg, items) = editor.ui.thumbnail_cache.get_or_compose(
+        editor.session.revision,
+        editor.session.last_changed_slide(),
+        &editor.session.course,
+        slide,
+    );
     let painter = ui.painter_at(thumb_rect);
     painter.rect_filled(
         thumb_rect,
@@ -344,9 +351,7 @@ fn show_map_thumbnail(
         thumb_bg,
     );
     if let Some(t) = SlideTransform::fit(thumb_rect, editor.session.course.slide_size) {
-        let source = crate::MemoryMediaSource {
-            media: &editor.media,
-        };
+        let source = crate::MemoryMediaSource::from_store(&editor.media);
         paint(
             &painter,
             &t,

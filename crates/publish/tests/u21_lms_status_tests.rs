@@ -17,7 +17,7 @@ fn published_scorm12_package_preserves_lms_status_in_course_json() {
     let course_json = course.to_json().expect("serialize");
     let player_files = vec![PackageFile {
         path: "index.html".to_string(),
-        bytes: b"<!doctype html><html></html>".to_vec(),
+        bytes: std::sync::Arc::from(b"<!doctype html><html></html>".as_slice()),
     }];
     let input = PackageInput {
         course: &course,

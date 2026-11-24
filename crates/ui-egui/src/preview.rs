@@ -169,6 +169,9 @@ pub struct Preview {
     pub frame: PlayerFrame,
     /// Real-time frame clock accumulator.
     pub ticker: Ticker,
+    /// Last egui frame timestamp (`InputState::time`), used to measure real
+    /// elapsed wall time across delayed wakes.
+    last_frame_time: Option<f64>,
     /// Drives the playback backend from runtime media effects.
     pub media: MediaDriver,
     /// Emitted effects formatted as JSON strings.
@@ -524,6 +527,22 @@ impl Preview {
         }
     }
 
+    /// Create a full-course preview starting at `slide_id` (not a partial subset).
+    ///
+    /// If `slide_id` is empty or does not refer to a play-order slide (e.g. a bank slide),
+    /// starts from the course's normal start slide.
+    #[must_use]
+    pub fn new_from_slide(course: &Course, slide_id: &str) -> Self {
+        let mut course_clone = course.clone();
+        if !slide_id.is_empty()
+            && course.bank_slide(slide_id).is_none()
+            && course.play_slide(slide_id).is_some()
+        {
+            course_clone.start_slide = Some(slide_id.to_owned());
+        }
+        Self::new_subset(&course_clone, None)
+    }
+
     /// Create a new preview for the given course, optionally restricted to a subset of slide IDs.
     #[must_use]
     pub fn new_subset(course: &Course, subset: Option<&[String]>) -> Self {
@@ -555,6 +574,7 @@ impl Preview {
                 view: SlideView::new(),
                 frame: PlayerFrame::new(),
                 ticker: Ticker::new(),
+                last_frame_time: None,
                 media: MediaDriver::new(),
                 log: Vec::new(),
                 requests: Vec::new(),
@@ -615,7 +635,7 @@ impl Preview {
                     None
                 };
                 let plan = player.play_plan();
-                let state = player.state().clone();
+                let state = player.into_state();
                 let last_var_values = state.variables.clone();
                 Self {
                     course: course_clone,
@@ -625,6 +645,7 @@ impl Preview {
                     view: SlideView::new(),
                     frame: PlayerFrame::new(),
                     ticker: Ticker::new(),
+                    last_frame_time: None,
                     media,
                     log,
                     requests,
@@ -653,6 +674,7 @@ impl Preview {
                 view: SlideView::new(),
                 frame: PlayerFrame::new(),
                 ticker: Ticker::new(),
+                last_frame_time: None,
                 media: MediaDriver::new(),
                 log: Vec::new(),
                 requests: Vec::new(),
@@ -741,11 +763,12 @@ impl Preview {
                 self.end_of_preview_popup = true;
             }
             self.play_plan = Some(player.play_plan());
-            let state = player.state().clone();
+            let state = player.into_state();
             self.last_var_values = state.variables.clone();
             self.var_changed_at.clear();
             self.state = Some(state);
             self.ticker = Ticker::new();
+            self.last_frame_time = None;
             self.frame.restart();
             self.view = SlideView::new();
             self.media.set_rate(1.0);
@@ -754,7 +777,7 @@ impl Preview {
 
     /// Feed a runtime input to the player, updating state and returning emitted effects.
     pub fn handle(&mut self, input: &Input, ctx: Option<&egui::Context>) -> Vec<Effect> {
-        let Some(state) = self.state.clone() else {
+        let Some(state) = self.state.take() else {
             return Vec::new();
         };
         let Ok(mut player) = resume_with_plan(&self.course, state, self.play_plan.as_ref()) else {
@@ -779,7 +802,7 @@ impl Preview {
             self.end_of_preview_popup = true;
         }
         self.play_plan = Some(player.play_plan());
-        self.state = Some(player.state().clone());
+        self.state = Some(player.into_state());
         effects
     }
 
@@ -796,7 +819,7 @@ impl Preview {
     /// Render validation error messages when the course cannot be previewed.
     fn show_errors(&self, ui: &mut Ui) {
         let p = coursecraft_render::palette(ui.ctx());
-        ui.heading("Course Validation Errors");
+        ui.heading("Course validation errors");
         ui.label("This course cannot be previewed because it has validation errors:");
         ui.add_space(8.0);
         ScrollArea::vertical().show(ui, |ui| {
@@ -818,15 +841,22 @@ impl Preview {
     ) {
         if !*open {
             self.media.stop_all();
+            self.last_frame_time = None;
+            self.ticker.reset();
             return;
         }
 
-        ctx.request_repaint();
+        let (now, stable_dt) = ctx.input(|i| (i.time, i.stable_dt));
+        let dt = match self.last_frame_time {
+            Some(prev) if (now - prev).is_finite() && now > prev => (now - prev) as f32,
+            _ => stable_dt,
+        };
+        self.last_frame_time = Some(now);
 
         let mut should_show_errors = false;
         let mut close_requested = false;
         let mut boundary_hit = false;
-        let current_state = self.state.clone();
+        let mut current_state = self.state.take();
         let mut frame_effects = Vec::new();
         let drawer_was_open = self.frame.drawer_open();
         let text_edit_was_focused = self.had_text_focus || ctx.egui_wants_keyboard_input();
@@ -838,8 +868,16 @@ impl Preview {
             let initial = self.remembered_size.map_or_else(
                 || {
                     egui::vec2(
-                        PREVIEW_DEFAULT_WIDTH.clamp(min_size.x, max_size.x),
-                        PREVIEW_DEFAULT_HEIGHT.clamp(min_size.y, max_size.y),
+                        coursecraft_course::safe_clamp(
+                            PREVIEW_DEFAULT_WIDTH,
+                            min_size.x,
+                            max_size.x,
+                        ),
+                        coursecraft_course::safe_clamp(
+                            PREVIEW_DEFAULT_HEIGHT,
+                            min_size.y,
+                            max_size.y,
+                        ),
                     )
                 },
                 |sz| clamp_preview_size(sz, min_size, max_size),
@@ -925,10 +963,11 @@ impl Preview {
                             });
                             ui.separator();
                             self.show_errors(ui);
+                            self.state = current_state.take();
                             return;
                         }
 
-                        let Some(state) = current_state else {
+                        let Some(state) = current_state.take() else {
                             self.show_errors(ui);
                             return;
                         };
@@ -959,7 +998,6 @@ impl Preview {
                             };
 
                         // Advance clock ticker
-                        let dt = ctx.input(|i| i.stable_dt);
                         if let Some(tick) = ticker.advance(dt) {
                             let effects = player.handle(&tick);
                             record_effects(&effects, log, ended, Some(ctx));
@@ -1062,7 +1100,11 @@ impl Preview {
                         let (slide_width, side_width) = if is_log_visible || is_vars_visible {
                             let max_side = (avail.x - LOG_GAP - 80.0).max(0.0);
                             let min_side = 240.0_f32.min(max_side);
-                            let sw = (avail.x * 0.35).clamp(min_side, 400.0_f32.min(max_side));
+                            let sw = coursecraft_course::safe_clamp(
+                                avail.x * 0.35,
+                                min_side,
+                                400.0_f32.min(max_side),
+                            );
                             ((avail.x - sw - LOG_GAP).max(1.0), Some(sw))
                         } else {
                             (avail.x.max(1.0), None)
@@ -1195,7 +1237,7 @@ impl Preview {
                                                 Layout::top_down(Align::Min),
                                                 |ui| {
                                                     ui.label(
-                                                        egui::RichText::new("Effect Log").strong(),
+                                                        egui::RichText::new("Effect log").strong(),
                                                     );
                                                     ScrollArea::vertical()
                                                         .auto_shrink([false, false])
@@ -1217,7 +1259,7 @@ impl Preview {
                                                 now,
                                             );
                                         } else {
-                                            ui.label(egui::RichText::new("Effect Log").strong());
+                                            ui.label(egui::RichText::new("Effect log").strong());
                                             ScrollArea::vertical()
                                                 .auto_shrink([false, false])
                                                 .stick_to_bottom(true)
@@ -1232,7 +1274,7 @@ impl Preview {
                             }
                         });
 
-                        self.state = Some(player.state().clone());
+                        self.state = Some(player.into_state());
                     });
                 });
             });
@@ -1285,10 +1327,10 @@ impl Preview {
                             );
                             ui.add_space(12.0);
                             ui.horizontal(|ui| {
-                                if ui.button("Replay Slide(s)").clicked() {
+                                if ui.button("Replay slide(s)").clicked() {
                                     popup_replay = true;
                                 }
-                                if ui.button("Close Preview").clicked() {
+                                if ui.button("Close preview").clicked() {
                                     popup_close_preview = true;
                                 }
                             });
@@ -1335,63 +1377,120 @@ impl Preview {
             }
         }
 
-        if !*open {
+        let media_source = media.as_ref().map(|(_, s)| *s);
+        self.finish_frame_media_and_schedule(
+            ctx,
+            *open,
+            dt,
+            now,
+            &frame_effects,
+            media_source,
+            &mut should_show_errors,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_frame_media_and_schedule(
+        &mut self,
+        ctx: &egui::Context,
+        open: bool,
+        dt: f32,
+        now: f64,
+        frame_effects: &[Effect],
+        media_source: Option<&dyn MediaSource>,
+        should_show_errors: &mut bool,
+    ) {
+        let mut wake: Option<u32> = None;
+        if !open {
             self.media.stop_all();
-        } else if let Some(state) = self.state.clone()
-            && let Ok(mut player) = resume_with_plan(&self.course, state, self.play_plan.as_ref())
-        {
-            let media_source = media.as_ref().map(|(_, s)| *s);
-            match media_source {
-                Some(source) => {
-                    queue_prints(&frame_effects, &player, source, &mut self.requests);
+        } else if let Some(state) = self.state.take() {
+            match resume_with_plan(&self.course, state, self.play_plan.as_ref()) {
+                Ok(mut player) => {
+                    match media_source {
+                        Some(source) => {
+                            queue_prints(frame_effects, &player, source, &mut self.requests);
+                        }
+                        None => {
+                            queue_prints(frame_effects, &player, &NoMedia, &mut self.requests);
+                        }
+                    }
+                    dispatch_media_effects(
+                        &mut self.media,
+                        &mut player,
+                        frame_effects,
+                        media_source,
+                        &mut self.log,
+                        &mut self.ended,
+                        Some(ctx),
+                    );
+                    poll_media_events(
+                        &mut self.media,
+                        &mut player,
+                        media_source,
+                        &mut self.log,
+                        &mut self.ended,
+                        Some(ctx),
+                    );
+                    let dt_ms = if dt.is_finite() && dt > 0.0 {
+                        (f64::from(dt.min(1.0)) * 1000.0)
+                            .round()
+                            .clamp(0.0, u64::MAX as f64) as u64
+                    } else {
+                        0
+                    };
+                    let mut queue: std::collections::VecDeque<Input> =
+                        self.media.media_time_inputs(&player, dt_ms).into();
+                    feed_inputs(
+                        &mut self.media,
+                        &mut player,
+                        &mut queue,
+                        media_source,
+                        &mut self.log,
+                        &mut self.ended,
+                        Some(ctx),
+                    );
+                    self.media.layout_videos(&player, &self.view);
+                    if player.take_preview_boundary() {
+                        self.end_of_preview_popup = true;
+                    }
+                    if !self.ended {
+                        wake = player.next_wake_ms();
+                    }
+                    self.state = Some(player.into_state());
                 }
-                None => {
-                    queue_prints(&frame_effects, &player, &NoMedia, &mut self.requests);
+                Err(issues) => {
+                    self.errors = issues;
+                    *should_show_errors = true;
                 }
             }
-            dispatch_media_effects(
-                &mut self.media,
-                &mut player,
-                &frame_effects,
-                media_source,
-                &mut self.log,
-                &mut self.ended,
-                Some(ctx),
-            );
-            poll_media_events(
-                &mut self.media,
-                &mut player,
-                media_source,
-                &mut self.log,
-                &mut self.ended,
-                Some(ctx),
-            );
-            let dt = ctx.input(|i| i.stable_dt);
-            let dt_ms = if dt.is_finite() && dt > 0.0 {
-                (f64::from(dt) * 1000.0).round().clamp(0.0, u64::MAX as f64) as u64
-            } else {
-                0
-            };
-            let mut queue: std::collections::VecDeque<Input> =
-                self.media.media_time_inputs(&player, dt_ms).into();
-            feed_inputs(
-                &mut self.media,
-                &mut player,
-                &mut queue,
-                media_source,
-                &mut self.log,
-                &mut self.ended,
-                Some(ctx),
-            );
-            self.media.layout_videos(&player, &self.view);
-            if player.take_preview_boundary() {
-                self.end_of_preview_popup = true;
-            }
-            self.state = Some(player.state().clone());
         }
 
-        if should_show_errors {
+        if *should_show_errors {
             self.state = None;
+        }
+
+        if open {
+            self.var_changed_at
+                .retain(|_, changed_at| (0.0..=1.5).contains(&(now - *changed_at)));
+            if self.view.transition_active()
+                || self.media.pending_len() > 0
+                || (self.show_variables && !self.var_changed_at.is_empty())
+            {
+                wake = Some(0);
+            }
+            match wake {
+                Some(0) => ctx.request_repaint(),
+                Some(ms) => ctx.request_repaint_after(std::time::Duration::from_millis(u64::from(
+                    ms.clamp(1, 900),
+                ))),
+                None => {
+                    self.last_frame_time = None;
+                    self.ticker.reset();
+                }
+            }
+        } else {
+            self.last_frame_time = None;
+            self.ticker.reset();
         }
     }
 }
@@ -1416,8 +1515,8 @@ fn preview_size_limits(bounds: Rect) -> (egui::Vec2, egui::Vec2) {
 
 fn clamp_preview_size(size: egui::Vec2, min_size: egui::Vec2, max_size: egui::Vec2) -> egui::Vec2 {
     egui::vec2(
-        size.x.clamp(min_size.x, max_size.x),
-        size.y.clamp(min_size.y, max_size.y),
+        coursecraft_course::safe_clamp(size.x, min_size.x, max_size.x),
+        coursecraft_course::safe_clamp(size.y, min_size.y, max_size.y),
     )
 }
 
@@ -1430,8 +1529,8 @@ fn clamp_preview_rect(
     let size = clamp_preview_size(rect.size(), min_size, max_size);
     let max_left = (bounds.max.x - size.x).max(bounds.min.x);
     let max_top = (bounds.max.y - size.y).max(bounds.min.y);
-    let min_x = rect.min.x.clamp(bounds.min.x, max_left);
-    let min_y = rect.min.y.clamp(bounds.min.y, max_top);
+    let min_x = coursecraft_course::safe_clamp(rect.min.x, bounds.min.x, max_left);
+    let min_y = coursecraft_course::safe_clamp(rect.min.y, bounds.min.y, max_top);
     Rect::from_min_size(egui::pos2(min_x, min_y), size)
 }
 
@@ -1590,4 +1689,40 @@ fn handle_resize_grips(
         });
     ctx.move_to_top(grip_area.response.layer_id);
     updated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn m31_11_clamp_preview_size_and_rect_handle_hostile_bounds() {
+        let inverted = clamp_preview_size(
+            egui::vec2(400.0, 300.0),
+            egui::vec2(500.0, 400.0),
+            egui::vec2(100.0, 100.0),
+        );
+        assert_eq!(inverted, egui::vec2(100.0, 100.0));
+
+        let nan_bounds = clamp_preview_size(
+            egui::vec2(f32::NAN, f32::INFINITY),
+            egui::vec2(f32::NAN, 10.0),
+            egui::vec2(100.0, f32::NAN),
+        );
+        assert!(nan_bounds.x.is_finite() && nan_bounds.y.is_finite());
+
+        let _ = clamp_preview_rect(
+            Rect::NOTHING,
+            Rect::NOTHING,
+            egui::vec2(300.0, 200.0),
+            egui::vec2(100.0, 100.0),
+        );
+        let rect = clamp_preview_rect(
+            Rect::NOTHING,
+            Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(50.0, 50.0)),
+            egui::vec2(300.0, 200.0),
+            egui::vec2(100.0, 100.0),
+        );
+        assert_eq!(rect.size(), egui::vec2(100.0, 100.0));
+    }
 }

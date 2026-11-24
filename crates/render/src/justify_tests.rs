@@ -18,6 +18,7 @@ impl MediaSource for EmptyMedia {
 
 fn text_ctx() -> egui::Context {
     let ctx = egui::Context::default();
+    crate::install_fonts(&ctx);
     let output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
     output.drop_without_applying_deltas();
     ctx
@@ -195,8 +196,9 @@ fn justified_mixed_runs_fonts_and_sizes() {
         "mixed-run justified line content_right={content_r} != box_w={box_w}"
     );
     let mesh_r = row_mesh_right(first);
+    // Allow one scaled trailing space advance for the strikethrough hline on `r3`.
     assert!(
-        (mesh_r - box_w).abs() <= 6.0,
+        (mesh_r - box_w).abs() <= 8.0,
         "mixed-run justified line mesh_right={mesh_r} != box_w={box_w}"
     );
 }
@@ -334,6 +336,7 @@ fn justified_words_snap_to_physical_pixels_at_100_and_150_zoom() {
     let text = "The quick brown fox jumps over the lazy dog and five dozen liquor jugs";
     for &ppp in &[1.0f32, 1.5f32] {
         let ctx = egui::Context::default();
+        crate::install_fonts(&ctx);
         ctx.set_pixels_per_point(ppp);
         let output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
         output.drop_without_applying_deltas();

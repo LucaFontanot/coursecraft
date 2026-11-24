@@ -148,7 +148,7 @@ fn load_inputs(filename: &str) -> Vec<Input> {
 fn collect_folder_recursive(
     base: &Path,
     dir: &Path,
-    out: &mut Vec<(String, Vec<u8>)>,
+    out: &mut Vec<(String, std::sync::Arc<[u8]>)>,
 ) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -165,7 +165,7 @@ fn collect_folder_recursive(
                 .to_string_lossy()
                 .replace('\\', "/");
             let bytes = std::fs::read(&path)?;
-            out.push((rel, bytes));
+            out.push((rel, std::sync::Arc::from(bytes)));
         }
     }
     Ok(())
@@ -179,14 +179,16 @@ fn package_and_validate(
 ) -> Vec<PackageFile> {
     let player_files = vec![PackageFile {
         path: "index.html".to_owned(),
-        bytes: b"<!doctype html><html><body>player</body></html>".to_vec(),
+        bytes: std::sync::Arc::from(b"<!doctype html><html><body>player</body></html>".as_slice()),
     }];
     let media_root = ref_dir().join("media");
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<std::sync::Arc<[u8]>> {
         let rel = src.strip_prefix("media/").unwrap_or(src);
-        std::fs::read(media_root.join(rel)).ok()
+        std::fs::read(media_root.join(rel))
+            .ok()
+            .map(std::sync::Arc::from)
     };
-    let web_folder = |folder: &str| -> Option<Vec<(String, Vec<u8>)>> {
+    let web_folder = |folder: &str| -> Option<Vec<(String, std::sync::Arc<[u8]>)>> {
         let rel = folder.strip_prefix("media/").unwrap_or(folder);
         let dir = media_root.join(rel);
         if !dir.is_dir() {
@@ -206,7 +208,7 @@ fn package_and_validate(
         .unwrap_or_else(|e| panic!("package {kind:?}: {e}"));
     let refs: Vec<(&str, &[u8])> = files
         .iter()
-        .map(|f| (f.path.as_str(), f.bytes.as_slice()))
+        .map(|f| (f.path.as_str(), f.bytes.as_ref()))
         .collect();
     let violations = validate_package(kind, &refs);
     assert!(
@@ -364,7 +366,7 @@ fn b1_1_scorm12_full_pass() {
         .find(|f| f.path == "course.json")
         .expect("packaged course.json")
         .bytes
-        .as_slice();
+        .as_ref();
     let pkg_course: Course =
         serde_json::from_slice(pkg_course_bytes).expect("parse packaged course.json");
     assert!(

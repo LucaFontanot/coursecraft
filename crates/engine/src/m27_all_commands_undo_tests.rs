@@ -267,6 +267,11 @@ fn fixture_session() -> Session {
             term: "xAPI".into(),
             definition: "Experience API".into(),
         },
+        GlossaryEntry {
+            id: "gloss3".into(),
+            term: "AICC".into(),
+            definition: "Aviation Industry CBT Committee".into(),
+        },
     ];
     c.editor.guides = vec![
         Guide {
@@ -1403,6 +1408,7 @@ fn command_cases() -> Vec<(&'static str, Json)> {
         ),
         ("glossary.remove", json!({ "id": "gloss1" })),
         ("glossary.move", json!({ "id": "gloss2", "to": 0 })),
+        ("glossary.sort", json!({})),
         (
             "variable.add",
             json!({ "name": "score_flag", "value": false }),
@@ -1624,6 +1630,565 @@ fn d5_1_all_mutating_commands_undo_redo_round_trip() {
     assert!(
         failures.is_empty(),
         "D5.1 failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn set_slide_size_fill_undo_redo_and_cli_docs_sync() {
+    // A-05: course.set_slide_size ("fill") undo/redo + docs/cli.md sync.
+    let cli_md = include_str!("../../../docs/cli.md");
+    assert!(
+        cli_md.contains(r#""mode": "scale"|"fill"|"keep""#),
+        "docs/cli.md must document course.set_slide_size with scale|fill|keep"
+    );
+
+    let mut s = Session::blank("Slide Size Fill Undo");
+    let before = s.course.clone();
+    s.execute(
+        "course.set_slide_size",
+        &json!({ "w": 1000, "h": 1000, "mode": "fill" }),
+    )
+    .expect("course.set_slide_size fill");
+    let after = s.course.clone();
+    assert_ne!(after, before);
+    assert!(validation_errors(&after).is_empty());
+
+    s.execute("edit.undo", &json!({})).expect("undo");
+    assert_eq!(s.course, before);
+    s.execute("edit.redo", &json!({})).expect("redo");
+    assert_eq!(s.course, after);
+    s.execute("edit.undo", &json!({})).expect("second undo");
+    assert_eq!(s.course, before);
+}
+
+/// DF-01: Differential byte-identical JSON and undo/redo metadata oracle across
+/// every `mutates == true` command in `REGISTRY`.
+#[test]
+fn df_01_all_mutating_commands_byte_identical_delta_oracle() {
+    let cases = command_cases();
+
+    let registry_mutating: Vec<&'static str> = registry()
+        .iter()
+        .filter(|c| c.mutates)
+        .map(|c| c.id)
+        .collect();
+    let seen: HashSet<&'static str> = cases.iter().map(|&(id, _)| id).collect();
+    let missing: Vec<&'static str> = registry_mutating
+        .iter()
+        .copied()
+        .filter(|id| !seen.contains(id))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "REGISTRY mutating commands missing from DF-01 ({}): {missing:?}",
+        missing.len()
+    );
+
+    let mut failures = Vec::new();
+    for &(id, ref params) in &cases {
+        let label = registry()
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.label)
+            .expect("command registered");
+
+        let mut s = fixture_session();
+        let before = s.course.clone();
+        let before_json = before.to_json().expect("before json");
+        let base_rev = s.revision;
+
+        if let Err(e) = s.execute(id, params) {
+            failures.push(format!("{id}: execute failed: {e:?}"));
+            continue;
+        }
+        let after = s.course.clone();
+        let after_json = after.to_json().expect("after json");
+        if after == before || after_json == before_json {
+            failures.push(format!("{id}: command did not change course JSON"));
+            continue;
+        }
+        if s.undo_names() != vec![label] || !s.redo_names().is_empty() || s.revision != base_rev + 1
+        {
+            failures.push(format!(
+                "{id}: post-execute oracle mismatch: undo={:?} redo={:?} rev={}",
+                s.undo_names(),
+                s.redo_names(),
+                s.revision
+            ));
+            continue;
+        }
+
+        // Explicit CourseDelta::diff + apply byte-identical roundtrip check.
+        match crate::delta::CourseDelta::diff(before.clone(), &after) {
+            None => {
+                failures.push(format!("{id}: CourseDelta::diff returned None"));
+                continue;
+            }
+            Some(mut delta) => {
+                let mut check = after.clone();
+                if let Err(e) = delta.apply(&mut check) {
+                    failures.push(format!("{id}: delta undo apply failed: {e:?}"));
+                    continue;
+                }
+                let undone_json = check.to_json().expect("delta undo json");
+                if check != before || undone_json != before_json {
+                    failures.push(format!("{id}: delta undo JSON mismatch"));
+                    continue;
+                }
+                if let Err(e) = delta.apply(&mut check) {
+                    failures.push(format!("{id}: delta redo apply failed: {e:?}"));
+                    continue;
+                }
+                let redone_json = check.to_json().expect("delta redo json");
+                if check != after || redone_json != after_json {
+                    failures.push(format!("{id}: delta redo JSON mismatch"));
+                    continue;
+                }
+            }
+        }
+
+        // First edit.undo
+        if let Err(e) = s.execute("edit.undo", &json!({})) {
+            failures.push(format!("{id}: first edit.undo failed: {e:?}"));
+            continue;
+        }
+        let undo1_json = s.course.to_json().expect("undo1 json");
+        if s.course != before
+            || undo1_json != before_json
+            || !s.undo_names().is_empty()
+            || s.redo_names() != vec![label]
+            || s.revision != base_rev + 2
+        {
+            failures.push(format!(
+                "{id}: first edit.undo oracle mismatch (json_eq={}, undo={:?}, redo={:?}, rev={})",
+                undo1_json == before_json,
+                s.undo_names(),
+                s.redo_names(),
+                s.revision
+            ));
+            continue;
+        }
+
+        // edit.redo
+        if let Err(e) = s.execute("edit.redo", &json!({})) {
+            failures.push(format!("{id}: edit.redo failed: {e:?}"));
+            continue;
+        }
+        let redo_json = s.course.to_json().expect("redo json");
+        if s.course != after
+            || redo_json != after_json
+            || s.undo_names() != vec![label]
+            || !s.redo_names().is_empty()
+            || s.revision != base_rev + 3
+        {
+            failures.push(format!(
+                "{id}: edit.redo oracle mismatch (json_eq={}, undo={:?}, redo={:?}, rev={})",
+                redo_json == after_json,
+                s.undo_names(),
+                s.redo_names(),
+                s.revision
+            ));
+            continue;
+        }
+
+        // Second edit.undo
+        if let Err(e) = s.execute("edit.undo", &json!({})) {
+            failures.push(format!("{id}: second edit.undo failed: {e:?}"));
+            continue;
+        }
+        let undo2_json = s.course.to_json().expect("undo2 json");
+        if s.course != before
+            || undo2_json != before_json
+            || !s.undo_names().is_empty()
+            || s.redo_names() != vec![label]
+            || s.revision != base_rev + 4
+        {
+            failures.push(format!(
+                "{id}: second edit.undo oracle mismatch (json_eq={}, undo={:?}, redo={:?}, rev={})",
+                undo2_json == before_json,
+                s.undo_names(),
+                s.redo_names(),
+                s.revision
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "DF-01 failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// SC-01: Every annotated `SingleSlide` and `CourseHeader` command in `REGISTRY`
+/// must mutate only within its declared scope (enforced by the `#[cfg(test)]`
+/// scope-isolation verifier and shadow differential oracle), perform zero
+/// full-course clones, and round-trip undo/redo with byte-identical JSON.
+#[test]
+fn sc_01_all_annotated_commands_isolated_and_zero_full_clones() {
+    use crate::delta::UndoScope;
+
+    let mut annotated_count = 0usize;
+    for cmd in registry() {
+        let scope = cmd.scope();
+        if scope != UndoScope::FullCourse {
+            annotated_count += 1;
+            assert!(
+                cmd.mutates,
+                "command {} is annotated {:?} but has mutates == false",
+                cmd.id, scope
+            );
+        }
+    }
+    assert!(
+        annotated_count >= 130,
+        "expected at least 130 commands annotated as SingleSlide or CourseHeader, found {annotated_count}"
+    );
+
+    let cases = command_cases();
+    let mut failures = Vec::new();
+
+    for &(id, ref params) in &cases {
+        let cmd = registry()
+            .iter()
+            .find(|c| c.id == id)
+            .expect("command registered");
+        let scope = cmd.scope();
+
+        let mut s = fixture_session();
+        let before = s.course.clone();
+        let before_json = before.to_json().expect("before json");
+
+        #[cfg(debug_assertions)]
+        crate::test_counts::reset();
+
+        if let Err(e) = s.execute(id, params) {
+            failures.push(format!("{id} ({scope:?}): execute failed: {e:?}"));
+            continue;
+        }
+
+        #[cfg(debug_assertions)]
+        if scope != UndoScope::FullCourse {
+            let clones = crate::test_counts::full_course_clones();
+            if clones != 0 {
+                failures.push(format!(
+                    "{id} ({scope:?}): expected 0 full-course clones, got {clones}"
+                ));
+                continue;
+            }
+        }
+
+        let after = s.course.clone();
+        let after_json = after.to_json().expect("after json");
+        if after == before || after_json == before_json {
+            failures.push(format!("{id} ({scope:?}): command did not mutate course"));
+            continue;
+        }
+
+        if let Err(e) = s.execute("edit.undo", &json!({})) {
+            failures.push(format!("{id} ({scope:?}): edit.undo failed: {e:?}"));
+            continue;
+        }
+        let undo_json = s.course.to_json().expect("undo json");
+        if s.course != before || undo_json != before_json {
+            failures.push(format!(
+                "{id} ({scope:?}): edit.undo did not restore byte-identical JSON"
+            ));
+            continue;
+        }
+
+        if let Err(e) = s.execute("edit.redo", &json!({})) {
+            failures.push(format!("{id} ({scope:?}): edit.redo failed: {e:?}"));
+            continue;
+        }
+        let redo_json = s.course.to_json().expect("redo json");
+        if s.course != after || redo_json != after_json {
+            failures.push(format!(
+                "{id} ({scope:?}): edit.redo did not restore byte-identical JSON"
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "SC-01 failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// U-05 (`M34-07`): Scoped single-slide validation agrees 100% with full
+/// `Course::validate()` across every mutating command in `REGISTRY` and across
+/// hostile invalid inputs (bad frames, NaN frames, invalid jump targets,
+/// invalid colors, master restrictions, bank slides, bad triggers, bad draws).
+#[test]
+fn u05_scoped_validation_matches_full_validation_across_all_commands() {
+    use crate::delta::UndoScope;
+
+    // Every command whitelisted for scoped slide validation must be a mutating
+    // SingleSlide command, and non-mutating commands must keep FullCourse scope
+    // without slide_validation.
+    for cmd in registry() {
+        if cmd.can_use_slide_validation() {
+            assert!(
+                cmd.mutates,
+                "can_use_slide_validation({}) must have mutates == true",
+                cmd.id
+            );
+            assert_eq!(
+                cmd.scope(),
+                UndoScope::SingleSlide,
+                "can_use_slide_validation({}) must have UndoScope::SingleSlide",
+                cmd.id
+            );
+        }
+        if !cmd.mutates {
+            assert_eq!(
+                cmd.scope(),
+                UndoScope::FullCourse,
+                "non-mutating command {} must have UndoScope::FullCourse",
+                cmd.id
+            );
+            assert!(
+                !cmd.can_use_slide_validation(),
+                "non-mutating command {} must not enable slide_validation",
+                cmd.id
+            );
+        }
+    }
+
+    let cases = command_cases();
+    let mut failures = Vec::new();
+
+    // 1. Differential parity across every mutating command in REGISTRY.
+    for &(id, ref params) in &cases {
+        let mut s_scoped = fixture_session();
+        let mut s_full = fixture_session();
+        let _ = s_scoped.validation_issues();
+        let _ = s_full.validation_issues();
+
+        let res_scoped = s_scoped.execute(id, params);
+        let res_full = crate::with_full_validation_forced(|| s_full.execute(id, params));
+
+        if res_scoped.is_ok() != res_full.is_ok() {
+            failures.push(format!(
+                "valid {id}: accept/reject mismatch: scoped={res_scoped:?} full={res_full:?}"
+            ));
+            continue;
+        }
+        if res_scoped != res_full {
+            failures.push(format!(
+                "valid {id}: result mismatch: scoped={res_scoped:?} full={res_full:?}"
+            ));
+            continue;
+        }
+        if s_scoped.course != s_full.course {
+            failures.push(format!("valid {id}: resulting course diverged"));
+            continue;
+        }
+        if res_scoped.is_ok() {
+            let full_errs = validation_errors(&s_scoped.course);
+            if !full_errs.is_empty() {
+                failures.push(format!(
+                    "valid {id}: scoped validation accepted invalid course: {full_errs:?}"
+                ));
+            }
+        }
+    }
+
+    // 2. Hostile invalid inputs across scoped and fallback commands.
+    let hostile_cases: Vec<(&str, &str, Json)> = vec![
+        (
+            "negative_frame_width",
+            "object.set_frame",
+            json!({ "slide": "slide1", "object": "obj_shape", "frame": { "x": 10.0, "y": 10.0, "w": -5.0, "h": 40.0 } }),
+        ),
+        (
+            "oversized_frame_height",
+            "object.set_frame",
+            json!({ "slide": "slide1", "object": "obj_shape", "frame": { "x": 10.0, "y": 10.0, "w": 40.0, "h": 200_000.0 } }),
+        ),
+        (
+            "nan_frame_null_in_json",
+            "object.set_frame",
+            json!({ "slide": "slide1", "object": "obj_shape", "frame": { "x": f64::NAN, "y": 10.0, "w": 40.0, "h": 40.0 } }),
+        ),
+        (
+            "scroll_panel_frame_taller_than_content",
+            "object.set_frame",
+            json!({ "slide": "slide1", "object": "obj_scroll", "frame": { "x": 720.0, "y": 270.0, "w": 150.0, "h": 900.0 } }),
+        ),
+        (
+            "invalid_slide_background_color",
+            "slide.set_background",
+            json!({ "slide": "slide1", "background": "#ZZZZZZ" }),
+        ),
+        (
+            "invalid_object_fill_color",
+            "object.update",
+            json!({ "slide": "slide1", "object": "obj_shape", "kind": { "type": "shape", "shape": "rectangle", "fill": "not-hex" } }),
+        ),
+        (
+            "invalid_object_timing_inverted",
+            "object.update",
+            json!({ "slide": "slide1", "object": "obj_shape", "timing": { "start_ms": 2000, "end_ms": 1000 } }),
+        ),
+        (
+            "invalid_slide_transition_zero_ms",
+            "slide.set_transition",
+            json!({ "slide": "slide1", "transition": { "type": "fade", "duration_ms": 0 } }),
+        ),
+        (
+            "invalid_player_override_missing_var",
+            "slide.set_player_overrides",
+            json!({ "slide": "slide1", "next_requires": { "kind": "variable", "name": "no_such_var" } }),
+        ),
+        (
+            "invalid_player_override_non_bool_var",
+            "slide.set_player_overrides",
+            json!({ "slide": "slide1", "next_requires": { "kind": "variable", "name": "var1" } }),
+        ),
+        (
+            "invalid_fill_style_color",
+            "object.set_fill_style",
+            json!({ "slide": "slide1", "object": "obj_shape", "fill_style": { "type": "linear", "angle": 90.0, "stops": [{ "position": 0.0, "color": "bad" }, { "position": 1.0, "color": "#0000FF" }] } }),
+        ),
+        (
+            "invalid_shadow_color",
+            "object.set_shadow",
+            json!({ "slide": "slide1", "object": "obj_shape", "shadow": { "offset_x": 4.0, "offset_y": 4.0, "blur": 8.0, "color": "bad" } }),
+        ),
+        (
+            "invalid_glow_color",
+            "object.set_glow",
+            json!({ "slide": "slide1", "object": "obj_shape", "glow": { "size": 6.0, "color": "bad" } }),
+        ),
+        (
+            "invalid_crop_past_bounds",
+            "object.set_crop",
+            json!({ "slide": "slide1", "object": "obj_pic", "crop": { "x": 0.8, "y": 0.1, "w": 0.5, "h": 0.5 } }),
+        ),
+        (
+            "invalid_link_missing_slide",
+            "text.set_link",
+            json!({ "slide": "slide1", "object": "obj_text", "link": { "type": "slide", "slide": "missing_slide" } }),
+        ),
+        (
+            "invalid_link_javascript_url",
+            "text.set_link",
+            json!({ "slide": "slide1", "object": "obj_text", "link": { "type": "url", "url": "javascript:alert(1)" } }),
+        ),
+        (
+            "invalid_drag_target_missing",
+            "object.set_drag",
+            json!({ "slide": "slide1", "object": "obj_shape", "drag": { "targets": ["ghost_target"], "snap": true, "return_on_miss": true } }),
+        ),
+        (
+            "invalid_panel_non_scroll",
+            "object.set_panel",
+            json!({ "slide": "slide1", "object": "obj_shape", "panel": "obj_shape2" }),
+        ),
+        (
+            "invalid_state_fill_color",
+            "object.add_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "state": { "name": "bad_state", "fill": "not-hex" } }),
+        ),
+        (
+            "invalid_master_video_object",
+            "object.add",
+            json!({
+                "slide": "master1",
+                "kind": { "type": "video", "src": "media/clip.mp4" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 160.0, "h": 90.0 }
+            }),
+        ),
+        (
+            "invalid_bank_slide_bad_color",
+            "object.add",
+            json!({
+                "slide": "bank_q1",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "nope" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+            }),
+        ),
+        (
+            "invalid_trigger_jump_target",
+            "trigger.add",
+            json!({
+                "slide": "slide1",
+                "trigger": {
+                    "when": { "event": "click", "object": "obj_shape" },
+                    "action": { "action": "jump_to_slide", "target": { "id": "missing_slide" } }
+                }
+            }),
+        ),
+        (
+            "invalid_draw_count_exceeds_bank",
+            "draw.update",
+            json!({ "slide": "slide_draw", "count": 99 }),
+        ),
+        (
+            "invalid_motion_path_coords",
+            "object.update_motion_path",
+            json!({
+                "slide": "slide1",
+                "object": "obj_shape",
+                "path": "mpath1",
+                "points": [{ "x": 0.0, "y": 0.0 }, { "x": 500_000.0, "y": 0.0 }]
+            }),
+        ),
+    ];
+
+    for (label, id, params) in &hostile_cases {
+        let mut s_scoped = fixture_session();
+        let mut s_full = fixture_session();
+        let before = s_scoped.course.clone();
+        let _ = s_scoped.validation_issues();
+        let _ = s_full.validation_issues();
+
+        let res_scoped = s_scoped.execute(id, params);
+        let res_full = crate::with_full_validation_forced(|| s_full.execute(id, params));
+
+        if res_scoped.is_ok() {
+            failures.push(format!(
+                "hostile {label} ({id}): expected Err, got Ok({res_scoped:?})"
+            ));
+            continue;
+        }
+        if res_scoped != res_full {
+            failures.push(format!(
+                "hostile {label} ({id}): error mismatch: scoped={res_scoped:?} full={res_full:?}"
+            ));
+            continue;
+        }
+        if s_scoped.course != before || s_full.course != before {
+            failures.push(format!(
+                "hostile {label} ({id}): failed command did not roll back course"
+            ));
+        }
+    }
+
+    // 3. Direct NaN frame check: validate_slide_errors agrees with first_error / validate.
+    let mut nan_course = fixture_session().course;
+    nan_course.scenes[0].slides[0].objects[0].frame.w = f32::NAN;
+    let scoped_nan =
+        nan_course.validate_slide_errors(&nan_course.scenes[0].slides[0], "/scenes/0/slides/0");
+    let full_nan = nan_course.first_error();
+    assert!(
+        scoped_nan.is_some(),
+        "NaN frame must be rejected by scoped validation"
+    );
+    assert_eq!(
+        scoped_nan, full_nan,
+        "NaN frame error must match full validation"
+    );
+
+    assert!(
+        failures.is_empty(),
+        "U-05 scoped validation parity failures ({}):\n{}",
         failures.len(),
         failures.join("\n")
     );

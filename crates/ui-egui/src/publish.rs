@@ -135,7 +135,7 @@ pub enum PublishPhase {
 }
 
 /// Transient state for the Publish dialog, kept in `editor.ui` like other dialogs.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct PublishState {
     /// Whether the dialog is open.
     pub open: bool,
@@ -143,6 +143,8 @@ pub struct PublishState {
     pub standard: PublishStandard,
     /// What the dialog is showing.
     pub phase: PublishPhase,
+    /// Optional 0.0..=1.0 progress shown alongside `"Publishing…"` when busy.
+    pub progress: Option<f32>,
     /// A quiet status line, e.g. when "Show in folder" fails.
     pub status: Option<String>,
     /// Font families auto-embedded into the published package.
@@ -163,6 +165,7 @@ impl Editor {
         self.ui.publish.status = None;
         if !matches!(self.ui.publish.phase, PublishPhase::Busy) {
             self.ui.publish.phase = PublishPhase::Idle;
+            self.ui.publish.progress = None;
             self.ui.publish.standard = self
                 .session
                 .course
@@ -179,7 +182,13 @@ impl Editor {
     pub fn set_publish_busy(&mut self) {
         self.ui.publish.open = true;
         self.ui.publish.phase = PublishPhase::Busy;
+        self.ui.publish.progress = None;
         self.ui.publish.status = None;
+    }
+
+    /// Update the optional 0.0..=1.0 progress shown while publishing.
+    pub fn set_publish_progress(&mut self, progress: Option<f32>) {
+        self.ui.publish.progress = progress.map(|p| coursecraft_course::safe_clamp(p, 0.0, 1.0));
     }
 
     /// Show a successful publish.
@@ -201,6 +210,7 @@ impl Editor {
             file_name: file_name.into(),
             bytes,
         };
+        self.ui.publish.progress = None;
         self.ui.publish.status = None;
         self.ui.publish.embedded_fonts = embedded_fonts;
         self.ui.publish.font_warnings = font_warnings;
@@ -213,6 +223,7 @@ impl Editor {
         self.ui.publish.phase = PublishPhase::Failed {
             message: message.into(),
         };
+        self.ui.publish.progress = None;
         self.ui.publish.status = None;
     }
 
@@ -349,7 +360,15 @@ pub fn show_publish_dialog(
             } else if busy {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new());
-                    ui.label("Publishing…");
+                    let label = match editor.ui.publish.progress {
+                        Some(progress) => {
+                            let pct = (coursecraft_course::safe_clamp(progress, 0.0, 1.0) * 100.0)
+                                .round() as u8;
+                            format!("Publishing… {pct}%")
+                        }
+                        None => "Publishing…".to_string(),
+                    };
+                    ui.label(label);
                 });
             } else {
                 ui.horizontal(|ui| {
@@ -426,6 +445,7 @@ fn show_standards(editor: &mut Editor, ui: &mut egui::Ui, busy: bool) {
         let selected = editor.ui.publish.standard == standard;
         if ui
             .add_enabled(!busy, egui::RadioButton::new(selected, standard.label()))
+            .on_disabled_hover_text("Wait for publishing to finish")
             .clicked()
         {
             editor.ui.publish.standard = standard;
@@ -463,9 +483,12 @@ fn show_standards(editor: &mut Editor, ui: &mut egui::Ui, busy: bool) {
                     }
                 })
                 .response
-                .on_hover_text(LMS_STATUS_TOOLTIP);
+                .on_hover_text(LMS_STATUS_TOOLTIP)
+                .on_disabled_hover_text("Wait for publishing to finish");
             });
-        });
+        })
+        .response
+        .on_disabled_hover_text("Wait for publishing to finish");
         if selected != current {
             editor.run(
                 "course.set_publish_settings",
@@ -535,7 +558,7 @@ fn show_success_details(editor: &mut Editor, ui: &mut egui::Ui) {
                     .iter()
                     .any(|(name, _)| name.eq_ignore_ascii_case(&face.src))
                 {
-                    editor.media.push((face.src.clone(), bytes));
+                    editor.media.push(face.src.clone(), bytes);
                 }
                 let _ = editor.run(
                     "course.add_font",

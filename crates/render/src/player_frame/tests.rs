@@ -18,8 +18,10 @@ struct Harness {
 
 impl Harness {
     fn new(width: f32, height: f32) -> Self {
+        let ctx = egui::Context::default();
+        crate::install_fonts(&ctx);
         Self {
-            ctx: egui::Context::default(),
+            ctx,
             frame: PlayerFrame::new(),
             view: SlideView::new(),
             size: vec2(width, height),
@@ -1935,8 +1937,10 @@ struct AreaHarness {
 
 impl AreaHarness {
     fn new(screen_size: Vec2, player_area: Rect) -> Self {
+        let ctx = egui::Context::default();
+        crate::install_fonts(&ctx);
         Self {
-            ctx: egui::Context::default(),
+            ctx,
             frame: PlayerFrame::new(),
             view: SlideView::new(),
             screen_size,
@@ -2970,4 +2974,65 @@ fn no_gate_means_no_start_button() {
     let output = harness.run(&player, vec![key(egui::Key::Enter)]);
     assert!(!output.start);
     assert!(harness.frame.start_button_rect().is_none());
+}
+
+#[test]
+fn b09_start_gate_blocks_keyboard_shortcuts() {
+    let player = unstarted();
+    let mut harness = Harness::new(1280.0, 720.0);
+    harness.frame.awaiting_start = true;
+    harness.run(&player, Vec::new());
+
+    for k in [
+        egui::Key::C,
+        egui::Key::M,
+        egui::Key::ArrowRight,
+        egui::Key::ArrowLeft,
+    ] {
+        let output = harness.run(&player, vec![key(k)]);
+        assert!(!output.start, "{k:?} must not start the course");
+        assert!(
+            output.inputs.is_empty(),
+            "{k:?} must not emit inputs behind the start gate: {:?}",
+            output.inputs
+        );
+        assert!(
+            !harness.frame.captions_on,
+            "{k:?} must not toggle captions behind the start gate"
+        );
+        assert!(
+            !harness.frame.drawer_open,
+            "{k:?} must not open the drawer behind the start gate"
+        );
+    }
+}
+
+#[test]
+fn b10_start_gate_wraps_long_label_on_narrow_screen() {
+    let mut course = Course::from_json(HELLO_JSON).expect("valid course");
+    course.strings.insert(
+        "startCourse".to_owned(),
+        "Start this interactive training module now".to_owned(),
+    );
+    let player = Player::new(&course).expect("player");
+    let mut harness = Harness::new(320.0, 568.0);
+    harness.frame.awaiting_start = true;
+    harness.run(&player, Vec::new());
+
+    let slide = harness.frame.slide_rect().expect("slide rect");
+    let button = harness.frame.start_button_rect().expect("start button");
+    assert!(
+        slide.contains_rect(button),
+        "start button {button:?} must stay completely inside slide {slide:?}"
+    );
+}
+
+#[test]
+fn m31_11_slider_value_handles_inverted_and_nan_bounds() {
+    let normal = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 20.0));
+    let _ = super::slider_value(egui::Rect::NOTHING, 10.0, 100.0, 0.0, 0.0);
+    let v = super::slider_value(normal, 50.0, 100.0, 10.0, 4.0);
+    assert!(v.is_finite());
+    let nan_bound = super::slider_value(normal, 50.0, f32::NAN, 10.0, 4.0);
+    assert!(nan_bound.is_finite());
 }

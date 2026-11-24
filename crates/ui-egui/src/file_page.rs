@@ -178,8 +178,10 @@ fn column_entries(editor: &mut Editor, ui: &mut Ui, ink: egui::Color32, pick: &m
     }
     ui.add_space(8.0);
     let mut act = |ui: &mut Ui, icon: Icon, label: &str, enabled: bool, why: &str, what: Pick| {
-        let resp = ui.add_enabled_ui(enabled, |ui| entry(ui, ink, icon, label, false));
-        let resp = resp.inner.on_disabled_hover_text(why);
+        let resp = ui
+            .add_enabled_ui(enabled, |ui| entry(ui, ink, icon, label, false))
+            .inner
+            .on_disabled_hover_text(why);
         if resp.clicked() {
             *pick = Some(what);
         }

@@ -1253,3 +1253,12 @@ fn draw_outline_and_navigation_use_the_drawn_play_order() {
         "next is gone on the last slide: {list:?}"
     );
 }
+
+#[test]
+fn m31_11_clamp_point_handles_inverted_rect_and_nan() {
+    let _ = super::clamp_point(egui::Rect::NOTHING, 10.0, 20.0);
+    let inverted = egui::Rect::from_min_max(egui::pos2(100.0, 100.0), egui::pos2(10.0, 20.0));
+    let (x, y) = super::clamp_point(inverted, 50.0, 50.0);
+    assert!(x.is_finite() && y.is_finite());
+    let _ = super::clamp_point(egui::Rect::NOTHING, f32::NAN, f32::INFINITY);
+}

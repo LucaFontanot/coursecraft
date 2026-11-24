@@ -18,7 +18,7 @@ fn show_export_prompt(editor: &mut Editor, ctx: &egui::Context, requests: &mut V
         return;
     }
     let mut open = true;
-    Dialog::new("Export Translation")
+    Dialog::new("Export translation")
         .open(&mut open)
         .show(ctx, |ui| {
             ui.label("Target language (BCP 47, for example fr or pt-BR)");
@@ -91,7 +91,7 @@ fn show_report(editor: &mut Editor, ctx: &egui::Context) {
         return;
     };
     let mut open = true;
-    Dialog::new("Translation Import Report")
+    Dialog::new("Translation import report")
         .open(&mut open)
         .resizable(true)
         .show_with_footer(ctx, |dialog| {

@@ -970,7 +970,7 @@ fn right_arrow_polygon(w: f32, h: f32, start: f32) -> Vec<Pt> {
     let mid = h * 0.5;
     let shaft = d * 0.2;
     let head_half = d * 0.24;
-    let start = start.clamp(0.0, w * 0.95);
+    let start = coursecraft_course::safe_clamp(start, 0.0, w * 0.95);
     let head = (w * 0.18)
         .max(d * 0.1)
         .min((w - start) * 0.5)
@@ -1131,7 +1131,7 @@ fn arrow_right_from(w: f32, h: f32, x0: f32, head_frac: f32, tail_frac: f32) -> 
     let d = w.min(h);
     let mid = h * 0.5;
     let tail = (d * tail_frac).min(h * 0.45);
-    let x0 = x0.clamp(0.0, w * 0.5);
+    let x0 = coursecraft_course::safe_clamp(x0, 0.0, w * 0.5);
     let head = (d * head_frac).min((w - x0) * 0.9);
     vec![
         (x0, mid - tail),
@@ -2867,10 +2867,10 @@ pub fn shape_text_rect(kind: ShapeKind, w: f32, h: f32, _adjust: &[f32]) -> (f32
         _ => {}
     }
     // Clamp to the frame so hostile sizes and overrides never escape it.
-    let x = x.clamp(0.0, w);
-    let y = y.clamp(0.0, h);
-    let rw = rw.clamp(0.0, w - x);
-    let rh = rh.clamp(0.0, h - y);
+    let x = coursecraft_course::safe_clamp(x, 0.0, w);
+    let y = coursecraft_course::safe_clamp(y, 0.0, h);
+    let rw = coursecraft_course::safe_clamp(rw, 0.0, w - x);
+    let rh = coursecraft_course::safe_clamp(rh, 0.0, h - y);
     (x, y, rw, rh)
 }
 
@@ -2878,8 +2878,8 @@ fn clean_contour(mut points: Vec<Pt>, w: f32, h: f32, allow_outside: bool) -> Ve
     points.retain(|(x, y)| finite(*x) && finite(*y));
     if !allow_outside {
         for point in &mut points {
-            point.0 = point.0.clamp(0.0, w);
-            point.1 = point.1.clamp(0.0, h);
+            point.0 = coursecraft_course::safe_clamp(point.0, 0.0, w);
+            point.1 = coursecraft_course::safe_clamp(point.1, 0.0, h);
         }
     }
     let mut out: Vec<Pt> = Vec::with_capacity(points.len());
@@ -3787,5 +3787,21 @@ mod tests {
         assert_eq!(band.len(), 4);
         assert!(stroke_polyline(&[(0.0, 0.0)], 2.0).is_empty());
         assert!(star(2, 0.5).is_empty());
+    }
+
+    #[test]
+    fn m31_11_hostile_geometry_bounds_do_not_panic() {
+        let _ = right_arrow_polygon(-10.0, -5.0, f32::NAN);
+        let _ = right_arrow_polygon(f32::NAN, 10.0, 5.0);
+        let _ = arrow_right_from(-10.0, -5.0, f32::NAN, 0.5, 0.25);
+        let _ = shape_text_rect(ShapeKind::CalloutRightArrow, -10.0, -5.0, &[]);
+        let _ = shape_text_rect(ShapeKind::Rectangle, f32::NAN, -5.0, &[f32::NAN]);
+        let cleaned = clean_contour(
+            vec![(1.0, 2.0), (f32::NAN, 0.0), (5.0, 5.0)],
+            -10.0,
+            -5.0,
+            false,
+        );
+        assert!(cleaned.iter().all(|(x, y)| x.is_finite() && y.is_finite()));
     }
 }

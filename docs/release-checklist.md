@@ -153,9 +153,9 @@ Do each of these once per service:
 - [ ] While the service is uploading the file, press Save. Pass: it succeeds or, after about 2 seconds, shows the "sync service" message; the old file is never damaged.
 - [ ] Open the project from an iCloud or OneDrive file that is only online (not downloaded yet). Pass: it downloads and opens, or says why it cannot.
 
-## 9. Ribbon UI parity (M30 onward)
+## 9. Ribbon UI parity (M37 onward)
 
-Time: about 1.5 hours, then 20 minutes for each later milestone (M31 to M35). Needs: the desktop app, a Storyline-experienced author if possible, `docs/ui/ribbon.md`, `docs/ui/contextual-tabs.md` and `docs/ui/feature-parity.md` open beside it, the showcase course.
+Time: about 1.5 hours, then 20 minutes for each later milestone (M38 to M42). Needs: the desktop app, a Storyline-experienced author if possible, `docs/ui/ribbon.md`, `docs/ui/contextual-tabs.md` and `docs/ui/feature-parity.md` open beside it, the showcase course.
 
 Tab strip and ribbon
 
@@ -183,7 +183,7 @@ File page, quick access toolbar, shell
 
 Feature parity
 
-- [ ] For each milestone released (M31 to M35), take the rows it moved in `docs/ui/feature-parity.md` and try each one in the app and in a published course. Pass: the row's status is true; the summary counts match the tables.
+- [ ] For each milestone released (M38 to M42), take the rows it moved in `docs/ui/feature-parity.md` and try each one in the app and in a published course. Pass: the row's status is true; the summary counts match the tables.
 - [ ] A Storyline-experienced author builds the two tutorial courses' first slides (a title slide on a master, a narrated slide with cue points, a marker slide, a layer with a Start button, a multiple-choice question) without help. Note every place they looked for a command and did not find it.
 
 Localization (craft-i18n)

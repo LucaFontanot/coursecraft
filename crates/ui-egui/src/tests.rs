@@ -1978,7 +1978,7 @@ fn gear_opens_layer_settings_and_selection_alone_does_not() {
         Some("about")
     );
     assert!(
-        harness.find_text("Layer Settings: About").is_some(),
+        harness.find_text("Layer settings: About").is_some(),
         "the window is titled after the layer"
     );
 }
@@ -4184,6 +4184,31 @@ fn test_shortcut_formatting_both_platforms_and_fallbacks() {
 }
 
 #[test]
+fn test_function_key_shortcut_formatting_both_platforms() {
+    let all_glyphs = |_| true;
+    let no_glyphs = |_| false;
+    assert_eq!(menu::format_shortcut("F12", true, all_glyphs), "F12");
+    assert_eq!(menu::format_shortcut("Ctrl+F12", true, all_glyphs), "⌘F12");
+    assert_eq!(menu::format_shortcut("Shift+F12", true, all_glyphs), "⇧F12");
+    assert_eq!(
+        menu::format_shortcut("Ctrl+F12", true, no_glyphs),
+        "Cmd+F12"
+    );
+    assert_eq!(
+        menu::format_shortcut("Shift+F12", true, no_glyphs),
+        "Shift+F12"
+    );
+    assert_eq!(
+        menu::format_shortcut("Ctrl+F12", false, all_glyphs),
+        "Ctrl+F12"
+    );
+    assert_eq!(
+        menu::format_shortcut("Shift+F12", false, all_glyphs),
+        "Shift+F12"
+    );
+}
+
+#[test]
 fn bottom_panel_is_resizable_and_bounded() {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);
@@ -4443,6 +4468,76 @@ fn course_settings_player_bar_switch_disables_bar_options_and_updates_course() {
         tip.as_deref(),
         Some("Turn the player bar on to use this"),
         "disabled bar option must show tooltip, got {tip:?}"
+    );
+}
+
+#[test]
+fn b12_course_settings_seekbar_combo_disabled_with_tooltip_when_bar_or_seekbar_off() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut harness = TestHarness::new_with_size(course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    for _ in 0..5 {
+        harness.idle_frame();
+    }
+
+    let find_seekbar_combo = |h: &mut TestHarness| {
+        let row_y = h.find_text_last("Seekbar").expect("Seekbar label").y;
+        let combo_pos = h
+            .find_texts("Free")
+            .into_iter()
+            .min_by_key(|p| ((p.y - row_y).abs() * 10.0) as i32)
+            .expect("Seekbar combo text");
+        h.last_widgets
+            .iter()
+            .find(|n| n.bounds.contains(combo_pos))
+            .cloned()
+            .expect("Seekbar combo widget")
+    };
+
+    assert!(!find_seekbar_combo(&mut harness).disabled);
+
+    // Turning off "Show seekbar" disables the Seekbar combo with an explanatory tooltip.
+    let show_seekbar_toggle = harness
+        .find_text_last("Show seekbar")
+        .expect("Show seekbar toggle");
+    harness.click_at(show_seekbar_toggle);
+    harness.idle_frame();
+    assert!(!harness.editor.session.course.player.show_seekbar);
+
+    let combo = find_seekbar_combo(&mut harness);
+    assert!(
+        combo.disabled,
+        "Seekbar combo must be disabled when show_seekbar is false"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(combo.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Turn \"Show seekbar\" on to use this"),
+        "disabled Seekbar combo must explain show_seekbar is off, got {tip:?}"
+    );
+
+    // Turning off "Player bar" also disables the Seekbar combo with the player bar tooltip.
+    let bar_toggle = harness
+        .find_text_last("Player bar")
+        .expect("Player bar toggle");
+    harness.click_at(bar_toggle);
+    harness.idle_frame();
+    assert!(!harness.editor.session.course.player.show_bar);
+
+    let combo = find_seekbar_combo(&mut harness);
+    assert!(
+        combo.disabled,
+        "Seekbar combo must be disabled when show_bar is false"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(combo.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Turn the player bar on to use this"),
+        "disabled Seekbar combo must explain player bar is off, got {tip:?}"
     );
 }
 
@@ -5948,13 +6043,13 @@ fn typing_in_styled_text_preserves_runs() {
     let mut text_edit_pos = None;
     for _ in 0..20 {
         let panel = harness.right_panel_rect();
-        if let Some(pos) = harness.find_text_in("Text Content", panel) {
+        if let Some(pos) = harness.find_text_in("Text content", panel) {
             text_edit_pos = Some(pos + vec2(110.0, 0.0));
             break;
         }
         harness.scroll_over(panel.center(), -120.0);
     }
-    let text_edit_pos = text_edit_pos.expect("Text Content label");
+    let text_edit_pos = text_edit_pos.expect("Text content label");
     harness.editor.ui.properties.text_body = "Thanks a lot for completing the course.".to_owned();
     // Simulate commit via blur
     harness.click_at(text_edit_pos);
@@ -6501,8 +6596,8 @@ fn insert_menu_creates_a_results_slide_and_selects_it() {
     harness.click_at(insert);
     harness.idle_frame();
     let item = harness
-        .find_text("Results Slide")
-        .expect("Results Slide menu item");
+        .find_text("Results slide")
+        .expect("Results slide menu item");
     harness.click_at(item);
     harness.idle_frame();
 
@@ -6538,8 +6633,8 @@ fn insert_menu_creates_a_certificate_slide_and_selects_it() {
     harness.click_at(insert);
     harness.idle_frame();
     let item = harness
-        .find_text("Certificate Slide")
-        .expect("Certificate Slide menu item");
+        .find_text("Certificate slide")
+        .expect("Certificate slide menu item");
     harness.click_at(item);
     harness.idle_frame();
 
@@ -6615,7 +6710,7 @@ fn switching_question_kind_to_fill_in_shows_the_fill_in_form() {
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
     assert!(harness.find_text("+ Add choice").is_some());
     let prompt = quiz_question(&harness).prompt;
-    harness.pick_combo("Multiple Choice", "Fill in");
+    harness.pick_combo("Multiple choice", "Fill in");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::FillIn);
@@ -6637,7 +6732,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
     use coursecraft_course::{CmpOp, Condition, QuestionKind, Value};
 
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Custom question (graded by a condition)");
+    harness.pick_combo("Multiple choice", "Custom question (graded by a condition)");
     harness.idle_frame();
     harness.idle_frame();
 
@@ -6688,7 +6783,7 @@ fn freeform_question_shows_the_condition_builder_and_applies_a_change() {
 fn likert_choices_never_mark_correct_and_add_hides_at_eleven() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Likert scale");
+    harness.pick_combo("Multiple choice", "Likert scale");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Likert);
@@ -6731,7 +6826,7 @@ fn likert_choices_never_mark_correct_and_add_hides_at_eleven() {
 fn survey_question_shows_not_graded_and_no_points() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Likert scale");
+    harness.pick_combo("Multiple choice", "Likert scale");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Likert);
@@ -6743,7 +6838,7 @@ fn survey_question_shows_not_graded_and_no_points() {
 fn adding_a_matching_pair_appends_one() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Matching");
+    harness.pick_combo("Multiple choice", "Matching");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Matching);
@@ -6766,7 +6861,7 @@ fn adding_a_matching_pair_appends_one() {
 fn reordering_a_sequence_item_moves_it_down() {
     use coursecraft_course::QuestionKind;
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
-    harness.pick_combo("Multiple Choice", "Sequence");
+    harness.pick_combo("Multiple choice", "Sequence");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Sequence);
@@ -6796,7 +6891,7 @@ fn switching_question_kind_to_hotspot_shows_the_hotspot_form_and_adds_region() {
     let mut harness = quiz_question_harness(1280.0, 900.0, 1.0);
 
     // Switching to Hotspot before an image exists on the slide fails
-    harness.pick_combo("Multiple Choice", "Hotspot");
+    harness.pick_combo("Multiple choice", "Hotspot");
     harness.idle_frame();
     assert!(harness.editor.ui.last_error.is_some());
     assert_ne!(quiz_question(&harness).kind, QuestionKind::Hotspot);
@@ -6813,7 +6908,7 @@ fn switching_question_kind_to_hotspot_shows_the_hotspot_form_and_adds_region() {
     harness.idle_frame();
 
     // Now switch to Hotspot succeeds
-    harness.pick_combo("Multiple Choice", "Hotspot");
+    harness.pick_combo("Multiple choice", "Hotspot");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Hotspot);
@@ -6846,7 +6941,7 @@ fn canvas_hotspot_region_dragging_updates_position_and_undo() {
     );
     harness.idle_frame();
 
-    harness.pick_combo("Multiple Choice", "Hotspot");
+    harness.pick_combo("Multiple choice", "Hotspot");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::Hotspot);
@@ -6932,7 +7027,7 @@ fn switching_question_kind_to_drag_drop_shows_form_and_updates_target() {
     harness.idle_frame();
 
     // Switch to Drag and drop
-    harness.pick_combo("Multiple Choice", "Drag and drop");
+    harness.pick_combo("Multiple choice", "Drag and drop");
     harness.idle_frame();
     let q = quiz_question(&harness);
     assert_eq!(q.kind, QuestionKind::DragDrop);
@@ -7133,8 +7228,8 @@ fn toolbar_normal_width_labels_and_actions() {
 
     // At >= 1100 px width, toolbar labels are laid out
     assert!(
-        harness.find_text("Add slide").is_some(),
-        "Add slide button label"
+        harness.find_text("New slide").is_some(),
+        "New slide button label"
     );
     assert!(
         harness.find_text("Preview").is_some(),
@@ -7168,8 +7263,8 @@ fn toolbar_normal_width_labels_and_actions() {
     harness.idle_frame();
     assert_eq!(harness.editor.ui.inspector_tab, crate::InspectorTab::Course);
 
-    // Clicking Preview dispatches preview request
-    let preview_pos = harness.find_text("Preview").expect("Preview button");
+    // Clicking Preview dispatches preview request (find_text_last skips the top-level Preview menu)
+    let preview_pos = harness.find_text_last("Preview").expect("Preview button");
     let reqs = harness.frame(vec![
         egui::Event::PointerMoved(preview_pos),
         egui::Event::PointerButton {
@@ -7200,8 +7295,8 @@ fn toolbar_narrow_width_drops_labels_icon_only() {
 
     // Below 1100 px, toolbar labels are dropped to prevent clipping
     assert!(
-        harness.find_text("Add slide").is_none(),
-        "Add slide label should be dropped at 1024 px width"
+        harness.find_text("New slide").is_none(),
+        "New slide label should be dropped at 1024 px width"
     );
 
     // But icons are still rendered and interactive
@@ -8762,9 +8857,9 @@ fn toolbar_question_popup_inserts_and_opens_question_tab() {
     harness.click_at(question_btn);
     harness.idle_frame();
     for name in [
-        "Multiple Choice",
-        "Multiple Response",
-        "True / False",
+        "Multiple choice",
+        "Multiple response",
+        "True / false",
         "Fill in",
         "Sequence",
         "Matching",
@@ -8777,8 +8872,8 @@ fn toolbar_question_popup_inserts_and_opens_question_tab() {
         );
     }
     let kind = harness
-        .find_text("Multiple Choice")
-        .expect("Multiple Choice popup item");
+        .find_text("Multiple choice")
+        .expect("Multiple choice popup item");
     harness.click_at(kind);
     harness.idle_frame();
 
@@ -9672,12 +9767,12 @@ fn menu_routes_open_the_variables_tab_and_course_settings() {
     harness.idle_frame();
     assert_eq!(harness.editor.ui.bottom_tab, BottomTab::Variables);
 
-    let file = harness.find_text("File").expect("File menu");
-    harness.click_at(file);
+    let project = harness.find_text("Project").expect("Project menu");
+    harness.click_at(project);
     harness.idle_frame();
     let properties = harness
-        .find_text_last("Course Properties")
-        .expect("Course Properties menu item");
+        .find_text_last("Course settings…")
+        .expect("Course settings menu item");
     harness.click_at(properties);
     harness.idle_frame();
     assert!(harness.editor.ui.show_course_settings_window);
@@ -9720,8 +9815,8 @@ fn edit_menu_delete_scene_opens_the_confirmation() {
     harness.click_at(edit);
     harness.idle_frame();
     let delete = harness
-        .find_text_last("Delete Scene")
-        .expect("Delete Scene menu item");
+        .find_text_last("Delete scene")
+        .expect("Delete scene menu item");
     harness.click_at(delete);
     harness.idle_frame();
     assert!(harness.editor.ui.pending_delete_scene.is_some());
@@ -11428,7 +11523,7 @@ fn entering_and_leaving_master_view_restores_the_slide_and_hides_tabs() {
             .tab_rects
             .contains_key("Question")
     );
-    assert!(harness.find_text("Close Master View").is_some());
+    assert!(harness.find_text("Close slide masters").is_some());
 
     harness.editor.leave_master_view();
     harness.idle_frame();
@@ -11591,8 +11686,8 @@ fn project_menu_opens_ai_settings() {
     harness.click_at(project);
     harness.idle_frame();
     let item = harness
-        .find_text_last("AI Settings…")
-        .expect("AI Settings menu item");
+        .find_text_last("AI settings…")
+        .expect("AI settings menu item");
     harness.click_at(item);
     harness.idle_frame();
 
@@ -14325,7 +14420,7 @@ fn trigger_form_shows_the_key_picker_and_filtered_object_lists() {
     }
     harness.idle_frame();
     harness.idle_frame();
-    assert!(harness.find_text("Draggable Object").is_some());
+    assert!(harness.find_text("Draggable object").is_some());
     assert!(harness.find_text("Target").is_some());
 
     {
@@ -14831,7 +14926,7 @@ fn timeline_harness_with_fake() -> TestHarness {
     use crate::timeline_playback::tests::FakeTimelineMedia;
     use std::sync::Arc;
     let mut harness = TestHarness::new(timeline_media_course());
-    harness.editor.media = vec![
+    harness.editor.media.set_all(vec![
         (
             "clip.mp4".to_owned(),
             Arc::from(vec![1u8; 64].into_boxed_slice()),
@@ -14840,7 +14935,7 @@ fn timeline_harness_with_fake() -> TestHarness {
             "note.wav".to_owned(),
             Arc::from(vec![2u8; 64].into_boxed_slice()),
         ),
-    ];
+    ]);
     harness
         .editor
         .set_timeline_playback(crate::timeline_playback::TimelinePlayback::with_backend(
@@ -16205,7 +16300,7 @@ fn record_narration_is_refused_in_master_view() {
             .status_message
             .as_ref()
             .map(|(message, _)| message.as_str()),
-        Some("Not available in Master View")
+        Some("Not available in slide masters")
     );
 }
 
@@ -16882,8 +16977,8 @@ fn record_narration_opens_from_the_insert_menu() {
     harness.click_at(insert);
     harness.idle_frame();
     let item = harness
-        .find_text_last("Record Narration…")
-        .expect("Record Narration menu item");
+        .find_text_last("Record narration…")
+        .expect("Record narration menu item");
     harness.click_at(item);
     harness.idle_frame();
     assert!(harness.editor.ui.record_narration.open);
@@ -16908,8 +17003,8 @@ fn record_narration_opens_from_the_toolbar_media_popup() {
     harness.click_at(media_btn);
     harness.idle_frame();
     let item = harness
-        .find_text("Record Narration…")
-        .expect("Record Narration… in Media popup");
+        .find_text("Record narration…")
+        .expect("Record narration… in Media popup");
     harness.click_at(item);
     harness.idle_frame();
     assert!(harness.editor.ui.record_narration.open);
@@ -17075,7 +17170,7 @@ fn view_menu_toggles_rulers_grid_snap_and_guides() {
             (|e: &Editor| e.session.course.editor.show_rulers) as fn(&Editor) -> bool,
         ),
         ("Grid", |e: &Editor| e.session.course.editor.show_grid),
-        ("Snap to Grid", |e: &Editor| {
+        ("Snap to grid", |e: &Editor| {
             e.session.course.editor.snap_to_grid
         }),
         ("Guides", |e: &Editor| e.session.course.editor.show_guides),
@@ -17138,12 +17233,15 @@ fn slide_size_dialog_opens_from_the_file_menu_and_apply_dispatches() {
     let file = h.find_text("File").expect("File menu");
     h.click_at(file);
     h.idle_frame();
-    let item = h.find_text("Slide Size…").expect("Slide Size item");
+    let item = h.find_text("Slide size…").expect("Slide size item");
     h.click_at(item);
     h.idle_frame();
     assert!(h.editor.ui.slide_size_dialog.open);
 
-    let preset = h.find_text("4:3 (960 x 720)").expect("4:3 preset");
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let preset = h.find_text("4:3 Standard (960 × 720)").expect("4:3 preset");
     h.click_at(preset);
     h.idle_frame();
     assert_eq!(
@@ -17172,6 +17270,609 @@ fn slide_size_dialog_disables_apply_out_of_range() {
     state.w = 1280;
     state.h = 4321;
     assert!(!state.valid());
+}
+
+#[test]
+fn slide_size_dialog_preset_combo_and_custom_switching() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+
+    // Select 16:9 Full HD (1920 × 1080) -> ratio "16:9"
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    // Esc while combo popup is open closes only the popup, not the dialog (popup-first).
+    assert!(egui::Popup::is_any_open(&h.ctx));
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.open);
+
+    // Reopen combo and pick Full HD.
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
+    h.click_at(fhd);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1920, 1080)
+    );
+    assert!(
+        h.find_text("16:9").is_some(),
+        "ratio badge should show 16:9"
+    );
+
+    // Select 9:16 Portrait (1080 × 1920).
+    let combo = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let portrait = h
+        .find_text("9:16 Portrait (1080 × 1920)")
+        .expect("Portrait preset");
+    h.click_at(portrait);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1080, 1920)
+    );
+
+    // Typing a custom width switches combo label to "Custom".
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("1500");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.w, 1500);
+    assert!(
+        h.find_text("Custom").is_some(),
+        "combo label must switch to Custom"
+    );
+}
+
+#[test]
+fn slide_size_dialog_aspect_lock_keeps_and_updates_ratio() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.lock_aspect);
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1280, 720)
+    );
+
+    // With lock ON at 1280x720, changing W to 1920 updates H to 1080.
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("1920");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1920, 1080)
+    );
+
+    // Changing H to 900 updates W to 1600.
+    let h_label = h.find_text("H").expect("H label");
+    h.click_at(egui::Pos2::new(h_label.x + 30.0, h_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("900");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1600, 900)
+    );
+
+    // Uncheck lock -> W changes independently.
+    let lock = h
+        .find_text("Lock aspect ratio")
+        .expect("Lock aspect ratio checkbox");
+    h.click_at(lock);
+    h.idle_frame();
+    assert!(!h.editor.ui.slide_size_dialog.lock_aspect);
+
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("1000");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (1000, 900)
+    );
+
+    // Re-checking lock captures the new 10:9 ratio.
+    let lock = h
+        .find_text("Lock aspect ratio")
+        .expect("Lock aspect ratio checkbox");
+    h.click_at(lock);
+    h.idle_frame();
+    assert!(h.editor.ui.slide_size_dialog.lock_aspect);
+
+    let w_label = h.find_text("W").expect("W label");
+    h.click_at(egui::Pos2::new(w_label.x + 30.0, w_label.y));
+    h.idle_frame();
+    h.press(Key::A, Modifiers::COMMAND);
+    h.type_text("2000");
+    h.press(Key::Tab, Modifiers::NONE);
+    h.idle_frame();
+    assert_eq!(
+        (
+            h.editor.ui.slide_size_dialog.w,
+            h.editor.ui.slide_size_dialog.h
+        ),
+        (2000, 1800)
+    );
+}
+
+#[test]
+fn slide_size_dialog_use_as_default_emits_request_and_disables_when_already_default() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+
+    // At 1280x720 (already default), button is disabled with explanatory tooltip.
+    let btn_pos = h
+        .find_text("Use as default for new courses")
+        .expect("Use as default button");
+    let tip = h
+        .probe_tooltip(btn_pos)
+        .expect("disabled default button should explain why");
+    assert!(
+        tip.contains("Already the default"),
+        "unexpected tooltip: {tip}"
+    );
+
+    // Switch to 1920x1080 and click "Use as default for new courses".
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
+    h.click_at(fhd);
+    h.idle_frame();
+
+    let btn_pos = h
+        .find_text("Use as default for new courses")
+        .expect("Use as default button");
+    let mut requests = Vec::new();
+    h.frame(vec![Event::PointerMoved(btn_pos)]);
+    for pressed in [true, false] {
+        requests.extend(h.frame(vec![Event::PointerButton {
+            pos: btn_pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }]));
+    }
+    h.idle_frame();
+    assert_eq!(h.editor.ui.prefs.default_slide, (1920, 1080));
+    assert!(
+        requests.iter().any(|r| matches!(
+            r,
+            EditorRequest::SetPreferences {
+                default_slide: (1920, 1080),
+                ..
+            }
+        )),
+        "expected SetPreferences request, got {requests:?}"
+    );
+    assert!(
+        h.find_text("Saved as default").is_some(),
+        "expected Saved as default confirmation"
+    );
+    h.hover_at(egui::Pos2::ZERO);
+    h.idle_frame();
+    let btn_pos = h
+        .find_text("Use as default for new courses")
+        .expect("Use as default button");
+    let tip = h
+        .probe_tooltip(btn_pos)
+        .expect("button should now be disabled with tooltip");
+    assert!(
+        tip.contains("Already the default"),
+        "unexpected tooltip: {tip}"
+    );
+}
+
+#[test]
+fn slide_size_dialog_content_modes_dispatch_and_undo() {
+    let (mut h, _t) = lock_hide_setup();
+    let orig_size = h.editor.session.course.slide_size;
+    let slide_id = h.editor.selection.slide.clone();
+    let orig_frames: Vec<_> = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .expect("slide")
+        .objects
+        .iter()
+        .map(|o| (o.id.clone(), o.frame))
+        .collect();
+
+    for (radio_label, target_label, expected_size, check_enter) in [
+        (
+            "Scale to fit",
+            "4:3 Standard (960 × 720)",
+            (960, 720),
+            false,
+        ),
+        (
+            "Fill slide",
+            "9:16 Portrait (1080 × 1920)",
+            (1080, 1920),
+            false,
+        ),
+        (
+            "Keep as is",
+            "16:9 Full HD (1920 × 1080)",
+            (1920, 1080),
+            true,
+        ),
+    ] {
+        h.editor.open_slide_size_dialog();
+        h.idle_frame();
+        let current_label = crate::slide_size_dialog::PRESETS
+            .iter()
+            .find(|p| {
+                (p.w, p.h)
+                    == (
+                        h.editor.session.course.slide_size.w,
+                        h.editor.session.course.slide_size.h,
+                    )
+            })
+            .expect("current preset")
+            .label;
+        let combo = h.find_text(current_label).expect("preset combo");
+        h.click_at(combo);
+        h.idle_frame();
+        let target = h.find_text(target_label).expect("target preset");
+        h.click_at(target);
+        h.idle_frame();
+
+        let radio = h.find_text(radio_label).expect("mode radio");
+        h.click_at(radio);
+        h.idle_frame();
+
+        if check_enter {
+            h.press(Key::Enter, Modifiers::NONE);
+        } else {
+            let apply = h.find_text("Apply").expect("Apply button");
+            h.click_at(apply);
+        }
+        h.idle_frame();
+
+        assert!(!h.editor.ui.slide_size_dialog.open);
+        let size = h.editor.session.course.slide_size;
+        assert_eq!((size.w, size.h), expected_size);
+
+        // Undo restores prior course size and frames.
+        h.press(Key::Z, Modifiers::COMMAND);
+        h.idle_frame();
+        assert_eq!(h.editor.session.course.slide_size, orig_size);
+        let restored_frames: Vec<_> = h
+            .editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .map(|o| (o.id.clone(), o.frame))
+            .collect();
+        assert_eq!(restored_frames, orig_frames);
+    }
+}
+
+#[test]
+fn slide_size_dialog_live_preview_and_course_wide_impact_counts() {
+    let (mut h, _t) = lock_hide_setup();
+    // Add an object on the current slide that sits at (900, 500) so it is inside 1280x720
+    // but completely outside 640x360 when keeping positions.
+    h.editor.run(
+        "object.add",
+        serde_json::json!({
+            "slide": h.editor.selection.slide,
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 900.0, "y": 500.0, "w": 120.0, "h": 80.0 }
+        }),
+    );
+    assert!(
+        h.editor.ui.last_error.is_none(),
+        "unexpected error adding object: {:?}",
+        h.editor.ui.last_error
+    );
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+
+    // 1) 1280x720 -> 1920x1080 (scale): reports "0 outside" and 150%.
+    let combo = h.find_text("16:9 HD (1280 × 720)").expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
+    h.click_at(fhd);
+    h.idle_frame();
+    assert!(
+        h.find_text_containing("0 outside").is_some(),
+        "expected '0 outside' for 1280x720 -> 1920x1080 (scale)"
+    );
+    assert!(
+        h.find_text_containing("150%").is_some(),
+        "expected '150%' scale hint for 1280x720 -> 1920x1080 (scale)"
+    );
+
+    // 2) 1280x720 -> 1080x1080 (scale): reports margin hint.
+    let combo = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("preset combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let square = h
+        .find_text("1:1 Square (1080 × 1080)")
+        .expect("Square preset");
+    h.click_at(square);
+    h.idle_frame();
+    assert!(
+        h.find_text_containing("Adds top/bottom margins").is_some(),
+        "expected margin hint for 1280x720 -> 1080x1080 (scale)"
+    );
+
+    // 3) 1280x720 -> 640x360 (keep): reports exact off-slide object count across the course.
+    let keep = h.find_text("Keep as is").expect("Keep as is radio");
+    h.click_at(keep);
+    h.idle_frame();
+    let lock = h
+        .find_text("Lock aspect ratio")
+        .expect("Lock aspect ratio checkbox");
+    h.click_at(lock);
+    h.idle_frame();
+    h.editor.ui.slide_size_dialog.w = 640;
+    h.editor.ui.slide_size_dialog.h = 360;
+    h.idle_frame();
+
+    let expected_outside = h
+        .editor
+        .session
+        .course
+        .slides()
+        .chain(h.editor.session.course.masters.iter())
+        .chain(h.editor.session.course.templates.iter())
+        .chain(
+            h.editor
+                .session
+                .course
+                .banks
+                .iter()
+                .flat_map(|b| b.slides.iter()),
+        )
+        .flat_map(|s| {
+            s.objects
+                .iter()
+                .chain(s.layers.iter().flat_map(|l| l.objects.iter()))
+        })
+        .filter(|o| {
+            !matches!(o.kind, ObjectKind::Audio { .. })
+                && o.panel.is_none()
+                && (o.frame.x + o.frame.w <= 0.0
+                    || o.frame.x >= 640.0
+                    || o.frame.y + o.frame.h <= 0.0
+                    || o.frame.y >= 360.0)
+        })
+        .count();
+    assert!(
+        expected_outside >= 1,
+        "expected at least 1 off-slide object at 640x360"
+    );
+    let needle = format!("{expected_outside} outside");
+    assert!(
+        h.find_text_containing(&needle).is_some(),
+        "expected '{needle}' in preview impact summary"
+    );
+}
+
+#[test]
+fn slide_size_dialog_preview_idle_frames_do_not_recompute() {
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_slide_size_dialog();
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 1);
+
+    for _ in 0..5 {
+        h.idle_frame();
+    }
+    assert_eq!(
+        h.editor.ui.slide_size_dialog.impact_recomputes, 1,
+        "idle frames must not recompute course-wide impact"
+    );
+
+    h.editor.ui.slide_size_dialog.mode = crate::slide_size_dialog::ResizeModeChoice::Fill;
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 2);
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 2);
+
+    h.editor.ui.slide_size_dialog.w = 1920;
+    h.editor.ui.slide_size_dialog.h = 1080;
+    h.idle_frame();
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 3);
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    assert_eq!(h.editor.ui.slide_size_dialog.impact_recomputes, 3);
+}
+
+#[test]
+fn slide_size_dialog_opens_from_all_five_entry_points() {
+    let (mut h, _t) = lock_hide_setup();
+
+    // 1. File ▸ Slide size…
+    let file = h.find_text("File").expect("File menu");
+    h.click_at(file);
+    h.idle_frame();
+    let item = h.find_text("Slide size…").expect("File > Slide size…");
+    h.click_at(item);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "File menu must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.idle_frame();
+
+    // 2. Slide ▸ Slide size…
+    let slide_menu = h.find_text("Slide").expect("Slide menu");
+    h.click_at(slide_menu);
+    h.idle_frame();
+    let item = h.find_text("Slide size…").expect("Slide > Slide size…");
+    h.click_at(item);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Slide menu must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.idle_frame();
+
+    // 3. Course Inspector "Change…"
+    h.editor.ui.inspector_tab = crate::InspectorTab::Course;
+    h.idle_frame();
+    let change = h.find_text("Change…").expect("Course inspector Change…");
+    h.click_at(change);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Course inspector Change… must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.idle_frame();
+
+    // 4. Course Settings "Change…"
+    h.editor.ui.inspector_tab = crate::InspectorTab::Format;
+    h.editor.ui.show_course_settings_window = true;
+    h.idle_frame();
+    h.idle_frame();
+    let change = h.find_text("Change…").expect("Course settings Change…");
+    h.click_at(change);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Course settings Change… must open Slide size"
+    );
+    h.editor.ui.slide_size_dialog.open = false;
+    h.editor.ui.show_course_settings_window = false;
+    h.idle_frame();
+
+    // 5. Status bar "1280 × 720 px" pill
+    let pill = h
+        .find_text("1280 × 720 px")
+        .expect("Status bar slide size pill");
+    h.click_at(pill);
+    h.idle_frame();
+    assert!(
+        h.editor.ui.slide_size_dialog.open,
+        "Status bar pill must open Slide size"
+    );
+}
+
+#[test]
+fn check_course_off_slide_warning_navigates_to_stranded_object() {
+    let (mut h, _t) = lock_hide_setup();
+    let layer_res = h
+        .editor
+        .run(
+            "layer.add",
+            serde_json::json!({ "slide": "slide1", "name": "Stranded Layer" }),
+        )
+        .expect("layer.add");
+    let layer_id = layer_res["id"].as_str().expect("layer id").to_owned();
+    let obj_res = h
+        .editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": "slide1",
+                "layer": layer_id,
+                "name": "Stranded Box",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#3B82F6" },
+                "frame": { "x": 1000.0, "y": 100.0, "w": 150.0, "h": 80.0 }
+            }),
+        )
+        .expect("object.add");
+    let obj_id = obj_res["id"].as_str().expect("object id").to_owned();
+
+    h.editor
+        .run(
+            "course.set_slide_size",
+            serde_json::json!({ "w": 800, "h": 600, "mode": "keep" }),
+        )
+        .expect("resize keep");
+    h.editor.selection.slide = String::new();
+    h.editor.selection.layer = None;
+    h.editor.selection.clear_objects();
+    h.editor.refresh_validate_only();
+    let issue_label = h
+        .editor
+        .ui
+        .validation_issues
+        .iter()
+        .find(|i| i.message.contains("lies outside the 800×600 slide"))
+        .map(|i| format!("{} — {}", i.path, i.message))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected off-slide warning, got {:?}",
+                h.editor.ui.validation_issues
+            )
+        });
+    h.editor.ui.show_validation_window = true;
+    h.idle_frame();
+    h.idle_frame();
+
+    let warning_pos = h
+        .find_text(&issue_label)
+        .expect("off-slide warning row in Check Course");
+    h.click_at(warning_pos);
+    h.idle_frame();
+
+    assert_eq!(h.editor.selection.slide, "slide1");
+    assert_eq!(h.editor.selection.layer.as_deref(), Some(layer_id.as_str()));
+    assert_eq!(h.editor.selection.object.as_deref(), Some(obj_id.as_str()));
 }
 
 #[test]
@@ -17218,6 +17919,20 @@ fn inspector_strikethrough_button_styles_the_text() {
 }
 
 #[test]
+fn format_aspect_ratio_unit_matrix() {
+    use crate::slide_size_dialog::format_aspect_ratio;
+    assert_eq!(format_aspect_ratio(1920, 1080), "16:9");
+    assert_eq!(format_aspect_ratio(1280, 720), "16:9");
+    assert_eq!(format_aspect_ratio(1280, 800), "16:10");
+    assert_eq!(format_aspect_ratio(960, 720), "4:3");
+    assert_eq!(format_aspect_ratio(1080, 1080), "1:1");
+    assert_eq!(format_aspect_ratio(1080, 1920), "9:16");
+    assert_eq!(format_aspect_ratio(1500, 900), "5:3");
+    assert_eq!(format_aspect_ratio(1001, 700), "1.43:1");
+    assert_eq!(format_aspect_ratio(0, 720), "—");
+}
+
+#[test]
 fn preferences_open_from_the_menu_and_changes_are_requested() {
     let (mut h, _t) = lock_hide_setup();
     let file = h.find_text("File").expect("File menu");
@@ -17227,12 +17942,20 @@ fn preferences_open_from_the_menu_and_changes_are_requested() {
     h.click_at(item);
     h.idle_frame();
     assert!(h.editor.ui.prefs.open);
-    let square = h.find_text("1:1 (1080 x 1080)").expect("preset");
+    // Open the default slide size combo and select 16:9 Full HD (1920 × 1080).
+    let combo = h
+        .find_text("16:9 HD (1280 × 720)")
+        .expect("default slide combo");
+    h.click_at(combo);
+    h.idle_frame();
+    let fhd = h
+        .find_text("16:9 Full HD (1920 × 1080)")
+        .expect("Full HD preset");
     let mut requests = Vec::new();
-    h.frame(vec![Event::PointerMoved(square)]);
+    h.frame(vec![Event::PointerMoved(fhd)]);
     for pressed in [true, false] {
         requests.extend(h.frame(vec![Event::PointerButton {
-            pos: square,
+            pos: fhd,
             button: PointerButton::Primary,
             pressed,
             modifiers: Modifiers::NONE,
@@ -17241,10 +17964,16 @@ fn preferences_open_from_the_menu_and_changes_are_requested() {
     assert!(requests.iter().any(|r| matches!(
         r,
         EditorRequest::SetPreferences {
-            default_slide: (1080, 1080),
+            default_slide: (1920, 1080),
             ..
         }
     )));
+
+    // Verify set_preferences accepts custom sizes and the combo shows "Custom".
+    h.editor.set_preferences(1, (1440, 900));
+    h.idle_frame();
+    assert_eq!(h.editor.ui.prefs.default_slide, (1440, 900));
+    assert!(h.find_text("Custom").is_some());
 }
 
 #[test]
@@ -17286,6 +18015,88 @@ fn preferences_checkbox_flips_as_you_type_spelling() {
         )),
         "the change is sent to the app to save"
     );
+}
+
+/// U-11: Preferences Performance radio switches editor profile, updates cache caps,
+/// and emits `EditorRequest::SetPreferences` with `performance_mode`.
+#[test]
+fn u11_preferences_performance_mode_updates_editor_profile_and_emits_request() {
+    use coursecraft_render::PerformanceMode;
+
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_preferences();
+    h.idle_frame();
+    assert_eq!(h.editor.performance_mode, PerformanceMode::Auto);
+    assert!(
+        h.find_text_containing("Published courses are not affected.")
+            .is_some(),
+        "Preferences must show the Lite mode helper note"
+    );
+
+    let lite = h.find_text("Lite").expect("Lite radio button");
+    let mut requests = Vec::new();
+    for pressed in [true, false] {
+        requests.extend(h.frame(vec![Event::PointerButton {
+            pos: lite,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }]));
+    }
+    assert_eq!(h.editor.performance_mode, PerformanceMode::Lite);
+    assert_eq!(h.editor.ui.prefs.performance_mode, PerformanceMode::Lite);
+    assert_eq!(h.editor.media_cache.picture_budget(), 64 * 1024 * 1024);
+    assert_eq!(h.editor.media_cache.max_canvas_dim(), 1024);
+    assert_eq!(h.editor.media_cache.max_thumb_dim(), 256);
+    assert!(
+        requests.iter().any(|r| matches!(
+            r,
+            EditorRequest::SetPreferences {
+                performance_mode: PerformanceMode::Lite,
+                ..
+            }
+        )),
+        "expected SetPreferences with performance_mode=Lite, got {requests:?}"
+    );
+}
+
+/// U-11: Large media library triggers a one-time non-blocking status notice and resets on `replace_course`.
+#[test]
+fn u11_memory_pressure_notice_fires_once_and_resets_on_replace_course() {
+    use std::sync::Arc;
+
+    let (mut h, _t) = lock_hide_setup();
+    let one_mib: Arc<[u8]> = Arc::from(vec![0u8; 1024 * 1024]);
+    let media: Vec<(String, Arc<[u8]>)> = (0..513)
+        .map(|i| (format!("img/big-{i}.bin"), Arc::clone(&one_mib)))
+        .collect();
+    h.editor.set_media(media);
+    assert!(!h.editor.ui.memory_pressure_warned);
+
+    h.idle_frame();
+    assert!(h.editor.ui.memory_pressure_warned);
+    assert!(
+        h.editor
+            .ui
+            .status_message
+            .as_ref()
+            .is_some_and(|(msg, _)| msg.contains("Large media library detected")),
+        "expected memory pressure status notice, got {:?}",
+        h.editor.ui.status_message
+    );
+
+    // Must only fire once per opened course.
+    h.editor.ui.status_message = None;
+    h.idle_frame();
+    assert!(
+        h.editor.ui.status_message.is_none(),
+        "memory pressure notice must not repeat on subsequent frames"
+    );
+
+    // Replacing the course resets the one-time guard.
+    let fresh = Course::from_json(COURSE_JSON).expect("valid course");
+    h.editor.replace_course(fresh);
+    assert!(!h.editor.ui.memory_pressure_warned);
 }
 
 fn triggers_harness() -> TestHarness {
@@ -17372,7 +18183,7 @@ fn trigger_copy_then_paste_adds_it_to_another_owner_and_skips_misfits() {
         .triggers
         .len();
     let undo = h.editor.session.undo_len();
-    let paste = h.find_text("Paste Triggers").expect("Paste Triggers");
+    let paste = h.find_text("Paste triggers").expect("Paste triggers");
     h.click_at(paste);
     h.idle_frame();
     let slide = h.editor.session.course.slide("s-tabs").unwrap();
@@ -17437,7 +18248,7 @@ fn version_history_menu_item_is_disabled_without_a_file_and_opens_with_one() {
     let file = h.find_text("File").expect("File menu");
     h.click_at(file);
     h.idle_frame();
-    let item = h.find_text("Version History…").expect("menu item");
+    let item = h.find_text("Version history…").expect("menu item");
     let requests = click_collect(&mut h, item);
     assert!(
         !requests
@@ -17449,12 +18260,12 @@ fn version_history_menu_item_is_disabled_without_a_file_and_opens_with_one() {
     // A saved project enables it and the click raises the request.
     h.editor.set_project_has_file(true);
     h.idle_frame();
-    if h.find_text("Version History…").is_none() {
+    if h.find_text("Version history…").is_none() {
         let file = h.find_text("File").expect("File menu");
         h.click_at(file);
         h.idle_frame();
     }
-    let item = h.find_text("Version History…").expect("menu item");
+    let item = h.find_text("Version history…").expect("menu item");
     let requests = click_collect(&mut h, item);
     assert!(
         requests
@@ -17511,7 +18322,7 @@ fn folder_menu_items_raise_requests_and_history_says_git_is_the_history() {
     let file = h.find_text("File").expect("File menu");
     h.click_at(file);
     h.idle_frame();
-    let open = h.find_text("Open Folder…").expect("Open Folder item");
+    let open = h.find_text("Open folder…").expect("Open folder item");
     let requests = click_collect(&mut h, open);
     assert!(
         requests
@@ -17519,14 +18330,14 @@ fn folder_menu_items_raise_requests_and_history_says_git_is_the_history() {
             .any(|r| matches!(r, EditorRequest::OpenFolder))
     );
 
-    if h.find_text("Save As Project Folder (for git)…").is_none() {
+    if h.find_text("Save as project folder (for git)…").is_none() {
         let file = h.find_text("File").expect("File menu");
         h.click_at(file);
         h.idle_frame();
     }
     let save = h
-        .find_text("Save As Project Folder (for git)…")
-        .expect("Save As Project Folder item");
+        .find_text("Save as project folder (for git)…")
+        .expect("Save as project folder item");
     let requests = click_collect(&mut h, save);
     assert!(
         requests
@@ -17932,7 +18743,7 @@ fn edit_menu_shows_named_undo_and_redo() {
     harness.click_at(edit);
     harness.idle_frame();
     assert!(
-        harness.find_text_last("Undo Course Title").is_some(),
+        harness.find_text_last("Undo course title").is_some(),
         "Edit menu should show named Undo"
     );
     assert!(
@@ -17944,7 +18755,7 @@ fn edit_menu_shows_named_undo_and_redo() {
     harness.editor.run("edit.undo", serde_json::json!({}));
     harness.idle_frame();
     assert!(
-        harness.find_text_last("Redo Course Title").is_some(),
+        harness.find_text_last("Redo course title").is_some(),
         "Edit menu should show named Redo"
     );
 }
@@ -18032,4 +18843,1737 @@ fn exit_animations_play_in_preview_with_slide_transition() {
     player.handle(&coursecraft_logic::Input::Tick { ms: 500 });
     assert!(player.sample_object("txt").is_none());
     assert!(player.sample_object("shape2").is_none());
+}
+
+#[test]
+fn find_glossary_hit_opens_course_settings_with_resources_expanded() {
+    let mut session = coursecraft_engine::Session::blank("Glossary Find");
+    session
+        .execute(
+            "glossary.add",
+            &serde_json::json!({
+                "id": "g1",
+                "term": "Telemetry",
+                "definition": "Automated measurement of remote course events."
+            }),
+        )
+        .expect("add glossary");
+    let mut harness = TestHarness::new(session.course);
+    harness.idle_frame();
+    harness.press(Key::F, egui::Modifiers::COMMAND);
+    harness.type_text("Telemetry");
+    harness.idle_frame();
+
+    let hit_pos = harness
+        .find_text_last("Telemetry")
+        .expect("glossary hit in Find & Replace");
+    harness.click_at(hit_pos);
+    harness.idle_frame();
+
+    assert!(
+        harness.editor.ui.show_course_settings_window,
+        "clicking a glossary hit should open Course Settings"
+    );
+    let cs_pos = harness
+        .find_text("Course settings")
+        .expect("Course settings title");
+    harness.scroll_over(egui::pos2(cs_pos.x, cs_pos.y + 200.0), -600.0);
+    harness.idle_frame();
+    assert!(
+        harness.find_text("Add term").is_some(),
+        "Resources & glossary section should be expanded so Add term is visible"
+    );
+}
+
+#[test]
+fn resources_glossary_sort_button_and_order_controls_follow_ui_rules() {
+    // C-06: "Sort A–Z" button dispatches glossary.sort, disables with tooltip when < 2 terms
+    // or already sorted, and ↑/↓/✕ buttons are >= 24×24 pt with disabled tooltips.
+    let mut session = coursecraft_engine::Session::blank("Glossary UI");
+    session
+        .execute(
+            "glossary.add",
+            &serde_json::json!({ "term": "OnlyOne", "definition": "Single entry." }),
+        )
+        .expect("add single glossary term");
+
+    let mut harness = TestHarness::new_with_size(session.course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    harness.editor.ui.course_settings.open_resources = true;
+    for _ in 0..3 {
+        harness.idle_frame();
+    }
+    let cs_pos = harness
+        .find_text("Course settings")
+        .expect("Course settings title");
+    harness.scroll_over(egui::pos2(cs_pos.x, cs_pos.y + 200.0), -600.0);
+    harness.idle_frame();
+
+    let find_widget_for_text = |h: &mut TestHarness, label: &str| {
+        h.last_widgets
+            .iter()
+            .find(|n| n.label.as_deref() == Some(label))
+            .cloned()
+            .unwrap_or_else(|| panic!("missing widget for {label:?}"))
+    };
+
+    // With < 2 terms, "Sort A–Z" is disabled with explanatory tooltip.
+    let sort_btn = find_widget_for_text(&mut harness, "Sort A–Z");
+    assert!(
+        sort_btn.disabled,
+        "Sort A–Z must be disabled with < 2 terms"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    let tip = harness.probe_tooltip(sort_btn.bounds.center());
+    assert_eq!(
+        tip.as_deref(),
+        Some("Add at least two terms to sort"),
+        "unexpected tooltip for < 2 terms: {tip:?}"
+    );
+
+    // Replace with 3 unsorted terms: ["Zebra", "alpha", "Beta"].
+    let mut s2 = coursecraft_engine::Session::blank("Glossary Unsorted");
+    for term in ["Zebra", "alpha", "Beta"] {
+        s2.execute("glossary.add", &serde_json::json!({ "term": term }))
+            .expect("add term");
+    }
+    let mut harness = TestHarness::new_with_size(s2.course, (1280.0, 1100.0));
+    harness.editor.ui.show_course_settings_window = true;
+    harness.editor.ui.course_settings.open_resources = true;
+    for _ in 0..3 {
+        harness.idle_frame();
+    }
+    let cs_pos = harness
+        .find_text("Course settings")
+        .expect("Course settings title");
+    harness.scroll_over(egui::pos2(cs_pos.x, cs_pos.y + 200.0), -600.0);
+    harness.idle_frame();
+
+    // Check ↑/↓/✕ button sizes (>= 24×24 pt) and disabled tooltips on first ↑ / last ↓.
+    let mut up_buttons: Vec<_> = harness
+        .last_widgets
+        .iter()
+        .filter(|n| n.label.as_deref() == Some("↑"))
+        .cloned()
+        .collect();
+    up_buttons.sort_by(|a, b| a.bounds.min.y.total_cmp(&b.bounds.min.y));
+    assert_eq!(up_buttons.len(), 3, "expected 3 ↑ buttons");
+    for btn in &up_buttons {
+        assert!(
+            btn.bounds.width() >= 24.0 && btn.bounds.height() >= 24.0,
+            "↑ button must be >= 24×24 pt, got {:?}",
+            btn.bounds.size()
+        );
+    }
+    assert!(up_buttons[0].disabled, "first ↑ button must be disabled");
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    assert_eq!(
+        harness
+            .probe_tooltip(up_buttons[0].bounds.center())
+            .as_deref(),
+        Some("Already at the top")
+    );
+
+    let mut down_buttons: Vec<_> = harness
+        .last_widgets
+        .iter()
+        .filter(|n| n.label.as_deref() == Some("↓"))
+        .cloned()
+        .collect();
+    down_buttons.sort_by(|a, b| a.bounds.min.y.total_cmp(&b.bounds.min.y));
+    assert_eq!(down_buttons.len(), 3, "expected 3 ↓ buttons");
+    for btn in &down_buttons {
+        assert!(
+            btn.bounds.width() >= 24.0 && btn.bounds.height() >= 24.0,
+            "↓ button must be >= 24×24 pt, got {:?}",
+            btn.bounds.size()
+        );
+    }
+    assert!(down_buttons[2].disabled, "last ↓ button must be disabled");
+    assert_eq!(
+        harness
+            .probe_tooltip(down_buttons[2].bounds.center())
+            .as_deref(),
+        Some("Already at the bottom")
+    );
+
+    let remove_buttons: Vec<_> = harness
+        .last_widgets
+        .iter()
+        .filter(|n| n.label.as_deref() == Some("✕"))
+        .cloned()
+        .collect();
+    assert_eq!(remove_buttons.len(), 3, "expected 3 ✕ buttons");
+    for btn in &remove_buttons {
+        assert!(
+            btn.bounds.width() >= 24.0 && btn.bounds.height() >= 24.0,
+            "✕ button must be >= 24×24 pt, got {:?}",
+            btn.bounds.size()
+        );
+    }
+
+    // "Sort A–Z" is enabled and clicking it sorts the glossary via glossary.sort.
+    let sort_btn = find_widget_for_text(&mut harness, "Sort A–Z");
+    assert!(!sort_btn.disabled, "Sort A–Z must be enabled when unsorted");
+    harness.click_at(sort_btn.bounds.center());
+    harness.idle_frame();
+
+    let terms: Vec<&str> = harness
+        .editor
+        .session
+        .course
+        .glossary
+        .iter()
+        .map(|g| g.term.as_str())
+        .collect();
+    assert_eq!(terms, vec!["alpha", "Beta", "Zebra"]);
+
+    // After sorting, "Sort A–Z" is disabled with the already-sorted tooltip.
+    let sort_btn = find_widget_for_text(&mut harness, "Sort A–Z");
+    assert!(
+        sort_btn.disabled,
+        "Sort A–Z must be disabled once already sorted"
+    );
+    harness.advance_time(1.0);
+    harness.idle_frame();
+    assert_eq!(
+        harness.probe_tooltip(sort_btn.bounds.center()).as_deref(),
+        Some("Glossary is already sorted A–Z")
+    );
+}
+
+#[test]
+fn timeline_show_all_and_unlock_all_dispatch_single_undo_batches() {
+    let mut h = TestHarness::new_with_size(two_scene_course(), (1440.0, 900.0));
+    let slide_id = h.editor.selection.slide.clone();
+    // Ensure at least 3 objects exist on the active slide.
+    for i in 0..3 {
+        h.editor.run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+                "frame": { "x": 100.0 + i as f32 * 40.0, "y": 100.0, "w": 60.0, "h": 40.0 }
+            }),
+        );
+        assert!(h.editor.ui.last_error.is_none());
+    }
+    let obj_ids: Vec<String> = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .expect("slide")
+        .objects
+        .iter()
+        .map(|o| o.id.clone())
+        .collect();
+    assert!(obj_ids.len() >= 3);
+    let hide_ids = obj_ids[0..3].to_vec();
+    let lock_ids = obj_ids[0..2].to_vec();
+
+    // Hide 3 objects and lock 2 objects.
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": slide_id, "objects": hide_ids, "hidden": true }),
+    );
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": slide_id, "objects": lock_ids, "locked": true }),
+    );
+    h.idle_frame();
+
+    // "Show all (3)" appears in the Timeline header and unhides all 3 in 1 undo step.
+    let show_all_pos = h
+        .find_text_containing("Show all (3)")
+        .expect("Show all (3) button");
+    h.click_at(show_all_pos);
+    h.idle_frame();
+
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert!(
+        slide.objects.iter().all(|o| !o.editor_hidden),
+        "all objects must be unhidden after clicking Show all (3)"
+    );
+    assert!(
+        h.find_text_containing("Show all (").is_none(),
+        "Show all button must disappear when no hidden objects remain"
+    );
+
+    // Ctrl+Z restores all 3 hidden objects in 1 undo step.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert_eq!(
+        slide.objects.iter().filter(|o| o.editor_hidden).count(),
+        3,
+        "1 undo step must restore all 3 hidden objects"
+    );
+
+    // Re-unhide via Show all (3), then test "Unlock all (2)".
+    let show_all_pos = h
+        .find_text_containing("Show all (3)")
+        .expect("Show all (3) button");
+    h.click_at(show_all_pos);
+    h.idle_frame();
+
+    let unlock_all_pos = h
+        .find_text_containing("Unlock all (2)")
+        .expect("Unlock all (2) button");
+    h.click_at(unlock_all_pos);
+    h.idle_frame();
+
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert!(
+        slide.objects.iter().all(|o| !o.locked),
+        "all objects must be unlocked after clicking Unlock all (2)"
+    );
+    assert!(
+        h.find_text_containing("Unlock all (").is_none(),
+        "Unlock all button must disappear when no locked objects remain"
+    );
+
+    // Ctrl+Z restores both locked objects in 1 undo step.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    let slide = h.editor.session.course.slide(&slide_id).expect("slide");
+    assert_eq!(
+        slide.objects.iter().filter(|o| o.locked).count(),
+        2,
+        "1 undo step must restore both locked objects"
+    );
+}
+
+#[test]
+fn view_menu_show_all_and_unlock_all_disabled_tooltips_and_batch_undo() {
+    let mut h = TestHarness::new_with_size(two_scene_course(), (1440.0, 900.0));
+    let find_widget_for_text = |h: &mut TestHarness, label: &str| {
+        let pos = h.find_text(label).expect("label position");
+        h.last_widgets
+            .iter()
+            .find(|n| {
+                n.role == egui::Role::Button
+                    && (n.label.as_deref() == Some(label) || n.bounds.contains(pos))
+            })
+            .cloned()
+            .expect("widget node")
+    };
+    let slide_id = h.editor.selection.slide.clone();
+    for i in 0..2 {
+        h.editor.run(
+            "object.add",
+            serde_json::json!({
+                "slide": slide_id,
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+                "frame": { "x": 80.0 + i as f32 * 50.0, "y": 80.0, "w": 60.0, "h": 40.0 }
+            }),
+        );
+        assert!(h.editor.ui.last_error.is_none());
+    }
+
+    // Open View menu when no objects are hidden or locked -> both items disabled with tooltips.
+    let view_menu = h.find_text("View").expect("View menu");
+    h.click_at(view_menu);
+    h.idle_frame();
+
+    let show_item = find_widget_for_text(&mut h, "Show all hidden objects");
+    assert!(
+        show_item.disabled,
+        "Show all hidden objects must be disabled when none hidden"
+    );
+    h.advance_time(1.0);
+    h.idle_frame();
+    assert_eq!(
+        h.probe_tooltip(show_item.bounds.center()).as_deref(),
+        Some("No hidden objects on this slide")
+    );
+
+    let unlock_item = find_widget_for_text(&mut h, "Unlock all objects");
+    assert!(
+        unlock_item.disabled,
+        "Unlock all objects must be disabled when none locked"
+    );
+    assert_eq!(
+        h.probe_tooltip(unlock_item.bounds.center()).as_deref(),
+        Some("No locked objects on this slide")
+    );
+
+    // Close menu, hide and lock 2 objects, then test View menu batch actions.
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+
+    let obj_ids: Vec<String> = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .expect("slide")
+        .objects
+        .iter()
+        .take(2)
+        .map(|o| o.id.clone())
+        .collect();
+    h.editor.run(
+        "object.hide_in_editor",
+        serde_json::json!({ "slide": slide_id, "objects": obj_ids, "hidden": true }),
+    );
+    h.editor.run(
+        "object.lock",
+        serde_json::json!({ "slide": slide_id, "objects": obj_ids, "locked": true }),
+    );
+    h.idle_frame();
+
+    let view_menu = h.find_text("View").expect("View menu");
+    h.click_at(view_menu);
+    h.idle_frame();
+    let show_item = find_widget_for_text(&mut h, "Show all hidden objects");
+    assert!(!show_item.disabled);
+    h.click_at(show_item.bounds.center());
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .filter(|o| o.editor_hidden)
+            .count(),
+        0
+    );
+
+    let view_menu = h.find_text("View").expect("View menu");
+    h.click_at(view_menu);
+    h.idle_frame();
+    let unlock_item = find_widget_for_text(&mut h, "Unlock all objects");
+    assert!(!unlock_item.disabled);
+    h.click_at(unlock_item.bounds.center());
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .filter(|o| o.locked)
+            .count(),
+        0
+    );
+
+    // Single undo restores both locked objects.
+    h.press(Key::Z, Modifiers::COMMAND);
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide(&slide_id)
+            .expect("slide")
+            .objects
+            .iter()
+            .filter(|o| o.locked)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn m31_01_file_shortcuts_emit_requests_and_shift_s_beats_s() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut h = TestHarness::new(course);
+    h.idle_frame();
+
+    let key_event = |key: Key, modifiers: Modifiers| {
+        vec![Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]
+    };
+
+    let reqs = h.frame(key_event(Key::S, Modifiers::COMMAND));
+    assert!(
+        reqs.iter().any(|r| matches!(r, EditorRequest::Save)),
+        "Cmd/Ctrl+S must emit EditorRequest::Save, got {reqs:?}"
+    );
+
+    let reqs = h.frame(key_event(Key::S, Modifiers::COMMAND | Modifiers::SHIFT));
+    assert!(
+        reqs.iter().any(|r| matches!(r, EditorRequest::SaveAs)),
+        "Cmd/Ctrl+Shift+S must emit EditorRequest::SaveAs, got {reqs:?}"
+    );
+    assert!(
+        !reqs.iter().any(|r| matches!(r, EditorRequest::Save)),
+        "Cmd/Ctrl+Shift+S must not also emit EditorRequest::Save, got {reqs:?}"
+    );
+
+    let reqs = h.frame(key_event(Key::O, Modifiers::COMMAND));
+    assert!(
+        reqs.iter().any(|r| matches!(r, EditorRequest::Open)),
+        "Cmd/Ctrl+O must emit EditorRequest::Open, got {reqs:?}"
+    );
+
+    let reqs = h.frame(key_event(Key::N, Modifiers::COMMAND));
+    assert!(
+        reqs.iter().any(|r| matches!(r, EditorRequest::New)),
+        "Cmd/Ctrl+N must emit EditorRequest::New, got {reqs:?}"
+    );
+}
+
+#[test]
+fn m31_02_file_shortcuts_suppressed_in_text_edit_inline_preview_and_welcome() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut h = TestHarness::new(course);
+    h.idle_frame();
+
+    let key_event = |key: Key, modifiers: Modifiers| {
+        vec![Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]
+    };
+    let is_file_req = |r: &EditorRequest| {
+        matches!(
+            r,
+            EditorRequest::Save | EditorRequest::SaveAs | EditorRequest::Open | EditorRequest::New
+        )
+    };
+
+    // 1. TextEdit focused (Find & Replace dialog focuses its search TextEdit).
+    h.press(Key::F, Modifiers::COMMAND);
+    h.idle_frame();
+    assert!(
+        h.ctx.egui_wants_keyboard_input(),
+        "Find dialog must own keyboard input"
+    );
+    for (key, mods) in [
+        (Key::S, Modifiers::COMMAND),
+        (Key::S, Modifiers::COMMAND | Modifiers::SHIFT),
+        (Key::O, Modifiers::COMMAND),
+        (Key::N, Modifiers::COMMAND),
+    ] {
+        let reqs = h.frame(key_event(key, mods));
+        assert!(
+            !reqs.iter().any(is_file_req),
+            "file shortcut ({key:?}) must be suppressed while TextEdit is focused: {reqs:?}"
+        );
+    }
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+
+    // 2. Inline canvas text edit active.
+    let slide_id = h.editor.selection.slide.clone();
+    let text_obj = h
+        .editor
+        .session
+        .course
+        .slide(&slide_id)
+        .and_then(|s| {
+            s.objects
+                .iter()
+                .find(|o| matches!(o.kind, ObjectKind::Text { .. }))
+        })
+        .map(|o| o.id.clone())
+        .expect("text object in hello course");
+    h.editor.ui.inline_edit = Some(crate::canvas::InlineEdit {
+        slide: slide_id,
+        object: text_obj,
+        buffer: "Editing".to_owned(),
+        original: "Editing".to_owned(),
+        is_button: false,
+        is_shape: false,
+        cell: None,
+        just_entered: false,
+        live_runs: Vec::new(),
+        live_paragraphs: Vec::new(),
+        last_revision: 0,
+        state_name: None,
+        extra_id: None,
+    });
+    for (key, mods) in [
+        (Key::S, Modifiers::COMMAND),
+        (Key::S, Modifiers::COMMAND | Modifiers::SHIFT),
+        (Key::O, Modifiers::COMMAND),
+        (Key::N, Modifiers::COMMAND),
+    ] {
+        let reqs = h.frame(key_event(key, mods));
+        assert!(
+            !reqs.iter().any(is_file_req),
+            "file shortcut ({key:?}) must be suppressed during inline edit: {reqs:?}"
+        );
+    }
+    h.editor.ui.inline_edit = None;
+    h.idle_frame();
+
+    // 3. Preview focused.
+    h.editor.open_preview_at(None);
+    h.idle_frame();
+    for (key, mods) in [
+        (Key::S, Modifiers::COMMAND),
+        (Key::S, Modifiers::COMMAND | Modifiers::SHIFT),
+        (Key::O, Modifiers::COMMAND),
+        (Key::N, Modifiers::COMMAND),
+    ] {
+        let reqs = h.frame(key_event(key, mods));
+        assert!(
+            !reqs.iter().any(is_file_req),
+            "file shortcut ({key:?}) must be suppressed while preview is open: {reqs:?}"
+        );
+    }
+    h.editor.preview = None;
+    h.idle_frame();
+
+    // 4. Welcome screen: Save/SaveAs suppressed, Open/New allowed.
+    h.editor.ui.show_welcome = true;
+    h.idle_frame();
+    let save_reqs = h.frame(key_event(Key::S, Modifiers::COMMAND));
+    assert!(!save_reqs.iter().any(is_file_req));
+    let save_as_reqs = h.frame(key_event(Key::S, Modifiers::COMMAND | Modifiers::SHIFT));
+    assert!(!save_as_reqs.iter().any(is_file_req));
+    let open_reqs = h.frame(key_event(Key::O, Modifiers::COMMAND));
+    assert!(open_reqs.iter().any(|r| matches!(r, EditorRequest::Open)));
+    let new_reqs = h.frame(key_event(Key::N, Modifiers::COMMAND));
+    assert!(new_reqs.iter().any(|r| matches!(r, EditorRequest::New)));
+}
+
+#[test]
+fn m31_04_file_menu_hints_and_compound_shortcut_formatting() {
+    assert_eq!(
+        crate::menu::format_shortcut("Ctrl+S / Ctrl+Shift+S", true, |_| true),
+        "⌘S / ⇧⌘S"
+    );
+    assert_eq!(
+        crate::menu::format_shortcut("Ctrl+S / Ctrl+Shift+S", false, |_| true),
+        "Ctrl+S / Ctrl+Shift+S"
+    );
+    assert_eq!(
+        crate::menu::format_shortcut("Ctrl+N / Ctrl+O", true, |_| true),
+        "⌘N / ⌘O"
+    );
+
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let mut h = TestHarness::new(course);
+    h.idle_frame();
+
+    let file_menu = h.find_text("File").expect("File menu");
+    h.click_at(file_menu);
+    h.idle_frame();
+
+    for (label, sc) in [
+        ("New", "Ctrl+N"),
+        ("Open…", "Ctrl+O"),
+        ("Save", "Ctrl+S"),
+        ("Save as…", "Ctrl+Shift+S"),
+    ] {
+        assert!(
+            h.find_text(label).is_some(),
+            "File menu must show '{label}'"
+        );
+        let hint = crate::menu::shortcut_label(&h.ctx, sc);
+        assert!(
+            h.find_text(&hint).is_some(),
+            "File menu must show shortcut hint '{hint}' for '{label}'"
+        );
+    }
+}
+
+/// L-04: Static sentence-case lint over all production `Dialog::new("...")` titles
+/// in `crates/ui-egui/src/` and menu/toolbar/navigator button literals in
+/// `menu.rs`, `toolbar.rs`, and `slides.rs`.
+#[test]
+fn static_sentence_case_lint_for_dialogs_menus_toolbar_and_slides() {
+    const ALLOWED_CAPS: &[&str] = &[
+        "CourseCraft",
+        "PowerPoint",
+        "PPTX",
+        "Word",
+        "PDF",
+        "MP4",
+        "CSV",
+        "XLIFF",
+        "SCORM",
+        "LTI",
+        "xAPI",
+        "cmi5",
+        "HTML5",
+        "AI",
+        "Lottie",
+        "GitHub",
+        "Inter",
+        "OK",
+        "ID",
+        "A–Z",
+        "Web",
+        "Esc",
+        "Enter",
+        "Delete",
+        "Ctrl",
+        "Cmd",
+        "Shift",
+        "Alt",
+        "F2",
+        "F7",
+        "F11",
+        "F12",
+    ];
+
+    fn strip_test_module(src: &str) -> &str {
+        src.find("\n#[cfg(test)]").map_or(src, |idx| &src[..idx])
+    }
+
+    fn strip_line_comments(src: &str) -> String {
+        src.lines()
+            .map(|line| {
+                if line.trim_start().starts_with("//") {
+                    ""
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn parse_quoted_literal(s: &str) -> Option<(String, usize)> {
+        let mut chars = s.char_indices();
+        let (_, first) = chars.next()?;
+        if first != '"' {
+            return None;
+        }
+        let mut out = String::new();
+        let mut escaped = false;
+        for (idx, ch) in chars {
+            if escaped {
+                out.push(ch);
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                return Some((out, idx + 1));
+            } else {
+                out.push(ch);
+            }
+        }
+        None
+    }
+
+    fn collect_first_string_arg_after(src: &str, needle: &str) -> Vec<String> {
+        let mut results = Vec::new();
+        let mut offset = 0;
+        while let Some(pos) = src[offset..].find(needle) {
+            let after = offset + pos + needle.len();
+            let rest = src[after..].trim_start();
+            if let Some((lit, consumed)) = parse_quoted_literal(rest) {
+                results.push(lit);
+                offset = after + (src[after..].len() - rest.len()) + consumed;
+            } else {
+                offset = after;
+            }
+        }
+        results
+    }
+
+    fn collect_nth_string_arg_after(src: &str, needle: &str, arg_index: usize) -> Vec<String> {
+        let mut results = Vec::new();
+        let mut offset = 0;
+        while let Some(pos) = src[offset..].find(needle) {
+            let after = offset + pos + needle.len();
+            let rest = &src[after..];
+            let mut depth = 0usize;
+            let mut comma_count = 0usize;
+            let mut in_str = false;
+            let mut escaped = false;
+            let mut arg_start = if arg_index == 0 { Some(0) } else { None };
+            for (idx, ch) in rest.char_indices() {
+                if in_str {
+                    if escaped {
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        in_str = false;
+                    }
+                    continue;
+                }
+                match ch {
+                    '"' => {
+                        if let Some(start) = arg_start
+                            && rest[start..idx].trim().is_empty()
+                        {
+                            if let Some((lit, _)) = parse_quoted_literal(&rest[idx..]) {
+                                results.push(lit);
+                            }
+                            break;
+                        }
+                        in_str = true;
+                    }
+                    '(' | '[' | '{' => depth += 1,
+                    ')' => {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    ']' | '}' => depth = depth.saturating_sub(1),
+                    ',' if depth == 0 => {
+                        comma_count += 1;
+                        if comma_count == arg_index {
+                            arg_start = Some(idx + 1);
+                        } else if comma_count > arg_index {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            offset = after;
+        }
+        results
+    }
+
+    fn check_sentence_case(phrase: &str, context: &str, violations: &mut Vec<String>) {
+        if phrase.is_empty() || phrase == "Don't Save" {
+            return;
+        }
+        if let Some(first_alpha) = phrase.chars().find(|c| c.is_alphabetic())
+            && !first_alpha.is_uppercase()
+        {
+            violations.push(format!(
+                "{context}: {phrase:?} must start with an uppercase letter"
+            ));
+            return;
+        }
+        let tokens: Vec<&str> = phrase
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .filter(|t| !t.is_empty())
+            .collect();
+        for &token in tokens.iter().skip(1) {
+            let trimmed = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '–');
+            if trimmed.is_empty() || ALLOWED_CAPS.contains(&trimmed) {
+                continue;
+            }
+            if trimmed.chars().any(char::is_uppercase) {
+                violations.push(format!(
+                    "{context}: unexpected Title Case token {trimmed:?} in {phrase:?}"
+                ));
+            }
+        }
+    }
+
+    let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations = Vec::new();
+    let mut dialog_count = 0usize;
+    let mut button_count = 0usize;
+
+    let entries = std::fs::read_dir(&src_dir).expect("read crates/ui-egui/src");
+    for entry in entries {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if file_name == "tests.rs"
+            || file_name == "test_harness.rs"
+            || file_name.ends_with("_tests.rs")
+            || file_name.starts_with("bughunt_")
+        {
+            continue;
+        }
+
+        let raw = std::fs::read_to_string(&path).expect("read source file");
+        let prod = strip_line_comments(strip_test_module(&raw));
+
+        for title in collect_first_string_arg_after(&prod, "Dialog::new(") {
+            dialog_count += 1;
+            check_sentence_case(&title, &format!("{file_name} Dialog::new"), &mut violations);
+        }
+
+        if matches!(file_name, "menu.rs" | "toolbar.rs" | "slides.rs") {
+            for needle in ["Button::new(", ".button(", ".menu_button("] {
+                for label in collect_first_string_arg_after(&prod, needle) {
+                    button_count += 1;
+                    check_sentence_case(&label, &format!("{file_name} {needle}"), &mut violations);
+                }
+            }
+            for (needle, arg_idx) in [
+                (".checkbox(", 1),
+                ("quiet_button(", 1),
+                ("primary_button(", 1),
+                ("toolbar_toggle(", 2),
+                ("toolbar_toggle(", 4),
+                ("toolbar_button_enabled(", 2),
+            ] {
+                for label in collect_nth_string_arg_after(&prod, needle, arg_idx) {
+                    button_count += 1;
+                    check_sentence_case(
+                        &label,
+                        &format!("{file_name} {needle} arg {arg_idx}"),
+                        &mut violations,
+                    );
+                }
+            }
+        }
+
+        if file_name == "properties.rs" {
+            for heading in collect_nth_string_arg_after(&prod, "inspector_section_header(", 1) {
+                button_count += 1;
+                check_sentence_case(
+                    &heading,
+                    "properties.rs inspector_section_header",
+                    &mut violations,
+                );
+            }
+        }
+    }
+
+    assert!(
+        dialog_count >= 25,
+        "expected >= 25 Dialog::new titles scanned, found {dialog_count}"
+    );
+    assert!(
+        button_count >= 80,
+        "expected >= 80 menu/toolbar/navigator button literals scanned, found {button_count}"
+    );
+    assert!(
+        violations.is_empty(),
+        "sentence-case lint violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+/// D-02: Static CI guard ensuring every `.add_enabled(` and `.add_enabled_ui(` call
+/// in production UI code attaches `.on_disabled_hover_text(` and zero `ui.disable()`
+/// calls exist (`UX-08` / `M32-05`).
+#[test]
+fn every_add_enabled_has_disabled_reason() {
+    fn strip_comments_keep_lines(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let bytes = src.as_bytes();
+        let mut i = 0usize;
+        let mut in_str = false;
+        let mut in_char = false;
+        let mut escaped = false;
+        let mut block_depth = 0usize;
+
+        while i < bytes.len() {
+            let b = bytes[i];
+            if block_depth > 0 {
+                if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    block_depth += 1;
+                    out.push_str("  ");
+                    i += 2;
+                } else if b == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    block_depth -= 1;
+                    out.push_str("  ");
+                    i += 2;
+                } else {
+                    out.push(if b == b'\n' { '\n' } else { ' ' });
+                    i += 1;
+                }
+                continue;
+            }
+            if in_str {
+                out.push(b as char);
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_char {
+                out.push(b as char);
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+                continue;
+            }
+            if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    out.push(' ');
+                    i += 1;
+                }
+                continue;
+            }
+            if b == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                block_depth = 1;
+                out.push_str("  ");
+                i += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_str = true;
+                out.push('"');
+                i += 1;
+                continue;
+            }
+            // Only enter char literal if it looks like `'x'` or `'\x'`, not a lifetime `'a`.
+            if b == b'\''
+                && ((i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                    || (i + 3 < bytes.len() && bytes[i + 1] == b'\\' && bytes[i + 3] == b'\''))
+            {
+                in_char = true;
+                out.push('\'');
+                i += 1;
+                continue;
+            }
+            let ch = src[i..].chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+        out
+    }
+
+    fn strip_inline_cfg_test_modules(comment_free: &str) -> String {
+        let lines: Vec<&str> = comment_free.lines().collect();
+        let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+        let mut idx = 0usize;
+        while idx < lines.len() {
+            let trimmed = lines[idx].trim();
+            let mut inline_mod_start = None;
+            if trimmed.starts_with("#[cfg(test)]") {
+                let rest = trimmed.trim_start_matches("#[cfg(test)]").trim();
+                let is_mod_decl = |s: &str| {
+                    (s.starts_with("mod ")
+                        || s.starts_with("pub mod ")
+                        || s.starts_with("pub(crate) mod "))
+                        && !s.trim_end().ends_with(';')
+                };
+                if is_mod_decl(rest) {
+                    inline_mod_start = Some(idx);
+                } else if rest.is_empty() {
+                    let mut next = idx + 1;
+                    while next < lines.len() {
+                        let t = lines[next].trim();
+                        if t.is_empty() || t.starts_with("#[") {
+                            next += 1;
+                            continue;
+                        }
+                        if is_mod_decl(t) {
+                            inline_mod_start = Some(next);
+                        }
+                        break;
+                    }
+                }
+            }
+            if let Some(mod_line) = inline_mod_start {
+                while idx < mod_line {
+                    kept.push(String::new());
+                    idx += 1;
+                }
+                let mut depth = 0usize;
+                let mut opened = false;
+                while idx < lines.len() {
+                    let line = lines[idx];
+                    let bytes = line.as_bytes();
+                    let mut i = 0usize;
+                    let mut in_str = false;
+                    let mut in_char = false;
+                    let mut escaped = false;
+                    while i < bytes.len() {
+                        let b = bytes[i];
+                        if in_str {
+                            if escaped {
+                                escaped = false;
+                            } else if b == b'\\' {
+                                escaped = true;
+                            } else if b == b'"' {
+                                in_str = false;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                        if in_char {
+                            if escaped {
+                                escaped = false;
+                            } else if b == b'\\' {
+                                escaped = true;
+                            } else if b == b'\'' {
+                                in_char = false;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                        if b == b'"' {
+                            in_str = true;
+                        } else if b == b'\''
+                            && ((i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                                || (i + 3 < bytes.len()
+                                    && bytes[i + 1] == b'\\'
+                                    && bytes[i + 3] == b'\''))
+                        {
+                            in_char = true;
+                        } else if b == b'{' {
+                            depth += 1;
+                            opened = true;
+                        } else if b == b'}' && depth > 0 {
+                            depth -= 1;
+                        }
+                        i += 1;
+                    }
+                    kept.push(String::new());
+                    idx += 1;
+                    if opened && depth == 0 {
+                        break;
+                    }
+                }
+                continue;
+            }
+            kept.push(lines[idx].to_owned());
+            idx += 1;
+        }
+        kept.join("\n")
+    }
+
+    fn find_matching_paren(src: &str, open_paren_idx: usize) -> Option<usize> {
+        let bytes = src.as_bytes();
+        let mut depth = 0usize;
+        let mut in_str = false;
+        let mut in_char = false;
+        let mut escaped = false;
+        let mut i = open_paren_idx;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if in_str {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_char {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+                continue;
+            }
+            match b {
+                b'"' => in_str = true,
+                b'\''
+                    if (i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                        || (i + 3 < bytes.len()
+                            && bytes[i + 1] == b'\\'
+                            && bytes[i + 3] == b'\'') =>
+                {
+                    in_char = true;
+                }
+                b'(' => depth += 1,
+                b')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    fn statement_end_after(src: &str, start_idx: usize) -> usize {
+        let bytes = src.as_bytes();
+        let mut depth = 0usize;
+        let mut in_str = false;
+        let mut in_char = false;
+        let mut escaped = false;
+        let mut i = start_idx;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if in_str {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_char {
+                if escaped {
+                    escaped = false;
+                } else if b == b'\\' {
+                    escaped = true;
+                } else if b == b'\'' {
+                    in_char = false;
+                }
+                i += 1;
+                continue;
+            }
+            match b {
+                b'"' => in_str = true,
+                b'\''
+                    if (i + 2 < bytes.len() && bytes[i + 2] == b'\'')
+                        || (i + 3 < bytes.len()
+                            && bytes[i + 1] == b'\\'
+                            && bytes[i + 3] == b'\'') =>
+                {
+                    in_char = true;
+                }
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => {
+                    if depth == 0 {
+                        return i;
+                    }
+                    depth -= 1;
+                }
+                b';' | b',' if depth == 0 => return i,
+                _ => {}
+            }
+            i += 1;
+        }
+        src.len()
+    }
+
+    fn bound_var_before(src: &str, call_idx: usize) -> Option<&str> {
+        let prefix = &src[..call_idx];
+        let stmt_start = prefix.rfind([';', '{', '}']).map_or(0, |p| p + 1);
+        let stmt = prefix[stmt_start..].trim_start();
+        let after_let = stmt.strip_prefix("let ")?.trim_start();
+        let after_mut = after_let
+            .strip_prefix("mut ")
+            .unwrap_or(after_let)
+            .trim_start();
+        let ident_end = after_mut
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(after_mut.len());
+        let ident = &after_mut[..ident_end];
+        if ident.is_empty() { None } else { Some(ident) }
+    }
+
+    fn line_number_at(src: &str, byte_idx: usize) -> usize {
+        src[..byte_idx].bytes().filter(|&b| b == b'\n').count() + 1
+    }
+
+    fn scan_source(file_name: &str, raw: &str) -> (usize, Vec<String>) {
+        let prod = strip_inline_cfg_test_modules(&strip_comments_keep_lines(raw));
+        let mut violations = Vec::new();
+        let mut checked = 0usize;
+
+        // 1. Forbid `ui.disable()` in production code.
+        let mut disable_offset = 0usize;
+        while let Some(pos) = prod[disable_offset..].find(".disable()") {
+            let abs = disable_offset + pos;
+            let line = line_number_at(&prod, abs);
+            violations.push(format!(
+                "{file_name}:{line}: forbidden `ui.disable()` in production code; use `add_enabled_ui` with `.on_disabled_hover_text(...)`"
+            ));
+            disable_offset = abs + ".disable()".len();
+        }
+
+        // 2. Check every `.add_enabled(` and `.add_enabled_ui(`.
+        for needle in [".add_enabled(", ".add_enabled_ui("] {
+            let is_ui_block = needle == ".add_enabled_ui(";
+            let mut offset = 0usize;
+            while let Some(pos) = prod[offset..].find(needle) {
+                let abs = offset + pos;
+                let open_paren = abs + needle.len() - 1;
+                offset = open_paren + 1;
+                checked += 1;
+
+                let Some(close_paren) = find_matching_paren(&prod, open_paren) else {
+                    let line = line_number_at(&prod, abs);
+                    violations.push(format!("{file_name}:{line}: unmatched paren in `{needle}`"));
+                    continue;
+                };
+
+                let after_call = close_paren + 1;
+                let stmt_end = statement_end_after(&prod, after_call);
+                let chain = &prod[after_call..stmt_end];
+                let inside = &prod[open_paren..=close_paren];
+
+                let mut has_reason = chain.contains(".on_disabled_hover_text(")
+                    || (is_ui_block && inside.contains(".on_disabled_hover_text("));
+
+                if !has_reason && let Some(var) = bound_var_before(&prod, abs) {
+                    let lookahead_end = prod
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .find(|&i| i >= (stmt_end + 800).min(prod.len()))
+                        .unwrap_or(prod.len());
+                    let lookahead_compact: String = prod[stmt_end..lookahead_end]
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .collect();
+                    let direct = format!("{var}.on_disabled_hover_text(");
+                    let chained = format!("{var}.on_hover_text(");
+                    if lookahead_compact.contains(&direct)
+                        || (lookahead_compact.contains(&chained)
+                            && lookahead_compact.contains(".on_disabled_hover_text("))
+                    {
+                        has_reason = true;
+                    }
+                }
+
+                if !has_reason {
+                    let line = line_number_at(&prod, abs);
+                    violations.push(format!(
+                        "{file_name}:{line}: `{needle}` is missing `.on_disabled_hover_text(...)`"
+                    ));
+                }
+            }
+        }
+
+        (checked, violations)
+    }
+
+    // Self-check: out-of-line `#[cfg(test)] mod foo;` (like lib.rs & main.rs) must NOT blind
+    // the scanner, inline `#[cfg(test)] mod tests { ... }` must be ignored, and char literals
+    // like `'"'` must not break paren matching.
+    let (_, synthetic_violations) = scan_source(
+        "synthetic.rs",
+        r#"
+#[cfg(test)]
+mod external_tests;
+
+fn prod(ui: &mut egui::Ui, ok: bool) {
+    #[cfg(test)]
+    let _c = '"';
+    ui.add_enabled(ok, egui::Button::new("Bare"));
+    ui.disable();
+}
+
+#[cfg(test)]
+mod tests {
+    fn ignored(ui: &mut egui::Ui) {
+        ui.disable();
+        ui.add_enabled(false, egui::Button::new("In test"));
+    }
+}
+"#,
+    );
+    assert_eq!(
+        synthetic_violations.len(),
+        2,
+        "guard self-check must catch prod violations after out-of-line #[cfg(test)] mod and ignore inline #[cfg(test)] mod tests, got: {synthetic_violations:?}"
+    );
+
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dirs = [
+        manifest.join("src"),
+        manifest.join("../../apps/coursecraft/src"),
+    ];
+    let mut violations = Vec::new();
+    let mut scanned_files = 0usize;
+    let mut checked_calls = 0usize;
+    let mut lib_rs_checked_calls = 0usize;
+
+    for dir in &dirs {
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if file_name == "tests.rs"
+                || file_name == "test_harness.rs"
+                || file_name.ends_with("_tests.rs")
+                || file_name.starts_with("bughunt_")
+            {
+                continue;
+            }
+            scanned_files += 1;
+            let raw = std::fs::read_to_string(&path).expect("read production source file");
+            let (file_checked, file_violations) = scan_source(file_name, &raw);
+            if file_name == "lib.rs" {
+                lib_rs_checked_calls = file_checked;
+            }
+            checked_calls += file_checked;
+            violations.extend(file_violations);
+        }
+    }
+
+    assert!(
+        scanned_files >= 30,
+        "expected >= 30 production files scanned, found {scanned_files}"
+    );
+    assert!(
+        lib_rs_checked_calls >= 1,
+        "lib.rs must be scanned past its out-of-line #[cfg(test)] mod declarations (expected quiet_button_enabled)"
+    );
+    assert!(
+        checked_calls >= 60,
+        "expected >= 60 add_enabled/add_enabled_ui calls checked, found {checked_calls}"
+    );
+    assert!(
+        violations.is_empty(),
+        "disabled-control guard violations ({}):\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn r1_03_ui_media_walkers_golden() {
+    let json = r##"{
+        "schema_version": 1,
+        "id": "r1-03-ui-media",
+        "title": "R1-03 UI Media",
+        "slide_size": { "w": 1280, "h": 720 },
+        "fonts": [
+            { "family": "Lato", "style": "regular", "src": "fonts/lato.ttf" },
+            { "family": "Empty", "style": "bold", "src": "" }
+        ],
+        "background_audio": { "src": "bgm.mp3" },
+        "player": { "logo": "logo.png" },
+        "resources": [
+            { "id": "res-file", "title": "PDF", "target": { "kind": "file", "src": "handout.pdf" } },
+            { "id": "res-url", "title": "URL", "target": { "kind": "url", "url": "https://example.com" } }
+        ],
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide 1",
+                "duration_ms": 5000,
+                "objects": [
+                    {
+                        "id": "obj-img",
+                        "name": "Hero",
+                        "kind": { "type": "image", "src": "hero.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-lot",
+                        "name": "Anim",
+                        "kind": { "type": "lottie", "src": "anim.json" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-aud",
+                        "name": "Voice",
+                        "kind": { "type": "audio", "src": "voice.mp3", "captions": "voice.vtt" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 }
+                    },
+                    {
+                        "id": "obj-vid",
+                        "name": "Clip",
+                        "kind": {
+                            "type": "video",
+                            "src": "clip.mp4",
+                            "captions": "clip.vtt",
+                            "poster": "clip-poster.png"
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 320.0, "h": 180.0 }
+                    },
+                    {
+                        "id": "obj-shp",
+                        "name": "ShapePic",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "rectangle",
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "shape-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-btn",
+                        "name": "BtnPic",
+                        "kind": {
+                            "type": "button",
+                            "label": "Go",
+                            "fill_style": { "type": "picture", "src": "btn-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 44.0 }
+                    },
+                    {
+                        "id": "obj-path",
+                        "name": "PathPic",
+                        "kind": {
+                            "type": "path",
+                            "points": [
+                                { "x": 0.0, "y": 0.0 },
+                                { "x": 1.0, "y": 0.0 },
+                                { "x": 0.5, "y": 1.0 }
+                            ],
+                            "closed": true,
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "path-fill.png" },
+                            "outline": { "color": "#000000", "width": 1.0 }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-web",
+                        "name": "SiteWeb",
+                        "kind": {
+                            "type": "web",
+                            "source": { "type": "folder", "path": "web/site", "entry": "index.html" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 400.0, "h": 300.0 }
+                    },
+                    {
+                        "id": "obj-st",
+                        "name": "Stateful",
+                        "kind": { "type": "image", "src": "base-state.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+                        "states": [{
+                            "name": "hover",
+                            "src": "state-img.png",
+                            "fill_style": { "type": "picture", "src": "state-fill.png" },
+                            "extras": [
+                                {
+                                    "id": "ex-img",
+                                    "kind": { "type": "image", "src": "extra-img.png" },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-shp",
+                                    "kind": {
+                                        "type": "shape",
+                                        "shape": "ellipse",
+                                        "fill": "#ffffff",
+                                        "fill_style": { "type": "picture", "src": "extra-shape-fill.png" }
+                                    },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-path",
+                                    "kind": {
+                                        "type": "path",
+                                        "points": [
+                                            { "x": 0.0, "y": 0.0 },
+                                            { "x": 1.0, "y": 0.0 },
+                                            { "x": 0.5, "y": 1.0 }
+                                        ],
+                                        "closed": true,
+                                        "fill": "#ffffff",
+                                        "fill_style": { "type": "picture", "src": "extra-path-fill.png" },
+                                        "outline": { "color": "#000000", "width": 1.0 }
+                                    },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-txt",
+                                    "kind": { "type": "text", "text": "Plain" },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 20.0 }
+                                }
+                            ]
+                        }]
+                    }
+                ],
+                "layers": [{
+                    "id": "l1",
+                    "name": "Layer 1",
+                    "objects": [{
+                        "id": "l-img",
+                        "name": "LayerPic",
+                        "kind": { "type": "image", "src": "layer-pic.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 80.0 }
+                    }]
+                }]
+            }]
+        }],
+        "masters": [{
+            "id": "m1",
+            "title": "Master 1",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "m-img",
+                "name": "MasterBg",
+                "kind": { "type": "image", "src": "master-base.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }],
+            "layers": [{
+                "id": "ml1",
+                "name": "Master Layer",
+                "objects": [{
+                    "id": "ml-img",
+                    "name": "MasterLayerPic",
+                    "kind": { "type": "image", "src": "master-layer.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 40.0 }
+                }]
+            }]
+        }],
+        "templates": [{
+            "id": "t1",
+            "title": "Template 1",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "t-img",
+                "name": "TemplatePic",
+                "kind": { "type": "image", "src": "template-pic.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }]
+        }],
+        "banks": [{
+            "id": "b1",
+            "title": "Bank 1",
+            "slides": [{
+                "id": "bs1",
+                "title": "Bank Slide 1",
+                "duration_ms": 5000,
+                "objects": [{
+                    "id": "b-img",
+                    "name": "BankPic",
+                    "kind": { "type": "image", "src": "bank-base.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                }],
+                "layers": [{
+                    "id": "bl1",
+                    "name": "Bank Layer",
+                    "objects": [{
+                        "id": "bl-img",
+                        "name": "BankLayerPic",
+                        "kind": { "type": "image", "src": "bank-layer.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+                    }]
+                }]
+            }]
+        }]
+    }"##;
+    let course = Course::from_json(json).expect("valid R1-03 course");
+
+    let expected_referenced: std::collections::HashSet<String> = [
+        "fonts/lato.ttf",
+        "bgm.mp3",
+        "logo.png",
+        "handout.pdf",
+        "hero.png",
+        "anim.json",
+        "voice.mp3",
+        "voice.vtt",
+        "clip.mp4",
+        "clip.vtt",
+        "clip-poster.png",
+        "shape-fill.png",
+        "btn-fill.png",
+        "path-fill.png",
+        "web/site/index.html",
+        "base-state.png",
+        "state-img.png",
+        "state-fill.png",
+        "extra-img.png",
+        "extra-shape-fill.png",
+        "extra-path-fill.png",
+        "layer-pic.png",
+        "master-base.png",
+        "master-layer.png",
+        "template-pic.png",
+        "bank-base.png",
+        "bank-layer.png",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+
+    assert_eq!(referenced_media_srcs(&course), expected_referenced);
+    assert_eq!(web_folder_prefixes(&course), vec!["web/site/".to_owned()]);
+
+    let mut editor = Editor::new(course);
+    // Load a subset of referenced files, plus a web-folder subfile and an unused file.
+    editor.set_media(vec![
+        ("hero.png".into(), Arc::from(b"hero".as_slice())),
+        ("layer-pic.png".into(), Arc::from(b"layer".as_slice())),
+        ("state-img.png".into(), Arc::from(b"state".as_slice())),
+        ("extra-path-fill.png".into(), Arc::from(b"epath".as_slice())),
+        (
+            "web/site/index.html".into(),
+            Arc::from(b"<h1>hi</h1>".as_slice()),
+        ),
+        ("web/site/app.js".into(), Arc::from(b"1;".as_slice())),
+        ("bgm.mp3".into(), Arc::from(b"bgm".as_slice())),
+        ("master-base.png".into(), Arc::from(b"master".as_slice())),
+        ("template-pic.png".into(), Arc::from(b"tpl".as_slice())),
+        ("bank-layer.png".into(), Arc::from(b"bank".as_slice())),
+        ("unused.png".into(), Arc::from(b"unused".as_slice())),
+    ]);
+
+    let used_names: Vec<String> = editor.used_media().into_iter().map(|(k, _)| k).collect();
+    assert_eq!(
+        used_names,
+        vec![
+            "hero.png",
+            "layer-pic.png",
+            "state-img.png",
+            "extra-path-fill.png",
+            "web/site/index.html",
+            "web/site/app.js",
+            "bgm.mp3",
+            "master-base.png",
+            "template-pic.png",
+            "bank-layer.png",
+        ]
+    );
+
+    let slide = &editor.session.course.scenes[0].slides[0];
+    let slide_media_names: Vec<String> = editor
+        .slide_media(slide)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(
+        slide_media_names,
+        vec![
+            "hero.png",
+            "layer-pic.png",
+            "state-img.png",
+            "extra-path-fill.png",
+            "web/site/index.html",
+            "web/site/app.js",
+        ]
+    );
+
+    assert_eq!(
+        editor.missing_media(),
+        vec![
+            "anim.json",
+            "bank-base.png",
+            "base-state.png",
+            "btn-fill.png",
+            "clip-poster.png",
+            "clip.mp4",
+            "clip.vtt",
+            "extra-img.png",
+            "extra-shape-fill.png",
+            "fonts/lato.ttf",
+            "handout.pdf",
+            "logo.png",
+            "master-layer.png",
+            "path-fill.png",
+            "shape-fill.png",
+            "state-fill.png",
+            "voice.mp3",
+            "voice.vtt",
+        ]
+    );
 }

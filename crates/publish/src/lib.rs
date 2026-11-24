@@ -13,11 +13,13 @@
     clippy::unreachable
 )]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
+use std::sync::Arc;
 
 use coursecraft_course::{
-    BACKGROUND_AUDIO_ID, Course, FontFace, FontStyle, Object, ObjectKind, TextRun, TextStyle,
+    BACKGROUND_AUDIO_ID, Course, FontFace, FontStyle, MediaOwner, MediaRole, MediaScope, Object,
+    ObjectKind, SlideContainer, TextRun, TextStyle, visit_course_media,
 };
 use coursecraft_scorm::Standard;
 use coursecraft_xapi::{Flavor, PackageSpec, cmi5_xml, tincan_xml};
@@ -41,19 +43,21 @@ pub enum PackageStandard {
     Web,
 }
 
-/// A single file in a package, holding its relative package path and contents.
+/// A single file in a package, holding its relative package path and contents
+/// backed by a shared [`Arc`] buffer so media and player bytes are never copied
+/// during packaging.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageFile {
     pub path: String,
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<[u8]>,
 }
 
-/// In-memory inputs needed to build a SCORM 1.2 package.
+/// In-memory inputs needed to build a package using shared [`Arc`] buffers.
 pub struct PackageInput<'a> {
     pub course: &'a Course,
     pub course_json: &'a str,
     pub player_files: &'a [PackageFile],
-    pub media: &'a dyn Fn(&str) -> Option<Vec<u8>>,
+    pub media: &'a dyn Fn(&str) -> Option<Arc<[u8]>>,
 }
 
 /// Publishing errors. Every invalid input is an error, never a panic.
@@ -87,175 +91,12 @@ impl From<std::io::Error> for PublishError {
 
 pub use coursecraft_format::is_safe_relative_path;
 
-struct MediaRef<'a> {
-    object_id: &'a str,
-    src: &'a str,
-}
-
-fn collect_object_media<'a>(obj: &'a Object, out: &mut Vec<MediaRef<'a>>) {
-    match &obj.kind {
-        ObjectKind::Image { src, .. } | ObjectKind::Lottie { src, .. } => {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-        }
-        ObjectKind::Audio { src, captions, .. } => {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-            if let Some(captions) = captions {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src: captions,
-                });
-            }
-        }
-        ObjectKind::Video {
-            src,
-            captions,
-            poster,
-            ..
-        } => {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-            if let Some(captions) = captions {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src: captions,
-                });
-            }
-            if let Some(poster) = poster
-                && !poster.is_empty()
-            {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src: poster,
-                });
-            }
-        }
-        ObjectKind::Shape { fill_style, .. } | ObjectKind::Button { fill_style, .. } => {
-            if let Some(src) = fill_style
-                .as_ref()
-                .and_then(coursecraft_course::FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src,
-                });
-            }
-        }
-        ObjectKind::Path { path } => {
-            if let Some(src) = path
-                .fill_style
-                .as_ref()
-                .and_then(coursecraft_course::FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src,
-                });
-            }
-        }
-        _ => {}
-    }
-    for state in &obj.states {
-        if let Some(src) = &state.src {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-        }
-        if let Some(src) = state
-            .fill_style
-            .as_ref()
-            .and_then(coursecraft_course::FillStyle::picture_src)
-            && !src.is_empty()
-        {
-            out.push(MediaRef {
-                object_id: &obj.id,
-                src,
-            });
-        }
-        for extra in &state.extras {
-            let extra_src = match &extra.kind {
-                coursecraft_course::StateExtraKind::Image { src, .. } => Some(src.as_str()),
-                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => fill_style
-                    .as_ref()
-                    .and_then(coursecraft_course::FillStyle::picture_src),
-                coursecraft_course::StateExtraKind::Path { path } => path
-                    .fill_style
-                    .as_ref()
-                    .and_then(coursecraft_course::FillStyle::picture_src),
-                coursecraft_course::StateExtraKind::Text { .. } => None,
-            };
-            if let Some(src) = extra_src
-                && !src.is_empty()
-            {
-                out.push(MediaRef {
-                    object_id: &obj.id,
-                    src,
-                });
-            }
-        }
-    }
-}
-
-fn collect_resource_media<'a>(course: &'a Course, out: &mut Vec<MediaRef<'a>>) {
-    if let Some(logo) = &course.player.logo {
-        out.push(MediaRef {
-            object_id: "player-logo",
-            src: logo,
-        });
-    }
-    for resource in &course.resources {
-        if let coursecraft_course::ResourceTarget::File { src } = &resource.target {
-            out.push(MediaRef {
-                object_id: &resource.id,
-                src,
-            });
-        }
-    }
-}
-
 fn add_web_folders(
-    course: &Course,
+    web_folders: HashSet<String>,
+    web_entries: &HashMap<String, String>,
     files: &mut Vec<PackageFile>,
     web_folder: &WebFolderFiles<'_>,
 ) -> Result<(), PublishError> {
-    let mut web_folders = HashSet::new();
-    for slide in course.slides() {
-        for obj in &slide.objects {
-            collect_web_folders(obj, &mut web_folders);
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                collect_web_folders(obj, &mut web_folders);
-            }
-        }
-    }
-    for master in &course.masters {
-        for obj in &master.objects {
-            collect_web_folders(obj, &mut web_folders);
-        }
-    }
-    for bank in &course.banks {
-        for slide in &bank.slides {
-            for obj in &slide.objects {
-                collect_web_folders(obj, &mut web_folders);
-            }
-            for layer in &slide.layers {
-                for obj in &layer.objects {
-                    collect_web_folders(obj, &mut web_folders);
-                }
-            }
-        }
-    }
     let mut folders: Vec<String> = web_folders.into_iter().collect();
     folders.sort();
     for folder in folders {
@@ -265,7 +106,7 @@ fn add_web_folders(
                 src: folder,
             });
         }
-        let entry = web_folder_entry(course, &folder);
+        let entry = web_entries.get(&folder).cloned();
         let folder_files = web_folder(&folder).ok_or_else(|| PublishError::MissingMedia {
             object: "web".to_string(),
             src: entry.clone().unwrap_or_else(|| folder.clone()),
@@ -295,51 +136,6 @@ fn add_web_folders(
         }
     }
     Ok(())
-}
-
-fn collect_web_folders(obj: &Object, out: &mut HashSet<String>) {
-    if let ObjectKind::Web {
-        source: coursecraft_course::WebSource::Folder { path, .. },
-    } = &obj.kind
-    {
-        out.insert(path.clone());
-    }
-}
-
-/// The media-relative entry file of the first web object using `folder`.
-fn web_folder_entry(course: &Course, folder: &str) -> Option<String> {
-    let mut objects = course
-        .slides()
-        .flat_map(|slide| {
-            slide
-                .objects
-                .iter()
-                .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
-        })
-        .chain(
-            course
-                .masters
-                .iter()
-                .flat_map(|master| master.objects.iter()),
-        )
-        .chain(
-            course
-                .banks
-                .iter()
-                .flat_map(|bank| bank.slides.iter())
-                .flat_map(|slide| {
-                    slide
-                        .objects
-                        .iter()
-                        .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
-                }),
-        );
-    objects.find_map(|object| match &object.kind {
-        ObjectKind::Web {
-            source: coursecraft_course::WebSource::Folder { path, entry },
-        } if path == folder => Some(format!("{path}/{entry}")),
-        _ => None,
-    })
 }
 
 /// Build the full SCORM 1.2 file set in memory.
@@ -404,19 +200,37 @@ pub fn build_package_standard(
 /// # Errors
 /// Returns [`PublishError`] for the same reasons as [`build_package_standard`],
 /// plus unsafe or missing web-folder files.
-/// Lists a web object's folder files by media-relative path.
-pub type WebFolderFiles<'a> = dyn Fn(&str) -> Option<Vec<(String, Vec<u8>)>> + 'a;
+/// Lists a web object's folder files by media-relative path using shared [`Arc`] buffers.
+pub type WebFolderFiles<'a> = dyn Fn(&str) -> Option<Vec<(String, Arc<[u8]>)>> + 'a;
 
 pub fn build_package_standard_with_folders(
     input: &PackageInput<'_>,
     standard: PackageStandard,
     web_folder: &WebFolderFiles<'_>,
 ) -> Result<Vec<PackageFile>, PublishError> {
+    build_package_entries(
+        input.course,
+        input.course_json,
+        input.player_files,
+        input.media,
+        standard,
+        web_folder,
+    )
+}
+
+fn build_package_entries(
+    course: &Course,
+    input_course_json: &str,
+    player_files: &[PackageFile],
+    media: &dyn Fn(&str) -> Option<Arc<[u8]>>,
+    standard: PackageStandard,
+    web_folder: &WebFolderFiles<'_>,
+) -> Result<Vec<PackageFile>, PublishError> {
     // 1. Validate player files and check for index.html.
     let mut has_index = false;
-    let mut files = Vec::new();
+    let mut files: Vec<PackageFile> = Vec::new();
 
-    for player_file in input.player_files {
+    for player_file in player_files {
         if !is_safe_relative_path(&player_file.path) {
             return Err(PublishError::UnsafePath {
                 object: "player".to_string(),
@@ -430,7 +244,10 @@ pub fn build_package_standard_with_folders(
             // Ours replace any course.json or standard marker in the player folder.
             continue;
         }
-        files.push(player_file.clone());
+        files.push(PackageFile {
+            path: player_file.path.clone(),
+            bytes: Arc::clone(&player_file.bytes),
+        });
     }
 
     if !has_index {
@@ -438,72 +255,78 @@ pub fn build_package_standard_with_folders(
     }
 
     // 2. Add course.json. Templates are authoring-only and never published.
-    let course_json = if input.course.templates.is_empty() {
-        input.course_json.to_owned()
+    let course_json = if course.templates.is_empty() {
+        input_course_json.to_owned()
     } else {
-        let mut published = input.course.clone();
+        let mut published = course.clone();
         published.templates.clear();
         published
-            .to_json()
-            .unwrap_or_else(|_| input.course_json.to_owned())
+            .to_json_compact()
+            .unwrap_or_else(|_| input_course_json.to_owned())
     };
     files.push(PackageFile {
         path: "course.json".to_string(),
-        bytes: course_json.as_bytes().to_vec(),
+        bytes: Arc::from(course_json.into_bytes()),
     });
 
     // 3. Collect media references from base objects and layer objects, and from
     // masters, which draw under every slide that names them. Template media is
     // not collected: a template is not played.
-    let mut media_refs = Vec::new();
-    for slide in input.course.slides() {
-        for obj in &slide.objects {
-            collect_object_media(obj, &mut media_refs);
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                collect_object_media(obj, &mut media_refs);
-            }
-        }
-    }
-    for master in &input.course.masters {
-        for obj in &master.objects {
-            collect_object_media(obj, &mut media_refs);
-        }
-    }
-    for bank in &input.course.banks {
-        for slide in &bank.slides {
-            for obj in &slide.objects {
-                collect_object_media(obj, &mut media_refs);
-            }
-            for layer in &slide.layers {
-                for obj in &layer.objects {
-                    collect_object_media(obj, &mut media_refs);
-                }
-            }
-        }
-    }
+    let mut object_refs: Vec<(&str, &str)> = Vec::new();
+    let mut bg_audio_refs: Vec<(&str, &str)> = Vec::new();
+    let mut font_refs: Vec<(&str, &str)> = Vec::new();
+    let mut logo_refs: Vec<(&str, &str)> = Vec::new();
+    let mut resource_refs: Vec<(&str, &str)> = Vec::new();
+    let mut web_folders: HashSet<String> = HashSet::new();
+    let mut web_entries: HashMap<String, String> = HashMap::new();
 
-    // A course-wide background track is media too.
-    media_refs.extend(input.course.background_audio.iter().map(|audio| MediaRef {
-        object_id: BACKGROUND_AUDIO_ID,
-        src: &audio.src,
-    }));
-
-    // Course fonts are media too: every face ships under media/fonts/.
-    for face in &input.course.fonts {
-        media_refs.push(MediaRef {
-            object_id: "font",
-            src: &face.src,
-        });
-    }
-
-    // Resource files ship like any other asset, under media/.
-    collect_resource_media(input.course, &mut media_refs);
+    visit_course_media(course, MediaScope::Publishable, &mut |r| {
+        if matches!(
+            r.owner,
+            MediaOwner::Object {
+                container: SlideContainer::Master,
+                layer: Some(_),
+                ..
+            }
+        ) {
+            return;
+        }
+        if r.role == MediaRole::WebFolder {
+            let folder = r.src.to_owned();
+            web_entries
+                .entry(folder.clone())
+                .or_insert_with(|| format!("{}/{}", r.src, r.web_entry.unwrap_or("")));
+            web_folders.insert(folder);
+            return;
+        }
+        if r.src.is_empty()
+            && matches!(
+                r.role,
+                MediaRole::VideoPoster
+                    | MediaRole::PictureFill
+                    | MediaRole::StateImage
+                    | MediaRole::StateExtraImage
+            )
+        {
+            return;
+        }
+        match r.owner {
+            MediaOwner::Object { object, .. } => object_refs.push((object.id.as_str(), r.src)),
+            MediaOwner::BackgroundAudio => bg_audio_refs.push((BACKGROUND_AUDIO_ID, r.src)),
+            MediaOwner::Font { .. } => font_refs.push(("font", r.src)),
+            MediaOwner::PlayerLogo => logo_refs.push(("player-logo", r.src)),
+            MediaOwner::Resource { id, .. } => resource_refs.push((id, r.src)),
+        }
+    });
 
     let mut seen_sources = HashSet::new();
-    for m in media_refs {
-        let src = m.src;
+    for (object_id, src) in object_refs
+        .into_iter()
+        .chain(bg_audio_refs)
+        .chain(font_refs)
+        .chain(logo_refs)
+        .chain(resource_refs)
+    {
         // Skip remote http:// and https:// sources.
         if src.starts_with("http://") || src.starts_with("https://") {
             continue;
@@ -511,7 +334,7 @@ pub fn build_package_standard_with_folders(
 
         if !is_safe_relative_path(src) {
             return Err(PublishError::UnsafePath {
-                object: m.object_id.to_string(),
+                object: object_id.to_string(),
                 src: src.to_string(),
             });
         }
@@ -520,8 +343,8 @@ pub fn build_package_standard_with_folders(
             continue;
         }
 
-        let bytes = (input.media)(src).ok_or_else(|| PublishError::MissingMedia {
-            object: m.object_id.to_string(),
+        let bytes = media(src).ok_or_else(|| PublishError::MissingMedia {
+            object: object_id.to_string(),
             src: src.to_string(),
         })?;
 
@@ -533,7 +356,7 @@ pub fn build_package_standard_with_folders(
 
     // 3b. Web object folders: every file ships under media/<path>/ and keeps
     // its relative path, so the iframe can load `media/web/<name>/<entry>`.
-    add_web_folders(input.course, &mut files, web_folder)?;
+    add_web_folders(web_folders, &web_entries, &mut files, web_folder)?;
 
     // 4. State the standard for the player. SCORM 1.2 stays marker-free so its
     // packages are unchanged; a missing file means 1.2.
@@ -542,19 +365,19 @@ pub fn build_package_standard_with_folders(
         PackageStandard::Scorm(Standard::Scorm2004) => {
             files.push(PackageFile {
                 path: PACKAGE_MARKER.to_string(),
-                bytes: b"{\"standard\":\"scorm2004\"}".to_vec(),
+                bytes: Arc::from(b"{\"standard\":\"scorm2004\"}".as_slice()),
             });
         }
         PackageStandard::Xapi(flavor) => {
             let marker = format!("{{\"standard\":\"{}\"}}", flavor.as_id());
             files.push(PackageFile {
                 path: PACKAGE_MARKER.to_string(),
-                bytes: marker.into_bytes(),
+                bytes: Arc::from(marker.into_bytes()),
             });
             let spec = PackageSpec {
-                course_id: input.course.id.clone(),
-                title: input.course.title.clone(),
-                mastery_score: input.course.quiz.as_ref().map(|q| q.passing_percent),
+                course_id: course.id.clone(),
+                title: course.title.clone(),
+                mastery_score: course.quiz.as_ref().map(|q| q.passing_percent),
             };
             let (path, xml) = match flavor {
                 Flavor::Cmi5 => ("cmi5.xml", cmi5_xml(&spec)),
@@ -562,19 +385,19 @@ pub fn build_package_standard_with_folders(
             };
             files.push(PackageFile {
                 path: path.to_string(),
-                bytes: xml.into_bytes(),
+                bytes: Arc::from(xml.into_bytes()),
             });
         }
         PackageStandard::Lti => {
             files.push(PackageFile {
                 path: PACKAGE_MARKER.to_string(),
-                bytes: b"{\"standard\":\"lti\"}".to_vec(),
+                bytes: Arc::from(b"{\"standard\":\"lti\"}".as_slice()),
             });
         }
         PackageStandard::Web => {
             files.push(PackageFile {
                 path: PACKAGE_MARKER.to_string(),
-                bytes: b"{\"standard\":\"web\"}".to_vec(),
+                bytes: Arc::from(b"{\"standard\":\"web\"}".as_slice()),
             });
         }
     }
@@ -587,11 +410,11 @@ pub fn build_package_standard_with_folders(
         manifest_files.dedup();
 
         let spec = coursecraft_scorm::ManifestSpec {
-            identifier: format!("coursecraft.{}", input.course.id),
-            title: input.course.title.clone(),
+            identifier: format!("coursecraft.{}", course.id),
+            title: course.title.clone(),
             launch: "index.html".to_string(),
             files: manifest_files,
-            mastery_score: input.course.quiz.as_ref().map(|q| q.passing_percent),
+            mastery_score: course.quiz.as_ref().map(|q| q.passing_percent),
         };
 
         let manifest_xml = match scorm_standard {
@@ -600,7 +423,7 @@ pub fn build_package_standard_with_folders(
         };
         files.push(PackageFile {
             path: "imsmanifest.xml".to_string(),
-            bytes: manifest_xml.into_bytes(),
+            bytes: Arc::from(manifest_xml.into_bytes()),
         });
     }
 
@@ -654,6 +477,119 @@ pub fn zip_package_to<W: std::io::Write + std::io::Seek>(
     }
     writer.finish()?;
     Ok(())
+}
+
+/// Progress or completion from [`PackageZipper::step`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ZipStep {
+    /// More bytes remain to be written.
+    InProgress { bytes_done: u64, bytes_total: u64 },
+    /// Archive finished; contains the complete zip bytes.
+    Done(Vec<u8>),
+}
+
+/// Incremental zero-copy zip writer that writes a bounded number of input bytes
+/// per [`step`](Self::step) call so callers on single-threaded targets (such as
+/// the web editor) can yield between animation frames without copying media or
+/// player bytes.
+///
+/// Produces bytes identical to [`zip_package`].
+pub struct PackageZipper {
+    files: Vec<PackageFile>,
+    writer: Option<zip::ZipWriter<std::io::Cursor<Vec<u8>>>>,
+    file_index: usize,
+    file_offset: usize,
+    bytes_done: u64,
+    bytes_total: u64,
+}
+
+impl PackageZipper {
+    /// Start zipping `files` incrementally.
+    #[must_use]
+    pub fn new(files: Vec<PackageFile>) -> Self {
+        let capacity = files
+            .iter()
+            .map(|f| f.bytes.len().saturating_add(128))
+            .fold(1 << 16, usize::saturating_add);
+        let bytes_total = files.iter().map(|f| f.bytes.len() as u64).sum();
+        let writer = Some(zip::ZipWriter::new(std::io::Cursor::new(
+            Vec::with_capacity(capacity),
+        )));
+        Self {
+            files,
+            writer,
+            file_index: 0,
+            file_offset: 0,
+            bytes_done: 0,
+            bytes_total,
+        }
+    }
+
+    /// Write up to `max_bytes` of input file data (at least 1 byte) and return
+    /// either [`ZipStep::InProgress`] or [`ZipStep::Done`].
+    ///
+    /// # Errors
+    /// Returns [`PublishError::Zip`] if writing, compressing, or finishing fails,
+    /// or if called again after [`ZipStep::Done`].
+    pub fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
+        let mut budget = max_bytes.max(1);
+        let Some(writer) = self.writer.as_mut() else {
+            return Err(PublishError::Zip("zipper already finished".to_string()));
+        };
+
+        while self.file_index < self.files.len() && budget > 0 {
+            let Some(file) = self.files.get(self.file_index) else {
+                break;
+            };
+            let path = file.path.as_str();
+            let bytes = file.bytes.as_ref();
+            if self.file_offset == 0 {
+                writer.start_file(path, coursecraft_format::zip_options_for(path))?;
+            }
+            if bytes.is_empty() {
+                self.file_index += 1;
+                self.file_offset = 0;
+                continue;
+            }
+            if !coursecraft_format::is_precompressed(path) {
+                // DeflateEncoder's block boundaries depend on input slice size,
+                // so deflated entries are written whole to stay byte-identical
+                // to `zip_package`.
+                writer.write_all(bytes)?;
+                self.bytes_done = self.bytes_done.saturating_add(bytes.len() as u64);
+                budget = budget.saturating_sub(bytes.len());
+                self.file_index += 1;
+                self.file_offset = 0;
+                continue;
+            }
+            let remaining = bytes.len().saturating_sub(self.file_offset);
+            let take = remaining.min(budget);
+            let end = self.file_offset.saturating_add(take);
+            if let Some(chunk) = bytes.get(self.file_offset..end) {
+                writer.write_all(chunk)?;
+            }
+            self.file_offset = end;
+            self.bytes_done = self.bytes_done.saturating_add(take as u64);
+            budget = budget.saturating_sub(take);
+            if self.file_offset >= bytes.len() {
+                self.file_index += 1;
+                self.file_offset = 0;
+            }
+        }
+
+        if self.file_index >= self.files.len() {
+            let Some(writer) = self.writer.take() else {
+                return Err(PublishError::Zip("zipper already finished".to_string()));
+            };
+            let cursor = writer.finish()?;
+            return Ok(ZipStep::Done(cursor.into_inner()));
+        }
+
+        Ok(ZipStep::InProgress {
+            bytes_done: self.bytes_done,
+            bytes_total: self.bytes_total,
+        })
+    }
 }
 
 /// Outcome of looking up an installed font face for auto-embedding at publish.

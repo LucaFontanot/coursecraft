@@ -11,7 +11,7 @@ use coursecraft_course::{AuditReport, AuditSeverity, Course, Severity};
 use coursecraft_engine::{Session, registry};
 use coursecraft_logic::{Effect, Input, Player};
 use coursecraft_publish::{
-    PackageFile, PackageInput, PackageStandard, build_package_standard_with_folders, zip_package,
+    PackageFile, PackageInput, PackageStandard, build_package_standard_with_folders, zip_package_to,
 };
 use coursecraft_scorm::Standard;
 use coursecraft_xapi::Flavor;
@@ -432,6 +432,13 @@ fn course_file(p: &Path) -> PathBuf {
     }
 }
 
+/// Open a `.ccraft` archive by streaming from disk through a 256 KiB buffer.
+pub(crate) fn open_ccraft_file(p: &Path) -> Res<coursecraft_format::Project> {
+    let file = std::fs::File::open(p).map_err(|e| format!("{}: {e}", p.display()))?;
+    let reader = std::io::BufReader::with_capacity(256 * 1024, file);
+    coursecraft_format::open_project_from(reader).map_err(|e| format!("{}: {e}", p.display()))
+}
+
 /// Load `course.json`, a folder that contains it, or a `.ccraft` archive.
 fn load_course_any(p: &Path) -> Res<Course> {
     let is_ccraft = p
@@ -439,10 +446,7 @@ fn load_course_any(p: &Path) -> Res<Course> {
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
     if is_ccraft {
-        let bytes = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
-        let project = coursecraft_format::open_project(&bytes)
-            .map_err(|e| format!("{}: {e}", p.display()))?;
-        return Ok(project.course);
+        return Ok(open_ccraft_file(p)?.course);
     }
     let target = if p.is_dir() {
         p.join("course.json")
@@ -500,9 +504,7 @@ fn load_with_media(p: &Path) -> Res<(Course, Option<coursecraft_course::MediaHas
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
     if is_ccraft {
-        let bytes = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
-        let project = coursecraft_format::open_project(&bytes)
-            .map_err(|e| format!("{}: {e}", p.display()))?;
+        let project = open_ccraft_file(p)?;
         let hashes = project
             .media
             .iter()
@@ -527,9 +529,7 @@ fn load_with_media(p: &Path) -> Res<(Course, Option<coursecraft_course::MediaHas
 
 /// `unpack <a.ccraft> -o <dir>`: the folder holds exactly what the zip held.
 fn run_unpack(archive: &Path, out: &Path) -> Res<ExitCode> {
-    let bytes = std::fs::read(archive).map_err(|e| format!("{}: {e}", archive.display()))?;
-    let project = coursecraft_format::open_project(&bytes)
-        .map_err(|e| format!("{}: {e}", archive.display()))?;
+    let project = open_ccraft_file(archive)?;
     let occupied = std::fs::read_dir(out).is_ok_and(|mut entries| entries.next().is_some());
     if occupied || (out.exists() && !out.is_dir()) {
         return Err(format!(
@@ -790,7 +790,7 @@ fn collect_files_recursive(base: &Path, current: &Path, out: &mut Vec<PackageFil
             let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             out.push(PackageFile {
                 path: rel_str,
-                bytes,
+                bytes: std::sync::Arc::from(bytes),
             });
         }
     }
@@ -822,12 +822,10 @@ fn run_render(
 
     let (course_model, media_source): (Course, Box<dyn coursecraft_render::MediaSource>) =
         if is_ccraft {
-            let bytes = std::fs::read(&course).map_err(|e| format!("{}: {e}", course.display()))?;
-            let proj = coursecraft_format::open_project(&bytes)
-                .map_err(|e| format!("{}: {e}", course.display()))?;
+            let proj = open_ccraft_file(&course)?;
             let mut map = std::collections::HashMap::new();
             for (name, data) in proj.media {
-                map.insert(name, std::sync::Arc::from(data.as_slice()));
+                map.insert(name, std::sync::Arc::from(data));
             }
             (proj.course, Box::new(InMemoryCliMedia(map)))
         } else {
@@ -981,13 +979,11 @@ fn run_snapshot_editor(
             Vec::new(),
         )
     } else if is_ccraft {
-        let bytes = std::fs::read(&course).map_err(|e| format!("{}: {e}", course.display()))?;
-        let proj = coursecraft_format::open_project(&bytes)
-            .map_err(|e| format!("{}: {e}", course.display()))?;
+        let proj = open_ccraft_file(&course)?;
         let media_vec = proj
             .media
             .into_iter()
-            .map(|(n, d)| (n, std::sync::Arc::from(d.as_slice())))
+            .map(|(n, d)| (n, std::sync::Arc::from(d)))
             .collect();
         (proj.course, media_vec)
     } else {
@@ -1103,13 +1099,11 @@ fn run_snapshot_player(
         .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
 
     let (course_model, media): (Course, Box<dyn coursecraft_render::MediaSource>) = if is_ccraft {
-        let bytes = std::fs::read(&course).map_err(|e| format!("{}: {e}", course.display()))?;
-        let project = coursecraft_format::open_project(&bytes)
-            .map_err(|e| format!("{}: {e}", course.display()))?;
+        let project = open_ccraft_file(&course)?;
         let media_map = project
             .media
             .into_iter()
-            .map(|(name, data)| (name, std::sync::Arc::from(data.as_slice())))
+            .map(|(name, data)| (name, std::sync::Arc::from(data)))
             .collect();
         (project.course, Box::new(InMemoryCliMedia(media_map)))
     } else {
@@ -1153,7 +1147,10 @@ fn run_snapshot_player(
 }
 
 /// Read every file under `media/<path>/`, keeping paths relative to `media/`.
-fn collect_web_folder_files(media_dir: &Path, path: &str) -> Option<Vec<(String, Vec<u8>)>> {
+fn collect_web_folder_files(
+    media_dir: &Path,
+    path: &str,
+) -> Option<Vec<(String, std::sync::Arc<[u8]>)>> {
     let dir = media_dir.join(path);
     if !dir.is_dir() {
         return None;
@@ -1172,7 +1169,10 @@ fn collect_web_folder_files(media_dir: &Path, path: &str) -> Option<Vec<(String,
             if file_type.is_dir() {
                 queue.push((entry.path(), relative));
             } else if file_type.is_file() {
-                out.push((relative, std::fs::read(entry.path()).ok()?));
+                out.push((
+                    relative,
+                    std::sync::Arc::from(std::fs::read(entry.path()).ok()?),
+                ));
             }
         }
     }
@@ -1249,7 +1249,6 @@ fn run_publish(
     let player = resolve_player_dir(player)?;
     let course = course_file(&course);
     let c = load(&course)?;
-    let course_text = read(&course)?;
 
     let issues = c.validate();
     let errors = issues
@@ -1269,21 +1268,30 @@ fn run_publish(
 
     let player_files = collect_player_files(&player)?;
 
-    let font_index =
-        coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default();
-    let auto = coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)));
-    let published_course = if auto.embedded_files.is_empty() {
-        c
-    } else {
-        auto.course
-    };
-    let published_course_text = if auto.embedded_files.is_empty() {
-        course_text
-    } else {
-        let mut s = published_course.to_json().map_err(|e| e.to_string())?;
-        s.push('\n');
-        s
-    };
+    let (published_course, embedded_files, embedded_families, font_warnings) =
+        if needs_system_font_scan(&c) {
+            let font_index =
+                coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default(
+                );
+            let auto =
+                coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)));
+            let published = if auto.embedded_files.is_empty() {
+                c
+            } else {
+                auto.course
+            };
+            (
+                published,
+                auto.embedded_files,
+                auto.embedded_families,
+                auto.warnings,
+            )
+        } else {
+            (c, Vec::new(), Vec::new(), Vec::new())
+        };
+    let published_course_text = published_course
+        .to_json_compact()
+        .map_err(|e| e.to_string())?;
 
     let course_dir = course.parent().unwrap_or_else(|| Path::new("."));
     let course_dir = if course_dir.as_os_str().is_empty() {
@@ -1293,17 +1301,17 @@ fn run_publish(
     };
 
     // `src` is relative to the project's `media/` folder (docs/spec/course-model.md);
-    // `build_package_for` checks it is a safe relative path before asking for it.
-    let embedded_map: std::collections::HashMap<&str, &[u8]> = auto
-        .embedded_files
-        .iter()
-        .map(|(face, bytes)| (face.src.as_str(), bytes.as_slice()))
+    // `build_package_standard_with_folders` checks it is a safe relative path before asking for it.
+    let embedded_map: std::collections::HashMap<String, std::sync::Arc<[u8]>> = embedded_files
+        .into_iter()
+        .map(|(face, bytes)| (face.src, std::sync::Arc::from(bytes)))
         .collect();
     let media_resolver = |src: &str| {
-        embedded_map
-            .get(src)
-            .map(|b| (*b).to_vec())
-            .or_else(|| std::fs::read(course_dir.join("media").join(src)).ok())
+        embedded_map.get(src).cloned().or_else(|| {
+            std::fs::read(course_dir.join("media").join(src))
+                .ok()
+                .map(std::sync::Arc::from)
+        })
     };
     let web_folders = |path: &str| collect_web_folder_files(&course_dir.join("media"), path);
 
@@ -1316,12 +1324,11 @@ fn run_publish(
 
     let files = build_package_standard_with_folders(&pkg_input, standard, &web_folders)
         .map_err(|e| format!("publish error: {e}"))?;
-    let zip_bytes = zip_package(&files).map_err(|e| format!("zip error: {e}"))?;
 
-    if !auto.embedded_families.is_empty() {
-        println!("embedded fonts: {}", auto.embedded_families.join(", "));
+    if !embedded_families.is_empty() {
+        println!("embedded fonts: {}", embedded_families.join(", "));
     }
-    for w in &auto.warnings {
+    for w in &font_warnings {
         eprintln!("warning: {w}");
     }
 
@@ -1336,20 +1343,23 @@ fn run_publish(
         }
     }
 
-    if let Some(zip_path) = &out {
+    let zip_len = if let Some(zip_path) = &out {
         if let Some(parent) = zip_path.parent()
             && !parent.as_os_str().is_empty()
         {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
-        std::fs::write(zip_path, &zip_bytes).map_err(|e| format!("{}: {e}", zip_path.display()))?;
-    }
+        let file =
+            std::fs::File::create(zip_path).map_err(|e| format!("{}: {e}", zip_path.display()))?;
+        let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
+        zip_package_to(&files, &mut writer).map_err(|e| format!("zip error: {e}"))?;
+        std::io::Write::flush(&mut writer).map_err(|e| format!("{}: {e}", zip_path.display()))?;
+        std::fs::metadata(zip_path).map_or(0, |m| m.len())
+    } else {
+        0
+    };
 
-    println!(
-        "published {} file(s), {} bytes zip",
-        files.len(),
-        zip_bytes.len()
-    );
+    println!("published {} file(s), {} bytes zip", files.len(), zip_len);
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1364,9 +1374,7 @@ fn load_project_any(p: &Path) -> Res<LoadedProject> {
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("ccraft"));
     if is_ccraft {
-        let bytes = std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))?;
-        let project = coursecraft_format::open_project(&bytes)
-            .map_err(|e| format!("{}: {e}", p.display()))?;
+        let project = open_ccraft_file(p)?;
         return Ok(LoadedProject {
             course: project.course,
             media: project.media,
@@ -1577,7 +1585,11 @@ fn run_export_docx(
     }
 }
 
-fn write_course_output(out: &Path, course: &Course, media: &[(String, Vec<u8>)]) -> Res<()> {
+fn write_course_output<B: AsRef<[u8]>>(
+    out: &Path,
+    course: &Course,
+    media: &[(String, B)],
+) -> Res<()> {
     let is_ccraft = out
         .extension()
         .and_then(|e| e.to_str())
@@ -1618,7 +1630,7 @@ fn write_course_output(out: &Path, course: &Course, media: &[(String, Vec<u8>)])
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
-        std::fs::write(&dest, data).map_err(|e| format!("{}: {e}", dest.display()))?;
+        std::fs::write(&dest, data.as_ref()).map_err(|e| format!("{}: {e}", dest.display()))?;
     }
     Ok(())
 }
@@ -1705,8 +1717,21 @@ fn run_import_questions(
     Ok(ExitCode::SUCCESS)
 }
 
-struct CliFontProvider<'a>(
-    &'a coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex,
+/// True when `course` references at least one non-Inter font face that is not
+/// already embedded in `course.fonts`, matching [`coursecraft_publish::auto_embed_fonts`].
+pub(crate) fn needs_system_font_scan(course: &Course) -> bool {
+    coursecraft_publish::collect_used_font_faces(course)
+        .into_iter()
+        .any(|(family, style)| {
+            !course
+                .fonts
+                .iter()
+                .any(|f| f.family.eq_ignore_ascii_case(&family) && f.style == style)
+        })
+}
+
+pub(crate) struct CliFontProvider<'a>(
+    pub(crate) &'a coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex,
 );
 
 impl coursecraft_publish::PublishFontProvider for CliFontProvider<'_> {
@@ -1886,6 +1911,52 @@ fn run_editor(method: String, params: String, config_dir: Option<PathBuf>) -> Re
     }
 }
 
+fn run_validate(course: &Path, out: &mut impl std::io::Write) -> Res<ExitCode> {
+    let c = match load(course) {
+        Ok(c) => c,
+        Err(err) => {
+            if let Some(hint) = explain_non_course_file(course) {
+                return Err(hint.to_string());
+            }
+            return Err(err);
+        }
+    };
+    let issues = c.validate();
+    for i in &issues {
+        let tag = if i.severity == Severity::Error {
+            "error"
+        } else {
+            "warning"
+        };
+        let _ = writeln!(out, "{tag}: {} — {}", i.path, i.message);
+    }
+    let font_warnings: Vec<String> = if needs_system_font_scan(&c) {
+        let font_index =
+            coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default();
+        coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)))
+            .warnings
+            .into_iter()
+            .filter(|w| !w.contains("responsibility"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for w in &font_warnings {
+        let _ = writeln!(out, "warning: /fonts — {w}");
+    }
+    let errors = issues
+        .iter()
+        .filter(|i| i.severity == Severity::Error)
+        .count();
+    let warnings = issues.len() - errors + font_warnings.len();
+    let _ = writeln!(out, "{errors} error(s), {warnings} warning(s)");
+    Ok(if errors == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
 fn run(cli: Cli) -> Res<ExitCode> {
     match cli.cmd {
         Cmd::New { out, title } => {
@@ -1893,50 +1964,8 @@ fn run(cli: Cli) -> Res<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Validate { course } => {
-            let c = match load(&course) {
-                Ok(c) => c,
-                Err(err) => {
-                    if let Some(hint) = explain_non_course_file(&course) {
-                        return Err(hint.to_string());
-                    }
-                    return Err(err);
-                }
-            };
-            let issues = c.validate();
-            for i in &issues {
-                let tag = if i.severity == Severity::Error {
-                    "error"
-                } else {
-                    "warning"
-                };
-                println!("{tag}: {} — {}", i.path, i.message);
-            }
-            let font_index =
-                coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex::scan_default(
-                );
-            let auto =
-                coursecraft_publish::auto_embed_fonts(&c, Some(&CliFontProvider(&font_index)));
-            for w in &auto.warnings {
-                if !w.contains("responsibility") {
-                    println!("warning: /fonts — {w}");
-                }
-            }
-            let errors = issues
-                .iter()
-                .filter(|i| i.severity == Severity::Error)
-                .count();
-            let warnings = issues.len() - errors
-                + auto
-                    .warnings
-                    .iter()
-                    .filter(|w| !w.contains("responsibility"))
-                    .count();
-            println!("{errors} error(s), {warnings} warning(s)");
-            Ok(if errors == 0 {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
-            })
+            let mut out = std::io::stdout().lock();
+            run_validate(&course, &mut out)
         }
         Cmd::A11yCheck { course, json } => run_a11y_check(course, json),
         Cmd::Diff { a, b, json } => run_diff(&a, &b, json),

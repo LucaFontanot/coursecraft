@@ -96,6 +96,9 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Generate SHA-256 checksums
+        working-directory: dist
+        run: sha256sum CourseCraft-* > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v3
         with:
           draft: true

@@ -58,6 +58,8 @@ pub mod interaction_gallery;
 pub mod interaction_insert;
 pub mod layers;
 pub mod media_library;
+mod media_store;
+pub use media_store::MediaStore;
 pub mod menu;
 pub mod outline;
 pub mod preferences;
@@ -89,6 +91,7 @@ pub mod toolbar;
 pub mod translate_ai;
 pub mod translation;
 pub mod triggers;
+pub mod update_dialog;
 pub mod variables;
 pub mod version_history;
 pub mod web_insert;
@@ -190,6 +193,8 @@ mod history_tests;
 mod i18n_tests;
 #[cfg(test)]
 mod idle_tests;
+#[cfg(test)]
+mod issue8_timeline_group_tests;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
@@ -409,9 +414,9 @@ pub use welcome::{
 };
 pub use widgets::{
     COMBO_MIN_POPUP_HEIGHT, COMBO_MIN_WIDTH, IconTone, icon_button, icon_button_danger,
-    icon_button_enabled, icon_toggle, mixed_toggle, modal_backdrop_color, styled_combo,
-    toolbar_button, toolbar_button_active, toolbar_button_enabled, toolbar_caret_button,
-    toolbar_primary_button, toolbar_toggle,
+    icon_button_danger_reason, icon_button_enabled, icon_button_enabled_reason, icon_toggle,
+    mixed_toggle, modal_backdrop_color, styled_combo, toolbar_button, toolbar_button_active,
+    toolbar_button_enabled, toolbar_caret_button, toolbar_primary_button, toolbar_toggle,
 };
 
 use coursecraft_course::{Course, FontStyle, ShapeKind, shape_label};
@@ -556,6 +561,8 @@ pub enum EditorRequest {
         spell_check_as_you_type: bool,
         /// The personal dictionary, saved with the other preferences.
         spell_words: Vec<String>,
+        /// Editor performance mode (`Auto` / `Standard` / `Lite`).
+        performance_mode: coursecraft_render::PerformanceMode,
     },
     /// File > Open Folder…: open a project folder (kept in git).
     OpenFolder,
@@ -669,6 +676,18 @@ pub enum EditorRequest {
         /// Command id and parameters to run after the font is added.
         apply: Option<(String, serde_json::Value)>,
     },
+    /// Ask the desktop host shell to check GitHub Releases for a newer version.
+    CheckForUpdates,
+    /// Ask the desktop host shell to download the matched installer for the available update.
+    DownloadUpdate,
+    /// Ask the desktop host shell to cancel an in-progress update download.
+    CancelUpdateDownload,
+    /// Persist that the user chose to skip automatic notifications for this version.
+    SkipUpdateVersion(String),
+    /// Reveal the verified downloaded installer in the OS file manager.
+    RevealDownloadedUpdate,
+    /// Persist whether CourseCraft checks for updates automatically on desktop startup.
+    SetAutoCheckUpdates(bool),
 }
 
 /// An installed font family offered by the picker. No file paths cross into
@@ -791,7 +810,7 @@ impl PlacementTool {
     #[must_use]
     pub fn name(&self) -> String {
         match self {
-            Self::TextBox => "Text Box".to_owned(),
+            Self::TextBox => "Text box".to_owned(),
             Self::Button => "Button".to_owned(),
             Self::Shape(kind) => shape_label(*kind).to_owned(),
             Self::Draw(tool) => tool.label().to_owned(),
@@ -1007,6 +1026,8 @@ pub struct UiState {
     pub versions: version_history::VersionHistoryState,
     /// Report a Problem window, crash prompt and recent status messages.
     pub report: report::ReportState,
+    /// Software update dialog and status-bar/menu hint state.
+    pub update: update_dialog::UpdateState,
     pub slide_size_dialog: slide_size_dialog::SlideSizeState,
     /// Rulers, grid and user guides (editor only).
     pub rulers: rulers::RulerState,
@@ -1047,9 +1068,9 @@ pub struct UiState {
     pub pending_remove_font: Option<(String, FontStyle)>,
     /// Course map replaces the slide editor in the centre.
     pub story_view: bool,
-    /// The ribbon (M30), drawn above the toolbar when visible.
+    /// The ribbon (M37), drawn above the toolbar when visible.
     pub ribbon: ribbon::RibbonState,
-    /// The panels in a docking workspace (M30), when enabled.
+    /// The panels in a docking workspace (M37), when enabled.
     pub dock: dock::DockState,
     /// The Course Map and opened-slide tabs under the ribbon.
     pub doc_tabs: doc_tabs::DocTabs,
@@ -1064,6 +1085,155 @@ pub struct UiState {
     pub(crate) properties_lists: PropertiesListCache,
     /// Cached `media_references` for the Media Library window.
     pub(crate) media_refs_cache: MediaRefsCache,
+    /// Revision- and fingerprint-keyed thumbnail draw-item cache.
+    pub(crate) thumbnail_cache: crate::slides::ThumbnailCache,
+    /// Revision-cached slide/scene/bank summaries for the left navigator.
+    pub(crate) navigator_index: crate::slides::NavigatorIndex,
+    /// Cached main-canvas composed draw items for idle/hover/scroll frames.
+    pub(crate) canvas_compose_cache: CanvasComposeCache,
+    /// Course revision for which theme colors were last published to egui temp data.
+    pub(crate) last_published_theme_rev: Option<u64>,
+    /// True once the one-time large-media-library notice has been shown for the open course.
+    pub memory_pressure_warned: bool,
+    /// Last performance profile applied to `media_cache` and `thumbnail_cache`.
+    pub(crate) applied_cache_profile: Option<coursecraft_render::PerfProfile>,
+    /// Last performance profile applied to `egui::Context` via `set_render_profile`.
+    pub(crate) applied_ctx_profile: Option<coursecraft_render::PerfProfile>,
+}
+
+/// Cached composed draw items for the main authoring canvas.
+#[derive(Debug)]
+pub(crate) struct CanvasComposeCache {
+    key: Option<CanvasComposeKey>,
+    items: std::sync::Arc<[coursecraft_render::DrawItem]>,
+}
+
+impl Default for CanvasComposeCache {
+    fn default() -> Self {
+        Self {
+            key: None,
+            items: std::sync::Arc::from([]),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InlineEditTargetKey {
+    object: String,
+    cell: Option<(usize, usize)>,
+    is_extra: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InlineEditTargetRef<'a> {
+    pub(crate) object: &'a str,
+    pub(crate) cell: Option<(usize, usize)>,
+    pub(crate) is_extra: bool,
+}
+
+impl InlineEditTargetKey {
+    fn from_ref(target: InlineEditTargetRef<'_>) -> Self {
+        Self {
+            object: target.object.to_owned(),
+            cell: target.cell,
+            is_extra: target.is_extra,
+        }
+    }
+
+    fn as_ref(&self) -> InlineEditTargetRef<'_> {
+        InlineEditTargetRef {
+            object: self.object.as_str(),
+            cell: self.cell,
+            is_extra: self.is_extra,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CanvasComposeKey {
+    revision: u64,
+    slide_id: String,
+    layer: Option<String>,
+    extra_layers: Vec<String>,
+    base_slide_view: coursecraft_course::BaseSlideView,
+    selected_marker_id: Option<String>,
+    preview_state: Option<(String, String)>,
+    editing_state: Option<String>,
+    inline_edit_target: Option<InlineEditTargetKey>,
+    media_fingerprint: (usize, u64),
+}
+
+impl CanvasComposeCache {
+    pub(crate) fn clear(&mut self) {
+        self.key = None;
+        self.items = std::sync::Arc::from([]);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn get_if_matching(
+        &self,
+        revision: u64,
+        slide_id: &str,
+        layer: Option<&str>,
+        extra_layers: &[String],
+        base_slide_view: coursecraft_course::BaseSlideView,
+        selected_marker_id: Option<&str>,
+        preview_state: Option<(&str, &str)>,
+        editing_state: Option<&str>,
+        inline_edit_target: Option<InlineEditTargetRef<'_>>,
+        media_fingerprint: (usize, u64),
+    ) -> Option<std::sync::Arc<[coursecraft_render::DrawItem]>> {
+        let key = self.key.as_ref()?;
+        let matches = key.revision == revision
+            && key.slide_id == slide_id
+            && key.layer.as_deref() == layer
+            && key.extra_layers.as_slice() == extra_layers
+            && key.base_slide_view == base_slide_view
+            && key.selected_marker_id.as_deref() == selected_marker_id
+            && key
+                .preview_state
+                .as_ref()
+                .map(|(obj, state)| (obj.as_str(), state.as_str()))
+                == preview_state
+            && key.editing_state.as_deref() == editing_state
+            && key
+                .inline_edit_target
+                .as_ref()
+                .map(InlineEditTargetKey::as_ref)
+                == inline_edit_target
+            && key.media_fingerprint == media_fingerprint;
+        matches.then(|| std::sync::Arc::clone(&self.items))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn store(
+        &mut self,
+        revision: u64,
+        slide_id: &str,
+        layer: Option<&str>,
+        extra_layers: Vec<String>,
+        base_slide_view: coursecraft_course::BaseSlideView,
+        selected_marker_id: Option<&str>,
+        preview_state: Option<(&str, &str)>,
+        editing_state: Option<&str>,
+        inline_edit_target: Option<InlineEditTargetRef<'_>>,
+        media_fingerprint: (usize, u64),
+        items: std::sync::Arc<[coursecraft_render::DrawItem]>,
+    ) {
+        self.key = Some(CanvasComposeKey {
+            revision,
+            slide_id: slide_id.to_owned(),
+            layer: layer.map(str::to_owned),
+            extra_layers,
+            base_slide_view,
+            selected_marker_id: selected_marker_id.map(str::to_owned),
+            preview_state: preview_state.map(|(obj, state)| (obj.to_owned(), state.to_owned())),
+            editing_state: editing_state.map(str::to_owned),
+            inline_edit_target: inline_edit_target.map(InlineEditTargetKey::from_ref),
+            media_fingerprint,
+        });
+        self.items = items;
+    }
 }
 
 /// Cached per-revision / per-media-count lists for the Properties panel.
@@ -1174,7 +1344,7 @@ pub struct Editor {
     pub file_ops_available: bool,
     pub publish_available: bool,
     pub title_info: Option<(String, bool)>,
-    pub media: Vec<(String, std::sync::Arc<[u8]>)>,
+    pub media: MediaStore,
     pub media_cache: coursecraft_render::MediaCache,
     /// Cached audio waveform peak envelopes (`0.0..=1.0`, <= 2,000 peaks) keyed by media id (`src`).
     pub audio_waveforms: std::collections::HashMap<String, Option<Vec<f32>>>,
@@ -1185,6 +1355,8 @@ pub struct Editor {
     pub pending_image_pick: Option<PendingImagePick>,
     pub pending_requests: Vec<EditorRequest>,
     pub automation_available: bool,
+    /// Whether desktop in-app update checks are supported on this host.
+    pub updates_available: bool,
     /// This app's own binary, for the Connect an AI agent dialog.
     pub agent_exe_path: Option<String>,
     pub automation_enabled: bool,
@@ -1195,6 +1367,10 @@ pub struct Editor {
     /// The ribbon, docking and panel arrangement last saved (or loaded), so a
     /// change is sent once as [`EditorRequest::SaveLayout`].
     saved_layout: (bool, bool, craft_ui::docking::Workspace<dock::Panel>),
+    /// User-selected editor performance mode (`Auto` / `Standard` / `Lite`).
+    pub performance_mode: coursecraft_render::PerformanceMode,
+    /// True when the host shell detected a constrained/low-memory device (e.g. `deviceMemory <= 4`).
+    pub low_memory_device: bool,
     /// Timeline playback (authoring-only: no runtime, no document writes).
     pub timeline_playback: timeline_playback::TimelinePlayback,
     /// Session revision the timeline playback last saw; a change stops Play.
@@ -1228,6 +1404,19 @@ pub enum QuietTone {
 ///
 /// A disabled button is painted in `text_disabled`, never highlights and does not sense clicks.
 pub fn quiet_button(ui: &mut Ui, text: &str, tone: QuietTone, enabled: bool) -> egui::Response {
+    quiet_button_enabled(ui, text, tone, enabled, "Not available right now")
+}
+
+/// A quiet text button with an explicit disabled hover reason.
+///
+/// Wraps the button in [`Ui::add_enabled_ui`] so `.on_disabled_hover_text` fires reliably in egui.
+pub fn quiet_button_enabled(
+    ui: &mut Ui,
+    text: &str,
+    tone: QuietTone,
+    enabled: bool,
+    disabled_reason: &str,
+) -> egui::Response {
     let p = coursecraft_render::palette(ui.ctx());
     let galley = ui.painter().layout_no_wrap(
         text.to_owned(),
@@ -1239,35 +1428,38 @@ pub fn quiet_button(ui: &mut Ui, text: &str, tone: QuietTone, enabled: bool) -> 
         galley.size().x + 2.0 * pad_x,
         coursecraft_render::CONTROL_COMPACT,
     );
-    let sense = if enabled {
-        egui::Sense::click()
-    } else {
-        egui::Sense::hover()
-    };
-    let (rect, resp) = ui.allocate_exact_size(size, sense);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text.to_owned()));
-    if ui.is_rect_visible(rect) {
-        let hovered = enabled && resp.hovered();
-        let color = if !enabled {
-            p.text_disabled
-        } else {
-            match (tone, hovered) {
-                (QuietTone::Accent, _) => p.accent_text,
-                (QuietTone::Secondary, true) => p.text,
-                (QuietTone::Danger, true) => p.danger,
-                (QuietTone::Secondary | QuietTone::Danger, false) => p.text_secondary,
+    let resp = ui
+        .add_enabled_ui(enabled, |ui| {
+            let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+            resp.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::Role::Button, enabled, text.to_owned())
+            });
+            if ui.is_rect_visible(rect) {
+                let hovered = enabled && resp.hovered();
+                let color = if !enabled {
+                    p.text_disabled
+                } else {
+                    match (tone, hovered) {
+                        (QuietTone::Accent, _) => p.accent_text,
+                        (QuietTone::Secondary, true) => p.text,
+                        (QuietTone::Danger, true) => p.danger,
+                        (QuietTone::Secondary | QuietTone::Danger, false) => p.text_secondary,
+                    }
+                };
+                if hovered {
+                    ui.painter().rect_filled(
+                        rect,
+                        egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+                        p.hover,
+                    );
+                }
+                let pos = egui::pos2(rect.left() + pad_x, rect.center().y - galley.size().y * 0.5);
+                ui.painter().galley(pos, galley, color);
             }
-        };
-        if hovered {
-            ui.painter().rect_filled(
-                rect,
-                egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
-                p.hover,
-            );
-        }
-        let pos = egui::pos2(rect.left() + pad_x, rect.center().y - galley.size().y * 0.5);
-        ui.painter().galley(pos, galley, color);
-    }
+            resp
+        })
+        .inner
+        .on_disabled_hover_text(disabled_reason);
     if enabled {
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     } else {
@@ -1475,6 +1667,7 @@ impl Editor {
                 prefs: preferences::PrefsState::default(),
                 versions: version_history::VersionHistoryState::default(),
                 report: report::ReportState::default(),
+                update: update_dialog::UpdateState::default(),
                 slide_size_dialog: slide_size_dialog::SlideSizeState::default(),
                 rulers: rulers::RulerState::default(),
                 snap_guides: Vec::new(),
@@ -1504,6 +1697,13 @@ impl Editor {
                 course_map: CourseMapState::default(),
                 properties_lists: PropertiesListCache::default(),
                 media_refs_cache: MediaRefsCache::default(),
+                thumbnail_cache: crate::slides::ThumbnailCache::default(),
+                navigator_index: crate::slides::NavigatorIndex::default(),
+                canvas_compose_cache: CanvasComposeCache::default(),
+                last_published_theme_rev: None,
+                memory_pressure_warned: false,
+                applied_cache_profile: None,
+                applied_ctx_profile: None,
             },
             preview: None,
             recent_files: Vec::new(),
@@ -1512,7 +1712,7 @@ impl Editor {
             file_ops_available: true,
             publish_available: true,
             title_info: None,
-            media: Vec::new(),
+            media: MediaStore::new(),
             media_cache: coursecraft_render::MediaCache::new(),
             audio_waveforms: std::collections::HashMap::new(),
             video_durations: std::sync::Arc::new(std::sync::Mutex::new(
@@ -1521,6 +1721,7 @@ impl Editor {
             pending_image_pick: None,
             pending_requests: Vec::new(),
             automation_available: false,
+            updates_available: false,
             agent_exe_path: None,
             automation_enabled: true,
             automation_port: None,
@@ -1531,6 +1732,8 @@ impl Editor {
                 true,
                 craft_ui::docking::Workspace::new(dock::default_layout()),
             ),
+            performance_mode: coursecraft_render::PerformanceMode::Auto,
+            low_memory_device: false,
             timeline_playback: timeline_playback::TimelinePlayback::create_default(),
             timeline_last_revision: initial_revision,
             timeline_mono_ms: 0,
@@ -1540,9 +1743,66 @@ impl Editor {
             spell_version: 0,
             system_font_provider: None,
         };
+        editor.sync_perf_profile(None);
         editor.check_revision();
         editor.refresh_audit_now();
         editor
+    }
+
+    /// Tell the editor whether the host detected a constrained/low-memory device.
+    pub fn set_low_memory_device(&mut self, low: bool) {
+        self.low_memory_device = low;
+        self.sync_perf_profile(None);
+    }
+
+    /// Resolve the active editor [`coursecraft_render::PerfProfile`] for the current course and device.
+    #[must_use]
+    pub fn resolved_perf_profile(&self) -> coursecraft_render::PerfProfile {
+        let slide_count: usize = self
+            .session
+            .course
+            .scenes
+            .iter()
+            .map(|scene| scene.slides.len())
+            .sum();
+        coursecraft_render::PerfProfile::for_editor(
+            self.performance_mode,
+            cfg!(target_arch = "wasm32"),
+            self.low_memory_device,
+            slide_count,
+            self.media.total_bytes(),
+        )
+    }
+
+    pub(crate) fn sync_perf_profile(&mut self, ctx: Option<&egui::Context>) {
+        let profile = self.resolved_perf_profile();
+        if self.ui.applied_cache_profile != Some(profile) {
+            self.media_cache.apply_perf_profile(&profile);
+            self.ui
+                .thumbnail_cache
+                .set_max_entries(profile.thumbnail_cache_entries);
+            self.ui.applied_cache_profile = Some(profile);
+        }
+        if let Some(ctx) = ctx
+            && self.ui.applied_ctx_profile != Some(profile)
+        {
+            coursecraft_render::set_render_profile(ctx, &profile);
+            self.ui.applied_ctx_profile = Some(profile);
+        }
+    }
+
+    fn check_memory_pressure(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        const THRESHOLD: u64 = 128 * 1024 * 1024;
+        #[cfg(not(target_arch = "wasm32"))]
+        const THRESHOLD: u64 = 512 * 1024 * 1024;
+
+        if !self.ui.memory_pressure_warned && self.media.total_bytes() > THRESHOLD {
+            self.ui.memory_pressure_warned = true;
+            self.set_status(
+                "Large media library detected. Consider saving as a project folder or switching Preferences to Lite mode.",
+            );
+        }
     }
 
     /// Register (or clear) the optional system font provider for slide rendering.
@@ -1639,6 +1899,11 @@ impl Editor {
         self.automation_available = available;
     }
 
+    /// Configure whether desktop in-app update checks are supported on this host.
+    pub fn set_updates_available(&mut self, available: bool) {
+        self.updates_available = available;
+    }
+
     /// Configure whether local control channel automation is enabled.
     pub fn set_automation_enabled(&mut self, enabled: bool) {
         self.automation_enabled = enabled;
@@ -1693,11 +1958,13 @@ impl Editor {
             .slide(&slide_id)
             .map_or(100, |slide| slide.duration_ms.max(100));
         self.timeline_playback.update_clock(now_mono);
-        self.timeline_playback.sync_slide(
+        self.timeline_playback.sync_slide_indexed(
             &self.session.course,
             &slide_id,
             duration_ms,
             &self.media,
+            Some(self.media.index()),
+            Some(self.session.revision),
             self.ui.timeline.playhead_ms,
         );
 
@@ -1843,6 +2110,12 @@ impl Editor {
         self.ui.story_view = false;
         self.ui.course_map = CourseMapState::default();
         self.ui.doc_tabs = doc_tabs::DocTabs::default();
+        self.ui.thumbnail_cache.clear();
+        self.ui.navigator_index.clear();
+        self.ui.canvas_compose_cache.clear();
+        self.ui.last_published_theme_rev = None;
+        self.ui.memory_pressure_warned = false;
+        self.ui.applied_cache_profile = None;
         self.ui.publish.open = false;
         self.ui.publish.phase = PublishPhase::Idle;
         self.ui.publish.status = None;
@@ -1858,6 +2131,7 @@ impl Editor {
 
         self.media.clear();
         self.media_cache = coursecraft_render::MediaCache::new();
+        self.sync_perf_profile(None);
         self.pending_image_pick = None;
         self.pending_requests.clear();
 
@@ -1911,14 +2185,29 @@ impl Editor {
 
     /// Update the in-memory media list (e.g. after opening a project file).
     pub fn set_media(&mut self, media: Vec<(String, std::sync::Arc<[u8]>)>) {
-        self.media = media;
+        self.media.set_all(media);
         self.media_cache = coursecraft_render::MediaCache::new();
+        self.ui.applied_cache_profile = None;
+        self.sync_perf_profile(None);
+    }
+
+    /// Append a raw media entry directly into the editor's media store.
+    pub fn add_raw_media(&mut self, name: String, bytes: std::sync::Arc<[u8]>) {
+        self.media.push(name, bytes);
+    }
+
+    pub(crate) fn media_get(&self, src: &str) -> Option<&std::sync::Arc<[u8]>> {
+        self.media.get(src)
+    }
+
+    pub(crate) fn media_contains(&self, src: &str) -> bool {
+        self.media.contains(src)
     }
 
     /// Access the in-memory media list.
     #[must_use]
     pub fn media(&self) -> &[(String, std::sync::Arc<[u8]>)] {
-        &self.media
+        self.media.as_slice()
     }
 
     /// Mark a media-list change as a document change, so autosave and the
@@ -1966,7 +2255,7 @@ impl Editor {
             match coursecraft_media::font_info(bytes) {
                 Ok(_) => {
                     let src = sanitize_font_src(file_name, &self.media);
-                    self.media.push((src.clone(), bytes.into()));
+                    self.media.push(src.clone(), bytes.into());
                     Some(src)
                 }
                 Err(e) => {
@@ -1987,7 +2276,7 @@ impl Editor {
                 None
             } else {
                 let src = sanitize_media_src(file_name, &self.media);
-                self.media.push((src.clone(), bytes.into()));
+                self.media.push(src.clone(), bytes.into());
                 Some(src)
             }
         };
@@ -2011,10 +2300,9 @@ impl Editor {
             self.ui.error_history.push(msg);
             return false;
         }
-        let Some((_, slot)) = self.media.iter_mut().find(|(name, _)| name == src) else {
+        if !self.media.replace(src, bytes.into()) {
             return false;
-        };
-        *slot = bytes.into();
+        }
         self.media_cache = coursecraft_render::MediaCache::new();
         self.audio_waveforms.remove(src);
         self.ensure_audio_waveform(src);
@@ -2046,26 +2334,14 @@ impl Editor {
     pub fn slide_media(&self, slide: &coursecraft_course::Slide) -> Vec<(String, Vec<u8>)> {
         let mut referenced = std::collections::HashSet::new();
         let mut web_prefixes = std::collections::BTreeSet::new();
-        for obj in &slide.objects {
-            collect_object_media_srcs(obj, &mut referenced);
-            if let coursecraft_course::ObjectKind::Web {
-                source: coursecraft_course::WebSource::Folder { path, .. },
-            } = &obj.kind
-            {
-                web_prefixes.insert(format!("{path}/"));
+        coursecraft_course::visit_slide_media(slide, &mut |r| {
+            if r.role == coursecraft_course::MediaRole::WebFolder {
+                referenced.insert(format!("{}/{}", r.src, r.web_entry.unwrap_or("")));
+                web_prefixes.insert(format!("{}/", r.src));
+            } else if !r.src.is_empty() {
+                referenced.insert(r.src.to_owned());
             }
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                collect_object_media_srcs(obj, &mut referenced);
-                if let coursecraft_course::ObjectKind::Web {
-                    source: coursecraft_course::WebSource::Folder { path, .. },
-                } = &obj.kind
-                {
-                    web_prefixes.insert(format!("{path}/"));
-                }
-            }
-        }
+        });
         self.media
             .iter()
             .filter(|(src, _)| {
@@ -2101,14 +2377,14 @@ impl Editor {
             {
                 if existing.as_ref() != bytes.as_slice() {
                     let new_src = sanitize_media_src(&src, &self.media);
-                    self.media.push((new_src.clone(), bytes.into()));
+                    self.media.push(new_src.clone(), bytes.into());
                     renames.insert(src, new_src);
                     media_added = true;
                 } else if existing_name != &src {
                     renames.insert(src, existing_name.clone());
                 }
             } else {
-                self.media.push((src, bytes.into()));
+                self.media.push(src, bytes.into());
                 media_added = true;
             }
         }
@@ -2143,7 +2419,7 @@ impl Editor {
         let referenced = referenced_media_srcs(&self.session.course);
         referenced
             .into_iter()
-            .filter(|src| !self.media.iter().any(|(name, _)| name == src))
+            .filter(|src| !self.media_contains(src))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect()
@@ -2155,18 +2431,16 @@ impl Editor {
         if let Some(size) = self.media_cache.natural_size(src) {
             return Some(size);
         }
-        for (name, bytes) in &self.media {
-            if name == src {
-                let lower = name.to_ascii_lowercase();
-                if lower.ends_with(".svg") || lower.ends_with(".svgz") {
-                    if let Some(size) = coursecraft_media::svg_natural_size(bytes) {
-                        return Some(size);
-                    }
-                } else if let Ok(img) =
-                    coursecraft_media::decode_image(bytes, &coursecraft_media::Limits::default())
-                {
-                    return Some((img.width as f32, img.height as f32));
+        if let Some(bytes) = self.media_get(src) {
+            let lower = src.to_ascii_lowercase();
+            if lower.ends_with(".svg") || lower.ends_with(".svgz") {
+                if let Some(size) = coursecraft_media::svg_natural_size(bytes) {
+                    return Some(size);
                 }
+            } else if let Ok(img) =
+                coursecraft_media::decode_image(bytes, &coursecraft_media::Limits::default())
+            {
+                return Some((img.width as f32, img.height as f32));
             }
         }
         None
@@ -2537,7 +2811,7 @@ impl Editor {
     /// changing the course in Master View or when no slide is selected.
     pub fn paste_image_png(&mut self, png_bytes: &[u8]) -> bool {
         if self.ui.master_view {
-            self.set_status("Not available in Master View");
+            self.set_status("Not available in slide masters");
             return false;
         }
         let slide_id = self.selection.slide.clone();
@@ -2669,7 +2943,7 @@ impl Editor {
             }
             let src = sanitize_media_src(file_name, &self.media);
             let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-            self.media.push((src.clone(), arc_bytes));
+            self.media.push(src.clone(), arc_bytes);
             if self
                 .run(
                     "object.patch_state",
@@ -2712,7 +2986,7 @@ impl Editor {
             let parent_frame = parent_frame?;
             let src = sanitize_media_src(file_name, &self.media);
             let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-            self.media.push((src.clone(), arc_bytes));
+            self.media.push(src.clone(), arc_bytes);
 
             let (mut w, mut h) = (natural_width, natural_height);
             if !w.is_finite() || !h.is_finite() || w <= 0.0 || h <= 0.0 {
@@ -2772,7 +3046,7 @@ impl Editor {
 
         let src = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((src.clone(), arc_bytes));
+        self.media.push(src.clone(), arc_bytes);
 
         match pending_pick {
             Some(PendingImagePick::PictureFill {
@@ -2963,7 +3237,7 @@ impl Editor {
         kind: MediaKind,
         src: &str,
     ) -> Option<((String, Json), u32)> {
-        let (_, bytes) = self.media.iter().find(|(name, _)| name == src)?;
+        let bytes = self.media_get(src)?;
         let ms = if kind == MediaKind::Video {
             let cached = self
                 .video_durations
@@ -3035,7 +3309,7 @@ impl Editor {
 
         let src = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((src.clone(), arc_bytes));
+        self.media.push(src.clone(), arc_bytes);
         Some(src)
     }
 
@@ -3108,7 +3382,7 @@ impl Editor {
         };
         let src = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((src.clone(), arc_bytes));
+        self.media.push(src.clone(), arc_bytes);
         self.ui.placement_tool = Some(PlacementTool::Lottie {
             src: src.clone(),
             natural_size: (info.width as f32, info.height as f32),
@@ -3135,7 +3409,7 @@ impl Editor {
 
         let path = sanitize_media_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((path.clone(), arc_bytes));
+        self.media.push(path.clone(), arc_bytes);
 
         let Some(PendingImagePick::ReplaceObject(object_id)) = (if matches!(
             self.pending_image_pick,
@@ -3181,7 +3455,7 @@ impl Editor {
         };
         let src = sanitize_font_src(file_name, &self.media);
         let arc_bytes: std::sync::Arc<[u8]> = bytes.into();
-        self.media.push((src.clone(), arc_bytes));
+        self.media.push(src.clone(), arc_bytes);
         let style = match info.style {
             coursecraft_media::FontFileStyle::Regular => FontStyle::Regular,
             coursecraft_media::FontFileStyle::Bold => FontStyle::Bold,
@@ -3427,6 +3701,24 @@ impl Editor {
         self.exit_edit_state();
         let slide = slide.filter(|id| self.session.course.bank_slide(id).is_none());
         let mut preview = Preview::new(&self.session.course, slide);
+        preview.set_initial_size(self.ui.preview_size);
+        self.preview = Some(preview);
+    }
+
+    /// Open the in-editor full-course preview starting at `slide_id`.
+    ///
+    /// Falls back to the whole course from its start slide if `slide_id` is empty
+    /// or refers to a question bank slide.
+    pub fn open_preview_from(&mut self, slide_id: &str) {
+        self.exit_edit_state();
+        let is_scene_slide = !slide_id.is_empty()
+            && self.session.course.bank_slide(slide_id).is_none()
+            && self.session.course.play_slide(slide_id).is_some();
+        let mut preview = if is_scene_slide {
+            Preview::new_from_slide(&self.session.course, slide_id)
+        } else {
+            Preview::new(&self.session.course, None)
+        };
         preview.set_initial_size(self.ui.preview_size);
         self.preview = Some(preview);
     }
@@ -3930,17 +4222,6 @@ impl Editor {
     /// On `Err` it stores the error message in `ui.last_error` and returns `None`.
     /// Nothing else in the crate calls `execute`.
     pub fn run(&mut self, id: &str, params: Json) -> Option<Json> {
-        // A mutating command makes `Session::execute` clone the whole course
-        // for its undo snapshot. Count that copy here, where the editor has a
-        // hook; non-mutating reads (validate, audit, info) copy nothing.
-        #[cfg(test)]
-        if registry()
-            .iter()
-            .find(|cmd| cmd.id == id)
-            .is_some_and(|cmd| cmd.mutates)
-        {
-            crate::guard_counters::note_course_copy();
-        }
         #[cfg(test)]
         let before_for_log = std::env::var("CC_FAILED_LOG")
             .ok()
@@ -3975,11 +4256,6 @@ impl Editor {
     /// On `Err` it stores the error message in `ui.last_error` and returns `None`.
     /// On success, selects the last created item if any.
     pub fn run_batch(&mut self, steps: &[(String, Json)]) -> Option<Vec<Json>> {
-        // `execute_batch` takes one undo snapshot for the whole batch, up front.
-        #[cfg(test)]
-        if !steps.is_empty() {
-            crate::guard_counters::note_course_copy();
-        }
         match self.session.execute_batch(steps) {
             Ok(results) => {
                 self.ui.pending_undo_redo = false;
@@ -4075,7 +4351,9 @@ impl Editor {
                 &self.ui.last_known_slides,
                 reselect_restored,
             );
-            self.ui.last_known_slides = selection::slide_layout(&self.session.course);
+            if !slide_layout_matches(&self.session.course, &self.ui.last_known_slides) {
+                self.ui.last_known_slides = selection::slide_layout(&self.session.course);
+            }
             self.ui.pending_undo_redo = false;
             if let Some(session) = self.ui.editing_state.clone()
                 && let Some(ref extra_id) = session.selected_extra
@@ -4205,26 +4483,44 @@ impl Editor {
     pub(crate) fn refresh_validate_only(&mut self) {
         #[cfg(test)]
         crate::guard_counters::note_validation_run();
-        if let Some(res) = self.run("course.validate", serde_json::json!({})) {
-            let (errs, mut warns, mut issues) = parse_validation_result(&res);
-            for r in coursecraft_course::media_references(&self.session.course) {
-                if r.src.ends_with('/') {
-                    continue;
+        let engine_issues = self.session.validation_issues();
+        let mut errs = 0usize;
+        let mut warns = 0usize;
+        let mut issues = Vec::with_capacity(engine_issues.len());
+        for issue in engine_issues {
+            let severity = match issue.severity {
+                coursecraft_course::Severity::Error => {
+                    errs += 1;
+                    "error"
                 }
-                if !self.media.iter().any(|(name, _)| name == &r.src) {
+                coursecraft_course::Severity::Warning => {
                     warns += 1;
-                    issues.push(ValidationIssueSummary {
-                        severity: "warning".to_owned(),
-                        path: r.place.clone(),
-                        message: format!("Missing media \u{201C}{}\u{201D} in {}.", r.src, r.place),
-                    });
+                    "warning"
                 }
-            }
-            self.ui.trigger_issues_by_path = index_trigger_issues(&issues);
-            self.ui.validation_errors = errs;
-            self.ui.validation_warnings = warns;
-            self.ui.validation_issues = issues;
+            };
+            issues.push(ValidationIssueSummary {
+                severity: severity.to_owned(),
+                path: issue.path.clone(),
+                message: issue.message.clone(),
+            });
         }
+        for r in coursecraft_course::media_references(&self.session.course) {
+            if r.src.ends_with('/') {
+                continue;
+            }
+            if !self.media_contains(&r.src) {
+                warns += 1;
+                issues.push(ValidationIssueSummary {
+                    severity: "warning".to_owned(),
+                    path: r.place.clone(),
+                    message: format!("Missing media \u{201C}{}\u{201D} in {}.", r.src, r.place),
+                });
+            }
+        }
+        self.ui.trigger_issues_by_path = index_trigger_issues(&issues);
+        self.ui.validation_errors = errs;
+        self.ui.validation_warnings = warns;
+        self.ui.validation_issues = issues;
     }
 
     /// Run the accessibility audit now, through the engine, and clear the dirty flag.
@@ -4357,17 +4653,22 @@ impl Editor {
         // Strings are looked up on the drawing thread in the saved language.
         i18n::set_current(i18n::resolve(&self.language));
         self.media_cache.begin_frame();
+        self.sync_perf_profile(Some(ui.ctx()));
+        self.check_memory_pressure();
         widgets::begin_press_guard(ui.ctx());
         // Pick mode owns the pointer and Escape before anything else sees them.
         eyedropper::process_frame(ui.ctx());
         self.check_revision();
         self.maybe_run_deferred_audit(ui.ctx());
-        properties::publish_theme_colors(ui.ctx(), &self.session.course.theme);
+        if self.ui.last_published_theme_rev != Some(self.session.revision) {
+            properties::publish_theme_colors(ui.ctx(), &self.session.course.theme);
+            self.ui.last_published_theme_rev = Some(self.session.revision);
+        }
         coursecraft_render::set_system_font_provider(ui.ctx(), self.system_font_provider.clone());
         coursecraft_render::install_course_fonts(
             ui.ctx(),
             &self.session.course,
-            &MemoryMediaSource { media: &self.media },
+            &MemoryMediaSource::from_store(&self.media),
         );
         self.update_timeline_playback(ui);
         dock::replay_forwarded(self, ui.ctx());
@@ -4409,6 +4710,44 @@ impl Editor {
             }
             if let Some(text) = paste {
                 clipboard::paste_text(self, &text);
+            }
+        }
+
+        let mut requests = Vec::new();
+
+        // File shortcuts (Save As before Save because egui's COMMAND match ignores extra Shift).
+        let file_shortcuts_allowed = !preview_has_focus
+            && !ui.ctx().egui_wants_keyboard_input()
+            && self.ui.inline_edit.is_none()
+            && !self.is_cropping()
+            && !self.ui.ai.open
+            && !self.ui.document.open
+            && !self.ui.alt.open
+            && !self.ui.translate.open
+            && !self.ui.show_shortcuts_dialog
+            && !matches!(self.ui.publish.phase, PublishPhase::Busy);
+        if file_shortcuts_allowed {
+            if self.file_ops_available && !self.ui.show_welcome {
+                if let Some(sc) = menu::parse_shortcut("Ctrl+Shift+S")
+                    && ui.input_mut(|i| i.consume_shortcut(&sc))
+                {
+                    requests.push(EditorRequest::SaveAs);
+                } else if let Some(sc) = menu::parse_shortcut("Ctrl+S")
+                    && ui.input_mut(|i| i.consume_shortcut(&sc))
+                {
+                    requests.push(EditorRequest::Save);
+                }
+            }
+            if self.file_ops_available
+                && let Some(sc) = menu::parse_shortcut("Ctrl+O")
+                && ui.input_mut(|i| i.consume_shortcut(&sc))
+            {
+                requests.push(EditorRequest::Open);
+            }
+            if let Some(sc) = menu::parse_shortcut("Ctrl+N")
+                && ui.input_mut(|i| i.consume_shortcut(&sc))
+            {
+                requests.push(EditorRequest::New);
             }
         }
 
@@ -4699,9 +5038,8 @@ impl Editor {
         if self.ui.master_view && self.ui.bottom_tab == BottomTab::States {
             self.ui.bottom_tab = BottomTab::Timeline;
         }
-        let mut requests = Vec::new();
-        // F12 previews this slide and Shift+F12 the course from the start,
-        // like the toolbar's Preview button and its menu.
+        // F12 previews this slide, Ctrl+F12 (Cmd+F12 on macOS) previews from here,
+        // and Shift+F12 previews the whole course, like the Preview menu and toolbar.
         if !self.ui.show_welcome
             && self.preview.is_none()
             && !self.ui.master_view
@@ -4712,6 +5050,10 @@ impl Editor {
                 requests.push(EditorRequest::Preview {
                     slide: String::new(),
                 });
+            } else if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F12)) {
+                let slide_id = self.selection.slide.clone();
+                self.open_preview_from(&slide_id);
+                requests.push(EditorRequest::Preview { slide: slide_id });
             } else if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F12)) {
                 toolbar::preview_slide(self, &mut requests);
             }
@@ -4742,6 +5084,7 @@ impl Editor {
 
             shortcuts::show_shortcuts_dialog(self, ui.ctx());
             report::show_report_windows(self, ui.ctx(), &mut requests);
+            update_dialog::show_update_dialog(self, ui.ctx(), &mut requests);
             translation::show_translation_windows(self, ui.ctx(), &mut requests);
             outline::show_outline_dialog(self, ui.ctx());
             document::show_document_dialog(self, ui.ctx(), &mut requests);
@@ -4789,7 +5132,7 @@ impl Editor {
                 }
             });
 
-        // 1b. The ribbon (M30, the default), or the older flat toolbar when the
+        // 1b. The ribbon (M37, the default), or the older flat toolbar when the
         // ribbon is turned off in Preferences.
         self.ui.ribbon.rect = egui::Rect::NOTHING;
         let top_panel = if self.ui.ribbon.visible {
@@ -4970,10 +5313,11 @@ impl Editor {
         // Theme dialog window
         theme_dialog::show_theme_dialog_window(self, ui.ctx());
         text_styles_ui::show_manage_styles_window(self, ui.ctx());
-        slide_size_dialog::show_slide_size_dialog(self, ui.ctx());
+        slide_size_dialog::show_slide_size_dialog(self, ui.ctx(), &mut requests);
         preferences::show_preferences_window(self, ui.ctx(), &mut requests);
         version_history::show_version_history_window(self, ui.ctx(), &mut requests);
         report::show_report_windows(self, ui.ctx(), &mut requests);
+        update_dialog::show_update_dialog(self, ui.ctx(), &mut requests);
 
         // XLIFF export language dialog and import report
         translation::show_translation_windows(self, ui.ctx(), &mut requests);
@@ -5017,7 +5361,7 @@ impl Editor {
         if self.preview.is_some() {
             let mut open = true;
             if let Some(ref mut preview) = self.preview {
-                let source = MemoryMediaSource { media: &self.media };
+                let source = MemoryMediaSource::from_store(&self.media);
                 preview.show(ui.ctx(), &mut open, Some((&mut self.media_cache, &source)));
                 if let Some(size) = preview.remembered_size() {
                     self.ui.preview_size = Some(size);
@@ -5082,10 +5426,18 @@ pub fn primary_button(ui: &mut Ui, label: impl Into<egui::WidgetText>) -> egui::
 /// In-memory media source borrowing from an editor's media assets.
 pub struct MemoryMediaSource<'a> {
     pub media: &'a [(String, std::sync::Arc<[u8]>)],
+    pub index: Option<&'a std::collections::HashMap<String, usize>>,
 }
 
-impl coursecraft_render::MediaSource for MemoryMediaSource<'_> {
-    fn get(&self, src: &str) -> coursecraft_render::MediaFetch {
+impl<'a> MemoryMediaSource<'a> {
+    pub(crate) fn from_store(store: &'a MediaStore) -> Self {
+        Self {
+            media: store.as_slice(),
+            index: Some(store.index()),
+        }
+    }
+
+    fn linear_get(&self, src: &str) -> coursecraft_render::MediaFetch {
         for (name, bytes) in self.media {
             if name == src {
                 return coursecraft_render::MediaFetch::Ready(std::sync::Arc::clone(bytes));
@@ -5095,14 +5447,29 @@ impl coursecraft_render::MediaSource for MemoryMediaSource<'_> {
     }
 }
 
+impl coursecraft_render::MediaSource for MemoryMediaSource<'_> {
+    fn get(&self, src: &str) -> coursecraft_render::MediaFetch {
+        if let Some(index) = self.index {
+            return match index.get(src) {
+                Some(&idx) => match self.media.get(idx) {
+                    Some((name, bytes)) if name == src => {
+                        coursecraft_render::MediaFetch::Ready(std::sync::Arc::clone(bytes))
+                    }
+                    _ => self.linear_get(src),
+                },
+                None => coursecraft_render::MediaFetch::Missing,
+            };
+        }
+        self.linear_get(src)
+    }
+}
+
 impl coursecraft_render::MediaSource for Editor {
     fn get(&self, src: &str) -> coursecraft_render::MediaFetch {
-        for (name, bytes) in &self.media {
-            if name == src {
-                return coursecraft_render::MediaFetch::Ready(std::sync::Arc::clone(bytes));
-            }
+        match self.media_get(src) {
+            Some(bytes) => coursecraft_render::MediaFetch::Ready(std::sync::Arc::clone(bytes)),
+            None => coursecraft_render::MediaFetch::Missing,
         }
-        coursecraft_render::MediaFetch::Missing
     }
 }
 
@@ -5136,43 +5503,17 @@ impl coursecraft_render::MediaSource for TimelineMediaSource<'_> {
 #[must_use]
 pub fn referenced_media_srcs(course: &Course) -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
-    for face in &course.fonts {
-        if !face.src.is_empty() {
-            set.insert(face.src.clone());
-        }
-    }
-    if let Some(logo) = &course.player.logo
-        && !logo.is_empty()
-    {
-        set.insert(logo.clone());
-    }
-    for resource in &course.resources {
-        if let coursecraft_course::ResourceTarget::File { src } = &resource.target
-            && !src.is_empty()
-        {
-            set.insert(src.clone());
-        }
-    }
-    if let Some(audio) = &course.background_audio
-        && !audio.src.is_empty()
-    {
-        set.insert(audio.src.clone());
-    }
-    for slide in course
-        .slides()
-        .chain(course.masters.iter())
-        .chain(course.templates.iter())
-        .chain(course.banks.iter().flat_map(|bank| bank.slides.iter()))
-    {
-        for obj in &slide.objects {
-            collect_object_media_srcs(obj, &mut set);
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                collect_object_media_srcs(obj, &mut set);
+    coursecraft_course::visit_course_media(
+        course,
+        coursecraft_course::MediaScope::AllIncludingTemplates,
+        &mut |r| {
+            if r.role == coursecraft_course::MediaRole::WebFolder {
+                set.insert(format!("{}/{}", r.src, r.web_entry.unwrap_or("")));
+            } else if !r.src.is_empty() {
+                set.insert(r.src.to_owned());
             }
-        }
-    }
+        },
+    );
     set
 }
 
@@ -5181,135 +5522,16 @@ pub fn referenced_media_srcs(course: &Course) -> std::collections::HashSet<Strin
 #[must_use]
 pub fn web_folder_prefixes(course: &Course) -> Vec<String> {
     let mut prefixes = std::collections::BTreeSet::new();
-    for slide in course
-        .slides()
-        .chain(course.masters.iter())
-        .chain(course.templates.iter())
-        .chain(course.banks.iter().flat_map(|bank| bank.slides.iter()))
-    {
-        for obj in &slide.objects {
-            if let coursecraft_course::ObjectKind::Web {
-                source: coursecraft_course::WebSource::Folder { path, .. },
-            } = &obj.kind
-            {
-                prefixes.insert(format!("{path}/"));
+    coursecraft_course::visit_course_media(
+        course,
+        coursecraft_course::MediaScope::AllIncludingTemplates,
+        &mut |r| {
+            if r.role == coursecraft_course::MediaRole::WebFolder {
+                prefixes.insert(format!("{}/", r.src));
             }
-        }
-        for layer in &slide.layers {
-            for obj in &layer.objects {
-                if let coursecraft_course::ObjectKind::Web {
-                    source: coursecraft_course::WebSource::Folder { path, .. },
-                } = &obj.kind
-                {
-                    prefixes.insert(format!("{path}/"));
-                }
-            }
-        }
-    }
+        },
+    );
     prefixes.into_iter().collect()
-}
-
-fn collect_object_media_srcs(
-    obj: &coursecraft_course::Object,
-    set: &mut std::collections::HashSet<String>,
-) {
-    match &obj.kind {
-        coursecraft_course::ObjectKind::Image { src, .. }
-        | coursecraft_course::ObjectKind::Lottie { src, .. }
-            if !src.is_empty() =>
-        {
-            set.insert(src.clone());
-        }
-        coursecraft_course::ObjectKind::Audio { src, captions, .. } => {
-            if !src.is_empty() {
-                set.insert(src.clone());
-            }
-            if let Some(captions) = captions
-                && !captions.is_empty()
-            {
-                set.insert(captions.clone());
-            }
-        }
-        coursecraft_course::ObjectKind::Video {
-            src,
-            captions,
-            poster,
-            ..
-        } => {
-            if !src.is_empty() {
-                set.insert(src.clone());
-            }
-            if let Some(captions) = captions
-                && !captions.is_empty()
-            {
-                set.insert(captions.clone());
-            }
-            if let Some(poster) = poster
-                && !poster.is_empty()
-            {
-                set.insert(poster.clone());
-            }
-        }
-        coursecraft_course::ObjectKind::Shape { fill_style, .. }
-        | coursecraft_course::ObjectKind::Button { fill_style, .. } => {
-            if let Some(src) = fill_style
-                .as_ref()
-                .and_then(coursecraft_course::FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                set.insert(src.to_owned());
-            }
-        }
-        coursecraft_course::ObjectKind::Path { path } => {
-            if let Some(src) = path
-                .fill_style
-                .as_ref()
-                .and_then(coursecraft_course::FillStyle::picture_src)
-                && !src.is_empty()
-            {
-                set.insert(src.to_owned());
-            }
-        }
-        coursecraft_course::ObjectKind::Web {
-            source: coursecraft_course::WebSource::Folder { path, entry },
-        } => {
-            set.insert(format!("{path}/{entry}"));
-        }
-        _ => {}
-    }
-    for state in &obj.states {
-        if let Some(src) = &state.src
-            && !src.is_empty()
-        {
-            set.insert(src.clone());
-        }
-        if let Some(src) = state
-            .fill_style
-            .as_ref()
-            .and_then(coursecraft_course::FillStyle::picture_src)
-            && !src.is_empty()
-        {
-            set.insert(src.to_owned());
-        }
-        for extra in &state.extras {
-            let extra_src = match &extra.kind {
-                coursecraft_course::StateExtraKind::Image { src, .. } => Some(src.as_str()),
-                coursecraft_course::StateExtraKind::Shape { fill_style, .. } => fill_style
-                    .as_ref()
-                    .and_then(coursecraft_course::FillStyle::picture_src),
-                coursecraft_course::StateExtraKind::Path { path } => path
-                    .fill_style
-                    .as_ref()
-                    .and_then(coursecraft_course::FillStyle::picture_src),
-                coursecraft_course::StateExtraKind::Text { .. } => None,
-            };
-            if let Some(src) = extra_src
-                && !src.is_empty()
-            {
-                set.insert(src.to_owned());
-            }
-        }
-    }
 }
 
 fn rewrite_slide_media_srcs(
@@ -5534,35 +5756,24 @@ pub fn sanitize_media_src(file_name: &str, existing: &[(String, std::sync::Arc<[
     }
 }
 
-fn parse_validation_result(val: &Json) -> (usize, usize, Vec<ValidationIssueSummary>) {
-    let mut errors = 0;
-    let mut warnings = 0;
-    let mut issues = Vec::new();
-
-    if let Json::Array(items) = val {
-        for item in items {
-            let severity = item
-                .get("severity")
-                .and_then(|s| s.as_str())
-                .unwrap_or("error");
-            let path = item.get("path").and_then(|p| p.as_str()).unwrap_or("");
-            let message = item.get("message").and_then(|m| m.as_str()).unwrap_or("");
-
-            if severity == "error" {
-                errors += 1;
-            } else if severity == "warning" {
-                warnings += 1;
-            }
-
-            issues.push(ValidationIssueSummary {
-                severity: severity.to_owned(),
-                path: path.to_owned(),
-                message: message.to_owned(),
-            });
-        }
-    }
-
-    (errors, warnings, issues)
+fn slide_layout_matches(
+    course: &coursecraft_course::Course,
+    known: &[(String, Vec<String>)],
+) -> bool {
+    course.scenes.len() == known.len()
+        && course
+            .scenes
+            .iter()
+            .zip(known)
+            .all(|(scene, (scene_id, slide_ids))| {
+                scene.id == *scene_id
+                    && scene.slides.len() == slide_ids.len()
+                    && scene
+                        .slides
+                        .iter()
+                        .zip(slide_ids)
+                        .all(|(slide, id)| slide.id == *id)
+            })
 }
 
 /// Extract the canonical trigger path prefix from a validation issue path

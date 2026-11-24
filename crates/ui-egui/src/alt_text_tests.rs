@@ -170,8 +170,8 @@ fn project_menu_opens_the_window() {
     h.click_at(project);
     h.idle_frame();
     let item = h
-        .find_text_last("Suggest Alt Text…")
-        .expect("Suggest Alt Text menu item");
+        .find_text_last("Suggest alt text…")
+        .expect("Suggest alt text menu item");
     h.click_at(item);
     h.idle_frame();
     assert!(h.editor.ui.alt.open);
@@ -275,8 +275,8 @@ fn not_ready_shows_the_settings_button_and_sends_nothing() {
 
     assert!(h.find_text("Suggest").is_none());
     let button = h
-        .find_text("Open AI Settings")
-        .expect("Open AI Settings button");
+        .find_text("Open AI settings")
+        .expect("Open AI settings button");
     let requests = click_for_requests(&mut h, button);
     assert!(
         !requests

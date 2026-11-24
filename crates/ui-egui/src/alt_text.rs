@@ -366,7 +366,7 @@ pub fn show_alt_text_window(
     let mut apply = false;
     let mut open_settings = false;
 
-    Dialog::new("Suggest Alt Text")
+    Dialog::new("Suggest alt text")
         .id(Id::unique(("suggest_alt_text_dialog", 0_u64)))
         .width(620.0)
         .open(&mut open)
