@@ -20581,3 +20581,504 @@ fn r1_03_ui_media_walkers_golden() {
         ]
     );
 }
+
+fn setup_gb_13_group_slide(
+    h: &mut TestHarness,
+) -> (String, Vec<String>, coursecraft_course::Trigger, usize) {
+    let rect_id = h
+        .editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": "s-intro",
+                "id": "gb-rect",
+                "name": "Card BG",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+                "frame": { "x": 100.0, "y": 100.0, "w": 220.0, "h": 64.0 }
+            }),
+        )
+        .expect("add rect")
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("rect id")
+        .to_owned();
+    let icon_id = h
+        .editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": "s-intro",
+                "id": "gb-icon",
+                "name": "Arrow Icon",
+                "kind": { "type": "shape", "shape": "triangle", "fill": "#FFFFFF" },
+                "frame": { "x": 116.0, "y": 116.0, "w": 24.0, "h": 32.0 }
+            }),
+        )
+        .expect("add icon")
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("icon id")
+        .to_owned();
+    let label_id = h
+        .editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": "s-intro",
+                "id": "gb-label",
+                "name": "Label",
+                "kind": { "type": "text", "text": "Go back" },
+                "frame": { "x": 150.0, "y": 116.0, "w": 150.0, "h": 32.0 }
+            }),
+        )
+        .expect("add label")
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("label id")
+        .to_owned();
+
+    assert!(
+        h.editor
+            .run(
+                "object.add_state",
+                serde_json::json!({
+                    "slide": "s-intro",
+                    "object": rect_id,
+                    "state": { "name": "hover", "opacity": 0.85 }
+                }),
+            )
+            .is_some(),
+        "add hover state on rect"
+    );
+
+    let member_trigger = coursecraft_course::Trigger {
+        when: coursecraft_course::Event::Click {
+            object: label_id.clone(),
+        },
+        action: coursecraft_course::Action::PauseTimeline,
+        condition: None,
+        disabled: false,
+    };
+    assert!(
+        h.editor
+            .run(
+                "trigger.add",
+                serde_json::json!({
+                    "slide": "s-intro",
+                    "trigger": member_trigger,
+                }),
+            )
+            .is_some(),
+        "add existing member click trigger"
+    );
+    let triggers_before = h
+        .editor
+        .session
+        .course
+        .slide("s-intro")
+        .expect("slide")
+        .triggers
+        .len();
+
+    let member_ids = vec![rect_id, icon_id, label_id];
+    let group_id = h
+        .editor
+        .run(
+            "object.group",
+            serde_json::json!({
+                "slide": "s-intro",
+                "objects": member_ids,
+            }),
+        )
+        .expect("group 3 objects")
+        .get("group")
+        .and_then(|v| v.as_str())
+        .expect("group id")
+        .to_owned();
+    (group_id, member_ids, member_trigger, triggers_before)
+}
+
+#[test]
+fn gb_13_interactive_group_authoring_ui_end_to_end() {
+    let course = Course::from_json(COURSE_JSON).expect("hello course");
+    let mut h = TestHarness::new(course);
+    h.editor.selection.slide = "s-intro".into();
+    h.editor.ui.inspector_tab = InspectorTab::Format;
+
+    // 1. Place 3 objects (rect + shape + text), add a custom state on one member,
+    //    add an existing click trigger on one member, and group them.
+    let (group_id, member_ids, member_trigger, triggers_before) = setup_gb_13_group_slide(&mut h);
+
+    // 2. Select the complete group, check Arrange menu shows "Make button from group",
+    //    and toggle "Act as one button" in Group Inspector.
+    h.editor.selection.set_many(member_ids);
+    h.idle_frame();
+    h.idle_frame();
+
+    let arrange_pos = h.find_text("Arrange").expect("Arrange menu in menu bar");
+    h.click_at(arrange_pos);
+    h.idle_frame();
+    assert!(
+        h.find_text("Make button from group").is_some(),
+        "Arrange menu should show 'Make button from group' for a non-interactive group"
+    );
+    // Close Arrange menu before interacting with inspector.
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+
+    let toggle_pos = h
+        .find_text("Act as one button")
+        .expect("'Act as one button' checkbox in Group Inspector");
+    h.click_at(toggle_pos);
+    h.idle_frame();
+    h.idle_frame();
+
+    {
+        let slide = h.editor.session.course.slide("s-intro").expect("slide");
+        assert!(
+            slide.interactive_group(&group_id).is_some(),
+            "group should now be interactive"
+        );
+        assert_eq!(
+            slide.triggers.len(),
+            triggers_before,
+            "making group interactive must not add or delete triggers"
+        );
+        assert!(
+            slide.triggers.contains(&member_trigger),
+            "existing member trigger must remain untouched"
+        );
+    }
+
+    // Verify Arrange menu now offers "Remove button behaviour".
+    let arrange_pos = h.find_text("Arrange").expect("Arrange menu");
+    h.click_at(arrange_pos);
+    h.idle_frame();
+    assert!(
+        h.find_text("Remove button behaviour").is_some(),
+        "Arrange menu should show 'Remove button behaviour' for an interactive group"
+    );
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+
+    // 3. Edit group Name ("Back button") and Accessible description in Group Inspector.
+    let name_rect = h
+        .editor
+        .ui
+        .properties
+        .group_name_rect
+        .expect("group Name TextEdit rect");
+    h.set_field(name_rect.center(), "Back button");
+    h.idle_frame();
+
+    let desc_rect = h
+        .editor
+        .ui
+        .properties
+        .group_description_rect
+        .expect("group Accessible description TextEdit rect");
+    h.set_field(desc_rect.center(), "Return to previous step");
+    h.idle_frame();
+
+    {
+        let slide = h.editor.session.course.slide("s-intro").expect("slide");
+        let (group, _) = slide
+            .interactive_group(&group_id)
+            .expect("interactive group");
+        assert_eq!(group.name, "Back button");
+        assert_eq!(
+            group.description.as_deref(),
+            Some("Return to previous step")
+        );
+        assert_eq!(
+            crate::triggers::object_name(slide, &group_id),
+            "Back button"
+        );
+        assert_eq!(
+            crate::triggers::object_label(slide, &group_id),
+            "Back button (button group)"
+        );
+    }
+
+    // 4. Verify timeline folder row reflects "Back button" and the "Button" indicator.
+    h.editor.ui.bottom_tab = BottomTab::Timeline;
+    h.idle_frame();
+    h.idle_frame();
+    let group_row_rect = *h
+        .editor
+        .ui
+        .timeline
+        .group_row_rects
+        .get(&group_id)
+        .expect("timeline group row rect");
+    assert!(
+        h.find_text_in("Back button", group_row_rect).is_some(),
+        "timeline folder row should display group name 'Back button'"
+    );
+    assert!(
+        h.find_text_in("Button", group_row_rect).is_some(),
+        "timeline folder row should display 'Button' pill"
+    );
+
+    // 5. Open Trigger Editor via Group Inspector "Add trigger…" -> assert default target
+    //    is group_id -> add a Click trigger.
+    let add_trig_pos = h
+        .find_text("Add trigger…")
+        .expect("'Add trigger…' button in Group Inspector");
+    h.click_at(add_trig_pos);
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .ui
+            .trigger_form
+            .as_ref()
+            .expect("trigger editor open")
+            .event_object,
+        group_id,
+        "default event target should be the interactive group id"
+    );
+    let ok_pos = h.find_text("OK").expect("Trigger Editor OK button");
+    h.click_at(ok_pos);
+    h.idle_frame();
+    h.idle_frame();
+    assert!(
+        h.editor.ui.trigger_form.is_none(),
+        "trigger editor should close after OK"
+    );
+
+    // Also verify Triggers tab "+ Add trigger" defaults to group_id when the group is selected.
+    h.editor.ui.bottom_tab = BottomTab::Triggers;
+    h.idle_frame();
+    h.idle_frame();
+    let tab_add_pos = h
+        .find_text("+ Add trigger")
+        .expect("'+ Add trigger' in Triggers tab");
+    h.click_at(tab_add_pos);
+    h.idle_frame();
+    assert_eq!(
+        h.editor
+            .ui
+            .trigger_form
+            .as_ref()
+            .expect("trigger editor open from Triggers tab")
+            .event_object,
+        group_id,
+        "Triggers tab '+ Add trigger' should default to selected interactive group id"
+    );
+    h.press(Key::Escape, Modifiers::NONE);
+    h.idle_frame();
+
+    // 6. Verify trigger list displays "Back button (button group)" cleanly with zero
+    //    broken-reference warnings.
+    let warning_glyph = coursecraft_render::icon(
+        coursecraft_render::Icon::Warning,
+        coursecraft_render::ICON_SM,
+    )
+    .text()
+    .to_owned();
+    assert!(
+        h.find_text_containing("Back button (button group)")
+            .is_some(),
+        "trigger list should display 'Back button (button group)'"
+    );
+    assert!(
+        h.find_text(&warning_glyph).is_none(),
+        "group trigger should have zero broken-reference warning badges"
+    );
+    assert!(
+        h.find_text_containing("needs attention").is_none()
+            && h.find_text_containing("need attention").is_none(),
+        "group trigger should not trigger any attention banner"
+    );
+
+    // 7. Attempt to turn "Act as one button" off while the group trigger exists ->
+    //    verify blocked with an error message and the group stays interactive.
+    h.editor.ui.last_error = None;
+    let toggle_pos = h
+        .find_text("Act as one button")
+        .expect("'Act as one button' checkbox");
+    h.click_at(toggle_pos);
+    h.idle_frame();
+    h.idle_frame();
+
+    assert!(
+        h.editor.ui.last_error.is_some(),
+        "turning off interactive group while referenced by a trigger should show an error"
+    );
+    assert!(
+        h.editor
+            .session
+            .course
+            .slide("s-intro")
+            .expect("slide")
+            .interactive_group(&group_id)
+            .is_some(),
+        "group should remain interactive after blocked toggle-off"
+    );
+
+    // 8. Undo reverses each edit cleanly in 1 step.
+    assert_gb_13_undo_chain(&mut h, &group_id, triggers_before);
+}
+
+fn assert_gb_13_undo_chain(h: &mut TestHarness, group_id: &str, triggers_before: usize) {
+    assert!(h.editor.run("edit.undo", serde_json::json!({})).is_some());
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide("s-intro")
+            .expect("slide")
+            .triggers
+            .len(),
+        triggers_before,
+        "1st undo removes the added group trigger"
+    );
+    assert!(h.editor.run("edit.undo", serde_json::json!({})).is_some());
+    assert_eq!(
+        h.editor
+            .session
+            .course
+            .slide("s-intro")
+            .expect("slide")
+            .interactive_group(group_id)
+            .expect("group")
+            .0
+            .description,
+        None,
+        "2nd undo clears Accessible description"
+    );
+    assert!(h.editor.run("edit.undo", serde_json::json!({})).is_some());
+    assert_ne!(
+        h.editor
+            .session
+            .course
+            .slide("s-intro")
+            .expect("slide")
+            .interactive_group(group_id)
+            .expect("group")
+            .0
+            .name,
+        "Back button",
+        "3rd undo reverts group name"
+    );
+    assert!(h.editor.run("edit.undo", serde_json::json!({})).is_some());
+    assert!(
+        h.editor
+            .session
+            .course
+            .slide("s-intro")
+            .expect("slide")
+            .interactive_group(group_id)
+            .is_none(),
+        "4th undo reverts interactive group back to plain group"
+    );
+}
+
+#[test]
+fn gb_13_layer_group_labels_and_toolbar_insert_trigger() {
+    let course = Course::from_json(COURSE_JSON).expect("hello course");
+    let mut h = TestHarness::new(course);
+    h.editor.selection.slide = "s-intro".into();
+
+    let layer_id = h
+        .editor
+        .run(
+            "layer.add",
+            serde_json::json!({
+                "slide": "s-intro",
+                "id": "ly-panel",
+                "name": "Overlay"
+            }),
+        )
+        .expect("add layer")
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("layer id")
+        .to_owned();
+
+    let a_id = h
+        .editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": "s-intro",
+                "layer": layer_id,
+                "id": "ly-bg",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#1F6FEB" },
+                "frame": { "x": 40.0, "y": 40.0, "w": 160.0, "h": 48.0 }
+            }),
+        )
+        .expect("add a")
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("a id")
+        .to_owned();
+    let b_id = h
+        .editor
+        .run(
+            "object.add",
+            serde_json::json!({
+                "slide": "s-intro",
+                "layer": layer_id,
+                "id": "ly-txt",
+                "kind": { "type": "text", "text": "Close" },
+                "frame": { "x": 50.0, "y": 48.0, "w": 140.0, "h": 32.0 }
+            }),
+        )
+        .expect("add b")
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("b id")
+        .to_owned();
+
+    let group_id = h
+        .editor
+        .run(
+            "object.group",
+            serde_json::json!({
+                "slide": "s-intro",
+                "objects": [a_id, b_id]
+            }),
+        )
+        .expect("group layer objects")
+        .get("group")
+        .and_then(|v| v.as_str())
+        .expect("group id")
+        .to_owned();
+
+    assert!(
+        h.editor
+            .run(
+                "group.set_interactive",
+                serde_json::json!({
+                    "slide": "s-intro",
+                    "group": group_id,
+                    "interactive": true,
+                    "name": "Dismiss card"
+                }),
+            )
+            .is_some()
+    );
+
+    let slide = h.editor.session.course.slide("s-intro").expect("slide");
+    assert_eq!(
+        crate::triggers::object_name(slide, &group_id),
+        "Dismiss card"
+    );
+    assert_eq!(
+        crate::triggers::object_label(slide, &group_id),
+        "Dismiss card (button group, Overlay)"
+    );
+
+    // Selecting the layer group and invoking toolbar::insert_trigger targets the group id.
+    h.editor.selection.layer = Some(layer_id);
+    h.editor.selection.set_many(vec![a_id, b_id]);
+    crate::toolbar::insert_trigger(&mut h.editor);
+    let form = h
+        .editor
+        .ui
+        .trigger_form
+        .as_ref()
+        .expect("trigger form opened via toolbar::insert_trigger");
+    assert_eq!(form.event_object, group_id);
+}

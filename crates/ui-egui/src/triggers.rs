@@ -8,7 +8,8 @@ use coursecraft_course::{
 use egui::{DragValue, RichText, ScrollArea, TextEdit, Ui};
 use serde_json::Value as Json;
 
-/// Helper to get the display name of an object (its name if non-empty, otherwise its id).
+/// Helper to get the display name of an object or interactive group
+/// (its name if non-empty, otherwise its id).
 #[must_use]
 pub fn object_name(slide: &Slide, obj_id: &str) -> String {
     for obj in &slide.objects {
@@ -29,6 +30,12 @@ pub fn object_name(slide: &Slide, obj_id: &str) -> String {
             }
         }
     }
+    if let Some((group, _)) = slide.interactive_group(obj_id) {
+        if !group.name.trim().is_empty() {
+            return group.name.clone();
+        }
+        return group.id.clone();
+    }
     obj_id.to_owned()
 }
 
@@ -39,6 +46,77 @@ fn all_objects(slide: &Slide) -> Vec<&coursecraft_course::Object> {
         .iter()
         .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
         .collect()
+}
+
+/// Every interactive group on the slide, base layer first then layers in authored order.
+fn all_interactive_groups(slide: &Slide) -> Vec<&coursecraft_course::Group> {
+    slide
+        .groups
+        .iter()
+        .chain(slide.layers.iter().flat_map(|layer| layer.groups.iter()))
+        .filter(|g| g.interactive)
+        .collect()
+}
+
+/// Default trigger target for the current editor selection: when a single
+/// complete interactive group is selected, target that group id; otherwise
+/// target the primary selected object.
+#[must_use]
+pub(crate) fn default_trigger_target(
+    selection: &crate::Selection,
+    course: &Course,
+    slide: &Slide,
+) -> Option<String> {
+    if selection.is_one_group(course)
+        && let Some(primary) = selection.object.as_deref()
+        && let Some((obj, _)) = slide.object(primary)
+        && let Some(group_id) = obj.group.as_deref()
+        && slide.interactive_group(group_id).is_some()
+    {
+        return Some(group_id.to_owned());
+    }
+    selection.object.clone()
+}
+
+/// States available for a trigger target (object or interactive group).
+fn available_states_for_target(slide: &Slide, target_id: &str) -> Vec<String> {
+    if slide.interactive_group(target_id).is_some() {
+        let mut states = vec![
+            "normal".to_owned(),
+            "hidden".to_owned(),
+            "disabled".to_owned(),
+        ];
+        let mut extra: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for member in slide.group_members(target_id) {
+            for s in &member.states {
+                if !matches!(s.name.as_str(), "normal" | "hidden" | "disabled") {
+                    extra.insert(s.name.clone());
+                }
+            }
+        }
+        states.extend(extra);
+        return states;
+    }
+    let mut available_states: Vec<String> =
+        BUILTIN_STATES.iter().map(|s| (*s).to_owned()).collect();
+    if let Some((obj, _)) = slide.object(target_id) {
+        for s in &obj.states {
+            if !available_states.contains(&s.name) {
+                available_states.push(s.name.clone());
+            }
+        }
+    }
+    available_states
+}
+
+/// Display name used inside readable trigger descriptions: uses `object_label`
+/// for interactive groups so button groups stay distinct from plain objects.
+fn target_display_name(slide: &Slide, target_id: &str) -> String {
+    if slide.interactive_group(target_id).is_some() {
+        object_label(slide, target_id)
+    } else {
+        object_name(slide, target_id)
+    }
 }
 
 /// Maximum popup height for long combo lists: most of the window, so every entry is reachable
@@ -62,10 +140,23 @@ pub fn layer_name(slide: &Slide, layer_id: &str) -> String {
     }
 }
 
-/// Picker label for an object: its name, plus ` (layer name)` for objects on a layer.
-/// Used for both the open list and the closed combo so they always agree.
+/// Picker label for an object or interactive group: its name, plus ` (layer name)`
+/// for objects on a layer, or ` (button group)` / ` (button group, layer name)` for
+/// interactive groups. Used for both the open list and the closed combo so they
+/// always agree.
 #[must_use]
 pub fn object_label(slide: &Slide, obj_id: &str) -> String {
+    if let Some((group, owner)) = slide.interactive_group(obj_id) {
+        let base = if !group.name.trim().is_empty() {
+            group.name.as_str()
+        } else {
+            group.id.as_str()
+        };
+        return match owner {
+            Some(layer_id) => format!("{base} (button group, {})", layer_name(slide, layer_id)),
+            None => format!("{base} (button group)"),
+        };
+    }
     for l in &slide.layers {
         if l.objects.iter().any(|o| o.id == obj_id) {
             return format!(
@@ -147,7 +238,10 @@ pub fn describe_action(action: &Action, slide: &Slide) -> String {
             None => "Hide this layer".to_owned(),
         },
         Action::ChangeState { object, state } => {
-            format!("Set {} state to {state}", object_name(slide, object))
+            format!(
+                "Set {} state to {state}",
+                target_display_name(slide, object)
+            )
         }
         Action::SetVariable {
             variable,
@@ -254,20 +348,28 @@ pub fn describe_event(event: &Event, slide: &Slide) -> String {
                 (None, None) => format!("timeline reaches {ms}ms"),
             }
         }
-        Event::Click { object } => format!("the user clicks {}", object_name(slide, object)),
+        Event::Click { object } => {
+            format!("the user clicks {}", target_display_name(slide, object))
+        }
         Event::HoverStart { object } => {
-            format!("the user hovers over {}", object_name(slide, object))
+            format!(
+                "the user hovers over {}",
+                target_display_name(slide, object)
+            )
         }
         Event::HoverEnd { object } => {
             format!(
                 "the user stops hovering over {}",
-                object_name(slide, object)
+                target_display_name(slide, object)
             )
         }
         Event::VariableChanges { variable } => format!("{variable} changes"),
         Event::StateChanges { object, to } => match to {
-            Some(st) => format!("{} state changes to {st}", object_name(slide, object)),
-            None => format!("{} state changes", object_name(slide, object)),
+            Some(st) => format!(
+                "{} state changes to {st}",
+                target_display_name(slide, object)
+            ),
+            None => format!("{} state changes", target_display_name(slide, object)),
         },
         Event::MediaEnds { object } => {
             format!("media ends on {}", media_object_name(slide, object))
@@ -278,7 +380,7 @@ pub fn describe_event(event: &Event, slide: &Slide) -> String {
         Event::KeyPressed { key, object } => match object {
             Some(obj) => format!(
                 "the user presses key '{key}' on {}",
-                object_name(slide, obj)
+                target_display_name(slide, obj)
             ),
             None => format!("the user presses key '{key}'"),
         },
@@ -335,7 +437,7 @@ pub fn describe_condition(cond: &Condition, slide: &Slide) -> String {
             format!("{variable} {op_str} {}", describe_value_source(value))
         }
         Condition::ObjectState { object, state, is } => {
-            let obj = object_name(slide, object);
+            let obj = target_display_name(slide, object);
             if *is {
                 format!("{obj} is {state}")
             } else {
@@ -943,11 +1045,12 @@ impl TriggerFormState {
         }
     }
 
-    /// Default the trigger's event object to `object_id` when it exists on `slide`.
+    /// Default the trigger's event object to `object_id` when it exists on `slide`
+    /// as an object or an interactive group.
     #[must_use]
     pub fn with_selected_object(mut self, slide: &Slide, object_id: Option<&str>) -> Self {
         if let Some(id) = object_id
-            && slide.object(id).is_some()
+            && (slide.object(id).is_some() || slide.interactive_group(id).is_some())
         {
             self.event_object = id.to_owned();
         }
@@ -1558,13 +1661,15 @@ pub fn show_triggers_tab(
                         && crate::quiet_button(ui, "+ Add trigger", crate::QuietTone::Accent, true)
                             .clicked()
                     {
+                        let default_target =
+                            default_trigger_target(selection, &session.course, slide);
                         editor_ui.trigger_form = Some(
                             TriggerFormState::new_for_owner(
                                 slide,
                                 selected_layer.as_deref(),
                                 &session.course,
                             )
-                            .with_selected_object(slide, selection.object.as_deref()),
+                            .with_selected_object(slide, default_target.as_deref()),
                         );
                     }
                     if can_paste
@@ -1669,13 +1774,15 @@ pub fn show_triggers_tab(
                         );
                         ui.add_space(12.0);
                         if crate::primary_button(ui, "+ Add trigger").clicked() {
+                            let default_target =
+                                default_trigger_target(selection, &session.course, slide);
                             editor_ui.trigger_form = Some(
                                 TriggerFormState::new_for_owner(
                                     slide,
                                     selected_layer.as_deref(),
                                     &session.course,
                                 )
-                                .with_selected_object(slide, selection.object.as_deref()),
+                                .with_selected_object(slide, default_target.as_deref()),
                             );
                         }
                     });
@@ -1711,6 +1818,7 @@ pub fn show_triggers_tab(
                     return;
                 }
 
+                let active_target = default_trigger_target(selection, &session.course, slide);
                 let groups: Vec<(Option<String>, Vec<TriggerRow<'_>>)> =
                     if editor_ui.triggers.group_by_object {
                         let mut grouped: Vec<(Option<String>, String, Vec<TriggerRow<'_>>)> =
@@ -1721,7 +1829,7 @@ pub fn show_triggers_tab(
                                 existing.2.push(item);
                             } else {
                                 let label = match key.as_deref() {
-                                    Some(id) => object_name(slide, id),
+                                    Some(id) => target_display_name(slide, id),
                                     None => "Slide".to_owned(),
                                 };
                                 grouped.push((key, label, vec![item]));
@@ -1732,7 +1840,7 @@ pub fn show_triggers_tab(
                             .map(|(_, label, rows)| (Some(label), rows))
                             .collect()
                     } else {
-                        if let Some(sel_id) = selection.object.as_deref() {
+                        if let Some(sel_id) = active_target.as_deref() {
                             visible.sort_by_key(|(idx, trig, _)| {
                                 let is_selected = event_object_id(&trig.when) == Some(sel_id);
                                 (!is_selected, *idx)
@@ -1753,7 +1861,7 @@ pub fn show_triggers_tab(
                     let sel_id = if editor_ui.triggers.group_by_object {
                         None
                     } else {
-                        selection.object.as_deref()
+                        active_target.as_deref()
                     };
                     let row_neighbors: Vec<(Option<usize>, Option<usize>)> = (0..rows.len())
                         .map(|pos| {
@@ -2541,19 +2649,15 @@ fn render_action_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide,
                                 );
                             }
                         }
+                        for g in all_interactive_groups(slide) {
+                            let label = object_label(slide, &g.id);
+                            ui.selectable_value(&mut form.change_state_object, g.id.clone(), label);
+                        }
                     });
             });
 
-            // Find states available on this object
-            let mut available_states: Vec<String> =
-                BUILTIN_STATES.iter().map(|s| (*s).to_owned()).collect();
-            if let Some((obj, _)) = slide.object(&form.change_state_object) {
-                for s in &obj.states {
-                    if !available_states.contains(&s.name) {
-                        available_states.push(s.name.clone());
-                    }
-                }
-            }
+            // Find states available on this object or interactive group
+            let available_states = available_states_for_target(slide, &form.change_state_object);
 
             trigger_row(ui, "State", |ui| {
                 tall_combo(ui, "action_change_state_st_combo")
@@ -2857,6 +2961,10 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
         | EventKindTag::HoverEnd
         | EventKindTag::MarkerOpened
         | EventKindTag::MarkerClosed => {
+            let include_groups = matches!(
+                form.event_tag,
+                EventKindTag::Click | EventKindTag::HoverStart | EventKindTag::HoverEnd
+            );
             trigger_row(ui, "Object", |ui| {
                 tall_combo(ui, "event_obj_combo")
                     .selected_text(object_label(slide, &form.event_object))
@@ -2869,6 +2977,12 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                             for obj in &l.objects {
                                 let label = object_label(slide, &obj.id);
                                 ui.selectable_value(&mut form.event_object, obj.id.clone(), label);
+                            }
+                        }
+                        if include_groups {
+                            for g in all_interactive_groups(slide) {
+                                let label = object_label(slide, &g.id);
+                                ui.selectable_value(&mut form.event_object, g.id.clone(), label);
                             }
                         }
                     });
@@ -3005,18 +3119,14 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                                 ui.selectable_value(&mut form.event_object, obj.id.clone(), label);
                             }
                         }
+                        for g in all_interactive_groups(slide) {
+                            let label = object_label(slide, &g.id);
+                            ui.selectable_value(&mut form.event_object, g.id.clone(), label);
+                        }
                     });
             });
 
-            let mut available_states: Vec<String> =
-                BUILTIN_STATES.iter().map(|s| (*s).to_owned()).collect();
-            if let Some((obj, _)) = slide.object(&form.event_object) {
-                for s in &obj.states {
-                    if !available_states.contains(&s.name) {
-                        available_states.push(s.name.clone());
-                    }
-                }
-            }
+            let available_states = available_states_for_target(slide, &form.event_object);
 
             trigger_row(ui, "To state", |ui| {
                 let display = form.event_state_to.as_deref().unwrap_or("Any state change");
@@ -3138,6 +3248,14 @@ fn render_event_fields(form: &mut TriggerFormState, ui: &mut Ui, slide: &Slide, 
                             ui.selectable_value(
                                 &mut form.event_key_object,
                                 Some(obj.id.clone()),
+                                label,
+                            );
+                        }
+                        for g in all_interactive_groups(slide) {
+                            let label = object_label(slide, &g.id);
+                            ui.selectable_value(
+                                &mut form.event_key_object,
+                                Some(g.id.clone()),
                                 label,
                             );
                         }
@@ -3486,6 +3604,10 @@ pub(crate) fn render_condition_editor(
                                 ui.selectable_value(object, obj.id.clone(), label);
                             }
                         }
+                        for g in all_interactive_groups(slide) {
+                            let label = object_label(slide, &g.id);
+                            ui.selectable_value(object, g.id.clone(), label);
+                        }
                     });
 
                 let is_label = if *is { "is" } else { "is not" };
@@ -3496,15 +3618,7 @@ pub(crate) fn render_condition_editor(
                         ui.selectable_value(is, false, "is not");
                     });
 
-                let mut available_states: Vec<String> =
-                    BUILTIN_STATES.iter().map(|s| (*s).to_owned()).collect();
-                if let Some((obj, _)) = slide.object(object) {
-                    for s in &obj.states {
-                        if !available_states.contains(&s.name) {
-                            available_states.push(s.name.clone());
-                        }
-                    }
-                }
+                let available_states = available_states_for_target(slide, object);
 
                 tall_combo(ui, ("state_name_picker", depth))
                     .selected_text(state.as_str())
