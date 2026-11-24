@@ -123,16 +123,22 @@ impl From<ImageError> for MediaError {
     }
 }
 
-/// Decode an image from raw bytes into an 8-bit RGBA pixel buffer.
+/// Decode an image from raw bytes into an 8-bit RGBA pixel buffer, optionally
+/// downscaling to fit within `max_dim` while preserving aspect ratio.
 ///
-/// Guesses the image format from the byte content (not file extension).
-/// Reads header dimensions first and validates them against `limits` before allocating
-/// or decoding pixel data. For animated formats (e.g. GIF), only the first frame is decoded.
+/// Enforces the exact same header, format, dimension, and byte-limit checks as
+/// [`decode_image`] before decoding. Returns `(image, [natural_w, natural_h])`,
+/// where `[natural_w, natural_h]` are the original full-resolution dimensions
+/// before any downscaling.
 ///
 /// # Errors
 /// Returns [`MediaError`] if the format is unsupported, dimensions or memory exceed limits,
 /// or the file bytes are corrupt or truncated.
-pub fn decode_image(bytes: &[u8], limits: &Limits) -> Result<Rgba8Image, MediaError> {
+pub fn decode_image_fitted(
+    bytes: &[u8],
+    max_dim: Option<(u32, u32)>,
+    limits: &Limits,
+) -> Result<(Rgba8Image, [u32; 2]), MediaError> {
     if bytes.is_empty() {
         return Err(MediaError::Unsupported);
     }
@@ -189,15 +195,49 @@ pub fn decode_image(bytes: &[u8], limits: &Limits) -> Result<Rgba8Image, MediaEr
         other => MediaError::Corrupt(other.to_string()),
     })?;
 
+    let decoded_w = dyn_img.width();
+    let decoded_h = dyn_img.height();
+    if decoded_w == 0 || decoded_h == 0 {
+        return Err(MediaError::Corrupt(
+            "image dimensions must be non-zero".to_string(),
+        ));
+    }
+    let natural = [decoded_w, decoded_h];
+
+    let dyn_img = match max_dim {
+        Some((max_w, max_h))
+            if max_w > 0 && max_h > 0 && (decoded_w > max_w || decoded_h > max_h) =>
+        {
+            dyn_img.resize(max_w, max_h, image::imageops::FilterType::Triangle)
+        }
+        _ => dyn_img,
+    };
+
     let rgba = dyn_img.to_rgba8();
-    let (decoded_w, decoded_h) = rgba.dimensions();
+    let (out_w, out_h) = rgba.dimensions();
     let pixels = rgba.into_raw();
 
-    Ok(Rgba8Image {
-        width: decoded_w,
-        height: decoded_h,
-        pixels,
-    })
+    Ok((
+        Rgba8Image {
+            width: out_w,
+            height: out_h,
+            pixels,
+        },
+        natural,
+    ))
+}
+
+/// Decode an image from raw bytes into an 8-bit RGBA pixel buffer.
+///
+/// Guesses the image format from the byte content (not file extension).
+/// Reads header dimensions first and validates them against `limits` before allocating
+/// or decoding pixel data. For animated formats (e.g. GIF), only the first frame is decoded.
+///
+/// # Errors
+/// Returns [`MediaError`] if the format is unsupported, dimensions or memory exceed limits,
+/// or the file bytes are corrupt or truncated.
+pub fn decode_image(bytes: &[u8], limits: &Limits) -> Result<Rgba8Image, MediaError> {
+    decode_image_fitted(bytes, None, limits).map(|(img, _)| img)
 }
 
 /// Encode an 8-bit RGBA pixel buffer as PNG bytes.

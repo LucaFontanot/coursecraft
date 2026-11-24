@@ -45,12 +45,18 @@ fn picture_course(n: usize) -> Course {
 }
 
 fn picture_media(n: usize) -> Vec<(String, Arc<[u8]>)> {
-    let pixels = vec![0u8; 16 * 16 * 4];
-    let png = Arc::from(
-        crate::coursecraft_media::encode_png_rgba(16, 16, &pixels).expect("test picture encodes"),
-    );
     (0..n)
-        .map(|n| (format!("img/p{n}.png"), Arc::clone(&png)))
+        .map(|i| {
+            let mut pixels = vec![0u8; 16 * 16 * 4];
+            pixels[0] = (i & 0xFF) as u8;
+            pixels[1] = ((i >> 8) & 0xFF) as u8;
+            pixels[3] = 255;
+            let png = Arc::from(
+                crate::coursecraft_media::encode_png_rgba(16, 16, &pixels)
+                    .expect("test picture encodes"),
+            );
+            (format!("img/p{i}.png"), png)
+        })
         .collect()
 }
 
@@ -916,5 +922,129 @@ fn g03_steady_frames_zero_font_def_clones() {
         gc::font_def_clones(),
         0,
         "20 steady idle frames with a registered custom font face must perform zero FontDefinitions clones"
+    );
+}
+
+fn png_crc32(chunk_type: &[u8; 4], data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in chunk_type.iter().chain(data.iter()) {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+/// Build `n` distinct valid `1280x720` PNGs quickly by encoding one base PNG
+/// and splicing a unique `tEXt` chunk before `IEND` so content-hash dedup
+/// never collapses them.
+fn distinct_1280x720_pngs(n: usize) -> Vec<(String, Arc<[u8]>)> {
+    let pixels = vec![64u8; 1280 * 720 * 4];
+    let base = crate::coursecraft_media::encode_png_rgba(1280, 720, &pixels)
+        .expect("encode base 1280x720 png");
+    let iend_start = base.len().saturating_sub(12);
+    let (prefix, iend) = base.split_at(iend_start);
+
+    (0..n)
+        .map(|i| {
+            let text = format!("Comment\0slide-{i}");
+            let data = text.as_bytes();
+            let crc = png_crc32(b"tEXt", data);
+            let mut png = Vec::with_capacity(base.len() + 12 + data.len());
+            png.extend_from_slice(prefix);
+            png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            png.extend_from_slice(b"tEXt");
+            png.extend_from_slice(data);
+            png.extend_from_slice(&crc.to_be_bytes());
+            png.extend_from_slice(iend);
+            (format!("img/p{i}.png"), Arc::from(png))
+        })
+        .collect()
+}
+
+/// G-02: Scrolling a 100-slide picture course with distinct 1280×720 PNGs
+/// decodes thumbnails at thumbnail tier (`total_bytes <= 8 MiB`,
+/// `full_res_thumbnail_decodes == 0`), and selecting slide `s-50` on the main
+/// canvas upgrades its texture cleanly.
+#[test]
+fn g02_scrolling_100_slide_pictures_stays_under_8_mib() {
+    const SLIDES: usize = 100;
+    let mut slides = Vec::with_capacity(SLIDES);
+    for i in 0..SLIDES {
+        slides.push(format!(
+            r##"{{"id":"s-{i}","title":"Slide {i}","objects":[{{"id":"p{i}","kind":{{"type":"image","src":"img/p{i}.png","alt":"Photo {i}"}},"frame":{{"x":40,"y":40,"w":1200,"h":640}}}}]}}"##
+        ));
+    }
+    let json = format!(
+        r#"{{"schema_version":1,"id":"g02-pictures","title":"G02 Pictures","slide_size":{{"w":1280,"h":720}},"scenes":[{{"id":"sc0","title":"Scene 0","slides":[{}]}}]}}"#,
+        slides.join(",")
+    );
+    let course = Course::from_json(&json).expect("g02 course parses");
+
+    let mut h = TestHarness::new(course);
+    h.editor.set_media(distinct_1280x720_pngs(SLIDES));
+    reset_counts();
+
+    // Settle initial viewport (top thumbnails + s-0 on canvas).
+    for _ in 0..3 {
+        let _ = h.idle_frame();
+    }
+    let list_pos = h
+        .find_text_containing("Slide 0")
+        .unwrap_or_else(|| pos2(90.0, 300.0));
+    h.frame(vec![Event::PointerMoved(list_pos)]);
+
+    // Scroll through the slide list (middle and bottom) without selecting every slide.
+    h.frame(vec![wheel(-4000.0)]);
+    let _ = h.idle_frame();
+    h.frame(vec![wheel(-4000.0)]);
+    let _ = h.idle_frame();
+
+    let scroll_bytes = h.editor.media_cache.total_bytes();
+    assert!(
+        scroll_bytes <= 8 * 1024 * 1024,
+        "scrolling 100-slide 1280x720 picture list must stay <= 8 MiB, got {scroll_bytes} bytes"
+    );
+    assert_eq!(
+        gc::full_res_thumbnail_decodes(),
+        0,
+        "thumbnails must never trigger full-resolution decodes"
+    );
+
+    // Select slide s-50 on the main canvas and verify it upgrades cleanly and renders.
+    let bytes_before_s50 = h.editor.media_cache.total_bytes();
+    let tex_before_s50 = h.editor.media_cache.texture_id("img/p50.png");
+    h.editor.selection.slide = "s-50".into();
+    let _ = h.idle_frame();
+
+    assert!(
+        h.editor.media_cache.is_loaded_image("img/p50.png"),
+        "s-50 picture must load and render on the main canvas"
+    );
+    assert!(
+        matches!(
+            h.editor.media_cache.get_entry("img/p50.png"),
+            Some(coursecraft_render::MediaEntry::Texture(_, [1280, 720]))
+        ),
+        "s-50 picture must preserve its natural 1280x720 dimensions"
+    );
+    assert_ne!(
+        h.editor.media_cache.texture_id("img/p50.png"),
+        tex_before_s50,
+        "selecting s-50 on the main canvas must upgrade/upload its canvas texture"
+    );
+    assert!(
+        h.editor.media_cache.total_bytes() > bytes_before_s50,
+        "upgrading s-50 for the main canvas should allocate its higher-tier texture"
+    );
+    assert_eq!(
+        gc::full_res_thumbnail_decodes(),
+        0,
+        "upgrading s-50 on the canvas must not count as a full-res thumbnail decode"
     );
 }

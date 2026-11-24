@@ -7,7 +7,8 @@ use image::{Delay, ExtendedColorType, Frame, ImageBuffer, ImageFormat, Rgb, Rgba
 use crate::animation::{MAX_ANIMATION_FRAMES, clamp_frame_delay_ms, decode_animation};
 use crate::svg::{MAX_SVG_BYTES, decode_svg, svg_natural_size};
 use crate::{
-    FontFileStyle, Limits, MAX_FONT_BYTES, MediaError, decode_image, encode_png_rgba, font_info,
+    FontFileStyle, Limits, MAX_FONT_BYTES, MediaError, decode_image, decode_image_fitted,
+    encode_png_rgba, font_info,
 };
 
 const INTER_REGULAR: &[u8] = include_bytes!("../../render/fonts/Inter-Regular.ttf");
@@ -196,6 +197,78 @@ fn rejects_image_over_bytes_limit() {
             width: 2,
             height: 2
         }
+    );
+}
+
+/// U-01: `decode_image_fitted` downscales oversized rasters while preserving
+/// exact natural dimensions, skips downscaling for already-small images, and
+/// rejects hostile/empty/oversized inputs with `Err`.
+#[test]
+fn u01_decode_image_fitted_downscales_and_preserves_natural_dims() {
+    let pixels = vec![42u8; 1280 * 720 * 4];
+    let large_png = encode_png_rgba(1280, 720, &pixels).expect("encode 1280x720 png");
+
+    // Downscale to <= 384 px preserving 16:9 aspect ratio and natural [1280, 720].
+    let (fitted, natural) = decode_image_fitted(&large_png, Some((384, 384)), &Limits::default())
+        .expect("decode fitted 1280x720");
+    assert_eq!(natural, [1280, 720]);
+    assert!(fitted.width >= 1 && fitted.width <= 384);
+    assert!(fitted.height >= 1 && fitted.height <= 384);
+    assert_eq!((fitted.width, fitted.height), (384, 216));
+    assert_eq!(
+        fitted.pixels.len(),
+        (fitted.width as usize) * (fitted.height as usize) * 4
+    );
+
+    // None max_dim returns full resolution.
+    let (full, full_natural) =
+        decode_image_fitted(&large_png, None, &Limits::default()).expect("decode full 1280x720");
+    assert_eq!(full_natural, [1280, 720]);
+    assert_eq!((full.width, full.height), (1280, 720));
+
+    // Already small image skips downscaling.
+    let small_png = make_png_2x2();
+    let (small, small_natural) =
+        decode_image_fitted(&small_png, Some((384, 384)), &Limits::default())
+            .expect("decode small png");
+    assert_eq!(small_natural, [2, 2]);
+    assert_eq!((small.width, small.height), (2, 2));
+
+    // Zero max_dim is treated safely without panicking.
+    let (zero_guard, zero_natural) =
+        decode_image_fitted(&small_png, Some((0, 0)), &Limits::default())
+            .expect("zero max_dim should not panic");
+    assert_eq!(zero_natural, [2, 2]);
+    assert_eq!((zero_guard.width, zero_guard.height), (2, 2));
+
+    // Hostile, empty, truncated, and over-limit inputs return Err.
+    assert_eq!(
+        decode_image_fitted(&[], Some((384, 384)), &Limits::default()),
+        Err(MediaError::Unsupported)
+    );
+    assert_eq!(
+        decode_image_fitted(
+            &[1, 2, 3, 4, 5, 6, 7, 8],
+            Some((384, 384)),
+            &Limits::default()
+        ),
+        Err(MediaError::Unsupported)
+    );
+    assert!(matches!(
+        decode_image_fitted(&large_png[..12], Some((384, 384)), &Limits::default()),
+        Err(MediaError::Corrupt(_))
+    ));
+    let tight = Limits {
+        max_width: 640,
+        max_height: 640,
+        max_decoded_bytes: 64 * 1024 * 1024,
+    };
+    assert_eq!(
+        decode_image_fitted(&large_png, Some((384, 384)), &tight),
+        Err(MediaError::TooLarge {
+            width: 1280,
+            height: 720
+        })
     );
 }
 

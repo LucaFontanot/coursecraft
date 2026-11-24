@@ -454,7 +454,8 @@ fn paint_picture_contours(
     let view = if tile {
         cache.texture_tiled(painter.ctx(), src, *source)
     } else {
-        cache.texture(painter.ctx(), src, *source)
+        let target_px = image_target_px(rect, painter.ctx().pixels_per_point());
+        cache.texture_for(painter.ctx(), src, *source, target_px)
     };
     let MediaView::Ready { texture, size } = view else {
         return false;
