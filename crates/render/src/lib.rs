@@ -138,7 +138,8 @@ pub use snapshot::{PlayerSnapshotSelect, snapshot_player};
 pub use text_layout::{
     AUTOFIT_MIN_SCALE, DEFAULT_TEXT_LAYOUT_CACHE_MAX, INDENT_STEP, LaidLink, LaidMarker,
     LaidParagraph, LaidText, clear_text_layout_cache, fill_item_links, inline_edit_layout_job,
-    justify_galley, justify_galley_snapped, layout_text, set_text_layout_cache_limit,
+    inline_edit_layout_job_with_wrap, justify_galley, justify_galley_snapped, layout_text,
+    layout_text_with_wrap, set_text_layout_cache_limit,
 };
 pub use ticker::Ticker;
 pub use view::{

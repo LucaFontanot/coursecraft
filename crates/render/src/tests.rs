@@ -10009,3 +10009,95 @@ fn pt_02_skrifa_matches_egui_unwrapped_layout() {
         }
     }
 }
+
+#[test]
+fn pt_08_inline_edit_layout_job_respects_wrap_false() {
+    use crate::compose::ResolvedTextRun;
+    use crate::text_layout::inline_edit_layout_job_with_wrap;
+    use coursecraft_course::{Align, Baseline};
+
+    let ctx = text_layout_context();
+    let run = ResolvedTextRun {
+        text: "A long unwrapped point text line that must never wrap".to_owned(),
+        size: 20.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        strikethrough: false,
+        baseline: Baseline::Normal,
+        letter_spacing: 0.0,
+        font: None,
+        link: None,
+    };
+
+    let unwrapped_job = inline_edit_layout_job_with_wrap(
+        &ctx,
+        1.0,
+        1.0,
+        std::slice::from_ref(&run),
+        &[],
+        Align::Left,
+        40.0,
+        true,
+        false,
+    );
+    assert_eq!(unwrapped_job.wrap.max_width, f32::INFINITY);
+    assert!(unwrapped_job.break_on_newline);
+    let unwrapped_galley = ctx.fonts_mut(|fonts| fonts.layout_job(unwrapped_job));
+    assert_eq!(
+        unwrapped_galley.rows.len(),
+        1,
+        "wrap=false must stay on one row even with a narrow wrap_width"
+    );
+
+    let wrapped_job = inline_edit_layout_job_with_wrap(
+        &ctx,
+        1.0,
+        1.0,
+        &[run],
+        &[],
+        Align::Left,
+        40.0,
+        true,
+        true,
+    );
+    assert_eq!(wrapped_job.wrap.max_width, 40.0);
+    let wrapped_galley = ctx.fonts_mut(|fonts| fonts.layout_job(wrapped_job));
+    assert!(
+        wrapped_galley.rows.len() > 1,
+        "wrap=true must wrap across rows at wrap_width=40"
+    );
+
+    // Explicit newlines still break lines when wrap=false and multiline=true.
+    let multiline_run = ResolvedTextRun {
+        text: "First line\nSecond line".to_owned(),
+        size: 20.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        strikethrough: false,
+        baseline: Baseline::Normal,
+        letter_spacing: 0.0,
+        font: None,
+        link: None,
+    };
+    let multi_job = inline_edit_layout_job_with_wrap(
+        &ctx,
+        1.0,
+        1.0,
+        &[multiline_run],
+        &[],
+        Align::Left,
+        40.0,
+        true,
+        false,
+    );
+    let multi_galley = ctx.fonts_mut(|fonts| fonts.layout_job(multi_job));
+    assert_eq!(
+        multi_galley.rows.len(),
+        2,
+        "explicit newline must still break lines when wrap=false"
+    );
+}

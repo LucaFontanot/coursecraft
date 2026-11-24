@@ -4375,6 +4375,7 @@ fn show_text_controls(
     font_families: &[String],
     cell: Option<(usize, usize)>,
     autofit: Option<Autofit>,
+    point_text: bool,
     system_fonts: Option<&[crate::SystemFontChoice]>,
     font_requests: &mut Vec<crate::EditorRequest>,
 ) -> Option<(&'static str, Json)> {
@@ -4883,7 +4884,15 @@ fn show_text_controls(
 
     inspector_row(ui, "Wrap", |ui| {
         let mut wrap = style.wrap;
-        if ui.checkbox(&mut wrap, "Wrap text").changed() {
+        let resp = ui.checkbox(&mut wrap, "Wrap text");
+        let resp = if point_text {
+            resp.on_hover_text(
+                "Fits width to text. Turn on wrap or drag a side handle for fixed width.",
+            )
+        } else {
+            resp
+        };
+        if resp.changed() {
             action_to_run = Some((
                 "text.set_paragraph",
                 serde_json::json!({ "slide": slide_id, "object": obj_id, "wrap": wrap }),
@@ -6293,6 +6302,7 @@ fn show_table_controls(
             font_families,
             Some((row, column)),
             None,
+            false,
             system_fonts,
             font_requests,
         ) {
@@ -7668,6 +7678,7 @@ fn show_object_properties(
             style,
             runs,
             autofit,
+            point_text,
             outline,
             ..
         } => {
@@ -7702,6 +7713,7 @@ fn show_object_properties(
                 &lists.font_families,
                 None,
                 Some(eff_autofit),
+                *point_text,
                 system_fonts,
                 &mut font_requests,
             ) {
@@ -8302,6 +8314,7 @@ fn show_object_properties(
                     &lists.font_families,
                     None,
                     eff_autofit,
+                    false,
                     system_fonts,
                     &mut font_requests,
                 ) {

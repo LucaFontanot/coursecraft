@@ -207,6 +207,8 @@ mod m29_state_extras_ui_tests;
 #[cfg(test)]
 mod m29_states_tab_tests;
 #[cfg(test)]
+mod m37_point_text_ui_tests;
+#[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
 mod perf_tests;
@@ -923,6 +925,10 @@ pub struct UiState {
     pub inline_edit_selection: Option<InlineEditSelection>,
     /// True after a click in the right panel while inline edit is open, so the canvas editor doesn't steal focus back.
     pub inline_edit_yielded_to_panel: bool,
+    /// Latest egui-measured `(buffer, (w, h))` for an active point-text inline edit.
+    pub(crate) inline_edit_measured_size: Option<(String, (f32, f32))>,
+    /// Latest live fitted slide-space rect for an active point-text inline edit.
+    pub(crate) inline_edit_live_rect: Option<egui::Rect>,
     /// Image crop mode: the canvas edits a window, Apply writes it in one step.
     pub crop_edit: Option<CropSession>,
     /// Active pointer drag inside crop mode.
@@ -1572,6 +1578,8 @@ impl Editor {
                 inline_edit: None,
                 inline_edit_selection: None,
                 inline_edit_yielded_to_panel: false,
+                inline_edit_measured_size: None,
+                inline_edit_live_rect: None,
                 crop_edit: None,
                 crop_drag: None,
                 scene_rename: None,

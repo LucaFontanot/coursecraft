@@ -1806,6 +1806,29 @@ pub fn inline_edit_layout_job(
     wrap_width: f32,
     multiline: bool,
 ) -> LayoutJob {
+    inline_edit_layout_job_with_wrap(
+        ctx, scale, shrink, runs, paragraphs, align, wrap_width, multiline, true,
+    )
+}
+
+/// Like [`inline_edit_layout_job`], with explicit `wrap` control.
+///
+/// When `wrap` is `false`, `TextWrapping::max_width` is set to `f32::INFINITY`
+/// so unwrapped point text stays on a single line while preserving explicit
+/// newline breaks when `multiline` is `true`.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn inline_edit_layout_job_with_wrap(
+    ctx: &Context,
+    scale: f32,
+    shrink: f32,
+    runs: &[ResolvedTextRun],
+    paragraphs: &[Paragraph],
+    align: Align,
+    wrap_width: f32,
+    multiline: bool,
+    wrap: bool,
+) -> LayoutJob {
     let shrink = if shrink.is_finite() {
         shrink.clamp(AUTOFIT_MIN_SCALE, 1.0)
     } else {
@@ -1819,7 +1842,7 @@ pub fn inline_edit_layout_job(
     let mut job = LayoutJob {
         halign: halign(align),
         wrap: TextWrapping {
-            max_width: if multiline {
+            max_width: if multiline && wrap && wrap_width.is_finite() {
                 wrap_width.max(1.0)
             } else {
                 f32::INFINITY
