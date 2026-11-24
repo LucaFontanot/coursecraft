@@ -285,7 +285,7 @@ enum WebPublishJob {
     },
     Zipping {
         standard: coursecraft_ui_egui::PublishStandard,
-        zipper: coursecraft_publish::SharedPackageZipper,
+        zipper: coursecraft_publish::PackageZipper,
     },
 }
 
@@ -4069,7 +4069,7 @@ impl EditorApp {
             WebPublishJob::Preparing { standard } => {
                 let pkg_standard = publish::package_standard(standard);
                 let player = player_bundle::player_files();
-                match publish::package_files_shared_from(
+                match publish::package_files_from(
                     &self.editor.session.course,
                     &self.editor.media,
                     pkg_standard,
@@ -4079,7 +4079,7 @@ impl EditorApp {
                         self.editor.set_publish_progress(Some(0.0));
                         self.web_publish = Some(WebPublishJob::Zipping {
                             standard,
-                            zipper: coursecraft_publish::SharedPackageZipper::new(files),
+                            zipper: coursecraft_publish::PackageZipper::new(files),
                         });
                         ctx.request_repaint();
                     }

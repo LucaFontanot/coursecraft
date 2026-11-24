@@ -65,14 +65,16 @@ fn package_and_validate(
 ) -> Vec<PackageFile> {
     let player_files = vec![PackageFile {
         path: "index.html".to_owned(),
-        bytes: b"<!doctype html><html><body>player</body></html>".to_vec(),
+        bytes: std::sync::Arc::from(b"<!doctype html><html><body>player</body></html>".as_slice()),
     }];
     let media_root = rich_dir().join("media");
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<std::sync::Arc<[u8]>> {
         let rel = src.strip_prefix("media/").unwrap_or(src);
-        std::fs::read(media_root.join(rel)).ok()
+        std::fs::read(media_root.join(rel))
+            .ok()
+            .map(std::sync::Arc::from)
     };
-    let web_folder = |_folder: &str| -> Option<Vec<(String, Vec<u8>)>> { None };
+    let web_folder = |_folder: &str| -> Option<Vec<(String, std::sync::Arc<[u8]>)>> { None };
     let input = PackageInput {
         course,
         course_json,
@@ -83,7 +85,7 @@ fn package_and_validate(
         .unwrap_or_else(|e| panic!("package {kind:?}: {e}"));
     let refs: Vec<(&str, &[u8])> = files
         .iter()
-        .map(|f| (f.path.as_str(), f.bytes.as_slice()))
+        .map(|f| (f.path.as_str(), f.bytes.as_ref()))
         .collect();
     let violations = validate_package(kind, &refs);
     assert!(

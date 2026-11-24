@@ -17,8 +17,8 @@ use coursecraft_course::{Course, MediaHashes, Severity};
 use coursecraft_engine::Session;
 use coursecraft_format::{FolderRecord, fnv1a64};
 use coursecraft_publish::{
-    PackageFile, PackageStandard, SharedPackageFile, SharedPackageInput, auto_embed_fonts,
-    build_package_shared, zip_shared_package_to,
+    PackageFile, PackageInput, PackageStandard, auto_embed_fonts,
+    build_package_standard_with_folders, zip_package_to,
 };
 use coursecraft_ui_egui::coursecraft_media::system_fonts::SystemFontIndex;
 
@@ -523,7 +523,7 @@ fn build_publish(
     job: &Job<'_>,
     name: &str,
     edited: &Edited,
-) -> Res<Option<(PathBuf, Vec<SharedPackageFile>)>> {
+) -> Res<Option<(PathBuf, Vec<PackageFile>)>> {
     let (Some(standard), Some(dir), Some(player)) =
         (job.args.publish, &job.args.publish_dir, &job.player)
     else {
@@ -569,18 +569,18 @@ fn build_publish(
             .collect();
         (!files.is_empty()).then_some(files)
     };
-    let input = SharedPackageInput {
+    let input = PackageInput {
         course: &published_course,
         course_json: &json,
         player_files: player,
         media: &media,
     };
-    let files = build_package_shared(&input, PackageStandard::from(standard), &web)
+    let files = build_package_standard_with_folders(&input, PackageStandard::from(standard), &web)
         .map_err(|e| format!("publish error: {e}"))?;
     Ok(Some((dir.join(format!("{}.zip", stem(name))), files)))
 }
 
-fn write_publish(package: Option<(PathBuf, Vec<SharedPackageFile>)>) -> Res<()> {
+fn write_publish(package: Option<(PathBuf, Vec<PackageFile>)>) -> Res<()> {
     let Some((target, files)) = package else {
         return Ok(());
     };
@@ -589,7 +589,7 @@ fn write_publish(package: Option<(PathBuf, Vec<SharedPackageFile>)>) -> Res<()> 
     }
     let file = std::fs::File::create(&target).map_err(|e| format!("{}: {e}", target.display()))?;
     let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
-    zip_shared_package_to(&files, &mut writer).map_err(|e| format!("zip error: {e}"))?;
+    zip_package_to(&files, &mut writer).map_err(|e| format!("zip error: {e}"))?;
     writer
         .flush()
         .map_err(|e| format!("{}: {e}", target.display()))

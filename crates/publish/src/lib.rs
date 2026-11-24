@@ -43,31 +43,17 @@ pub enum PackageStandard {
     Web,
 }
 
-/// A single file in a package, holding its relative package path and contents.
+/// A single file in a package, holding its relative package path and contents
+/// backed by a shared [`Arc`] buffer so media and player bytes are never copied
+/// during packaging.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageFile {
-    pub path: String,
-    pub bytes: Vec<u8>,
-}
-
-/// A single file in a package backed by a shared [`Arc`] buffer so media bytes
-/// are never copied during packaging.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SharedPackageFile {
     pub path: String,
     pub bytes: Arc<[u8]>,
 }
 
-/// In-memory inputs needed to build a SCORM 1.2 package.
+/// In-memory inputs needed to build a package using shared [`Arc`] buffers.
 pub struct PackageInput<'a> {
-    pub course: &'a Course,
-    pub course_json: &'a str,
-    pub player_files: &'a [PackageFile],
-    pub media: &'a dyn Fn(&str) -> Option<Vec<u8>>,
-}
-
-/// In-memory inputs for zero-copy packaging using shared [`Arc`] media buffers.
-pub struct SharedPackageInput<'a> {
     pub course: &'a Course,
     pub course_json: &'a str,
     pub player_files: &'a [PackageFile],
@@ -105,13 +91,11 @@ impl From<std::io::Error> for PublishError {
 
 pub use coursecraft_format::is_safe_relative_path;
 
-type WebFolderEntries<'a, B> = dyn Fn(&str) -> Option<Vec<(String, B)>> + 'a;
-
-fn add_web_folders<B>(
+fn add_web_folders(
     web_folders: HashSet<String>,
     web_entries: &HashMap<String, String>,
-    files: &mut Vec<(String, B)>,
-    web_folder: &WebFolderEntries<'_, B>,
+    files: &mut Vec<PackageFile>,
+    web_folder: &WebFolderFiles<'_>,
 ) -> Result<(), PublishError> {
     let mut folders: Vec<String> = web_folders.into_iter().collect();
     folders.sort();
@@ -139,7 +123,10 @@ fn add_web_folders<B>(
             if entry.as_deref() == Some(relative.as_str()) {
                 found_entry = true;
             }
-            files.push((format!("media/{relative}"), bytes));
+            files.push(PackageFile {
+                path: format!("media/{relative}"),
+                bytes,
+            });
         }
         if !found_entry {
             return Err(PublishError::MissingMedia {
@@ -213,73 +200,35 @@ pub fn build_package_standard(
 /// # Errors
 /// Returns [`PublishError`] for the same reasons as [`build_package_standard`],
 /// plus unsafe or missing web-folder files.
-/// Lists a web object's folder files by media-relative path.
-pub type WebFolderFiles<'a> = dyn Fn(&str) -> Option<Vec<(String, Vec<u8>)>> + 'a;
-
 /// Lists a web object's folder files by media-relative path using shared [`Arc`] buffers.
-pub type SharedWebFolderFiles<'a> = dyn Fn(&str) -> Option<Vec<(String, Arc<[u8]>)>> + 'a;
+pub type WebFolderFiles<'a> = dyn Fn(&str) -> Option<Vec<(String, Arc<[u8]>)>> + 'a;
 
 pub fn build_package_standard_with_folders(
     input: &PackageInput<'_>,
     standard: PackageStandard,
     web_folder: &WebFolderFiles<'_>,
 ) -> Result<Vec<PackageFile>, PublishError> {
-    let entries = build_package_entries(
+    build_package_entries(
         input.course,
         input.course_json,
         input.player_files,
         input.media,
         standard,
         web_folder,
-        |v| v,
-    )?;
-    Ok(entries
-        .into_iter()
-        .map(|(path, bytes)| PackageFile { path, bytes })
-        .collect())
+    )
 }
 
-/// Build a package using shared [`Arc`] media buffers without copying media
-/// bytes.
-///
-/// Mirrors [`build_package_standard_with_folders`], cloning only the [`Arc`]
-/// handles returned by `input.media` and `web_folders`.
-///
-/// # Errors
-/// Returns [`PublishError`] for the same reasons as
-/// [`build_package_standard_with_folders`].
-pub fn build_package_shared(
-    input: &SharedPackageInput<'_>,
-    standard: PackageStandard,
-    web_folders: &SharedWebFolderFiles<'_>,
-) -> Result<Vec<SharedPackageFile>, PublishError> {
-    let entries = build_package_entries(
-        input.course,
-        input.course_json,
-        input.player_files,
-        input.media,
-        standard,
-        web_folders,
-        Arc::from,
-    )?;
-    Ok(entries
-        .into_iter()
-        .map(|(path, bytes)| SharedPackageFile { path, bytes })
-        .collect())
-}
-
-fn build_package_entries<B>(
+fn build_package_entries(
     course: &Course,
     input_course_json: &str,
     player_files: &[PackageFile],
-    media: &dyn Fn(&str) -> Option<B>,
+    media: &dyn Fn(&str) -> Option<Arc<[u8]>>,
     standard: PackageStandard,
-    web_folder: &WebFolderEntries<'_, B>,
-    from_vec: fn(Vec<u8>) -> B,
-) -> Result<Vec<(String, B)>, PublishError> {
+    web_folder: &WebFolderFiles<'_>,
+) -> Result<Vec<PackageFile>, PublishError> {
     // 1. Validate player files and check for index.html.
     let mut has_index = false;
-    let mut files: Vec<(String, B)> = Vec::new();
+    let mut files: Vec<PackageFile> = Vec::new();
 
     for player_file in player_files {
         if !is_safe_relative_path(&player_file.path) {
@@ -295,10 +244,10 @@ fn build_package_entries<B>(
             // Ours replace any course.json or standard marker in the player folder.
             continue;
         }
-        files.push((
-            player_file.path.clone(),
-            from_vec(player_file.bytes.clone()),
-        ));
+        files.push(PackageFile {
+            path: player_file.path.clone(),
+            bytes: Arc::clone(&player_file.bytes),
+        });
     }
 
     if !has_index {
@@ -315,10 +264,10 @@ fn build_package_entries<B>(
             .to_json_compact()
             .unwrap_or_else(|_| input_course_json.to_owned())
     };
-    files.push((
-        "course.json".to_string(),
-        from_vec(course_json.into_bytes()),
-    ));
+    files.push(PackageFile {
+        path: "course.json".to_string(),
+        bytes: Arc::from(course_json.into_bytes()),
+    });
 
     // 3. Collect media references from base objects and layer objects, and from
     // masters, which draw under every slide that names them. Template media is
@@ -402,7 +351,7 @@ fn build_package_entries<B>(
         // Package layout rule: always "media/" + src (the player loads `media/{src}`).
         let path = format!("media/{src}");
 
-        files.push((path, bytes));
+        files.push(PackageFile { path, bytes });
     }
 
     // 3b. Web object folders: every file ships under media/<path>/ and keeps
@@ -414,14 +363,17 @@ fn build_package_entries<B>(
     match standard {
         PackageStandard::Scorm(Standard::Scorm12) => {}
         PackageStandard::Scorm(Standard::Scorm2004) => {
-            files.push((
-                PACKAGE_MARKER.to_string(),
-                from_vec(b"{\"standard\":\"scorm2004\"}".to_vec()),
-            ));
+            files.push(PackageFile {
+                path: PACKAGE_MARKER.to_string(),
+                bytes: Arc::from(b"{\"standard\":\"scorm2004\"}".as_slice()),
+            });
         }
         PackageStandard::Xapi(flavor) => {
             let marker = format!("{{\"standard\":\"{}\"}}", flavor.as_id());
-            files.push((PACKAGE_MARKER.to_string(), from_vec(marker.into_bytes())));
+            files.push(PackageFile {
+                path: PACKAGE_MARKER.to_string(),
+                bytes: Arc::from(marker.into_bytes()),
+            });
             let spec = PackageSpec {
                 course_id: course.id.clone(),
                 title: course.title.clone(),
@@ -431,26 +383,29 @@ fn build_package_entries<B>(
                 Flavor::Cmi5 => ("cmi5.xml", cmi5_xml(&spec)),
                 Flavor::Xapi => ("tincan.xml", tincan_xml(&spec)),
             };
-            files.push((path.to_string(), from_vec(xml.into_bytes())));
+            files.push(PackageFile {
+                path: path.to_string(),
+                bytes: Arc::from(xml.into_bytes()),
+            });
         }
         PackageStandard::Lti => {
-            files.push((
-                PACKAGE_MARKER.to_string(),
-                from_vec(b"{\"standard\":\"lti\"}".to_vec()),
-            ));
+            files.push(PackageFile {
+                path: PACKAGE_MARKER.to_string(),
+                bytes: Arc::from(b"{\"standard\":\"lti\"}".as_slice()),
+            });
         }
         PackageStandard::Web => {
-            files.push((
-                PACKAGE_MARKER.to_string(),
-                from_vec(b"{\"standard\":\"web\"}".to_vec()),
-            ));
+            files.push(PackageFile {
+                path: PACKAGE_MARKER.to_string(),
+                bytes: Arc::from(b"{\"standard\":\"web\"}".as_slice()),
+            });
         }
     }
 
     // 5. Generate imsmanifest.xml with the full file list, sorted. xAPI
     // packages carry no imsmanifest.
     if let PackageStandard::Scorm(scorm_standard) = standard {
-        let mut manifest_files: Vec<String> = files.iter().map(|(path, _)| path.clone()).collect();
+        let mut manifest_files: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
         manifest_files.sort();
         manifest_files.dedup();
 
@@ -466,20 +421,20 @@ fn build_package_entries<B>(
             Standard::Scorm12 => coursecraft_scorm::manifest_scorm12(&spec)?,
             Standard::Scorm2004 => coursecraft_scorm::manifest_scorm2004(&spec)?,
         };
-        files.push((
-            "imsmanifest.xml".to_string(),
-            from_vec(manifest_xml.into_bytes()),
-        ));
+        files.push(PackageFile {
+            path: "imsmanifest.xml".to_string(),
+            bytes: Arc::from(manifest_xml.into_bytes()),
+        });
     }
 
     // 6. Return the files sorted by path with no duplicates.
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by(|a, b| a.path.cmp(&b.path));
 
     for window in files.windows(2) {
         if let (Some(first), Some(second)) = (window.first(), window.get(1))
-            && first.0 == second.0
+            && first.path == second.path
         {
-            return Err(PublishError::DuplicateFile(first.0.clone()));
+            return Err(PublishError::DuplicateFile(first.path.clone()));
         }
     }
 
@@ -524,42 +479,7 @@ pub fn zip_package_to<W: std::io::Write + std::io::Seek>(
     Ok(())
 }
 
-/// Pack shared package files into a deterministic zip archive in memory.
-///
-/// Produces bytes identical to [`zip_package`].
-///
-/// # Errors
-/// Returns [`PublishError`] if writing or compressing any file fails.
-pub fn zip_shared_package(files: &[SharedPackageFile]) -> Result<Vec<u8>, PublishError> {
-    let capacity = files
-        .iter()
-        .map(|f| f.bytes.len().saturating_add(128))
-        .fold(1 << 16, usize::saturating_add);
-    let mut out = Vec::with_capacity(capacity);
-    zip_shared_package_to(files, std::io::Cursor::new(&mut out))?;
-    Ok(out)
-}
-
-/// Pack shared package files into a zip written straight to `out` (a file, say),
-/// so a large package is never held in memory a second time. Same bytes as
-/// [`zip_shared_package`].
-///
-/// # Errors
-/// Returns [`PublishError`] if writing or compressing any file fails.
-pub fn zip_shared_package_to<W: std::io::Write + std::io::Seek>(
-    files: &[SharedPackageFile],
-    out: W,
-) -> Result<(), PublishError> {
-    let mut writer = zip::ZipWriter::new(out);
-    for file in files {
-        writer.start_file(&file.path, coursecraft_format::zip_options_for(&file.path))?;
-        writer.write_all(&file.bytes)?;
-    }
-    writer.finish()?;
-    Ok(())
-}
-
-/// Progress or completion from [`PackageZipper::step`] or [`SharedPackageZipper::step`].
+/// Progress or completion from [`PackageZipper::step`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZipStep {
     /// More bytes remain to be written.
@@ -568,33 +488,14 @@ pub enum ZipStep {
     Done(Vec<u8>),
 }
 
-trait ZipEntry {
-    fn path(&self) -> &str;
-    fn bytes(&self) -> &[u8];
-}
-
-impl ZipEntry for PackageFile {
-    fn path(&self) -> &str {
-        &self.path
-    }
-
-    fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-
-impl ZipEntry for SharedPackageFile {
-    fn path(&self) -> &str {
-        &self.path
-    }
-
-    fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-}
-
-struct ZipperCore<F> {
-    files: Vec<F>,
+/// Incremental zero-copy zip writer that writes a bounded number of input bytes
+/// per [`step`](Self::step) call so callers on single-threaded targets (such as
+/// the web editor) can yield between animation frames without copying media or
+/// player bytes.
+///
+/// Produces bytes identical to [`zip_package`].
+pub struct PackageZipper {
+    files: Vec<PackageFile>,
     writer: Option<zip::ZipWriter<std::io::Cursor<Vec<u8>>>>,
     file_index: usize,
     file_offset: usize,
@@ -602,13 +503,15 @@ struct ZipperCore<F> {
     bytes_total: u64,
 }
 
-impl<F: ZipEntry> ZipperCore<F> {
-    fn new(files: Vec<F>) -> Self {
+impl PackageZipper {
+    /// Start zipping `files` incrementally.
+    #[must_use]
+    pub fn new(files: Vec<PackageFile>) -> Self {
         let capacity = files
             .iter()
-            .map(|f| f.bytes().len().saturating_add(128))
+            .map(|f| f.bytes.len().saturating_add(128))
             .fold(1 << 16, usize::saturating_add);
-        let bytes_total = files.iter().map(|f| f.bytes().len() as u64).sum();
+        let bytes_total = files.iter().map(|f| f.bytes.len() as u64).sum();
         let writer = Some(zip::ZipWriter::new(std::io::Cursor::new(
             Vec::with_capacity(capacity),
         )));
@@ -622,7 +525,13 @@ impl<F: ZipEntry> ZipperCore<F> {
         }
     }
 
-    fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
+    /// Write up to `max_bytes` of input file data (at least 1 byte) and return
+    /// either [`ZipStep::InProgress`] or [`ZipStep::Done`].
+    ///
+    /// # Errors
+    /// Returns [`PublishError::Zip`] if writing, compressing, or finishing fails,
+    /// or if called again after [`ZipStep::Done`].
+    pub fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
         let mut budget = max_bytes.max(1);
         let Some(writer) = self.writer.as_mut() else {
             return Err(PublishError::Zip("zipper already finished".to_string()));
@@ -632,8 +541,8 @@ impl<F: ZipEntry> ZipperCore<F> {
             let Some(file) = self.files.get(self.file_index) else {
                 break;
             };
-            let path = file.path();
-            let bytes = file.bytes();
+            let path = file.path.as_str();
+            let bytes = file.bytes.as_ref();
             if self.file_offset == 0 {
                 writer.start_file(path, coursecraft_format::zip_options_for(path))?;
             }
@@ -680,64 +589,6 @@ impl<F: ZipEntry> ZipperCore<F> {
             bytes_done: self.bytes_done,
             bytes_total: self.bytes_total,
         })
-    }
-}
-
-/// Incremental zip writer that writes a bounded number of input bytes per
-/// [`step`](Self::step) call so callers on single-threaded targets (such as the
-/// web editor) can yield between animation frames.
-///
-/// Produces bytes identical to [`zip_package`].
-pub struct PackageZipper {
-    inner: ZipperCore<PackageFile>,
-}
-
-impl PackageZipper {
-    /// Start zipping `files` incrementally.
-    #[must_use]
-    pub fn new(files: Vec<PackageFile>) -> Self {
-        Self {
-            inner: ZipperCore::new(files),
-        }
-    }
-
-    /// Write up to `max_bytes` of input file data (at least 1 byte) and return
-    /// either [`ZipStep::InProgress`] or [`ZipStep::Done`].
-    ///
-    /// # Errors
-    /// Returns [`PublishError::Zip`] if writing, compressing, or finishing fails,
-    /// or if called again after [`ZipStep::Done`].
-    pub fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
-        self.inner.step(max_bytes)
-    }
-}
-
-/// Incremental zero-copy zip writer backed by shared [`Arc`] buffers so callers
-/// on single-threaded targets (such as the web editor) can yield between
-/// animation frames without copying media bytes.
-///
-/// Produces bytes identical to [`zip_shared_package`] and [`zip_package`].
-pub struct SharedPackageZipper {
-    inner: ZipperCore<SharedPackageFile>,
-}
-
-impl SharedPackageZipper {
-    /// Start zipping `files` incrementally.
-    #[must_use]
-    pub fn new(files: Vec<SharedPackageFile>) -> Self {
-        Self {
-            inner: ZipperCore::new(files),
-        }
-    }
-
-    /// Write up to `max_bytes` of input file data (at least 1 byte) and return
-    /// either [`ZipStep::InProgress`] or [`ZipStep::Done`].
-    ///
-    /// # Errors
-    /// Returns [`PublishError::Zip`] if writing, compressing, or finishing fails,
-    /// or if called again after [`ZipStep::Done`].
-    pub fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
-        self.inner.step(max_bytes)
     }
 }
 

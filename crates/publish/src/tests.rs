@@ -57,19 +57,19 @@ fn fake_player() -> Vec<PackageFile> {
     vec![
         PackageFile {
             path: "index.html".into(),
-            bytes: b"<!doctype html><html><body>fake player</body></html>".to_vec(),
+            bytes: Arc::from(b"<!doctype html><html><body>fake player</body></html>".as_slice()),
         },
         PackageFile {
             path: "app.js".into(),
-            bytes: b"console.log('app');".to_vec(),
+            bytes: Arc::from(b"console.log('app');".as_slice()),
         },
         PackageFile {
             path: "app_bg.wasm".into(),
-            bytes: b"\0asm fake wasm binary".to_vec(),
+            bytes: Arc::from(b"\0asm fake wasm binary".as_slice()),
         },
         PackageFile {
             path: "course.json".into(),
-            bytes: b"{\"stale\": true}".to_vec(),
+            bytes: Arc::from(b"{\"stale\": true}".as_slice()),
         },
     ]
 }
@@ -123,8 +123,9 @@ fn background_audio_is_packaged() {
     });
     let player_files = fake_player();
     let course_json = course.to_json().expect("course json");
-    let media =
-        |src: &str| -> Option<Vec<u8>> { (src == "music.mp3").then(|| b"audio bytes".to_vec()) };
+    let media = |src: &str| -> Option<Arc<[u8]>> {
+        (src == "music.mp3").then(|| Arc::from(b"audio bytes".as_slice()))
+    };
     let input = PackageInput {
         course: &course,
         course_json: &course_json,
@@ -149,7 +150,7 @@ fn missing_background_audio_is_reported() {
     });
     let player_files = fake_player();
     let course_json = course.to_json().expect("course json");
-    let media = |_src: &str| -> Option<Vec<u8>> { None };
+    let media = |_src: &str| -> Option<Arc<[u8]>> { None };
     let input = PackageInput {
         course: &course,
         course_json: &course_json,
@@ -174,15 +175,21 @@ fn web_folder_files_keep_their_relative_paths_in_the_package() {
         .push(web_object("web1", "web/site", "index.html"));
     let player_files = fake_player();
     let course_json = course.to_json().expect("course json");
-    let media = |src: &str| -> Option<Vec<u8>> {
-        (src == "web/site/index.html").then(|| b"<html>site</html>".to_vec())
+    let media = |src: &str| -> Option<Arc<[u8]>> {
+        (src == "web/site/index.html").then(|| Arc::from(b"<html>site</html>".as_slice()))
     };
-    let folder = |path: &str| -> Option<Vec<(String, Vec<u8>)>> {
+    let folder = |path: &str| -> Option<Vec<(String, Arc<[u8]>)>> {
         (path == "web/site").then(|| {
             vec![
-                ("web/site/index.html".into(), b"<html>site</html>".to_vec()),
-                ("web/site/style.css".into(), b"body{}".to_vec()),
-                ("web/site/assets/app.js".into(), b"run()".to_vec()),
+                (
+                    "web/site/index.html".into(),
+                    Arc::from(b"<html>site</html>".as_slice()),
+                ),
+                ("web/site/style.css".into(), Arc::from(b"body{}".as_slice())),
+                (
+                    "web/site/assets/app.js".into(),
+                    Arc::from(b"run()".as_slice()),
+                ),
             ]
         })
     };
@@ -222,9 +229,10 @@ fn missing_web_folder_entry_is_reported() {
         .push(web_object("web1", "web/site", "index.html"));
     let player_files = fake_player();
     let course_json = course.to_json().expect("course json");
-    let media = |_src: &str| -> Option<Vec<u8>> { None };
-    let folder = |path: &str| -> Option<Vec<(String, Vec<u8>)>> {
-        (path == "web/site").then(|| vec![("web/site/other.html".into(), b"x".to_vec())])
+    let media = |_src: &str| -> Option<Arc<[u8]>> { None };
+    let folder = |path: &str| -> Option<Vec<(String, Arc<[u8]>)>> {
+        (path == "web/site")
+            .then(|| vec![("web/site/other.html".into(), Arc::from(b"x".as_slice()))])
     };
     let input = PackageInput {
         course: &course,
@@ -247,7 +255,7 @@ fn missing_web_folder_entry_is_reported() {
 #[test]
 fn hello_course_packaged_with_fake_player() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
 
     let input = PackageInput {
         course: &course,
@@ -275,7 +283,7 @@ fn hello_course_packaged_with_fake_player() {
         .iter()
         .find(|f| f.path == "course.json")
         .expect("course.json present");
-    assert_eq!(course_file.bytes, HELLO_COURSE_JSON.as_bytes());
+    assert_eq!(course_file.bytes.as_ref(), HELLO_COURSE_JSON.as_bytes());
 
     // imsmanifest.xml lists all files and has mastery score 80
     let manifest_file = files
@@ -333,10 +341,10 @@ fn course_with_image_packaged_under_media() {
         editor_hidden: false,
     });
 
-    let fake_png = vec![0x89, 0x50, 0x4e, 0x47];
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let fake_png: Arc<[u8]> = Arc::from([0x89, 0x50, 0x4e, 0x47].as_slice());
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         if src == "media/pic.png" {
-            Some(fake_png.clone())
+            Some(Arc::clone(&fake_png))
         } else {
             None
         }
@@ -406,10 +414,13 @@ fn course_with_svg_image_packaged_under_media() {
         editor_hidden: false,
     });
 
-    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#123456"/></svg>"##.to_vec();
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let svg: Arc<[u8]> = Arc::from(
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16" fill="#123456"/></svg>"##
+            .as_slice(),
+    );
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         if src == "media/logo.svg" {
-            Some(svg.clone())
+            Some(Arc::clone(&svg))
         } else {
             None
         }
@@ -445,9 +456,10 @@ fn course_fonts_ship_as_media() {
         style: coursecraft_course::FontStyle::Regular,
         src: "fonts/lato.ttf".into(),
     });
-    let font_bytes = b"font-bytes".to_vec();
-    let media =
-        |src: &str| -> Option<Vec<u8>> { (src == "fonts/lato.ttf").then(|| font_bytes.clone()) };
+    let font_bytes: Arc<[u8]> = Arc::from(b"font-bytes".as_slice());
+    let media = |src: &str| -> Option<Arc<[u8]>> {
+        (src == "fonts/lato.ttf").then(|| Arc::clone(&font_bytes))
+    };
     let course_json = course.to_json().expect("serialize");
     let input = PackageInput {
         course: &course,
@@ -460,7 +472,7 @@ fn course_fonts_ship_as_media() {
         .iter()
         .find(|f| f.path == "media/fonts/lato.ttf")
         .expect("font packaged under media/");
-    assert_eq!(packaged.bytes, b"font-bytes");
+    assert_eq!(packaged.bytes.as_ref(), b"font-bytes");
     let manifest = files
         .iter()
         .find(|f| f.path == "imsmanifest.xml")
@@ -513,7 +525,7 @@ fn missing_media_errors() {
         editor_hidden: false,
     });
 
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
     let course_json = course.to_json().expect("serialize");
     let input = PackageInput {
         course: &course,
@@ -591,7 +603,8 @@ fn each_unsafe_path_case_errors() {
             editor_hidden: false,
         });
 
-        let dummy_media = |_src: &str| -> Option<Vec<u8>> { Some(vec![1, 2, 3]) };
+        let dummy_media =
+            |_src: &str| -> Option<Arc<[u8]>> { Some(Arc::from([1u8, 2, 3].as_slice())) };
         let course_json = course.to_json().expect("serialize");
         let input = PackageInput {
             course: &course,
@@ -614,16 +627,16 @@ fn each_unsafe_path_case_errors() {
     // Also test unsafe player file path
     let course = minimal_course("Player Unsafe");
     let course_json = course.to_json().expect("serialize");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
 
     let bad_player_files = vec![
         PackageFile {
             path: "index.html".into(),
-            bytes: b"ok".to_vec(),
+            bytes: Arc::from(b"ok".as_slice()),
         },
         PackageFile {
             path: "../escape.js".into(),
-            bytes: b"bad".to_vec(),
+            bytes: Arc::from(b"bad".as_slice()),
         },
     ];
 
@@ -648,11 +661,11 @@ fn each_unsafe_path_case_errors() {
 fn missing_index_html_errors() {
     let course = minimal_course("No Index");
     let course_json = course.to_json().expect("serialize");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
 
     let player_without_index = vec![PackageFile {
         path: "app.js".into(),
-        bytes: b"console.log('app');".to_vec(),
+        bytes: Arc::from(b"console.log('app');".as_slice()),
     }];
 
     let input = PackageInput {
@@ -669,7 +682,7 @@ fn missing_index_html_errors() {
 #[test]
 fn read_zip_back_with_zip_archive() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
 
     let input = PackageInput {
         course: &course,
@@ -689,14 +702,14 @@ fn read_zip_back_with_zip_archive() {
         let mut entry = archive.by_name(&file.path).expect("file in zip");
         let mut extracted = Vec::new();
         entry.read_to_end(&mut extracted).expect("read entry");
-        assert_eq!(extracted, file.bytes);
+        assert_eq!(extracted.as_slice(), file.bytes.as_ref());
     }
 }
 
 #[test]
 fn deterministic_zip() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
 
     let input = PackageInput {
         course: &course,
@@ -797,10 +810,10 @@ fn dedupes_identical_media_sources() {
     });
 
     let resolve_count = std::sync::atomic::AtomicUsize::new(0);
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         if src == "media/logo.png" {
             resolve_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Some(vec![9, 9, 9])
+            Some(Arc::from([9u8, 9, 9].as_slice()))
         } else {
             None
         }
@@ -908,7 +921,7 @@ fn skips_remote_http_and_https_sources() {
         editor_hidden: false,
     });
 
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
     let course_json = course.to_json().expect("serialize");
     let input = PackageInput {
         course: &course,
@@ -925,20 +938,20 @@ fn skips_remote_http_and_https_sources() {
 fn detects_duplicate_files_in_player() {
     let course = minimal_course("Duplicates");
     let course_json = course.to_json().expect("serialize");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
 
     let player_files = vec![
         PackageFile {
             path: "index.html".into(),
-            bytes: b"1".to_vec(),
+            bytes: Arc::from(b"1".as_slice()),
         },
         PackageFile {
             path: "app.js".into(),
-            bytes: b"2".to_vec(),
+            bytes: Arc::from(b"2".as_slice()),
         },
         PackageFile {
             path: "app.js".into(),
-            bytes: b"3".to_vec(),
+            bytes: Arc::from(b"3".as_slice()),
         },
     ];
 
@@ -995,10 +1008,10 @@ fn distinct_sources_never_collide_in_package() {
             editor_hidden: false,
         });
     }
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         match src {
-            "a.png" => Some(vec![1]),
-            "media/a.png" => Some(vec![2]),
+            "a.png" => Some(Arc::from([1u8].as_slice())),
+            "media/a.png" => Some(Arc::from([2u8].as_slice())),
             _ => None,
         }
     };
@@ -1010,7 +1023,7 @@ fn distinct_sources_never_collide_in_package() {
         media: &media,
     };
     let files = build_package(&input).expect("package builds");
-    let find = |p: &str| files.iter().find(|f| f.path == p).map(|f| f.bytes.clone());
+    let find = |p: &str| files.iter().find(|f| f.path == p).map(|f| f.bytes.to_vec());
     assert_eq!(find("media/a.png"), Some(vec![1]));
     assert_eq!(find("media/media/a.png"), Some(vec![2]));
 }
@@ -1065,12 +1078,12 @@ fn editor_saved_project_roundtrips_to_publish_package() {
     let opened = coursecraft_format::open_project(&archive_bytes).expect("open project succeeds");
     assert_eq!(opened.course, course);
 
-    let media_lookup = |src: &str| -> Option<Vec<u8>> {
+    let media_lookup = |src: &str| -> Option<Arc<[u8]>> {
         opened
             .media
             .iter()
             .find(|(s, _)| s == src)
-            .map(|(_, b)| b.clone())
+            .map(|(_, b)| Arc::from(b.as_slice()))
     };
     let course_json = opened.course.to_json().expect("serialize course");
     let input = PackageInput {
@@ -1085,7 +1098,7 @@ fn editor_saved_project_roundtrips_to_publish_package() {
         .iter()
         .find(|f| f.path == "media/photo.png")
         .expect("media/photo.png packaged");
-    assert_eq!(media_file.bytes, media_bytes);
+    assert_eq!(media_file.bytes.as_ref(), media_bytes.as_slice());
 }
 
 #[test]
@@ -1168,13 +1181,13 @@ fn course_with_audio_and_video_packaged_under_media() {
         editor_hidden: false,
     });
 
-    let wav_bytes = vec![b'R', b'I', b'F', b'F', 0, 0, 0, 0];
-    let mp4_bytes = vec![0, 0, 0, 0x18, b'f', b't', b'y', b'p'];
+    let wav_bytes: Arc<[u8]> = Arc::from([b'R', b'I', b'F', b'F', 0, 0, 0, 0].as_slice());
+    let mp4_bytes: Arc<[u8]> = Arc::from([0, 0, 0, 0x18, b'f', b't', b'y', b'p'].as_slice());
 
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         match src {
-            "sound.wav" => Some(wav_bytes.clone()),
-            "clip.mp4" => Some(mp4_bytes.clone()),
+            "sound.wav" => Some(Arc::clone(&wav_bytes)),
+            "clip.mp4" => Some(Arc::clone(&mp4_bytes)),
             _ => None,
         }
     };
@@ -1249,9 +1262,10 @@ fn course_with_a_lottie_animation_packages_its_file() {
         locked: false,
         editor_hidden: false,
     });
-    let lottie_bytes = b"PK\x03\x04fake lottie".to_vec();
-    let media =
-        |src: &str| -> Option<Vec<u8>> { (src == "motion.lottie").then(|| lottie_bytes.clone()) };
+    let lottie_bytes: Arc<[u8]> = Arc::from(b"PK\x03\x04fake lottie".as_slice());
+    let media = |src: &str| -> Option<Arc<[u8]>> {
+        (src == "motion.lottie").then(|| Arc::clone(&lottie_bytes))
+    };
     let course_json = course.to_json().expect("serialize course");
     let input = PackageInput {
         course: &course,
@@ -1276,7 +1290,7 @@ fn course_with_a_lottie_animation_packages_its_file() {
 #[test]
 fn scorm12_package_is_unchanged_and_has_no_standard_marker() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
     let input = PackageInput {
         course: &course,
         course_json: HELLO_COURSE_JSON,
@@ -1305,7 +1319,7 @@ fn scorm12_package_is_unchanged_and_has_no_standard_marker() {
 #[test]
 fn cmi5_package_has_course_structure_and_marker() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
     let input = PackageInput {
         course: &course,
         course_json: HELLO_COURSE_JSON,
@@ -1323,7 +1337,7 @@ fn cmi5_package_has_course_structure_and_marker() {
         .iter()
         .find(|f| f.path == PACKAGE_MARKER)
         .expect("marker");
-    assert_eq!(marker.bytes, b"{\"standard\":\"cmi5\"}".as_slice());
+    assert_eq!(marker.bytes.as_ref(), b"{\"standard\":\"cmi5\"}".as_slice());
 
     let cmi5 = files
         .iter()
@@ -1341,7 +1355,7 @@ fn cmi5_package_has_course_structure_and_marker() {
 #[test]
 fn xapi_package_has_tincan_xml_and_marker() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
     let input = PackageInput {
         course: &course,
         course_json: HELLO_COURSE_JSON,
@@ -1359,7 +1373,7 @@ fn xapi_package_has_tincan_xml_and_marker() {
         .iter()
         .find(|f| f.path == PACKAGE_MARKER)
         .expect("marker");
-    assert_eq!(marker.bytes, b"{\"standard\":\"xapi\"}".as_slice());
+    assert_eq!(marker.bytes.as_ref(), b"{\"standard\":\"xapi\"}".as_slice());
 
     let tincan = files
         .iter()
@@ -1385,8 +1399,9 @@ fn lti_package_has_the_marker_no_manifest_and_the_same_media_as_scorm12() {
             trim: None,
         },
     ));
-    let media =
-        |src: &str| -> Option<Vec<u8>> { (src == "sound.wav").then(|| b"audio bytes".to_vec()) };
+    let media = |src: &str| -> Option<Arc<[u8]>> {
+        (src == "sound.wav").then(|| Arc::from(b"audio bytes".as_slice()))
+    };
     let course_json = course.to_json().expect("serialize");
     let input = PackageInput {
         course: &course,
@@ -1406,7 +1421,7 @@ fn lti_package_has_the_marker_no_manifest_and_the_same_media_as_scorm12() {
         .iter()
         .find(|file| file.path == PACKAGE_MARKER)
         .expect("LTI marker");
-    assert_eq!(marker.bytes, b"{\"standard\":\"lti\"}".as_slice());
+    assert_eq!(marker.bytes.as_ref(), b"{\"standard\":\"lti\"}".as_slice());
     assert!(
         !lti_paths.contains(&"imsmanifest.xml"),
         "LTI packages have no imsmanifest: {lti_paths:?}"
@@ -1425,7 +1440,7 @@ fn lti_package_has_the_marker_no_manifest_and_the_same_media_as_scorm12() {
         .iter()
         .find(|file| file.path == "media/sound.wav")
         .expect("media packaged");
-    assert_eq!(packaged_media.bytes, b"audio bytes".as_slice());
+    assert_eq!(packaged_media.bytes.as_ref(), b"audio bytes".as_slice());
 }
 
 #[test]
@@ -1441,8 +1456,9 @@ fn web_package_has_marker_index_and_no_manifest() {
             trim: None,
         },
     ));
-    let media =
-        |src: &str| -> Option<Vec<u8>> { (src == "sound.wav").then(|| b"audio bytes".to_vec()) };
+    let media = |src: &str| -> Option<Arc<[u8]>> {
+        (src == "sound.wav").then(|| Arc::from(b"audio bytes".as_slice()))
+    };
     let course_json = course.to_json().expect("serialize");
     let input = PackageInput {
         course: &course,
@@ -1466,7 +1482,7 @@ fn web_package_has_marker_index_and_no_manifest() {
         .iter()
         .find(|file| file.path == PACKAGE_MARKER)
         .expect("web marker");
-    assert_eq!(marker.bytes, b"{\"standard\":\"web\"}".as_slice());
+    assert_eq!(marker.bytes.as_ref(), b"{\"standard\":\"web\"}".as_slice());
     assert!(
         !web_paths.contains(&"imsmanifest.xml"),
         "web packages have no imsmanifest: {web_paths:?}"
@@ -1485,7 +1501,7 @@ fn web_package_has_marker_index_and_no_manifest() {
 #[test]
 fn scorm12_via_the_standard_entry_point_is_byte_identical() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
     let input = PackageInput {
         course: &course,
         course_json: HELLO_COURSE_JSON,
@@ -1501,7 +1517,7 @@ fn scorm12_via_the_standard_entry_point_is_byte_identical() {
 #[test]
 fn scorm2004_package_adds_marker_and_2004_manifest() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
     let input = PackageInput {
         course: &course,
         course_json: HELLO_COURSE_JSON,
@@ -1514,7 +1530,10 @@ fn scorm2004_package_adds_marker_and_2004_manifest() {
         .iter()
         .find(|f| f.path == PACKAGE_MARKER)
         .expect("standard marker present");
-    assert_eq!(marker.bytes, b"{\"standard\":\"scorm2004\"}".as_slice());
+    assert_eq!(
+        marker.bytes.as_ref(),
+        b"{\"standard\":\"scorm2004\"}".as_slice()
+    );
 
     let manifest = files
         .iter()
@@ -1588,11 +1607,11 @@ fn missing_caption_file_fails_publish_for_audio_and_video() {
         course.scenes[0].slides[0]
             .objects
             .push(media_object("media1", kind));
-        let media = |src: &str| -> Option<Vec<u8>> {
+        let media = |src: &str| -> Option<Arc<[u8]>> {
             if src.ends_with(".vtt") {
                 None
             } else {
-                Some(b"media".to_vec())
+                Some(Arc::from(b"media".as_slice()))
             }
         };
         let input = PackageInput {
@@ -1639,7 +1658,9 @@ fn caption_files_are_packaged_under_media_for_audio_and_video() {
         course.scenes[0].slides[0]
             .objects
             .push(media_object("media1", kind));
-        let media = |src: &str| -> Option<Vec<u8>> { Some(format!("bytes:{src}").into_bytes()) };
+        let media = |src: &str| -> Option<Arc<[u8]>> {
+            Some(Arc::from(format!("bytes:{src}").into_bytes()))
+        };
         let input = PackageInput {
             course: &course,
             course_json: "{}",
@@ -1651,7 +1672,7 @@ fn caption_files_are_packaged_under_media_for_audio_and_video() {
             .iter()
             .find(|f| f.path == format!("media/{vtt}"))
             .expect("caption file packaged");
-        assert_eq!(caption.bytes, format!("bytes:{vtt}").into_bytes());
+        assert_eq!(caption.bytes.as_ref(), format!("bytes:{vtt}").as_bytes());
     }
 }
 
@@ -1711,9 +1732,9 @@ fn master_media_is_packaged_templates_are_stripped_and_their_media_is_not() {
 
     let course_json = course.to_json().expect("serialise");
     assert!(course_json.contains("\"templates\""));
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         match src {
-            "master.png" | "template.png" => Some(src.as_bytes().to_vec()),
+            "master.png" | "template.png" => Some(Arc::from(src.as_bytes())),
             _ => None,
         }
     };
@@ -1741,7 +1762,7 @@ fn master_media_is_packaged_templates_are_stripped_and_their_media_is_not() {
 #[test]
 fn a_course_without_templates_publishes_the_same_course_json_bytes() {
     let course = Course::from_json(HELLO_COURSE_JSON).expect("valid course");
-    let no_media = |_src: &str| -> Option<Vec<u8>> { None };
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
     let input = PackageInput {
         course: &course,
         course_json: HELLO_COURSE_JSON,
@@ -1753,7 +1774,7 @@ fn a_course_without_templates_publishes_the_same_course_json_bytes() {
         .iter()
         .find(|file| file.path == "course.json")
         .expect("course.json");
-    assert_eq!(published.bytes, HELLO_COURSE_JSON.as_bytes());
+    assert_eq!(published.bytes.as_ref(), HELLO_COURSE_JSON.as_bytes());
 }
 
 #[test]
@@ -1802,9 +1823,9 @@ fn a_picture_shape_fill_is_packaged_as_media() {
         editor_hidden: false,
     });
 
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         if src == "texture.png" {
-            Some(vec![1, 2, 3])
+            Some(Arc::from([1u8, 2, 3].as_slice()))
         } else {
             None
         }
@@ -1870,8 +1891,9 @@ fn media_used_only_on_a_bank_slide_is_packaged() {
         title: "Bank One".into(),
         slides: vec![bank_slide],
     });
-    let media =
-        |src: &str| -> Option<Vec<u8>> { (src == "bank-only.png").then_some(vec![9, 8, 7]) };
+    let media = |src: &str| -> Option<Arc<[u8]>> {
+        (src == "bank-only.png").then(|| Arc::from([9u8, 8, 7].as_slice()))
+    };
     let course_json = course.to_json().expect("serialize");
     let input = PackageInput {
         course: &course,
@@ -1908,8 +1930,9 @@ fn resource_files_are_packaged_and_links_are_not() {
     ];
     let player_files = fake_player();
     let course_json = course.to_json().expect("course json");
-    let media =
-        |src: &str| -> Option<Vec<u8>> { (src == "guide.pdf").then(|| b"%PDF-1.7".to_vec()) };
+    let media = |src: &str| -> Option<Arc<[u8]>> {
+        (src == "guide.pdf").then(|| Arc::from(b"%PDF-1.7".as_slice()))
+    };
     let input = PackageInput {
         course: &course,
         course_json: &course_json,
@@ -1920,7 +1943,7 @@ fn resource_files_are_packaged_and_links_are_not() {
     let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
     assert!(paths.contains(&"media/guide.pdf"), "{paths:?}");
 
-    let missing = |_src: &str| -> Option<Vec<u8>> { None };
+    let missing = |_src: &str| -> Option<Arc<[u8]>> { None };
     let input = PackageInput {
         media: &missing,
         ..input
@@ -1939,15 +1962,15 @@ fn zip_package_stores_compressed_media_and_deflates_text() {
     let files = vec![
         PackageFile {
             path: "index.html".into(),
-            bytes: vec![b'a'; 4096],
+            bytes: Arc::from(vec![b'a'; 4096]),
         },
         PackageFile {
             path: "media/pic.png".into(),
-            bytes: vec![1u8; 4096],
+            bytes: Arc::from(vec![1u8; 4096]),
         },
         PackageFile {
             path: "media/clip.mp4".into(),
-            bytes: vec![2u8; 4096],
+            bytes: Arc::from(vec![2u8; 4096]),
         },
     ];
     let bytes = zip_package(&files).expect("zip");
@@ -1970,11 +1993,11 @@ fn zip_package_to_writes_the_same_bytes_as_zip_package() {
     let files = vec![
         PackageFile {
             path: "index.html".into(),
-            bytes: b"<html></html>".to_vec(),
+            bytes: Arc::from(b"<html></html>".as_slice()),
         },
         PackageFile {
             path: "media/pic.png".into(),
-            bytes: vec![5u8; 777],
+            bytes: Arc::from(vec![5u8; 777]),
         },
     ];
     let mut out = std::io::Cursor::new(Vec::new());
@@ -2074,11 +2097,11 @@ fn published_packages_pass_strict_manifest_validation_and_include_poster_and_pat
     course.scenes[0].slides[0].objects.push(video_obj);
     course.scenes[0].slides[0].objects.push(path_obj);
 
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         match src {
-            "media/clip.mp4" => Some(b"MP4".to_vec()),
-            "media/poster.png" => Some(b"PNG-POSTER".to_vec()),
-            "media/tile.png" => Some(b"PNG-TILE".to_vec()),
+            "media/clip.mp4" => Some(Arc::from(b"MP4".as_slice())),
+            "media/poster.png" => Some(Arc::from(b"PNG-POSTER".as_slice())),
+            "media/tile.png" => Some(Arc::from(b"PNG-TILE".as_slice())),
             _ => None,
         }
     };
@@ -2124,7 +2147,7 @@ fn published_packages_pass_strict_manifest_validation_and_include_poster_and_pat
         );
         let refs: Vec<(&str, &[u8])> = files
             .iter()
-            .map(|f| (f.path.as_str(), f.bytes.as_slice()))
+            .map(|f| (f.path.as_str(), f.bytes.as_ref()))
             .collect();
         let violations = validate_package(kind, &refs);
         assert!(
@@ -2163,11 +2186,11 @@ fn publish_bundles_state_src_and_state_fill_style_picture_media() {
     course.scenes[0].slides[0].objects.push(img_obj);
     course.scenes[0].slides[0].objects.push(shp_obj);
 
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         match src {
-            "base.png" => Some(b"BASE".to_vec()),
-            "hover-only.png" => Some(b"HOVER".to_vec()),
-            "state-fill-only.png" => Some(b"FILL".to_vec()),
+            "base.png" => Some(Arc::from(b"BASE".as_slice())),
+            "hover-only.png" => Some(Arc::from(b"HOVER".as_slice())),
+            "state-fill-only.png" => Some(Arc::from(b"FILL".as_slice())),
             _ => None,
         }
     };
@@ -2184,7 +2207,7 @@ fn publish_bundles_state_src_and_state_fill_style_picture_media() {
     assert!(files.iter().any(|f| f.path == "media/state-fill-only.png"));
     let refs: Vec<(&str, &[u8])> = files
         .iter()
-        .map(|f| (f.path.as_str(), f.bytes.as_slice()))
+        .map(|f| (f.path.as_str(), f.bytes.as_ref()))
         .collect();
     let violations = coursecraft_strict_lms::validate_package(
         coursecraft_strict_lms::PackageStandardKind::Web,
@@ -2210,7 +2233,7 @@ fn publish_rejects_missing_or_unsafe_state_fill_style_media() {
     .expect("shp obj");
     course.scenes[0].slides[0].objects.push(shp_obj);
 
-    let media = |_: &str| -> Option<Vec<u8>> { None };
+    let media = |_: &str| -> Option<Arc<[u8]>> { None };
     let course_json = serde_json::to_string(&course).expect("serialize");
     let player_files = fake_player();
     let input = PackageInput {
@@ -2332,9 +2355,9 @@ fn publish_bundles_state_extra_image_shape_and_path_media() {
     .expect("btn obj");
     course.scenes[0].slides[0].objects.push(obj);
 
-    let media = |src: &str| -> Option<Vec<u8>> {
+    let media = |src: &str| -> Option<Arc<[u8]>> {
         if matches!(src, "ex-img.png" | "ex-shp.png" | "ex-path.png") {
-            Some(vec![1, 2, 3, 4])
+            Some(Arc::from([1u8, 2, 3, 4].as_slice()))
         } else {
             None
         }
@@ -2356,7 +2379,7 @@ fn publish_bundles_state_extra_image_shape_and_path_media() {
     }
     let refs: Vec<(&str, &[u8])> = files
         .iter()
-        .map(|f| (f.path.as_str(), f.bytes.as_slice()))
+        .map(|f| (f.path.as_str(), f.bytes.as_ref()))
         .collect();
     let violations = coursecraft_strict_lms::validate_package(
         coursecraft_strict_lms::PackageStandardKind::Web,
@@ -2386,7 +2409,7 @@ fn publish_rejects_missing_or_unsafe_state_extra_media() {
     .expect("btn obj");
     course.scenes[0].slides[0].objects.push(obj);
 
-    let media = |_: &str| -> Option<Vec<u8>> { None };
+    let media = |_: &str| -> Option<Arc<[u8]>> { None };
     let course_json = serde_json::to_string(&course).expect("serialize");
     let player_files = fake_player();
     let input = PackageInput {
@@ -2547,8 +2570,9 @@ fn m31_12_empty_state_src_builds_and_zips_with_base_image() {
 
     let player_files = fake_player();
     let course_json = course.to_json().expect("course json");
-    let media =
-        |src: &str| -> Option<Vec<u8>> { (src == "photo.png").then(|| b"png bytes".to_vec()) };
+    let media = |src: &str| -> Option<Arc<[u8]>> {
+        (src == "photo.png").then(|| Arc::from(b"png bytes".as_slice()))
+    };
     let input = PackageInput {
         course: &course,
         course_json: &course_json,
@@ -2579,23 +2603,23 @@ fn m31_20_package_zipper_matches_zip_package_across_chunk_sizes() {
     let files = vec![
         PackageFile {
             path: "course.json".to_string(),
-            bytes: br#"{"title":"Chunked"}"#.repeat(200),
+            bytes: Arc::from(br#"{"title":"Chunked"}"#.repeat(200)),
         },
         PackageFile {
             path: "coursecraft_player_bg.wasm".to_string(),
-            bytes: big_wasm,
+            bytes: Arc::from(big_wasm),
         },
         PackageFile {
             path: "empty.txt".to_string(),
-            bytes: Vec::new(),
+            bytes: Arc::from(Vec::<u8>::new()),
         },
         PackageFile {
             path: "index.html".to_string(),
-            bytes: b"<!doctype html><html></html>".to_vec(),
+            bytes: Arc::from(b"<!doctype html><html></html>".as_slice()),
         },
         PackageFile {
             path: "media/photo.png".to_string(),
-            bytes: big_png,
+            bytes: Arc::from(big_png),
         },
     ];
     let expected = zip_package(&files).expect("reference zip_package");
@@ -2639,12 +2663,13 @@ fn m31_20_package_zipper_matches_zip_package_across_chunk_sizes() {
     }
 }
 
-/// G-04: `build_package_shared` shares `Arc<[u8]>` media buffers with zero
-/// copies (`Arc::ptr_eq`), emits compact `course.json` without pretty-print
-/// newlines (including when stripping templates), and zips identically to
-/// `zip_package`.
+/// R2-03 (strengthened G-04): `build_package_standard_with_folders` shares
+/// `Arc<[u8]>` buffers with zero copies (`Arc::ptr_eq`) for course media,
+/// web-folder files, and `player_files`, emits compact `course.json` without
+/// pretty-print newlines (including when stripping templates), and zips
+/// identically through `zip_package` and `zip_package_to`.
 #[test]
-fn g04_build_package_shared_zero_copy_and_compact_course_json() {
+fn r2_03_zero_copy_publish_shares_media_web_and_player_arcs() {
     let mut course = minimal_course("Zero Copy Shared");
     course.scenes[0].slides[0].objects.push(Object {
         id: "img1".into(),
@@ -2711,21 +2736,21 @@ fn g04_build_package_shared_zero_copy_and_compact_course_json() {
             .then(|| vec![("web/widget/index.html".into(), Arc::clone(&web_index_arc))])
     };
 
-    let shared_input = SharedPackageInput {
+    let input = PackageInput {
         course: &course,
         course_json: &compact_json,
         player_files: &player_files,
         media: &resolve_media,
     };
-    let shared_files = build_package_shared(
-        &shared_input,
+    let files = build_package_standard_with_folders(
+        &input,
         PackageStandard::Scorm(Standard::Scorm12),
         &resolve_folder,
     )
-    .expect("build_package_shared succeeds");
+    .expect("build_package_standard_with_folders succeeds");
 
     // Zero-copy guarantee: output Arcs point to the exact same allocation as input Arcs.
-    let packaged_hero = shared_files
+    let packaged_hero = files
         .iter()
         .find(|f| f.path == "media/hero.png")
         .expect("media/hero.png present");
@@ -2734,7 +2759,7 @@ fn g04_build_package_shared_zero_copy_and_compact_course_json() {
         "media/hero.png must share the input Arc without copying"
     );
 
-    let packaged_web = shared_files
+    let packaged_web = files
         .iter()
         .find(|f| f.path == "media/web/widget/index.html")
         .expect("web folder entry present");
@@ -2743,8 +2768,23 @@ fn g04_build_package_shared_zero_copy_and_compact_course_json() {
         "web folder file must share the input Arc without copying"
     );
 
+    for player_path in ["index.html", "app.js", "app_bg.wasm"] {
+        let input_player = player_files
+            .iter()
+            .find(|f| f.path == player_path)
+            .expect("input player file present");
+        let packaged_player = files
+            .iter()
+            .find(|f| f.path == player_path)
+            .expect("packaged player file present");
+        assert!(
+            Arc::ptr_eq(&packaged_player.bytes, &input_player.bytes),
+            "player file {player_path} must share the input Arc without copying"
+        );
+    }
+
     // Published course.json is compact (no pretty-print newlines) and round-trips.
-    let packaged_course = shared_files
+    let packaged_course = files
         .iter()
         .find(|f| f.path == "course.json")
         .expect("course.json present");
@@ -2758,20 +2798,20 @@ fn g04_build_package_shared_zero_copy_and_compact_course_json() {
     expected_course.templates.clear();
     assert_eq!(round_tripped, expected_course);
 
-    // zip_shared_package and zip_shared_package_to match zip_package byte-for-byte.
-    let legacy_files: Vec<PackageFile> = shared_files
+    // zip_package and zip_package_to match byte-for-byte (including against freshly copied buffers).
+    let copied_files: Vec<PackageFile> = files
         .iter()
         .map(|f| PackageFile {
             path: f.path.clone(),
-            bytes: f.bytes.to_vec(),
+            bytes: Arc::from(f.bytes.to_vec()),
         })
         .collect();
-    let expected_zip = zip_package(&legacy_files).expect("zip_package");
-    let shared_zip = zip_shared_package(&shared_files).expect("zip_shared_package");
+    let expected_zip = zip_package(&copied_files).expect("zip_package copied");
+    let shared_zip = zip_package(&files).expect("zip_package shared");
     assert_eq!(shared_zip, expected_zip);
 
     let mut streamed = std::io::Cursor::new(Vec::new());
-    zip_shared_package_to(&shared_files, &mut streamed).expect("zip_shared_package_to");
+    zip_package_to(&files, &mut streamed).expect("zip_package_to");
     assert_eq!(streamed.into_inner(), expected_zip);
 }
 
@@ -3032,42 +3072,54 @@ fn r1_02_publish_media_walker_golden_and_errors() {
     let course_json = course.to_json_compact().expect("compact json");
     let player_files = fake_player();
 
-    let all_media: std::collections::HashMap<&str, Vec<u8>> = [
-        ("fonts/lato.ttf", b"font-bytes".to_vec()),
-        ("bgm.mp3", b"bgm-bytes".to_vec()),
-        ("logo.png", b"logo-bytes".to_vec()),
-        ("handout.pdf", b"pdf-bytes".to_vec()),
-        ("hero.png", b"hero-bytes".to_vec()),
-        ("anim.json", b"{}".to_vec()),
-        ("voice.mp3", b"voice-bytes".to_vec()),
-        ("voice.vtt", b"WEBVTT".to_vec()),
-        ("clip.mp4", b"clip-bytes".to_vec()),
-        ("clip.vtt", b"WEBVTT clip".to_vec()),
-        ("clip-poster.png", b"poster-bytes".to_vec()),
-        ("clip2.mp4", b"clip2-bytes".to_vec()),
-        ("shape-fill.png", b"shape-bytes".to_vec()),
-        ("btn-fill.png", b"btn-bytes".to_vec()),
-        ("path-fill.png", b"path-bytes".to_vec()),
-        ("base-state.png", b"base-state-bytes".to_vec()),
-        ("state-img.png", b"state-img-bytes".to_vec()),
-        ("state-fill.png", b"state-fill-bytes".to_vec()),
-        ("extra-img.png", b"extra-img-bytes".to_vec()),
-        ("extra-shape-fill.png", b"extra-shape-bytes".to_vec()),
-        ("extra-path-fill.png", b"extra-path-bytes".to_vec()),
-        ("layer-pic.png", b"layer-bytes".to_vec()),
-        ("master-base.png", b"master-bytes".to_vec()),
-        ("bank-base.png", b"bank-base-bytes".to_vec()),
-        ("bank-layer.png", b"bank-layer-bytes".to_vec()),
+    let all_media: std::collections::HashMap<&str, Arc<[u8]>> = [
+        ("fonts/lato.ttf", Arc::from(b"font-bytes".as_slice())),
+        ("bgm.mp3", Arc::from(b"bgm-bytes".as_slice())),
+        ("logo.png", Arc::from(b"logo-bytes".as_slice())),
+        ("handout.pdf", Arc::from(b"pdf-bytes".as_slice())),
+        ("hero.png", Arc::from(b"hero-bytes".as_slice())),
+        ("anim.json", Arc::from(b"{}".as_slice())),
+        ("voice.mp3", Arc::from(b"voice-bytes".as_slice())),
+        ("voice.vtt", Arc::from(b"WEBVTT".as_slice())),
+        ("clip.mp4", Arc::from(b"clip-bytes".as_slice())),
+        ("clip.vtt", Arc::from(b"WEBVTT clip".as_slice())),
+        ("clip-poster.png", Arc::from(b"poster-bytes".as_slice())),
+        ("clip2.mp4", Arc::from(b"clip2-bytes".as_slice())),
+        ("shape-fill.png", Arc::from(b"shape-bytes".as_slice())),
+        ("btn-fill.png", Arc::from(b"btn-bytes".as_slice())),
+        ("path-fill.png", Arc::from(b"path-bytes".as_slice())),
+        ("base-state.png", Arc::from(b"base-state-bytes".as_slice())),
+        ("state-img.png", Arc::from(b"state-img-bytes".as_slice())),
+        ("state-fill.png", Arc::from(b"state-fill-bytes".as_slice())),
+        ("extra-img.png", Arc::from(b"extra-img-bytes".as_slice())),
+        (
+            "extra-shape-fill.png",
+            Arc::from(b"extra-shape-bytes".as_slice()),
+        ),
+        (
+            "extra-path-fill.png",
+            Arc::from(b"extra-path-bytes".as_slice()),
+        ),
+        ("layer-pic.png", Arc::from(b"layer-bytes".as_slice())),
+        ("master-base.png", Arc::from(b"master-bytes".as_slice())),
+        ("bank-base.png", Arc::from(b"bank-base-bytes".as_slice())),
+        ("bank-layer.png", Arc::from(b"bank-layer-bytes".as_slice())),
     ]
     .into_iter()
     .collect();
 
-    let resolve_media = |src: &str| -> Option<Vec<u8>> { all_media.get(src).cloned() };
-    let resolve_folder = |folder: &str| -> Option<Vec<(String, Vec<u8>)>> {
+    let resolve_media = |src: &str| -> Option<Arc<[u8]>> { all_media.get(src).cloned() };
+    let resolve_folder = |folder: &str| -> Option<Vec<(String, Arc<[u8]>)>> {
         (folder == "web/demo").then(|| {
             vec![
-                ("web/demo/index.html".into(), b"<h1>Demo</h1>".to_vec()),
-                ("web/demo/app.js".into(), b"console.log(1);".to_vec()),
+                (
+                    "web/demo/index.html".into(),
+                    Arc::from(b"<h1>Demo</h1>".as_slice()),
+                ),
+                (
+                    "web/demo/app.js".into(),
+                    Arc::from(b"console.log(1);".as_slice()),
+                ),
             ]
         })
     };
@@ -3141,7 +3193,7 @@ fn r1_02_publish_media_walker_golden_and_errors() {
             course: mutated,
             course_json: &json_str,
             player_files: &player_files,
-            media: &|_| Some(vec![1]),
+            media: &|_| Some(Arc::from([1u8].as_slice())),
         };
         let err = build_package(&inp).expect_err("empty primary src must fail");
         assert_eq!(
@@ -3435,18 +3487,21 @@ fn r2_01_shared_package_zipper_matches_zip_package_across_chunk_sizes() {
             _ => None,
         }
     };
-    let input = SharedPackageInput {
+    let input = PackageInput {
         course: &course,
         course_json: &course_json,
         player_files: &player_files,
         media: &resolve,
     };
 
-    let shared_files =
-        build_package_shared(&input, PackageStandard::Scorm(Standard::Scorm12), &|_| None)
-            .expect("build shared package");
+    let files = build_package_standard_with_folders(
+        &input,
+        PackageStandard::Scorm(Standard::Scorm12),
+        &|_| None,
+    )
+    .expect("build package");
 
-    let paths: Vec<&str> = shared_files.iter().map(|f| f.path.as_str()).collect();
+    let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
     for expected_path in [
         "index.html",
         "course.json",
@@ -3461,19 +3516,10 @@ fn r2_01_shared_package_zipper_matches_zip_package_across_chunk_sizes() {
         );
     }
 
-    let expected_shared = zip_shared_package(&shared_files).expect("zip_shared_package");
-    let owned_files: Vec<PackageFile> = shared_files
-        .iter()
-        .map(|f| PackageFile {
-            path: f.path.clone(),
-            bytes: f.bytes.to_vec(),
-        })
-        .collect();
-    let expected_owned = zip_package(&owned_files).expect("zip_package");
-    assert_eq!(expected_shared, expected_owned);
+    let expected = zip_package(&files).expect("zip_package");
 
     for chunk_size in [1, 17, 1024, 65_536, 262_144] {
-        let mut zipper = SharedPackageZipper::new(shared_files.clone());
+        let mut zipper = PackageZipper::new(files.clone());
         let zipped = loop {
             match zipper.step(chunk_size).expect("zipper step") {
                 ZipStep::InProgress {
@@ -3486,8 +3532,8 @@ fn r2_01_shared_package_zipper_matches_zip_package_across_chunk_sizes() {
             }
         };
         assert_eq!(
-            zipped, expected_shared,
-            "SharedPackageZipper mismatch for chunk_size={chunk_size}"
+            zipped, expected,
+            "PackageZipper mismatch for chunk_size={chunk_size}"
         );
         assert!(
             matches!(zipper.step(chunk_size), Err(PublishError::Zip(_))),
@@ -3495,9 +3541,8 @@ fn r2_01_shared_package_zipper_matches_zip_package_across_chunk_sizes() {
         );
     }
 
-    let expected_empty = zip_shared_package(&[]).expect("zip_shared_package empty");
-    assert_eq!(expected_empty, zip_package(&[]).expect("zip_package empty"));
-    let mut empty_zipper = SharedPackageZipper::new(Vec::new());
+    let expected_empty = zip_package(&[]).expect("zip_package empty");
+    let mut empty_zipper = PackageZipper::new(Vec::new());
     let done = empty_zipper.step(1024).expect("empty zipper step");
     assert_eq!(done, ZipStep::Done(expected_empty));
     assert!(matches!(empty_zipper.step(1024), Err(PublishError::Zip(_))));

@@ -20,7 +20,7 @@ pub fn player_files() -> Vec<PackageFile> {
         .iter()
         .map(|entry| PackageFile {
             path: entry.0.to_owned(),
-            bytes: entry.1.to_vec(),
+            bytes: std::sync::Arc::from(entry.1),
         })
         .collect()
 }

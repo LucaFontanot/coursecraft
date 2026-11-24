@@ -22,7 +22,7 @@ use coursecraft_format::{
 };
 use coursecraft_logic::{Input, Player};
 use coursecraft_publish::{
-    PackageFile, PackageStandard, SharedPackageInput, build_package_shared, zip_shared_package_to,
+    PackageFile, PackageInput, PackageStandard, build_package_standard_with_folders, zip_package_to,
 };
 use coursecraft_scorm::Standard;
 use serde_json::{Value, json};
@@ -377,7 +377,7 @@ fn big_course_speed() -> Result<(), String> {
     // Publish SCORM 1.2 and the manifest-free zip, from the in-memory media.
     let player = vec![PackageFile {
         path: "index.html".into(),
-        bytes: b"<html></html>".to_vec(),
+        bytes: Arc::from(b"<html></html>".as_slice()),
     }];
     let course_json = course.to_json().map_err(|e| e.to_string())?;
     for (name, standard) in [
@@ -394,16 +394,17 @@ fn big_course_speed() -> Result<(), String> {
         let lookup: HashMap<&str, &Arc<[u8]>> =
             media.iter().map(|(n, b)| (n.as_str(), b)).collect();
         let resolve = |src: &str| lookup.get(src).map(|b| Arc::clone(b));
-        let input = SharedPackageInput {
+        let input = PackageInput {
             course: &course,
             course_json: &course_json,
             player_files: &player,
             media: &resolve,
         };
-        let files = build_package_shared(&input, standard, &|_| None).map_err(|e| e.to_string())?;
+        let files = build_package_standard_with_folders(&input, standard, &|_| None)
+            .map_err(|e| e.to_string())?;
         let out = std::fs::File::create(dir.join("out.zip")).map_err(|e| e.to_string())?;
         let mut out = std::io::BufWriter::with_capacity(256 * 1024, out);
-        zip_shared_package_to(&files, &mut out).map_err(|e| e.to_string())?;
+        zip_package_to(&files, &mut out).map_err(|e| e.to_string())?;
         out.flush().map_err(|e| e.to_string())?;
         let size = std::fs::metadata(dir.join("out.zip")).map_or(0, |m| m.len());
         row(
