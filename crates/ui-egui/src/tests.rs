@@ -20239,3 +20239,341 @@ mod tests {
         violations.join("\n")
     );
 }
+
+#[test]
+fn r1_03_ui_media_walkers_golden() {
+    let json = r##"{
+        "schema_version": 1,
+        "id": "r1-03-ui-media",
+        "title": "R1-03 UI Media",
+        "slide_size": { "w": 1280, "h": 720 },
+        "fonts": [
+            { "family": "Lato", "style": "regular", "src": "fonts/lato.ttf" },
+            { "family": "Empty", "style": "bold", "src": "" }
+        ],
+        "background_audio": { "src": "bgm.mp3" },
+        "player": { "logo": "logo.png" },
+        "resources": [
+            { "id": "res-file", "title": "PDF", "target": { "kind": "file", "src": "handout.pdf" } },
+            { "id": "res-url", "title": "URL", "target": { "kind": "url", "url": "https://example.com" } }
+        ],
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide 1",
+                "duration_ms": 5000,
+                "objects": [
+                    {
+                        "id": "obj-img",
+                        "name": "Hero",
+                        "kind": { "type": "image", "src": "hero.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-lot",
+                        "name": "Anim",
+                        "kind": { "type": "lottie", "src": "anim.json" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-aud",
+                        "name": "Voice",
+                        "kind": { "type": "audio", "src": "voice.mp3", "captions": "voice.vtt" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 }
+                    },
+                    {
+                        "id": "obj-vid",
+                        "name": "Clip",
+                        "kind": {
+                            "type": "video",
+                            "src": "clip.mp4",
+                            "captions": "clip.vtt",
+                            "poster": "clip-poster.png"
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 320.0, "h": 180.0 }
+                    },
+                    {
+                        "id": "obj-shp",
+                        "name": "ShapePic",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "rectangle",
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "shape-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-btn",
+                        "name": "BtnPic",
+                        "kind": {
+                            "type": "button",
+                            "label": "Go",
+                            "fill_style": { "type": "picture", "src": "btn-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 44.0 }
+                    },
+                    {
+                        "id": "obj-path",
+                        "name": "PathPic",
+                        "kind": {
+                            "type": "path",
+                            "points": [
+                                { "x": 0.0, "y": 0.0 },
+                                { "x": 1.0, "y": 0.0 },
+                                { "x": 0.5, "y": 1.0 }
+                            ],
+                            "closed": true,
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "path-fill.png" },
+                            "outline": { "color": "#000000", "width": 1.0 }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-web",
+                        "name": "SiteWeb",
+                        "kind": {
+                            "type": "web",
+                            "source": { "type": "folder", "path": "web/site", "entry": "index.html" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 400.0, "h": 300.0 }
+                    },
+                    {
+                        "id": "obj-st",
+                        "name": "Stateful",
+                        "kind": { "type": "image", "src": "base-state.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+                        "states": [{
+                            "name": "hover",
+                            "src": "state-img.png",
+                            "fill_style": { "type": "picture", "src": "state-fill.png" },
+                            "extras": [
+                                {
+                                    "id": "ex-img",
+                                    "kind": { "type": "image", "src": "extra-img.png" },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-shp",
+                                    "kind": {
+                                        "type": "shape",
+                                        "shape": "ellipse",
+                                        "fill": "#ffffff",
+                                        "fill_style": { "type": "picture", "src": "extra-shape-fill.png" }
+                                    },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-path",
+                                    "kind": {
+                                        "type": "path",
+                                        "points": [
+                                            { "x": 0.0, "y": 0.0 },
+                                            { "x": 1.0, "y": 0.0 },
+                                            { "x": 0.5, "y": 1.0 }
+                                        ],
+                                        "closed": true,
+                                        "fill": "#ffffff",
+                                        "fill_style": { "type": "picture", "src": "extra-path-fill.png" },
+                                        "outline": { "color": "#000000", "width": 1.0 }
+                                    },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                },
+                                {
+                                    "id": "ex-txt",
+                                    "kind": { "type": "text", "text": "Plain" },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 20.0 }
+                                }
+                            ]
+                        }]
+                    }
+                ],
+                "layers": [{
+                    "id": "l1",
+                    "name": "Layer 1",
+                    "objects": [{
+                        "id": "l-img",
+                        "name": "LayerPic",
+                        "kind": { "type": "image", "src": "layer-pic.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 80.0 }
+                    }]
+                }]
+            }]
+        }],
+        "masters": [{
+            "id": "m1",
+            "title": "Master 1",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "m-img",
+                "name": "MasterBg",
+                "kind": { "type": "image", "src": "master-base.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }],
+            "layers": [{
+                "id": "ml1",
+                "name": "Master Layer",
+                "objects": [{
+                    "id": "ml-img",
+                    "name": "MasterLayerPic",
+                    "kind": { "type": "image", "src": "master-layer.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 40.0 }
+                }]
+            }]
+        }],
+        "templates": [{
+            "id": "t1",
+            "title": "Template 1",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "t-img",
+                "name": "TemplatePic",
+                "kind": { "type": "image", "src": "template-pic.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }]
+        }],
+        "banks": [{
+            "id": "b1",
+            "title": "Bank 1",
+            "slides": [{
+                "id": "bs1",
+                "title": "Bank Slide 1",
+                "duration_ms": 5000,
+                "objects": [{
+                    "id": "b-img",
+                    "name": "BankPic",
+                    "kind": { "type": "image", "src": "bank-base.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                }],
+                "layers": [{
+                    "id": "bl1",
+                    "name": "Bank Layer",
+                    "objects": [{
+                        "id": "bl-img",
+                        "name": "BankLayerPic",
+                        "kind": { "type": "image", "src": "bank-layer.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+                    }]
+                }]
+            }]
+        }]
+    }"##;
+    let course = Course::from_json(json).expect("valid R1-03 course");
+
+    let expected_referenced: std::collections::HashSet<String> = [
+        "fonts/lato.ttf",
+        "bgm.mp3",
+        "logo.png",
+        "handout.pdf",
+        "hero.png",
+        "anim.json",
+        "voice.mp3",
+        "voice.vtt",
+        "clip.mp4",
+        "clip.vtt",
+        "clip-poster.png",
+        "shape-fill.png",
+        "btn-fill.png",
+        "path-fill.png",
+        "web/site/index.html",
+        "base-state.png",
+        "state-img.png",
+        "state-fill.png",
+        "extra-img.png",
+        "extra-shape-fill.png",
+        "extra-path-fill.png",
+        "layer-pic.png",
+        "master-base.png",
+        "master-layer.png",
+        "template-pic.png",
+        "bank-base.png",
+        "bank-layer.png",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+
+    assert_eq!(referenced_media_srcs(&course), expected_referenced);
+    assert_eq!(web_folder_prefixes(&course), vec!["web/site/".to_owned()]);
+
+    let mut editor = Editor::new(course);
+    // Load a subset of referenced files, plus a web-folder subfile and an unused file.
+    editor.set_media(vec![
+        ("hero.png".into(), Arc::from(b"hero".as_slice())),
+        ("layer-pic.png".into(), Arc::from(b"layer".as_slice())),
+        ("state-img.png".into(), Arc::from(b"state".as_slice())),
+        ("extra-path-fill.png".into(), Arc::from(b"epath".as_slice())),
+        (
+            "web/site/index.html".into(),
+            Arc::from(b"<h1>hi</h1>".as_slice()),
+        ),
+        ("web/site/app.js".into(), Arc::from(b"1;".as_slice())),
+        ("bgm.mp3".into(), Arc::from(b"bgm".as_slice())),
+        ("master-base.png".into(), Arc::from(b"master".as_slice())),
+        ("template-pic.png".into(), Arc::from(b"tpl".as_slice())),
+        ("bank-layer.png".into(), Arc::from(b"bank".as_slice())),
+        ("unused.png".into(), Arc::from(b"unused".as_slice())),
+    ]);
+
+    let used_names: Vec<String> = editor.used_media().into_iter().map(|(k, _)| k).collect();
+    assert_eq!(
+        used_names,
+        vec![
+            "hero.png",
+            "layer-pic.png",
+            "state-img.png",
+            "extra-path-fill.png",
+            "web/site/index.html",
+            "web/site/app.js",
+            "bgm.mp3",
+            "master-base.png",
+            "template-pic.png",
+            "bank-layer.png",
+        ]
+    );
+
+    let slide = &editor.session.course.scenes[0].slides[0];
+    let slide_media_names: Vec<String> = editor
+        .slide_media(slide)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(
+        slide_media_names,
+        vec![
+            "hero.png",
+            "layer-pic.png",
+            "state-img.png",
+            "extra-path-fill.png",
+            "web/site/index.html",
+            "web/site/app.js",
+        ]
+    );
+
+    assert_eq!(
+        editor.missing_media(),
+        vec![
+            "anim.json",
+            "bank-base.png",
+            "base-state.png",
+            "btn-fill.png",
+            "clip-poster.png",
+            "clip.mp4",
+            "clip.vtt",
+            "extra-img.png",
+            "extra-shape-fill.png",
+            "fonts/lato.ttf",
+            "handout.pdf",
+            "logo.png",
+            "master-layer.png",
+            "path-fill.png",
+            "shape-fill.png",
+            "state-fill.png",
+            "voice.mp3",
+            "voice.vtt",
+        ]
+    );
+}

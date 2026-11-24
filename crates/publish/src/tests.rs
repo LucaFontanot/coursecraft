@@ -2774,3 +2774,592 @@ fn g04_build_package_shared_zero_copy_and_compact_course_json() {
     zip_shared_package_to(&shared_files, &mut streamed).expect("zip_shared_package_to");
     assert_eq!(streamed.into_inner(), expected_zip);
 }
+
+#[test]
+fn r1_02_publish_media_walker_golden_and_errors() {
+    let json = r##"{
+        "schema_version": 1,
+        "id": "r1-02-publish",
+        "title": "R1-02 Publish Media",
+        "slide_size": { "w": 1280, "h": 720 },
+        "fonts": [
+            { "family": "Lato", "style": "regular", "src": "fonts/lato.ttf" }
+        ],
+        "background_audio": { "src": "bgm.mp3" },
+        "player": { "logo": "logo.png" },
+        "resources": [
+            { "id": "res-file", "title": "Guide", "target": { "kind": "file", "src": "handout.pdf" } },
+            { "id": "res-url", "title": "Site", "target": { "kind": "url", "url": "https://example.com" } }
+        ],
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide 1",
+                "duration_ms": 5000,
+                "objects": [
+                    {
+                        "id": "obj-img",
+                        "name": "Hero",
+                        "kind": { "type": "image", "src": "hero.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-lot",
+                        "name": "Anim",
+                        "kind": { "type": "lottie", "src": "anim.json" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-aud",
+                        "name": "Voice",
+                        "kind": { "type": "audio", "src": "voice.mp3", "captions": "voice.vtt" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 }
+                    },
+                    {
+                        "id": "obj-vid",
+                        "name": "Clip",
+                        "kind": {
+                            "type": "video",
+                            "src": "clip.mp4",
+                            "captions": "clip.vtt",
+                            "poster": "clip-poster.png"
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 320.0, "h": 180.0 }
+                    },
+                    {
+                        "id": "obj-vid-empty-poster",
+                        "name": "ClipEmptyPoster",
+                        "kind": {
+                            "type": "video",
+                            "src": "clip2.mp4",
+                            "poster": ""
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 320.0, "h": 180.0 }
+                    },
+                    {
+                        "id": "obj-shp",
+                        "name": "ShapePic",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "rectangle",
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "shape-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-shp-empty",
+                        "name": "ShapeEmptyPic",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "rectangle",
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-btn",
+                        "name": "BtnPic",
+                        "kind": {
+                            "type": "button",
+                            "label": "Go",
+                            "fill_style": { "type": "picture", "src": "btn-fill.png" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 120.0, "h": 44.0 }
+                    },
+                    {
+                        "id": "obj-path",
+                        "name": "PathPic",
+                        "kind": {
+                            "type": "path",
+                            "points": [
+                                { "x": 0.0, "y": 0.0 },
+                                { "x": 1.0, "y": 0.0 },
+                                { "x": 0.5, "y": 1.0 }
+                            ],
+                            "closed": true,
+                            "fill": "#ffffff",
+                            "fill_style": { "type": "picture", "src": "path-fill.png" },
+                            "outline": { "color": "#000000", "width": 1.0 }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                    },
+                    {
+                        "id": "obj-web",
+                        "name": "DemoWeb",
+                        "kind": {
+                            "type": "web",
+                            "source": { "type": "folder", "path": "web/demo", "entry": "index.html" }
+                        },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 400.0, "h": 300.0 }
+                    },
+                    {
+                        "id": "obj-st",
+                        "name": "Stateful",
+                        "kind": { "type": "image", "src": "base-state.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 },
+                        "states": [
+                            {
+                                "name": "hover",
+                                "src": "state-img.png",
+                                "fill_style": { "type": "picture", "src": "state-fill.png" },
+                                "extras": [
+                                    {
+                                        "id": "ex-img",
+                                        "kind": { "type": "image", "src": "extra-img.png" },
+                                        "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                    },
+                                    {
+                                        "id": "ex-shp",
+                                        "kind": {
+                                            "type": "shape",
+                                            "shape": "ellipse",
+                                            "fill": "#ffffff",
+                                            "fill_style": { "type": "picture", "src": "extra-shape-fill.png" }
+                                        },
+                                        "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                    },
+                                    {
+                                        "id": "ex-path",
+                                        "kind": {
+                                            "type": "path",
+                                            "points": [
+                                                { "x": 0.0, "y": 0.0 },
+                                                { "x": 1.0, "y": 0.0 },
+                                                { "x": 0.5, "y": 1.0 }
+                                            ],
+                                            "closed": true,
+                                            "fill": "#ffffff",
+                                            "fill_style": { "type": "picture", "src": "extra-path-fill.png" },
+                                            "outline": { "color": "#000000", "width": 1.0 }
+                                        },
+                                        "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                    },
+                                    {
+                                        "id": "ex-txt",
+                                        "kind": { "type": "text", "text": "Plain" },
+                                        "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 20.0 }
+                                    }
+                                ]
+                            },
+                            {
+                                "name": "empty_optional",
+                                "src": "",
+                                "fill_style": { "type": "picture", "src": "" },
+                                "extras": [{
+                                    "id": "ex-empty-img",
+                                    "kind": { "type": "image", "src": "" },
+                                    "frame": { "x": 0.0, "y": 0.0, "w": 24.0, "h": 24.0 }
+                                }]
+                            }
+                        ]
+                    }
+                ],
+                "layers": [{
+                    "id": "l1",
+                    "name": "Layer 1",
+                    "objects": [{
+                        "id": "l-img",
+                        "name": "LayerPic",
+                        "kind": { "type": "image", "src": "layer-pic.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 60.0, "h": 60.0 }
+                    }]
+                }]
+            }]
+        }],
+        "masters": [{
+            "id": "m1",
+            "title": "Master 1",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "m-img",
+                "name": "MasterBg",
+                "kind": { "type": "image", "src": "master-base.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }],
+            "layers": [{
+                "id": "ml1",
+                "name": "Master Layer",
+                "objects": [{
+                    "id": "ml-img",
+                    "name": "MasterLayerIgnored",
+                    "kind": { "type": "image", "src": "master-layer-ignored.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 40.0, "h": 40.0 }
+                }]
+            }]
+        }],
+        "templates": [{
+            "id": "t1",
+            "title": "Template 1",
+            "duration_ms": 5000,
+            "objects": [{
+                "id": "t-img",
+                "name": "TemplateIgnored",
+                "kind": { "type": "image", "src": "tpl-missing.png", "alt": "" },
+                "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+            }]
+        }],
+        "banks": [{
+            "id": "b1",
+            "title": "Bank 1",
+            "slides": [{
+                "id": "bs1",
+                "title": "Bank Slide 1",
+                "duration_ms": 5000,
+                "objects": [{
+                    "id": "b-img",
+                    "name": "BankPic",
+                    "kind": { "type": "image", "src": "bank-base.png", "alt": "" },
+                    "frame": { "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0 }
+                }],
+                "layers": [{
+                    "id": "bl1",
+                    "name": "Bank Layer",
+                    "objects": [{
+                        "id": "bl-img",
+                        "name": "BankLayerPic",
+                        "kind": { "type": "image", "src": "bank-layer.png", "alt": "" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 50.0, "h": 50.0 }
+                    }]
+                }]
+            }]
+        }]
+    }"##;
+    let course = Course::from_json(json).expect("valid R1-02 course");
+    let course_json = course.to_json_compact().expect("compact json");
+    let player_files = fake_player();
+
+    let all_media: std::collections::HashMap<&str, Vec<u8>> = [
+        ("fonts/lato.ttf", b"font-bytes".to_vec()),
+        ("bgm.mp3", b"bgm-bytes".to_vec()),
+        ("logo.png", b"logo-bytes".to_vec()),
+        ("handout.pdf", b"pdf-bytes".to_vec()),
+        ("hero.png", b"hero-bytes".to_vec()),
+        ("anim.json", b"{}".to_vec()),
+        ("voice.mp3", b"voice-bytes".to_vec()),
+        ("voice.vtt", b"WEBVTT".to_vec()),
+        ("clip.mp4", b"clip-bytes".to_vec()),
+        ("clip.vtt", b"WEBVTT clip".to_vec()),
+        ("clip-poster.png", b"poster-bytes".to_vec()),
+        ("clip2.mp4", b"clip2-bytes".to_vec()),
+        ("shape-fill.png", b"shape-bytes".to_vec()),
+        ("btn-fill.png", b"btn-bytes".to_vec()),
+        ("path-fill.png", b"path-bytes".to_vec()),
+        ("base-state.png", b"base-state-bytes".to_vec()),
+        ("state-img.png", b"state-img-bytes".to_vec()),
+        ("state-fill.png", b"state-fill-bytes".to_vec()),
+        ("extra-img.png", b"extra-img-bytes".to_vec()),
+        ("extra-shape-fill.png", b"extra-shape-bytes".to_vec()),
+        ("extra-path-fill.png", b"extra-path-bytes".to_vec()),
+        ("layer-pic.png", b"layer-bytes".to_vec()),
+        ("master-base.png", b"master-bytes".to_vec()),
+        ("bank-base.png", b"bank-base-bytes".to_vec()),
+        ("bank-layer.png", b"bank-layer-bytes".to_vec()),
+    ]
+    .into_iter()
+    .collect();
+
+    let resolve_media = |src: &str| -> Option<Vec<u8>> { all_media.get(src).cloned() };
+    let resolve_folder = |folder: &str| -> Option<Vec<(String, Vec<u8>)>> {
+        (folder == "web/demo").then(|| {
+            vec![
+                ("web/demo/index.html".into(), b"<h1>Demo</h1>".to_vec()),
+                ("web/demo/app.js".into(), b"console.log(1);".to_vec()),
+            ]
+        })
+    };
+
+    let input = PackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &resolve_media,
+    };
+    let files1 = build_package_standard_with_folders(
+        &input,
+        PackageStandard::Scorm(Standard::Scorm12),
+        &resolve_folder,
+    )
+    .expect("publish succeeds with all media present");
+    let files2 = build_package_standard_with_folders(
+        &input,
+        PackageStandard::Scorm(Standard::Scorm12),
+        &resolve_folder,
+    )
+    .expect("second publish succeeds");
+
+    let zip1 = zip_package(&files1).expect("zip1");
+    let zip2 = zip_package(&files2).expect("zip2");
+    assert_eq!(zip1, zip2, "published zip must be deterministic");
+
+    let media_paths: Vec<&str> = files1
+        .iter()
+        .map(|f| f.path.as_str())
+        .filter(|p| p.starts_with("media/"))
+        .collect();
+    assert_eq!(
+        media_paths,
+        vec![
+            "media/anim.json",
+            "media/bank-base.png",
+            "media/bank-layer.png",
+            "media/base-state.png",
+            "media/bgm.mp3",
+            "media/btn-fill.png",
+            "media/clip-poster.png",
+            "media/clip.mp4",
+            "media/clip.vtt",
+            "media/clip2.mp4",
+            "media/extra-img.png",
+            "media/extra-path-fill.png",
+            "media/extra-shape-fill.png",
+            "media/fonts/lato.ttf",
+            "media/handout.pdf",
+            "media/hero.png",
+            "media/layer-pic.png",
+            "media/logo.png",
+            "media/master-base.png",
+            "media/path-fill.png",
+            "media/shape-fill.png",
+            "media/state-fill.png",
+            "media/state-img.png",
+            "media/voice.mp3",
+            "media/voice.vtt",
+            "media/web/demo/app.js",
+            "media/web/demo/index.html",
+        ]
+    );
+
+    // Error-selection parity: empty primary src on every required slot triggers UnsafePath
+    // with the exact expected object id.
+    let run_expect_unsafe = |mutated: &Course, expected_object: &str| {
+        let json_str = mutated.to_json_compact().expect("json");
+        let inp = PackageInput {
+            course: mutated,
+            course_json: &json_str,
+            player_files: &player_files,
+            media: &|_| Some(vec![1]),
+        };
+        let err = build_package(&inp).expect_err("empty primary src must fail");
+        assert_eq!(
+            err,
+            PublishError::UnsafePath {
+                object: expected_object.to_string(),
+                src: String::new(),
+            },
+            "mismatch for {expected_object}"
+        );
+    };
+
+    let mut base_empty = minimal_course("Empty checks");
+    let make_obj = |id: &str, kind: ObjectKind| Object {
+        id: id.into(),
+        name: id.into(),
+        kind,
+        frame: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        },
+        timing: Timing::default(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        states: Vec::new(),
+        initial_state: "normal".into(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: None,
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+        locked: false,
+        editor_hidden: false,
+    };
+
+    {
+        let mut c = base_empty.clone();
+        c.scenes[0].slides[0].objects.push(make_obj(
+            "img-empty",
+            ObjectKind::Image {
+                src: String::new(),
+                alt: String::new(),
+                crop: None,
+                outline: None,
+                shape: None,
+            },
+        ));
+        run_expect_unsafe(&c, "img-empty");
+    }
+    {
+        let mut c = base_empty.clone();
+        c.scenes[0].slides[0].objects.push(make_obj(
+            "lot-empty",
+            ObjectKind::Lottie {
+                src: String::new(),
+                loop_playback: true,
+                autoplay: true,
+                speed: 1.0,
+            },
+        ));
+        run_expect_unsafe(&c, "lot-empty");
+    }
+    {
+        let mut c = base_empty.clone();
+        c.scenes[0].slides[0].objects.push(make_obj(
+            "aud-empty",
+            ObjectKind::Audio {
+                src: String::new(),
+                autoplay: false,
+                captions: None,
+                volume: 1.0,
+                trim: None,
+            },
+        ));
+        run_expect_unsafe(&c, "aud-empty");
+    }
+    {
+        let mut c = base_empty.clone();
+        c.scenes[0].slides[0].objects.push(make_obj(
+            "aud-cap-empty",
+            ObjectKind::Audio {
+                src: "ok.mp3".into(),
+                autoplay: false,
+                captions: Some(String::new()),
+                volume: 1.0,
+                trim: None,
+            },
+        ));
+        run_expect_unsafe(&c, "aud-cap-empty");
+    }
+    {
+        let mut c = base_empty.clone();
+        c.scenes[0].slides[0].objects.push(make_obj(
+            "vid-empty",
+            ObjectKind::Video {
+                src: String::new(),
+                autoplay: false,
+                captions: None,
+                volume: 1.0,
+                trim: None,
+                cues: Vec::new(),
+                poster: None,
+            },
+        ));
+        run_expect_unsafe(&c, "vid-empty");
+    }
+    {
+        let mut c = base_empty.clone();
+        c.scenes[0].slides[0].objects.push(make_obj(
+            "vid-cap-empty",
+            ObjectKind::Video {
+                src: "ok.mp4".into(),
+                autoplay: false,
+                captions: Some(String::new()),
+                volume: 1.0,
+                trim: None,
+                cues: Vec::new(),
+                poster: None,
+            },
+        ));
+        run_expect_unsafe(&c, "vid-cap-empty");
+    }
+    {
+        let mut c = base_empty.clone();
+        c.background_audio = Some(BackgroundAudio {
+            src: String::new(),
+            volume: 0.5,
+            looping: true,
+        });
+        run_expect_unsafe(&c, BACKGROUND_AUDIO_ID);
+    }
+    {
+        let mut c = base_empty.clone();
+        c.fonts.push(FontFace {
+            family: "Lato".into(),
+            style: FontStyle::Regular,
+            src: String::new(),
+        });
+        run_expect_unsafe(&c, "font");
+    }
+    {
+        let mut c = base_empty.clone();
+        c.player.logo = Some(String::new());
+        run_expect_unsafe(&c, "player-logo");
+    }
+    {
+        let mut c = base_empty.clone();
+        c.resources.push(coursecraft_course::Resource {
+            id: "res-empty".into(),
+            title: "Empty".into(),
+            target: coursecraft_course::ResourceTarget::File { src: String::new() },
+        });
+        run_expect_unsafe(&c, "res-empty");
+    }
+
+    // Missing-media error ordering: slide object reported before background_audio,
+    // and background_audio reported before font.
+    base_empty.background_audio = Some(BackgroundAudio {
+        src: "missing-bgm.mp3".into(),
+        volume: 0.5,
+        looping: true,
+    });
+    base_empty.fonts.push(FontFace {
+        family: "Lato".into(),
+        style: FontStyle::Regular,
+        src: "fonts/missing.ttf".into(),
+    });
+    {
+        let mut c = base_empty.clone();
+        c.scenes[0].slides[0].objects.push(make_obj(
+            "obj-missing",
+            ObjectKind::Image {
+                src: "missing-slide.png".into(),
+                alt: String::new(),
+                crop: None,
+                outline: None,
+                shape: None,
+            },
+        ));
+        let json_str = c.to_json_compact().expect("json");
+        let inp = PackageInput {
+            course: &c,
+            course_json: &json_str,
+            player_files: &player_files,
+            media: &|_| None,
+        };
+        assert_eq!(
+            build_package(&inp),
+            Err(PublishError::MissingMedia {
+                object: "obj-missing".into(),
+                src: "missing-slide.png".into(),
+            })
+        );
+    }
+    {
+        let json_str = base_empty.to_json_compact().expect("json");
+        let inp = PackageInput {
+            course: &base_empty,
+            course_json: &json_str,
+            player_files: &player_files,
+            media: &|_| None,
+        };
+        assert_eq!(
+            build_package(&inp),
+            Err(PublishError::MissingMedia {
+                object: BACKGROUND_AUDIO_ID.into(),
+                src: "missing-bgm.mp3".into(),
+            })
+        );
+    }
+}
