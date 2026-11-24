@@ -219,6 +219,10 @@ pub struct DockState {
     /// The bottom tab last brought forward, as `shown_inspector` for
     /// `ui.bottom_tab`.
     pub shown_bottom: BottomTab,
+    /// Keys, text and clipboard events typed in a panel's own OS window that no
+    /// widget there used: replayed into the main window's next frame so the
+    /// editor's shortcuts work from a detached panel too.
+    pub forwarded: Vec<egui::Event>,
 }
 
 impl Default for DockState {
@@ -229,6 +233,7 @@ impl Default for DockState {
             rects: Vec::new(),
             shown_inspector: InspectorTab::default(),
             shown_bottom: BottomTab::default(),
+            forwarded: Vec::new(),
         }
     }
 }
@@ -513,6 +518,7 @@ pub fn show(editor: &mut Editor, ui: &mut Ui) {
     );
     let Content { editor, rects } = content;
     editor.ui.dock.rects = rects;
+    editor.ui.dock.forwarded.extend(output.forwarded_events);
     follow_activated_inspector(editor, &output.actions);
     follow_activated_bottom_tab(editor, &output.actions);
     apply(editor, output.actions);
@@ -520,6 +526,16 @@ pub fn show(editor: &mut Editor, ui: &mut Ui) {
         log::debug!("dock gesture refused: {err:?}");
     }
     record_timeline(editor, ui);
+}
+
+/// Replay the keys a detached panel's OS window passed on (see
+/// [`DockState::forwarded`]) into this frame's input, before the shortcuts read it.
+pub fn replay_forwarded(editor: &mut Editor, ctx: &egui::Context) {
+    if editor.ui.dock.forwarded.is_empty() {
+        return;
+    }
+    let events = std::mem::take(&mut editor.ui.dock.forwarded);
+    ctx.input_mut(|i| i.events.extend(events));
 }
 
 /// Apply layout changes through the workspace, all or none.

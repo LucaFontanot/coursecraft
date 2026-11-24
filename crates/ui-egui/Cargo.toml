@@ -24,5 +24,9 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+# Floating dock panels open in their own OS windows on the desktop; the browser has none.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-ui = { workspace = true, features = ["serde", "native-windows"] }
+
 [lints]
 workspace = true

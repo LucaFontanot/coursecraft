@@ -28,7 +28,7 @@ Top to bottom:
 | Tooltips: name, shortcut, one sentence | yes | partial | 🟡 | every ribbon control, from the registry |
 | View tabs row with open slides | yes | `doc_tabs.rs`: Course Map tab, then each opened slide (× closes; closing the shown one shows its neighbour, the last one the map) | ✅ | breadcrumb tabs for sub-editors |
 | Device toggles in view row | yes | — | ⛔ | they set the preview device |
-| Panels undock / float / dock back | yes | docked by default (`dock.rs`); View › Panels closes and reopens; saved in prefs; Timeline, States, Triggers, Variables, Question are dock panels of their own | ✅ | Slide Layers, Notes as dock panels of their own (step 6) |
+| Panels undock / float / dock back | yes | docked by default (`dock.rs`); View › Panels closes and reopens; saved in prefs; Timeline, States, Triggers, Variables, Question are dock panels of their own; a floating panel can be dragged out of the app window into its own OS window (desktop; off on Wayland, which reports no window positions), and keys typed there reach the editor's shortcuts | ✅ | Slide Layers, Notes as dock panels of their own (step 6) |
 | Status bar: Slide n of m, size, theme | yes | `status.rs` | 🟡 | add size and theme name |
 | Status bar: view buttons, zoom %, slider, fit | yes | zoom in View | 🟡 | |
 

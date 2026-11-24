@@ -4370,6 +4370,7 @@ impl Editor {
             &MemoryMediaSource { media: &self.media },
         );
         self.update_timeline_playback(ui);
+        dock::replay_forwarded(self, ui.ctx());
 
         // Editor shortcuts must not act on the editor's selection while the user is
         // interacting with the preview window. Crop mode owns the keyboard: only
