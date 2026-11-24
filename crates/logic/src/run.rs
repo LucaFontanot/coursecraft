@@ -48,10 +48,37 @@ enum ClickCheck<'a> {
         obj: &'a coursecraft_course::Object,
         layer: Option<&'a str>,
     },
+    ReachesGroup {
+        group: &'a coursecraft_course::Group,
+    },
     Missing,
     NotLive,
     Disabled,
     Prevented,
+}
+
+fn seed_slide_states(slide: &Slide, states: &mut BTreeMap<String, String>) {
+    for obj in slide
+        .objects
+        .iter()
+        .chain(slide.layers.iter().flat_map(|l| l.objects.iter()))
+    {
+        states.insert(obj.id.clone(), obj.initial_state.clone());
+    }
+    for group in slide
+        .groups
+        .iter()
+        .chain(slide.layers.iter().flat_map(|l| l.groups.iter()))
+        .filter(|g| g.interactive)
+    {
+        states.insert(group.id.clone(), group.initial_state.clone());
+    }
+}
+
+fn object_in_timing_window(obj: &coursecraft_course::Object, t: u32, duration_ms: u32) -> bool {
+    let end_ms = obj.timing.end_ms.unwrap_or(duration_ms);
+    let exited = obj.exit.is_some() && t >= end_ms;
+    obj.timing.start_ms <= t && obj.timing.end_ms.is_none_or(|end| t < end) && !exited
 }
 
 /// Links carried by an object's text, in run order. Adjacent runs with the same
@@ -231,7 +258,7 @@ impl<'c> Player<'c> {
             }
             Input::LinkClicked { object, link } => {
                 match self.click_check(object) {
-                    ClickCheck::Reaches { .. } => {}
+                    ClickCheck::Reaches { .. } | ClickCheck::ReachesGroup { .. } => {}
                     ClickCheck::Missing => {
                         warn(out, format!("object {object:?} is not on this slide"));
                         return;
@@ -261,19 +288,64 @@ impl<'c> Player<'c> {
                 }
             }
             Input::HoverStart { object } | Input::HoverEnd { object } => {
-                if !self.object_is_live(object) {
-                    warn(out, format!("object {object:?} is not on screen"));
-                    return;
+                let is_start = matches!(input, Input::HoverStart { .. });
+                if let Some(slide) = self.slide()
+                    && let Some((group, _)) = slide
+                        .interactive_group(object)
+                        .or_else(|| slide.interactive_group_of_object(object))
+                {
+                    let group_id = group.id.clone();
+                    if !self.object_is_live(&group_id) {
+                        warn(out, format!("object {object:?} is not on screen"));
+                        return;
+                    }
+                    let make_event = |target: String| {
+                        if is_start {
+                            Event::HoverStart { object: target }
+                        } else {
+                            Event::HoverEnd { object: target }
+                        }
+                    };
+                    let has_hover_trigger = |target_id: &str| {
+                        slide
+                            .triggers
+                            .iter()
+                            .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+                            .any(|t| {
+                                !t.disabled
+                                    && if is_start {
+                                        matches!(&t.when, Event::HoverStart { object } if object == target_id)
+                                    } else {
+                                        matches!(&t.when, Event::HoverEnd { object } if object == target_id)
+                                    }
+                            })
+                    };
+                    self.push(&mut q, make_event(group_id.clone()));
+                    if object == &group_id {
+                        for member in slide.group_members(&group_id) {
+                            if has_hover_trigger(&member.id) {
+                                self.push(&mut q, make_event(member.id.clone()));
+                            }
+                        }
+                    } else if has_hover_trigger(object) {
+                        self.push(&mut q, make_event(object.clone()));
+                    }
+                } else {
+                    if !self.object_is_live(object) {
+                        warn(out, format!("object {object:?} is not on screen"));
+                        return;
+                    }
+                    let event = if is_start {
+                        Event::HoverStart {
+                            object: object.clone(),
+                        }
+                    } else {
+                        Event::HoverEnd {
+                            object: object.clone(),
+                        }
+                    };
+                    self.push(&mut q, event);
                 }
-                let event = match input {
-                    Input::HoverStart { .. } => Event::HoverStart {
-                        object: object.clone(),
-                    },
-                    _ => Event::HoverEnd {
-                        object: object.clone(),
-                    },
-                };
-                self.push(&mut q, event);
             }
             Input::MediaEnded { object } if object == BACKGROUND_AUDIO_ID => {
                 self.background_media_ended(&mut q, out);
@@ -314,8 +386,9 @@ impl<'c> Player<'c> {
             }
             Input::FocusChanged { object } => {
                 self.st.focused_object = object.clone().filter(|id| {
-                    self.current_slide()
-                        .is_some_and(|slide| slide.object(id).is_some())
+                    self.current_slide().is_some_and(|slide| {
+                        slide.object(id).is_some() || slide.interactive_group(id).is_some()
+                    })
                 });
                 return;
             }
@@ -482,7 +555,7 @@ impl<'c> Player<'c> {
     fn push_key(&self, q: &mut Queue, key: &str) {
         let object = self.st.focused_object.as_ref().and_then(|id| {
             self.current_slide()
-                .and_then(|slide| slide.object(id))
+                .filter(|slide| slide.object(id).is_some() || slide.interactive_group(id).is_some())
                 .map(|_| id.clone())
         });
         self.push(
@@ -500,7 +573,7 @@ impl<'c> Player<'c> {
         let Some(id) = self.st.focused_object.as_deref() else {
             return false;
         };
-        let Some((object, _)) = self.current_slide().and_then(|slide| slide.object(id)) else {
+        let Some(slide) = self.current_slide() else {
             return false;
         };
         let lower = key.to_ascii_lowercase();
@@ -509,6 +582,12 @@ impl<'c> Player<'c> {
             "arrow_up" | "arrow_down" | "arrow_left" | "arrow_right"
         );
         let activate = matches!(lower.as_str(), "enter" | "space");
+        if slide.interactive_group(id).is_some() {
+            return activate;
+        }
+        let Some((object, _)) = slide.object(id) else {
+            return false;
+        };
         match &object.kind {
             ObjectKind::TextEntry { .. } => true,
             ObjectKind::Slider { .. } | ObjectKind::Dial { .. } => arrow,
@@ -1515,21 +1594,12 @@ impl<'c> Player<'c> {
             .object_states
             .entry(slide.id.clone())
             .or_insert_with(|| {
-                slide
-                    .objects
-                    .iter()
-                    .chain(slide.layers.iter().flat_map(|l| l.objects.iter()))
-                    .map(|o| (o.id.clone(), o.initial_state.clone()))
-                    .collect()
+                let mut map = BTreeMap::new();
+                seed_slide_states(slide, &mut map);
+                map
             });
         if slide.revisit == RevisitMode::Reset {
-            for object in slide
-                .objects
-                .iter()
-                .chain(slide.layers.iter().flat_map(|l| l.objects.iter()))
-            {
-                states.insert(object.id.clone(), object.initial_state.clone());
-            }
+            seed_slide_states(slide, states);
         }
 
         // `resume` restores the base clock, visible layers and layer clocks
@@ -1791,6 +1861,13 @@ impl<'c> Player<'c> {
             .objects
             .iter()
             .map(|obj| (obj.id.clone(), obj.initial_state.clone()))
+            .chain(
+                layer
+                    .groups
+                    .iter()
+                    .filter(|g| g.interactive)
+                    .map(|g| (g.id.clone(), g.initial_state.clone())),
+            )
             .collect();
         let states = self.st.object_states.entry(slide.id.clone()).or_default();
         for (id, state) in initial {
@@ -1910,6 +1987,33 @@ impl<'c> Player<'c> {
 
     fn set_state(&mut self, object: &str, state: &str, q: &mut Queue, out: &mut Vec<Effect>) {
         let Some(slide) = self.slide() else { return };
+        if let Some((group, _)) = slide
+            .interactive_group(object)
+            .or_else(|| slide.interactive_group_of_object(object))
+        {
+            if !slide.group_has_state(&group.id, state) {
+                warn(out, format!("group {:?} has no state {state:?}", group.id));
+                return;
+            }
+            let group_id = group.id.clone();
+            let states = self.st.object_states.entry(slide.id.clone()).or_default();
+            if states.get(&group_id).map(String::as_str) == Some(state) {
+                return;
+            }
+            states.insert(group_id.clone(), state.to_owned());
+            out.push(Effect::StateChanged {
+                object: group_id.clone(),
+                state: state.to_owned(),
+            });
+            self.push(
+                q,
+                Event::StateChanges {
+                    object: group_id,
+                    to: Some(state.to_owned()),
+                },
+            );
+            return;
+        }
         let Some((obj, _)) = slide.object(object) else {
             warn(out, format!("object {object:?} is not on this slide"));
             return;
@@ -2349,21 +2453,12 @@ impl<'c> Player<'c> {
             .object_states
             .entry(slide.id.clone())
             .or_insert_with(|| {
-                slide
-                    .objects
-                    .iter()
-                    .chain(slide.layers.iter().flat_map(|l| l.objects.iter()))
-                    .map(|o| (o.id.clone(), o.initial_state.clone()))
-                    .collect()
+                let mut map = BTreeMap::new();
+                seed_slide_states(slide, &mut map);
+                map
             });
         if slide.revisit == RevisitMode::Reset {
-            for object in slide
-                .objects
-                .iter()
-                .chain(slide.layers.iter().flat_map(|l| l.objects.iter()))
-            {
-                states.insert(object.id.clone(), object.initial_state.clone());
-            }
+            seed_slide_states(slide, states);
         }
         out.push(Effect::LightboxOpened {
             slide: slide.id.clone(),
@@ -2434,12 +2529,34 @@ impl<'c> Player<'c> {
 
     // ------------------------------------------------------------ input helpers
 
-    /// Is the object on a visible layer, inside its timing window, not hidden,
-    /// and has not completed an exit animation?
+    /// Is the object (or interactive group) on a visible layer, inside its
+    /// timing window, not hidden, and has not completed an exit animation?
     fn object_is_live(&self, id: &str) -> bool {
         let Some(slide) = self.slide() else {
             return false;
         };
+        if let Some((group, layer)) = slide
+            .interactive_group(id)
+            .or_else(|| slide.interactive_group_of_object(id))
+        {
+            if layer.is_none() && self.base_objects_hidden() {
+                return false;
+            }
+            let (t, duration_ms) = match layer {
+                None => (self.st.base.ms, slide.duration_ms),
+                Some(l) => match self.st.layer_clocks.get(l) {
+                    Some(c) => (c.ms, slide.layer(l).map_or(5000, |l| l.duration_ms)),
+                    None => return false, // layer not visible
+                },
+            };
+            if self.object_state(&group.id) == Some("hidden") {
+                return false;
+            }
+            return slide
+                .group_members(&group.id)
+                .into_iter()
+                .any(|m| object_in_timing_window(m, t, duration_ms));
+        }
         let Some((obj, layer)) = slide.object(id) else {
             return false;
         };
@@ -2453,11 +2570,7 @@ impl<'c> Player<'c> {
                 None => return false, // layer not visible
             },
         };
-        let end_ms = obj.timing.end_ms.unwrap_or(duration_ms);
-        let exited = obj.exit.is_some() && t >= end_ms;
-        let in_window =
-            obj.timing.start_ms <= t && obj.timing.end_ms.is_none_or(|end| t < end) && !exited;
-        in_window && self.object_state(id) != Some("hidden")
+        object_in_timing_window(obj, t, duration_ms) && self.object_state(id) != Some("hidden")
     }
 
     /// Whether any trigger on the current slide listens for `key` (globally or
@@ -2485,11 +2598,32 @@ impl<'c> Player<'c> {
             })
     }
 
-    /// Why a click on `id` would or would not reach the object.
+    /// Why a click on `id` would or would not reach the object or interactive group.
     fn click_check(&self, id: &str) -> ClickCheck<'c> {
         let Some(slide) = self.slide() else {
             return ClickCheck::Missing;
         };
+        if let Some((group, layer)) = slide
+            .interactive_group(id)
+            .or_else(|| slide.interactive_group_of_object(id))
+        {
+            if !self.object_is_live(&group.id) {
+                return ClickCheck::NotLive;
+            }
+            if self.object_state(&group.id) == Some("disabled") {
+                return ClickCheck::Disabled;
+            }
+            if layer.is_none()
+                && self
+                    .st
+                    .visible_layers
+                    .iter()
+                    .any(|l| slide.layer(l).is_some_and(|l| l.prevent_base_clicks))
+            {
+                return ClickCheck::Prevented;
+            }
+            return ClickCheck::ReachesGroup { group };
+        }
         let Some((obj, layer)) = slide.object(id) else {
             return ClickCheck::Missing;
         };
@@ -2521,7 +2655,10 @@ impl<'c> Player<'c> {
         };
         let mut out = Vec::new();
         let mut collect = |obj: &coursecraft_course::Object| {
-            if !matches!(self.click_check(&obj.id), ClickCheck::Reaches { .. }) {
+            if !matches!(
+                self.click_check(&obj.id),
+                ClickCheck::Reaches { .. } | ClickCheck::ReachesGroup { .. }
+            ) {
                 return;
             }
             let links = object_links(obj);
@@ -2557,10 +2694,11 @@ impl<'c> Player<'c> {
     /// Objects on the current slide that a click reaches right now and that
     /// should appear in the keyboard focus order.
     ///
-    /// Buttons, inputs, markers, scroll panels and draggable objects are always
-    /// candidates; other objects only when a trigger on the slide listens for
-    /// their click or hover. The shared [`Player::click_check`] keeps this list
-    /// in step with [`Player::click`].
+    /// Buttons, interactive groups, inputs, markers, scroll panels and draggable
+    /// objects are always candidates; other objects only when a trigger on the
+    /// slide listens for their click or hover. Interactive groups appear once at
+    /// their first member's position and their individual members are omitted.
+    /// The shared [`Player::click_check`] keeps this list in step with [`Player::click`].
     #[must_use]
     pub fn keyboard_objects(&self) -> Vec<String> {
         let Some(slide) = self.slide() else {
@@ -2582,25 +2720,36 @@ impl<'c> Player<'c> {
                     .contains(obj.id.as_str())
         };
         let mut out = Vec::new();
-        for obj in &slide.objects {
+        let mut seen_groups: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut consider = |obj: &coursecraft_course::Object| {
+            if let Some((group, _)) = slide.interactive_group_of_object(&obj.id) {
+                if seen_groups.insert(group.id.as_str())
+                    && matches!(self.click_check(&group.id), ClickCheck::ReachesGroup { .. })
+                    && slide
+                        .group_members(&group.id)
+                        .into_iter()
+                        .any(|m| self.object_in_panel_viewport(&m.id))
+                {
+                    out.push(group.id.clone());
+                }
+                return;
+            }
             if is_candidate(obj)
                 && matches!(self.click_check(&obj.id), ClickCheck::Reaches { .. })
                 && self.object_in_panel_viewport(&obj.id)
             {
                 out.push(obj.id.clone());
             }
+        };
+        for obj in &slide.objects {
+            consider(obj);
         }
         for layer_id in &self.st.visible_layers {
             let Some(layer) = slide.layer(layer_id) else {
                 continue;
             };
             for obj in &layer.objects {
-                if is_candidate(obj)
-                    && matches!(self.click_check(&obj.id), ClickCheck::Reaches { .. })
-                    && self.object_in_panel_viewport(&obj.id)
-                {
-                    out.push(obj.id.clone());
-                }
+                consider(obj);
             }
         }
         out
@@ -2614,6 +2763,77 @@ impl<'c> Player<'c> {
         }
         let (obj, _layer) = match self.click_check(id) {
             ClickCheck::Reaches { obj, layer } => (obj, layer),
+            ClickCheck::ReachesGroup { group } => {
+                let group_id = group.id.clone();
+                let before = self.object_state(&group_id).map(str::to_owned);
+                let epoch = self.st.epoch;
+                let mut q = Queue::new();
+                self.push(
+                    &mut q,
+                    Event::Click {
+                        object: group_id.clone(),
+                    },
+                );
+                if let Some(slide) = self.slide() {
+                    let has_click_trigger = |target_id: &str| {
+                        slide
+                            .triggers
+                            .iter()
+                            .chain(slide.layers.iter().flat_map(|l| l.triggers.iter()))
+                            .any(|t| {
+                                !t.disabled
+                                    && matches!(&t.when, Event::Click { object } if object == target_id)
+                            })
+                    };
+                    if id == group_id {
+                        for member in slide.group_members(&group_id) {
+                            if has_click_trigger(&member.id) {
+                                self.push(
+                                    &mut q,
+                                    Event::Click {
+                                        object: member.id.clone(),
+                                    },
+                                );
+                            }
+                        }
+                    } else if has_click_trigger(id) {
+                        self.push(
+                            &mut q,
+                            Event::Click {
+                                object: id.to_owned(),
+                            },
+                        );
+                    }
+                }
+                self.process(&mut q, out);
+
+                if self.st.epoch != epoch
+                    || self.st.exited
+                    || self.object_state(&group_id).map(str::to_owned) != before
+                {
+                    return;
+                }
+                let members = self.group_members(&group_id);
+                let has = |n: &str| members.iter().any(|m| m.states.iter().any(|s| s.name == n));
+                let next = if has("selected") {
+                    Some(if before.as_deref() == Some("selected") {
+                        "normal"
+                    } else {
+                        "selected"
+                    })
+                } else if has("visited") && before.as_deref() != Some("visited") {
+                    Some("visited")
+                } else {
+                    None
+                };
+                if let Some(state) = next {
+                    self.set_state(&group_id, state, &mut q, out);
+                    self.process(&mut q, out);
+                }
+                self.check_intersections(&mut q);
+                self.process(&mut q, out);
+                return;
+            }
             ClickCheck::Missing => {
                 warn(out, format!("object {id:?} is not on this slide"));
                 return;
