@@ -1537,6 +1537,12 @@ impl EditorApp {
             EditorRequest::AddSystemFont { family, apply } => {
                 self.add_system_font(&family, apply);
             }
+            EditorRequest::CheckForUpdates
+            | EditorRequest::DownloadUpdate
+            | EditorRequest::CancelUpdateDownload
+            | EditorRequest::SkipUpdateVersion(_)
+            | EditorRequest::RevealDownloadedUpdate
+            | EditorRequest::SetAutoCheckUpdates(_) => {}
         }
     }
 

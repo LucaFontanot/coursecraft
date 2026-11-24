@@ -80,6 +80,7 @@ pub mod toolbar;
 pub mod translate_ai;
 pub mod translation;
 pub mod triggers;
+pub mod update_dialog;
 pub mod variables;
 pub mod version_history;
 pub mod web_insert;
@@ -645,6 +646,18 @@ pub enum EditorRequest {
         /// Command id and parameters to run after the font is added.
         apply: Option<(String, serde_json::Value)>,
     },
+    /// Ask the desktop host shell to check GitHub Releases for a newer version.
+    CheckForUpdates,
+    /// Ask the desktop host shell to download the matched installer for the available update.
+    DownloadUpdate,
+    /// Ask the desktop host shell to cancel an in-progress update download.
+    CancelUpdateDownload,
+    /// Persist that the user chose to skip automatic notifications for this version.
+    SkipUpdateVersion(String),
+    /// Reveal the verified downloaded installer in the OS file manager.
+    RevealDownloadedUpdate,
+    /// Persist whether CourseCraft checks for updates automatically on desktop startup.
+    SetAutoCheckUpdates(bool),
 }
 
 /// An installed font family offered by the picker. No file paths cross into
@@ -983,6 +996,8 @@ pub struct UiState {
     pub versions: version_history::VersionHistoryState,
     /// Report a Problem window, crash prompt and recent status messages.
     pub report: report::ReportState,
+    /// Software update dialog and status-bar/menu hint state.
+    pub update: update_dialog::UpdateState,
     pub slide_size_dialog: slide_size_dialog::SlideSizeState,
     /// Rulers, grid and user guides (editor only).
     pub rulers: rulers::RulerState,
@@ -1303,6 +1318,8 @@ pub struct Editor {
     pub pending_image_pick: Option<PendingImagePick>,
     pub pending_requests: Vec<EditorRequest>,
     pub automation_available: bool,
+    /// Whether desktop in-app update checks are supported on this host.
+    pub updates_available: bool,
     /// This app's own binary, for the Connect an AI agent dialog.
     pub agent_exe_path: Option<String>,
     pub automation_enabled: bool,
@@ -1608,6 +1625,7 @@ impl Editor {
                 prefs: preferences::PrefsState::default(),
                 versions: version_history::VersionHistoryState::default(),
                 report: report::ReportState::default(),
+                update: update_dialog::UpdateState::default(),
                 slide_size_dialog: slide_size_dialog::SlideSizeState::default(),
                 rulers: rulers::RulerState::default(),
                 snap_guides: Vec::new(),
@@ -1660,6 +1678,7 @@ impl Editor {
             pending_image_pick: None,
             pending_requests: Vec::new(),
             automation_available: false,
+            updates_available: false,
             agent_exe_path: None,
             automation_enabled: true,
             automation_port: None,
@@ -1785,6 +1804,11 @@ impl Editor {
     /// Configure whether local control channel automation is supported on this platform.
     pub fn set_automation_available(&mut self, available: bool) {
         self.automation_available = available;
+    }
+
+    /// Configure whether desktop in-app update checks are supported on this host.
+    pub fn set_updates_available(&mut self, available: bool) {
+        self.updates_available = available;
     }
 
     /// Configure whether local control channel automation is enabled.
@@ -4974,6 +4998,7 @@ impl Editor {
 
             shortcuts::show_shortcuts_dialog(self, ui.ctx());
             report::show_report_windows(self, ui.ctx(), &mut requests);
+            update_dialog::show_update_dialog(self, ui.ctx(), &mut requests);
             translation::show_translation_windows(self, ui.ctx(), &mut requests);
             outline::show_outline_dialog(self, ui.ctx());
             document::show_document_dialog(self, ui.ctx(), &mut requests);
@@ -5161,6 +5186,7 @@ impl Editor {
         preferences::show_preferences_window(self, ui.ctx(), &mut requests);
         version_history::show_version_history_window(self, ui.ctx(), &mut requests);
         report::show_report_windows(self, ui.ctx(), &mut requests);
+        update_dialog::show_update_dialog(self, ui.ctx(), &mut requests);
 
         // XLIFF export language dialog and import report
         translation::show_translation_windows(self, ui.ctx(), &mut requests);
