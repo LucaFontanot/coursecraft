@@ -30,19 +30,19 @@ The sample course "Healthy Habits at Work" was built entirely with `coursecraft-
 
 ## Get CourseCraft
 
-Download the latest version from the **Releases** page of this repository: a `.dmg` for macOS on Apple Silicon, a Windows installer (`-setup.exe`) or portable `.exe` (`-portable.exe`), or a `.tar.gz` for Linux (x86-64; built automatically but less tested, so reports are welcome). It's free, with no account and no subscription.
+Download the latest version from the **Releases** page of this repository: a `.dmg` for macOS on Apple Silicon, a Windows installer (`-setup.exe`) or portable `.zip` (`-portable.zip`), or a `.tar.gz` for Linux (x86-64; built automatically but less tested, so reports are welcome). It's free, with no account and no subscription.
 
 The first time you open it:
 - **macOS** says it can't check the app, because it isn't signed with a paid Apple developer account. Right-click the app and choose Open, or go to System Settings → Privacy & Security → Open Anyway.
 - **Windows** SmartScreen may warn about an unknown publisher. Choose More info → Run anyway.
-- **Linux:** unpack the archive and run `./coursecraft`. It needs GTK 3, which most desktops already have.
+- **Linux:** unpack the archive and run `bin/coursecraft` in its folder. It needs GTK 3, which most desktops already have.
 
-There is no automatic update. Help → Check for Updates opens the Releases page. What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+CourseCraft checks for a newer version when it starts (turn that off in Preferences), and Help → Check for Updates checks on demand. Where your copy can update itself (the Windows portable folder, the Linux folder, the macOS app) it offers Update and Restart; otherwise it opens the Releases page. What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
 
 ### Install on Windows
 
-- **Installer (`CourseCraft-<version>-setup.exe`):** Recommended for most users. Installs per user into `%LOCALAPPDATA%\Programs\CourseCraft` without administrator rights, adds a Start menu shortcut (and an optional desktop shortcut), and registers an uninstaller in Windows **Settings → Apps**.
-- **Portable (`CourseCraft-<version>-portable.exe`):** A standalone single executable that runs directly from wherever you save it (for example, a folder or USB drive) with no installation step.
+- **Installer (`coursecraft-<version>-windows-x64-setup.exe`):** Recommended for most users. Installs per user into `%LOCALAPPDATA%\Programs\CourseCraft` without administrator rights, adds a Start menu shortcut (and an optional desktop shortcut), and registers an uninstaller in Windows **Settings → Apps**.
+- **Portable (`coursecraft-<version>-windows-x64-portable.zip`):** A folder with `coursecraft.exe` that runs directly from wherever you unpack it (for example, a folder or USB drive) with no installation step. Keep `portable.txt` beside the program: it marks the copy as portable, so it updates itself in place.
 - **Settings and logs:** Preferences, saved project version history, and crash notes (`last-crash.txt`) are stored in `%APPDATA%\CourseCraft`.
 
 Built to the conventions of the [ArtCraft](https://github.com/storytold) Crafting Apps: native egui/wgpu, the same code on the web via WebAssembly, every action a command, and no crashes.

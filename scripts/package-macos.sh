@@ -1,5 +1,7 @@
 #!/bin/sh
-# Wraps the desktop binary in CourseCraft.app and a .dmg.
+# Wraps the desktop binary in CourseCraft.app and a .dmg named
+# coursecraft-<version>-macos-<arch>.dmg (the Craft suite's convention, which the
+# in-app update check reads), <arch> being the machine's: arm64 or x86_64.
 # usage: package-macos.sh <version> <binary> <output folder>
 set -eu
 version=$1
@@ -34,4 +36,5 @@ PLIST
 # An ad-hoc signature: not a verified developer, but Apple Silicon won't run a bundle without one.
 codesign --force --deep --sign - "$app"
 ln -s /Applications "$work/Applications"
-hdiutil create -quiet -volname CourseCraft -srcfolder "$work" -ov -format UDZO "$out/CourseCraft-$version-macos.dmg"
+arch=$(uname -m)
+hdiutil create -quiet -volname CourseCraft -srcfolder "$work" -ov -format UDZO "$out/coursecraft-$version-macos-$arch.dmg"

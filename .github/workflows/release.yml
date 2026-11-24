@@ -5,6 +5,11 @@ name: Release
 # on a branch to test the builds: that keeps the files as run artifacts and
 # makes no release. The release description is the version's section of
 # CHANGELOG.md (scripts/release-notes.sh), so write that section before tagging.
+#
+# File names follow the Craft suite's convention, which the in-app update check
+# (craft-update) reads: coursecraft-<version>-<os>-<arch>.<ext>, the version
+# without the tag's "v". The Linux archive holds one folder with bin/coursecraft,
+# and the portable zip one folder with coursecraft.exe beside portable.txt.
 on:
   push:
     tags: ["v*"]
@@ -46,8 +51,13 @@ jobs:
         if: matrix.name == 'windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/coursecraft.exe "dist/CourseCraft-$($env:GITHUB_REF_NAME)-portable.exe"
+          $ver = $env:GITHUB_REF_NAME.TrimStart('v')
+          $name = "coursecraft-$ver-windows-x64-portable"
+          New-Item -ItemType Directory -Force dist, "stage/$name" | Out-Null
+          Copy-Item target/release/coursecraft.exe "stage/$name/coursecraft.exe"
+          New-Item -ItemType File -Force "stage/$name/portable.txt" | Out-Null
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, ATTRIBUTION.md "stage/$name/"
+          Compress-Archive -Path "stage/$name" -DestinationPath "dist/$name.zip"
       - name: Build Windows installer
         if: matrix.name == 'windows'
         shell: pwsh
@@ -71,13 +81,18 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe not found after installation" }
           $tag = $env:GITHUB_REF_NAME
           $ver = $tag.TrimStart('v')
-          & $iscc "/DAppVersion=$ver" "/DOutputName=CourseCraft-$tag-setup" "/DOutputDir=$PWD\dist" "/DRepoRoot=$PWD" "packaging/windows/coursecraft.iss"
+          & $iscc "/DAppVersion=$ver" "/DOutputName=coursecraft-$ver-windows-x64-setup" "/DOutputDir=$PWD\dist" "/DRepoRoot=$PWD" "packaging/windows/coursecraft.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
       - name: Package for Linux
         if: matrix.name == 'linux'
         run: |
-          mkdir -p dist
-          tar -czf "dist/CourseCraft-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" -C target/release coursecraft -C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE ATTRIBUTION.md -C "$GITHUB_WORKSPACE/apps/coursecraft/icons" coursecraft-1024.png
+          name="coursecraft-${GITHUB_REF_NAME#v}-linux-x86_64"
+          root="stage/$name"
+          mkdir -p dist "$root/bin" "$root/share/doc/coursecraft" "$root/share/icons/hicolor/1024x1024/apps"
+          cp target/release/coursecraft "$root/bin/coursecraft"
+          cp LICENSE-MIT LICENSE-APACHE ATTRIBUTION.md "$root/share/doc/coursecraft/"
+          cp apps/coursecraft/icons/coursecraft-1024.png "$root/share/icons/hicolor/1024x1024/apps/coursecraft.png"
+          tar -czf "dist/$name.tar.gz" -C stage "$name"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
@@ -98,7 +113,7 @@ jobs:
           merge-multiple: true
       - name: Generate SHA-256 checksums
         working-directory: dist
-        run: sha256sum CourseCraft-* > SHA256SUMS.txt
+        run: sha256sum coursecraft-* > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v3
         with:
           draft: true

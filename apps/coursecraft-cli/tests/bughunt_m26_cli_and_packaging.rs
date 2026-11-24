@@ -181,7 +181,7 @@ fn a8_3_release_yml_and_iss_defines_parity() {
             "iss missing #ifndef {key}"
         );
     }
-    assert!(yml.contains("-portable.exe"));
+    assert!(yml.contains("-windows-x64-portable"));
     assert!(yml.contains("-setup"));
 }
 
@@ -299,7 +299,7 @@ fn cc_3_published_web_zip_preserves_course_and_media() {
 fn a8_5_docs_explain_windows_installer_vs_portable() {
     let root = repo_root();
     let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
-    assert!(readme.contains("-setup.exe") && readme.contains("-portable.exe"));
+    assert!(readme.contains("-setup.exe") && readme.contains("-portable.zip"));
     let pkg_readme =
         std::fs::read_to_string(root.join("packaging/windows/README.md")).expect("pkg README");
     assert!(pkg_readme.contains("Inno Setup") && pkg_readme.contains("release.yml"));

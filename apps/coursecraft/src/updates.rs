@@ -14,6 +14,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const UPDATE_APP: craft_update::App = craft_update::App {
     icon_png: Some(include_bytes!("../icons/window-256.png")),
     accent: Some([0x0B, 0x7F, 0x72]),
+    // The macOS bundle's identifier (scripts/package-macos.sh), kept for existing installs.
+    bundle_id_override: Some("org.coursecraft.CourseCraft"),
     ..craft_update::App::new(
         "coursecraft",
         "CourseCraft",
@@ -155,6 +157,54 @@ mod tests {
             UPDATE_APP.releases_url(),
             "https://github.com/ad1-kamath/coursecraft/releases"
         );
+    }
+
+    /// The file names release.yml and package-macos.sh make are the ones craft-update picks.
+    #[test]
+    fn the_release_file_names_are_the_ones_the_update_picks() {
+        use craft_update::{Arch, Os, PackageKind, Platform, pick_asset};
+        let names = [
+            "coursecraft-0.5.0-macos-arm64.dmg",
+            "coursecraft-0.5.0-windows-x64-portable.zip",
+            "coursecraft-0.5.0-windows-x64-setup.exe",
+            "coursecraft-0.5.0-linux-x86_64.tar.gz",
+            "SHA256SUMS.txt",
+        ];
+        let release = craft_update::Release {
+            tag: "v0.5.0".into(),
+            assets: names
+                .iter()
+                .map(|n| craft_update::Asset {
+                    name: (*n).into(),
+                    size: 1,
+                    url: String::new(),
+                    sha256: None,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let stems: Vec<&str> = UPDATE_APP.stems().collect();
+        for (os, arch, kind, expected) in [
+            (Os::MacOs, Arch::Arm64, PackageKind::Dmg, names[0]),
+            (Os::Windows, Arch::X64, PackageKind::PortableZip, names[1]),
+            (Os::Linux, Arch::X64, PackageKind::TarGz, names[3]),
+        ] {
+            let picked = pick_asset(&release, &stems, Platform { os, arch }, &[kind]);
+            assert_eq!(picked.map(|(a, _)| a.name.as_str()), Some(expected));
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let yml = std::fs::read_to_string(root.join(".github/workflows/release.yml")).unwrap();
+        for part in [
+            "coursecraft-$ver-windows-x64-portable",
+            "coursecraft-$ver-windows-x64-setup",
+            "coursecraft-${GITHUB_REF_NAME#v}-linux-x86_64",
+            "$root/bin/coursecraft",
+            "portable.txt",
+        ] {
+            assert!(yml.contains(part), "release.yml lacks {part}");
+        }
+        let mac = std::fs::read_to_string(root.join("scripts/package-macos.sh")).unwrap();
+        assert!(mac.contains("coursecraft-$version-macos-$arch.dmg"));
     }
 
     #[test]
