@@ -1502,7 +1502,10 @@ const VIEW: &[Group] = &[
     Group {
         id: "view.show",
         label: "Show",
-        launcher: None,
+        launcher: Some(Ui(UiAction::PanelAt(
+            crate::dock::Panel::GridGuides,
+            Some(crate::panels::Section::Grid),
+        ))),
         items: &[
             item(
                 "view.rulers",

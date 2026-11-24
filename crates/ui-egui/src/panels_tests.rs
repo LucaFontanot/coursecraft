@@ -439,3 +439,42 @@ fn a_layout_saved_before_layers_and_notes_gains_them() {
     assert!(loaded.layout.contains(&Panel::Notes), "Notes added");
     assert!(loaded.layout.contains(&Panel::Layers), "Layers added");
 }
+
+#[test]
+fn view_show_launcher_opens_grid_and_guides_and_its_settings_undo() {
+    let mut h = harness(true);
+    let launcher = crate::ribbon::spec::tab("view")
+        .and_then(|t| t.groups.iter().find(|g| g.id == "view.show"))
+        .and_then(|g| g.launcher);
+    assert_eq!(
+        launcher,
+        Some(crate::ribbon::spec::Action::Ui(
+            crate::ribbon::spec::UiAction::PanelAt(Panel::GridGuides, Some(panels::Section::Grid))
+        ))
+    );
+    panels::open_at(
+        &mut h.editor,
+        Panel::GridGuides,
+        Some(panels::Section::Grid),
+    );
+    frames(&mut h, 3);
+    assert!(dock::is_open(&h.editor, Panel::GridGuides));
+    assert_eq!(panels::family(Panel::GridGuides), Family::Settings);
+    let rect = h.editor.ui.dock.rect(Panel::GridGuides).expect("drawn");
+    let show = h.find_text_in("Show grid", rect).expect("Show grid");
+    h.click_at(show);
+    frames(&mut h, 1);
+    assert!(h.editor.session.course.editor.show_grid);
+    let add = h
+        .find_text_in("Add vertical guide", rect)
+        .expect("Add vertical guide");
+    h.click_at(add);
+    frames(&mut h, 2);
+    assert_eq!(h.editor.session.course.editor.guides.len(), 1);
+    let remove = h.find_text_in("×", rect).expect("the guide's ×");
+    h.click_at(remove);
+    frames(&mut h, 2);
+    assert!(h.editor.session.course.editor.guides.is_empty());
+    h.editor.run("edit.undo", serde_json::json!({}));
+    assert_eq!(h.editor.session.course.editor.guides.len(), 1, "undone");
+}

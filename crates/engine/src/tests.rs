@@ -12606,10 +12606,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 23_881, "registry golden table byte length");
+    assert_eq!(table.len(), 23_906, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        0xde91_1e13_87d0_bfef,
+        0xc467_dce1_51ac_af1d,
         "registry golden table FNV-1a hash"
     );
 }
@@ -12818,4 +12818,28 @@ fn r5_02_interaction_insert_golden_all_eight_kinds() {
             "{kind}: last layer id"
         );
     }
+}
+
+#[test]
+fn grid_spacing_is_a_view_setting_that_undoes_and_rejects_nonsense() {
+    let mut s = Session::blank("Grid");
+    assert!((s.course.editor.grid_step() - 20.0).abs() < f32::EPSILON);
+    ok(&mut s, "view.set", json!({ "grid_spacing": 10.0 }));
+    assert_eq!(s.course.editor.grid_spacing, Some(10.0));
+    assert!((s.course.editor.grid_step() - 10.0).abs() < f32::EPSILON);
+    // The default spacing is stored as none, so the file stays as it was.
+    ok(&mut s, "view.set", json!({ "grid_spacing": 20.0 }));
+    assert_eq!(s.course.editor.grid_spacing, None);
+    s.undo().expect("undo");
+    assert_eq!(s.course.editor.grid_spacing, Some(10.0));
+    for bad in [0.0, 1.0, 1000.0, -5.0] {
+        assert!(
+            s.execute("view.set", &json!({ "grid_spacing": bad }))
+                .is_err(),
+            "{bad} accepted"
+        );
+    }
+    // A hand-edited file with a useless spacing draws the default grid.
+    s.course.editor.grid_spacing = Some(f32::NAN);
+    assert!((s.course.editor.grid_step() - 20.0).abs() < f32::EPSILON);
 }

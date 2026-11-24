@@ -82,7 +82,7 @@ panel holds that nothing holds today.
 | **Variables** | Triggers › Variables | Timeline › Variables tab | — (moves out) | M40 |
 | **Question** | Slides › Questions, Question Tools | Timeline › Question tab, Format › Question | feedback, scoring and attempts in one place | M40 |
 | **Accessibility** | context menu Accessibility…, Home › Drawing | `alt_text.rs` window, Format › Accessibility | focus order, tab order, contrast check | M38 |
-| **Grid and Guides** | View › Show | View toggles | grid spacing, snap options, guide list, ruler units | M37 |
+| **Grid and Guides** ✅ | View › Show | View toggles | grid spacing (`view.set` `{grid_spacing}`, saved with the course), show and snap for grid and guides, the guide list (move by number, remove, add at the slide's centre), show rulers; ruler units drawn disabled | M37 |
 | **AI** | AI › Write, Media, Assess, Agents | `ai_settings.rs`, `connect_agent.rs` windows | chat with the connected agent, generation history, voices | M42 |
 
 Layers and Notes move from the Timeline panel to Workspace panels of their own, as
@@ -156,7 +156,7 @@ The panels are the base for the customization testers ask for. In order:
 | 3 | **Size and Position** and **Shape Style**; Drawing ↘ and the contextual launchers | Size and Position dialog, Format Shape (M38) |
 | 4 🟡 | **Triggers**, **States**, **Variables**, **Question** as dock panels of their own (✅: tabbed with Timeline by default; a saved layout gains them beside Timeline; `ui.bottom_tab` brings its panel forward; in Master View they say why they are empty). **Slide Layers** (✅, right of the Timeline's group) and **Notes** (✅, a tab of that group; the Slide inspector leaves the notes to it while it is open) out of the Timeline panel; a saved layout gains both. Still to do: Triggers, Variables and Question as settings panels with ↘ launchers | shell step 6 (M40) |
 | 5 | **Animation** and **Transition** | M41 |
-| 6 | **Slide Properties**, **Theme**, **Course and Player**, **Grid and Guides** | M40 |
+| 6 🟡 | **Grid and Guides** (✅, `grid_panel.rs`, View › Show ↘), **Slide Properties**, **Theme**, **Course and Player** | M40 |
 | 7 | **Media**, **Table**, **Accessibility** | M39 |
 | 8 | **AI** panel with agent chat | M42 |
 | 9 | Customization 1–3 | after M42 |

@@ -49,10 +49,13 @@ pub enum Panel {
     Layers,
     /// The slide's notes, a tab of the Timeline's group.
     Notes,
+    /// The Grid and Guides settings panel (View › Show ↘).
+    #[serde(rename = "grid_guides")]
+    GridGuides,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 14] = [
+    pub const ALL: [Panel; 15] = [
         Panel::Slides,
         Panel::Canvas,
         Panel::Timeline,
@@ -67,6 +70,7 @@ impl Panel {
         Panel::SlideInspector,
         Panel::CourseInspector,
         Panel::Text,
+        Panel::GridGuides,
     ];
 
     /// The bottom panels, in their tab order.
@@ -103,7 +107,8 @@ impl Panel {
             | Panel::Variables
             | Panel::Question
             | Panel::Layers
-            | Panel::Notes => None,
+            | Panel::Notes
+            | Panel::GridGuides => None,
         }
     }
 
@@ -124,7 +129,8 @@ impl Panel {
             | Panel::CourseInspector
             | Panel::Text
             | Panel::Layers
-            | Panel::Notes => None,
+            | Panel::Notes
+            | Panel::GridGuides => None,
         }
     }
 
@@ -169,6 +175,7 @@ impl Panel {
             Panel::Question => "Question",
             Panel::Layers => "Slide Layers",
             Panel::Notes => "Notes",
+            Panel::GridGuides => "Grid and Guides",
         }
     }
 
@@ -193,7 +200,8 @@ impl Panel {
             | Panel::Variables
             | Panel::Question
             | Panel::Layers
-            | Panel::Notes => Permissions::default(),
+            | Panel::Notes
+            | Panel::GridGuides => Permissions::default(),
         }
     }
 
@@ -212,7 +220,8 @@ impl Panel {
             | Panel::Animate
             | Panel::SlideInspector
             | Panel::CourseInspector
-            | Panel::Text => vec2(260.0, 200.0),
+            | Panel::Text
+            | Panel::GridGuides => vec2(260.0, 200.0),
         };
         PanelLimits {
             min,
@@ -497,7 +506,7 @@ impl DockContent<Panel> for Content<'_> {
                     self.editor.inspector_body(ui, Some(tab));
                 }
             }
-            Panel::Text => crate::panels::body(self.editor, ui, *panel),
+            Panel::Text | Panel::GridGuides => crate::panels::body(self.editor, ui, *panel),
             Panel::Layers => {
                 if self.editor.ui.master_view {
                     ui.add_space(8.0);

@@ -295,7 +295,8 @@ Not shown except Slide Master; proposal.
 | | Grid | K | `view.set` `{grid}` | ✅ |
 | | Guides | K | `view.set` `{guides}` | ✅ |
 | | Snap to Grid / Snap to Guides | K | `view.set` | ✅ |
-| Panels | Timeline, States, Notes, Triggers, Layers, Scenes | K | `ui:panel.toggle` | 🟡 (Slides, Timeline, the Format, Animate, Slide and Course inspectors, and the Text settings panel, each its own panel; the others are tabs inside the timeline panel) |
+| | ↘ Show | — | `UiAction::PanelAt(GridGuides, Grid)` | ✅ (opens the Grid and Guides settings panel: grid spacing, snapping, the guide list, rulers; [panels.md](panels.md)) |
+| Panels | Timeline, States, Notes, Triggers, Layers, Scenes | K | `ui:panel.toggle` | 🟡 (Slides, Timeline, States, Triggers, Variables, Question, Notes, Slide Layers, the four inspectors and the settings panels, each its own panel; View › Panels lists them all, the ribbon has buttons for some) |
 | | Reset Panels | S | `ui:panel.reset` | ✅ |
 | Theme | Light / Dark | T | `ui:theme` | ✅ (Light, Dark, Match System) |
 | Publish | Preview | LS | | ✅ |

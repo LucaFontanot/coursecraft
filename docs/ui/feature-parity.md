@@ -110,7 +110,7 @@ Counted from the tables below; recount when a row changes.
 | Arrange, group, align, distribute, match size | `object.*` | ✅ | — |
 | Rotate, flip | `object.set_rotation`, `object.flip` | ✅ | — |
 | X, Y, width, height | `object.update` | ✅ | — |
-| Smart guides, grid, guides, rulers | `snap.rs`, `rulers.rs` | ✅ | — |
+| Smart guides, grid, guides, rulers | `snap.rs`, `rulers.rs`; the Grid and Guides panel (`grid_panel.rs`) sets the grid spacing and lists the guides | ✅ | — |
 | Lock and hide in editor | `object.lock`, `object.hide_in_editor` | ✅ | — |
 | Pictures: insert, replace, crop | `object.set_crop`, `crop.rs` | ✅ | — |
 | Picture border | `object.update` | ✅ | — |

@@ -42,6 +42,9 @@ pub enum Section {
     Font,
     Paragraph,
     TextBox,
+    Grid,
+    Guides,
+    Rulers,
 }
 
 impl Section {
@@ -52,6 +55,9 @@ impl Section {
             Section::Font => "Font",
             Section::Paragraph => "Paragraph",
             Section::TextBox => "Text Box",
+            Section::Grid => "Grid",
+            Section::Guides => "Guides",
+            Section::Rulers => "Rulers",
         }
     }
 
@@ -60,6 +66,7 @@ impl Section {
     pub fn panel(self) -> Panel {
         match self {
             Section::Font | Section::Paragraph | Section::TextBox => Panel::Text,
+            Section::Grid | Section::Guides | Section::Rulers => Panel::GridGuides,
         }
     }
 }
@@ -80,7 +87,7 @@ pub fn family(panel: Panel) -> Family {
         Panel::Format | Panel::Animate | Panel::SlideInspector | Panel::CourseInspector => {
             Family::Inspectors
         }
-        Panel::Text => Family::Settings,
+        Panel::Text | Panel::GridGuides => Family::Settings,
     }
 }
 
@@ -89,6 +96,7 @@ pub fn family(panel: Panel) -> Family {
 pub fn sections(panel: Panel) -> &'static [Section] {
     match panel {
         Panel::Text => &[Section::Font, Section::Paragraph, Section::TextBox],
+        Panel::GridGuides => &[Section::Grid, Section::Guides, Section::Rulers],
         Panel::Slides
         | Panel::Canvas
         | Panel::Timeline
@@ -183,6 +191,7 @@ pub fn follow_work(editor: &mut Editor) {
 pub fn body(editor: &mut Editor, ui: &mut egui::Ui, panel: Panel) {
     match panel {
         Panel::Text => crate::properties::show_text_panel(editor, ui),
+        Panel::GridGuides => crate::grid_panel::show(editor, ui),
         Panel::Slides
         | Panel::Canvas
         | Panel::Timeline

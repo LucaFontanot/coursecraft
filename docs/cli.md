@@ -315,7 +315,7 @@ object.set_rotation  -                        -          {"slide": id, "object"?
 object.flip          -                        -          {"slide": id, "object"?: id, "objects"?: id[], "axis": "horizontal"|"vertical"}
 object.lock          -                        -          {"slide": id, "object"?: id, "objects"?: id[], "locked": bool}
 object.hide_in_editor -                       -          {"slide": id, "object"?: id, "objects"?: id[], "hidden": bool}
-view.set             -                        -          {"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool}
+view.set             -                        -          {"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "grid_spacing"?: number, "show_guides"?: bool}
 view.guides.add      -                        -          {"vertical": bool, "at": number}
 view.guides.move     -                        -          {"index": usize, "at": number}
 view.guides.remove   -                        -          {"index": usize}

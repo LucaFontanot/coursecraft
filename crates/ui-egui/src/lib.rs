@@ -43,6 +43,7 @@ pub mod i18n;
 pub mod doc_tabs;
 pub mod dock;
 pub mod file_page;
+pub mod grid_panel;
 pub mod panels;
 pub mod ribbon;
 #[cfg(test)]

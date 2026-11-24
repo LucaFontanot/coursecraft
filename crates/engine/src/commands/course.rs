@@ -585,6 +585,18 @@ pub(super) fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(v) = opt::<bool>(C, p, "show_guides")? {
         s.course.editor.show_guides = v;
     }
+    if let Some(v) = opt::<f32>(C, p, "grid_spacing")? {
+        if !v.is_finite() || !coursecraft_course::EditorSettings::GRID_SPACING_RANGE.contains(&v) {
+            return Err(bad(
+                C,
+                "`grid_spacing` must be between 2 and 400 slide pixels",
+            ));
+        }
+        // The default spacing is stored as none, so the file stays as it was.
+        s.course.editor.grid_spacing =
+            ((v - coursecraft_course::EditorSettings::DEFAULT_GRID_SPACING).abs() > f32::EPSILON)
+                .then_some(v);
+    }
     if let Some(v) = opt::<coursecraft_course::BaseSlideView>(C, p, "base_slide_view")? {
         s.course.editor.base_slide_view = v;
     }
