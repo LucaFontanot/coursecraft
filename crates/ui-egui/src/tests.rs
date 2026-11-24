@@ -18017,6 +18017,88 @@ fn preferences_checkbox_flips_as_you_type_spelling() {
     );
 }
 
+/// U-11: Preferences Performance radio switches editor profile, updates cache caps,
+/// and emits `EditorRequest::SetPreferences` with `performance_mode`.
+#[test]
+fn u11_preferences_performance_mode_updates_editor_profile_and_emits_request() {
+    use coursecraft_render::PerformanceMode;
+
+    let (mut h, _t) = lock_hide_setup();
+    h.editor.open_preferences();
+    h.idle_frame();
+    assert_eq!(h.editor.performance_mode, PerformanceMode::Auto);
+    assert!(
+        h.find_text_containing("Published courses are not affected.")
+            .is_some(),
+        "Preferences must show the Lite mode helper note"
+    );
+
+    let lite = h.find_text("Lite").expect("Lite radio button");
+    let mut requests = Vec::new();
+    for pressed in [true, false] {
+        requests.extend(h.frame(vec![Event::PointerButton {
+            pos: lite,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }]));
+    }
+    assert_eq!(h.editor.performance_mode, PerformanceMode::Lite);
+    assert_eq!(h.editor.ui.prefs.performance_mode, PerformanceMode::Lite);
+    assert_eq!(h.editor.media_cache.picture_budget(), 64 * 1024 * 1024);
+    assert_eq!(h.editor.media_cache.max_canvas_dim(), 1024);
+    assert_eq!(h.editor.media_cache.max_thumb_dim(), 256);
+    assert!(
+        requests.iter().any(|r| matches!(
+            r,
+            EditorRequest::SetPreferences {
+                performance_mode: PerformanceMode::Lite,
+                ..
+            }
+        )),
+        "expected SetPreferences with performance_mode=Lite, got {requests:?}"
+    );
+}
+
+/// U-11: Large media library triggers a one-time non-blocking status notice and resets on `replace_course`.
+#[test]
+fn u11_memory_pressure_notice_fires_once_and_resets_on_replace_course() {
+    use std::sync::Arc;
+
+    let (mut h, _t) = lock_hide_setup();
+    let one_mib: Arc<[u8]> = Arc::from(vec![0u8; 1024 * 1024]);
+    let media: Vec<(String, Arc<[u8]>)> = (0..513)
+        .map(|i| (format!("img/big-{i}.bin"), Arc::clone(&one_mib)))
+        .collect();
+    h.editor.set_media(media);
+    assert!(!h.editor.ui.memory_pressure_warned);
+
+    h.idle_frame();
+    assert!(h.editor.ui.memory_pressure_warned);
+    assert!(
+        h.editor
+            .ui
+            .status_message
+            .as_ref()
+            .is_some_and(|(msg, _)| msg.contains("Large media library detected")),
+        "expected memory pressure status notice, got {:?}",
+        h.editor.ui.status_message
+    );
+
+    // Must only fire once per opened course.
+    h.editor.ui.status_message = None;
+    h.idle_frame();
+    assert!(
+        h.editor.ui.status_message.is_none(),
+        "memory pressure notice must not repeat on subsequent frames"
+    );
+
+    // Replacing the course resets the one-time guard.
+    let fresh = Course::from_json(COURSE_JSON).expect("valid course");
+    h.editor.replace_course(fresh);
+    assert!(!h.editor.ui.memory_pressure_warned);
+}
+
 fn triggers_harness() -> TestHarness {
     let course = Course::from_json(COURSE_JSON).expect("valid course");
     let mut harness = TestHarness::new(course);

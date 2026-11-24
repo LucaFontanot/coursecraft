@@ -127,6 +127,14 @@ struct ConflictPrompt {
     files: Vec<String>,
 }
 
+/// Result sent back from the background autosave thread.
+#[cfg(not(target_arch = "wasm32"))]
+struct AutosaveOutcome {
+    revision: u64,
+    epoch: u64,
+    result: Result<bool, String>,
+}
+
 struct EditorApp {
     editor: Editor,
     /// One background AI call at a time, on both desktop and web.
@@ -142,6 +150,14 @@ struct EditorApp {
     config_dir: Option<PathBuf>,
     #[cfg(not(target_arch = "wasm32"))]
     autosaver: Autosaver,
+    /// A background autosave receiver while one is running.
+    #[cfg(not(target_arch = "wasm32"))]
+    autosave_rx: Option<std::sync::mpsc::Receiver<AutosaveOutcome>>,
+    /// Monotonically incremented on manual Save, Save As, Save Folder, Open, New,
+    /// and autosaver resets so an in-flight background autosave never commits
+    /// after a newer explicit user action.
+    #[cfg(not(target_arch = "wasm32"))]
+    save_epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
     #[cfg(not(target_arch = "wasm32"))]
     pending_action: Option<PendingAction>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -399,6 +415,7 @@ impl EditorApp {
         editor.set_preferences(prefs.autosave_minutes_clamped(), prefs.default_slide.size());
         editor.set_versions_to_keep(prefs.versions_to_keep_clamped());
         editor.set_spell_preferences(prefs.spell_check_as_you_type, prefs.spell_words.clone());
+        editor.set_performance_mode(prefs.performance_mode.into());
         editor.set_ai_config(prefs.ai.as_ref().map(prefs::AiPrefs::to_config));
         editor.set_ai_source(
             prefs
@@ -459,6 +476,8 @@ impl EditorApp {
                 interval_minutes: Some(autosave_minutes),
                 ..Autosaver::new()
             },
+            autosave_rx: None,
+            save_epoch: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pending_action: None,
             restore_prompt: None,
             error_modal: None,
@@ -677,7 +696,15 @@ impl EditorApp {
         }
 
         let media = self.editor.used_media();
-        let saved = match save_kind(&path, self.project.folder.is_some(), !media.is_empty()) {
+        let kind = save_kind(&path, self.project.folder.is_some(), !media.is_empty());
+        if kind == SaveKind::JsonNeedsSaveAs {
+            self.editor.set_status(
+                "Plain JSON files cannot store imported media; save as a .ccraft project instead.",
+            );
+            return self.perform_save_as();
+        }
+        self.bump_save_epoch();
+        let saved = match kind {
             SaveKind::Folder => {
                 // A folder is kept in git, so there is no version history for it.
                 let mut record = self.project.folder.take().unwrap_or_default();
@@ -690,12 +717,7 @@ impl EditorApp {
                 self.project.folder = Some(record);
                 result.map(|_| ())
             }
-            SaveKind::JsonNeedsSaveAs => {
-                self.editor.set_status(
-                    "Plain JSON files cannot store imported media; save as a .ccraft project instead.",
-                );
-                return self.perform_save_as();
-            }
+            SaveKind::JsonNeedsSaveAs => return self.perform_save_as(),
             SaveKind::Json => {
                 self.keep_version(&path);
                 self.editor
@@ -795,7 +817,13 @@ impl EditorApp {
         }
     }
 
+    fn bump_save_epoch(&self) {
+        self.save_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
     fn reset_autosaver(&mut self) {
+        self.bump_save_epoch();
         self.autosaver = Autosaver::new();
         self.autosaver.interval_minutes = Some(self.prefs.autosave_minutes_clamped());
     }
@@ -1047,21 +1075,55 @@ impl EditorApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn update_autosave(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = self.autosave_rx.take() {
+            match rx.try_recv() {
+                Ok(outcome) => {
+                    let current_epoch = self.save_epoch.load(std::sync::atomic::Ordering::Acquire);
+                    if matches!(outcome.result, Ok(true)) && outcome.epoch == current_epoch {
+                        self.autosaver.last_autosaved_revision = Some(outcome.revision);
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.autosave_rx = Some(rx);
+                }
+            }
+        }
+
         let current_time = ctx.input(|i| i.time);
         let is_dirty = self.project.is_dirty(&self.editor.session);
         let rev = self.editor.session.revision;
-        let editor = &self.editor;
-        self.autosaver.maybe_autosave_arc(
-            current_time,
-            is_dirty,
-            rev,
-            autosave::AutosaveTarget {
-                project_path: self.project.path.as_deref(),
-                config_dir: self.config_dir.as_deref(),
-                course: &self.editor.session.course,
-            },
-            || editor.used_media(),
-        );
+        if self.autosave_rx.is_none()
+            && self.autosaver.take_due(current_time, is_dirty, rev)
+            && let Some(auto_path) = autosave::autosave_target_path(
+                self.project.path.as_deref(),
+                self.config_dir.as_deref(),
+            )
+        {
+            let course = self.editor.session.course.clone();
+            let media = self.editor.used_media();
+            let epoch = self.save_epoch.load(std::sync::atomic::Ordering::Acquire);
+            let epoch_ref = std::sync::Arc::clone(&self.save_epoch);
+            let ctx_wake = ctx.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            if std::thread::Builder::new()
+                .name("coursecraft-autosave".into())
+                .spawn(move || {
+                    let result = autosave::write_autosave_arc_guarded(
+                        &course, &media, &auto_path, &epoch_ref, epoch,
+                    );
+                    let _ = tx.send(AutosaveOutcome {
+                        revision: rev,
+                        epoch,
+                        result,
+                    });
+                    ctx_wake.request_repaint();
+                })
+                .is_ok()
+            {
+                self.autosave_rx = Some(rx);
+            }
+        }
         if is_dirty && let Some(wait) = self.autosaver.secs_until_next(current_time) {
             // Autosave is a timer, so never wake the UI more often than once
             // a second just to check it. The extra half second is the usual
@@ -1384,11 +1446,14 @@ impl EditorApp {
                 default_slide,
                 spell_check_as_you_type,
                 spell_words,
+                performance_mode,
             } => {
                 self.prefs.autosave_minutes = autosave_minutes.min(prefs::MAX_AUTOSAVE_MINUTES);
                 self.prefs.versions_to_keep = versions_to_keep.min(prefs::MAX_VERSIONS_TO_KEEP);
                 self.prefs.spell_check_as_you_type = spell_check_as_you_type;
                 self.prefs.spell_words = spell_words;
+                self.prefs.performance_mode = performance_mode.into();
+                self.editor.set_performance_mode(performance_mode);
                 if let Some(size) = prefs::DefaultSlideSize::from_valid_size(default_slide) {
                     self.prefs.default_slide = size;
                 }
@@ -2528,6 +2593,7 @@ struct EditorHostAdapter<'a> {
     project: &'a mut Project,
     config_dir: Option<&'a Path>,
     prefs: &'a mut Prefs,
+    save_epoch: &'a std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2670,6 +2736,8 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
         let media = self.editor.used_media();
         let is_ccraft = has_extension_ignore_ascii_case(&target, "ccraft");
         let is_project_folder = control_save_is_folder(&target, self.project);
+        self.save_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 
         if is_project_folder {
             // Keep the record when saving over the folder that is already open.
@@ -2766,6 +2834,8 @@ impl<'a> coursecraft_control::ControlHost for EditorHostAdapter<'a> {
                     let _ = prefs::save_prefs(dir, self.prefs);
                 }
                 self.editor.set_recent(self.prefs.recent.clone());
+                self.save_epoch
+                    .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                 Ok(title)
             }
             Err(e) => Err(coursecraft_control::HostError::Engine(e)),
@@ -2879,6 +2949,7 @@ impl EditorApp {
                     project: &mut self.project,
                     config_dir: self.config_dir.as_deref(),
                     prefs: &mut self.prefs,
+                    save_epoch: &self.save_epoch,
                 };
                 if server.poll(&mut host) > 0 {
                     ui.ctx().request_repaint();
@@ -3071,6 +3142,7 @@ impl EditorApp {
                                 dismiss = true;
                             }
                             if ui.button("Discard").clicked() {
+                                self.bump_save_epoch();
                                 autosave::delete_autosave(&prompt.autosave_path);
                                 if let Some(ref file_path) = prompt.file_path {
                                     self.finish_open(file_path, Some(file_path.clone()), false);
@@ -3625,6 +3697,24 @@ fn main() {
 
         let (course, media) = initial_course_and_media(blank);
         let mut editor = Editor::new(course);
+        let low_memory = web_sys::window().is_some_and(|window| {
+            js_sys::Reflect::get(
+                window.as_ref(),
+                &eframe::wasm_bindgen::JsValue::from_str("navigator"),
+            )
+            .ok()
+            .filter(|nav| !nav.is_null() && !nav.is_undefined())
+            .and_then(|nav| {
+                js_sys::Reflect::get(
+                    &nav,
+                    &eframe::wasm_bindgen::JsValue::from_str("deviceMemory"),
+                )
+                .ok()
+            })
+            .and_then(|v| v.as_f64())
+            .is_some_and(|gb| gb.is_finite() && gb > 0.0 && gb <= 4.0)
+        });
+        editor.set_low_memory_device(low_memory);
         editor.set_media(media);
         editor.set_publish_available(player_bundle::has_player());
         editor.set_coach_marks_done(false);

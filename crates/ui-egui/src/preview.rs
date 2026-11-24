@@ -169,6 +169,9 @@ pub struct Preview {
     pub frame: PlayerFrame,
     /// Real-time frame clock accumulator.
     pub ticker: Ticker,
+    /// Last egui frame timestamp (`InputState::time`), used to measure real
+    /// elapsed wall time across delayed wakes.
+    last_frame_time: Option<f64>,
     /// Drives the playback backend from runtime media effects.
     pub media: MediaDriver,
     /// Emitted effects formatted as JSON strings.
@@ -571,6 +574,7 @@ impl Preview {
                 view: SlideView::new(),
                 frame: PlayerFrame::new(),
                 ticker: Ticker::new(),
+                last_frame_time: None,
                 media: MediaDriver::new(),
                 log: Vec::new(),
                 requests: Vec::new(),
@@ -631,7 +635,7 @@ impl Preview {
                     None
                 };
                 let plan = player.play_plan();
-                let state = player.state().clone();
+                let state = player.into_state();
                 let last_var_values = state.variables.clone();
                 Self {
                     course: course_clone,
@@ -641,6 +645,7 @@ impl Preview {
                     view: SlideView::new(),
                     frame: PlayerFrame::new(),
                     ticker: Ticker::new(),
+                    last_frame_time: None,
                     media,
                     log,
                     requests,
@@ -669,6 +674,7 @@ impl Preview {
                 view: SlideView::new(),
                 frame: PlayerFrame::new(),
                 ticker: Ticker::new(),
+                last_frame_time: None,
                 media: MediaDriver::new(),
                 log: Vec::new(),
                 requests: Vec::new(),
@@ -757,11 +763,12 @@ impl Preview {
                 self.end_of_preview_popup = true;
             }
             self.play_plan = Some(player.play_plan());
-            let state = player.state().clone();
+            let state = player.into_state();
             self.last_var_values = state.variables.clone();
             self.var_changed_at.clear();
             self.state = Some(state);
             self.ticker = Ticker::new();
+            self.last_frame_time = None;
             self.frame.restart();
             self.view = SlideView::new();
             self.media.set_rate(1.0);
@@ -770,7 +777,7 @@ impl Preview {
 
     /// Feed a runtime input to the player, updating state and returning emitted effects.
     pub fn handle(&mut self, input: &Input, ctx: Option<&egui::Context>) -> Vec<Effect> {
-        let Some(state) = self.state.clone() else {
+        let Some(state) = self.state.take() else {
             return Vec::new();
         };
         let Ok(mut player) = resume_with_plan(&self.course, state, self.play_plan.as_ref()) else {
@@ -795,7 +802,7 @@ impl Preview {
             self.end_of_preview_popup = true;
         }
         self.play_plan = Some(player.play_plan());
-        self.state = Some(player.state().clone());
+        self.state = Some(player.into_state());
         effects
     }
 
@@ -834,15 +841,22 @@ impl Preview {
     ) {
         if !*open {
             self.media.stop_all();
+            self.last_frame_time = None;
+            self.ticker.reset();
             return;
         }
 
-        ctx.request_repaint();
+        let (now, stable_dt) = ctx.input(|i| (i.time, i.stable_dt));
+        let dt = match self.last_frame_time {
+            Some(prev) if (now - prev).is_finite() && now > prev => (now - prev) as f32,
+            _ => stable_dt,
+        };
+        self.last_frame_time = Some(now);
 
         let mut should_show_errors = false;
         let mut close_requested = false;
         let mut boundary_hit = false;
-        let current_state = self.state.clone();
+        let mut current_state = self.state.take();
         let mut frame_effects = Vec::new();
         let drawer_was_open = self.frame.drawer_open();
         let text_edit_was_focused = self.had_text_focus || ctx.egui_wants_keyboard_input();
@@ -949,10 +963,11 @@ impl Preview {
                             });
                             ui.separator();
                             self.show_errors(ui);
+                            self.state = current_state.take();
                             return;
                         }
 
-                        let Some(state) = current_state else {
+                        let Some(state) = current_state.take() else {
                             self.show_errors(ui);
                             return;
                         };
@@ -983,7 +998,6 @@ impl Preview {
                             };
 
                         // Advance clock ticker
-                        let dt = ctx.input(|i| i.stable_dt);
                         if let Some(tick) = ticker.advance(dt) {
                             let effects = player.handle(&tick);
                             record_effects(&effects, log, ended, Some(ctx));
@@ -1260,7 +1274,7 @@ impl Preview {
                             }
                         });
 
-                        self.state = Some(player.state().clone());
+                        self.state = Some(player.into_state());
                     });
                 });
             });
@@ -1363,63 +1377,120 @@ impl Preview {
             }
         }
 
-        if !*open {
+        let media_source = media.as_ref().map(|(_, s)| *s);
+        self.finish_frame_media_and_schedule(
+            ctx,
+            *open,
+            dt,
+            now,
+            &frame_effects,
+            media_source,
+            &mut should_show_errors,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finish_frame_media_and_schedule(
+        &mut self,
+        ctx: &egui::Context,
+        open: bool,
+        dt: f32,
+        now: f64,
+        frame_effects: &[Effect],
+        media_source: Option<&dyn MediaSource>,
+        should_show_errors: &mut bool,
+    ) {
+        let mut wake: Option<u32> = None;
+        if !open {
             self.media.stop_all();
-        } else if let Some(state) = self.state.clone()
-            && let Ok(mut player) = resume_with_plan(&self.course, state, self.play_plan.as_ref())
-        {
-            let media_source = media.as_ref().map(|(_, s)| *s);
-            match media_source {
-                Some(source) => {
-                    queue_prints(&frame_effects, &player, source, &mut self.requests);
+        } else if let Some(state) = self.state.take() {
+            match resume_with_plan(&self.course, state, self.play_plan.as_ref()) {
+                Ok(mut player) => {
+                    match media_source {
+                        Some(source) => {
+                            queue_prints(frame_effects, &player, source, &mut self.requests);
+                        }
+                        None => {
+                            queue_prints(frame_effects, &player, &NoMedia, &mut self.requests);
+                        }
+                    }
+                    dispatch_media_effects(
+                        &mut self.media,
+                        &mut player,
+                        frame_effects,
+                        media_source,
+                        &mut self.log,
+                        &mut self.ended,
+                        Some(ctx),
+                    );
+                    poll_media_events(
+                        &mut self.media,
+                        &mut player,
+                        media_source,
+                        &mut self.log,
+                        &mut self.ended,
+                        Some(ctx),
+                    );
+                    let dt_ms = if dt.is_finite() && dt > 0.0 {
+                        (f64::from(dt.min(1.0)) * 1000.0)
+                            .round()
+                            .clamp(0.0, u64::MAX as f64) as u64
+                    } else {
+                        0
+                    };
+                    let mut queue: std::collections::VecDeque<Input> =
+                        self.media.media_time_inputs(&player, dt_ms).into();
+                    feed_inputs(
+                        &mut self.media,
+                        &mut player,
+                        &mut queue,
+                        media_source,
+                        &mut self.log,
+                        &mut self.ended,
+                        Some(ctx),
+                    );
+                    self.media.layout_videos(&player, &self.view);
+                    if player.take_preview_boundary() {
+                        self.end_of_preview_popup = true;
+                    }
+                    if !self.ended {
+                        wake = player.next_wake_ms();
+                    }
+                    self.state = Some(player.into_state());
                 }
-                None => {
-                    queue_prints(&frame_effects, &player, &NoMedia, &mut self.requests);
+                Err(issues) => {
+                    self.errors = issues;
+                    *should_show_errors = true;
                 }
             }
-            dispatch_media_effects(
-                &mut self.media,
-                &mut player,
-                &frame_effects,
-                media_source,
-                &mut self.log,
-                &mut self.ended,
-                Some(ctx),
-            );
-            poll_media_events(
-                &mut self.media,
-                &mut player,
-                media_source,
-                &mut self.log,
-                &mut self.ended,
-                Some(ctx),
-            );
-            let dt = ctx.input(|i| i.stable_dt);
-            let dt_ms = if dt.is_finite() && dt > 0.0 {
-                (f64::from(dt) * 1000.0).round().clamp(0.0, u64::MAX as f64) as u64
-            } else {
-                0
-            };
-            let mut queue: std::collections::VecDeque<Input> =
-                self.media.media_time_inputs(&player, dt_ms).into();
-            feed_inputs(
-                &mut self.media,
-                &mut player,
-                &mut queue,
-                media_source,
-                &mut self.log,
-                &mut self.ended,
-                Some(ctx),
-            );
-            self.media.layout_videos(&player, &self.view);
-            if player.take_preview_boundary() {
-                self.end_of_preview_popup = true;
-            }
-            self.state = Some(player.state().clone());
         }
 
-        if should_show_errors {
+        if *should_show_errors {
             self.state = None;
+        }
+
+        if open {
+            self.var_changed_at
+                .retain(|_, changed_at| (0.0..=1.5).contains(&(now - *changed_at)));
+            if self.view.transition_active()
+                || self.media.pending_len() > 0
+                || (self.show_variables && !self.var_changed_at.is_empty())
+            {
+                wake = Some(0);
+            }
+            match wake {
+                Some(0) => ctx.request_repaint(),
+                Some(ms) => ctx.request_repaint_after(std::time::Duration::from_millis(u64::from(
+                    ms.clamp(1, 900),
+                ))),
+                None => {
+                    self.last_frame_time = None;
+                    self.ticker.reset();
+                }
+            }
+        } else {
+            self.last_frame_time = None;
+            self.ticker.reset();
         }
     }
 }

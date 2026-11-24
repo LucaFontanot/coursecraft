@@ -18,8 +18,10 @@ struct Harness {
 
 impl Harness {
     fn new(width: f32, height: f32) -> Self {
+        let ctx = egui::Context::default();
+        crate::install_fonts(&ctx);
         Self {
-            ctx: egui::Context::default(),
+            ctx,
             frame: PlayerFrame::new(),
             view: SlideView::new(),
             size: vec2(width, height),
@@ -1935,8 +1937,10 @@ struct AreaHarness {
 
 impl AreaHarness {
     fn new(screen_size: Vec2, player_area: Rect) -> Self {
+        let ctx = egui::Context::default();
+        crate::install_fonts(&ctx);
         Self {
-            ctx: egui::Context::default(),
+            ctx,
             frame: PlayerFrame::new(),
             view: SlideView::new(),
             screen_size,

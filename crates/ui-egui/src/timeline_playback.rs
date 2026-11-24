@@ -214,6 +214,8 @@ pub struct TimelinePlayback {
     seek_pending: bool,
     /// Timeout before a hung video preview decode gives up.
     decode_timeout_ms: u64,
+    /// Last synced `(revision, slide_id, media.len())` to skip rebuilding track specs on idle frames.
+    synced_key: Option<(u64, String, usize)>,
 }
 
 impl TimelinePlayback {
@@ -248,6 +250,7 @@ impl TimelinePlayback {
             last_mono: 0,
             seek_pending: false,
             decode_timeout_ms: DEFAULT_VIDEO_DECODE_TIMEOUT_MS,
+            synced_key: None,
         }
     }
 
@@ -297,16 +300,69 @@ impl TimelinePlayback {
         media: &[(String, Arc<[u8]>)],
         playhead_ms: u32,
     ) {
+        self.sync_slide_indexed(
+            course,
+            slide_id,
+            duration_ms,
+            media,
+            None,
+            None,
+            playhead_ms,
+        );
+    }
+
+    /// Revision- and index-accelerated variant of [`Self::sync_slide`].
+    ///
+    /// When `(revision, slide_id, media.len())` and `duration_ms` are unchanged,
+    /// skips rebuilding `specs` and `next` and only services ended/pending videos.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn sync_slide_indexed(
+        &mut self,
+        course: &Course,
+        slide_id: &str,
+        duration_ms: u32,
+        media: &[(String, Arc<[u8]>)],
+        media_index: Option<&std::collections::HashMap<String, usize>>,
+        revision: Option<u64>,
+        playhead_ms: u32,
+    ) {
         let duration_ms = duration_ms.max(100);
+        if let Some(rev) = revision
+            && self.duration_ms == duration_ms
+            && self
+                .synced_key
+                .as_ref()
+                .is_some_and(|(r, sid, mlen)| *r == rev && sid == slide_id && *mlen == media.len())
+        {
+            self.drain_ended();
+            self.update_video_decode_status(playhead_ms.min(duration_ms));
+            if !self.playing {
+                self.arm_videos_at(playhead_ms.min(duration_ms));
+            }
+            return;
+        }
         let specs = timeline_track_specs(course, slide_id);
         let next: Vec<TimelineTrack> = specs
             .iter()
             .map(|spec| {
-                let bytes = media
-                    .iter()
-                    .find(|(name, _)| name == &spec.src)
-                    .map(|(_, bytes)| Arc::clone(bytes))
-                    .unwrap_or_else(|| Arc::new([]));
+                let bytes = match media_index {
+                    Some(index) => match index.get(&spec.src) {
+                        Some(&idx) => match media.get(idx) {
+                            Some((name, bytes)) if name == &spec.src => Arc::clone(bytes),
+                            _ => media
+                                .iter()
+                                .find(|(name, _)| name == &spec.src)
+                                .map(|(_, bytes)| Arc::clone(bytes))
+                                .unwrap_or_else(|| Arc::new([])),
+                        },
+                        None => Arc::new([]),
+                    },
+                    None => media
+                        .iter()
+                        .find(|(name, _)| name == &spec.src)
+                        .map(|(_, bytes)| Arc::clone(bytes))
+                        .unwrap_or_else(|| Arc::new([])),
+                };
                 let start_ms = spec.timing.start_ms.min(duration_ms);
                 let end_ms = spec
                     .timing
@@ -336,6 +392,7 @@ impl TimelinePlayback {
             self.slide_id = slide_id.to_owned();
             self.tracks = next;
             self.duration_ms = duration_ms;
+            self.synced_key = revision.map(|rev| (rev, slide_id.to_owned(), media.len()));
             // Arm each video whose timing includes the playhead and
             // request its frame, without needing a click: a worker only
             // exists after a seek, so without this the canvas would show
@@ -355,6 +412,7 @@ impl TimelinePlayback {
             });
         if same {
             self.duration_ms = duration_ms;
+            self.synced_key = revision.map(|rev| (rev, slide_id.to_owned(), media.len()));
             // A track whose worker ended (e.g. Play reached the end and
             // the backend removed the worker) is re-armed here so a later
             // scrub still produces a frame.
@@ -410,6 +468,7 @@ impl TimelinePlayback {
             }
         }
         self.duration_ms = duration_ms;
+        self.synced_key = revision.map(|rev| (rev, slide_id.to_owned(), media.len()));
         if !self.playing {
             self.arm_videos_at(playhead_ms.min(duration_ms));
         }
@@ -574,6 +633,7 @@ impl TimelinePlayback {
         self.anchor_playhead = 0;
         self.anchor_mono = 0;
         self.last_mono = 0;
+        self.synced_key = None;
     }
 
     /// Record a scrub or seek to `playhead_ms`.

@@ -536,6 +536,7 @@ fn player_drawer_clips_to_player_area_at_letterboxed_and_fullscreen_sizes() {
         playing.handle_input(&Input::Start, None);
 
         let ctx = egui::Context::default();
+        coursecraft_render::install_fonts(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
         let mut time = 0.1;
 
@@ -620,6 +621,7 @@ fn player_scales_letterboxes_and_places_drawer_and_log_panel_across_window_sizes
         playing.handle_input(&Input::Start, None);
 
         let ctx = egui::Context::default();
+        coursecraft_render::install_fonts(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
         let mut time = 0.1;
 
@@ -745,6 +747,7 @@ fn player_click_and_keyboard_on_video_plays_pauses_and_fires_cues_without_placeh
     let mut playing = Playing::new(course, false, None).expect("playing");
     playing.handle_input(&coursecraft_logic::Input::Start, None);
     let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
     let mut time = 0.0;
 
@@ -923,6 +926,7 @@ fn t14_8_failed_screen_uses_player_ground_raised_card_and_wraps() {
         + &"missing_manifest_or_corrupted_archive_".repeat(8);
     for (w, h) in [(390.0_f32, 844.0_f32), (1280.0, 720.0)] {
         let ctx = egui::Context::default();
+        coursecraft_render::install_fonts(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(w, h));
         let out = ctx.run_ui(
             egui::RawInput {
@@ -1205,6 +1209,7 @@ fn b08_should_hide_dom_overlays_covers_gate_ended_drawer_and_lightbox() {
     assert!(crate::app::should_hide_dom_overlays(&player, &frame, true));
 
     let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
     let mut view = coursecraft_render::SlideView::new();
     let mut toggle_drawer = |ctx: &egui::Context, frame: &mut coursecraft_render::PlayerFrame| {
         let raw = egui::RawInput {
@@ -1237,4 +1242,421 @@ fn b08_should_hide_dom_overlays_covers_gate_ended_drawer_and_lightbox() {
     });
     assert!(player.lightbox_open(), "expected lightbox to be open");
     assert!(crate::app::should_hide_dom_overlays(&player, &frame, false));
+}
+
+/// U-03: Player chrome renders start gate, active slide + chrome bar, speed menu
+/// (`1×`, `1.5×`), and ended state cleanly with bundled fonts and zero `epaint_default_fonts`.
+#[test]
+fn u03_player_chrome_renders_strings_and_symbols_cleanly() {
+    fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                egui::Shape::Vec(list) => {
+                    for s in list {
+                        walk(s, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for cs in shapes {
+            walk(&cs.shape, &mut out);
+        }
+        out
+    }
+
+    let raw = include_str!("../../../examples/hello-course/course.json");
+    let course = Course::from_json(raw).expect("valid hello-course");
+    let mut playing = Playing::from_course(course, false).expect("valid playing");
+
+    let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0));
+    let mut time = 0.0;
+
+    let mut run_frame = |playing: &mut Playing, events: Vec<egui::Event>| {
+        time += 0.05;
+        let raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw_input, |ui| {
+            playing.show_ui(ui);
+        });
+        let shapes = out.shapes.clone();
+        out.drop_without_applying_deltas();
+        shapes
+    };
+
+    // 1. Start gate
+    playing.frame.awaiting_start = true;
+    let start_shapes = run_frame(&mut playing, Vec::new());
+    assert!(
+        !start_shapes.is_empty(),
+        "start gate must paint non-empty shapes"
+    );
+
+    // 2. Active slide with chrome bar
+    playing.frame.awaiting_start = false;
+    playing.handle_input(&Input::Start, None);
+    let _ = run_frame(&mut playing, Vec::new());
+    let active_shapes = run_frame(&mut playing, Vec::new());
+    assert!(
+        !active_shapes.is_empty(),
+        "active slide with chrome bar must paint non-empty shapes"
+    );
+    let active_texts = collect_texts(&active_shapes);
+    assert!(
+        active_texts.iter().any(|t| t.contains("1×")),
+        "chrome bar must render speed label '1×', got: {active_texts:?}"
+    );
+
+    // 3. Open speed menu and verify `1×` and `1.5×` render cleanly
+    let speed_rect = playing
+        .frame
+        .chrome_rect(&coursecraft_render::ChromeButton::Speed)
+        .expect("speed button rect present");
+    let click_speed = vec![
+        egui::Event::PointerMoved(speed_rect.center()),
+        egui::Event::PointerButton {
+            pos: speed_rect.center(),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        },
+        egui::Event::PointerButton {
+            pos: speed_rect.center(),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    let _ = run_frame(&mut playing, click_speed);
+    let speed_shapes = run_frame(&mut playing, Vec::new());
+    let speed_texts = collect_texts(&speed_shapes);
+    assert!(
+        speed_texts.iter().any(|t| t.contains("1×"))
+            && speed_texts.iter().any(|t| t.contains("1.5×")),
+        "speed menu must render '1×' and '1.5×', got: {speed_texts:?}"
+    );
+
+    // 4. Ended state
+    playing.ended = true;
+    let ended_shapes = run_frame(&mut playing, Vec::new());
+    assert!(
+        !ended_shapes.is_empty(),
+        "ended state must paint non-empty shapes"
+    );
+    let ended_texts = collect_texts(&ended_shapes);
+    assert!(
+        ended_texts.iter().any(|t| !t.trim().is_empty()),
+        "ended state must render non-empty text, got: {ended_texts:?}"
+    );
+}
+
+/// G-01 (player): Start gate, learner-paused playback, and finished slides do
+/// not schedule immediate repaints, whereas starting playback or running an
+/// active animation/timer does schedule a wake.
+#[test]
+fn g01_player_start_gate_and_finished_slide_do_not_repaint() {
+    use std::time::Duration;
+
+    let json = r##"{
+      "schema_version": 1,
+      "id": "g01-player-idle",
+      "title": "G01 Player Idle",
+      "slide_size": { "w": 960, "h": 540 },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Short Slide",
+          "duration_ms": 400,
+          "objects": [
+            {
+              "id": "card",
+              "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+              "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 120.0 },
+              "entrance": { "effect": { "type": "fade" }, "duration_ms": 200 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let mut playing = Playing::from_course(course, false)
+        .expect("valid playing")
+        .with_backend(Box::new(coursecraft_playback::NullBackend::new()));
+    playing.frame.awaiting_start = true;
+    playing.frame.reduced_motion = true;
+
+    let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
+    let mut style = (*ctx.global_style()).clone();
+    style.animation_time = 0.0;
+    ctx.set_global_style(style);
+
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0));
+    let mut time = 0.0;
+
+    let run_frame = |ctx: &egui::Context,
+                     playing: &mut Playing,
+                     time: &mut f64,
+                     dt: f64,
+                     events: Vec<egui::Event>|
+     -> Duration {
+        *time += dt;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(*time),
+            events,
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw, |ui| {
+            playing.show_ui(ui);
+        });
+        let delay = out
+            .viewport_output
+            .get(&ctx.viewport_id())
+            .map_or(Duration::ZERO, |vp| vp.repaint_delay);
+        out.drop_without_applying_deltas();
+        delay
+    };
+
+    // 1. Start gate: settle, then assert idle frame schedules no repaint < 1 s.
+    for _ in 0..8 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    }
+    let start_gate_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    assert!(
+        !ctx.requested_repaint_last_pass(),
+        "start gate must not request immediate repaints while idle"
+    );
+    assert!(
+        start_gate_delay >= Duration::from_secs(1),
+        "start gate must stay quiet while waiting, got delay {start_gate_delay:?}"
+    );
+
+    // 2. Clicking Start begins playback; entrance animation [0, 200 ms) must schedule immediate wake.
+    let start_btn = playing
+        .frame
+        .start_button_rect()
+        .expect("start gate button rect");
+    let click_start = vec![
+        egui::Event::PointerMoved(start_btn.center()),
+        egui::Event::PointerButton {
+            pos: start_btn.center(),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        },
+        egui::Event::PointerButton {
+            pos: start_btn.center(),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    let after_start_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, click_start);
+    assert!(
+        !playing.frame.awaiting_start,
+        "clicking Start must leave start gate"
+    );
+    assert_eq!(
+        after_start_delay,
+        Duration::ZERO,
+        "active entrance animation after Start must request an immediate repaint"
+    );
+
+    // 3. Learner pause: settle, then assert idle frame schedules no repaint < 1 s.
+    playing.handle_input(&Input::PlayerPause, Some(&ctx));
+    for _ in 0..8 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    }
+    let paused_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    assert!(
+        !ctx.requested_repaint_last_pass(),
+        "paused player must not request immediate repaints"
+    );
+    assert!(
+        paused_delay >= Duration::from_secs(1),
+        "paused player must stay quiet, got delay {paused_delay:?}"
+    );
+
+    // 4. Resume playback and advance past duration_ms (400 ms) until slide finishes.
+    playing.handle_input(&Input::PlayerResume, Some(&ctx));
+    let resumed_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    assert!(
+        resumed_delay < Duration::from_secs(1),
+        "resumed active slide must schedule a wake, got {resumed_delay:?}"
+    );
+
+    for _ in 0..8 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.10, Vec::new());
+    }
+    assert!(
+        playing.player.state().base.ended,
+        "short slide should have reached its timeline end"
+    );
+    // Settling frames after timeline ends.
+    for _ in 0..8 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    }
+    let finished_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    assert!(
+        !ctx.requested_repaint_last_pass(),
+        "finished slide must not request immediate repaints"
+    );
+    assert!(
+        finished_delay >= Duration::from_secs(1),
+        "finished slide must stay quiet, got delay {finished_delay:?}"
+    );
+}
+
+/// G-01 (player): Resuming after a long idle pause must not jump the slide
+/// clock forward by the paused wall time, while a delayed wake on an active
+/// quiet slide must advance by the full elapsed wake interval.
+#[test]
+fn g01_player_resume_after_idle_pause_does_not_jump_and_delayed_wake_advances() {
+    use std::time::Duration;
+
+    let json = r##"{
+      "schema_version": 1,
+      "id": "g01-player-dt",
+      "title": "G01 Player Dt",
+      "slide_size": { "w": 960, "h": 540 },
+      "player": { "show_seekbar": false },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Quiet Slide",
+          "duration_ms": 5000,
+          "objects": [
+            {
+              "id": "late-box",
+              "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+              "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 120.0 },
+              "timing": { "start_ms": 2000 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let mut playing = Playing::from_course(course, false)
+        .expect("valid playing")
+        .with_backend(Box::new(coursecraft_playback::NullBackend::new()));
+    playing.frame.reduced_motion = true;
+
+    let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
+    let mut style = (*ctx.global_style()).clone();
+    style.animation_time = 0.0;
+    ctx.set_global_style(style);
+
+    playing.handle_input(&Input::Start, Some(&ctx));
+
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0));
+    let mut time = 1.0;
+
+    let run_frame =
+        |ctx: &egui::Context, playing: &mut Playing, time: &mut f64, dt: f64| -> Duration {
+            *time += dt;
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                time: Some(*time),
+                ..Default::default()
+            };
+            let out = ctx.run_ui(raw, |ui| {
+                playing.show_ui(ui);
+            });
+            let delay = out
+                .viewport_output
+                .get(&ctx.viewport_id())
+                .map_or(Duration::ZERO, |vp| vp.repaint_delay);
+            out.drop_without_applying_deltas();
+            delay
+        };
+
+    // Settle initial egui layout frames; quiet slide schedules a bounded delayed wake (<= 900 ms).
+    for _ in 0..4 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02);
+    }
+    let delay1 = run_frame(&ctx, &mut playing, &mut time, 0.02);
+    assert!(
+        delay1 >= Duration::from_millis(500) && delay1 <= Duration::from_millis(900),
+        "quiet slide should schedule a bounded delayed wake, got {delay1:?}"
+    );
+    let before_sleep = playing.player.state().base.ms;
+
+    // Simulate waking 500 ms later: real elapsed wall time must advance the clock.
+    let _ = run_frame(&ctx, &mut playing, &mut time, 0.50);
+    let after_sleep = playing.player.state().base.ms;
+    assert_eq!(
+        after_sleep.saturating_sub(before_sleep),
+        500,
+        "delayed wake must advance the slide clock by the full elapsed interval"
+    );
+
+    // Pause, settle into idle (wake == None), then sit idle for 10 seconds
+    // with zero frames before resuming.
+    playing.handle_input(&Input::PlayerPause, Some(&ctx));
+    for _ in 0..4 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02);
+    }
+    let paused_delay = run_frame(&ctx, &mut playing, &mut time, 0.02);
+    assert!(
+        paused_delay >= Duration::from_secs(1),
+        "paused slide should go idle, got {paused_delay:?}"
+    );
+    let paused_ms = playing.player.state().base.ms;
+
+    playing.handle_input(&Input::PlayerResume, Some(&ctx));
+    let _ = run_frame(&ctx, &mut playing, &mut time, 10.0);
+    let resumed_advance = playing.player.state().base.ms.saturating_sub(paused_ms);
+    assert!(
+        resumed_advance <= 100,
+        "resuming after a 10 s idle pause must not jump by 1000 ms, advanced {resumed_advance} ms"
+    );
+}
+
+/// U-11: `?lite=1` query flag parsing and 32 MiB web media cache ceiling enforcement.
+#[test]
+fn u11_lite_mode_from_query_parses_flag() {
+    use std::sync::Arc;
+
+    assert!(crate::load::lite_mode_from_query("?lite=1"));
+    assert!(crate::load::lite_mode_from_query("?debug=1&lite=1"));
+    assert!(crate::load::lite_mode_from_query("lite=1&name=Ada"));
+    assert!(!crate::load::lite_mode_from_query("?lite=0"));
+    assert!(!crate::load::lite_mode_from_query(""));
+    assert!(!crate::load::lite_mode_from_query("?lite_mode=1"));
+
+    const LITE_CAP: usize = 32 * 1024 * 1024;
+    let profile = coursecraft_render::PerfProfile::for_player_cache(true, true);
+    assert_eq!(profile.web_media_cache_bytes, LITE_CAP);
+
+    let mut state = crate::media::WebMediaState::with_max_bytes(profile.web_media_cache_bytes);
+    // Insert three 12 MiB unprotected entries (36 MiB total -> must evict oldest to stay <= 32 MiB).
+    let chunk: Arc<[u8]> = Arc::from(vec![0u8; 12 * 1024 * 1024]);
+    state.insert_ready("a.png".into(), Arc::clone(&chunk));
+    state.insert_ready("b.png".into(), Arc::clone(&chunk));
+    assert_eq!(state.total_bytes(), 24 * 1024 * 1024);
+
+    state.insert_ready("c.png".into(), chunk);
+    assert!(
+        state.total_bytes() <= LITE_CAP,
+        "web media cache must stay within 32 MiB cap, got {} bytes",
+        state.total_bytes()
+    );
+    assert!(!state.contains("a.png"));
+    assert!(state.contains("b.png"));
+    assert!(state.contains("c.png"));
 }

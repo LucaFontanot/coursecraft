@@ -7,10 +7,11 @@ use std::sync::Arc;
 
 use coursecraft_course::{Course, FontFace, FontStyle};
 #[cfg(not(target_arch = "wasm32"))]
-use coursecraft_publish::zip_package_to;
+use coursecraft_publish::zip_shared_package_to;
 use coursecraft_publish::{
-    PackageFile, PackageInput, PackageStandard, PublishError, PublishFontLookup,
-    PublishFontProvider, auto_embed_fonts, build_package_standard_with_folders, zip_package,
+    PackageFile, PackageStandard, PublishError, PublishFontLookup, PublishFontProvider,
+    SharedPackageFile, SharedPackageInput, auto_embed_fonts, build_package_shared,
+    zip_shared_package,
 };
 use coursecraft_scorm::Standard;
 use coursecraft_ui_egui::PublishStandard;
@@ -53,50 +54,70 @@ pub fn package_standard(standard: PublishStandard) -> PackageStandard {
     }
 }
 
+/// Build the package files using shared `Arc<[u8]>` media buffers without
+/// copying media bytes, and compact published `course.json`.
+///
+/// # Errors
+/// Returns a plain sentence naming the object and file when media is missing,
+/// or describing another package problem.
+pub(crate) fn package_files_shared_from(
+    course: &Course,
+    media: &[(String, Arc<[u8]>)],
+    standard: PackageStandard,
+    player: &[PackageFile],
+) -> Result<Vec<SharedPackageFile>, String> {
+    let course_json = course
+        .to_json_compact()
+        .map_err(|e| format!("Couldn't prepare the course for publishing: {e}"))?;
+
+    let media_map: HashMap<&str, &Arc<[u8]>> = media
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), bytes))
+        .collect();
+    let resolve = |src: &str| media_map.get(src).map(|bytes| Arc::clone(bytes));
+    let folder = |path: &str| {
+        let prefix = format!("{path}/");
+        let files: Vec<(String, Arc<[u8]>)> = media
+            .iter()
+            .filter(|(name, _)| name.starts_with(&prefix))
+            .map(|(name, bytes)| (name.clone(), Arc::clone(bytes)))
+            .collect();
+        (!files.is_empty()).then_some(files)
+    };
+
+    let input = SharedPackageInput {
+        course,
+        course_json: &course_json,
+        player_files: player,
+        media: &resolve,
+    };
+    build_package_shared(&input, standard, &folder).map_err(readable_error)
+}
+
 /// Build the package files for a course and its in-memory media, resolving
 /// media from the in-memory items exactly like the CLI's `.ccraft` path.
 ///
 /// # Errors
 /// Returns a plain sentence naming the object and file when media is missing,
 /// or describing another package problem.
+#[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) fn package_files_from(
     course: &Course,
     media: &[(String, Arc<[u8]>)],
     standard: PackageStandard,
     player: &[PackageFile],
 ) -> Result<Vec<PackageFile>, String> {
-    let course_json = course
-        .to_json()
-        .map_err(|e| format!("Couldn't prepare the course for publishing: {e}"))?;
-    let mut course_json = course_json;
-    // Save writes a trailing newline; publish stays byte-identical to that form.
-    course_json.push('\n');
-
-    let media_map: HashMap<&str, &[u8]> = media
-        .iter()
-        .map(|(name, bytes)| (name.as_str(), bytes.as_ref()))
-        .collect();
-    let resolve = |src: &str| media_map.get(src).map(|bytes| bytes.to_vec());
-    let folder = |path: &str| {
-        let prefix = format!("{path}/");
-        let files: Vec<(String, Vec<u8>)> = media
-            .iter()
-            .filter(|(name, _)| name.starts_with(&prefix))
-            .map(|(name, bytes)| (name.clone(), bytes.to_vec()))
-            .collect();
-        (!files.is_empty()).then_some(files)
-    };
-
-    let input = PackageInput {
-        course,
-        course_json: &course_json,
-        player_files: player,
-        media: &resolve,
-    };
-    build_package_standard_with_folders(&input, standard, &folder).map_err(readable_error)
+    let shared = package_files_shared_from(course, media, standard, player)?;
+    Ok(shared
+        .into_iter()
+        .map(|f| PackageFile {
+            path: f.path,
+            bytes: f.bytes.to_vec(),
+        })
+        .collect())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn package_files(job: &PublishJob) -> Result<Vec<PackageFile>, String> {
     package_files_from(&job.course, &job.media, job.standard, &job.player)
 }
@@ -111,8 +132,8 @@ pub fn run_publish_bytes(
     standard: PackageStandard,
     player: &[PackageFile],
 ) -> Result<Vec<u8>, String> {
-    let files = package_files_from(course, media, standard, player)?;
-    zip_package(&files).map_err(|e| format!("Couldn't create the zip file: {e}"))
+    let files = package_files_shared_from(course, media, standard, player)?;
+    zip_shared_package(&files).map_err(|e| format!("Couldn't create the zip file: {e}"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -191,7 +212,7 @@ pub fn run_publish_job_with_fonts(
             pending_save_fonts.push((face, arc));
         }
     }
-    let files = package_files(&job)?;
+    let files = package_files_shared_from(&job.course, &job.media, job.standard, &job.player)?;
 
     if let Some(parent) = job.out.parent()
         && !parent.as_os_str().is_empty()
@@ -212,8 +233,8 @@ pub fn run_publish_job_with_fonts(
     let written = std::fs::File::create(&tmp)
         .map_err(|e| format!("Couldn't write {}: {e}", job.out.display()))
         .and_then(|file| {
-            let mut file = std::io::BufWriter::new(file);
-            zip_package_to(&files, &mut file)
+            let mut file = std::io::BufWriter::with_capacity(256 * 1024, file);
+            zip_shared_package_to(&files, &mut file)
                 .map_err(|e| format!("Couldn't create the zip file: {e}"))?;
             std::io::Write::flush(&mut file)
                 .map_err(|e| format!("Couldn't write {}: {e}", job.out.display()))

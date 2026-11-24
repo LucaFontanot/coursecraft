@@ -5573,3 +5573,317 @@ fn all_bundled_examples_emit_zero_off_slide_warnings() {
         );
     }
 }
+
+/// U-04: `Course::first_error()` must match `Course::validate().into_iter().find(Error)`
+/// identically across valid courses, warning-only courses, and a broad matrix of invalid courses.
+#[test]
+fn u04_first_error_matches_validate_across_valid_and_invalid_courses() {
+    let assert_parity = |label: &str, course: &Course, expect_playable: bool| {
+        let full_first = course
+            .validate()
+            .into_iter()
+            .find(|i| i.severity == Severity::Error);
+        let fast_first = course.first_error();
+        assert_eq!(
+            fast_first, full_first,
+            "first_error mismatch for case {label}"
+        );
+        assert_eq!(
+            course.is_playable(),
+            expect_playable,
+            "is_playable mismatch for case {label} (error: {fast_first:?})"
+        );
+        assert_eq!(
+            course.is_playable(),
+            full_first.is_none(),
+            "is_playable disagrees with validate for case {label}"
+        );
+    };
+
+    // Valid bundled examples
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    for name in [
+        "hello-course",
+        "reference-course",
+        "showcase",
+        "rich-states",
+        "healthy-habits",
+    ] {
+        let text = std::fs::read_to_string(examples.join(name).join("course.json")).unwrap();
+        let course = Course::from_json(&text).unwrap();
+        assert_parity(name, &course, true);
+    }
+
+    let hello = Course::from_json(HELLO).unwrap();
+
+    // Warnings-only courses (unknown chrome string, unsupported script, missing master, off-slide)
+    {
+        let mut c = hello.clone();
+        c.strings.insert("not_a_real_key".into(), "oops".into());
+        c.theme.font = "NotARealFont".into();
+        c.scenes[0].slides[0].title = "مرحبا العالم".into();
+        c.scenes[0].slides[0].master = Some("missing-master".into());
+        assert!(
+            c.validate().iter().any(|i| i.severity == Severity::Warning),
+            "expected warnings-only course to emit warnings"
+        );
+        assert_parity("warnings_only", &c, true);
+    }
+
+    // Warnings preceding an error (first_error must skip warnings and find the exact error)
+    {
+        let mut c = hello.clone();
+        c.strings.insert("unknown_chrome".into(), "x".into());
+        c.scenes[0].slides[0].title = "مرحبا".into();
+        c.scenes[0].slides[0].objects[0].frame.w = -10.0;
+        assert_parity("warnings_then_error", &c, false);
+    }
+
+    // Invalid matrix
+    type CourseMutator = fn(&mut Course);
+    let invalid_cases: Vec<(&str, CourseMutator)> = vec![
+        ("bad_schema_version", |c| {
+            c.schema_version = 99;
+        }),
+        ("bad_course_id", |c| {
+            c.id = "bad id!".into();
+        }),
+        ("duplicate_slide_id", |c| {
+            let first_id = c.scenes[0].slides[0].id.clone();
+            c.scenes[0].slides[1].id = first_id;
+        }),
+        ("bad_theme_color", |c| {
+            c.theme.accent = crate::Color("not-hex".into());
+        }),
+        ("bad_object_color", |c| {
+            c.scenes[0].slides[0].background = Some(crate::Color("#12345".into()));
+        }),
+        ("bad_frame_nan", |c| {
+            c.scenes[0].slides[0].objects[0].frame.x = f32::NAN;
+        }),
+        ("bad_frame_negative", |c| {
+            c.scenes[0].slides[0].objects[0].frame.h = -1.0;
+        }),
+        ("bad_frame_zero_scroll_panel", |c| {
+            c.scenes[0].slides[0].objects[0].frame.w = 0.0;
+            c.scenes[0].slides[0].objects[0].frame.h = 100.0;
+            c.scenes[0].slides[0].objects[0].kind = crate::ObjectKind::ScrollPanel {
+                content_height: 10.0,
+                bar: crate::ScrollBar::Visible,
+            };
+        }),
+        ("invalid_jump_target", |c| {
+            c.scenes[0].slides[0].triggers.push(Trigger {
+                when: Event::TimelineStarts { layer: None },
+                action: crate::Action::JumpToSlide {
+                    target: crate::SlideTarget::Id("ghost-slide".into()),
+                },
+                condition: None,
+                disabled: false,
+            });
+        }),
+        ("invalid_variable_ref", |c| {
+            c.scenes[0].slides[0].triggers.push(Trigger {
+                when: Event::VariableChanges {
+                    variable: "missing_var".into(),
+                },
+                action: crate::Action::PauseTimeline,
+                condition: None,
+                disabled: false,
+            });
+        }),
+        ("bad_condition_depth", |c| {
+            let mut cond = crate::Condition::Compare {
+                variable: "tabs_seen".into(),
+                op: crate::CmpOp::Eq,
+                value: crate::Value::Number(1.0).into(),
+            };
+            for _ in 0..40 {
+                cond = crate::Condition::Not(Box::new(cond));
+            }
+            c.scenes[0].slides[1].triggers[0].condition = Some(cond);
+        }),
+        ("bad_master_trigger", |c| {
+            let mut master = c.scenes[0].slides[0].clone();
+            master.id = "m-bad".into();
+            master.title = "Bad Master".into();
+            master.layers.clear();
+            master.question = None;
+            c.masters.push(master);
+        }),
+        ("bad_master_object_frame", |c| {
+            let mut master = c.scenes[0].slides[0].clone();
+            master.id = "m-frame".into();
+            master.title = "Frame Master".into();
+            master.triggers.clear();
+            master.layers.clear();
+            master.question = None;
+            master.objects[0].frame.w = f32::INFINITY;
+            c.masters.push(master);
+        }),
+        ("bad_bank_draw_missing_bank", |c| {
+            c.scenes[0].slides[0].draw = Some(crate::BankDraw {
+                bank: "no-bank".into(),
+                count: 1,
+            });
+        }),
+        ("bad_bank_draw_count_exceeds", |c| {
+            let mut q_slide = c.slide("s-quiz").unwrap().clone();
+            q_slide.id = "b-q1".into();
+            c.banks.push(crate::QuestionBank {
+                id: "bank-1".into(),
+                title: "Bank 1".into(),
+                slides: vec![q_slide],
+            });
+            c.scenes[0].slides[0].draw = Some(crate::BankDraw {
+                bank: "bank-1".into(),
+                count: 2,
+            });
+        }),
+        ("bad_quiz_passing_percent", |c| {
+            c.quiz = Some(crate::QuizSettings {
+                passing_percent: 120,
+            });
+        }),
+        ("bad_quiz_question_choices", |c| {
+            let q = c.slide_mut("s-quiz").unwrap().question.as_mut().unwrap();
+            q.choices[0].correct = true;
+        }),
+    ];
+
+    for (label, mutate_fn) in invalid_cases {
+        let mut c = hello.clone();
+        mutate_fn(&mut c);
+        assert_parity(label, &c, false);
+    }
+}
+
+/// U-04: `Course::validate_slide_errors()` catches the exact same error (path + message)
+/// as `Course::first_error()` for single-slide mutations across scene slides, masters,
+/// bank slides, and templates.
+#[test]
+fn u04_validate_slide_errors_matches_full_validate_for_slide_mutations() {
+    let hello = Course::from_json(HELLO).unwrap();
+
+    // Valid slide (even with warnings-only) returns None
+    {
+        let mut c = hello.clone();
+        c.scenes[0].slides[0].title = "مرحبا العالم".into();
+        assert_eq!(
+            c.validate_slide_errors(&c.scenes[0].slides[0], "/scenes/0/slides/0"),
+            None
+        );
+    }
+
+    // Scene slide mutations
+    type CourseMutator = fn(&mut Course);
+    let scene_mutations: Vec<(&str, usize, CourseMutator)> = vec![
+        ("bad_object_frame", 0, |c| {
+            c.scenes[0].slides[0].objects[0].frame.w = f32::NAN;
+        }),
+        ("bad_object_color", 0, |c| {
+            if let crate::ObjectKind::Text { style, .. } =
+                &mut c.scenes[0].slides[0].objects[0].kind
+            {
+                style.color = crate::Color("invalid".into());
+            }
+        }),
+        ("invalid_jump_target", 0, |c| {
+            c.scenes[0].slides[0].triggers.push(Trigger {
+                when: Event::TimelineStarts { layer: None },
+                action: crate::Action::JumpToSlide {
+                    target: crate::SlideTarget::Id("does-not-exist".into()),
+                },
+                condition: None,
+                disabled: false,
+            });
+        }),
+        ("invalid_trigger_variable", 1, |c| {
+            c.scenes[0].slides[1].triggers[0].action = crate::Action::SetVariable {
+                variable: "nonexistent_var".into(),
+                op: crate::VarOp::Assign,
+                value: Some(crate::Value::Number(1.0).into()),
+            };
+        }),
+        ("bad_slide_next_requires", 0, |c| {
+            c.scenes[0].slides[0].player = Some(crate::SlidePlayerOverrides {
+                next_requires: Some(crate::NextRequirement::Variable {
+                    name: "tabs_seen".into(),
+                }),
+                ..Default::default()
+            });
+        }),
+        ("bad_slide_draw", 0, |c| {
+            c.scenes[0].slides[0].draw = Some(crate::BankDraw {
+                bank: "missing-bank".into(),
+                count: 1,
+            });
+        }),
+    ];
+
+    for (label, slide_idx, mutate_fn) in scene_mutations {
+        let mut c = hello.clone();
+        mutate_fn(&mut c);
+        let prefix = format!("/scenes/0/slides/{slide_idx}");
+        let expected = c.first_error();
+        assert!(expected.is_some(), "expected an error for {label}");
+        let actual = c.validate_slide_errors(&c.scenes[0].slides[slide_idx], &prefix);
+        assert_eq!(
+            actual, expected,
+            "validate_slide_errors mismatch for scene slide case {label}"
+        );
+    }
+
+    // Master slide mutation (including master label prefix on object errors)
+    {
+        let mut c = hello.clone();
+        let mut master = c.scenes[0].slides[0].clone();
+        master.id = "m-custom".into();
+        master.title = "Custom Master".into();
+        master.triggers.clear();
+        master.layers.clear();
+        master.question = None;
+        master.objects[0].frame.h = -5.0;
+        c.masters.push(master);
+        let expected = c.first_error();
+        assert!(expected.is_some());
+        let actual = c.validate_slide_errors(&c.masters[0], "/masters/0");
+        assert_eq!(actual, expected, "master validate_slide_errors mismatch");
+    }
+
+    // Bank slide mutation (missing question)
+    {
+        let mut c = hello.clone();
+        let mut b_slide = c.scenes[0].slides[0].clone();
+        b_slide.id = "b-no-q".into();
+        b_slide.question = None;
+        c.banks.push(crate::QuestionBank {
+            id: "bank-a".into(),
+            title: "Bank A".into(),
+            slides: vec![b_slide],
+        });
+        let expected = c.first_error();
+        assert!(expected.is_some());
+        let actual = c.validate_slide_errors(&c.banks[0].slides[0], "/banks/0/slides/0");
+        assert_eq!(
+            actual, expected,
+            "bank slide validate_slide_errors mismatch"
+        );
+    }
+
+    // Template slide mutation (draw not allowed)
+    {
+        let mut c = hello.clone();
+        let mut tmpl = c.scenes[0].slides[0].clone();
+        tmpl.id = "t-bad".into();
+        tmpl.draw = Some(crate::BankDraw {
+            bank: "any".into(),
+            count: 1,
+        });
+        c.templates.push(tmpl);
+        let expected = c.first_error();
+        assert!(expected.is_some());
+        let actual = c.validate_slide_errors(&c.templates[0], "/templates/0");
+        assert_eq!(actual, expected, "template validate_slide_errors mismatch");
+    }
+}

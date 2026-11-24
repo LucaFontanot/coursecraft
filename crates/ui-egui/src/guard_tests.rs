@@ -45,12 +45,18 @@ fn picture_course(n: usize) -> Course {
 }
 
 fn picture_media(n: usize) -> Vec<(String, Arc<[u8]>)> {
-    let pixels = vec![0u8; 16 * 16 * 4];
-    let png = Arc::from(
-        crate::coursecraft_media::encode_png_rgba(16, 16, &pixels).expect("test picture encodes"),
-    );
     (0..n)
-        .map(|n| (format!("img/p{n}.png"), Arc::clone(&png)))
+        .map(|i| {
+            let mut pixels = vec![0u8; 16 * 16 * 4];
+            pixels[0] = (i & 0xFF) as u8;
+            pixels[1] = ((i >> 8) & 0xFF) as u8;
+            pixels[3] = 255;
+            let png = Arc::from(
+                crate::coursecraft_media::encode_png_rgba(16, 16, &pixels)
+                    .expect("test picture encodes"),
+            );
+            (format!("img/p{i}.png"), png)
+        })
         .collect()
 }
 
@@ -790,5 +796,704 @@ fn editing_master_or_theme_invalidates_visible_thumbnails() {
         gc::thumbnail_composes(),
         0,
         "selecting another already-visible slide must compose zero thumbnails"
+    );
+}
+
+/// s1: `guard_counters::reset()` zeroes all new M34 counters (canvas composes,
+/// renderer counters, and engine full-course validations), and running an uncached
+/// editor frame increments `canvas_composes()`.
+#[test]
+fn s1_guard_counters_reset_and_record_canvas_compose() {
+    let mut h = hello();
+
+    // Bump every new counter before resetting so we prove reset() zeroes them all.
+    gc::note_canvas_compose();
+    coursecraft_render::test_counts::note_font_def_clone();
+    coursecraft_render::test_counts::note_text_layout_miss();
+    coursecraft_render::test_counts::note_shape_mesh_miss();
+    coursecraft_render::test_counts::note_full_res_thumbnail_decode();
+    coursecraft_engine::test_counts::note_full_course_validation();
+
+    assert!(gc::canvas_composes() > 0);
+    assert!(gc::font_def_clones() > 0);
+    assert!(gc::text_layout_misses() > 0);
+    assert!(gc::shape_mesh_misses() > 0);
+    assert!(gc::full_res_thumbnail_decodes() > 0);
+    assert!(gc::full_course_validations() > 0);
+
+    gc::reset();
+
+    assert_eq!(gc::canvas_composes(), 0);
+    assert_eq!(gc::font_def_clones(), 0);
+    assert_eq!(gc::text_layout_misses(), 0);
+    assert_eq!(gc::shape_mesh_misses(), 0);
+    assert_eq!(gc::full_res_thumbnail_decodes(), 0);
+    assert_eq!(gc::full_course_validations(), 0);
+    assert_eq!(picture_decodes(), 0);
+
+    let _ = h.idle_frame();
+    assert!(
+        gc::canvas_composes() >= 1,
+        "an uncached editor frame must record at least one canvas compose, got {}",
+        gc::canvas_composes()
+    );
+}
+
+/// G-03: Steady idle and scroll frames perform zero `FontDefinitions` clones on
+/// both `hello-course` and a course with a registered custom font face.
+#[test]
+fn g03_steady_frames_zero_font_def_clones() {
+    // 1. hello-course: 20 idle frames + 20 scroll frames after settling.
+    let mut h = hello();
+    for _ in 0..10 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    for _ in 0..20 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::font_def_clones(),
+        0,
+        "20 steady idle frames on hello-course must perform zero FontDefinitions clones"
+    );
+
+    let list_pos = pos2(90.0, 300.0);
+    h.frame(vec![Event::PointerMoved(list_pos)]);
+    reset_counts();
+    for i in 0..20 {
+        let dy = if i % 2 == 0 { -120.0 } else { 120.0 };
+        h.frame(vec![wheel(dy)]);
+    }
+    assert_eq!(
+        gc::font_def_clones(),
+        0,
+        "20 scroll frames on hello-course must perform zero FontDefinitions clones"
+    );
+
+    // 2. Course with a registered custom font face: 20 idle frames after settling.
+    const TEST_FONT: &[u8] = include_bytes!("../../render/fonts/Inter-Bold.ttf");
+    let custom_json = r##"{
+        "schema_version": 1,
+        "id": "custom-font-guard",
+        "title": "Custom Font Guard",
+        "slide_size": { "w": 1280, "h": 720 },
+        "fonts": [{
+            "family": "BrandDisplay",
+            "style": "regular",
+            "src": "fonts/brand.ttf"
+        }],
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [{
+                "id": "s0",
+                "title": "Brand Slide",
+                "objects": [{
+                    "id": "t0",
+                    "kind": {
+                        "type": "text",
+                        "text": "Custom font headline",
+                        "style": { "font": "BrandDisplay", "size": 42, "color": "#111827" }
+                    },
+                    "frame": { "x": 80, "y": 80, "w": 640, "h": 120 }
+                }]
+            }]
+        }]
+    }"##;
+    let custom_course = Course::from_json(custom_json).expect("custom font course parses");
+    let mut h_custom = TestHarness::new(custom_course);
+    h_custom
+        .editor
+        .set_media(vec![("fonts/brand.ttf".into(), Arc::from(TEST_FONT))]);
+    for _ in 0..10 {
+        let _ = h_custom.idle_frame();
+    }
+    assert!(
+        coursecraft_render::font_epoch(&h_custom.ctx) > 0,
+        "custom font course should have installed fonts"
+    );
+    reset_counts();
+    for _ in 0..20 {
+        let _ = h_custom.idle_frame();
+    }
+    assert_eq!(
+        gc::font_def_clones(),
+        0,
+        "20 steady idle frames with a registered custom font face must perform zero FontDefinitions clones"
+    );
+}
+
+fn png_crc32(chunk_type: &[u8; 4], data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in chunk_type.iter().chain(data.iter()) {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xEDB8_8320;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    !crc
+}
+
+/// Build `n` distinct valid `1280x720` PNGs quickly by encoding one base PNG
+/// and splicing a unique `tEXt` chunk before `IEND` so content-hash dedup
+/// never collapses them.
+fn distinct_1280x720_pngs(n: usize) -> Vec<(String, Arc<[u8]>)> {
+    let pixels = vec![64u8; 1280 * 720 * 4];
+    let base = crate::coursecraft_media::encode_png_rgba(1280, 720, &pixels)
+        .expect("encode base 1280x720 png");
+    let iend_start = base.len().saturating_sub(12);
+    let (prefix, iend) = base.split_at(iend_start);
+
+    (0..n)
+        .map(|i| {
+            let text = format!("Comment\0slide-{i}");
+            let data = text.as_bytes();
+            let crc = png_crc32(b"tEXt", data);
+            let mut png = Vec::with_capacity(base.len() + 12 + data.len());
+            png.extend_from_slice(prefix);
+            png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            png.extend_from_slice(b"tEXt");
+            png.extend_from_slice(data);
+            png.extend_from_slice(&crc.to_be_bytes());
+            png.extend_from_slice(iend);
+            (format!("img/p{i}.png"), Arc::from(png))
+        })
+        .collect()
+}
+
+/// G-02: Scrolling a 100-slide picture course with distinct 1280×720 PNGs
+/// decodes thumbnails at thumbnail tier (`total_bytes <= 8 MiB`,
+/// `full_res_thumbnail_decodes == 0`), and selecting slide `s-50` on the main
+/// canvas upgrades its texture cleanly.
+#[test]
+fn g02_scrolling_100_slide_pictures_stays_under_8_mib() {
+    const SLIDES: usize = 100;
+    let mut slides = Vec::with_capacity(SLIDES);
+    for i in 0..SLIDES {
+        slides.push(format!(
+            r##"{{"id":"s-{i}","title":"Slide {i}","objects":[{{"id":"p{i}","kind":{{"type":"image","src":"img/p{i}.png","alt":"Photo {i}"}},"frame":{{"x":40,"y":40,"w":1200,"h":640}}}}]}}"##
+        ));
+    }
+    let json = format!(
+        r#"{{"schema_version":1,"id":"g02-pictures","title":"G02 Pictures","slide_size":{{"w":1280,"h":720}},"scenes":[{{"id":"sc0","title":"Scene 0","slides":[{}]}}]}}"#,
+        slides.join(",")
+    );
+    let course = Course::from_json(&json).expect("g02 course parses");
+
+    let mut h = TestHarness::new(course);
+    h.editor.set_media(distinct_1280x720_pngs(SLIDES));
+    reset_counts();
+
+    // Settle initial viewport (top thumbnails + s-0 on canvas).
+    for _ in 0..3 {
+        let _ = h.idle_frame();
+    }
+    let list_pos = h
+        .find_text_containing("Slide 0")
+        .unwrap_or_else(|| pos2(90.0, 300.0));
+    h.frame(vec![Event::PointerMoved(list_pos)]);
+    let top = h.editor.ui.slides_scroll_y;
+
+    // Scroll through the slide list (middle and bottom) without selecting every slide.
+    h.frame(vec![wheel(-4000.0)]);
+    let _ = h.idle_frame();
+    h.frame(vec![wheel(-4000.0)]);
+    let _ = h.idle_frame();
+
+    assert!(
+        h.editor.ui.slides_scroll_y > top,
+        "wheel events must actually scroll the 100-slide list (top={top}, after={})",
+        h.editor.ui.slides_scroll_y
+    );
+    let decoded_during_scroll = h.editor.media_cache.decoded_picture_count();
+    assert!(
+        decoded_during_scroll >= 10,
+        "scrolling 100 distinct slides must decode at least 10 distinct thumbnails, got {decoded_during_scroll}"
+    );
+    let scroll_bytes = h.editor.media_cache.total_bytes();
+    assert!(
+        scroll_bytes <= 8 * 1024 * 1024,
+        "scrolling 100-slide 1280x720 picture list must stay <= 8 MiB, got {scroll_bytes} bytes"
+    );
+    assert_eq!(
+        gc::full_res_thumbnail_decodes(),
+        0,
+        "thumbnails must never trigger full-resolution decodes"
+    );
+
+    // Select slide s-50 on the main canvas and verify it upgrades cleanly and renders.
+    let bytes_before_s50 = h.editor.media_cache.total_bytes();
+    let tex_before_s50 = h.editor.media_cache.texture_id("img/p50.png");
+    h.editor.selection.slide = "s-50".into();
+    let _ = h.idle_frame();
+
+    assert!(
+        h.editor.media_cache.is_loaded_image("img/p50.png"),
+        "s-50 picture must load and render on the main canvas"
+    );
+    assert!(
+        matches!(
+            h.editor.media_cache.get_entry("img/p50.png"),
+            Some(coursecraft_render::MediaEntry::Texture(_, [1280, 720]))
+        ),
+        "s-50 picture must preserve its natural 1280x720 dimensions"
+    );
+    assert_ne!(
+        h.editor.media_cache.texture_id("img/p50.png"),
+        tex_before_s50,
+        "selecting s-50 on the main canvas must upgrade/upload its canvas texture"
+    );
+    assert!(
+        h.editor.media_cache.total_bytes() > bytes_before_s50,
+        "upgrading s-50 for the main canvas should allocate its higher-tier texture"
+    );
+    assert_eq!(
+        gc::full_res_thumbnail_decodes(),
+        0,
+        "upgrading s-50 on the canvas must not count as a full-res thumbnail decode"
+    );
+}
+
+/// G-07 (`M34-07`): On a settled 300-slide course, nudging an object with an
+/// arrow key uses scoped single-slide validation and cached engine issues with
+/// zero full-course validations and exactly one validation refresh.
+#[test]
+fn g07_arrow_nudge_uses_cached_validation_with_zero_full_validations() {
+    let mut h = TestHarness::new(many_slide_course(300));
+    h.editor.selection.slide = "s-0".into();
+    h.editor.selection.object = Some("t0".into());
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+
+    let x_before = h
+        .editor
+        .session
+        .course
+        .slide("s-0")
+        .and_then(|slide| slide.object("t0"))
+        .map(|(obj, _)| obj.frame.x)
+        .expect("t0 exists on s-0");
+
+    reset_counts();
+    h.press(Key::ArrowRight, Modifiers::NONE);
+
+    let x_after = h
+        .editor
+        .session
+        .course
+        .slide("s-0")
+        .and_then(|slide| slide.object("t0"))
+        .map(|(obj, _)| obj.frame.x)
+        .expect("t0 exists on s-0");
+    assert!(
+        x_after > x_before,
+        "ArrowRight should nudge t0 to the right (before={x_before}, after={x_after})"
+    );
+    assert_eq!(
+        gc::full_course_validations(),
+        0,
+        "arrow nudge on a 300-slide course must perform zero full-course validations"
+    );
+    assert_eq!(
+        gc::validation_runs(),
+        1,
+        "arrow nudge must trigger exactly one cached validation refresh"
+    );
+}
+
+/// G-05 (`M34-10`): On a settled 50-object slide with gradient shapes and
+/// overflowing `Autofit::Shrink` text boxes, 20 idle frames perform zero canvas
+/// composes, zero text layout cache misses, and zero shape mesh cache misses.
+#[test]
+fn g05_idle_frames_zero_canvas_composes_and_cache_misses() {
+    let shape_kinds = [
+        "rounded_rectangle",
+        "ellipse",
+        "star_5",
+        "arrow_right",
+        "hexagon",
+    ];
+    let mut objects = Vec::with_capacity(50);
+    for i in 0..50usize {
+        let col = i % 10;
+        let row = i / 10;
+        let x = 20.0 + (col as f32) * 124.0;
+        let y = 20.0 + (row as f32) * 136.0;
+        if i < 25 {
+            let shape = shape_kinds[i % shape_kinds.len()];
+            let fill_style = if i % 2 == 0 {
+                serde_json::json!({
+                    "type": "linear",
+                    "angle": (i as f32) * 15.0,
+                    "stops": [
+                        { "color": "#2563EB", "position": 0.0 },
+                        { "color": "#10B981", "position": 1.0 }
+                    ]
+                })
+            } else {
+                serde_json::json!({
+                    "type": "radial",
+                    "center": [0.4, 0.4],
+                    "stops": [
+                        { "color": "#F59E0B", "position": 0.0 },
+                        { "color": "#DC2626", "position": 1.0 }
+                    ]
+                })
+            };
+            objects.push(serde_json::json!({
+                "id": format!("sh-{i}"),
+                "kind": {
+                    "type": "shape",
+                    "shape": shape,
+                    "fill": "#2563EB",
+                    "fill_style": fill_style,
+                    "outline": { "color": "#1E293B", "width": 2.0 }
+                },
+                "frame": { "x": x, "y": y, "w": 110.0, "h": 110.0 }
+            }));
+        } else {
+            objects.push(serde_json::json!({
+                "id": format!("tx-{i}"),
+                "kind": {
+                    "type": "text",
+                    "text": format!("Overflowing shrink-to-fit text item {i} with enough words to trigger Autofit::Shrink binary search."),
+                    "style": { "size": 26.0, "color": "#111827" },
+                    "autofit": "shrink"
+                },
+                "frame": { "x": x, "y": y, "w": 110.0, "h": 110.0 }
+            }));
+        }
+    }
+    let course_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "g05-cache-slide",
+        "title": "G-05 Cache Slide",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [{
+                "id": "s0",
+                "title": "50 Gradient & Shrink Objects",
+                "objects": objects
+            }]
+        }]
+    });
+    let course = Course::from_json(&course_json.to_string()).expect("g05 course parses");
+    let mut h = TestHarness::new(course);
+    h.editor.selection.slide = "s0".into();
+
+    reset_counts();
+    for _ in 0..5 {
+        let _ = h.idle_frame();
+    }
+    assert!(
+        gc::canvas_composes() >= 1,
+        "initial settling must perform at least one canvas compose"
+    );
+    assert!(
+        gc::text_layout_misses() >= 25,
+        "initial settling must populate text layout cache, got {}",
+        gc::text_layout_misses()
+    );
+    assert!(
+        gc::shape_mesh_misses() >= 25,
+        "initial settling must populate shape mesh cache, got {}",
+        gc::shape_mesh_misses()
+    );
+
+    reset_counts();
+    for _ in 0..20 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::canvas_composes(),
+        0,
+        "20 idle frames must perform zero canvas composes"
+    );
+    assert_eq!(
+        gc::text_layout_misses(),
+        0,
+        "20 idle frames must perform zero text layout cache misses"
+    );
+    assert_eq!(
+        gc::shape_mesh_misses(),
+        0,
+        "20 idle frames must perform zero shape mesh cache misses"
+    );
+}
+
+/// G-06 (`M34-12`): In Check Spelling on a 100-slide course, Ignore, Ignore all,
+/// and Add to dictionary filter issues in-place with zero speller runs.
+#[test]
+fn g06_check_spelling_ignore_and_add_run_zero_speller_checks() {
+    const SLIDES: usize = 100;
+    let mut slides = Vec::with_capacity(SLIDES);
+    for i in 0..SLIDES {
+        slides.push(format!(
+            r##"{{"id":"s-{i}","title":"Slide {i}","objects":[{{"id":"t{i}","kind":{{"type":"text","text":"teh recieve seperate"}},"frame":{{"x":60,"y":60,"w":600,"h":120}}}}]}}"##
+        ));
+    }
+    let json = format!(
+        r#"{{"schema_version":1,"id":"g06-spelling","title":"G-06 Spelling","slide_size":{{"w":1280,"h":720}},"scenes":[{{"id":"sc0","title":"Scene 0","slides":[{}]}}]}}"#,
+        slides.join(",")
+    );
+    let course = Course::from_json(&json).expect("g06 spelling course parses");
+    let mut h = TestHarness::new(course);
+    let _ = h.idle_frame();
+
+    // Open Check Spelling and let the initial scan finish.
+    crate::spell_check::open(&mut h.editor);
+    let _ = h.idle_frame();
+    assert_eq!(
+        h.editor.ui.spell_check.issues.len(),
+        SLIDES * 3,
+        "initial Check Spelling scan should find all 300 typos"
+    );
+
+    reset_counts();
+
+    // 1. Ignore one occurrence of "teh" on Slide 0.
+    let first_loc = h.editor.ui.spell_check.issues[0].item.location.clone();
+    let first_start = h.editor.ui.spell_check.issues[0].misspelling.start;
+    crate::spell_check::ignore_issue(&mut h.editor, 0, false);
+    let _ = h.idle_frame();
+    assert_eq!(
+        gc::speller_runs(),
+        0,
+        "Ignore must perform zero speller runs"
+    );
+    assert_eq!(
+        h.editor.ui.spell_check.issues.len(),
+        SLIDES * 3 - 1,
+        "Ignore must remove only the ignored occurrence"
+    );
+    assert!(
+        !h.editor
+            .ui
+            .spell_check
+            .issues
+            .iter()
+            .any(|i| i.item.location == first_loc && i.misspelling.start == first_start),
+        "ignored occurrence must be removed from issues"
+    );
+
+    // 2. Ignore all occurrences of "teh".
+    let teh_idx = h
+        .editor
+        .ui
+        .spell_check
+        .issues
+        .iter()
+        .position(|i| i.misspelling.word.eq_ignore_ascii_case("teh"))
+        .expect("remaining teh occurrence");
+    crate::spell_check::ignore_issue(&mut h.editor, teh_idx, true);
+    let _ = h.idle_frame();
+    assert_eq!(
+        gc::speller_runs(),
+        0,
+        "Ignore all must perform zero speller runs"
+    );
+    assert!(
+        h.editor
+            .ui
+            .spell_check
+            .issues
+            .iter()
+            .all(|i| !i.misspelling.word.eq_ignore_ascii_case("teh")),
+        "Ignore all must remove every occurrence of teh"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues.len(), SLIDES * 2);
+
+    // 3. Add "recieve" to the personal dictionary.
+    let recieve_idx = h
+        .editor
+        .ui
+        .spell_check
+        .issues
+        .iter()
+        .position(|i| i.misspelling.word.eq_ignore_ascii_case("recieve"))
+        .expect("recieve occurrence");
+    crate::spell_check::add_issue_word(&mut h.editor, recieve_idx);
+    let _ = h.idle_frame();
+    assert_eq!(
+        gc::speller_runs(),
+        0,
+        "Add to dictionary must perform zero speller runs"
+    );
+    assert!(
+        h.editor
+            .ui
+            .spell_check
+            .issues
+            .iter()
+            .all(|i| !i.misspelling.word.eq_ignore_ascii_case("recieve")),
+        "Add to dictionary must remove every occurrence of recieve"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues.len(), SLIDES);
+}
+
+/// Regression test (`M34-12`): direct same-length replacements of `Editor::media`
+/// (including middle-entry renames) must never leave `media_index` stale.
+#[test]
+fn s11_media_index_detects_same_length_replacement() {
+    use coursecraft_render::{MediaFetch, MediaSource};
+
+    let course = Course::from_json(
+        r#"{"schema_version":1,"id":"s11-media","title":"S11 Media","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[{"id":"img0","kind":{"type":"image","src":"mid-new.png","alt":""},"frame":{"x":0,"y":0,"w":100,"h":100}}]}]}]}"#,
+    )
+    .expect("course parses");
+    let mut h = TestHarness::new(course);
+    let bytes_a: std::sync::Arc<[u8]> = std::sync::Arc::from(b"aaa".as_slice());
+    let bytes_b: std::sync::Arc<[u8]> = std::sync::Arc::from(b"bbb".as_slice());
+    let bytes_c: std::sync::Arc<[u8]> = std::sync::Arc::from(b"ccc".as_slice());
+
+    h.editor
+        .set_media(vec![("old.png".to_owned(), bytes_a.clone())]);
+    let _ = h.idle_frame();
+    assert!(h.editor.media_contains("old.png"));
+
+    // Same-length full replacement before any frame runs.
+    h.editor.media = vec![("new.png".to_owned(), bytes_b.clone())];
+    assert!(
+        matches!(h.editor.get("new.png"), MediaFetch::Ready(ref b) if b.as_ref() == b"bbb"),
+        "same-length replacement must be visible immediately via MediaSource::get"
+    );
+    assert!(matches!(h.editor.get("old.png"), MediaFetch::Missing));
+
+    // Sync a 3-item list, then replace only the middle entry's name (same length & ends).
+    h.editor.set_media(vec![
+        ("first.png".to_owned(), bytes_a.clone()),
+        ("mid-old.png".to_owned(), bytes_b.clone()),
+        ("last.png".to_owned(), bytes_c.clone()),
+    ]);
+    let _ = h.idle_frame();
+    assert!(h.editor.media_contains("mid-old.png"));
+
+    h.editor.media[1] = ("mid-new.png".to_owned(), bytes_b);
+    let _ = h.idle_frame();
+    assert!(
+        matches!(h.editor.get("mid-new.png"), MediaFetch::Ready(ref b) if b.as_ref() == b"bbb"),
+        "sync_media_index must detect same-length middle-entry replacement"
+    );
+    assert!(!h.editor.media_contains("mid-old.png"));
+    h.editor.refresh_validate_only();
+    assert!(
+        !h.editor
+            .ui
+            .validation_issues
+            .iter()
+            .any(|i| i.message.contains("Missing media")),
+        "mid-new.png must not be flagged as missing media"
+    );
+}
+
+/// Regression test (`M34-12`): `add_issue_word` removes Unicode case variants
+/// matching `Speller::add_word`, and stale issue lists refresh instead of freezing.
+#[test]
+fn s11_spell_check_unicode_add_and_stale_key_safety() {
+    let course = Course::from_json(
+        r#"{"schema_version":1,"id":"s11-spell","title":"S11 Spell","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[{"id":"t0","kind":{"type":"text","text":"Übertäx übertäx teh"},"frame":{"x":60,"y":60,"w":600,"h":120}}]}]}]}"#,
+    )
+    .expect("course parses");
+    let mut h = TestHarness::new(course);
+    let _ = h.idle_frame();
+
+    crate::spell_check::open(&mut h.editor);
+    let _ = h.idle_frame();
+    assert_eq!(h.editor.ui.spell_check.issues.len(), 3);
+
+    reset_counts();
+    crate::spell_check::add_issue_word(&mut h.editor, 0);
+    let _ = h.idle_frame();
+    assert_eq!(gc::speller_runs(), 0);
+    assert_eq!(
+        h.editor.ui.spell_check.issues.len(),
+        1,
+        "adding Übertäx must also remove übertäx in-place"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues[0].misspelling.word, "teh");
+
+    // Mutate course text so spell_check.key becomes stale relative to session.revision,
+    // then invoke ignore_issue directly: it must refresh instead of freezing stale issues.
+    assert!(
+        h.editor
+            .run(
+                "object.update",
+                serde_json::json!({
+                    "slide": "s0",
+                    "object": "t0",
+                    "kind": { "type": "text", "text": "Übertäx übertäx teh recieve" }
+                }),
+            )
+            .is_some()
+    );
+    crate::spell_check::ignore_issue(&mut h.editor, 0, false);
+    assert!(
+        h.editor
+            .ui
+            .spell_check
+            .issues
+            .iter()
+            .any(|i| i.misspelling.word == "recieve"),
+        "stale spell_check list must refresh to include newly introduced typo"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues.len(), 1);
+}
+
+/// Regression test (`G-06` follow-up): ignoring an occurrence or word preserves
+/// cached word suggestions (0 suggestion lookups on repeated words), while
+/// adding a word to the dictionary clears cached suggestions so the new word
+/// can be suggested.
+#[test]
+fn g06_ignore_preserves_cached_suggestions() {
+    let course = Course::from_json(
+        r#"{"schema_version":1,"id":"g06-sug","title":"G-06 Suggestions","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[{"id":"t0","kind":{"type":"text","text":"teh first"},"frame":{"x":60,"y":60,"w":600,"h":120}}]},{"id":"s1","title":"Slide 1","objects":[{"id":"t1","kind":{"type":"text","text":"teh second"},"frame":{"x":60,"y":60,"w":600,"h":120}}]},{"id":"s2","title":"Slide 2","objects":[{"id":"t2","kind":{"type":"text","text":"teh third"},"frame":{"x":60,"y":60,"w":600,"h":120}}]}]}]}"#,
+    )
+    .expect("course parses");
+    let mut h = TestHarness::new(course);
+    let _ = h.idle_frame();
+
+    crate::spell_check::open(&mut h.editor);
+    let _ = h.idle_frame();
+    assert_eq!(h.editor.ui.spell_check.issues.len(), 3);
+
+    reset_counts();
+    crate::spell_check::ignore_issue(&mut h.editor, 0, false);
+    let _ = h.idle_frame();
+    assert_eq!(
+        gc::speller_runs(),
+        0,
+        "Ignore must perform zero speller runs"
+    );
+    assert_eq!(
+        gc::suggestion_lookups(),
+        0,
+        "Ignore must preserve cached suggestions for the next identical word"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues.len(), 2);
+
+    // Ignoring another word (session-only) also keeps cached suggestions intact.
+    h.editor.ignore_spell_word("recieve");
+    let _ = h.editor.spell_suggestions("teh");
+    assert_eq!(
+        gc::suggestion_lookups(),
+        0,
+        "ignore_spell_word must preserve cached suggestions"
+    );
+
+    // Adding a word to the personal dictionary does invalidate cached suggestions.
+    h.editor.add_spell_word("customword");
+    let _ = h.editor.spell_suggestions("teh");
+    assert_eq!(
+        gc::suggestion_lookups(),
+        1,
+        "add_spell_word must clear cached suggestions because the dictionary changed"
     );
 }

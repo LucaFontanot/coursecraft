@@ -2,7 +2,7 @@
 
 use coursecraft_course::Course;
 use coursecraft_engine::Session;
-use coursecraft_format::{FolderRecord, open_project};
+use coursecraft_format::{FolderRecord, open_project_from};
 use std::path::{Path, PathBuf};
 
 /// A media entry stored alongside the course.
@@ -146,7 +146,7 @@ fn save_to_slices<B: AsRef<[u8]>>(
     write_atomic_stream_with(
         path,
         &mut |file| {
-            let mut buf = std::io::BufWriter::new(file);
+            let mut buf = std::io::BufWriter::with_capacity(256 * 1024, file);
             coursecraft_format::save_project_to(course, media, &mut buf)
                 .map_err(|e| std::io::Error::other(format!("Save failed: {e}")))?;
             std::io::Write::flush(&mut buf)
@@ -162,7 +162,8 @@ fn save_to_slices<B: AsRef<[u8]>>(
 /// Read a `.ccraft` file back from disk and check it is whole.
 pub(crate) fn verify_ccraft_file(path: &Path) -> Result<(), String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    coursecraft_format::verify_project(std::io::BufReader::new(file)).map_err(|e| plain_error(&e))
+    coursecraft_format::verify_project(std::io::BufReader::with_capacity(256 * 1024, file))
+        .map_err(|e| plain_error(&e))
 }
 
 /// A format error in plain words. A project over the size limits gets the same
@@ -248,6 +249,10 @@ pub type Verify<'a> = dyn Fn(&Path) -> Result<(), String> + 'a;
 pub struct Hooks<'a> {
     /// Runs on the flushed temp file just before verification.
     pub after_write: &'a dyn Fn(&Path) -> std::io::Result<()>,
+    /// Checked after verification and immediately before the atomic rename.
+    /// Returning `false` aborts the commit, removes the temp file, and leaves
+    /// the target untouched.
+    pub should_commit: &'a dyn Fn() -> bool,
     /// Moves the temp file over the target.
     pub rename: &'a dyn Fn(&Path, &Path) -> std::io::Result<()>,
     /// Pause between retries of a locked file.
@@ -258,6 +263,7 @@ impl Default for Hooks<'_> {
     fn default() -> Self {
         Self {
             after_write: &|_| Ok(()),
+            should_commit: &|| true,
             rename: &|from, to| std::fs::rename(from, to),
             retry_delay: std::time::Duration::from_millis(400),
         }
@@ -373,6 +379,10 @@ fn write_and_swap(
             )
         })?;
     }
+    if !(hooks.should_commit)() {
+        let _ = std::fs::remove_file(tmp);
+        return Ok(());
+    }
     with_retries(hooks.retry_delay, || (hooks.rename)(tmp, path))?;
     sync_parent_dir(path);
     Ok(())
@@ -466,7 +476,6 @@ pub fn open_from(path: &Path) -> Result<LoadedCourse, String> {
     if path.is_dir() {
         return open_folder_from(path).map(|(loaded, _)| loaded);
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
     let damaged = |detail: String| {
         format!(
             "This file can't be opened. It may be damaged or not a CourseCraft project. The file has not been changed. ({detail})"
@@ -476,11 +485,19 @@ pub fn open_from(path: &Path) -> Result<LoadedCourse, String> {
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
     {
-        let json_str = std::str::from_utf8(&bytes).map_err(|e| damaged(e.to_string()))?;
-        let course = Course::from_json(json_str).map_err(|e| damaged(e.to_string()))?;
+        let json_str = std::fs::read_to_string(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::InvalidData {
+                damaged(e.to_string())
+            } else {
+                format!("Failed to read file: {e}")
+            }
+        })?;
+        let course = Course::from_json(&json_str).map_err(|e| damaged(e.to_string()))?;
         Ok((course, Vec::new()))
     } else {
-        let proj = open_project(&bytes).map_err(|e| damaged(e.to_string()))?;
+        let file = std::fs::File::open(path).map_err(|e| format!("Failed to read file: {e}"))?;
+        let reader = std::io::BufReader::with_capacity(256 * 1024, file);
+        let proj = open_project_from(reader).map_err(|e| damaged(e.to_string()))?;
         Ok((proj.course, proj.media))
     }
 }

@@ -167,24 +167,10 @@ impl From<serde_json::Error> for FormatError {
 /// Validate whether a relative path is safe for package inclusion and project archives.
 ///
 /// Rejects empty paths, leading slashes, backslashes, colons (drive letters and
-/// URL schemes), control characters, and any segment that is empty, `.` or `..`.
+/// URL schemes), double quotes, control characters, and any segment that is empty, `.` or `..`.
 #[must_use]
 pub fn is_safe_relative_path(path: &str) -> bool {
-    if path.is_empty() {
-        return false;
-    }
-    if path.starts_with('/') || path.contains('\\') || path.contains(':') || path.contains('"') {
-        return false;
-    }
-    if path.chars().any(char::is_control) {
-        return false;
-    }
-    for segment in path.split('/') {
-        if segment.is_empty() || segment == "." || segment == ".." {
-            return false;
-        }
-    }
-    true
+    coursecraft_course::is_safe_media_path(path)
 }
 
 /// Save a course and its media files to a deterministic `.ccraft` zip archive.
@@ -369,7 +355,7 @@ pub fn open_project(bytes: &[u8]) -> Result<Project, FormatError> {
     open_project_with_limits(bytes, Limits::default())
 }
 
-/// Open a `.ccraft` project archive with custom limits.
+/// Open a `.ccraft` project archive from memory with custom limits.
 ///
 /// Binds entry count and entry sizes to guard against hostile inputs like zip bombs.
 /// Directory entries (ending in `/`) are skipped. Unknown non-media files are ignored.
@@ -378,7 +364,35 @@ pub fn open_project(bytes: &[u8]) -> Result<Project, FormatError> {
 /// Returns [`FormatError`] if the archive violates limits, contains unsafe paths,
 /// has invalid or missing `course.json`, or contains duplicate entries.
 pub fn open_project_with_limits(bytes: &[u8], limits: Limits) -> Result<Project, FormatError> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+    open_project_from_with_limits(std::io::Cursor::new(bytes), limits)
+}
+
+/// Open a `.ccraft` project archive by streaming from a seekable reader using
+/// default limits, without holding the full compressed archive in memory.
+///
+/// # Errors
+/// Returns [`FormatError`] if the archive violates limits, contains unsafe paths,
+/// has invalid or missing `course.json`, or contains duplicate entries.
+pub fn open_project_from<R: std::io::Read + std::io::Seek>(
+    reader: R,
+) -> Result<Project, FormatError> {
+    open_project_from_with_limits(reader, Limits::default())
+}
+
+/// Open a `.ccraft` project archive by streaming from a seekable reader with
+/// custom limits.
+///
+/// Binds entry count and entry sizes to guard against hostile inputs like zip bombs.
+/// Directory entries (ending in `/`) are skipped. Unknown non-media files are ignored.
+///
+/// # Errors
+/// Returns [`FormatError`] if the archive violates limits, contains unsafe paths,
+/// has invalid or missing `course.json`, or contains duplicate entries.
+pub fn open_project_from_with_limits<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    limits: Limits,
+) -> Result<Project, FormatError> {
+    let mut archive = zip::ZipArchive::new(reader)?;
 
     if archive.len() > limits.max_entries {
         return Err(FormatError::TooManyEntries);

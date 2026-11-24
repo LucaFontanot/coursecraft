@@ -1028,7 +1028,6 @@ name = "coursecraft-player"
 version = "0.4.3"
 dependencies = [
  "coursecraft-course",
- "coursecraft-format",
  "coursecraft-lms",
  "coursecraft-logic",
  "coursecraft-playback",

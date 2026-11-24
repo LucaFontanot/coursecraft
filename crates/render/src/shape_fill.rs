@@ -174,8 +174,44 @@ fn point_in_triangle(p: Pt, a: Pt, b: Pt, c: Pt) -> bool {
     c1 > EPS && c2 > EPS && c3 > EPS
 }
 
-/// Triangulate one simple polygon with ear clipping. Returns triangles in
-/// counter-clockwise order and never loops more than a fixed cap.
+/// Return `true` when `points` is a strictly convex, simple, counter-clockwise
+/// polygon (no collinear/reflex vertices and exterior turning angle sums to `2π`,
+/// rejecting self-intersecting star polygons).
+pub(crate) fn is_strictly_convex_ccw(points: &[Pt]) -> bool {
+    let n = points.len();
+    if n < 3 {
+        return false;
+    }
+    let mut total_turn = 0.0_f64;
+    for i in 0..n {
+        let (Some(&a), Some(&b), Some(&c)) = (
+            points.get(i),
+            points.get((i + 1) % n),
+            points.get((i + 2) % n),
+        ) else {
+            return false;
+        };
+        if !finite(a) || !finite(b) || !finite(c) {
+            return false;
+        }
+        let e1 = sub(b, a);
+        let e2 = sub(c, b);
+        let cr = cross(e1, e2);
+        let dt = dot(e1, e2);
+        if !cr.is_finite() || !dt.is_finite() || cr <= EPS {
+            return false;
+        }
+        let turn = cr.atan2(dt);
+        if !turn.is_finite() || turn <= 0.0 {
+            return false;
+        }
+        total_turn += f64::from(turn);
+    }
+    (total_turn - std::f64::consts::TAU).abs() <= 1e-2
+}
+
+/// Triangulate one simple polygon with a convex fan fast-path or ear clipping.
+/// Returns triangles in counter-clockwise order and never loops more than a fixed cap.
 fn triangulate_polygon(poly: &[Pt]) -> Vec<[Pt; 3]> {
     let mut points = clean_contour(poly);
     if points.len() < 3 {
@@ -183,6 +219,18 @@ fn triangulate_polygon(poly: &[Pt]) -> Vec<[Pt; 3]> {
     }
     if signed_area(&points) < 0.0 {
         points.reverse();
+    }
+    if is_strictly_convex_ccw(&points) {
+        let Some(&first) = points.first() else {
+            return Vec::new();
+        };
+        let mut triangles = Vec::with_capacity(points.len().saturating_sub(2));
+        for pair in points.get(1..).unwrap_or_default().windows(2) {
+            if let (Some(&a), Some(&b)) = (pair.first(), pair.get(1)) {
+                triangles.push([first, a, b]);
+            }
+        }
+        return triangles;
     }
     let total = points.len();
     let mut indices: Vec<usize> = (0..total).collect();

@@ -1919,3 +1919,263 @@ fn sc_01_all_annotated_commands_isolated_and_zero_full_clones() {
         failures.join("\n")
     );
 }
+
+/// U-05 (`M34-07`): Scoped single-slide validation agrees 100% with full
+/// `Course::validate()` across every mutating command in `REGISTRY` and across
+/// hostile invalid inputs (bad frames, NaN frames, invalid jump targets,
+/// invalid colors, master restrictions, bank slides, bad triggers, bad draws).
+#[test]
+fn u05_scoped_validation_matches_full_validation_across_all_commands() {
+    use crate::delta::UndoScope;
+
+    // Every command whitelisted for scoped slide validation must be a mutating
+    // SingleSlide command.
+    for cmd in registry() {
+        if crate::commands::can_use_slide_validation(cmd.id) {
+            assert!(
+                cmd.mutates,
+                "can_use_slide_validation({}) must have mutates == true",
+                cmd.id
+            );
+            assert_eq!(
+                cmd.scope(),
+                UndoScope::SingleSlide,
+                "can_use_slide_validation({}) must have UndoScope::SingleSlide",
+                cmd.id
+            );
+        }
+    }
+
+    let cases = command_cases();
+    let mut failures = Vec::new();
+
+    // 1. Differential parity across every mutating command in REGISTRY.
+    for &(id, ref params) in &cases {
+        let mut s_scoped = fixture_session();
+        let mut s_full = fixture_session();
+        let _ = s_scoped.validation_issues();
+        let _ = s_full.validation_issues();
+
+        let res_scoped = s_scoped.execute(id, params);
+        let res_full = crate::with_full_validation_forced(|| s_full.execute(id, params));
+
+        if res_scoped.is_ok() != res_full.is_ok() {
+            failures.push(format!(
+                "valid {id}: accept/reject mismatch: scoped={res_scoped:?} full={res_full:?}"
+            ));
+            continue;
+        }
+        if res_scoped != res_full {
+            failures.push(format!(
+                "valid {id}: result mismatch: scoped={res_scoped:?} full={res_full:?}"
+            ));
+            continue;
+        }
+        if s_scoped.course != s_full.course {
+            failures.push(format!("valid {id}: resulting course diverged"));
+            continue;
+        }
+        if res_scoped.is_ok() {
+            let full_errs = validation_errors(&s_scoped.course);
+            if !full_errs.is_empty() {
+                failures.push(format!(
+                    "valid {id}: scoped validation accepted invalid course: {full_errs:?}"
+                ));
+            }
+        }
+    }
+
+    // 2. Hostile invalid inputs across scoped and fallback commands.
+    let hostile_cases: Vec<(&str, &str, Json)> = vec![
+        (
+            "negative_frame_width",
+            "object.set_frame",
+            json!({ "slide": "slide1", "object": "obj_shape", "frame": { "x": 10.0, "y": 10.0, "w": -5.0, "h": 40.0 } }),
+        ),
+        (
+            "oversized_frame_height",
+            "object.set_frame",
+            json!({ "slide": "slide1", "object": "obj_shape", "frame": { "x": 10.0, "y": 10.0, "w": 40.0, "h": 200_000.0 } }),
+        ),
+        (
+            "nan_frame_null_in_json",
+            "object.set_frame",
+            json!({ "slide": "slide1", "object": "obj_shape", "frame": { "x": f64::NAN, "y": 10.0, "w": 40.0, "h": 40.0 } }),
+        ),
+        (
+            "scroll_panel_frame_taller_than_content",
+            "object.set_frame",
+            json!({ "slide": "slide1", "object": "obj_scroll", "frame": { "x": 720.0, "y": 270.0, "w": 150.0, "h": 900.0 } }),
+        ),
+        (
+            "invalid_slide_background_color",
+            "slide.set_background",
+            json!({ "slide": "slide1", "background": "#ZZZZZZ" }),
+        ),
+        (
+            "invalid_object_fill_color",
+            "object.update",
+            json!({ "slide": "slide1", "object": "obj_shape", "kind": { "type": "shape", "shape": "rectangle", "fill": "not-hex" } }),
+        ),
+        (
+            "invalid_object_timing_inverted",
+            "object.update",
+            json!({ "slide": "slide1", "object": "obj_shape", "timing": { "start_ms": 2000, "end_ms": 1000 } }),
+        ),
+        (
+            "invalid_slide_transition_zero_ms",
+            "slide.set_transition",
+            json!({ "slide": "slide1", "transition": { "type": "fade", "duration_ms": 0 } }),
+        ),
+        (
+            "invalid_player_override_missing_var",
+            "slide.set_player_overrides",
+            json!({ "slide": "slide1", "next_requires": { "kind": "variable", "name": "no_such_var" } }),
+        ),
+        (
+            "invalid_player_override_non_bool_var",
+            "slide.set_player_overrides",
+            json!({ "slide": "slide1", "next_requires": { "kind": "variable", "name": "var1" } }),
+        ),
+        (
+            "invalid_fill_style_color",
+            "object.set_fill_style",
+            json!({ "slide": "slide1", "object": "obj_shape", "fill_style": { "type": "linear", "angle": 90.0, "stops": [{ "position": 0.0, "color": "bad" }, { "position": 1.0, "color": "#0000FF" }] } }),
+        ),
+        (
+            "invalid_shadow_color",
+            "object.set_shadow",
+            json!({ "slide": "slide1", "object": "obj_shape", "shadow": { "offset_x": 4.0, "offset_y": 4.0, "blur": 8.0, "color": "bad" } }),
+        ),
+        (
+            "invalid_glow_color",
+            "object.set_glow",
+            json!({ "slide": "slide1", "object": "obj_shape", "glow": { "size": 6.0, "color": "bad" } }),
+        ),
+        (
+            "invalid_crop_past_bounds",
+            "object.set_crop",
+            json!({ "slide": "slide1", "object": "obj_pic", "crop": { "x": 0.8, "y": 0.1, "w": 0.5, "h": 0.5 } }),
+        ),
+        (
+            "invalid_link_missing_slide",
+            "text.set_link",
+            json!({ "slide": "slide1", "object": "obj_text", "link": { "type": "slide", "slide": "missing_slide" } }),
+        ),
+        (
+            "invalid_link_javascript_url",
+            "text.set_link",
+            json!({ "slide": "slide1", "object": "obj_text", "link": { "type": "url", "url": "javascript:alert(1)" } }),
+        ),
+        (
+            "invalid_drag_target_missing",
+            "object.set_drag",
+            json!({ "slide": "slide1", "object": "obj_shape", "drag": { "targets": ["ghost_target"], "snap": true, "return_on_miss": true } }),
+        ),
+        (
+            "invalid_panel_non_scroll",
+            "object.set_panel",
+            json!({ "slide": "slide1", "object": "obj_shape", "panel": "obj_shape2" }),
+        ),
+        (
+            "invalid_state_fill_color",
+            "object.add_state",
+            json!({ "slide": "slide1", "object": "obj_shape", "state": { "name": "bad_state", "fill": "not-hex" } }),
+        ),
+        (
+            "invalid_master_video_object",
+            "object.add",
+            json!({
+                "slide": "master1",
+                "kind": { "type": "video", "src": "media/clip.mp4" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 160.0, "h": 90.0 }
+            }),
+        ),
+        (
+            "invalid_bank_slide_bad_color",
+            "object.add",
+            json!({
+                "slide": "bank_q1",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "nope" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+            }),
+        ),
+        (
+            "invalid_trigger_jump_target",
+            "trigger.add",
+            json!({
+                "slide": "slide1",
+                "trigger": {
+                    "when": { "event": "click", "object": "obj_shape" },
+                    "action": { "action": "jump_to_slide", "target": { "id": "missing_slide" } }
+                }
+            }),
+        ),
+        (
+            "invalid_draw_count_exceeds_bank",
+            "draw.update",
+            json!({ "slide": "slide_draw", "count": 99 }),
+        ),
+        (
+            "invalid_motion_path_coords",
+            "object.update_motion_path",
+            json!({
+                "slide": "slide1",
+                "object": "obj_shape",
+                "path": "mpath1",
+                "points": [{ "x": 0.0, "y": 0.0 }, { "x": 500_000.0, "y": 0.0 }]
+            }),
+        ),
+    ];
+
+    for (label, id, params) in &hostile_cases {
+        let mut s_scoped = fixture_session();
+        let mut s_full = fixture_session();
+        let before = s_scoped.course.clone();
+        let _ = s_scoped.validation_issues();
+        let _ = s_full.validation_issues();
+
+        let res_scoped = s_scoped.execute(id, params);
+        let res_full = crate::with_full_validation_forced(|| s_full.execute(id, params));
+
+        if res_scoped.is_ok() {
+            failures.push(format!(
+                "hostile {label} ({id}): expected Err, got Ok({res_scoped:?})"
+            ));
+            continue;
+        }
+        if res_scoped != res_full {
+            failures.push(format!(
+                "hostile {label} ({id}): error mismatch: scoped={res_scoped:?} full={res_full:?}"
+            ));
+            continue;
+        }
+        if s_scoped.course != before || s_full.course != before {
+            failures.push(format!(
+                "hostile {label} ({id}): failed command did not roll back course"
+            ));
+        }
+    }
+
+    // 3. Direct NaN frame check: validate_slide_errors agrees with first_error / validate.
+    let mut nan_course = fixture_session().course;
+    nan_course.scenes[0].slides[0].objects[0].frame.w = f32::NAN;
+    let scoped_nan =
+        nan_course.validate_slide_errors(&nan_course.scenes[0].slides[0], "/scenes/0/slides/0");
+    let full_nan = nan_course.first_error();
+    assert!(
+        scoped_nan.is_some(),
+        "NaN frame must be rejected by scoped validation"
+    );
+    assert_eq!(
+        scoped_nan, full_nan,
+        "NaN frame error must match full validation"
+    );
+
+    assert!(
+        failures.is_empty(),
+        "U-05 scoped validation parity failures ({}):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

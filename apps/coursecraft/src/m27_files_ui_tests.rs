@@ -88,6 +88,18 @@ impl AppHarness {
         out.drop_without_applying_deltas();
     }
 
+    fn wait_for_autosave(&mut self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while self.app.autosave_rx.is_some() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+            self.idle_frame();
+        }
+        assert!(
+            self.app.autosave_rx.is_none(),
+            "background autosave did not finish within timeout"
+        );
+    }
+
     fn find_texts(&mut self, label: &str) -> Vec<Pos2> {
         fn walk(shape: &egui::epaint::Shape, label: &str, out: &mut Vec<Pos2>) {
             match shape {
@@ -542,6 +554,7 @@ fn d13_5_untitled_autosave_write_restore_discard_and_cleanup_on_save() {
     // Advance virtual clock past 60s and run frame to trigger update_autosave.
     h.advance_time(65.0);
     h.idle_frame();
+    h.wait_for_autosave();
     assert!(
         untitled_auto.is_file(),
         "untitled autosave should be written"
@@ -567,6 +580,7 @@ fn d13_5_untitled_autosave_write_restore_discard_and_cleanup_on_save() {
         serde_json::json!({ "title": "Recovered Untitled 2" }),
     );
     h.idle_frame();
+    h.wait_for_autosave();
     assert!(untitled_auto.is_file());
 
     let mut h_restore = AppHarness::new(initial_course(true), Some(cfg));
@@ -614,6 +628,7 @@ fn d13_6_named_and_folder_autosave_recovery() {
     );
     h.advance_time(65.0);
     h.idle_frame();
+    h.wait_for_autosave();
     let named_auto = autosave_path_for_project(Some(&named), &cfg);
     assert!(named_auto.is_file());
 
@@ -644,6 +659,7 @@ fn d13_6_named_and_folder_autosave_recovery() {
     );
     hf.advance_time(65.0);
     hf.idle_frame();
+    hf.wait_for_autosave();
     let folder_auto = autosave_path_for_project(Some(&folder), &cfg);
     assert!(folder_auto.is_file());
 
