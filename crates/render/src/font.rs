@@ -107,9 +107,11 @@ fn fnv1a_str(hash: u64, s: &str) -> u64 {
     fnv1a_bytes(hash, s.as_bytes())
 }
 
-fn base_definitions() -> FontDefinitions {
-    let mut fonts = FontDefinitions::default();
+pub(crate) fn base_definitions() -> FontDefinitions {
+    base_definitions_from(FontDefinitions::default())
+}
 
+pub(crate) fn base_definitions_from(mut fonts: FontDefinitions) -> FontDefinitions {
     fonts.font_data.insert(
         "inter_regular".to_owned(),
         Arc::new(FontData::from_static(INTER_REGULAR)),
@@ -196,6 +198,15 @@ fn base_definitions() -> FontDefinitions {
     fonts
         .families
         .insert(FontFamily::Proportional, make_family("inter_regular"));
+    if fonts
+        .families
+        .get(&FontFamily::Monospace)
+        .is_none_or(Vec::is_empty)
+    {
+        fonts
+            .families
+            .insert(FontFamily::Monospace, make_family("inter_regular"));
+    }
 
     fonts
 }

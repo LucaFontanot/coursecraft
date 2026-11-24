@@ -1636,11 +1636,16 @@ pub fn is_image_src(src: &str) -> bool {
     )
 }
 
-/// Whether `path` is a safe relative media path (no root, drive, `..` or
+/// Whether `path` is a safe relative media path (no root, drive, `..`, `"` or
 /// empty segments), as used by object media sources.
 #[must_use]
 pub fn is_safe_media_path(path: &str) -> bool {
-    if path.is_empty() || path.starts_with('/') || path.contains('\\') || path.contains(':') {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path.contains(':')
+        || path.contains('"')
+    {
         return false;
     }
     if path.chars().any(char::is_control) {

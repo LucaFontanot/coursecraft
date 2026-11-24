@@ -15,6 +15,7 @@ const HELLO_JSON: &str = include_str!("../../../examples/hello-course/course.jso
 /// An egui context with its fonts built, for layout-only tests.
 fn text_layout_context() -> egui::Context {
     let ctx = egui::Context::default();
+    crate::install_fonts(&ctx);
     let output = ctx.run_ui(egui::RawInput::default(), |_ui| {});
     output.drop_without_applying_deltas();
     ctx
@@ -6115,7 +6116,7 @@ fn course_and_render_contrast_agree() {
 }
 
 #[test]
-fn bundled_inter_has_glyphs_for_latin_greek_and_cyrillic_only() {
+fn bundled_inter_has_glyphs_for_latin_and_symbols_only() {
     let ctx = egui::Context::default();
     crate::install_fonts(&ctx);
     let raw = || egui::RawInput {
@@ -6127,7 +6128,9 @@ fn bundled_inter_has_glyphs_for_latin_greek_and_cyrillic_only() {
     };
     ctx.run_ui(raw(), |_ui| {}).drop_without_applying_deltas();
     let font = egui::FontId::new(20.0, egui::FontFamily::Name("inter".into()));
-    for c in ['A', 'é', 'Ω', 'Ж'] {
+    // Bundled Inter is subsetted to Latin, Latin-1 Supplement, Latin Extended-A,
+    // general punctuation, and UI symbols (see crates/render/fonts/README.md).
+    for c in ['A', 'é', 'Ł', '×', '€', '→', '✓'] {
         assert!(
             ctx.fonts_mut(|fonts| fonts.has_glyph(&font, c)),
             "Inter should cover {c:?}"
@@ -6138,6 +6141,14 @@ fn bundled_inter_has_glyphs_for_latin_greek_and_cyrillic_only() {
             !ctx.fonts_mut(|fonts| fonts.has_glyph(&font, c)),
             "Inter should not cover {c:?}"
         );
+    }
+    if egui::FontDefinitions::default().font_data.is_empty() {
+        for c in ['Ω', 'Ж'] {
+            assert!(
+                !ctx.fonts_mut(|fonts| fonts.has_glyph(&font, c)),
+                "Subsetted Inter without epaint_default_fonts should not cover {c:?}"
+            );
+        }
     }
 }
 
@@ -8711,4 +8722,206 @@ fn question_and_player_and_offscreen_succeed_across_all_aspect_presets_and_tiny(
         assert_eq!(slide_img.height, h);
         assert_eq!(slide_img.pixels.len(), (w * h * 4) as usize);
     }
+}
+
+/// U-03: `base_definitions()` without `epaint_default_fonts` drops Ubuntu/Hack/NotoEmoji,
+/// populates both Proportional and Monospace, resolves every player chrome string, symbol,
+/// and Phosphor icon used by `player_frame` with real glyphs, and renders `▶` bullets via
+/// vector paths without missing-glyph boxes.
+#[test]
+fn u03_base_definitions_covers_player_chrome_glyphs_without_default_fonts() {
+    use crate::icons::Icon;
+    use egui::{FontDefinitions, FontFamily, FontId};
+
+    let default_defs = crate::font::base_definitions();
+    assert!(
+        default_defs
+            .families
+            .get(&FontFamily::Proportional)
+            .is_some_and(|list| !list.is_empty()),
+        "base_definitions must populate Proportional"
+    );
+    assert!(
+        default_defs
+            .families
+            .get(&FontFamily::Monospace)
+            .is_some_and(|list| !list.is_empty()),
+        "base_definitions must populate Monospace"
+    );
+    if FontDefinitions::default().font_data.is_empty() {
+        for forbidden in ["Ubuntu-Light", "Hack", "NotoEmoji-Regular"] {
+            assert!(
+                !default_defs.font_data.contains_key(forbidden),
+                "base_definitions must not contain {forbidden} when default_fonts is off"
+            );
+        }
+    }
+
+    // Always test the exact lean (player / wasm32) font definitions built from empty base,
+    // even when Cargo feature unification enables default_fonts in a multi-crate test run.
+    let lean_defs = crate::font::base_definitions_from(FontDefinitions::empty());
+    for forbidden in [
+        "Ubuntu-Light",
+        "Hack",
+        "NotoEmoji-Regular",
+        "emoji-icon-font",
+    ] {
+        assert!(
+            !lean_defs.font_data.contains_key(forbidden),
+            "lean font definitions must not contain {forbidden}"
+        );
+    }
+    assert!(
+        lean_defs
+            .families
+            .get(&FontFamily::Proportional)
+            .is_some_and(|list| !list.is_empty()),
+        "lean font definitions must populate Proportional"
+    );
+    assert!(
+        lean_defs
+            .families
+            .get(&FontFamily::Monospace)
+            .is_some_and(|list| !list.is_empty()),
+        "lean font definitions must populate Monospace"
+    );
+
+    let ctx = egui::Context::default();
+    ctx.set_fonts(lean_defs);
+    let raw = egui::RawInput {
+        screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0))),
+        ..Default::default()
+    };
+    ctx.run_ui(raw, |_ui| {}).drop_without_applying_deltas();
+
+    let prop_font = FontId::proportional(14.0);
+    let mono_font = FontId::monospace(14.0);
+    let phosphor_font = FontId::new(18.0, FontFamily::Name("phosphor".into()));
+    let phosphor_fill_font = FontId::new(18.0, FontFamily::Name("phosphor-fill".into()));
+
+    assert!(
+        !ctx.fonts_mut(|f| f.has_glyph(&prop_font, '\u{F8FF}')),
+        "sanity check: unmapped private-use codepoint must report missing"
+    );
+
+    // Every non-whitespace character in CHROME_STRINGS resolves in Proportional and Monospace.
+    for (key, text) in coursecraft_course::CHROME_STRINGS {
+        for ch in text.chars().filter(|c| !c.is_whitespace()) {
+            assert!(
+                ctx.fonts_mut(
+                    |f| f.has_glyph(&prop_font, ch) && f.glyph_width(&prop_font, ch) > 0.0
+                ),
+                "CHROME_STRINGS[{key:?}] char {ch:?} (U+{:04X}) missing in Proportional",
+                ch as u32
+            );
+            assert!(
+                ctx.fonts_mut(
+                    |f| f.has_glyph(&mono_font, ch) && f.glyph_width(&mono_font, ch) > 0.0
+                ),
+                "CHROME_STRINGS[{key:?}] char {ch:?} (U+{:04X}) missing in Monospace",
+                ch as u32
+            );
+        }
+    }
+
+    // Player chrome symbols and numeric displays.
+    for sample in ["×", "✓", "…", "←", "→", "•", "00:00 / 01:30", "1.5×"] {
+        for ch in sample.chars().filter(|c| !c.is_whitespace()) {
+            assert!(
+                ctx.fonts_mut(
+                    |f| f.has_glyph(&prop_font, ch) && f.glyph_width(&prop_font, ch) > 0.0
+                ),
+                "chrome symbol {ch:?} (U+{:04X}) in {sample:?} missing in Proportional",
+                ch as u32
+            );
+            assert!(
+                ctx.fonts_mut(
+                    |f| f.has_glyph(&mono_font, ch) && f.glyph_width(&mono_font, ch) > 0.0
+                ),
+                "chrome symbol {ch:?} (U+{:04X}) in {sample:?} missing in Monospace",
+                ch as u32
+            );
+        }
+    }
+
+    // Every Phosphor icon used by player_frame resolves cleanly in phosphor, phosphor-fill, and Proportional.
+    for icon in [
+        Icon::Play,
+        Icon::Pause,
+        Icon::X,
+        Icon::Check,
+        Icon::CheckCircle,
+        Icon::List,
+        Icon::SpeakerHigh,
+        Icon::SpeakerLow,
+        Icon::SpeakerSlash,
+        Icon::Subtitles,
+        Icon::CornersOut,
+        Icon::CornersIn,
+        Icon::ArrowCounterClockwise,
+        Icon::CaretLeft,
+        Icon::CaretRight,
+        Icon::Lock,
+        Icon::Warning,
+        Icon::ArrowSquareOut,
+    ] {
+        let cp = icon.codepoint();
+        assert!(
+            ctx.fonts_mut(|f| {
+                f.has_glyph(&phosphor_font, cp) && f.glyph_width(&phosphor_font, cp) > 0.0
+            }),
+            "player_frame icon {icon:?} missing in phosphor"
+        );
+        assert!(
+            ctx.fonts_mut(|f| {
+                f.has_glyph(&phosphor_fill_font, cp) && f.glyph_width(&phosphor_fill_font, cp) > 0.0
+            }),
+            "player_frame icon {icon:?} missing in phosphor-fill"
+        );
+        assert!(
+            ctx.fonts_mut(|f| {
+                f.has_glyph(&prop_font, cp) && f.glyph_width(&prop_font, cp) > 0.0
+            }),
+            "player_frame icon {icon:?} missing in Proportional fallback"
+        );
+    }
+
+    // Verify `▶` is handled by text_layout's vector bullet renderer without missing-glyph boxes.
+    let runs = vec![crate::compose::ResolvedTextRun {
+        text: "Arrow bullet item".to_owned(),
+        size: 16.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        link: None,
+        font: None,
+        strikethrough: false,
+        baseline: coursecraft_course::Baseline::Normal,
+        letter_spacing: 0.0,
+    }];
+    let paragraphs = vec![coursecraft_course::Paragraph {
+        list: coursecraft_course::ListKind::Bullet,
+        bullet: Some("▶".to_owned()),
+        ..coursecraft_course::Paragraph::default()
+    }];
+    let laid = crate::text_layout::layout_text(
+        &ctx,
+        Rect::from_min_size(pos2(0.0, 0.0), vec2(300.0, 100.0)),
+        1.0,
+        &runs,
+        &paragraphs,
+        coursecraft_course::Align::Left,
+        coursecraft_course::VAlign::Top,
+        coursecraft_course::Autofit::None,
+    );
+    let marker = laid
+        .paragraphs
+        .first()
+        .and_then(|p| p.marker.as_ref())
+        .expect("bullet paragraph must produce a laid marker");
+    let vb = marker
+        .vector
+        .expect("`▶` bullet must use vector bullet rendering instead of a missing glyph box");
+    assert_eq!(vb.ch, '▶');
 }

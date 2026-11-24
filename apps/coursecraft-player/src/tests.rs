@@ -536,6 +536,7 @@ fn player_drawer_clips_to_player_area_at_letterboxed_and_fullscreen_sizes() {
         playing.handle_input(&Input::Start, None);
 
         let ctx = egui::Context::default();
+        coursecraft_render::install_fonts(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
         let mut time = 0.1;
 
@@ -620,6 +621,7 @@ fn player_scales_letterboxes_and_places_drawer_and_log_panel_across_window_sizes
         playing.handle_input(&Input::Start, None);
 
         let ctx = egui::Context::default();
+        coursecraft_render::install_fonts(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), size);
         let mut time = 0.1;
 
@@ -745,6 +747,7 @@ fn player_click_and_keyboard_on_video_plays_pauses_and_fires_cues_without_placeh
     let mut playing = Playing::new(course, false, None).expect("playing");
     playing.handle_input(&coursecraft_logic::Input::Start, None);
     let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
     let mut time = 0.0;
 
@@ -923,6 +926,7 @@ fn t14_8_failed_screen_uses_player_ground_raised_card_and_wraps() {
         + &"missing_manifest_or_corrupted_archive_".repeat(8);
     for (w, h) in [(390.0_f32, 844.0_f32), (1280.0, 720.0)] {
         let ctx = egui::Context::default();
+        coursecraft_render::install_fonts(&ctx);
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(w, h));
         let out = ctx.run_ui(
             egui::RawInput {
@@ -1205,6 +1209,7 @@ fn b08_should_hide_dom_overlays_covers_gate_ended_drawer_and_lightbox() {
     assert!(crate::app::should_hide_dom_overlays(&player, &frame, true));
 
     let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
     let mut view = coursecraft_render::SlideView::new();
     let mut toggle_drawer = |ctx: &egui::Context, frame: &mut coursecraft_render::PlayerFrame| {
         let raw = egui::RawInput {
@@ -1237,4 +1242,118 @@ fn b08_should_hide_dom_overlays_covers_gate_ended_drawer_and_lightbox() {
     });
     assert!(player.lightbox_open(), "expected lightbox to be open");
     assert!(crate::app::should_hide_dom_overlays(&player, &frame, false));
+}
+
+/// U-03: Player chrome renders start gate, active slide + chrome bar, speed menu
+/// (`1×`, `1.5×`), and ended state cleanly with bundled fonts and zero `epaint_default_fonts`.
+#[test]
+fn u03_player_chrome_renders_strings_and_symbols_cleanly() {
+    fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+                egui::Shape::Vec(list) => {
+                    for s in list {
+                        walk(s, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for cs in shapes {
+            walk(&cs.shape, &mut out);
+        }
+        out
+    }
+
+    let raw = include_str!("../../../examples/hello-course/course.json");
+    let course = Course::from_json(raw).expect("valid hello-course");
+    let mut playing = Playing::from_course(course, false).expect("valid playing");
+
+    let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0));
+    let mut time = 0.0;
+
+    let mut run_frame = |playing: &mut Playing, events: Vec<egui::Event>| {
+        time += 0.05;
+        let raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw_input, |ui| {
+            playing.show_ui(ui);
+        });
+        let shapes = out.shapes.clone();
+        out.drop_without_applying_deltas();
+        shapes
+    };
+
+    // 1. Start gate
+    playing.frame.awaiting_start = true;
+    let start_shapes = run_frame(&mut playing, Vec::new());
+    assert!(
+        !start_shapes.is_empty(),
+        "start gate must paint non-empty shapes"
+    );
+
+    // 2. Active slide with chrome bar
+    playing.frame.awaiting_start = false;
+    playing.handle_input(&Input::Start, None);
+    let _ = run_frame(&mut playing, Vec::new());
+    let active_shapes = run_frame(&mut playing, Vec::new());
+    assert!(
+        !active_shapes.is_empty(),
+        "active slide with chrome bar must paint non-empty shapes"
+    );
+    let active_texts = collect_texts(&active_shapes);
+    assert!(
+        active_texts.iter().any(|t| t.contains("1×")),
+        "chrome bar must render speed label '1×', got: {active_texts:?}"
+    );
+
+    // 3. Open speed menu and verify `1×` and `1.5×` render cleanly
+    let speed_rect = playing
+        .frame
+        .chrome_rect(&coursecraft_render::ChromeButton::Speed)
+        .expect("speed button rect present");
+    let click_speed = vec![
+        egui::Event::PointerMoved(speed_rect.center()),
+        egui::Event::PointerButton {
+            pos: speed_rect.center(),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        },
+        egui::Event::PointerButton {
+            pos: speed_rect.center(),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    let _ = run_frame(&mut playing, click_speed);
+    let speed_shapes = run_frame(&mut playing, Vec::new());
+    let speed_texts = collect_texts(&speed_shapes);
+    assert!(
+        speed_texts.iter().any(|t| t.contains("1×"))
+            && speed_texts.iter().any(|t| t.contains("1.5×")),
+        "speed menu must render '1×' and '1.5×', got: {speed_texts:?}"
+    );
+
+    // 4. Ended state
+    playing.ended = true;
+    let ended_shapes = run_frame(&mut playing, Vec::new());
+    assert!(
+        !ended_shapes.is_empty(),
+        "ended state must paint non-empty shapes"
+    );
+    let ended_texts = collect_texts(&ended_shapes);
+    assert!(
+        ended_texts.iter().any(|t| !t.trim().is_empty()),
+        "ended state must render non-empty text, got: {ended_texts:?}"
+    );
 }

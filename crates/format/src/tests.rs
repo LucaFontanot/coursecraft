@@ -970,3 +970,50 @@ fn xliff_round_trip_covers_state_extra_text_runs_and_alt() {
     };
     assert_eq!(alt, "Flèche");
 }
+
+/// U-09: `coursecraft_format::is_safe_relative_path` agrees with
+/// `coursecraft_course::is_safe_media_path` on every safe and hostile path.
+#[test]
+fn u09_is_safe_relative_path_matches_course_is_safe_media_path() {
+    let cases = [
+        ("", false),
+        ("/leading/slash.png", false),
+        ("/", false),
+        ("..", false),
+        ("../escape.png", false),
+        ("a/../b.png", false),
+        ("a/..", false),
+        (".", false),
+        ("./a.png", false),
+        ("a/./b.png", false),
+        ("a/.", false),
+        ("a\\b.png", false),
+        ("C:\\Users\\a.png", false),
+        ("C:file.png", false),
+        ("https://example.com/a.png", false),
+        ("\"quoted.png\"", false),
+        ("a\"b.png", false),
+        ("a\0b.png", false),
+        ("a\nb.png", false),
+        ("a\tb.png", false),
+        ("a\rb.png", false),
+        ("a\x1fb.png", false),
+        ("a\x7fb.png", false),
+        ("a//b.png", false),
+        ("a/b/", false),
+        ("pic.png", true),
+        ("media/pic.png", true),
+        ("assets/icons/star.svg", true),
+        ("nested/dir/clip-01_final.mp4", true),
+    ];
+
+    for (path, expected) in cases {
+        let fmt_ok = is_safe_relative_path(path);
+        let course_ok = coursecraft_course::is_safe_media_path(path);
+        assert_eq!(
+            fmt_ok, course_ok,
+            "is_safe_relative_path and is_safe_media_path disagreed on {path:?}"
+        );
+        assert_eq!(fmt_ok, expected, "unexpected result for {path:?}");
+    }
+}

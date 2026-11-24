@@ -35,6 +35,8 @@ coursecraft-cli.workspace = true
 coursecraft-control.workspace = true
 coursecraft-mcp.workspace = true
 coursecraft-export.workspace = true
+egui = { workspace = true, features = ["default_fonts"] }
+eframe = { workspace = true, features = ["default_fonts"] }
 # The system clipboard on the desktop: egui-winit's clipboard feature for text,
 # arboard directly to read pasted images.
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard"] }

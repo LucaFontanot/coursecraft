@@ -167,24 +167,10 @@ impl From<serde_json::Error> for FormatError {
 /// Validate whether a relative path is safe for package inclusion and project archives.
 ///
 /// Rejects empty paths, leading slashes, backslashes, colons (drive letters and
-/// URL schemes), control characters, and any segment that is empty, `.` or `..`.
+/// URL schemes), double quotes, control characters, and any segment that is empty, `.` or `..`.
 #[must_use]
 pub fn is_safe_relative_path(path: &str) -> bool {
-    if path.is_empty() {
-        return false;
-    }
-    if path.starts_with('/') || path.contains('\\') || path.contains(':') || path.contains('"') {
-        return false;
-    }
-    if path.chars().any(char::is_control) {
-        return false;
-    }
-    for segment in path.split('/') {
-        if segment.is_empty() || segment == "." || segment == ".." {
-            return false;
-        }
-    }
-    true
+    coursecraft_course::is_safe_media_path(path)
 }
 
 /// Save a course and its media files to a deterministic `.ccraft` zip archive.
