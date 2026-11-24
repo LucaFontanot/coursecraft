@@ -2779,6 +2779,7 @@ fn describe_covers_all_action_and_event_variants() {
                     autofit: coursecraft_course::Autofit::None,
                     text_style: None,
                     outline: None,
+                    point_text: false,
                 },
                 frame: Rect::default(),
                 timing: Default::default(),

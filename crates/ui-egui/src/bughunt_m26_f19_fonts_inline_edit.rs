@@ -130,6 +130,7 @@ fn f19_1_multi_run_installed_fonts_with_delayed_provider() {
             autofit: Default::default(),
             text_style: Default::default(),
             outline: None,
+            point_text: false,
         },
     ));
 
@@ -194,6 +195,7 @@ fn f19_1b_provider_before_reopen_case_whitespace_bold_italic_thumbnail_preview()
             autofit: Default::default(),
             text_style: Default::default(),
             outline: None,
+            point_text: false,
         },
     ));
 
@@ -344,6 +346,7 @@ fn f19_1c_published_player_path_with_embedded_fonts() {
             autofit: Default::default(),
             text_style: Default::default(),
             outline: None,
+            point_text: false,
         },
     ));
 
@@ -447,6 +450,7 @@ fn f19_2_inline_edit_preserves_formatting_while_open() {
             autofit: Default::default(),
             text_style: Default::default(),
             outline: None,
+            point_text: false,
         },
     ));
 
@@ -562,6 +566,7 @@ fn f19_2b_inline_edit_typing_boundary_backspace_undo_redo_and_insets() {
             autofit: Default::default(),
             text_style: Default::default(),
             outline: None,
+            point_text: false,
         },
     ));
 

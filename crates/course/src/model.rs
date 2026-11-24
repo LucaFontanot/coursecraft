@@ -2157,6 +2157,11 @@ pub enum ObjectKind {
         /// Optional border around the text box. Omitted when unset.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outline: Option<Outline>,
+        /// When true, the box acts as point text (`style.wrap == false`, `autofit == None`):
+        /// its width and height fit its content automatically as text or style changes.
+        /// Omitted when false so existing courses stay byte-identical.
+        #[serde(default, skip_serializing_if = "is_false")]
+        point_text: bool,
     },
     Shape {
         shape: ShapeKind,
@@ -4067,6 +4072,11 @@ pub enum StateExtraKind {
         autofit: Autofit,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outline: Option<Outline>,
+        /// When true, the box acts as point text (`style.wrap == false`, `autofit == None`):
+        /// its width and height fit its content automatically as text or style changes.
+        /// Omitted when false so existing courses stay byte-identical.
+        #[serde(default, skip_serializing_if = "is_false")]
+        point_text: bool,
     },
     Path {
         #[serde(flatten)]

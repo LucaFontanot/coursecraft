@@ -3469,6 +3469,7 @@ mod tests {
             autofit: Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         };
         assert!(estimate_object(&text_obj) > size_of::<Object>());
     }

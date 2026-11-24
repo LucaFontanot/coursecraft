@@ -2987,6 +2987,7 @@ fn check_state_extra_kind(course: &Course, cx: &mut Ctx<'_>, kind: &crate::State
             paragraphs,
             autofit: _,
             outline,
+            point_text: _,
         } => {
             if !style.color.is_valid() {
                 cx.err_at(

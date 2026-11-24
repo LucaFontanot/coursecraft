@@ -8495,6 +8495,7 @@ fn build_test_state_with_all_extras() -> coursecraft_course::StateDef {
                     paragraphs: base_paragraphs,
                     autofit: coursecraft_course::Autofit::None,
                     outline: Some(base_outline),
+                    point_text: false,
                 },
                 frame: coursecraft_course::Rect {
                     x: 0.0,

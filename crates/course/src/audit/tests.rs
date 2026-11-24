@@ -74,6 +74,7 @@ fn text(id: &str, content: &str, size: f32, color: &str) -> Object {
             autofit: crate::Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         (0.0, 0.0, 400.0, 100.0),
     )
@@ -535,6 +536,7 @@ fn runs_are_checked_separately_with_their_own_colours() {
         autofit: crate::Autofit::None,
         text_style: None,
         outline: None,
+        point_text: false,
     };
     slide(&mut course).objects.push(object);
     let findings = findings(&course);

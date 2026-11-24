@@ -69,6 +69,7 @@ fn make_text_obj(id: &str, text: &str, x: f32, y: f32) -> Object {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         },
         Rect {
             x,
@@ -361,6 +362,7 @@ fn fixture_session() -> Session {
                         paragraphs: vec![],
                         autofit: Default::default(),
                         outline: None,
+                        point_text: false,
                     },
                     frame: Rect {
                         x: 0.0,

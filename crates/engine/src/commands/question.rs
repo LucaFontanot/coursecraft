@@ -206,6 +206,7 @@ pub(super) fn ensure_question_support(slide: &mut Slide, kind: QuestionKind, the
                         autofit: Autofit::None,
                         text_style: None,
                         outline: None,
+                        point_text: false,
                     },
                     frame: Rect {
                         x: target_frame.x + 40.0,
@@ -478,6 +479,7 @@ pub(super) fn add_feedback_layers(
                     autofit: Autofit::None,
                     text_style: None,
                     outline: None,
+                    point_text: false,
                 },
                 frame,
                 timing: Timing::default(),
@@ -556,6 +558,7 @@ fn add_try_again_layer(slide: &mut Slide, theme: &Theme, slide_size: Size) -> St
                 autofit: Autofit::None,
                 text_style: None,
                 outline: None,
+                point_text: false,
             },
             frame: text_frame,
             timing: Timing::default(),

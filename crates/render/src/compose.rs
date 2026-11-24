@@ -2103,6 +2103,7 @@ fn compose_state_extra(
             paragraphs,
             autofit,
             outline,
+            point_text: _,
         } => {
             let resolved_runs = resolve_state_text_runs(
                 text,

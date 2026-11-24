@@ -33,6 +33,7 @@ pub(super) fn interaction_text(
             autofit: Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         frame,
         timing: Timing::default(),

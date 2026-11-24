@@ -369,6 +369,7 @@ fn a1_4_multi_select_mixed_sizes_and_shape_text() {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         },
     );
     let t2 = base_object(
@@ -390,6 +391,7 @@ fn a1_4_multi_select_mixed_sizes_and_shape_text() {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         },
     );
     let s1 = base_object(
@@ -495,6 +497,7 @@ fn a1_6_line_spacing_custom_enter_blur_and_presets() {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         },
     );
     course.scenes[0].slides[0].objects.push(body);
@@ -588,6 +591,7 @@ fn a1_5_inline_edit_partial_substring_selection() {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         },
     );
     course.scenes[0].slides[0].objects.push(hw);
@@ -752,6 +756,7 @@ fn a1_9_rapid_selection_switch_while_numeric_field_focused_no_bleed() {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         },
     );
     let t2 = base_object(
@@ -773,6 +778,7 @@ fn a1_9_rapid_selection_switch_while_numeric_field_focused_no_bleed() {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         },
     );
     course.scenes[0].slides[0].objects.extend([t1, t2]);

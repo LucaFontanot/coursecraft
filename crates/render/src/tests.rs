@@ -3416,6 +3416,7 @@ fn keyboard_focus_reaches_text_links() {
         autofit: Autofit::None,
         text_style: None,
         outline: None,
+        point_text: false,
     };
     let mut player = Player::new(&course).expect("player");
     player.handle(&Input::Start);
@@ -3557,6 +3558,7 @@ fn plain_text_renders_as_one_run() {
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         frame: coursecraft_course::Rect {
             x: 0.0,

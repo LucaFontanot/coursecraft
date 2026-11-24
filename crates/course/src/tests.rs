@@ -2894,6 +2894,7 @@ fn paragraph_and_link_serde_defaults_and_omission() {
         autofit: crate::Autofit::None,
         text_style: None,
         outline: None,
+        point_text: false,
     };
     let json = serde_json::to_value(&kind).expect("kind json");
     assert!(json.get("paragraphs").is_none());
@@ -2910,6 +2911,7 @@ fn paragraph_and_link_serde_defaults_and_omission() {
         autofit: crate::Autofit::Shrink,
         text_style: None,
         outline: None,
+        point_text: false,
     };
     let json = serde_json::to_value(&with_paragraphs).expect("kind json");
     assert_eq!(json["paragraphs"][0]["list"], "number");
@@ -3068,6 +3070,7 @@ fn links_are_validated_by_scheme_and_slide() {
         autofit: crate::Autofit::None,
         text_style: None,
         outline: None,
+        point_text: false,
     };
     course.scenes[0].slides[0].objects[0].kind = make_text(crate::Link::Url {
         url: "javascript:alert(1)".into(),
@@ -3567,6 +3570,7 @@ fn panel_membership_and_nesting_are_validated() {
             autofit: Default::default(),
             text_style: None,
             outline: None,
+            point_text: false,
         };
         child.panel = Some("panel".into());
         slide.objects.push(child);
@@ -6490,4 +6494,296 @@ fn m37_golden_course_json_roundtrip() {
         &expected,
         "canonical course.json changed: {actual:#x?}"
     );
+}
+
+#[test]
+fn pt_01_old_course_json_defaults_point_text_false_and_roundtrips() {
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    fn check_objects(objects: &[crate::Object], count: &mut usize) {
+        for obj in objects {
+            if let crate::ObjectKind::Text { point_text, .. } = &obj.kind {
+                assert!(
+                    !point_text,
+                    "pre-M37 ObjectKind::Text '{}' must default point_text to false",
+                    obj.id
+                );
+                *count += 1;
+            }
+            for state in &obj.states {
+                for extra in &state.extras {
+                    if let crate::StateExtraKind::Text { point_text, .. } = &extra.kind {
+                        assert!(
+                            !point_text,
+                            "pre-M37 StateExtraKind::Text '{}/{}' must default point_text to false",
+                            obj.id, extra.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_slide(slide: &crate::Slide, count: &mut usize) {
+        check_objects(&slide.objects, count);
+        for layer in &slide.layers {
+            check_objects(&layer.objects, count);
+        }
+    }
+
+    const SHOWCASE: &str = include_str!("../../../examples/showcase/course.json");
+    let expected: [(&str, &str, usize, u64); 2] = [
+        ("hello-course", HELLO, 19_660, 0x59fa_a48f_cd1e_912e),
+        ("showcase", SHOWCASE, 92_522, 0x6f5c_2ed0_e4bd_8a69),
+    ];
+
+    for (name, raw, expected_len, expected_hash) in expected {
+        let course = Course::from_json(raw).expect("parse example course");
+        let mut text_count = 0usize;
+        for scene in &course.scenes {
+            for slide in &scene.slides {
+                check_slide(slide, &mut text_count);
+            }
+        }
+        for slide in &course.masters {
+            check_slide(slide, &mut text_count);
+        }
+        for slide in &course.templates {
+            check_slide(slide, &mut text_count);
+        }
+        for bank in &course.banks {
+            for slide in &bank.slides {
+                check_slide(slide, &mut text_count);
+            }
+        }
+        assert!(text_count > 0, "{name}: expected at least one Text object");
+
+        let serialized = course.to_json().expect("serialize example course");
+        assert!(
+            !serialized.contains("\"point_text\""),
+            "{name}: pre-M37 course must not emit point_text key"
+        );
+        let bytes = serialized.as_bytes();
+        assert_eq!(
+            (bytes.len(), fnv1a64(bytes)),
+            (expected_len, expected_hash),
+            "{name}: re-serialization must match m37_golden_course_json_roundtrip byte-for-byte"
+        );
+    }
+}
+
+#[test]
+fn pt_01_point_text_true_roundtrips() {
+    let mut course = Course::from_json(HELLO).expect("parse hello course");
+    let slide = &mut course.scenes[0].slides[0];
+
+    let mut point_obj = slide.objects[0].clone();
+    point_obj.id = "pt-text".into();
+    point_obj.kind = crate::ObjectKind::Text {
+        text: "Point text".into(),
+        style: crate::TextStyle {
+            wrap: false,
+            ..crate::TextStyle::default()
+        },
+        runs: Vec::new(),
+        paragraphs: Vec::new(),
+        autofit: crate::Autofit::None,
+        text_style: None,
+        outline: None,
+        point_text: true,
+    };
+    point_obj.states.push(crate::StateDef {
+        name: "hover".into(),
+        fill: None,
+        text: None,
+        src: None,
+        fill_style: None,
+        clear_fill_style: false,
+        outline: None,
+        clear_outline: false,
+        text_style: None,
+        runs: None,
+        paragraphs: None,
+        autofit: None,
+        opacity: None,
+        shadow: None,
+        clear_shadow: false,
+        glow: None,
+        clear_glow: false,
+        crop: None,
+        clear_crop: false,
+        image_shape: None,
+        clear_image_shape: false,
+        rotation: None,
+        flip_h: None,
+        flip_v: None,
+        extras: vec![
+            crate::StateExtra {
+                id: "extra-pt".into(),
+                name: String::new(),
+                kind: crate::StateExtraKind::Text {
+                    text: "Extra point".into(),
+                    style: crate::TextStyle {
+                        wrap: false,
+                        ..crate::TextStyle::default()
+                    },
+                    runs: Vec::new(),
+                    paragraphs: Vec::new(),
+                    autofit: crate::Autofit::None,
+                    outline: None,
+                    point_text: true,
+                },
+                frame: crate::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 30.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: None,
+                glow: None,
+            },
+            crate::StateExtra {
+                id: "extra-area".into(),
+                name: String::new(),
+                kind: crate::StateExtraKind::Text {
+                    text: "Extra area".into(),
+                    style: crate::TextStyle::default(),
+                    runs: Vec::new(),
+                    paragraphs: Vec::new(),
+                    autofit: crate::Autofit::None,
+                    outline: None,
+                    point_text: false,
+                },
+                frame: crate::Rect {
+                    x: 0.0,
+                    y: 40.0,
+                    w: 100.0,
+                    h: 30.0,
+                },
+                rotation: 0.0,
+                flip_h: false,
+                flip_v: false,
+                opacity: 1.0,
+                shadow: None,
+                glow: None,
+            },
+        ],
+    });
+
+    let mut area_obj = slide.objects[0].clone();
+    area_obj.id = "area-text".into();
+    area_obj.kind = crate::ObjectKind::Text {
+        text: "Area text".into(),
+        style: crate::TextStyle::default(),
+        runs: Vec::new(),
+        paragraphs: Vec::new(),
+        autofit: crate::Autofit::None,
+        text_style: None,
+        outline: None,
+        point_text: false,
+    };
+
+    slide.objects.push(point_obj);
+    slide.objects.push(area_obj);
+
+    let json = course.to_json().expect("serialize course with point_text");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse json value");
+    let objects = value["scenes"][0]["slides"][0]["objects"]
+        .as_array()
+        .expect("objects array");
+
+    let pt_json = objects
+        .iter()
+        .find(|o| o["id"] == "pt-text")
+        .expect("pt-text json");
+    assert_eq!(pt_json["kind"]["point_text"], serde_json::json!(true));
+
+    let extras_json = pt_json["states"][0]["extras"]
+        .as_array()
+        .expect("extras array");
+    let extra_pt_json = extras_json
+        .iter()
+        .find(|e| e["id"] == "extra-pt")
+        .expect("extra-pt json");
+    assert_eq!(extra_pt_json["kind"]["point_text"], serde_json::json!(true));
+    let extra_area_json = extras_json
+        .iter()
+        .find(|e| e["id"] == "extra-area")
+        .expect("extra-area json");
+    assert!(
+        extra_area_json["kind"].get("point_text").is_none(),
+        "StateExtraKind::Text with point_text: false must omit point_text from JSON"
+    );
+
+    let area_json = objects
+        .iter()
+        .find(|o| o["id"] == "area-text")
+        .expect("area-text json");
+    assert!(
+        area_json["kind"].get("point_text").is_none(),
+        "ObjectKind::Text with point_text: false must omit point_text from JSON"
+    );
+
+    let reparsed = Course::from_json(&json).expect("reparse course with point_text");
+    let reparsed_slide = &reparsed.scenes[0].slides[0];
+    let reparsed_pt = reparsed_slide
+        .objects
+        .iter()
+        .find(|o| o.id == "pt-text")
+        .expect("reparsed pt-text");
+    assert!(matches!(
+        reparsed_pt.kind,
+        crate::ObjectKind::Text {
+            point_text: true,
+            ..
+        }
+    ));
+    let reparsed_extra_pt = reparsed_pt.states[0]
+        .extras
+        .iter()
+        .find(|e| e.id == "extra-pt")
+        .expect("reparsed extra-pt");
+    assert!(matches!(
+        reparsed_extra_pt.kind,
+        crate::StateExtraKind::Text {
+            point_text: true,
+            ..
+        }
+    ));
+    let reparsed_extra_area = reparsed_pt.states[0]
+        .extras
+        .iter()
+        .find(|e| e.id == "extra-area")
+        .expect("reparsed extra-area");
+    assert!(matches!(
+        reparsed_extra_area.kind,
+        crate::StateExtraKind::Text {
+            point_text: false,
+            ..
+        }
+    ));
+    let reparsed_area = reparsed_slide
+        .objects
+        .iter()
+        .find(|o| o.id == "area-text")
+        .expect("reparsed area-text");
+    assert!(matches!(
+        reparsed_area.kind,
+        crate::ObjectKind::Text {
+            point_text: false,
+            ..
+        }
+    ));
+    assert_eq!(course, reparsed);
 }

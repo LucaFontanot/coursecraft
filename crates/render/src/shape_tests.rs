@@ -466,6 +466,7 @@ fn label_object(id: &str, text: &str, frame: ModelRect, color: Color) -> Object 
             autofit: coursecraft_course::Autofit::None,
             text_style: None,
             outline: None,
+            point_text: false,
         },
         frame,
         timing: Timing::default(),
