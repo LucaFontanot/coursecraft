@@ -1077,7 +1077,7 @@ pub fn show_menu_bar(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<Editor
                 ui.close();
             }
             ui.separator();
-            show_project_help_items(editor, ui);
+            show_project_help_items(editor, ui, requests);
         });
     });
 
@@ -1184,9 +1184,11 @@ pub(crate) fn show_preview_menu_items(
 }
 
 /// Help items that report a problem or open the project's pages on GitHub.
-fn show_project_help_items(editor: &mut Editor, ui: &mut Ui) {
-    use crate::project_links::{REPO_URL, releases_url};
+fn show_project_help_items(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>) {
+    use crate::project_links::REPO_URL;
     use crate::report::{open_feature_request, open_link};
+    use crate::update_dialog::{UpdateCheckStatus, UpdateDownloadState};
+
     if ui.button("Report a problem…").clicked() {
         editor.open_report();
         ui.close();
@@ -1199,9 +1201,24 @@ fn show_project_help_items(editor: &mut Editor, ui: &mut Ui) {
         open_link(ui.ctx(), REPO_URL);
         ui.close();
     }
-    if ui.button("Check for updates").clicked() {
-        open_link(ui.ctx(), &releases_url());
-        ui.close();
+    if editor.updates_available {
+        let mut btn = Button::new("Check for updates…");
+        if editor.ui.update.has_available_hint() {
+            let p = coursecraft_render::palette(ui.ctx());
+            btn = btn.shortcut_text(egui::RichText::new("Update available").color(p.accent_text));
+        }
+        if ui.add(btn).clicked() {
+            editor.ui.update.open = true;
+            if !matches!(
+                editor.ui.update.download,
+                UpdateDownloadState::Downloading { .. }
+            ) && !editor.ui.update.has_available_hint()
+            {
+                editor.ui.update.status = UpdateCheckStatus::Checking;
+                requests.push(EditorRequest::CheckForUpdates);
+            }
+            ui.close();
+        }
     }
 }
 

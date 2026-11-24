@@ -1432,4 +1432,111 @@ Bidi & ctrl: a\u{202E}b\u{2066}c\u{200F}d\u{0007}e\u{0000}f
         let reqs = h.click_at_requests(retry_pos);
         assert!(reqs.contains(&EditorRequest::DownloadUpdate));
     }
+
+    /// UI-03: Help menu, status bar hint, and Welcome screen visibility when updates are available.
+    #[test]
+    fn ui03_help_menu_status_bar_and_welcome_visibility() {
+        let mut h = TestHarness::new(sample_course());
+        h.editor.set_updates_available(true);
+        h.idle_frame();
+
+        // 1. Help menu contains "Check for updates…" and emits CheckForUpdates on click.
+        let help_pos = h.find_text("Help").expect("Help menu button");
+        h.click_at(help_pos);
+        h.idle_frame();
+        let check_pos = h
+            .find_text_last("Check for updates…")
+            .expect("Check for updates… menu item");
+        let reqs = h.click_at_requests(check_pos);
+        assert!(h.editor.ui.update.open);
+        assert_eq!(h.editor.ui.update.status, UpdateCheckStatus::Checking);
+        assert!(
+            reqs.contains(&EditorRequest::CheckForUpdates),
+            "expected CheckForUpdates, got {reqs:?}"
+        );
+
+        // 2. With a non-skipped UpdateInfo, status bar paints "Update available" and clicking opens dialog.
+        h.editor.ui.update.open = false;
+        h.editor.ui.update.status = UpdateCheckStatus::Available(sample_update_info(true));
+        h.idle_frame();
+        h.idle_frame();
+
+        let pill_pos = h
+            .find_text("Update available")
+            .expect("status bar Update available pill");
+        h.click_at(pill_pos);
+        h.idle_frame();
+        assert!(h.editor.ui.update.open);
+        assert!(h.find_text("Software update").is_some());
+        assert!(h.find_text("CourseCraft 0.4.5 is available").is_some());
+
+        // 3. Help menu also shows the quiet "Update available" hint and opens without dropping state.
+        h.editor.ui.update.open = false;
+        h.idle_frame();
+        let help_pos = h.find_text("Help").expect("Help menu button");
+        h.click_at(help_pos);
+        h.idle_frame();
+        assert!(h.find_text_last("Check for updates…").is_some());
+        assert!(
+            h.find_texts("Update available").len() >= 2,
+            "expected Update available in both status bar and Help menu"
+        );
+        let check_pos = h
+            .find_text_last("Check for updates…")
+            .expect("Check for updates… menu item");
+        let reqs = h.click_at_requests(check_pos);
+        assert!(h.editor.ui.update.open);
+        assert!(matches!(
+            h.editor.ui.update.status,
+            UpdateCheckStatus::Available(_)
+        ));
+        assert!(
+            !reqs.contains(&EditorRequest::CheckForUpdates),
+            "clicking Check for updates… with a known non-skipped update should show it immediately"
+        );
+
+        // 4. Dialog renders cleanly over the welcome screen when show_welcome == true.
+        h.editor.ui.show_welcome = true;
+        h.editor.ui.update.open = true;
+        h.idle_frame();
+        h.idle_frame();
+        assert!(h.find_text("Software update").is_some());
+        assert!(h.find_text("CourseCraft 0.4.5 is available").is_some());
+    }
+
+    /// UI-04: Web editor isolation (`updates_available == false` by default).
+    #[test]
+    fn ui04_web_editor_isolation() {
+        let mut h = TestHarness::new(sample_course());
+        assert!(!h.editor.updates_available);
+        h.editor.ui.update.status = UpdateCheckStatus::Available(sample_update_info(true));
+        h.idle_frame();
+        h.idle_frame();
+
+        // Status bar never shows "Update available".
+        assert!(h.find_text("Update available").is_none());
+
+        // Help menu omits "Check for updates…" (and old "Check for updates").
+        let help_pos = h.find_text("Help").expect("Help menu button");
+        h.click_at(help_pos);
+        h.idle_frame();
+        assert!(
+            h.find_text_last("Report a problem…").is_some(),
+            "Help menu should be open"
+        );
+        assert!(h.find_text("Check for updates…").is_none());
+        assert!(h.find_text("Check for updates").is_none());
+        assert!(h.find_text("Update available").is_none());
+
+        // Preferences omits "Check for updates automatically".
+        h.editor.open_preferences();
+        h.idle_frame();
+        h.idle_frame();
+        assert!(
+            h.find_text("Check spelling as you type").is_some(),
+            "Preferences dialog should be open"
+        );
+        assert!(h.find_text("Check for updates automatically").is_none());
+        assert!(h.find_text("Updates").is_none());
+    }
 }
