@@ -100,7 +100,7 @@ pub(crate) fn package_files_shared_from(
 /// # Errors
 /// Returns a plain sentence naming the object and file when media is missing,
 /// or describing another package problem.
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(test)]
 pub(crate) fn package_files_from(
     course: &Course,
     media: &[(String, Arc<[u8]>)],

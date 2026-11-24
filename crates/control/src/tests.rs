@@ -669,3 +669,47 @@ fn m31_06_headless_open_path_course_json_with_sibling_media_saves_to_ccraft() {
     let reopened = coursecraft_format::open_project(&bytes).expect("reopen out.ccraft");
     assert_eq!(reopened.media, vec![("hero.png".to_owned(), png_bytes)]);
 }
+
+#[test]
+fn r2_02_headless_open_streaming_ccraft_and_errors() {
+    let scratch = scratch_dir("r2-02-headless-open-streaming");
+    let ccraft_path = scratch.join("streaming.ccraft");
+    let missing_path = scratch.join("does-not-exist.ccraft");
+    let corrupt_path = scratch.join("corrupt.ccraft");
+
+    let initial = Session::blank("Streaming Open Course").course;
+    let payload = b"\x89PNG\r\n\x1a\nstreaming-ccraft-media".to_vec();
+    let media = vec![("hero.png".to_owned(), payload.clone())];
+    let bytes = coursecraft_format::save_project(&initial, &media).expect("save ccraft");
+    std::fs::write(&ccraft_path, bytes).expect("write ccraft");
+
+    let mut host = HeadlessHost::new(Session::blank("Empty"), None);
+    let title = host
+        .open(&ccraft_path, true)
+        .expect("streaming open succeeds");
+    assert_eq!(title, "Streaming Open Course");
+    assert_eq!(host.course().title, "Streaming Open Course");
+    match host.media().get("hero.png") {
+        coursecraft_render::MediaFetch::Ready(found) => {
+            assert_eq!(found.as_ref(), payload.as_slice());
+        }
+        other => panic!("expected Ready media bytes, got {other:?}"),
+    }
+
+    let missing_err = host
+        .open(&missing_path, true)
+        .expect_err("missing ccraft must fail");
+    assert!(
+        matches!(missing_err, crate::HostError::Io(_)),
+        "expected HostError::Io, got {missing_err:?}"
+    );
+
+    std::fs::write(&corrupt_path, b"not a valid zip archive").expect("write corrupt ccraft");
+    let corrupt_err = host
+        .open(&corrupt_path, true)
+        .expect_err("corrupt ccraft must fail");
+    assert!(
+        matches!(corrupt_err, crate::HostError::Engine(_)),
+        "expected HostError::Engine, got {corrupt_err:?}"
+    );
+}

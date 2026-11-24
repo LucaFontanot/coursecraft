@@ -559,7 +559,7 @@ pub fn zip_shared_package_to<W: std::io::Write + std::io::Seek>(
     Ok(())
 }
 
-/// Progress or completion from [`PackageZipper::step`].
+/// Progress or completion from [`PackageZipper::step`] or [`SharedPackageZipper::step`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZipStep {
     /// More bytes remain to be written.
@@ -568,13 +568,33 @@ pub enum ZipStep {
     Done(Vec<u8>),
 }
 
-/// Incremental zip writer that writes a bounded number of input bytes per
-/// [`step`](Self::step) call so callers on single-threaded targets (such as the
-/// web editor) can yield between animation frames.
-///
-/// Produces bytes identical to [`zip_package`].
-pub struct PackageZipper {
-    files: Vec<PackageFile>,
+trait ZipEntry {
+    fn path(&self) -> &str;
+    fn bytes(&self) -> &[u8];
+}
+
+impl ZipEntry for PackageFile {
+    fn path(&self) -> &str {
+        &self.path
+    }
+
+    fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl ZipEntry for SharedPackageFile {
+    fn path(&self) -> &str {
+        &self.path
+    }
+
+    fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+struct ZipperCore<F> {
+    files: Vec<F>,
     writer: Option<zip::ZipWriter<std::io::Cursor<Vec<u8>>>>,
     file_index: usize,
     file_offset: usize,
@@ -582,15 +602,13 @@ pub struct PackageZipper {
     bytes_total: u64,
 }
 
-impl PackageZipper {
-    /// Start zipping `files` incrementally.
-    #[must_use]
-    pub fn new(files: Vec<PackageFile>) -> Self {
+impl<F: ZipEntry> ZipperCore<F> {
+    fn new(files: Vec<F>) -> Self {
         let capacity = files
             .iter()
-            .map(|f| f.bytes.len().saturating_add(128))
+            .map(|f| f.bytes().len().saturating_add(128))
             .fold(1 << 16, usize::saturating_add);
-        let bytes_total = files.iter().map(|f| f.bytes.len() as u64).sum();
+        let bytes_total = files.iter().map(|f| f.bytes().len() as u64).sum();
         let writer = Some(zip::ZipWriter::new(std::io::Cursor::new(
             Vec::with_capacity(capacity),
         )));
@@ -604,13 +622,7 @@ impl PackageZipper {
         }
     }
 
-    /// Write up to `max_bytes` of input file data (at least 1 byte) and return
-    /// either [`ZipStep::InProgress`] or [`ZipStep::Done`].
-    ///
-    /// # Errors
-    /// Returns [`PublishError::Zip`] if writing, compressing, or finishing fails,
-    /// or if called again after [`ZipStep::Done`].
-    pub fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
+    fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
         let mut budget = max_bytes.max(1);
         let Some(writer) = self.writer.as_mut() else {
             return Err(PublishError::Zip("zipper already finished".to_string()));
@@ -620,35 +632,37 @@ impl PackageZipper {
             let Some(file) = self.files.get(self.file_index) else {
                 break;
             };
+            let path = file.path();
+            let bytes = file.bytes();
             if self.file_offset == 0 {
-                writer.start_file(&file.path, coursecraft_format::zip_options_for(&file.path))?;
+                writer.start_file(path, coursecraft_format::zip_options_for(path))?;
             }
-            if file.bytes.is_empty() {
+            if bytes.is_empty() {
                 self.file_index += 1;
                 self.file_offset = 0;
                 continue;
             }
-            if !coursecraft_format::is_precompressed(&file.path) {
+            if !coursecraft_format::is_precompressed(path) {
                 // DeflateEncoder's block boundaries depend on input slice size,
                 // so deflated entries are written whole to stay byte-identical
                 // to `zip_package`.
-                writer.write_all(&file.bytes)?;
-                self.bytes_done = self.bytes_done.saturating_add(file.bytes.len() as u64);
-                budget = budget.saturating_sub(file.bytes.len());
+                writer.write_all(bytes)?;
+                self.bytes_done = self.bytes_done.saturating_add(bytes.len() as u64);
+                budget = budget.saturating_sub(bytes.len());
                 self.file_index += 1;
                 self.file_offset = 0;
                 continue;
             }
-            let remaining = file.bytes.len().saturating_sub(self.file_offset);
+            let remaining = bytes.len().saturating_sub(self.file_offset);
             let take = remaining.min(budget);
             let end = self.file_offset.saturating_add(take);
-            if let Some(chunk) = file.bytes.get(self.file_offset..end) {
+            if let Some(chunk) = bytes.get(self.file_offset..end) {
                 writer.write_all(chunk)?;
             }
             self.file_offset = end;
             self.bytes_done = self.bytes_done.saturating_add(take as u64);
             budget = budget.saturating_sub(take);
-            if self.file_offset >= file.bytes.len() {
+            if self.file_offset >= bytes.len() {
                 self.file_index += 1;
                 self.file_offset = 0;
             }
@@ -666,6 +680,64 @@ impl PackageZipper {
             bytes_done: self.bytes_done,
             bytes_total: self.bytes_total,
         })
+    }
+}
+
+/// Incremental zip writer that writes a bounded number of input bytes per
+/// [`step`](Self::step) call so callers on single-threaded targets (such as the
+/// web editor) can yield between animation frames.
+///
+/// Produces bytes identical to [`zip_package`].
+pub struct PackageZipper {
+    inner: ZipperCore<PackageFile>,
+}
+
+impl PackageZipper {
+    /// Start zipping `files` incrementally.
+    #[must_use]
+    pub fn new(files: Vec<PackageFile>) -> Self {
+        Self {
+            inner: ZipperCore::new(files),
+        }
+    }
+
+    /// Write up to `max_bytes` of input file data (at least 1 byte) and return
+    /// either [`ZipStep::InProgress`] or [`ZipStep::Done`].
+    ///
+    /// # Errors
+    /// Returns [`PublishError::Zip`] if writing, compressing, or finishing fails,
+    /// or if called again after [`ZipStep::Done`].
+    pub fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
+        self.inner.step(max_bytes)
+    }
+}
+
+/// Incremental zero-copy zip writer backed by shared [`Arc`] buffers so callers
+/// on single-threaded targets (such as the web editor) can yield between
+/// animation frames without copying media bytes.
+///
+/// Produces bytes identical to [`zip_shared_package`] and [`zip_package`].
+pub struct SharedPackageZipper {
+    inner: ZipperCore<SharedPackageFile>,
+}
+
+impl SharedPackageZipper {
+    /// Start zipping `files` incrementally.
+    #[must_use]
+    pub fn new(files: Vec<SharedPackageFile>) -> Self {
+        Self {
+            inner: ZipperCore::new(files),
+        }
+    }
+
+    /// Write up to `max_bytes` of input file data (at least 1 byte) and return
+    /// either [`ZipStep::InProgress`] or [`ZipStep::Done`].
+    ///
+    /// # Errors
+    /// Returns [`PublishError::Zip`] if writing, compressing, or finishing fails,
+    /// or if called again after [`ZipStep::Done`].
+    pub fn step(&mut self, max_bytes: usize) -> Result<ZipStep, PublishError> {
+        self.inner.step(max_bytes)
     }
 }
 

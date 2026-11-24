@@ -188,8 +188,9 @@ pub fn load_template(config_dir: &Path, id: &str) -> Result<LoadedTemplate, Stri
         return Err(format!("Invalid template id {id:?}"));
     }
     let path = template_file(config_dir, id);
-    let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read template {id:?}: {e}"))?;
-    let project = coursecraft_format::open_project(&bytes)
+    let file = File::open(&path).map_err(|e| format!("Failed to read template {id:?}: {e}"))?;
+    let reader = std::io::BufReader::with_capacity(256 * 1024, file);
+    let project = coursecraft_format::open_project_from(reader)
         .map_err(|e| format!("Failed to open template {id:?}: {e}"))?;
     let slide = project
         .course
@@ -350,5 +351,48 @@ mod tests {
         assert!(load_template(&dir, "../secret").is_err());
         assert!(delete_template(&dir, "a/b").is_err());
         assert!(delete_template(&dir, "").is_err());
+    }
+
+    #[test]
+    fn r2_02_load_template_streaming_round_trip_and_corrupt() {
+        let dir = scratch_dir("r2-02-template-streaming");
+
+        let course = Course::from_json(HELLO_JSON).unwrap();
+        let mut slide = course.scenes[0].slides[0].clone();
+        slide.id = "tpl-stream".to_owned();
+        slide.title = "Streaming Template".to_owned();
+        slide
+            .objects
+            .push(image_object("img-stream", "Stream Hero", "stream-hero.png"));
+
+        let media_bytes = b"\x89PNG\r\n\x1a\nstream-template-bytes".to_vec();
+        let saved = save_template(
+            &dir,
+            &slide,
+            course.slide_size,
+            &[("stream-hero.png".to_owned(), media_bytes.clone())],
+        )
+        .expect("save template");
+
+        let (loaded_slide, loaded_media) = load_template(&dir, &saved.id).expect("load template");
+        assert_eq!(loaded_slide, slide);
+        assert_eq!(
+            loaded_media,
+            vec![("stream-hero.png".to_owned(), media_bytes)]
+        );
+
+        let corrupt_path = templates_dir(&dir).join("corrupt.ccraft");
+        std::fs::write(&corrupt_path, b"not-a-valid-zip").expect("write corrupt template");
+        let err = load_template(&dir, "corrupt").expect_err("corrupt template must fail");
+        assert!(
+            err.contains("Failed to open template"),
+            "unexpected corrupt error: {err}"
+        );
+
+        let missing_err = load_template(&dir, "missing").expect_err("missing template must fail");
+        assert!(
+            missing_err.contains("Failed to read template"),
+            "unexpected missing error: {missing_err}"
+        );
     }
 }

@@ -3363,3 +3363,142 @@ fn r1_02_publish_media_walker_golden_and_errors() {
         );
     }
 }
+
+#[test]
+fn r2_01_shared_package_zipper_matches_zip_package_across_chunk_sizes() {
+    let mut course = minimal_course("Shared Zipper Parity");
+    course.scenes[0].slides[0].objects.push(Object {
+        id: "hero-img".into(),
+        name: "Hero".into(),
+        kind: ObjectKind::Image {
+            crop: None,
+            src: "hero.png".into(),
+            alt: "Hero image".into(),
+            outline: None,
+            shape: None,
+        },
+        frame: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 200.0,
+            h: 120.0,
+        },
+        timing: Timing::default(),
+        states: Vec::new(),
+        initial_state: "normal".into(),
+        entrance: None,
+        exit: None,
+        motion_paths: Vec::new(),
+        focus_order: None,
+        decorative: false,
+        description: None,
+        group: None,
+        panel: None,
+        rotation: 0.0,
+        flip_h: false,
+        flip_v: false,
+        opacity: 1.0,
+        shadow: None,
+        glow: None,
+        drag: None,
+        locked: false,
+        editor_hidden: false,
+    });
+    course.background_audio = Some(BackgroundAudio {
+        src: "audio.mp3".into(),
+        volume: 0.8,
+        looping: true,
+    });
+    course.resources.push(coursecraft_course::Resource {
+        id: "empty-res".into(),
+        title: "Empty".into(),
+        target: coursecraft_course::ResourceTarget::File {
+            src: "empty.txt".into(),
+        },
+    });
+
+    let hero_png: Arc<[u8]> = Arc::from(vec![0x89u8; 4096]);
+    let audio_mp3: Arc<[u8]> = Arc::from(
+        (0..70_000usize)
+            .map(|i| (i % 251) as u8)
+            .collect::<Vec<_>>(),
+    );
+    let empty_bytes: Arc<[u8]> = Arc::from(Vec::<u8>::new());
+
+    let course_json = course.to_json_compact().expect("course json");
+    let player_files = fake_player();
+    let resolve = |src: &str| -> Option<Arc<[u8]>> {
+        match src {
+            "hero.png" => Some(Arc::clone(&hero_png)),
+            "audio.mp3" => Some(Arc::clone(&audio_mp3)),
+            "empty.txt" => Some(Arc::clone(&empty_bytes)),
+            _ => None,
+        }
+    };
+    let input = SharedPackageInput {
+        course: &course,
+        course_json: &course_json,
+        player_files: &player_files,
+        media: &resolve,
+    };
+
+    let shared_files =
+        build_package_shared(&input, PackageStandard::Scorm(Standard::Scorm12), &|_| None)
+            .expect("build shared package");
+
+    let paths: Vec<&str> = shared_files.iter().map(|f| f.path.as_str()).collect();
+    for expected_path in [
+        "index.html",
+        "course.json",
+        "imsmanifest.xml",
+        "media/hero.png",
+        "media/audio.mp3",
+        "media/empty.txt",
+    ] {
+        assert!(
+            paths.contains(&expected_path),
+            "{expected_path} missing from {paths:?}"
+        );
+    }
+
+    let expected_shared = zip_shared_package(&shared_files).expect("zip_shared_package");
+    let owned_files: Vec<PackageFile> = shared_files
+        .iter()
+        .map(|f| PackageFile {
+            path: f.path.clone(),
+            bytes: f.bytes.to_vec(),
+        })
+        .collect();
+    let expected_owned = zip_package(&owned_files).expect("zip_package");
+    assert_eq!(expected_shared, expected_owned);
+
+    for chunk_size in [1, 17, 1024, 65_536, 262_144] {
+        let mut zipper = SharedPackageZipper::new(shared_files.clone());
+        let zipped = loop {
+            match zipper.step(chunk_size).expect("zipper step") {
+                ZipStep::InProgress {
+                    bytes_done,
+                    bytes_total,
+                } => {
+                    assert!(bytes_done <= bytes_total);
+                }
+                ZipStep::Done(bytes) => break bytes,
+            }
+        };
+        assert_eq!(
+            zipped, expected_shared,
+            "SharedPackageZipper mismatch for chunk_size={chunk_size}"
+        );
+        assert!(
+            matches!(zipper.step(chunk_size), Err(PublishError::Zip(_))),
+            "calling step after Done must return Err(PublishError::Zip(_))"
+        );
+    }
+
+    let expected_empty = zip_shared_package(&[]).expect("zip_shared_package empty");
+    assert_eq!(expected_empty, zip_package(&[]).expect("zip_package empty"));
+    let mut empty_zipper = SharedPackageZipper::new(Vec::new());
+    let done = empty_zipper.step(1024).expect("empty zipper step");
+    assert_eq!(done, ZipStep::Done(expected_empty));
+    assert!(matches!(empty_zipper.step(1024), Err(PublishError::Zip(_))));
+}
