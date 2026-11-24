@@ -191,6 +191,104 @@ pub(crate) fn undo_scope(id: &str) -> crate::delta::UndoScope {
     }
 }
 
+/// Whether a `SingleSlide` command may use scoped single-slide validation
+/// (`Course::validate_slide_errors`) inside `keep_valid` instead of full-course
+/// `Course::first_error`.
+///
+/// Only commands whose mutation stays strictly inside one slide's geometry,
+/// styling, text, tables, media/cues, layers, states, or slide settings are
+/// listed. Commands touching triggers, questions, bank draws, or course-wide
+/// invariants fall back to full `Course::first_error()`.
+#[must_use]
+pub(crate) fn can_use_slide_validation(id: &str) -> bool {
+    matches!(
+        id,
+        "object.add"
+            | "object.update"
+            | "object.reorder"
+            | "object.align"
+            | "object.distribute"
+            | "object.match_size"
+            | "object.group"
+            | "object.ungroup"
+            | "object.duplicate"
+            | "object.paste"
+            | "object.set_frame"
+            | "object.set_rotation"
+            | "object.flip"
+            | "object.lock"
+            | "object.hide_in_editor"
+            | "object.set_opacity"
+            | "object.set_outline_join"
+            | "object.set_fill_style"
+            | "object.set_shadow"
+            | "object.set_glow"
+            | "object.apply_style"
+            | "object.set_drag"
+            | "object.set_lottie"
+            | "object.set_web_source"
+            | "object.set_input"
+            | "object.set_marker"
+            | "object.set_panel"
+            | "object.set_scroll_panel"
+            | "object.set_timer"
+            | "object.set_meter"
+            | "object.set_path"
+            | "object.set_crop"
+            | "object.set_captions"
+            | "object.set_media"
+            | "object.add_state"
+            | "object.update_state"
+            | "object.patch_state"
+            | "object.delete_state"
+            | "object.duplicate_state"
+            | "object.rename_state"
+            | "object.reorder_state"
+            | "object.state_add_extra"
+            | "object.state_update_extra"
+            | "object.state_delete_extra"
+            | "object.state_reorder_extra"
+            | "object.delete"
+            | "object.set_animation"
+            | "object.add_motion_path"
+            | "object.update_motion_path"
+            | "object.remove_motion_path"
+            | "object.set_autofit"
+            | "text.set"
+            | "text.style_range"
+            | "text.set_paragraph"
+            | "text.set_paragraphs"
+            | "text.set_link"
+            | "text_style.apply"
+            | "table.set_cell"
+            | "table.insert_row"
+            | "table.delete_row"
+            | "table.insert_column"
+            | "table.delete_column"
+            | "table.resize"
+            | "table.merge"
+            | "table.split"
+            | "table.set_borders"
+            | "table.set_header_row"
+            | "layer.add"
+            | "layer.update"
+            | "layer.delete"
+            | "layer.move"
+            | "layer.duplicate"
+            | "video.add_cue"
+            | "video.set_cue"
+            | "video.remove_cue"
+            | "slide.update"
+            | "slide.set_duration"
+            | "slide.set_background"
+            | "slide.set_transition"
+            | "slide.set_player_overrides"
+            | "slide.add_cue"
+            | "slide.set_cue"
+            | "slide.remove_cue"
+    )
+}
+
 static REGISTRY: &[Command] = &[
     Command {
         id: "course.info",
@@ -1952,19 +2050,35 @@ fn layer_mut<'a>(slide: &'a mut Slide, id: &str) -> Result<&'a mut Layer> {
         .ok_or_else(|| EngineError::NotFound(format!("layer {id:?} is not on slide {sid:?}")))
 }
 
+fn slide_loc_path_prefix(loc: crate::delta::SlideLoc) -> String {
+    match loc {
+        crate::delta::SlideLoc::SceneSlide { scene, slide } => {
+            format!("/scenes/{scene}/slides/{slide}")
+        }
+        crate::delta::SlideLoc::Master(idx) => format!("/masters/{idx}"),
+        crate::delta::SlideLoc::Template(idx) => format!("/templates/{idx}"),
+        crate::delta::SlideLoc::BankSlide { bank, slide } => {
+            format!("/banks/{bank}/slides/{slide}")
+        }
+    }
+}
+
 /// Reject the edit if it took a valid course to an invalid one.
 fn keep_valid(s: &mut Session, was_valid: bool) -> Result<()> {
-    if !was_valid {
+    if !was_valid || s.skip_undo {
         return Ok(());
     }
-    #[cfg(debug_assertions)]
-    crate::test_counts::note_full_course_validation();
-    match s
-        .course
-        .validate()
-        .into_iter()
-        .find(|i| i.severity == coursecraft_course::Severity::Error)
+    let first_error = if let Some(loc) = s.active_single_slide
+        && let Some(slide) = crate::delta::slide_at(&s.course, loc)
     {
+        let prefix = slide_loc_path_prefix(loc);
+        s.course.validate_slide_errors(slide, &prefix)
+    } else {
+        #[cfg(debug_assertions)]
+        crate::test_counts::note_full_course_validation();
+        s.course.first_error()
+    };
+    match first_error {
         Some(i) => Err(EngineError::Invalid(format!("{} ({})", i.message, i.path))),
         None => {
             s.mark_validated_valid();
@@ -1992,7 +2106,7 @@ fn course_map(s: &mut Session, _p: &Json) -> Result<Json> {
 }
 
 fn course_validate(s: &mut Session, _p: &Json) -> Result<Json> {
-    serde_json::to_value(s.course.validate()).map_err(|e| EngineError::Invalid(e.to_string()))
+    serde_json::to_value(s.validation_issues()).map_err(|e| EngineError::Invalid(e.to_string()))
 }
 
 fn course_audit(s: &mut Session, _p: &Json) -> Result<Json> {
@@ -5726,10 +5840,17 @@ fn object_paste(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn object_set_frame(s: &mut Session, p: &Json) -> Result<Json> {
-    let was_valid = s.is_playable();
     let sid: String = req("object.set_frame", p, "slide")?;
     let oid: String = req("object.set_frame", p, "object")?;
     let frame: Rect = req("object.set_frame", p, "frame")?;
+    {
+        let obj = find_object_mut(slide_mut(s, &sid)?, &oid)?;
+        if obj.frame == frame {
+            s.skip_undo = true;
+            return Ok(Json::Null);
+        }
+    }
+    let was_valid = s.is_playable();
     find_object_mut(slide_mut(s, &sid)?, &oid)?.frame = frame;
     keep_valid(s, was_valid)?;
     Ok(Json::Null)

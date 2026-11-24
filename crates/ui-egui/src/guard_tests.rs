@@ -1059,3 +1059,51 @@ fn g02_scrolling_100_slide_pictures_stays_under_8_mib() {
         "upgrading s-50 on the canvas must not count as a full-res thumbnail decode"
     );
 }
+
+/// G-07 (`M34-07`): On a settled 300-slide course, nudging an object with an
+/// arrow key uses scoped single-slide validation and cached engine issues with
+/// zero full-course validations and exactly one validation refresh.
+#[test]
+fn g07_arrow_nudge_uses_cached_validation_with_zero_full_validations() {
+    let mut h = TestHarness::new(many_slide_course(300));
+    h.editor.selection.slide = "s-0".into();
+    h.editor.selection.object = Some("t0".into());
+    for _ in 0..4 {
+        let _ = h.idle_frame();
+    }
+
+    let x_before = h
+        .editor
+        .session
+        .course
+        .slide("s-0")
+        .and_then(|slide| slide.object("t0"))
+        .map(|(obj, _)| obj.frame.x)
+        .expect("t0 exists on s-0");
+
+    reset_counts();
+    h.press(Key::ArrowRight, Modifiers::NONE);
+
+    let x_after = h
+        .editor
+        .session
+        .course
+        .slide("s-0")
+        .and_then(|slide| slide.object("t0"))
+        .map(|(obj, _)| obj.frame.x)
+        .expect("t0 exists on s-0");
+    assert!(
+        x_after > x_before,
+        "ArrowRight should nudge t0 to the right (before={x_before}, after={x_after})"
+    );
+    assert_eq!(
+        gc::full_course_validations(),
+        0,
+        "arrow nudge on a 300-slide course must perform zero full-course validations"
+    );
+    assert_eq!(
+        gc::validation_runs(),
+        1,
+        "arrow nudge must trigger exactly one cached validation refresh"
+    );
+}

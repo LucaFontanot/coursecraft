@@ -4003,7 +4003,9 @@ impl Editor {
                 &self.ui.last_known_slides,
                 reselect_restored,
             );
-            self.ui.last_known_slides = selection::slide_layout(&self.session.course);
+            if !slide_layout_matches(&self.session.course, &self.ui.last_known_slides) {
+                self.ui.last_known_slides = selection::slide_layout(&self.session.course);
+            }
             self.ui.pending_undo_redo = false;
             if let Some(session) = self.ui.editing_state.clone()
                 && let Some(ref extra_id) = session.selected_extra
@@ -4133,26 +4135,44 @@ impl Editor {
     pub(crate) fn refresh_validate_only(&mut self) {
         #[cfg(test)]
         crate::guard_counters::note_validation_run();
-        if let Some(res) = self.run("course.validate", serde_json::json!({})) {
-            let (errs, mut warns, mut issues) = parse_validation_result(&res);
-            for r in coursecraft_course::media_references(&self.session.course) {
-                if r.src.ends_with('/') {
-                    continue;
+        let engine_issues = self.session.validation_issues();
+        let mut errs = 0usize;
+        let mut warns = 0usize;
+        let mut issues = Vec::with_capacity(engine_issues.len());
+        for issue in engine_issues {
+            let severity = match issue.severity {
+                coursecraft_course::Severity::Error => {
+                    errs += 1;
+                    "error"
                 }
-                if !self.media.iter().any(|(name, _)| name == &r.src) {
+                coursecraft_course::Severity::Warning => {
                     warns += 1;
-                    issues.push(ValidationIssueSummary {
-                        severity: "warning".to_owned(),
-                        path: r.place.clone(),
-                        message: format!("Missing media \u{201C}{}\u{201D} in {}.", r.src, r.place),
-                    });
+                    "warning"
                 }
-            }
-            self.ui.trigger_issues_by_path = index_trigger_issues(&issues);
-            self.ui.validation_errors = errs;
-            self.ui.validation_warnings = warns;
-            self.ui.validation_issues = issues;
+            };
+            issues.push(ValidationIssueSummary {
+                severity: severity.to_owned(),
+                path: issue.path.clone(),
+                message: issue.message.clone(),
+            });
         }
+        for r in coursecraft_course::media_references(&self.session.course) {
+            if r.src.ends_with('/') {
+                continue;
+            }
+            if !self.media.iter().any(|(name, _)| name == &r.src) {
+                warns += 1;
+                issues.push(ValidationIssueSummary {
+                    severity: "warning".to_owned(),
+                    path: r.place.clone(),
+                    message: format!("Missing media \u{201C}{}\u{201D} in {}.", r.src, r.place),
+                });
+            }
+        }
+        self.ui.trigger_issues_by_path = index_trigger_issues(&issues);
+        self.ui.validation_errors = errs;
+        self.ui.validation_warnings = warns;
+        self.ui.validation_issues = issues;
     }
 
     /// Run the accessibility audit now, through the engine, and clear the dirty flag.
@@ -5397,35 +5417,24 @@ pub fn sanitize_media_src(file_name: &str, existing: &[(String, std::sync::Arc<[
     }
 }
 
-fn parse_validation_result(val: &Json) -> (usize, usize, Vec<ValidationIssueSummary>) {
-    let mut errors = 0;
-    let mut warnings = 0;
-    let mut issues = Vec::new();
-
-    if let Json::Array(items) = val {
-        for item in items {
-            let severity = item
-                .get("severity")
-                .and_then(|s| s.as_str())
-                .unwrap_or("error");
-            let path = item.get("path").and_then(|p| p.as_str()).unwrap_or("");
-            let message = item.get("message").and_then(|m| m.as_str()).unwrap_or("");
-
-            if severity == "error" {
-                errors += 1;
-            } else if severity == "warning" {
-                warnings += 1;
-            }
-
-            issues.push(ValidationIssueSummary {
-                severity: severity.to_owned(),
-                path: path.to_owned(),
-                message: message.to_owned(),
-            });
-        }
-    }
-
-    (errors, warnings, issues)
+fn slide_layout_matches(
+    course: &coursecraft_course::Course,
+    known: &[(String, Vec<String>)],
+) -> bool {
+    course.scenes.len() == known.len()
+        && course
+            .scenes
+            .iter()
+            .zip(known)
+            .all(|(scene, (scene_id, slide_ids))| {
+                scene.id == *scene_id
+                    && scene.slides.len() == slide_ids.len()
+                    && scene
+                        .slides
+                        .iter()
+                        .zip(slide_ids)
+                        .all(|(slide, id)| slide.id == *id)
+            })
 }
 
 /// Extract the canonical trigger path prefix from a validation issue path
