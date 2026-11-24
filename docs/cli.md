@@ -308,6 +308,8 @@ object.distribute    -                        -          {"slide": id, "objects"
 object.match_size    -                        -          {"slide": id, "objects": id[], "dimension": "width"|"height"|"both"}
 object.group         Arrange/Group            Ctrl+G     {"slide": id, "objects": id[]}
 object.ungroup       Arrange/Ungroup          Ctrl+Shift+G {"slide": id, "objects": id[]}
+group.set_interactive -                        -          {"slide": id, "group": id, "interactive": bool, "name"?: string}
+group.update         -                        -          {"slide": id, "group": id, "name"?: string, "initial_state"?: string, "focus_order"?: u32|null, "description"?: string|null}
 object.duplicate     Edit/Duplicate           Ctrl+D     {"slide": id, "object"?: id, "objects"?: id[]}
 object.paste         -                        -          {"slide": id, "layer"?: id, "objects": Object[], "triggers"?: Trigger[], "offset"?: number, "source_slide"?: id}
 object.set_frame     -                        -          {"slide": id, "object": id, "frame": Rect}

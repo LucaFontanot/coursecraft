@@ -782,6 +782,7 @@ pub(super) fn object_delete(s: &mut Session, p: &Json) -> Result<Json> {
             "object {oid:?} is not on slide {sid:?}"
         )));
     }
+    let removed_groups = super::remove_empty_group_records(slide);
     // Deleting a panel releases every child in the same undo step.
     if is_panel {
         for object in &mut slide.objects {
@@ -797,18 +798,22 @@ pub(super) fn object_delete(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
     }
-    // Triggers that start from the object or act on it go with it, in the
-    // same undo step. Anything else that still needs it (a group, a
-    // question) makes keep_valid refuse the delete and name it.
-    let removed = if was_valid {
-        remove_dangling_triggers(
-            s,
-            &sid,
-            &[
-                format!("object {oid:?} is not on slide"),
-                format!("target {oid:?} is not on slide"),
-            ],
-        )
+    // Triggers that start from the object or act on it (or on any group record
+    // left empty by this delete) go with it, in the same undo step. Anything
+    // else that still needs it (a question) makes keep_valid refuse the delete
+    // and name it.
+    let removed = if was_valid || !removed_groups.is_empty() {
+        let mut needles = Vec::new();
+        if was_valid {
+            needles.push(format!("object {oid:?} is not on slide"));
+            needles.push(format!("target {oid:?} is not on slide"));
+        }
+        for gid in &removed_groups {
+            needles.push(format!("object {gid:?} is not on slide"));
+            needles.push(format!("target {gid:?} is not on slide"));
+            needles.push(format!("group {gid:?} on slide"));
+        }
+        remove_dangling_triggers(s, &sid, &needles)
     } else {
         0
     };

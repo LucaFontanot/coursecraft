@@ -10732,7 +10732,7 @@ fn registry_labels_and_menu_leaves_use_sentence_case() {
     };
 
     let cmds = crate::registry();
-    assert_eq!(cmds.len(), 186, "unexpected registry command count");
+    assert_eq!(cmds.len(), 188, "unexpected registry command count");
 
     for cmd in cmds {
         check_phrase(cmd.label, &format!("label for {}", cmd.id));
@@ -12248,7 +12248,7 @@ fn r5_01_registry_golden_lock() {
     use crate::delta::UndoScope;
 
     let reg = registry();
-    assert_eq!(reg.len(), 186);
+    assert_eq!(reg.len(), 188);
 
     const EXPECTED: &[(&str, bool, UndoScope, bool)] = &[
         ("course.info", false, UndoScope::FullCourse, false),
@@ -12346,6 +12346,8 @@ fn r5_01_registry_golden_lock() {
         ("object.match_size", true, UndoScope::SingleSlide, true),
         ("object.group", true, UndoScope::SingleSlide, true),
         ("object.ungroup", true, UndoScope::SingleSlide, true),
+        ("group.set_interactive", true, UndoScope::SingleSlide, true),
+        ("group.update", true, UndoScope::SingleSlide, true),
         ("object.duplicate", true, UndoScope::SingleSlide, true),
         ("object.paste", true, UndoScope::SingleSlide, true),
         ("object.set_frame", true, UndoScope::SingleSlide, true),
@@ -12607,10 +12609,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 23_881, "registry golden table byte length");
+    assert_eq!(table.len(), 24_195, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        0xde91_1e13_87d0_bfef,
+        0xbc9d_0049_e376_49ba,
         "registry golden table FNV-1a hash"
     );
 }
@@ -13637,4 +13639,659 @@ fn pt_06_state_extra_point_text_fits_and_converts() {
         &after_resize.kind,
         StateExtraKind::Text { point_text: false, style, .. } if style.wrap
     ));
+}
+
+#[test]
+fn gb_12_group_set_interactive_no_silent_migration_and_opt_out_guard() {
+    let mut s = Session::blank("Interactive Group No Migration");
+    ok(
+        &mut s,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "l1", "name": "Overlay" }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#1D4ED8" },
+            "frame": { "x": 100.0, "y": 100.0, "w": 180.0, "h": 56.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "lbl",
+            "kind": { "type": "text", "text": "  Continue  " },
+            "frame": { "x": 120.0, "y": 112.0, "w": 140.0, "h": 32.0 }
+        }),
+    );
+    let grp_res = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["bg", "lbl"] }),
+    );
+    let gid = grp_res["group"].as_str().unwrap().to_owned();
+
+    // Add member triggers BEFORE making the group interactive.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": "bg" },
+                "action": { "action": "show_layer", "layer": "l1" }
+            }
+        }),
+    );
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "hover_start", "object": "lbl" },
+                "action": { "action": "pause_timeline" }
+            }
+        }),
+    );
+
+    let plain_json = s.course.to_json().unwrap();
+    let member_triggers_before = s.course.slide("slide1").unwrap().triggers.clone();
+
+    // Turn interactive ON: must create Group record with derived name and NOT migrate member triggers.
+    let res = ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": gid, "interactive": true }),
+    );
+    assert_eq!(res["group"].as_str(), Some(gid.as_str()));
+    let slide = s.course.slide("slide1").unwrap();
+    assert_eq!(slide.groups.len(), 1);
+    assert_eq!(slide.groups[0].id, gid);
+    assert_eq!(slide.groups[0].name, "Continue");
+    assert!(slide.groups[0].interactive);
+    assert_eq!(slide.groups[0].initial_state, "normal");
+    assert_eq!(
+        slide.triggers, member_triggers_before,
+        "existing member triggers must remain completely untouched (no silent migration)"
+    );
+
+    // 1. Group Click trigger blocks opt-out without mutating the slide.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": gid },
+                "action": { "action": "show_layer", "layer": "l1" }
+            }
+        }),
+    );
+    let before_blocked = s.course.clone();
+    let err = s
+        .execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": gid, "interactive": false }),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Cannot remove button behaviour while triggers reference this group"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(s.course, before_blocked);
+    ok(
+        &mut s,
+        "trigger.delete",
+        json!({ "slide": "slide1", "index": 2 }),
+    );
+
+    // 2. Action targeting group blocks opt-out.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "timeline_starts" },
+                "action": { "action": "change_state", "object": gid, "state": "disabled" }
+            }
+        }),
+    );
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": gid, "interactive": false }),
+        )
+        .is_err()
+    );
+    ok(
+        &mut s,
+        "trigger.delete",
+        json!({ "slide": "slide1", "index": 2 }),
+    );
+
+    // 3. Condition referencing group on a layer trigger blocks opt-out.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "trigger": {
+                "when": { "event": "timeline_starts", "layer": "l1" },
+                "condition": { "object_state": { "object": gid, "state": "normal", "is": true } },
+                "action": { "action": "resume_timeline" }
+            }
+        }),
+    );
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": gid, "interactive": false }),
+        )
+        .is_err()
+    );
+    ok(
+        &mut s,
+        "trigger.delete",
+        json!({ "slide": "slide1", "layer": "l1", "index": 0 }),
+    );
+
+    // 4. With all group triggers deleted, opt-out succeeds and matches plain group JSON byte-for-byte.
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": gid, "interactive": false }),
+    );
+    assert!(s.course.slide("slide1").unwrap().groups.is_empty());
+    assert_eq!(
+        s.course.slide("slide1").unwrap().triggers,
+        member_triggers_before
+    );
+    let after_opt_out_json = s.course.to_json().unwrap();
+    assert_eq!(
+        after_opt_out_json, plain_json,
+        "opting out must return the course JSON to byte-identical plain group"
+    );
+}
+
+#[test]
+fn gb_12_group_set_interactive_collision_safe_id_and_rejections() {
+    let mut s = Session::blank("Interactive Group Safety");
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 80.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "box2",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#223344" },
+            "frame": { "x": 20.0, "y": 15.0, "w": 20.0, "h": 20.0 }
+        }),
+    );
+    // Simulate a legacy course whose group ID collides with an object ID (`box1`).
+    {
+        let slide = s.course.slide_mut("slide1").unwrap();
+        slide.objects[0].group = Some("box1".to_owned());
+        slide.objects[1].group = Some("box1".to_owned());
+    }
+    let res = ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": "box1", "interactive": true }),
+    );
+    let fresh_gid = res["group"].as_str().unwrap().to_owned();
+    assert_ne!(fresh_gid, "box1", "colliding group id must be remapped");
+    let slide = s.course.slide("slide1").unwrap();
+    assert_eq!(slide.objects[0].group.as_deref(), Some(fresh_gid.as_str()));
+    assert_eq!(slide.objects[1].group.as_deref(), Some(fresh_gid.as_str()));
+    assert_eq!(slide.groups.len(), 1);
+    assert_eq!(slide.groups[0].id, fresh_gid);
+    assert_eq!(slide.groups[0].name, "Button group");
+    assert!(s.course.first_error().is_none());
+
+    // Reject < 2 members.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "solo",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#334455" },
+            "frame": { "x": 200.0, "y": 10.0, "w": 60.0, "h": 40.0 }
+        }),
+    );
+    s.course.slide_mut("slide1").unwrap().objects[2].group = Some("solo_grp".to_owned());
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": "solo_grp", "interactive": true }),
+        )
+        .is_err()
+    );
+
+    // Reject members split across layers.
+    ok(
+        &mut s,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "layer1", "name": "L1" }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "layer1",
+            "id": "layer_member",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#445566" },
+            "frame": { "x": 200.0, "y": 10.0, "w": 60.0, "h": 40.0 }
+        }),
+    );
+    s.course
+        .slide_mut("slide1")
+        .unwrap()
+        .layer_mut("layer1")
+        .unwrap()
+        .objects[0]
+        .group = Some("solo_grp".to_owned());
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": "slide1", "group": "solo_grp", "interactive": true }),
+        )
+        .is_err()
+    );
+
+    // Reject master slide.
+    let mres = ok(&mut s, "master.add", json!({ "title": "Main Master" }));
+    let mid = mres["id"].as_str().unwrap().to_owned();
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": mid,
+            "id": "m1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 50.0, "h": 50.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": mid,
+            "id": "m2",
+            "kind": { "type": "text", "text": "Header" },
+            "frame": { "x": 70.0, "y": 10.0, "w": 80.0, "h": 30.0 }
+        }),
+    );
+    let mgrp = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": mid, "objects": ["m1", "m2"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        s.execute(
+            "group.set_interactive",
+            &json!({ "slide": mid, "group": mgrp, "interactive": true }),
+        )
+        .is_err()
+    );
+
+    // Reject disallowed member kinds (TextEntry, ScrollPanel, Web).
+    ok(
+        &mut s,
+        "variable.add",
+        json!({ "name": "txt_var", "value": "" }),
+    );
+    let disallowed_kinds = [
+        json!({ "type": "text_entry", "variable": "txt_var" }),
+        json!({ "type": "scroll_panel", "content_height": 300.0 }),
+        json!({ "type": "web", "source": { "type": "url", "url": "https://example.com" } }),
+    ];
+    for (idx, kind) in disallowed_kinds.into_iter().enumerate() {
+        let base_id = format!("dis_base_{idx}");
+        let bad_id = format!("dis_bad_{idx}");
+        ok(
+            &mut s,
+            "object.add",
+            json!({
+                "slide": "slide1",
+                "id": base_id,
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                "frame": { "x": 10.0, "y": 100.0, "w": 80.0, "h": 40.0 }
+            }),
+        );
+        ok(
+            &mut s,
+            "object.add",
+            json!({
+                "slide": "slide1",
+                "id": bad_id,
+                "kind": kind,
+                "frame": { "x": 100.0, "y": 100.0, "w": 120.0, "h": 80.0 }
+            }),
+        );
+        let dgrp = ok(
+            &mut s,
+            "object.group",
+            json!({ "slide": "slide1", "objects": [base_id, bad_id] }),
+        )["group"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            s.execute(
+                "group.set_interactive",
+                &json!({ "slide": "slide1", "group": dgrp, "interactive": true }),
+            )
+            .is_err(),
+            "disallowed kind index {idx} must be rejected"
+        );
+    }
+
+    // Layer interactive group works cleanly.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "layer1",
+            "id": "la",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "layer1",
+            "id": "lb",
+            "kind": { "type": "button", "label": "Close" },
+            "frame": { "x": 15.0, "y": 15.0, "w": 90.0, "h": 30.0 }
+        }),
+    );
+    let lgrp = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["la", "lb"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": lgrp, "interactive": true }),
+    );
+    let layer = s.course.slide("slide1").unwrap().layer("layer1").unwrap();
+    assert_eq!(layer.groups.len(), 1);
+    assert_eq!(layer.groups[0].id, lgrp);
+    assert_eq!(layer.groups[0].name, "Close");
+    assert!(s.course.first_error().is_none());
+}
+
+fn gb_12_setup_interactive_group_session() -> (Session, String) {
+    let mut s = Session::blank("Interactive Group Update and Lifecycle");
+    ok(
+        &mut s,
+        "slide.add",
+        json!({ "id": "slide2", "title": "S2" }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "a",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#1D4ED8" },
+            "frame": { "x": 40.0, "y": 40.0, "w": 160.0, "h": 50.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "b",
+            "kind": { "type": "text", "text": "Next" },
+            "frame": { "x": 60.0, "y": 50.0, "w": 80.0, "h": 30.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "a",
+            "state": { "name": "selected", "fill": "#1E40AF" }
+        }),
+    );
+    let gid = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["a", "b"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": gid, "interactive": true }),
+    );
+    (s, gid)
+}
+
+fn gb_12_assert_duplicate_and_paste(s: &mut Session, gid: &str) -> (Vec<String>, String) {
+    let dup = ok(
+        s,
+        "object.duplicate",
+        json!({ "slide": "slide1", "objects": ["a", "b"] }),
+    );
+    let dup_ids: Vec<String> = dup["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(dup_ids.len(), 2);
+    let dup_gid = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .object(&dup_ids[0])
+        .unwrap()
+        .0
+        .group
+        .clone()
+        .unwrap();
+    assert_ne!(dup_gid, gid);
+    let dup_group = s.course.slide("slide1").unwrap().group(&dup_gid).unwrap().0;
+    assert!(dup_group.interactive);
+    assert_eq!(dup_group.name, "Next slide button");
+    assert_eq!(dup_group.initial_state, "selected");
+    assert!(s.course.first_error().is_none());
+
+    let paste_objs: Vec<Json> = ["a", "b"]
+        .iter()
+        .map(|id| {
+            serde_json::to_value(s.course.slide("slide1").unwrap().object(id).unwrap().0).unwrap()
+        })
+        .collect();
+    let paste_triggers: Vec<Json> = s
+        .course
+        .slide("slide1")
+        .unwrap()
+        .triggers
+        .iter()
+        .map(|t| serde_json::to_value(t).unwrap())
+        .collect();
+    let pasted = ok(
+        s,
+        "object.paste",
+        json!({
+            "slide": "slide2",
+            "source_slide": "slide1",
+            "objects": paste_objs,
+            "triggers": paste_triggers
+        }),
+    );
+    let pasted_id = pasted["id"].as_str().unwrap().to_owned();
+    let slide2 = s.course.slide("slide2").unwrap();
+    let pasted_gid = slide2.object(&pasted_id).unwrap().0.group.clone().unwrap();
+    assert_eq!(slide2.groups.len(), 1);
+    assert_eq!(slide2.groups[0].id, pasted_gid);
+    assert!(slide2.groups[0].interactive);
+    assert_eq!(slide2.groups[0].name, "Next slide button");
+    assert_eq!(slide2.triggers.len(), 1);
+    assert!(matches!(
+        &slide2.triggers[0].when,
+        coursecraft_course::Event::Click { object } if object == &pasted_gid
+    ));
+    assert!(s.course.first_error().is_none());
+
+    ok(
+        s,
+        "object.ungroup",
+        json!({ "slide": "slide2", "objects": [pasted_id] }),
+    );
+    let slide2 = s.course.slide("slide2").unwrap();
+    assert!(slide2.groups.is_empty());
+    assert!(slide2.triggers.is_empty());
+    assert!(s.course.first_error().is_none());
+
+    (dup_ids, dup_gid)
+}
+
+#[test]
+fn gb_12_group_update_and_lifecycle_cleanup() {
+    let (mut s, gid) = gb_12_setup_interactive_group_session();
+
+    // 1. group.update updates all fields, rejects unknown state, and clears nullable fields.
+    ok(
+        &mut s,
+        "group.update",
+        json!({
+            "slide": "slide1",
+            "group": gid,
+            "name": "Next slide button",
+            "initial_state": "selected",
+            "focus_order": 3,
+            "description": "Advances to slide 2"
+        }),
+    );
+    let g = &s.course.slide("slide1").unwrap().groups[0];
+    assert_eq!(g.name, "Next slide button");
+    assert_eq!(g.initial_state, "selected");
+    assert_eq!(g.focus_order, Some(3));
+    assert_eq!(g.description.as_deref(), Some("Advances to slide 2"));
+
+    assert!(
+        s.execute(
+            "group.update",
+            &json!({ "slide": "slide1", "group": gid, "initial_state": "nonexistent" }),
+        )
+        .is_err()
+    );
+
+    ok(
+        &mut s,
+        "group.update",
+        json!({
+            "slide": "slide1",
+            "group": gid,
+            "focus_order": null,
+            "description": null
+        }),
+    );
+    let g = &s.course.slide("slide1").unwrap().groups[0];
+    assert_eq!(g.focus_order, None);
+    assert_eq!(g.description, None);
+
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": gid },
+                "action": { "action": "jump_to_slide", "target": { "id": "slide2" } }
+            }
+        }),
+    );
+
+    // 2-4. object.duplicate, object.paste, and object.ungroup lifecycle checks.
+    let (dup_ids, dup_gid) = gb_12_assert_duplicate_and_paste(&mut s, &gid);
+
+    // 5. object.group merging an interactive group with another shape removes old Group + trigger.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "c",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#999999" },
+            "frame": { "x": 220.0, "y": 40.0, "w": 30.0, "h": 30.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["a", "c"] }),
+    );
+    let slide1 = s.course.slide("slide1").unwrap();
+    assert!(slide1.group(&gid).is_none());
+    assert!(slide1.triggers.is_empty());
+    assert!(s.course.first_error().is_none());
+
+    // 6. object.delete on duplicated interactive group: 1st member keeps Group, last removes Group + trigger.
+    ok(
+        &mut s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": dup_gid },
+                "action": { "action": "pause_timeline" }
+            }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.delete",
+        json!({ "slide": "slide1", "object": dup_ids[1] }),
+    );
+    assert!(s.course.slide("slide1").unwrap().group(&dup_gid).is_some());
+    assert_eq!(s.course.slide("slide1").unwrap().triggers.len(), 1);
+    let del_res = ok(
+        &mut s,
+        "object.delete",
+        json!({ "slide": "slide1", "object": dup_ids[0] }),
+    );
+    assert_eq!(del_res["removed_triggers"], 1);
+    assert!(s.course.slide("slide1").unwrap().group(&dup_gid).is_none());
+    assert!(s.course.slide("slide1").unwrap().triggers.is_empty());
+    assert!(s.course.first_error().is_none());
 }
