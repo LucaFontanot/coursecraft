@@ -477,7 +477,7 @@ fn ui06_skip_version_persists_suppresses_silent_check_but_manual_shows_it() {
     // Second session (next day): silent check is completely suppressed for 0.4.4,
     // while a manual CheckForUpdates still displays 0.4.4.
     {
-        let mut h = AppHarness::new(dirs.config.clone(), dirs.downloads.clone(), http);
+        let mut h = AppHarness::new(dirs.config.clone(), dirs.downloads.clone(), http.clone());
         let ctx = h.ctx.clone();
         let next_day = h
             .app
@@ -488,6 +488,7 @@ fn ui06_skip_version_persists_suppresses_silent_check_but_manual_shows_it() {
         h.app.maybe_start_auto_update_check(&ctx, next_day);
         h.wait_for_updates_idle();
 
+        assert_eq!(http.call_count(), 2);
         assert!(!h.app.editor.ui.update.open);
         assert!(!h.app.editor.ui.update.has_available_hint());
         assert!(h.app.available_update.is_none());
@@ -496,6 +497,7 @@ fn ui06_skip_version_persists_suppresses_silent_check_but_manual_shows_it() {
         h.app.handle_request(EditorRequest::CheckForUpdates, &ctx);
         h.wait_for_updates_idle();
 
+        assert_eq!(http.call_count(), 3);
         assert!(h.app.editor.ui.update.open);
         assert_eq!(
             h.app
@@ -633,4 +635,81 @@ fn ui06_rate_limited_silent_startup_backs_off_without_showing_error() {
     assert_eq!(h.app.editor.ui.update.status, UpdateCheckStatus::Idle);
     assert!(h.app.prefs.last_update_check_unix.is_some());
     assert!(load_prefs(&dirs.config).last_update_check_unix.is_some());
+}
+
+#[test]
+fn ui06_manual_check_promotes_in_flight_silent_check_without_hanging() {
+    // Case 1: In-flight silent startup check finishes UpToDate after manual check opened the dialog.
+    {
+        let dirs = TempDirs::new("promote-up-to-date");
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let body = release_json("0.4.3", b"current");
+        let http = FakeHttp::new(move |_, _| {
+            let _ = entered_tx.send(());
+            let _ = release_rx
+                .lock()
+                .expect("lock release_rx")
+                .recv_timeout(Duration::from_secs(5));
+            Ok(ok_response(body.clone()))
+        });
+        let mut h = AppHarness::new(dirs.config.clone(), dirs.downloads.clone(), http.clone());
+        let ctx = h.ctx.clone();
+
+        h.app.maybe_start_auto_update_check(&ctx, 1_700_000_000);
+        entered_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("silent check should start");
+        assert_eq!(h.app.updates.busy(), UpdateBusy::Checking);
+
+        // User manually clicks Help -> Check for updates… while the silent check is still running.
+        h.app.handle_request(EditorRequest::CheckForUpdates, &ctx);
+        assert!(h.app.editor.ui.update.open);
+        assert_eq!(h.app.editor.ui.update.status, UpdateCheckStatus::Checking);
+
+        release_tx.send(()).expect("release silent check");
+        h.wait_for_updates_idle();
+
+        assert_eq!(http.call_count(), 1);
+        assert!(h.app.editor.ui.update.open);
+        assert_eq!(h.app.editor.ui.update.status, UpdateCheckStatus::UpToDate);
+    }
+
+    // Case 2: In-flight silent startup check fails offline after manual check opened the dialog.
+    {
+        let dirs = TempDirs::new("promote-error");
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let http = FakeHttp::new(move |_, _| {
+            let _ = entered_tx.send(());
+            let _ = release_rx
+                .lock()
+                .expect("lock release_rx")
+                .recv_timeout(Duration::from_secs(5));
+            Err(UpdateError::Network("offline".to_owned()))
+        });
+        let mut h = AppHarness::new(dirs.config.clone(), dirs.downloads.clone(), http.clone());
+        let ctx = h.ctx.clone();
+
+        h.app.maybe_start_auto_update_check(&ctx, 1_700_000_000);
+        entered_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("silent check should start");
+
+        h.app.handle_request(EditorRequest::CheckForUpdates, &ctx);
+        assert!(h.app.editor.ui.update.open);
+        assert_eq!(h.app.editor.ui.update.status, UpdateCheckStatus::Checking);
+
+        release_tx.send(()).expect("release silent check");
+        h.wait_for_updates_idle();
+
+        assert_eq!(http.call_count(), 1);
+        assert!(h.app.editor.ui.update.open);
+        assert!(matches!(
+            h.app.editor.ui.update.status,
+            UpdateCheckStatus::Error(_)
+        ));
+    }
 }

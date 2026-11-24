@@ -218,6 +218,9 @@ struct EditorApp {
     /// Verified installer saved to Downloads, for "Show in folder".
     #[cfg(not(target_arch = "wasm32"))]
     downloaded_update_path: Option<PathBuf>,
+    /// True when the user opened a manual check while a check was already in flight.
+    #[cfg(not(target_arch = "wasm32"))]
+    manual_update_check_pending: bool,
     /// A file returned by the export save dialog in tests instead of opening a dialog.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     test_export_path: Option<PathBuf>,
@@ -542,6 +545,7 @@ impl EditorApp {
             updates: updates::UpdateClient::new(),
             available_update: None,
             downloaded_update_path: None,
+            manual_update_check_pending: false,
             #[cfg(test)]
             test_export_path: None,
             #[cfg(test)]
@@ -2340,12 +2344,29 @@ impl EditorApp {
     /// Open the Software update dialog and trigger a manual GitHub Releases check.
     #[cfg(not(target_arch = "wasm32"))]
     fn start_manual_update_check(&mut self, ctx: &egui::Context) {
+        use coursecraft_ui_egui::update_dialog::{UpdateCheckStatus, UpdateDownloadState};
         self.editor.ui.update.open = true;
-        self.editor.ui.update.status =
-            coursecraft_ui_egui::update_dialog::UpdateCheckStatus::Checking;
-        self.editor.ui.update.download =
-            coursecraft_ui_egui::update_dialog::UpdateDownloadState::Idle;
-        let _ = self.updates.start_check(true, ctx);
+        match self.updates.busy() {
+            updates::UpdateBusy::Downloading => {}
+            updates::UpdateBusy::Checking => {
+                // Promote the in-flight silent startup check so its outcome populates the dialog.
+                self.manual_update_check_pending = true;
+                self.editor.ui.update.status = UpdateCheckStatus::Checking;
+                self.editor.ui.update.download = UpdateDownloadState::Idle;
+            }
+            updates::UpdateBusy::Idle => {
+                self.editor.ui.update.download = UpdateDownloadState::Idle;
+                if self.updates.start_check(true, ctx) {
+                    self.manual_update_check_pending = true;
+                    self.editor.ui.update.status = UpdateCheckStatus::Checking;
+                } else {
+                    self.editor.ui.update.status = UpdateCheckStatus::Error(
+                        "Couldn't check for updates right now. Try again or open the releases page in your browser."
+                            .to_owned(),
+                    );
+                }
+            }
+        }
     }
 
     /// Resolve the destination directory for verified installer downloads.
@@ -2454,11 +2475,13 @@ impl EditorApp {
         result: Result<updates::CheckOutcome, updates::UpdateError>,
     ) {
         use coursecraft_ui_egui::update_dialog::{UpdateCheckStatus, UpdateDownloadState};
+        let manual = manual || std::mem::take(&mut self.manual_update_check_pending);
         match result {
             Ok(updates::CheckOutcome::UpToDate) => {
                 self.prefs.last_update_check_unix = Some(now_unix_secs());
                 self.save_prefs();
                 self.available_update = None;
+                self.downloaded_update_path = None;
                 if manual {
                     self.editor.ui.update.status = UpdateCheckStatus::UpToDate;
                 }
