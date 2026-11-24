@@ -11,9 +11,7 @@ use crate::{
     encode_png_rgba, font_info,
 };
 
-const INTER_REGULAR: &[u8] = include_bytes!("../../render/fonts/Inter-Regular.ttf");
-const INTER_BOLD: &[u8] = include_bytes!("../../render/fonts/Inter-Bold.ttf");
-const INTER_ITALIC: &[u8] = include_bytes!("../../render/fonts/Inter-Italic.ttf");
+use crate::text_metrics::{INTER_BOLD, INTER_ITALIC, INTER_REGULAR};
 
 fn make_png_2x2() -> Vec<u8> {
     let mut img = ImageBuffer::<Rgba<u8>, Vec<u8>>::new(2, 2);

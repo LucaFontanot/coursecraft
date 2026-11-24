@@ -5708,7 +5708,7 @@ fn desktop_preview_speed_menu_changes_player_clock_rate() {
 
 #[test]
 fn font_picker_lists_inter_and_a_course_family() {
-    const INTER_REGULAR: &[u8] = include_bytes!("../../render/fonts/Inter-Regular.ttf");
+    const INTER_REGULAR: &[u8] = coursecraft_media::text_metrics::INTER_REGULAR;
 
     let mut course = Course::from_json(COURSE_JSON).expect("valid course");
     course.fonts.push(coursecraft_course::FontFace {
