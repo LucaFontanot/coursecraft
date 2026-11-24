@@ -508,7 +508,7 @@ impl MediaCache {
     /// evicted, even if the cache is over budget for that frame.
     pub fn begin_frame(&mut self) {
         self.frame = self.frame.saturating_add(1);
-        if self.frame.is_multiple_of(60) && !self.arc_hashes.is_empty() {
+        if !self.arc_hashes.is_empty() {
             self.arc_hashes
                 .retain(|_, entry| entry.weak.strong_count() > 0);
         }
@@ -1380,7 +1380,7 @@ impl MediaCache {
             return entry.hash;
         }
         let hash = content_hash_64(bytes);
-        if self.arc_hashes.len() >= MAX_ARC_HASH_ENTRIES {
+        if !self.arc_hashes.is_empty() {
             self.arc_hashes
                 .retain(|_, entry| entry.weak.strong_count() > 0);
             if self.arc_hashes.len() >= MAX_ARC_HASH_ENTRIES {
@@ -2323,16 +2323,55 @@ mod tests {
             );
         }
 
-        // Dropping an Arc allows retain_slice / periodic begin_frame to prune its Weak entry.
+        // Dropping an Arc must be unpinned immediately on the next begin_frame
+        // (not 60 frames later) because Weak<[u8]> keeps the inline slice buffer
+        // allocated until dropped.
+        let distinct_key = ArcPtrKey {
+            ptr: distinct.as_ptr() as usize,
+            len: distinct.len(),
+        };
         let weak_probe = Arc::downgrade(&distinct);
         drop(distinct);
         assert_eq!(weak_probe.strong_count(), 0);
         assert_eq!(cache.arc_hashes.len(), 3);
-        cache.retain_slice(&[]);
+        cache.begin_frame();
         assert_eq!(
             cache.arc_hashes.len(),
             2,
+            "begin_frame must immediately prune dropped Arc weak entries so buffers are not pinned"
+        );
+        assert!(!cache.arc_hashes.contains_key(&distinct_key));
+
+        // Hashing a new Arc on a cache miss also prunes dead Weak entries
+        // immediately, even if begin_frame() is never called (e.g. offscreen).
+        let transient = Arc::<[u8]>::from(distinct_png(16, 16, 99));
+        let transient_key = ArcPtrKey {
+            ptr: transient.as_ptr() as usize,
+            len: transient.len(),
+        };
+        let transient_probe = Arc::downgrade(&transient);
+        let _ = cache.content_hash(&transient);
+        assert!(cache.arc_hashes.contains_key(&transient_key));
+        drop(transient);
+        assert_eq!(transient_probe.strong_count(), 0);
+        let replacement = Arc::<[u8]>::from(distinct_png(16, 16, 100));
+        let _ = cache.content_hash(&replacement);
+        assert!(
+            !cache.arc_hashes.contains_key(&transient_key),
+            "content_hash miss must immediately prune dropped Arc weak entries"
+        );
+
+        // retain_slice also prunes dropped Weak entries.
+        let different_key = ArcPtrKey {
+            ptr: different.as_ptr() as usize,
+            len: different.len(),
+        };
+        drop(different);
+        cache.retain_slice(&[]);
+        assert!(
+            !cache.arc_hashes.contains_key(&different_key),
             "retain_slice must prune dropped Arc weak entries so buffers are not pinned"
         );
+        assert_eq!(cache.arc_hashes.len(), 2);
     }
 }
