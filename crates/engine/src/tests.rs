@@ -12232,3 +12232,590 @@ fn g07_single_slide_frame_edit_and_noop_zero_full_validations() {
         );
     });
 }
+
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
+}
+
+#[test]
+fn r5_01_registry_golden_lock() {
+    use crate::delta::UndoScope;
+
+    let reg = registry();
+    assert_eq!(reg.len(), 186);
+
+    const EXPECTED: &[(&str, bool, UndoScope, bool)] = &[
+        ("course.info", false, UndoScope::FullCourse, false),
+        ("course.map", false, UndoScope::FullCourse, false),
+        ("course.validate", false, UndoScope::FullCourse, false),
+        ("course.audit", false, UndoScope::FullCourse, false),
+        ("course.update", true, UndoScope::CourseHeader, false),
+        ("course.set_slide_size", true, UndoScope::FullCourse, false),
+        ("course.set_title", true, UndoScope::CourseHeader, false),
+        ("course.set_player", true, UndoScope::CourseHeader, false),
+        ("course.set_quiz", true, UndoScope::CourseHeader, false),
+        (
+            "course.set_publish_settings",
+            true,
+            UndoScope::CourseHeader,
+            false,
+        ),
+        (
+            "course.set_background_audio",
+            true,
+            UndoScope::CourseHeader,
+            false,
+        ),
+        ("theme.set_palette", true, UndoScope::CourseHeader, false),
+        (
+            "theme.set_palette_color",
+            true,
+            UndoScope::FullCourse,
+            false,
+        ),
+        ("course.recolor", true, UndoScope::FullCourse, false),
+        ("text_style.create", true, UndoScope::FullCourse, false),
+        ("text_style.update", true, UndoScope::FullCourse, false),
+        ("text_style.delete", true, UndoScope::FullCourse, false),
+        ("text_style.apply", true, UndoScope::SingleSlide, true),
+        (
+            "course.add_finish_button",
+            true,
+            UndoScope::FullCourse,
+            false,
+        ),
+        ("course.set_theme", true, UndoScope::CourseHeader, false),
+        ("course.add_font", true, UndoScope::CourseHeader, false),
+        ("course.remove_font", true, UndoScope::CourseHeader, false),
+        ("course.export_xliff", false, UndoScope::FullCourse, false),
+        ("course.import_xliff", true, UndoScope::FullCourse, false),
+        ("edit.undo", false, UndoScope::FullCourse, false),
+        ("edit.redo", false, UndoScope::FullCourse, false),
+        ("edit.history", false, UndoScope::FullCourse, false),
+        ("scene.add", true, UndoScope::FullCourse, false),
+        ("scene.update", true, UndoScope::FullCourse, false),
+        ("scene.delete", true, UndoScope::FullCourse, false),
+        ("slide.add", true, UndoScope::FullCourse, false),
+        ("slide.update", true, UndoScope::SingleSlide, true),
+        ("slide.delete", true, UndoScope::FullCourse, false),
+        ("slide.move", true, UndoScope::FullCourse, false),
+        ("slide.duplicate", true, UndoScope::FullCourse, false),
+        ("slide.paste", true, UndoScope::FullCourse, false),
+        ("slide.set_duration", true, UndoScope::SingleSlide, true),
+        ("slide.set_background", true, UndoScope::SingleSlide, true),
+        ("slide.set_transition", true, UndoScope::SingleSlide, true),
+        (
+            "slide.set_player_overrides",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("master.add", true, UndoScope::FullCourse, false),
+        ("master.delete", true, UndoScope::FullCourse, false),
+        ("slide.set_master", true, UndoScope::FullCourse, false),
+        ("bank.create", true, UndoScope::FullCourse, false),
+        ("bank.update", true, UndoScope::FullCourse, false),
+        ("bank.delete", true, UndoScope::FullCourse, false),
+        ("bank.add_question", true, UndoScope::FullCourse, false),
+        ("bank.import_csv", true, UndoScope::FullCourse, false),
+        ("bank.move_slide", true, UndoScope::FullCourse, false),
+        ("bank.remove_slide", true, UndoScope::FullCourse, false),
+        ("draw.insert", true, UndoScope::FullCourse, false),
+        ("draw.update", true, UndoScope::SingleSlide, false),
+        ("slide.add_from_layout", true, UndoScope::FullCourse, false),
+        ("course.import_outline", true, UndoScope::FullCourse, false),
+        ("template.save", true, UndoScope::FullCourse, false),
+        ("template.add_slide", true, UndoScope::FullCourse, false),
+        ("template.delete", true, UndoScope::FullCourse, false),
+        ("layer.add", true, UndoScope::SingleSlide, true),
+        ("layer.update", true, UndoScope::SingleSlide, true),
+        ("layer.delete", true, UndoScope::SingleSlide, true),
+        ("layer.move", true, UndoScope::SingleSlide, true),
+        ("layer.duplicate", true, UndoScope::SingleSlide, true),
+        ("object.add", true, UndoScope::SingleSlide, true),
+        ("object.update", true, UndoScope::SingleSlide, true),
+        ("object.reorder", true, UndoScope::SingleSlide, true),
+        ("object.align", true, UndoScope::SingleSlide, true),
+        ("object.distribute", true, UndoScope::SingleSlide, true),
+        ("object.match_size", true, UndoScope::SingleSlide, true),
+        ("object.group", true, UndoScope::SingleSlide, true),
+        ("object.ungroup", true, UndoScope::SingleSlide, true),
+        ("object.duplicate", true, UndoScope::SingleSlide, true),
+        ("object.paste", true, UndoScope::SingleSlide, true),
+        ("object.set_frame", true, UndoScope::SingleSlide, true),
+        ("object.set_rotation", true, UndoScope::SingleSlide, true),
+        ("object.flip", true, UndoScope::SingleSlide, true),
+        ("object.lock", true, UndoScope::SingleSlide, true),
+        ("object.hide_in_editor", true, UndoScope::SingleSlide, true),
+        ("view.set", true, UndoScope::CourseHeader, false),
+        ("view.guides.add", true, UndoScope::CourseHeader, false),
+        ("view.guides.move", true, UndoScope::CourseHeader, false),
+        ("view.guides.remove", true, UndoScope::CourseHeader, false),
+        ("object.set_opacity", true, UndoScope::SingleSlide, true),
+        (
+            "object.set_outline_join",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("object.set_fill_style", true, UndoScope::SingleSlide, true),
+        ("object.set_shadow", true, UndoScope::SingleSlide, true),
+        ("object.set_glow", true, UndoScope::SingleSlide, true),
+        ("object.apply_style", true, UndoScope::SingleSlide, true),
+        ("object.set_drag", true, UndoScope::SingleSlide, true),
+        ("object.set_lottie", true, UndoScope::SingleSlide, true),
+        ("object.set_web_source", true, UndoScope::SingleSlide, true),
+        ("object.set_input", true, UndoScope::SingleSlide, true),
+        ("object.set_marker", true, UndoScope::SingleSlide, true),
+        ("object.set_panel", true, UndoScope::SingleSlide, true),
+        (
+            "object.set_scroll_panel",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("object.set_timer", true, UndoScope::SingleSlide, true),
+        ("object.set_meter", true, UndoScope::SingleSlide, true),
+        ("object.set_path", true, UndoScope::SingleSlide, true),
+        ("object.set_crop", true, UndoScope::SingleSlide, true),
+        ("object.set_captions", true, UndoScope::SingleSlide, true),
+        ("object.set_media", true, UndoScope::SingleSlide, true),
+        ("video.add_cue", true, UndoScope::SingleSlide, true),
+        ("video.set_cue", true, UndoScope::SingleSlide, true),
+        ("video.remove_cue", true, UndoScope::SingleSlide, true),
+        (
+            "video.add_question_cue",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("slide.add_cue", true, UndoScope::SingleSlide, true),
+        ("slide.set_cue", true, UndoScope::SingleSlide, true),
+        ("slide.remove_cue", true, UndoScope::SingleSlide, true),
+        ("object.add_state", true, UndoScope::SingleSlide, true),
+        ("object.update_state", true, UndoScope::SingleSlide, true),
+        ("object.patch_state", true, UndoScope::SingleSlide, true),
+        ("object.delete_state", true, UndoScope::SingleSlide, true),
+        ("object.duplicate_state", true, UndoScope::SingleSlide, true),
+        ("object.rename_state", true, UndoScope::SingleSlide, true),
+        ("object.reorder_state", true, UndoScope::SingleSlide, true),
+        ("object.state_add_extra", true, UndoScope::SingleSlide, true),
+        (
+            "object.state_update_extra",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        (
+            "object.state_delete_extra",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        (
+            "object.state_reorder_extra",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("object.delete", true, UndoScope::SingleSlide, true),
+        ("object.set_animation", true, UndoScope::SingleSlide, true),
+        ("object.add_motion_path", true, UndoScope::SingleSlide, true),
+        (
+            "object.update_motion_path",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        (
+            "object.remove_motion_path",
+            true,
+            UndoScope::SingleSlide,
+            true,
+        ),
+        ("text.set", true, UndoScope::SingleSlide, true),
+        ("text.style_range", true, UndoScope::SingleSlide, true),
+        ("text.set_paragraph", true, UndoScope::SingleSlide, true),
+        ("text.set_paragraphs", true, UndoScope::SingleSlide, true),
+        ("text.set_link", true, UndoScope::SingleSlide, true),
+        ("object.set_autofit", true, UndoScope::SingleSlide, true),
+        ("table.set_cell", true, UndoScope::SingleSlide, true),
+        ("table.insert_row", true, UndoScope::SingleSlide, true),
+        ("table.delete_row", true, UndoScope::SingleSlide, true),
+        ("table.insert_column", true, UndoScope::SingleSlide, true),
+        ("table.delete_column", true, UndoScope::SingleSlide, true),
+        ("table.resize", true, UndoScope::SingleSlide, true),
+        ("table.merge", true, UndoScope::SingleSlide, true),
+        ("table.split", true, UndoScope::SingleSlide, true),
+        ("table.set_borders", true, UndoScope::SingleSlide, true),
+        ("table.set_header_row", true, UndoScope::SingleSlide, true),
+        ("trigger.add", true, UndoScope::SingleSlide, false),
+        ("trigger.update", true, UndoScope::SingleSlide, false),
+        ("trigger.move", true, UndoScope::SingleSlide, false),
+        ("trigger.delete", true, UndoScope::SingleSlide, false),
+        ("resource.add", true, UndoScope::CourseHeader, false),
+        ("resource.update", true, UndoScope::CourseHeader, false),
+        ("resource.remove", true, UndoScope::CourseHeader, false),
+        ("resource.move", true, UndoScope::CourseHeader, false),
+        ("glossary.add", true, UndoScope::CourseHeader, false),
+        ("glossary.update", true, UndoScope::CourseHeader, false),
+        ("glossary.remove", true, UndoScope::CourseHeader, false),
+        ("glossary.move", true, UndoScope::CourseHeader, false),
+        ("glossary.sort", true, UndoScope::CourseHeader, false),
+        ("variable.add", true, UndoScope::CourseHeader, false),
+        ("variable.set_value", true, UndoScope::CourseHeader, false),
+        ("variable.delete", true, UndoScope::FullCourse, false),
+        ("interaction.insert", true, UndoScope::FullCourse, false),
+        ("question.insert", true, UndoScope::SingleSlide, false),
+        ("results.insert", true, UndoScope::FullCourse, false),
+        ("certificate.insert", true, UndoScope::FullCourse, false),
+        (
+            "question.add_submit_button",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.add_feedback_layers",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.add_try_again_layer",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("question.set", true, UndoScope::SingleSlide, false),
+        ("question.delete", true, UndoScope::SingleSlide, false),
+        ("question.set_kind", true, UndoScope::SingleSlide, false),
+        ("question.add_accepted", true, UndoScope::SingleSlide, false),
+        (
+            "question.remove_accepted",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.update_accepted",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.set_case_sensitive",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("question.add_pair", true, UndoScope::SingleSlide, false),
+        ("question.remove_pair", true, UndoScope::SingleSlide, false),
+        ("question.update_pair", true, UndoScope::SingleSlide, false),
+        ("question.reorder_pair", true, UndoScope::SingleSlide, false),
+        (
+            "question.reorder_sequence",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.set_hotspot_image",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("question.add_region", true, UndoScope::SingleSlide, false),
+        (
+            "question.update_region",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.remove_region",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("question.set_markers", true, UndoScope::SingleSlide, false),
+        (
+            "question.add_drag_item",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.update_drag_item",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.remove_drag_item",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.set_drop_targets",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        (
+            "question.set_drag_options",
+            true,
+            UndoScope::SingleSlide,
+            false,
+        ),
+        ("course.find", false, UndoScope::FullCourse, false),
+        ("course.replace", true, UndoScope::FullCourse, false),
+    ];
+
+    let actual: Vec<(&str, bool, UndoScope, bool)> = reg
+        .iter()
+        .map(|cmd| {
+            (
+                cmd.id,
+                cmd.mutates,
+                cmd.scope(),
+                crate::commands::can_use_slide_validation(cmd.id),
+            )
+        })
+        .collect();
+    assert_eq!(actual.as_slice(), EXPECTED);
+
+    let mut table = String::new();
+    for cmd in reg {
+        let slide_val = crate::commands::can_use_slide_validation(cmd.id);
+        table.push_str(&format!(
+            "{}\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{}\n",
+            cmd.id,
+            cmd.label,
+            cmd.menu,
+            cmd.shortcut,
+            cmd.params,
+            cmd.mutates,
+            cmd.scope(),
+            slide_val
+        ));
+    }
+    assert_eq!(table.len(), 23_881, "registry golden table byte length");
+    assert_eq!(
+        fnv1a_64(table.as_bytes()),
+        0xde91_1e13_87d0_bfef,
+        "registry golden table FNV-1a hash"
+    );
+}
+
+#[test]
+fn r5_02_interaction_insert_golden_all_eight_kinds() {
+    type Expected = (
+        &'static str,
+        u64,
+        usize,
+        u64,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        Option<&'static str>,
+        Option<&'static str>,
+        Option<&'static str>,
+        Option<&'static str>,
+    );
+
+    const EXPECTED: &[Expected] = &[
+        (
+            "tabs",
+            0x8229_23c6_b2f7_4d9a,
+            223,
+            0xb24d_ef9c_81d3_6c76,
+            9571,
+            3,
+            3,
+            0,
+            13,
+            Some("tab_button1"),
+            Some("tab_button3"),
+            Some("tab_layer1"),
+            Some("tab_layer3"),
+        ),
+        (
+            "accordion",
+            0xed37_98ae_b36e_3636,
+            460,
+            0x6e5c_8ecd_32d7_4669,
+            16858,
+            3,
+            3,
+            0,
+            3,
+            Some("accordion_header1"),
+            Some("accordion_header3"),
+            Some("accordion_layer11"),
+            Some("accordion_layer31"),
+        ),
+        (
+            "flip_cards",
+            0x3b23_f9ad_626f_2cb2,
+            172,
+            0x1c45_77d7_939b_9ee0,
+            8378,
+            3,
+            0,
+            3,
+            9,
+            Some("flip_card1"),
+            Some("flip_card3"),
+            None,
+            None,
+        ),
+        (
+            "hotspot_reveal",
+            0xd0fc_58aa_f9ce_d2bb,
+            522,
+            0xf76c_230c_92df_9d57,
+            17172,
+            4,
+            3,
+            0,
+            6,
+            Some("hotspot_picture1"),
+            Some("hotspot_marker3"),
+            Some("hotspot_layer1"),
+            Some("hotspot_layer3"),
+        ),
+        (
+            "process_steps",
+            0x4f93_b7a3_a657_6f9b,
+            720,
+            0x1891_058d_2117_b5a0,
+            34043,
+            13,
+            4,
+            1,
+            29,
+            Some("step_line1"),
+            Some("step_next1"),
+            Some("step_layer1"),
+            Some("step_layer4"),
+        ),
+        (
+            "timeline",
+            0xaf44_cbac_ec25_ccff,
+            1059,
+            0xddf5_f6c8_45a1_1c8d,
+            27602,
+            16,
+            5,
+            0,
+            10,
+            Some("timeline_line1"),
+            Some("timeline_title5"),
+            Some("timeline_layer1"),
+            Some("timeline_layer5"),
+        ),
+        (
+            "reveal_grid",
+            0x5a9d_2d57_e41a_5620,
+            410,
+            0xa7a4_295f_475c_90d4,
+            22524,
+            7,
+            0,
+            7,
+            31,
+            Some("grid_tile_shape1"),
+            Some("grid_counter1"),
+            None,
+            None,
+        ),
+        (
+            "scenario_choice",
+            0x6715_89b0_5895_80ad,
+            605,
+            0xf2b0_c8ee_d764_2f0e,
+            15097,
+            6,
+            3,
+            0,
+            3,
+            Some("scenario_panel1"),
+            Some("scenario_choice3"),
+            Some("scenario_layer1"),
+            Some("scenario_layer3"),
+        ),
+    ];
+
+    for &(
+        kind,
+        exp_ret_hash,
+        exp_ret_len,
+        exp_course_hash,
+        exp_course_len,
+        exp_objs,
+        exp_layers,
+        exp_vars,
+        exp_triggers,
+        exp_first_obj,
+        exp_last_obj,
+        exp_first_layer,
+        exp_last_layer,
+    ) in EXPECTED
+    {
+        let mut s = Session::blank("Interaction Golden");
+        let ret = ok(
+            &mut s,
+            "interaction.insert",
+            json!({ "slide": "slide1", "kind": kind }),
+        );
+        let ret_str = serde_json::to_string(&ret).expect("serialize return");
+        let course_str = s.course.to_json().expect("serialize course");
+        let slide = s.course.slide("slide1").expect("slide1 exists");
+
+        assert_eq!(ret_str.len(), exp_ret_len, "{kind}: return json len");
+        assert_eq!(
+            fnv1a_64(ret_str.as_bytes()),
+            exp_ret_hash,
+            "{kind}: return json hash"
+        );
+        assert_eq!(course_str.len(), exp_course_len, "{kind}: course json len");
+        assert_eq!(
+            fnv1a_64(course_str.as_bytes()),
+            exp_course_hash,
+            "{kind}: course json hash"
+        );
+        assert_eq!(slide.objects.len(), exp_objs, "{kind}: object count");
+        assert_eq!(slide.layers.len(), exp_layers, "{kind}: layer count");
+        assert_eq!(s.course.variables.len(), exp_vars, "{kind}: variable count");
+        assert_eq!(slide.triggers.len(), exp_triggers, "{kind}: trigger count");
+        assert_eq!(
+            slide.objects.first().map(|o| o.id.as_str()),
+            exp_first_obj,
+            "{kind}: first object id"
+        );
+        assert_eq!(
+            slide.objects.last().map(|o| o.id.as_str()),
+            exp_last_obj,
+            "{kind}: last object id"
+        );
+        assert_eq!(
+            slide.layers.first().map(|l| l.id.as_str()),
+            exp_first_layer,
+            "{kind}: first layer id"
+        );
+        assert_eq!(
+            slide.layers.last().map(|l| l.id.as_str()),
+            exp_last_layer,
+            "{kind}: last layer id"
+        );
+    }
+}

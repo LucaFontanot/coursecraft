@@ -2,32 +2,32 @@
 //! Result<Json>`, add a row to `REGISTRY`, add a test. See `docs/contributing.md`.
 
 use coursecraft_course::{
-    Action, Align, Animation, Autofit, BackgroundAudio, BankDraw, Choice, CmpOp, Color, Condition,
-    Course, CourseOutline, CropRect, Cue, DashStyle, DragItem, Easing, Event, FillStyle, FontFace,
-    FontStyle, Glow, Glue, Guide, HotspotRegion, HotspotShape, Layer, Link, ListKind, Location,
-    MAX_CUES, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS, MatchPair, MotionPath, Object, ObjectKind,
-    Outline, OutlineProblem, OutlineQuestion, OutlineSlide, Paragraph, Point, Question,
-    QuestionBank, QuestionKind, QuizSettings, RadioOption, Rect, RevisitMode, Scene, Scoring,
-    SeekMode, Shadow, ShapeKind, ShapeText, Size, Slide, SlideCue, SlideTarget, StateDef,
-    TableBorders, TableCell, TableRow, TextRun, TextRunPatch, TextStyle, Theme, Timing, Transition,
-    Trigger, Trim, VAlign, Value, VarOp, VariableDef, WebSource, align_paragraphs,
-    apply_link_to_range, apply_style_to_range_with_base, apply_text_edit, course_string_locations,
-    find_in_course, is_valid_link_url, normalize_table_fractions, paragraphs_for, parse_color,
-    relative_luminance, replace_in_target, string_mut, table_cell_owners,
+    Action, Align, Animation, Autofit, BankDraw, Choice, CmpOp, Color, Condition, Course,
+    CourseOutline, CropRect, Cue, DashStyle, DragItem, Easing, Event, FillStyle, Glow, Glue,
+    HotspotRegion, HotspotShape, Layer, Link, MAX_CUES, MatchPair, MotionPath, Object, ObjectKind,
+    Outline, OutlineProblem, OutlineQuestion, OutlineSlide, Point, Question, QuestionBank,
+    QuestionKind, QuizSettings, RadioOption, Rect, RevisitMode, Scene, Scoring, SeekMode, Shadow,
+    ShapeKind, ShapeText, Size, Slide, SlideCue, SlideTarget, StateDef, TextRun, TextStyle, Theme,
+    Timing, Transition, Trigger, Trim, VAlign, Value, VarOp, VariableDef, WebSource,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value as Json, json};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{Command, EngineError, Result, Session};
 
+mod course;
 mod csv_import;
 #[cfg(test)]
 pub(crate) use csv_import::{MAX_CSV_BYTES, MAX_CSV_ROWS, parse_csv};
+mod layer;
 mod styles;
+mod table;
+mod text;
+mod trigger;
 
-const MAX_TEXT: usize = 4096;
-const MAX_DURATION_MS: u32 = 24 * 60 * 60 * 1000;
+pub(super) const MAX_TEXT: usize = 4096;
+pub(super) const MAX_DURATION_MS: u32 = 24 * 60 * 60 * 1000;
 
 /// Every command, in menu order.
 #[must_use]
@@ -297,7 +297,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
-        run: course_info,
+        run: course::course_info,
     },
     Command {
         id: "course.map",
@@ -306,7 +306,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
-        run: course_map,
+        run: course::course_map,
     },
     Command {
         id: "course.validate",
@@ -315,7 +315,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
-        run: course_validate,
+        run: course::course_validate,
     },
     Command {
         id: "course.audit",
@@ -324,7 +324,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
-        run: course_audit,
+        run: course::course_audit,
     },
     Command {
         id: "course.update",
@@ -333,7 +333,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"title"?: string, "id"?: string, "start_slide"?: id|null, "language"?: string|null}"#,
         mutates: true,
-        run: course_update,
+        run: course::course_update,
     },
     Command {
         id: "course.set_slide_size",
@@ -342,7 +342,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"w": number, "h": number, "mode": "scale"|"fill"|"keep"}"#,
         mutates: true,
-        run: course_set_slide_size,
+        run: course::course_set_slide_size,
     },
     Command {
         id: "course.set_title",
@@ -351,7 +351,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"title": string}"#,
         mutates: true,
-        run: course_set_title,
+        run: course::course_set_title,
     },
     Command {
         id: "course.set_player",
@@ -360,7 +360,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}, "seekbar"?: "free"|"locked"|"until_timeline_ends"}"#,
         mutates: true,
-        run: course_set_player,
+        run: course::course_set_player,
     },
     Command {
         id: "course.set_quiz",
@@ -369,7 +369,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"passing_percent": 0..=100|null}"#,
         mutates: true,
-        run: course_set_quiz,
+        run: course::course_set_quiz,
     },
     Command {
         id: "course.set_publish_settings",
@@ -378,7 +378,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"standard"?: string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}"#,
         mutates: true,
-        run: course_set_publish_settings,
+        run: course::course_set_publish_settings,
     },
     Command {
         id: "course.set_background_audio",
@@ -387,7 +387,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"src"?: string | null, "volume"?: number, "loop"?: bool}"#,
         mutates: true,
-        run: course_set_background_audio,
+        run: course::course_set_background_audio,
     },
     Command {
         id: "theme.set_palette",
@@ -459,7 +459,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: true,
-        run: course_add_finish_button,
+        run: course::course_add_finish_button,
     },
     Command {
         id: "course.set_theme",
@@ -468,7 +468,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"accent"?: color, "background"?: color, "text"?: color, "font"?: string, "bar"?: color, "bar_text"?: color}"#,
         mutates: true,
-        run: course_set_theme,
+        run: course::course_set_theme,
     },
     Command {
         id: "course.add_font",
@@ -477,7 +477,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"src": "fonts/<file>.ttf", "family": string, "style": "regular"|"bold"|"italic"|"bold_italic"}"#,
         mutates: true,
-        run: course_add_font,
+        run: course::course_add_font,
     },
     Command {
         id: "course.remove_font",
@@ -486,7 +486,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"family": string, "style"?: style} or {"src": "fonts/<file>.ttf"}"#,
         mutates: true,
-        run: course_remove_font,
+        run: course::course_remove_font,
     },
     Command {
         id: "course.export_xliff",
@@ -495,7 +495,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"target_language": string}"#,
         mutates: false,
-        run: course_export_xliff,
+        run: course::course_export_xliff,
     },
     Command {
         id: "course.import_xliff",
@@ -504,7 +504,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"xliff": string}"#,
         mutates: true,
-        run: course_import_xliff,
+        run: course::course_import_xliff,
     },
     Command {
         id: "edit.undo",
@@ -513,7 +513,7 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+Z"),
         params: "{}",
         mutates: false,
-        run: edit_undo,
+        run: course::edit_undo,
     },
     Command {
         id: "edit.redo",
@@ -522,7 +522,7 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+Y"),
         params: "{}",
         mutates: false,
-        run: edit_redo,
+        run: course::edit_redo,
     },
     Command {
         id: "edit.history",
@@ -531,7 +531,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
-        run: edit_history,
+        run: course::edit_history,
     },
     Command {
         id: "scene.add",
@@ -810,7 +810,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id"?: id, "slide": id, "name"?: string}"#,
         mutates: true,
-        run: layer_add,
+        run: layer::layer_add,
     },
     Command {
         id: "layer.update",
@@ -819,7 +819,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer": id, "name"?: string, "duration_ms"?: u32, "hide_other_layers"?: bool, "pause_base_timeline"?: bool, "prevent_base_clicks"?: bool, "hide_base_objects"?: bool, "hide_when_timeline_ends"?: bool, "allow_seek"?: "auto"|"yes"|"no", "revisit"?: "auto"|"reset"|"resume"}"#,
         mutates: true,
-        run: layer_update,
+        run: layer::layer_update,
     },
     Command {
         id: "layer.delete",
@@ -828,7 +828,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer": id}"#,
         mutates: true,
-        run: layer_delete,
+        run: layer::layer_delete,
     },
     Command {
         id: "layer.move",
@@ -837,7 +837,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer": id, "to": usize}"#,
         mutates: true,
-        run: layer_move,
+        run: layer::layer_move,
     },
     Command {
         id: "layer.duplicate",
@@ -846,7 +846,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer": id}"#,
         mutates: true,
-        run: layer_duplicate,
+        run: layer::layer_duplicate,
     },
     Command {
         id: "object.add",
@@ -990,7 +990,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "base_slide_view"?: "show"|"dim"|"hide", "last_publish"?: {"standard": string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}}"#,
         mutates: true,
-        run: view_set,
+        run: course::view_set,
     },
     Command {
         id: "view.guides.add",
@@ -999,7 +999,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"vertical": bool, "at": number}"#,
         mutates: true,
-        run: view_guides_add,
+        run: course::view_guides_add,
     },
     Command {
         id: "view.guides.move",
@@ -1008,7 +1008,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"index": usize, "at": number}"#,
         mutates: true,
-        run: view_guides_move,
+        run: course::view_guides_move,
     },
     Command {
         id: "view.guides.remove",
@@ -1017,7 +1017,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"index": usize}"#,
         mutates: true,
-        run: view_guides_remove,
+        run: course::view_guides_remove,
     },
     Command {
         id: "object.set_opacity",
@@ -1404,7 +1404,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "text": string}"#,
         mutates: true,
-        run: text_set,
+        run: text::text_set,
     },
     Command {
         id: "text.style_range",
@@ -1413,7 +1413,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "start": usize, "end": usize, "bold"?: bool, "italic"?: bool, "underline"?: bool, "strikethrough"?: bool, "baseline"?: "normal"|"superscript"|"subscript", "letter_spacing"?: number, "size"?: number, "color"?: string, "font"?: string}"#,
         mutates: true,
-        run: text_style_range,
+        run: text::text_style_range,
     },
     Command {
         id: "text.set_paragraph",
@@ -1422,7 +1422,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "align"?: "left"|"center"|"right", "valign"?: "top"|"middle"|"bottom"}"#,
         mutates: true,
-        run: text_set_paragraph,
+        run: text::text_set_paragraph,
     },
     Command {
         id: "text.set_paragraphs",
@@ -1431,7 +1431,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "start"?: usize, "end"?: usize, "list"?: "none"|"bullet"|"number", "level"?: 0..4, "line_spacing"?: 0.8..3, "space_before"?: 0..200, "space_after"?: 0..200}"#,
         mutates: true,
-        run: text_set_paragraphs,
+        run: text::text_set_paragraphs,
     },
     Command {
         id: "text.set_link",
@@ -1440,7 +1440,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "start"?: usize, "end"?: usize, "link": Link|null}"#,
         mutates: true,
-        run: text_set_link,
+        run: text::text_set_link,
     },
     Command {
         id: "object.set_autofit",
@@ -1449,7 +1449,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "autofit": "none"|"shrink"}"#,
         mutates: true,
-        run: object_set_autofit,
+        run: text::object_set_autofit,
     },
     Command {
         id: "table.set_cell",
@@ -1458,7 +1458,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "row": usize, "column": usize, "text"?: string, "runs"?: TextRun[], "paragraphs"?: Paragraph[], "fill"?: Color|null, "valign"?: "top"|"middle"|"bottom"}"#,
         mutates: true,
-        run: table_set_cell,
+        run: table::table_set_cell,
     },
     Command {
         id: "table.insert_row",
@@ -1467,7 +1467,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index"?: usize}"#,
         mutates: true,
-        run: table_insert_row,
+        run: table::table_insert_row,
     },
     Command {
         id: "table.delete_row",
@@ -1476,7 +1476,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index": usize}"#,
         mutates: true,
-        run: table_delete_row,
+        run: table::table_delete_row,
     },
     Command {
         id: "table.insert_column",
@@ -1485,7 +1485,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index"?: usize}"#,
         mutates: true,
-        run: table_insert_column,
+        run: table::table_insert_column,
     },
     Command {
         id: "table.delete_column",
@@ -1494,7 +1494,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index": usize}"#,
         mutates: true,
-        run: table_delete_column,
+        run: table::table_delete_column,
     },
     Command {
         id: "table.resize",
@@ -1503,7 +1503,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "columns"?: number[], "rows"?: number[]}"#,
         mutates: true,
-        run: table_resize,
+        run: table::table_resize,
     },
     Command {
         id: "table.merge",
@@ -1512,7 +1512,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "row": usize, "column": usize, "rows": usize, "columns": usize}"#,
         mutates: true,
-        run: table_merge,
+        run: table::table_merge,
     },
     Command {
         id: "table.split",
@@ -1521,7 +1521,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "row": usize, "column": usize}"#,
         mutates: true,
-        run: table_split,
+        run: table::table_split,
     },
     Command {
         id: "table.set_borders",
@@ -1530,7 +1530,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "outer"?: Outline|null, "inner"?: Outline|null}"#,
         mutates: true,
-        run: table_set_borders,
+        run: table::table_set_borders,
     },
     Command {
         id: "table.set_header_row",
@@ -1539,7 +1539,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "header_row": bool}"#,
         mutates: true,
-        run: table_set_header_row,
+        run: table::table_set_header_row,
     },
     Command {
         id: "trigger.add",
@@ -1548,7 +1548,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "trigger": Trigger, "index"?: usize}"#,
         mutates: true,
-        run: trigger_add,
+        run: trigger::trigger_add,
     },
     Command {
         id: "trigger.update",
@@ -1557,7 +1557,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "index": usize, "trigger": Trigger}"#,
         mutates: true,
-        run: trigger_update,
+        run: trigger::trigger_update,
     },
     Command {
         id: "trigger.move",
@@ -1566,7 +1566,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "from": usize, "to": usize}"#,
         mutates: true,
-        run: trigger_move,
+        run: trigger::trigger_move,
     },
     Command {
         id: "trigger.delete",
@@ -1575,7 +1575,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "index": usize}"#,
         mutates: true,
-        run: trigger_delete,
+        run: trigger::trigger_delete,
     },
     Command {
         id: "resource.add",
@@ -1584,7 +1584,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"title": string, "target": {"kind": "url", "url": string}|{"kind": "file", "src": string}}"#,
         mutates: true,
-        run: resource_add,
+        run: course::resource_add,
     },
     Command {
         id: "resource.update",
@@ -1593,7 +1593,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "title"?: string, "target"?: {"kind": "url", "url": string}|{"kind": "file", "src": string}}"#,
         mutates: true,
-        run: resource_update,
+        run: course::resource_update,
     },
     Command {
         id: "resource.remove",
@@ -1602,7 +1602,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id}"#,
         mutates: true,
-        run: resource_remove,
+        run: course::resource_remove,
     },
     Command {
         id: "resource.move",
@@ -1611,7 +1611,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "to": usize}"#,
         mutates: true,
-        run: resource_move,
+        run: course::resource_move,
     },
     Command {
         id: "glossary.add",
@@ -1620,7 +1620,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"term": string, "definition"?: string}"#,
         mutates: true,
-        run: glossary_add,
+        run: course::glossary_add,
     },
     Command {
         id: "glossary.update",
@@ -1629,7 +1629,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "term"?: string, "definition"?: string}"#,
         mutates: true,
-        run: glossary_update,
+        run: course::glossary_update,
     },
     Command {
         id: "glossary.remove",
@@ -1638,7 +1638,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id}"#,
         mutates: true,
-        run: glossary_remove,
+        run: course::glossary_remove,
     },
     Command {
         id: "glossary.move",
@@ -1647,7 +1647,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "to": usize}"#,
         mutates: true,
-        run: glossary_move,
+        run: course::glossary_move,
     },
     Command {
         id: "glossary.sort",
@@ -1656,7 +1656,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{}"#,
         mutates: true,
-        run: glossary_sort,
+        run: course::glossary_sort,
     },
     Command {
         id: "variable.add",
@@ -1665,7 +1665,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"name": string, "value": bool|number|string}"#,
         mutates: true,
-        run: variable_add,
+        run: course::variable_add,
     },
     Command {
         id: "variable.set_value",
@@ -1674,7 +1674,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"name": string, "value": bool|number|string}"#,
         mutates: true,
-        run: variable_set_value,
+        run: course::variable_set_value,
     },
     Command {
         id: "variable.delete",
@@ -1683,7 +1683,7 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"name": string}"#,
         mutates: true,
-        run: variable_delete,
+        run: course::variable_delete,
     },
     Command {
         id: "interaction.insert",
@@ -1953,7 +1953,7 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+F"),
         params: r#"{"query": string, "case"?: bool, "whole_word"?: bool}"#,
         mutates: false,
-        run: course_find,
+        run: course::course_find,
     },
     Command {
         id: "course.replace",
@@ -1962,25 +1962,25 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"query": string, "replacement": string, "case"?: bool, "whole_word"?: bool, "only"?: [{"slide"?: id, "object"?: id, "layer"?: id, "field": string}]}"#,
         mutates: true,
-        run: course_replace,
+        run: course::course_replace,
     },
 ];
 
 // ---------------------------------------------------------------- params
 
-fn bad(cmd: &str, message: impl Into<String>) -> EngineError {
+pub(super) fn bad(cmd: &str, message: impl Into<String>) -> EngineError {
     EngineError::BadParams {
         command: cmd.to_owned(),
         message: message.into(),
     }
 }
 
-fn obj<'a>(cmd: &str, p: &'a Json) -> Result<&'a serde_json::Map<String, Json>> {
+pub(super) fn obj<'a>(cmd: &str, p: &'a Json) -> Result<&'a serde_json::Map<String, Json>> {
     p.as_object()
         .ok_or_else(|| bad(cmd, "params must be a JSON object"))
 }
 
-fn opt<T: DeserializeOwned>(cmd: &str, p: &Json, key: &str) -> Result<Option<T>> {
+pub(super) fn opt<T: DeserializeOwned>(cmd: &str, p: &Json, key: &str) -> Result<Option<T>> {
     match obj(cmd, p)?.get(key) {
         None | Some(Json::Null) => Ok(None),
         Some(v) => serde_json::from_value(v.clone())
@@ -1989,18 +1989,18 @@ fn opt<T: DeserializeOwned>(cmd: &str, p: &Json, key: &str) -> Result<Option<T>>
     }
 }
 
-fn req<T: DeserializeOwned>(cmd: &str, p: &Json, key: &str) -> Result<T> {
+pub(super) fn req<T: DeserializeOwned>(cmd: &str, p: &Json, key: &str) -> Result<T> {
     opt(cmd, p, key)?.ok_or_else(|| bad(cmd, format!("missing `{key}`")))
 }
 
-fn text(cmd: &str, s: String, key: &str) -> Result<String> {
+pub(super) fn text(cmd: &str, s: String, key: &str) -> Result<String> {
     if s.len() > MAX_TEXT {
         return Err(bad(cmd, format!("`{key}` is longer than {MAX_TEXT} bytes")));
     }
     Ok(s)
 }
 
-fn validate_id(cmd: &str, id: &str) -> Result<()> {
+pub(super) fn validate_id(cmd: &str, id: &str) -> Result<()> {
     if id.is_empty() {
         return Err(bad(cmd, "id cannot be empty"));
     }
@@ -2020,7 +2020,7 @@ fn validate_id(cmd: &str, id: &str) -> Result<()> {
 }
 
 /// `prefix1`, `prefix2`, … : the first not already taken.
-fn fresh_id<'a>(prefix: &str, taken: impl Iterator<Item = &'a str>) -> String {
+pub(super) fn fresh_id<'a>(prefix: &str, taken: impl Iterator<Item = &'a str>) -> String {
     let taken: std::collections::BTreeSet<&str> = taken.collect();
     (1u64..)
         .map(|n| format!("{prefix}{n}"))
@@ -2029,7 +2029,7 @@ fn fresh_id<'a>(prefix: &str, taken: impl Iterator<Item = &'a str>) -> String {
 }
 
 /// The first `prefix<N>_explored` name not already used by a course variable.
-fn fresh_explored_variable(course: &Course, prefix: &str) -> String {
+pub(super) fn fresh_explored_variable(course: &Course, prefix: &str) -> String {
     let taken: BTreeSet<&str> = course.variables.iter().map(|v| v.name.as_str()).collect();
     (1u64..)
         .map(|n| format!("{prefix}{n}_explored"))
@@ -2037,13 +2037,13 @@ fn fresh_explored_variable(course: &Course, prefix: &str) -> String {
         .unwrap_or_else(|| format!("{prefix}_explored"))
 }
 
-fn slide_mut<'a>(s: &'a mut Session, id: &str) -> Result<&'a mut Slide> {
+pub(super) fn slide_mut<'a>(s: &'a mut Session, id: &str) -> Result<&'a mut Slide> {
     s.course
         .slide_mut(id)
         .ok_or_else(|| EngineError::NotFound(format!("slide {id:?} does not exist")))
 }
 
-fn layer_mut<'a>(slide: &'a mut Slide, id: &str) -> Result<&'a mut Layer> {
+pub(super) fn layer_mut<'a>(slide: &'a mut Slide, id: &str) -> Result<&'a mut Layer> {
     let sid = slide.id.clone();
     slide
         .layer_mut(id)
@@ -2064,7 +2064,7 @@ fn slide_loc_path_prefix(loc: crate::delta::SlideLoc) -> String {
 }
 
 /// Reject the edit if it took a valid course to an invalid one.
-fn keep_valid(s: &mut Session, was_valid: bool) -> Result<()> {
+pub(super) fn keep_valid(s: &mut Session, was_valid: bool) -> Result<()> {
     if !was_valid || s.skip_undo {
         return Ok(());
     }
@@ -2089,556 +2089,11 @@ fn keep_valid(s: &mut Session, was_valid: bool) -> Result<()> {
 
 // ---------------------------------------------------------------- commands
 
-fn course_info(s: &mut Session, _p: &Json) -> Result<Json> {
-    Ok(json!({
-        "title": s.course.title,
-        "scenes": s.course.scenes.len(),
-        "slides": s.course.slides().count(),
-        "revision": s.revision,
-        "can_undo": s.can_undo(),
-        "can_redo": s.can_redo(),
-    }))
-}
-
-fn course_map(s: &mut Session, _p: &Json) -> Result<Json> {
-    serde_json::to_value(coursecraft_course::course_map(&s.course))
-        .map_err(|e| EngineError::Invalid(e.to_string()))
-}
-
-fn course_validate(s: &mut Session, _p: &Json) -> Result<Json> {
-    serde_json::to_value(s.validation_issues()).map_err(|e| EngineError::Invalid(e.to_string()))
-}
-
-fn course_audit(s: &mut Session, _p: &Json) -> Result<Json> {
-    serde_json::to_value(s.course.audit()).map_err(|e| EngineError::Invalid(e.to_string()))
-}
-
-fn course_update(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.update";
-    let was_valid = s.is_playable();
-    let map = obj(C, p)?;
-    if let Some(title) = opt::<String>(C, p, "title")? {
-        let title = text(C, title, "title")?;
-        if title.trim().is_empty() {
-            return Err(bad(C, "title is empty"));
-        }
-        s.course.title = title;
-    }
-    if let Some(id) = opt::<String>(C, p, "id")? {
-        validate_id(C, &id)?;
-        s.course.id = id;
-    }
-    if let Some(v) = map.get("start_slide") {
-        match v {
-            Json::Null => s.course.start_slide = None,
-            Json::String(id) => {
-                if id.trim().is_empty() {
-                    return Err(bad(C, "start_slide cannot be empty"));
-                }
-                s.course.start_slide = Some(id.clone());
-            }
-            _ => return Err(bad(C, "`start_slide`: expected string or null")),
-        }
-    }
-    if let Some(v) = map.get("language") {
-        match v {
-            Json::Null => s.course.language = None,
-            Json::String(tag) => {
-                let tag = tag.trim();
-                if tag.is_empty() {
-                    s.course.language = None;
-                } else if coursecraft_course::is_language_tag_valid(tag) {
-                    s.course.language = Some(tag.to_owned());
-                } else {
-                    return Err(bad(C, "language is not a simple BCP 47 tag"));
-                }
-            }
-            _ => return Err(bad(C, "`language`: expected string or null")),
-        }
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn course_set_slide_size(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.set_slide_size";
-    let was_valid = s.is_playable();
-    let w: u32 = req(C, p, "w")?;
-    let h: u32 = req(C, p, "h")?;
-    let mode: String = req(C, p, "mode")?;
-    let mode = match mode.as_str() {
-        "scale" => crate::slide_size::ResizeMode::Scale,
-        "fill" => crate::slide_size::ResizeMode::Fill,
-        "keep" => crate::slide_size::ResizeMode::Keep,
-        _ => return Err(bad(C, "`mode` must be \"scale\", \"fill\", or \"keep\"")),
-    };
-    if !crate::slide_size::size_in_bounds(w, h) {
-        return Err(bad(C, "size must be 100..=7680 wide and 100..=4320 high"));
-    }
-    if !crate::slide_size::set_slide_size(&mut s.course, w, h, mode) {
-        s.skip_undo = true;
-    }
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "w": w, "h": h }))
-}
-
-fn course_set_title(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.set_title";
-    let was_valid = s.is_playable();
-    let title = text(C, req(C, p, "title")?, "title")?;
-    if title.trim().is_empty() {
-        return Err(bad(C, "title is empty"));
-    }
-    s.course.title = title;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn course_set_player(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.set_player";
-    let was_valid = s.is_playable();
-    if let Some(v) = opt::<bool>(C, p, "show_bar")? {
-        s.course.player.show_bar = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_nav")? {
-        s.course.player.show_nav = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_menu")? {
-        s.course.player.show_menu = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_seekbar")? {
-        s.course.player.show_seekbar = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_speed")? {
-        s.course.player.show_speed = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_fullscreen")? {
-        s.course.player.show_fullscreen = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_transcript")? {
-        s.course.player.show_transcript = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_title")? {
-        s.course.player.show_title = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_volume")? {
-        s.course.player.show_volume = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_captions")? {
-        s.course.player.show_captions = v;
-    }
-    match obj(C, p)?.get("logo") {
-        None => {}
-        Some(Json::Null) => s.course.player.logo = None,
-        Some(Json::String(src)) => {
-            let src = text(C, src.clone(), "logo")?;
-            if !coursecraft_course::is_image_src(&src) {
-                return Err(bad(C, "`logo` must be a safe path to an image file"));
-            }
-            s.course.player.logo = Some(src);
-        }
-        Some(_) => return Err(bad(C, "`logo`: expected string or null")),
-    }
-    if let Some(v) = opt::<coursecraft_course::NavMode>(C, p, "navigation")? {
-        s.course.player.navigation = v;
-    }
-    if let Some(v) = opt::<coursecraft_course::NextRequirement>(C, p, "next_requires")? {
-        check_next_requirement(s, C, &v)?;
-        s.course.player.next_requires = v;
-    }
-    if let Some(v) = opt::<coursecraft_course::SeekbarBehaviour>(C, p, "seekbar")? {
-        s.course.player.seekbar = v;
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-/// A variable rule must name an existing true/false variable.
-fn check_next_requirement(
-    s: &Session,
-    cmd: &str,
-    rule: &coursecraft_course::NextRequirement,
-) -> Result<()> {
-    let coursecraft_course::NextRequirement::Variable { name } = rule else {
-        return Ok(());
-    };
-    let kind = coursecraft_course::builtin_variable_kind(name)
-        .or_else(|| s.course.variable(name).map(|def| def.value.kind()));
-    match kind {
-        None => Err(bad(cmd, format!("variable {name:?} does not exist"))),
-        Some(coursecraft_course::ValueKind::Bool) => Ok(()),
-        Some(_) => Err(bad(cmd, format!("variable {name:?} is not true/false"))),
-    }
-}
-
-fn course_set_quiz(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.set_quiz";
-    let was_valid = s.is_playable();
-    let map = obj(C, p)?;
-    match map.get("passing_percent") {
-        None => return Err(bad(C, "missing `passing_percent`")),
-        Some(Json::Null) => {
-            s.course.quiz = None;
-        }
-        Some(Json::Number(n)) => {
-            let Some(val) = n.as_u64() else {
-                return Err(bad(C, "`passing_percent` must be an integer 0..=100"));
-            };
-            if val > 100 {
-                return Err(bad(C, "`passing_percent` must be 0..=100"));
-            }
-            #[allow(clippy::cast_possible_truncation)]
-            let passing_percent = val as u8;
-            s.course.quiz = Some(QuizSettings { passing_percent });
-        }
-        _ => return Err(bad(C, "`passing_percent`: expected integer or null")),
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn course_set_publish_settings(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.set_publish_settings";
-    let was_valid = s.is_playable();
-    let _ = obj(C, p)?;
-    let standard: Option<String> = opt(C, p, "standard")?;
-    let lms_status: Option<coursecraft_course::LmsStatus> = opt(C, p, "lms_status")?;
-    if standard.is_none() && lms_status.is_none() {
-        return Err(bad(C, "provide `standard` and/or `lms_status`"));
-    }
-    let mut settings = s.course.editor.last_publish.clone().unwrap_or_else(|| {
-        coursecraft_course::PublishSettings {
-            standard: "scorm12".to_string(),
-            lms_status: coursecraft_course::LmsStatus::Auto,
-        }
-    });
-    if let Some(std) = standard {
-        settings.standard = std;
-    }
-    if let Some(status) = lms_status {
-        settings.lms_status = status;
-    }
-    s.course.editor.last_publish = Some(settings.clone());
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "last_publish": settings }))
-}
-
-fn course_set_background_audio(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.set_background_audio";
-    let was_valid = s.is_playable();
-    let map = obj(C, p)?;
-    let volume: Option<f32> = opt(C, p, "volume")?;
-    if let Some(volume) = volume
-        && (!volume.is_finite() || !(0.0..=1.0).contains(&volume))
-    {
-        return Err(bad(C, "`volume` must be finite and within 0..=1"));
-    }
-    let looping: Option<bool> = opt(C, p, "loop")?;
-
-    match map.get("src") {
-        Some(Json::Null) => s.course.background_audio = None,
-        Some(Json::String(src)) => {
-            let src = text(C, src.clone(), "src")?;
-            let audio = s
-                .course
-                .background_audio
-                .get_or_insert_with(|| BackgroundAudio {
-                    src: String::new(),
-                    volume: 0.5,
-                    looping: true,
-                });
-            audio.src = src;
-        }
-        Some(_) => return Err(bad(C, "`src`: expected string or null")),
-        None => {
-            if s.course.background_audio.is_none() && (volume.is_some() || looping.is_some()) {
-                return Err(EngineError::NotFound(
-                    "course has no background audio".to_string(),
-                ));
-            }
-        }
-    }
-
-    if let Some(audio) = &mut s.course.background_audio {
-        if let Some(volume) = volume {
-            audio.volume = volume;
-        }
-        if let Some(looping) = looping {
-            audio.looping = looping;
-        }
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn course_add_finish_button(s: &mut Session, _p: &Json) -> Result<Json> {
-    let was_valid = s.is_playable();
-    let last_slide_id = s
-        .course
-        .scenes
-        .iter()
-        .rev()
-        .find_map(|scene| scene.slides.last())
-        .map(|slide| slide.id.clone())
-        .ok_or_else(|| EngineError::Invalid("course has no slides".into()))?;
-    let theme = s.course.theme.clone();
-    let slide_size = s.course.slide_size;
-    let slide = slide_mut(s, &last_slide_id)?;
-    let button = add_finish_button(slide, &theme, slide_size);
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "button": button }))
-}
-
-fn validate_color(cmd: &'static str, c: &Color) -> Result<()> {
+pub(super) fn validate_color(cmd: &'static str, c: &Color) -> Result<()> {
     if !c.is_valid() {
         return Err(bad(cmd, format!("invalid color hex {:?}", c.0)));
     }
     Ok(())
-}
-
-fn course_set_theme(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.set_theme";
-    let was_valid = s.is_playable();
-    if let Some(accent) = opt::<String>(C, p, "accent")? {
-        let col = Color(accent);
-        validate_color(C, &col)?;
-        s.course.theme.accent = col;
-    }
-    if let Some(bg) = opt::<String>(C, p, "background")? {
-        let col = Color(bg);
-        validate_color(C, &col)?;
-        s.course.theme.background = col;
-    }
-    if let Some(text_col) = opt::<String>(C, p, "text")? {
-        let col = Color(text_col);
-        validate_color(C, &col)?;
-        s.course.theme.text = col;
-    }
-    if let Some(font) = opt::<String>(C, p, "font")? {
-        let f = text(C, font, "font")?;
-        s.course.theme.font = f;
-    }
-    if let Some(bar) = opt::<String>(C, p, "bar")? {
-        let col = Color(bar);
-        validate_color(C, &col)?;
-        s.course.theme.player.bar = col;
-    }
-    if let Some(bar_text) = opt::<String>(C, p, "bar_text")? {
-        let col = Color(bar_text);
-        validate_color(C, &col)?;
-        s.course.theme.player.bar_text = col;
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-/// Trim and strip control characters from a font family name.
-fn clean_font_family(raw: &str) -> String {
-    raw.chars()
-        .filter(|c| !c.is_control())
-        .collect::<String>()
-        .trim()
-        .chars()
-        .take(MAX_FONT_FAMILY_CHARS)
-        .collect::<String>()
-        .trim()
-        .to_string()
-}
-
-fn font_src_is_valid(src: &str) -> bool {
-    let lower = src.to_ascii_lowercase();
-    !src.is_empty()
-        && src.starts_with("fonts/")
-        && !src.starts_with('/')
-        && !src.contains('\\')
-        && !src.contains(':')
-        && !src.chars().any(char::is_control)
-        && src
-            .split('/')
-            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
-        && (lower.ends_with(".ttf") || lower.ends_with(".otf"))
-}
-
-fn course_add_font(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.add_font";
-    let was_valid = s.is_playable();
-    let raw_family: String = req(C, p, "family")?;
-    let family = clean_font_family(&raw_family);
-    if family.is_empty() {
-        return Err(bad(C, "`family` is empty"));
-    }
-    let style: FontStyle = req(C, p, "style")?;
-    let src: String = req(C, p, "src")?;
-    if !font_src_is_valid(&src) {
-        return Err(bad(
-            C,
-            "`src` must be a .ttf or .otf media path under fonts/",
-        ));
-    }
-    if s.course.fonts.len() >= MAX_FONT_FACES {
-        return Err(bad(
-            C,
-            format!("a course may register at most {MAX_FONT_FACES} font faces"),
-        ));
-    }
-    if s.course
-        .fonts
-        .iter()
-        .any(|face| face.family.trim().eq_ignore_ascii_case(&family) && face.style == style)
-    {
-        return Err(bad(
-            C,
-            format!("font face for {family:?} {style:?} already exists"),
-        ));
-    }
-    let face = FontFace { family, style, src };
-    s.course.fonts.push(face.clone());
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "font": face }))
-}
-
-fn course_remove_font(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.remove_font";
-    let was_valid = s.is_playable();
-    let family = opt::<String>(C, p, "family")?.map(|f| clean_font_family(&f));
-    let style = opt::<FontStyle>(C, p, "style")?;
-    let src = opt::<String>(C, p, "src")?;
-    if family.as_deref().unwrap_or_default().is_empty() && src.is_none() {
-        return Err(bad(C, "pass `family` or `src`"));
-    }
-    let before = s.course.fonts.len();
-    s.course.fonts.retain(|face| {
-        let family_matches = family
-            .as_deref()
-            .is_some_and(|name| face.family.trim().eq_ignore_ascii_case(name));
-        let style_matches = style.is_none_or(|wanted| face.style == wanted);
-        let src_matches = src.as_deref().is_some_and(|path| face.src == path);
-        if family.is_some() {
-            !(family_matches && style_matches)
-        } else {
-            !src_matches
-        }
-    });
-    let removed = before.saturating_sub(s.course.fonts.len());
-    if removed == 0 {
-        return Err(EngineError::NotFound("font face not found".to_string()));
-    }
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "removed": removed }))
-}
-
-fn course_export_xliff(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.export_xliff";
-    let target_language = req::<String>(C, p, "target_language")?;
-    if !coursecraft_course::is_language_tag_valid(&target_language) {
-        return Err(bad(C, "target_language is not a simple BCP 47 tag"));
-    }
-    let xliff = coursecraft_format::xliff::export_xliff(&s.course, &target_language)
-        .map_err(|e| EngineError::Invalid(e.to_string()))?;
-    Ok(Json::String(xliff))
-}
-
-fn course_import_xliff(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.import_xliff";
-    let xliff = req::<String>(C, p, "xliff")?;
-    let doc = coursecraft_format::xliff::parse_xliff(xliff.as_bytes())
-        .map_err(|e| EngineError::Invalid(e.to_string()))?;
-    let (course, report) = coursecraft_format::xliff::apply_xliff(&s.course, &doc);
-    if let Some(issue) = course
-        .validate()
-        .into_iter()
-        .find(|i| i.severity == coursecraft_course::Severity::Error)
-    {
-        return Err(EngineError::Invalid(format!(
-            "translated course is invalid: {} ({})",
-            issue.message, issue.path
-        )));
-    }
-    s.course = course;
-    Ok(json!({
-        "applied": report.applied,
-        "missing_target": report.missing_target,
-        "source_changed": report.source_changed,
-        "unknown_ids": report.unknown_ids,
-        "placeholder_mismatch": report.placeholder_mismatch,
-        "unsupported_script": report.unsupported_script,
-    }))
-}
-
-/// Read-only search over every author-visible string.
-fn course_find(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.find";
-    let query = text(C, req::<String>(C, p, "query")?, "query")?;
-    let case_sensitive = opt::<bool>(C, p, "case")?.unwrap_or(false);
-    let whole_word = opt::<bool>(C, p, "whole_word")?.unwrap_or(false);
-    let (hits, truncated) = find_in_course(&s.course, &query, case_sensitive, whole_word);
-    let hits = serde_json::to_value(&hits).map_err(|e| EngineError::Invalid(e.to_string()))?;
-    Ok(json!({ "hits": hits, "truncated": truncated }))
-}
-
-/// Replace in every author-visible string, or only in the `only` locations.
-/// One undo step. Matches that overlap a `%name%` reference are skipped and
-/// counted. A replace that changes nothing makes no undo step.
-fn course_replace(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "course.replace";
-    let was_valid = s.is_playable();
-    let query = text(C, req::<String>(C, p, "query")?, "query")?;
-    let replacement = text(C, req::<String>(C, p, "replacement")?, "replacement")?;
-    let case_sensitive = opt::<bool>(C, p, "case")?.unwrap_or(false);
-    let whole_word = opt::<bool>(C, p, "whole_word")?.unwrap_or(false);
-    let only: Option<HashSet<Location>> =
-        opt::<Vec<Location>>(C, p, "only")?.map(|list| list.into_iter().collect());
-
-    let mut replaced = 0usize;
-    let mut skipped = 0usize;
-    if !query.is_empty() {
-        let locations: Vec<Location> = course_string_locations(&s.course)
-            .into_iter()
-            .filter(|location| only.as_ref().is_none_or(|set| set.contains(location)))
-            .collect();
-        for location in &locations {
-            let Some(target) = string_mut(&mut s.course, location) else {
-                continue;
-            };
-            let outcome = replace_in_target(
-                target,
-                &query,
-                &replacement,
-                case_sensitive,
-                whole_word,
-                MAX_TEXT,
-            );
-            if outcome.too_long {
-                return Err(bad(
-                    C,
-                    format!("the replacement would make a text longer than {MAX_TEXT} bytes"),
-                ));
-            }
-            replaced = replaced.saturating_add(outcome.replaced);
-            skipped = skipped.saturating_add(outcome.skipped);
-        }
-    }
-    if replaced == 0 {
-        s.skip_undo = true;
-        return Ok(json!({ "replaced": 0, "skipped_variable_refs": skipped }));
-    }
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "replaced": replaced, "skipped_variable_refs": skipped }))
-}
-
-fn edit_undo(s: &mut Session, _p: &Json) -> Result<Json> {
-    s.undo().map(|()| Json::Null)
-}
-
-fn edit_redo(s: &mut Session, _p: &Json) -> Result<Json> {
-    s.redo().map(|()| Json::Null)
-}
-
-fn edit_history(s: &mut Session, _p: &Json) -> Result<Json> {
-    Ok(json!({
-        "undo": s.undo_names(),
-        "redo": s.redo_names(),
-    }))
 }
 
 fn scene_add(s: &mut Session, p: &Json) -> Result<Json> {
@@ -3040,7 +2495,7 @@ fn slide_set_player_overrides(s: &mut Session, p: &Json) -> Result<Json> {
         Some(v) => {
             let rule: coursecraft_course::NextRequirement = serde_json::from_value(v.clone())
                 .map_err(|e| bad(C, format!("`next_requires`: {e}")))?;
-            check_next_requirement(s, C, &rule)?;
+            course::check_next_requirement(s, C, &rule)?;
             Some(Some(rule))
         }
     };
@@ -4090,281 +3545,6 @@ fn template_delete(s: &mut Session, p: &Json) -> Result<Json> {
     s.course.templates.remove(pos);
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
-}
-
-fn layer_add(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "layer.add";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let id: Option<String> = opt(C, p, "id")?;
-    let name: Option<String> = opt(C, p, "name")?;
-    let slide = slide_mut(s, &sid)?;
-    let id = match id {
-        Some(custom) => {
-            validate_id(C, &custom)?;
-            if slide.local_ids().any(|existing| existing == custom) {
-                return Err(EngineError::Invalid(format!(
-                    "layer id {custom:?} already exists on slide {sid:?}"
-                )));
-            }
-            custom
-        }
-        None => fresh_id("layer", slide.local_ids()),
-    };
-    let name = text(
-        C,
-        name.unwrap_or_else(|| format!("Layer {}", slide.layers.len() + 1)),
-        "name",
-    )?;
-    slide.layers.push(Layer {
-        id: id.clone(),
-        name,
-        duration_ms: 5000,
-        objects: Vec::new(),
-        triggers: Vec::new(),
-        hide_other_layers: true,
-        pause_base_timeline: false,
-        prevent_base_clicks: false,
-        hide_base_objects: false,
-        hide_when_timeline_ends: false,
-        allow_seek: SeekMode::Auto,
-        revisit: RevisitMode::Auto,
-        cue_points: Vec::new(),
-    });
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "id": id }))
-}
-
-fn layer_update(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "layer.update";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let lid: String = req(C, p, "layer")?;
-    let name: Option<String> = opt(C, p, "name")?;
-    let duration_ms: Option<u32> = opt(C, p, "duration_ms")?;
-    let hide_other_layers: Option<bool> = opt(C, p, "hide_other_layers")?;
-    let pause_base_timeline: Option<bool> = opt(C, p, "pause_base_timeline")?;
-    let prevent_base_clicks: Option<bool> = opt(C, p, "prevent_base_clicks")?;
-    let hide_base_objects: Option<bool> = opt(C, p, "hide_base_objects")?;
-    let hide_when_timeline_ends: Option<bool> = opt(C, p, "hide_when_timeline_ends")?;
-    let allow_seek: Option<SeekMode> = opt(C, p, "allow_seek")?;
-    let revisit: Option<RevisitMode> = opt(C, p, "revisit")?;
-
-    let slide = slide_mut(s, &sid)?;
-    let layer = layer_mut(slide, &lid)?;
-    if let Some(n) = name {
-        let n = text(C, n, "name")?;
-        if n.trim().is_empty() {
-            return Err(bad(C, "name is empty"));
-        }
-        layer.name = n;
-    }
-    if let Some(ms) = duration_ms {
-        if ms > MAX_DURATION_MS {
-            return Err(bad(C, "duration is longer than 24 hours"));
-        }
-        layer.duration_ms = ms;
-    }
-    if let Some(v) = hide_other_layers {
-        layer.hide_other_layers = v;
-    }
-    if let Some(v) = pause_base_timeline {
-        layer.pause_base_timeline = v;
-    }
-    if let Some(v) = prevent_base_clicks {
-        layer.prevent_base_clicks = v;
-    }
-    if let Some(v) = hide_base_objects {
-        layer.hide_base_objects = v;
-    }
-    if let Some(v) = hide_when_timeline_ends {
-        layer.hide_when_timeline_ends = v;
-    }
-    if let Some(v) = allow_seek {
-        layer.allow_seek = v;
-    }
-    if let Some(v) = revisit {
-        layer.revisit = v;
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn layer_delete(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "layer.delete";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let lid: String = req(C, p, "layer")?;
-    let slide = slide_mut(s, &sid)?;
-    let deleted_oids: Vec<String> = slide
-        .layers
-        .iter()
-        .find(|l| l.id == lid)
-        .map(|l| l.objects.iter().map(|o| o.id.clone()).collect())
-        .unwrap_or_default();
-    let before = slide.layers.len();
-    slide.layers.retain(|l| l.id != lid);
-    if slide.layers.len() == before {
-        return Err(EngineError::NotFound(format!(
-            "layer {lid:?} is not on slide {sid:?}"
-        )));
-    }
-    // Triggers that show, hide or start from the layer (or reference objects on it) go with it.
-    let removed = if was_valid {
-        let mut needles = vec![format!("layer {lid:?} is not on slide")];
-        for oid in &deleted_oids {
-            needles.push(format!("object {oid:?} is not on slide"));
-            needles.push(format!("target {oid:?} is not on slide"));
-        }
-        remove_dangling_triggers(s, &sid, &needles)
-    } else {
-        0
-    };
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "removed_triggers": removed }))
-}
-
-fn layer_move(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "layer.move";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let lid: String = req(C, p, "layer")?;
-    let to: usize = req(C, p, "to")?;
-
-    let slide = slide_mut(s, &sid)?;
-    let Some(pos) = slide.layers.iter().position(|l| l.id == lid) else {
-        return Err(EngineError::NotFound(format!(
-            "layer {lid:?} is not on slide {sid:?}"
-        )));
-    };
-    // `slide.layers` runs back to front: index 0 is the backmost layer.
-    let last = slide.layers.len().saturating_sub(1);
-    let at = to.min(last);
-    if at == pos {
-        s.skip_undo = true;
-        return Ok(Json::Null);
-    }
-    let layer = slide.layers.remove(pos);
-    slide.layers.insert(at.min(slide.layers.len()), layer);
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-/// A name for a duplicated layer: `<name> copy`, then `<name> copy 2`, …
-fn copied_layer_name(slide: &Slide, name: &str) -> String {
-    let first = format!("{name} copy");
-    if !slide.layers.iter().any(|layer| layer.name == first) {
-        return first;
-    }
-    for n in 2u64..=u32::MAX as u64 {
-        let candidate = format!("{name} copy {n}");
-        if !slide.layers.iter().any(|layer| layer.name == candidate) {
-            return candidate;
-        }
-    }
-    first
-}
-
-fn layer_duplicate(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "layer.duplicate";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let lid: String = req(C, p, "layer")?;
-
-    // Build the copy against the slide as it is now, then insert it directly in
-    // front of its source (a higher index is closer to the front).
-    let (mut copy, insert_at, name, object_map, copied_map, layer_map, slide_id) = {
-        let slide = s
-            .course
-            .slide(&sid)
-            .ok_or_else(|| EngineError::NotFound(format!("slide {sid:?} does not exist")))?;
-        let (mut copy, index) = slide
-            .layers
-            .iter()
-            .enumerate()
-            .find(|(_, layer)| layer.id == lid)
-            .map(|(index, layer)| (layer.clone(), index))
-            .ok_or_else(|| {
-                EngineError::NotFound(format!("layer {lid:?} is not on slide {sid:?}"))
-            })?;
-
-        let mut taken: BTreeSet<String> = slide.local_ids().map(str::to_owned).collect();
-        let mut taken_groups: BTreeSet<String> = all_group_ids(slide).into_iter().collect();
-        let new_layer_id = fresh_id_in("layer", &taken);
-        taken.insert(new_layer_id.clone());
-
-        // References to anything outside the copy stay pointed at the same ids.
-        let mut object_map: BTreeMap<String, String> = slide
-            .objects
-            .iter()
-            .chain(slide.layers.iter().flat_map(|layer| layer.objects.iter()))
-            .map(|object| (object.id.clone(), object.id.clone()))
-            .collect();
-        let mut group_map: BTreeMap<String, String> = BTreeMap::new();
-        let mut copied_map: BTreeMap<String, String> = BTreeMap::new();
-        for object in &mut copy.objects {
-            let new_id = fresh_id_in(kind_prefix(&object.kind), &taken);
-            taken.insert(new_id.clone());
-            object_map.insert(object.id.clone(), new_id.clone());
-            copied_map.insert(object.id.clone(), new_id.clone());
-            object.id = new_id;
-            if let Some(old_group) = object.group.clone() {
-                let new_group = group_map.entry(old_group).or_insert_with(|| {
-                    let fresh = fresh_id_in("group", &taken_groups);
-                    taken_groups.insert(fresh.clone());
-                    fresh
-                });
-                object.group = Some(new_group.clone());
-            }
-        }
-
-        let mut layer_map: BTreeMap<String, String> = slide
-            .layers
-            .iter()
-            .map(|layer| (layer.id.clone(), layer.id.clone()))
-            .collect();
-        layer_map.insert(lid.clone(), new_layer_id.clone());
-
-        let name = copied_layer_name(slide, &copy.name);
-        (
-            copy,
-            index.saturating_add(1),
-            name,
-            object_map,
-            copied_map,
-            layer_map,
-            slide.id.clone(),
-        )
-    };
-
-    remap_object_glues(&mut copy.objects, &copied_map);
-    let mut kept = Vec::with_capacity(copy.triggers.len());
-    for mut trigger in std::mem::take(&mut copy.triggers) {
-        if remap_trigger(
-            &mut trigger,
-            &object_map,
-            &layer_map,
-            &s.course,
-            None,
-            Some(&lid),
-            false,
-        ) {
-            kept.push(trigger);
-        }
-    }
-    copy.triggers = kept;
-    let new_id = layer_map
-        .get(&lid)
-        .cloned()
-        .ok_or_else(|| EngineError::NotFound(format!("layer {lid:?} disappeared")))?;
-    copy.id = new_id.clone();
-    copy.name = name;
-
-    let slide = slide_mut(s, &slide_id)?;
-    let at = insert_at.min(slide.layers.len());
-    slide.layers.insert(at, copy);
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "id": new_id }))
 }
 
 // ---------------------------------------------------------------- copy/paste helpers
@@ -5980,91 +5160,6 @@ fn object_hide_in_editor(s: &mut Session, p: &Json) -> Result<Json> {
     }
     keep_valid(s, was_valid)?;
     Ok(json!({ "changed": changed }))
-}
-
-const MAX_GUIDES: usize = 256;
-
-fn check_guide_pos(cmd: &'static str, at: f32) -> Result<f32> {
-    if !at.is_finite() || !(-100_000.0..=100_000.0).contains(&at) {
-        return Err(bad(cmd, "`at` must be a finite coordinate"));
-    }
-    Ok(at)
-}
-
-fn view_set(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "view.set";
-    let was_valid = s.is_playable();
-    let mut before = s.course.editor.clone();
-    if let Some(v) = opt::<bool>(C, p, "show_rulers")? {
-        s.course.editor.show_rulers = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_grid")? {
-        s.course.editor.show_grid = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "snap_to_grid")? {
-        s.course.editor.snap_to_grid = v;
-    }
-    if let Some(v) = opt::<bool>(C, p, "show_guides")? {
-        s.course.editor.show_guides = v;
-    }
-    if let Some(v) = opt::<coursecraft_course::BaseSlideView>(C, p, "base_slide_view")? {
-        s.course.editor.base_slide_view = v;
-    }
-    if let Some(v) = opt::<coursecraft_course::PublishSettings>(C, p, "last_publish")? {
-        s.course.editor.last_publish = Some(v);
-    }
-    // Remembering the last publish standard is not an author edit; skip undo
-    // when nothing else in `editor` changed.
-    before.last_publish = s.course.editor.last_publish.clone();
-    if s.course.editor == before {
-        s.skip_undo = true;
-    }
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "editor": s.course.editor }))
-}
-
-fn view_guides_add(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "view.guides.add";
-    let was_valid = s.is_playable();
-    let vertical: bool = req(C, p, "vertical")?;
-    let at = check_guide_pos(C, req::<f32>(C, p, "at")?)?;
-    if s.course.editor.guides.len() >= MAX_GUIDES {
-        return Err(bad(C, "too many guides"));
-    }
-    s.course.editor.guides.push(Guide { vertical, at });
-    s.course.editor.show_guides = true;
-    let index = s.course.editor.guides.len().saturating_sub(1);
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "index": index }))
-}
-
-fn view_guides_move(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "view.guides.move";
-    let was_valid = s.is_playable();
-    let index: usize = req(C, p, "index")?;
-    let at = check_guide_pos(C, req::<f32>(C, p, "at")?)?;
-    let Some(guide) = s.course.editor.guides.get_mut(index) else {
-        return Err(bad(C, "guide index out of range"));
-    };
-    if (guide.at - at).abs() <= f32::EPSILON {
-        s.skip_undo = true;
-    } else {
-        guide.at = at;
-    }
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "index": index, "at": at }))
-}
-
-fn view_guides_remove(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "view.guides.remove";
-    let was_valid = s.is_playable();
-    let index: usize = req(C, p, "index")?;
-    if index >= s.course.editor.guides.len() {
-        return Err(bad(C, "guide index out of range"));
-    }
-    s.course.editor.guides.remove(index);
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "removed": index }))
 }
 
 /// The appearance of one object, as copied by the format painter.
@@ -8510,1172 +7605,6 @@ fn remove_dangling_triggers(s: &mut Session, sid: &str, needles: &[String]) -> u
         }
     }
     removed
-}
-
-/// Default shape text style: a contrasting colour on the shape's fill, centred
-/// both ways. Transparent fills read as the slide background, so use dark text.
-fn shape_text_default_style(fill: &Color) -> TextStyle {
-    let dark = Color("#1F1F1F".to_owned());
-    let light = Color("#FFFFFF".to_owned());
-    let color = match parse_color(fill) {
-        Some(fill) if fill.a > 0 => {
-            let luminance = relative_luminance(fill);
-            if luminance < 0.45 { light } else { dark }
-        }
-        _ => dark,
-    };
-    TextStyle {
-        color,
-        align: Align::Center,
-        valign: VAlign::Middle,
-        ..TextStyle::default()
-    }
-}
-
-/// Mutable parts of an object that carries text. A shape with no text yet gets
-/// a default style when a text command touches it.
-struct TextParts<'a> {
-    text: &'a mut String,
-    runs: &'a mut Vec<TextRun>,
-    style: &'a mut TextStyle,
-    paragraphs: &'a mut Vec<Paragraph>,
-    autofit: Option<&'a mut Autofit>,
-    /// A table cell keeps vertical alignment beside its style.
-    valign: Option<&'a mut VAlign>,
-}
-
-fn text_parts(kind: &mut ObjectKind) -> Option<TextParts<'_>> {
-    match kind {
-        ObjectKind::Text {
-            text,
-            runs,
-            style,
-            paragraphs,
-            autofit,
-            ..
-        } => Some(TextParts {
-            text,
-            runs,
-            style,
-            paragraphs,
-            autofit: Some(autofit),
-            valign: None,
-        }),
-        ObjectKind::Shape { fill, text, .. } => {
-            if text.is_none() {
-                *text = Some(ShapeText {
-                    text: String::new(),
-                    style: shape_text_default_style(fill),
-                    runs: Vec::new(),
-                    paragraphs: Vec::new(),
-                    autofit: Autofit::None,
-                });
-            }
-            let shape = text.as_mut()?;
-            Some(TextParts {
-                text: &mut shape.text,
-                runs: &mut shape.runs,
-                style: &mut shape.style,
-                paragraphs: &mut shape.paragraphs,
-                autofit: Some(&mut shape.autofit),
-                valign: None,
-            })
-        }
-        _ => None,
-    }
-}
-
-/// Text parts of an object, or of the table cell named by `row` and `column`.
-fn text_parts_at<'a>(
-    kind: &'a mut ObjectKind,
-    p: &Json,
-    cmd: &str,
-) -> Result<Option<TextParts<'a>>> {
-    if let ObjectKind::Table { rows, .. } = kind {
-        let row: usize =
-            opt(cmd, p, "row")?.ok_or_else(|| bad(cmd, "a table cell needs `row` and `column`"))?;
-        let column: usize = opt(cmd, p, "column")?
-            .ok_or_else(|| bad(cmd, "a table cell needs `row` and `column`"))?;
-        let cell = rows
-            .get_mut(row)
-            .and_then(|line| line.cells.get_mut(column))
-            .ok_or_else(|| EngineError::NotFound(format!("no table cell {row},{column}")))?;
-        return Ok(Some(TextParts {
-            text: &mut cell.text,
-            runs: &mut cell.runs,
-            style: &mut cell.style,
-            paragraphs: &mut cell.paragraphs,
-            autofit: None,
-            valign: Some(&mut cell.valign),
-        }));
-    }
-    Ok(text_parts(kind))
-}
-
-fn text_set(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "text.set";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let new_text_raw: String = req(C, p, "text")?;
-    let new_text = text(C, new_text_raw, "text")?;
-
-    let explicit_runs: Option<Vec<coursecraft_course::TextRun>> = opt(C, p, "runs")?;
-    let explicit_paragraphs: Option<Vec<coursecraft_course::Paragraph>> = opt(C, p, "paragraphs")?;
-
-    let sl = slide_mut(s, &sid)?;
-    let obj = find_object_mut(sl, &oid)?;
-    let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
-        return Err(bad(C, format!("object {oid:?} is not a text object")));
-    };
-    // Diff against what is displayed: the runs when there are any.
-    let old_plain: String = if parts.runs.is_empty() {
-        parts.text.clone()
-    } else {
-        parts.runs.iter().map(|r| r.text.as_str()).collect()
-    };
-    let new_runs = match explicit_runs {
-        Some(runs) if runs.iter().map(|r| r.text.as_str()).collect::<String>() == new_text => {
-            coursecraft_course::normalize_runs(&runs)
-        }
-        _ => apply_text_edit(parts.runs, &old_plain, &new_text),
-    };
-    if new_runs.len() > 1000 {
-        return Err(bad(C, "exceeded 1000 text runs"));
-    }
-    let new_paragraphs = match explicit_paragraphs {
-        Some(paragraphs) => paragraphs,
-        None => align_paragraphs(&old_plain, parts.paragraphs, &new_text),
-    };
-    *parts.runs = new_runs;
-    *parts.paragraphs = new_paragraphs;
-    *parts.text = new_text;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn text_style_range(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "text.style_range";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let start: usize = req(C, p, "start")?;
-    let end: usize = req(C, p, "end")?;
-    let bold: Option<bool> = opt(C, p, "bold")?;
-    let italic: Option<bool> = opt(C, p, "italic")?;
-    let underline: Option<bool> = opt(C, p, "underline")?;
-    let strikethrough: Option<bool> = opt(C, p, "strikethrough")?;
-    let baseline: Option<coursecraft_course::Baseline> = opt(C, p, "baseline")?;
-    let letter_spacing: Option<f32> = opt(C, p, "letter_spacing")?;
-    if letter_spacing.is_some_and(|v| !v.is_finite()) {
-        return Err(bad(C, "letter_spacing must be finite"));
-    }
-    let size: Option<f32> = opt(C, p, "size")?;
-    let color_str: Option<String> = opt(C, p, "color")?;
-    let font: Option<String> = opt(C, p, "font")?;
-
-    if let Some(sz) = size
-        && (!sz.is_finite() || sz <= 0.0)
-    {
-        return Err(bad(C, "size must be a finite positive number"));
-    }
-    let color = if let Some(cs) = color_str {
-        let col = Color(cs);
-        validate_color(C, &col)?;
-        Some(col)
-    } else {
-        None
-    };
-
-    let sl = slide_mut(s, &sid)?;
-    let obj = find_object_mut(sl, &oid)?;
-    let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
-        return Err(bad(C, format!("object {oid:?} is not a text object")));
-    };
-    let total_chars = parts.text.chars().count();
-    let (range_start, range_end) = if start == 0 && end == 0 {
-        (0, 0)
-    } else {
-        let s_clamp = start.min(total_chars);
-        let e_clamp = end.min(total_chars);
-        (s_clamp.min(e_clamp), s_clamp.max(e_clamp))
-    };
-
-    let patch = TextRunPatch {
-        bold,
-        italic,
-        underline,
-        size,
-        color,
-        font,
-        link: None,
-        strikethrough,
-        baseline,
-        letter_spacing,
-    };
-    let new_runs = apply_style_to_range_with_base(
-        parts.runs,
-        parts.text,
-        (range_start, range_end),
-        &patch,
-        Some(parts.style),
-    );
-    if new_runs.len() > 1000 {
-        return Err(bad(C, "exceeded 1000 text runs"));
-    }
-    *parts.runs = new_runs;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn text_set_paragraph(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "text.set_paragraph";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let align_str: Option<String> = opt(C, p, "align")?;
-    let valign_str: Option<String> = opt(C, p, "valign")?;
-    let wrap: Option<bool> = opt(C, p, "wrap")?;
-    let dir_str: Option<String> = opt(C, p, "direction")?;
-    let insets_val: Option<coursecraft_course::TextInsets> = opt(C, p, "insets")?;
-
-    let align = match align_str.as_deref() {
-        None => None,
-        Some("left") => Some(Align::Left),
-        Some("center") => Some(Align::Center),
-        Some("right") => Some(Align::Right),
-        Some("justify") => Some(Align::Justify),
-        Some(other) => return Err(bad(C, format!("unknown align {other:?}"))),
-    };
-    let valign = match valign_str.as_deref() {
-        None => None,
-        Some("top") => Some(VAlign::Top),
-        Some("middle") => Some(VAlign::Middle),
-        Some("bottom") => Some(VAlign::Bottom),
-        Some(other) => return Err(bad(C, format!("unknown valign {other:?}"))),
-    };
-    let direction = match dir_str.as_deref() {
-        None => None,
-        Some("horizontal") => Some(coursecraft_course::TextDirection::Horizontal),
-        Some("vertical") => Some(coursecraft_course::TextDirection::Vertical),
-        Some("vertical270") => Some(coursecraft_course::TextDirection::Vertical270),
-        Some(other) => return Err(bad(C, format!("unknown direction {other:?}"))),
-    };
-
-    let sl = slide_mut(s, &sid)?;
-    let obj = find_object_mut(sl, &oid)?;
-    let Some(mut parts) = text_parts_at(&mut obj.kind, p, C)? else {
-        return Err(bad(C, format!("object {oid:?} is not a text object")));
-    };
-    if let Some(a) = align {
-        parts.style.align = a;
-    }
-    if let Some(v) = valign {
-        if let Some(slot) = parts.valign.as_deref_mut() {
-            *slot = v;
-        } else {
-            parts.style.valign = v;
-        }
-    }
-    if let Some(w) = wrap {
-        parts.style.wrap = w;
-    }
-    if let Some(d) = direction {
-        parts.style.direction = d;
-    }
-    if let Some(ins) = insets_val {
-        parts.style.insets = Some(ins);
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn trim_paragraphs(paragraphs: &mut Vec<Paragraph>) {
-    while paragraphs.last() == Some(&Paragraph::default()) {
-        paragraphs.pop();
-    }
-}
-
-fn text_set_paragraphs(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "text.set_paragraphs";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let start: Option<usize> = opt(C, p, "start")?;
-    let end: Option<usize> = opt(C, p, "end")?;
-    let list_str: Option<String> = opt(C, p, "list")?;
-    let level: Option<u8> = opt(C, p, "level")?;
-    let line_spacing: Option<f32> = opt(C, p, "line_spacing")?;
-    let space_before: Option<f32> = opt(C, p, "space_before")?;
-    let space_after: Option<f32> = opt(C, p, "space_after")?;
-
-    let list = match list_str.as_deref() {
-        None => None,
-        Some("none") => Some(ListKind::None),
-        Some("bullet") => Some(ListKind::Bullet),
-        Some("number") => Some(ListKind::Number),
-        Some(other) => return Err(bad(C, format!("unknown list {other:?}"))),
-    };
-    if let Some(level) = level
-        && level > 4
-    {
-        return Err(bad(C, "level must be within 0..=4"));
-    }
-    if let Some(spacing) = line_spacing
-        && (!spacing.is_finite() || !(0.8..=3.0).contains(&spacing))
-    {
-        return Err(bad(C, "line_spacing must be finite and within 0.8..=3"));
-    }
-    for (name, value) in [("space_before", space_before), ("space_after", space_after)] {
-        if let Some(value) = value
-            && (!value.is_finite() || !(0.0..=200.0).contains(&value))
-        {
-            return Err(bad(C, format!("{name} must be finite and within 0..=200")));
-        }
-    }
-
-    let sl = slide_mut(s, &sid)?;
-    let obj = find_object_mut(sl, &oid)?;
-    let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
-        return Err(bad(C, format!("object {oid:?} is not a text object")));
-    };
-    let count = coursecraft_course::text::paragraph_count(parts.text);
-    let first = start.unwrap_or(0).min(count);
-    let last = end.unwrap_or(count).clamp(first, count);
-    let mut paragraphs = paragraphs_for(parts.text, parts.paragraphs);
-    for paragraph in paragraphs.iter_mut().skip(first).take(last - first) {
-        if let Some(list) = list {
-            paragraph.list = list;
-        }
-        if let Some(level) = level {
-            paragraph.level = level;
-        }
-        if let Some(spacing) = line_spacing {
-            paragraph.line_spacing = spacing;
-        }
-        if let Some(value) = space_before {
-            paragraph.space_before = value;
-        }
-        if let Some(value) = space_after {
-            paragraph.space_after = value;
-        }
-    }
-    trim_paragraphs(&mut paragraphs);
-    *parts.paragraphs = paragraphs;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn text_set_link(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "text.set_link";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let start: Option<usize> = opt(C, p, "start")?;
-    let end: Option<usize> = opt(C, p, "end")?;
-    let link: Option<Link> = opt(C, p, "link")?;
-
-    if let Some(link) = &link {
-        match link {
-            Link::Url { url } if !is_valid_link_url(url) => {
-                return Err(bad(
-                    C,
-                    format!("link {url:?} must start with http://, https:// or mailto:"),
-                ));
-            }
-            Link::Slide { slide } if s.course.play_slide(slide).is_none() => {
-                return Err(bad(
-                    C,
-                    format!("link target slide {slide:?} does not exist"),
-                ));
-            }
-            _ => {}
-        }
-    }
-
-    let sl = slide_mut(s, &sid)?;
-    let obj = find_object_mut(sl, &oid)?;
-    let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
-        return Err(bad(C, format!("object {oid:?} is not a text object")));
-    };
-    let total_chars = parts.text.chars().count();
-    let start = start.unwrap_or(0).min(total_chars);
-    let end = end.unwrap_or(total_chars).min(total_chars);
-    let (start, end) = if start == 0 && end == total_chars {
-        (0, 0)
-    } else {
-        (start.min(end), start.max(end))
-    };
-    let new_runs = apply_link_to_range(parts.runs, parts.text, (start, end), link);
-    if new_runs.len() > 1000 {
-        return Err(bad(C, "exceeded 1000 text runs"));
-    }
-    *parts.runs = new_runs;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn object_set_autofit(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "object.set_autofit";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let autofit: Autofit = req(C, p, "autofit")?;
-
-    let sl = slide_mut(s, &sid)?;
-    let obj = find_object_mut(sl, &oid)?;
-    let Some(parts) = text_parts_at(&mut obj.kind, p, C)? else {
-        return Err(bad(C, format!("object {oid:?} is not a text object")));
-    };
-    let Some(current) = parts.autofit else {
-        return Err(bad(C, "a table cell has no autofit setting"));
-    };
-    *current = autofit;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-type TableRefs<'a> = (
-    &'a mut Vec<f32>,
-    &'a mut Vec<TableRow>,
-    &'a mut TableBorders,
-    &'a mut bool,
-);
-
-fn table_mut<'a>(s: &'a mut Session, sid: &str, oid: &str, cmd: &str) -> Result<TableRefs<'a>> {
-    let slide = slide_mut(s, sid)?;
-    let object = find_object_mut(slide, oid)?;
-    match &mut object.kind {
-        ObjectKind::Table {
-            columns,
-            rows,
-            borders,
-            header_row,
-        } => Ok((columns, rows, borders, header_row)),
-        _ => Err(bad(cmd, format!("object {oid:?} is not a table"))),
-    }
-}
-
-fn normalize_row_heights(rows: &mut [TableRow]) {
-    let mut heights: Vec<f32> = rows.iter().map(|row| row.height).collect();
-    normalize_table_fractions(&mut heights);
-    for (row, height) in rows.iter_mut().zip(heights) {
-        row.height = height;
-    }
-}
-
-fn table_set_cell(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.set_cell";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let row: usize = req(C, p, "row")?;
-    let column: usize = req(C, p, "column")?;
-    let new_text: Option<String> = opt(C, p, "text")?;
-    let runs: Option<Vec<TextRun>> = opt(C, p, "runs")?;
-    let paragraphs: Option<Vec<Paragraph>> = opt(C, p, "paragraphs")?;
-    let valign: Option<VAlign> = opt(C, p, "valign")?;
-
-    let (_, rows, _, _) = table_mut(s, &sid, &oid, C)?;
-    let cell = rows
-        .get_mut(row)
-        .and_then(|line| line.cells.get_mut(column))
-        .ok_or_else(|| EngineError::NotFound(format!("no table cell {row},{column}")))?;
-
-    let text_was_set = new_text.is_some();
-    if let Some(value) = new_text {
-        let value = text(C, value, "text")?;
-        let old_plain = if cell.runs.is_empty() {
-            cell.text.clone()
-        } else {
-            cell.runs.iter().map(|run| run.text.as_str()).collect()
-        };
-        if runs.is_none() {
-            cell.runs = apply_text_edit(&cell.runs, &old_plain, &value);
-            cell.paragraphs = align_paragraphs(&old_plain, &cell.paragraphs, &value);
-        }
-        cell.text = value;
-    }
-    if let Some(runs) = runs {
-        if runs.len() > 1000 {
-            return Err(bad(C, "exceeded 1000 text runs"));
-        }
-        let joined: String = runs.iter().map(|run| run.text.as_str()).collect();
-        if !text_was_set {
-            cell.text = joined;
-        }
-        cell.runs = runs;
-    }
-    if let Some(paragraphs) = paragraphs {
-        cell.paragraphs = paragraphs;
-    }
-    if let Some(valign) = valign {
-        cell.valign = valign;
-    }
-    if let Some(value) = obj(C, p)?.get("fill") {
-        cell.fill = match value {
-            Json::Null => None,
-            _ => {
-                let fill: Color = serde_json::from_value(value.clone())
-                    .map_err(|e| bad(C, format!("`fill`: {e}")))?;
-                validate_color(C, &fill)?;
-                Some(fill)
-            }
-        };
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn table_insert_row(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.insert_row";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let index: Option<usize> = opt(C, p, "index")?;
-    let (columns, rows, _, _) = table_mut(s, &sid, &oid, C)?;
-    if rows.len() >= coursecraft_course::TABLE_MAX_AXIS {
-        return Err(bad(C, "a table may have at most 50 rows"));
-    }
-    let at = index.unwrap_or(rows.len());
-    if at > rows.len() {
-        return Err(bad(C, "row index is past the end of the table"));
-    }
-    // Extend spans that cross the insertion line before adding the row.
-    for (row_index, row) in rows.iter_mut().enumerate() {
-        for cell in &mut row.cells {
-            let span = usize::from(cell.row_span.max(1));
-            if row_index < at && at < row_index.saturating_add(span) {
-                cell.row_span = u8::try_from(span.saturating_add(1)).unwrap_or(u8::MAX);
-            }
-        }
-    }
-    let mut heights: Vec<f32> = rows.iter().map(|row| row.height).collect();
-    normalize_table_fractions(&mut heights);
-    let old_count = heights.len() as f32;
-    let new_height = 1.0 / (old_count + 1.0);
-    for (row, height) in rows.iter_mut().zip(heights) {
-        row.height = height * old_count / (old_count + 1.0);
-    }
-    let cells = vec![TableCell::default(); columns.len()];
-    rows.insert(
-        at.min(rows.len()),
-        TableRow {
-            height: new_height,
-            cells,
-        },
-    );
-    normalize_row_heights(rows);
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "index": at }))
-}
-
-fn table_delete_row(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.delete_row";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let index: usize = req(C, p, "index")?;
-    let (_, rows, _, _) = table_mut(s, &sid, &oid, C)?;
-    if rows.len() <= 1 {
-        return Err(bad(C, "a table needs at least one row"));
-    }
-    if index >= rows.len() {
-        return Err(EngineError::NotFound(format!("no table row {index}")));
-    }
-    for (row_index, row) in rows.iter_mut().enumerate() {
-        for cell in &mut row.cells {
-            let span = usize::from(cell.row_span.max(1));
-            if row_index < index && index < row_index.saturating_add(span) {
-                cell.row_span = u8::try_from(span.saturating_sub(1)).unwrap_or(1).max(1);
-            }
-        }
-    }
-    rows.remove(index);
-    let max_span = rows.len().max(1);
-    for row in rows.iter_mut() {
-        for cell in &mut row.cells {
-            cell.row_span = cell
-                .row_span
-                .min(u8::try_from(max_span).unwrap_or(u8::MAX))
-                .max(1);
-        }
-    }
-    normalize_row_heights(rows);
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn table_insert_column(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.insert_column";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let index: Option<usize> = opt(C, p, "index")?;
-    let (columns, rows, _, _) = table_mut(s, &sid, &oid, C)?;
-    if columns.len() >= coursecraft_course::TABLE_MAX_AXIS {
-        return Err(bad(C, "a table may have at most 50 columns"));
-    }
-    let at = index.unwrap_or(columns.len());
-    if at > columns.len() {
-        return Err(bad(C, "column index is past the end of the table"));
-    }
-    for row in rows.iter_mut() {
-        for (column, cell) in row.cells.iter_mut().enumerate() {
-            let span = usize::from(cell.col_span.max(1));
-            if column < at && at < column.saturating_add(span) {
-                cell.col_span = u8::try_from(span.saturating_add(1)).unwrap_or(u8::MAX);
-            }
-        }
-        row.cells
-            .insert(at.min(row.cells.len()), TableCell::default());
-    }
-    let mut widths = std::mem::take(columns);
-    normalize_table_fractions(&mut widths);
-    let old_count = widths.len() as f32;
-    let new_width = 1.0 / (old_count + 1.0);
-    for width in &mut widths {
-        *width *= old_count / (old_count + 1.0);
-    }
-    let at = at.min(widths.len());
-    widths.insert(at, new_width);
-    normalize_table_fractions(&mut widths);
-    *columns = widths;
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "index": at }))
-}
-
-fn table_delete_column(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.delete_column";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let index: usize = req(C, p, "index")?;
-    let (columns, rows, _, _) = table_mut(s, &sid, &oid, C)?;
-    if columns.len() <= 1 {
-        return Err(bad(C, "a table needs at least one column"));
-    }
-    if index >= columns.len() {
-        return Err(EngineError::NotFound(format!("no table column {index}")));
-    }
-    for row in rows.iter_mut() {
-        for (column, cell) in row.cells.iter_mut().enumerate() {
-            let span = usize::from(cell.col_span.max(1));
-            if column < index && index < column.saturating_add(span) {
-                cell.col_span = u8::try_from(span.saturating_sub(1)).unwrap_or(1).max(1);
-            }
-        }
-        if index < row.cells.len() {
-            row.cells.remove(index);
-        }
-        let max_span = row.cells.len().max(1);
-        for cell in &mut row.cells {
-            cell.col_span = cell
-                .col_span
-                .min(u8::try_from(max_span).unwrap_or(u8::MAX))
-                .max(1);
-        }
-    }
-    columns.remove(index);
-    normalize_table_fractions(columns);
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.resize";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let new_columns: Option<Vec<f32>> = opt(C, p, "columns")?;
-    let new_rows: Option<Vec<f32>> = opt(C, p, "rows")?;
-    let (columns, rows, _, _) = table_mut(s, &sid, &oid, C)?;
-    if let Some(mut values) = new_columns {
-        if values.len() != columns.len() || values.is_empty() {
-            return Err(bad(C, "columns must have one fraction per column"));
-        }
-        if !values.iter().all(|value| value.is_finite() && *value > 0.0) {
-            return Err(bad(C, "column fractions must be finite and above 0"));
-        }
-        normalize_table_fractions(&mut values);
-        *columns = values;
-    }
-    if let Some(mut values) = new_rows {
-        if values.len() != rows.len() || values.is_empty() {
-            return Err(bad(C, "rows must have one fraction per row"));
-        }
-        if !values.iter().all(|value| value.is_finite() && *value > 0.0) {
-            return Err(bad(C, "row fractions must be finite and above 0"));
-        }
-        normalize_table_fractions(&mut values);
-        for (row, height) in rows.iter_mut().zip(values) {
-            row.height = height;
-        }
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn table_merge(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.merge";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let row: usize = req(C, p, "row")?;
-    let column: usize = req(C, p, "column")?;
-    let row_count: usize = req(C, p, "rows")?;
-    let column_count: usize = req(C, p, "columns")?;
-    let (columns, rows, _, _) = table_mut(s, &sid, &oid, C)?;
-    let row_end = row.saturating_add(row_count);
-    let column_end = column.saturating_add(column_count);
-    if row_count == 0 || column_count == 0 || row_end > rows.len() || column_end > columns.len() {
-        return Err(bad(C, "the merged range must lie inside the table"));
-    }
-    let owners = table_cell_owners(rows, columns.len());
-    if owners
-        .get(row)
-        .and_then(|line| line.get(column))
-        .copied()
-        .flatten()
-        != Some((row, column))
-    {
-        return Err(bad(C, "the merge anchor is covered by another merge"));
-    }
-    for covered_row in row..row_end {
-        for covered_column in column..column_end {
-            let Some(cell) = rows
-                .get_mut(covered_row)
-                .and_then(|line| line.cells.get_mut(covered_column))
-            else {
-                continue;
-            };
-            if (covered_row, covered_column) != (row, column) {
-                *cell = TableCell::default();
-            }
-        }
-    }
-    let Some(anchor) = rows
-        .get_mut(row)
-        .and_then(|line| line.cells.get_mut(column))
-    else {
-        return Err(bad(C, "the merge anchor is missing"));
-    };
-    anchor.row_span = u8::try_from(row_count).unwrap_or(u8::MAX).max(1);
-    anchor.col_span = u8::try_from(column_count).unwrap_or(u8::MAX).max(1);
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn table_split(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.split";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let row: usize = req(C, p, "row")?;
-    let column: usize = req(C, p, "column")?;
-    let (columns, rows, _, _) = table_mut(s, &sid, &oid, C)?;
-    let owners = table_cell_owners(rows, columns.len());
-    let Some(owner) = owners
-        .get(row)
-        .and_then(|line| line.get(column))
-        .copied()
-        .flatten()
-    else {
-        return Err(EngineError::NotFound(format!(
-            "no table cell {row},{column}"
-        )));
-    };
-    let Some(cell) = rows
-        .get_mut(owner.0)
-        .and_then(|line| line.cells.get_mut(owner.1))
-    else {
-        return Err(EngineError::NotFound(format!(
-            "no table cell {row},{column}"
-        )));
-    };
-    cell.row_span = 1;
-    cell.col_span = 1;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn table_set_borders(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.set_borders";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let has_outer = obj(C, p)?.contains_key("outer");
-    let has_inner = obj(C, p)?.contains_key("inner");
-    let outer: Option<coursecraft_course::Outline> =
-        if has_outer { opt(C, p, "outer")? } else { None };
-    let inner: Option<coursecraft_course::Outline> =
-        if has_inner { opt(C, p, "inner")? } else { None };
-    let (_, _, borders, _) = table_mut(s, &sid, &oid, C)?;
-    if has_outer {
-        borders.outer = outer;
-    }
-    if has_inner {
-        borders.inner = inner;
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn table_set_header_row(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "table.set_header_row";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let oid: String = req(C, p, "object")?;
-    let header_row: bool = req(C, p, "header_row")?;
-    let (_, _, _, current) = table_mut(s, &sid, &oid, C)?;
-    *current = header_row;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn triggers_mut<'a>(slide: &'a mut Slide, layer: Option<&str>) -> Result<&'a mut Vec<Trigger>> {
-    match layer {
-        Some(l) => Ok(&mut layer_mut(slide, l)?.triggers),
-        None => Ok(&mut slide.triggers),
-    }
-}
-
-fn trigger_add(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "trigger.add";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let layer: Option<String> = opt(C, p, "layer")?;
-    let trigger: Trigger = req(C, p, "trigger")?;
-    let index: Option<usize> = opt(C, p, "index")?;
-    let list = triggers_mut(slide_mut(s, &sid)?, layer.as_deref())?;
-    let at = index.unwrap_or(list.len()).min(list.len());
-    list.insert(at, trigger);
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "index": at }))
-}
-
-fn trigger_update(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "trigger.update";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let layer: Option<String> = opt(C, p, "layer")?;
-    let index: usize = req(C, p, "index")?;
-    let trigger: Trigger = req(C, p, "trigger")?;
-
-    let list = triggers_mut(slide_mut(s, &sid)?, layer.as_deref())?;
-    if index >= list.len() {
-        return Err(EngineError::NotFound(format!(
-            "no trigger at index {index}"
-        )));
-    }
-    let target = list
-        .get_mut(index)
-        .ok_or_else(|| EngineError::NotFound(format!("no trigger at index {index}")))?;
-    *target = trigger;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn trigger_move(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "trigger.move";
-    let was_valid = s.is_playable();
-    let sid: String = req(C, p, "slide")?;
-    let layer: Option<String> = opt(C, p, "layer")?;
-    let from: usize = req(C, p, "from")?;
-    let to: usize = req(C, p, "to")?;
-
-    let list = triggers_mut(slide_mut(s, &sid)?, layer.as_deref())?;
-    if from >= list.len() {
-        return Err(EngineError::NotFound(format!("no trigger at index {from}")));
-    }
-    let t = list.remove(from);
-    let at = to.min(list.len());
-    list.insert(at, t);
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn trigger_delete(s: &mut Session, p: &Json) -> Result<Json> {
-    let sid: String = req("trigger.delete", p, "slide")?;
-    let layer: Option<String> = opt("trigger.delete", p, "layer")?;
-    let index: usize = req("trigger.delete", p, "index")?;
-    let list = triggers_mut(slide_mut(s, &sid)?, layer.as_deref())?;
-    if index >= list.len() {
-        return Err(EngineError::NotFound(format!(
-            "no trigger at index {index}"
-        )));
-    }
-    list.remove(index);
-    Ok(Json::Null)
-}
-
-// ---------------------------------------------------------------- resources and glossary
-
-fn resource_index(s: &Session, cmd: &str, id: &str) -> Result<usize> {
-    let _ = cmd;
-    s.course
-        .resources
-        .iter()
-        .position(|r| r.id == id)
-        .ok_or_else(|| EngineError::NotFound(format!("resource {id:?} does not exist")))
-}
-
-fn glossary_index(s: &Session, id: &str) -> Result<usize> {
-    s.course
-        .glossary
-        .iter()
-        .position(|g| g.id == id)
-        .ok_or_else(|| EngineError::NotFound(format!("glossary entry {id:?} does not exist")))
-}
-
-fn resource_add(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "resource.add";
-    let was_valid = s.is_playable();
-    let title = text(C, req(C, p, "title")?, "title")?;
-    let target: coursecraft_course::ResourceTarget = req(C, p, "target")?;
-    let id = fresh_id("resource", s.course.resources.iter().map(|r| r.id.as_str()));
-    s.course.resources.push(coursecraft_course::Resource {
-        id: id.clone(),
-        title,
-        target,
-    });
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "id": id }))
-}
-
-fn resource_update(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "resource.update";
-    let was_valid = s.is_playable();
-    let id: String = req(C, p, "id")?;
-    let title: Option<String> = opt(C, p, "title")?;
-    let target: Option<coursecraft_course::ResourceTarget> = opt(C, p, "target")?;
-    let index = resource_index(s, C, &id)?;
-    if let Some(resource) = s.course.resources.get_mut(index) {
-        if let Some(title) = title {
-            resource.title = text(C, title, "title")?;
-        }
-        if let Some(target) = target {
-            resource.target = target;
-        }
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn resource_remove(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "resource.remove";
-    let id: String = req(C, p, "id")?;
-    let index = resource_index(s, C, &id)?;
-    s.course.resources.remove(index);
-    Ok(Json::Null)
-}
-
-fn resource_move(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "resource.move";
-    let id: String = req(C, p, "id")?;
-    let to: usize = req(C, p, "to")?;
-    let index = resource_index(s, C, &id)?;
-    if to >= s.course.resources.len() {
-        return Err(bad(C, "`to` is past the end of the list"));
-    }
-    move_to(&mut s.course.resources, index, to);
-    Ok(Json::Null)
-}
-
-fn glossary_add(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "glossary.add";
-    let was_valid = s.is_playable();
-    let term = text(C, req(C, p, "term")?, "term")?;
-    let definition: Option<String> = opt(C, p, "definition")?;
-    let definition = text(C, definition.unwrap_or_default(), "definition")?;
-    let id = fresh_id("term", s.course.glossary.iter().map(|g| g.id.as_str()));
-    s.course.glossary.push(coursecraft_course::GlossaryEntry {
-        id: id.clone(),
-        term,
-        definition,
-    });
-    keep_valid(s, was_valid)?;
-    Ok(json!({ "id": id }))
-}
-
-fn glossary_update(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "glossary.update";
-    let was_valid = s.is_playable();
-    let id: String = req(C, p, "id")?;
-    let term: Option<String> = opt(C, p, "term")?;
-    let definition: Option<String> = opt(C, p, "definition")?;
-    let index = glossary_index(s, &id)?;
-    if let Some(entry) = s.course.glossary.get_mut(index) {
-        if let Some(term) = term {
-            entry.term = text(C, term, "term")?;
-        }
-        if let Some(definition) = definition {
-            entry.definition = text(C, definition, "definition")?;
-        }
-    }
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn glossary_remove(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "glossary.remove";
-    let id: String = req(C, p, "id")?;
-    let index = glossary_index(s, &id)?;
-    s.course.glossary.remove(index);
-    Ok(Json::Null)
-}
-
-fn glossary_move(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "glossary.move";
-    let id: String = req(C, p, "id")?;
-    let to: usize = req(C, p, "to")?;
-    let index = glossary_index(s, &id)?;
-    if to >= s.course.glossary.len() {
-        return Err(bad(C, "`to` is past the end of the list"));
-    }
-    move_to(&mut s.course.glossary, index, to);
-    Ok(Json::Null)
-}
-
-fn glossary_cmp(
-    a: &coursecraft_course::GlossaryEntry,
-    b: &coursecraft_course::GlossaryEntry,
-) -> std::cmp::Ordering {
-    a.term
-        .to_lowercase()
-        .cmp(&b.term.to_lowercase())
-        .then_with(|| a.term.cmp(&b.term))
-        .then_with(|| a.id.cmp(&b.id))
-}
-
-fn glossary_sort(s: &mut Session, _p: &Json) -> Result<Json> {
-    let already_sorted = s
-        .course
-        .glossary
-        .windows(2)
-        .all(|w| glossary_cmp(&w[0], &w[1]) != std::cmp::Ordering::Greater);
-    if already_sorted {
-        s.skip_undo = true;
-        return Ok(Json::Null);
-    }
-    s.course.glossary.sort_by(glossary_cmp);
-    Ok(Json::Null)
-}
-
-fn variable_add(s: &mut Session, p: &Json) -> Result<Json> {
-    let was_valid = s.is_playable();
-    let name: String = req("variable.add", p, "name")?;
-    let value: Value = req("variable.add", p, "value")?;
-    if s.course.variable(&name).is_some() {
-        return Err(EngineError::Invalid(format!(
-            "variable {name:?} already exists"
-        )));
-    }
-    s.course.variables.push(VariableDef { name, value });
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn variable_set_value(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "variable.set_value";
-    let was_valid = s.is_playable();
-    let name: String = req(C, p, "name")?;
-    let value: Value = req(C, p, "value")?;
-
-    if let Value::Number(n) = &value
-        && !n.is_finite()
-    {
-        return Err(bad(C, "variable value must be finite"));
-    }
-
-    let var = s
-        .course
-        .variables
-        .iter_mut()
-        .find(|v| v.name == name)
-        .ok_or_else(|| EngineError::NotFound(format!("variable {name:?} does not exist")))?;
-
-    if var.value.kind() != value.kind() {
-        return Err(EngineError::Invalid(format!(
-            "cannot change variable type from {:?} to {:?}",
-            var.value.kind(),
-            value.kind()
-        )));
-    }
-    var.value = value;
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
-}
-
-fn condition_references_var(c: &Condition, var_name: &str) -> bool {
-    match c {
-        Condition::All(list) | Condition::Any(list) => {
-            list.iter().any(|c| condition_references_var(c, var_name))
-        }
-        Condition::Not(inner) => condition_references_var(inner, var_name),
-        Condition::Compare {
-            variable, value, ..
-        } => variable == var_name || value.as_variable() == Some(var_name),
-        Condition::ObjectState { .. } => false,
-    }
-}
-
-fn trigger_references_var(t: &Trigger, var_name: &str) -> bool {
-    let in_event = match &t.when {
-        Event::VariableChanges { variable } => variable == var_name,
-        _ => false,
-    };
-    let in_action = match &t.action {
-        Action::SetVariable {
-            variable, value, ..
-        } => variable == var_name || value.as_ref().and_then(|v| v.as_variable()) == Some(var_name),
-        _ => false,
-    };
-    let in_condition = t
-        .condition
-        .as_ref()
-        .is_some_and(|c| condition_references_var(c, var_name));
-    in_event || in_action || in_condition
-}
-
-fn variable_delete(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "variable.delete";
-    let was_valid = s.is_playable();
-    let name: String = req(C, p, "name")?;
-
-    let pos = s
-        .course
-        .variables
-        .iter()
-        .position(|v| v.name == name)
-        .ok_or_else(|| EngineError::NotFound(format!("variable {name:?} does not exist")))?;
-
-    for sc in &s.course.scenes {
-        for sl in &sc.slides {
-            for (i, t) in sl.triggers.iter().enumerate() {
-                if trigger_references_var(t, &name) {
-                    return Err(EngineError::Invalid(format!(
-                        "variable {name:?} is referenced by trigger {i} on slide {:?}",
-                        sl.id
-                    )));
-                }
-            }
-            for l in &sl.layers {
-                for (i, t) in l.triggers.iter().enumerate() {
-                    if trigger_references_var(t, &name) {
-                        return Err(EngineError::Invalid(format!(
-                            "variable {name:?} is referenced by trigger {i} on layer {:?} of slide {:?}",
-                            l.id, sl.id
-                        )));
-                    }
-                }
-            }
-        }
-    }
-
-    s.course.variables.remove(pos);
-    keep_valid(s, was_valid)?;
-    Ok(Json::Null)
 }
 
 /// The default question `question.insert` starts from, matching the editor's old
