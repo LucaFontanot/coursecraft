@@ -249,6 +249,10 @@ pub type Verify<'a> = dyn Fn(&Path) -> Result<(), String> + 'a;
 pub struct Hooks<'a> {
     /// Runs on the flushed temp file just before verification.
     pub after_write: &'a dyn Fn(&Path) -> std::io::Result<()>,
+    /// Checked after verification and immediately before the atomic rename.
+    /// Returning `false` aborts the commit, removes the temp file, and leaves
+    /// the target untouched.
+    pub should_commit: &'a dyn Fn() -> bool,
     /// Moves the temp file over the target.
     pub rename: &'a dyn Fn(&Path, &Path) -> std::io::Result<()>,
     /// Pause between retries of a locked file.
@@ -259,6 +263,7 @@ impl Default for Hooks<'_> {
     fn default() -> Self {
         Self {
             after_write: &|_| Ok(()),
+            should_commit: &|| true,
             rename: &|from, to| std::fs::rename(from, to),
             retry_delay: std::time::Duration::from_millis(400),
         }
@@ -373,6 +378,10 @@ fn write_and_swap(
                 ),
             )
         })?;
+    }
+    if !(hooks.should_commit)() {
+        let _ = std::fs::remove_file(tmp);
+        return Ok(());
     }
     with_retries(hooks.retry_delay, || (hooks.rename)(tmp, path))?;
     sync_parent_dir(path);
