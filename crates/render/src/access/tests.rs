@@ -1598,3 +1598,266 @@ fn a_timer_is_announced_at_each_minute_and_in_the_last_ten_seconds_only() {
         ]
     );
 }
+
+#[test]
+fn gb_09_interactive_group_single_button_access_node() {
+    // Case 1: Interactive group of rect + decorative icon + "BACK" text box
+    // (no group.name / group.description -> derives "BACK", skips decorative icon,
+    // emits one Button node with union bounds & checked toggle, zero member content nodes).
+    let raw = json!({
+        "schema_version": 1,
+        "id": "gb-09",
+        "title": "GB-09 Interactive Group Access",
+        "variables": [{ "name": "dest", "value": "Menu" }],
+        "scenes": [{
+            "id": "sc",
+            "title": "Scene",
+            "slides": [{
+                "id": "s1",
+                "title": "Group Access",
+                "groups": [{
+                    "id": "g-back",
+                    "interactive": true
+                }],
+                "objects": [
+                    {
+                        "id": "outside",
+                        "kind": { "type": "text", "text": "Slide body" },
+                        "frame": { "x": 10.0, "y": 10.0, "w": 200.0, "h": 30.0 }
+                    },
+                    {
+                        "id": "m-bg",
+                        "name": "Rectangle 1",
+                        "group": "g-back",
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#224488" },
+                        "frame": { "x": 40.0, "y": 80.0, "w": 160.0, "h": 60.0 },
+                        "states": [
+                            {
+                                "name": "hover",
+                                "fill": "#3366AA",
+                                "extras": [{
+                                    "id": "extra-glow",
+                                    "frame": { "x": -100.0, "y": -100.0, "w": 500.0, "h": 500.0 },
+                                    "kind": { "type": "shape", "shape": "rectangle", "fill": "#FF0000" }
+                                }]
+                            },
+                            { "name": "selected", "fill": "#118844" }
+                        ]
+                    },
+                    {
+                        "id": "m-icon",
+                        "name": "Back Icon",
+                        "group": "g-back",
+                        "decorative": true,
+                        "kind": { "type": "image", "src": "arrow.png", "alt": "Should not appear" },
+                        "frame": { "x": 50.0, "y": 95.0, "w": 24.0, "h": 24.0 }
+                    },
+                    {
+                        "id": "m-label",
+                        "name": "Back Text",
+                        "group": "g-back",
+                        "kind": { "type": "text", "text": "BACK" },
+                        "frame": { "x": 80.0, "y": 95.0, "w": 140.0, "h": 30.0 }
+                    }
+                ]
+            }]
+        }]
+    })
+    .to_string();
+    let course = Course::from_json(&raw).expect("valid gb-09 course");
+    let mut p = player(&course);
+    let mut frame = PlayerFrame::new();
+    let drawer = frame.drawer_open();
+    frame.focus_mut().rebuild(&p, false, false, drawer);
+    // Hover items include the oversized state extra on m-bg to confirm union rect ignores extras.
+    let items = crate::compose::compose_with_pointer(&p, Some("g-back"), None);
+    let tree = build_access_tree(&p, &frame, &items, false, false);
+
+    assert_eq!(
+        targets(&tree),
+        frame.focus().list().to_vec(),
+        "interactive order must match focus manager"
+    );
+    let group_nodes: Vec<&AccessNode> = tree
+        .nodes
+        .iter()
+        .filter(|n| n.target == Some(FocusTarget::Object("g-back".into())))
+        .collect();
+    assert_eq!(group_nodes.len(), 1, "exactly one AccessNode for g-back");
+    let node = group_nodes[0];
+    assert_eq!(node.key, "group:s1:g-back");
+    assert_eq!(node.role, AccessRole::Button);
+    assert_eq!(node.label, "BACK");
+    assert_eq!(node.checked, Some(false));
+    assert_eq!(
+        node.rect,
+        egui::Rect::from_min_max(egui::pos2(40.0, 80.0), egui::pos2(220.0, 140.0))
+    );
+
+    // Zero standalone content nodes for any member of g-back.
+    for member_id in ["m-bg", "m-icon", "m-label"] {
+        assert!(
+            !tree.nodes.iter().any(|n| n.key.contains(member_id)),
+            "member {member_id} must not emit a standalone AccessNode: {:?}",
+            tree.nodes
+        );
+    }
+    assert!(
+        !tree
+            .nodes
+            .iter()
+            .any(|n| n.role == AccessRole::Text && n.label == "BACK"),
+        "member text must not be duplicated outside button"
+    );
+    assert!(
+        !tree
+            .nodes
+            .iter()
+            .any(|n| n.label.contains("Should not appear")),
+        "decorative member icon must not be read"
+    );
+    assert!(
+        tree.nodes
+            .iter()
+            .any(|n| n.role == AccessRole::Text && n.label == "Slide body"),
+        "unrelated content outside group is still read"
+    );
+
+    // Clicking g-back toggles checked from Some(false) to Some(true) and back.
+    p.handle(&Input::Click {
+        object: "g-back".into(),
+    });
+    let tree_selected = tree_for(&p, false, false);
+    let selected_node = find(&tree_selected, |n| {
+        n.target == Some(FocusTarget::Object("g-back".into()))
+    })
+    .expect("group node after click");
+    assert_eq!(selected_node.checked, Some(true));
+
+    p.handle(&Input::Click {
+        object: "g-back".into(),
+    });
+    let tree_unselected = tree_for(&p, false, false);
+    let unselected_node = find(&tree_unselected, |n| {
+        n.target == Some(FocusTarget::Object("g-back".into()))
+    })
+    .expect("group node after second click");
+    assert_eq!(unselected_node.checked, Some(false));
+
+    // Case 2: Explicit group.name with %var% substitution (and no selected state -> checked None).
+    let mut name_course = course.clone();
+    name_course.scenes[0].slides[0].groups[0].name = "Back to %dest%".to_owned();
+    name_course.scenes[0].slides[0].objects[1].states.clear();
+    let p_name = player(&name_course);
+    let tree_name = tree_for(&p_name, false, false);
+    let node_name = find(&tree_name, |n| {
+        n.target == Some(FocusTarget::Object("g-back".into()))
+    })
+    .expect("group node with name");
+    assert_eq!(node_name.label, "Back to Menu");
+    assert_eq!(node_name.checked, None);
+
+    // Case 3: Explicit group.description with %var% overrides group.name.
+    let mut desc_course = name_course.clone();
+    desc_course.scenes[0].slides[0].groups[0].description =
+        Some("Return directly to %dest%".to_owned());
+    let p_desc = player(&desc_course);
+    let tree_desc = tree_for(&p_desc, false, false);
+    let node_desc = find(&tree_desc, |n| {
+        n.target == Some(FocusTarget::Object("g-back".into()))
+    })
+    .expect("group node with description");
+    assert_eq!(node_desc.label, "Return directly to Menu");
+
+    // Case 4: Fallback to group.id when description, name, and member text/alt are all empty,
+    // plus explicit focus_order and a visible-layer interactive group.
+    let raw_fallback = json!({
+        "schema_version": 1,
+        "id": "gb-09-fallback",
+        "title": "GB-09 Fallback & Layer",
+        "scenes": [{
+            "id": "sc",
+            "title": "Scene",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide",
+                "groups": [{
+                    "id": "g-empty",
+                    "interactive": true,
+                    "focus_order": 1
+                }],
+                "objects": [
+                    {
+                        "id": "b-after",
+                        "kind": { "type": "button", "label": "After" },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 80.0, "h": 30.0 }
+                    },
+                    {
+                        "id": "m-plain",
+                        "group": "g-empty",
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#224488" },
+                        "frame": { "x": 100.0, "y": 50.0, "w": 60.0, "h": 40.0 }
+                    }
+                ],
+                "layers": [{
+                    "id": "l1",
+                    "name": "Layer 1",
+                    "groups": [{
+                        "id": "g-layer",
+                        "interactive": true
+                    }],
+                    "objects": [
+                        {
+                            "id": "lm-bg",
+                            "group": "g-layer",
+                            "kind": { "type": "shape", "shape": "rectangle", "fill": "#333333" },
+                            "frame": { "x": 200.0, "y": 50.0, "w": 100.0, "h": 40.0 }
+                        },
+                        {
+                            "id": "lm-txt",
+                            "group": "g-layer",
+                            "kind": { "type": "text", "text": "LAYER GO" },
+                            "frame": { "x": 210.0, "y": 55.0, "w": 80.0, "h": 30.0 }
+                        }
+                    ]
+                }],
+                "triggers": [{
+                    "when": { "event": "timeline_starts" },
+                    "action": { "action": "show_layer", "layer": "l1" }
+                }]
+            }]
+        }]
+    })
+    .to_string();
+    let fallback_course = Course::from_json(&raw_fallback).expect("valid fallback course");
+    let p_fallback = player(&fallback_course);
+    let mut frame_fb = PlayerFrame::new();
+    frame_fb
+        .focus_mut()
+        .rebuild(&p_fallback, false, false, false);
+    let items_fb = compose(&p_fallback);
+    let tree_fb = build_access_tree(&p_fallback, &frame_fb, &items_fb, false, false);
+
+    assert_eq!(targets(&tree_fb), frame_fb.focus().list().to_vec());
+    let empty_node = find(&tree_fb, |n| {
+        n.target == Some(FocusTarget::Object("g-empty".into()))
+    })
+    .expect("g-empty node");
+    assert_eq!(empty_node.label, "g-empty");
+    assert_eq!(empty_node.role, AccessRole::Button);
+
+    let layer_node = find(&tree_fb, |n| {
+        n.target == Some(FocusTarget::Object("g-layer".into()))
+    })
+    .expect("g-layer node");
+    assert_eq!(layer_node.key, "group:s1:g-layer");
+    assert_eq!(layer_node.label, "LAYER GO");
+    assert_eq!(layer_node.role, AccessRole::Button);
+    assert!(
+        !tree_fb
+            .nodes
+            .iter()
+            .any(|n| n.key.contains("lm-bg") || n.key.contains("lm-txt")),
+        "layer interactive group members must not emit standalone content nodes"
+    );
+}
