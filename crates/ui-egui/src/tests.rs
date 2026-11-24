@@ -2805,6 +2805,7 @@ fn describe_covers_all_action_and_event_variants() {
             },
         ],
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         question: None,
         draw: None,
@@ -3370,6 +3371,7 @@ fn adding_multiple_choice_question_with_choices_commits_question_set() {
         allow_seek: coursecraft_course::SeekMode::Auto,
         revisit: coursecraft_course::RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     });
     intro.layers.push(Layer {
         id: "incorrect".to_owned(),
@@ -3385,6 +3387,7 @@ fn adding_multiple_choice_question_with_choices_commits_question_set() {
         allow_seek: coursecraft_course::SeekMode::Auto,
         revisit: coursecraft_course::RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     });
 
     let mut harness = TestHarness::new(course);

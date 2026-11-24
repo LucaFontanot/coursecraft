@@ -50,6 +50,7 @@ pub(super) fn layer_add(s: &mut Session, p: &Json) -> Result<Json> {
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     });
     keep_valid(s, was_valid)?;
     Ok(json!({ "id": id }))

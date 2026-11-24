@@ -2273,6 +2273,7 @@ fn a_master_must_not_have_play_time_behaviour_or_media() {
         allow_seek: crate::SeekMode::Auto,
         revisit: crate::RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     });
     assert!(
         errors(&c)
@@ -6786,4 +6787,167 @@ fn pt_01_point_text_true_roundtrips() {
         }
     ));
     assert_eq!(course, reparsed);
+}
+
+#[test]
+fn gb_01_courses_without_groups_serialize_byte_identically() {
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    fn check_slide(slide: &crate::Slide, name: &str) {
+        assert!(
+            slide.groups.is_empty(),
+            "{name}: pre-M37 slide '{}' must load with empty groups",
+            slide.id
+        );
+        for layer in &slide.layers {
+            assert!(
+                layer.groups.is_empty(),
+                "{name}: pre-M37 layer '{}/{}' must load with empty groups",
+                slide.id,
+                layer.id
+            );
+        }
+    }
+
+    const SHOWCASE: &str = include_str!("../../../examples/showcase/course.json");
+    let expected: [(&str, &str, usize, u64); 2] = [
+        ("hello-course", HELLO, 19_660, 0x59fa_a48f_cd1e_912e),
+        ("showcase", SHOWCASE, 92_522, 0x6f5c_2ed0_e4bd_8a69),
+    ];
+
+    for (name, raw, expected_len, expected_hash) in expected {
+        let course = Course::from_json(raw).expect("parse example course");
+        for scene in &course.scenes {
+            for slide in &scene.slides {
+                check_slide(slide, name);
+            }
+        }
+        for slide in &course.masters {
+            check_slide(slide, name);
+        }
+        for slide in &course.templates {
+            check_slide(slide, name);
+        }
+        for bank in &course.banks {
+            for slide in &bank.slides {
+                check_slide(slide, name);
+            }
+        }
+
+        let serialized = course.to_json().expect("serialize example course");
+        assert!(
+            !serialized.contains("\"groups\""),
+            "{name}: pre-M37 course must not emit groups key"
+        );
+        let bytes = serialized.as_bytes();
+        assert_eq!(
+            (bytes.len(), fnv1a64(bytes)),
+            (expected_len, expected_hash),
+            "{name}: re-serialization must remain byte-identical"
+        );
+    }
+}
+
+#[test]
+fn gb_01_plain_group_and_interactive_group_serde() {
+    // 1. Plain authoring group (Object.group = Some("g1"), slide.groups = []) omits "groups".
+    let mut plain = Course::from_json(HELLO).expect("parse hello course");
+    plain.scenes[0].slides[0].objects[0].group = Some("g1".into());
+    assert!(plain.scenes[0].slides[0].groups.is_empty());
+
+    let plain_json = plain.to_json().expect("serialize plain group course");
+    assert!(
+        !plain_json.contains("\"groups\""),
+        "slide with plain Object.group and empty groups vec must omit \"groups\""
+    );
+    let plain_reparsed = Course::from_json(&plain_json).expect("reparse plain group course");
+    assert_eq!(plain, plain_reparsed);
+    assert_eq!(
+        plain_reparsed.scenes[0].slides[0].objects[0]
+            .group
+            .as_deref(),
+        Some("g1")
+    );
+    assert!(plain_reparsed.scenes[0].slides[0].groups.is_empty());
+
+    // 2. Interactive Group with default fields omits name, initial_state, focus_order, description.
+    let mut course = Course::from_json(HELLO).expect("parse hello course");
+    let minimal_group = crate::Group {
+        id: "g-btn".into(),
+        name: String::new(),
+        interactive: true,
+        initial_state: "normal".into(),
+        focus_order: None,
+        description: None,
+    };
+    let full_group = crate::Group {
+        id: "g-full".into(),
+        name: "Back button".into(),
+        interactive: true,
+        initial_state: "disabled".into(),
+        focus_order: Some(3),
+        description: Some("Returns to previous slide".into()),
+    };
+    course.scenes[0].slides[0]
+        .groups
+        .push(minimal_group.clone());
+    course.scenes[0].slides[0].groups.push(full_group.clone());
+
+    let json = course.to_json().expect("serialize interactive groups");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse json value");
+    let groups_arr = value["scenes"][0]["slides"][0]["groups"]
+        .as_array()
+        .expect("groups array");
+    assert_eq!(groups_arr.len(), 2);
+
+    let min_obj = groups_arr[0].as_object().expect("minimal group object");
+    assert_eq!(min_obj.get("id"), Some(&serde_json::json!("g-btn")));
+    assert_eq!(min_obj.get("interactive"), Some(&serde_json::json!(true)));
+    assert!(
+        min_obj.get("name").is_none(),
+        "empty name must be omitted from JSON"
+    );
+    assert!(
+        min_obj.get("initial_state").is_none(),
+        "default initial_state \"normal\" must be omitted from JSON"
+    );
+    assert!(
+        min_obj.get("focus_order").is_none(),
+        "None focus_order must be omitted from JSON"
+    );
+    assert!(
+        min_obj.get("description").is_none(),
+        "None description must be omitted from JSON"
+    );
+
+    let full_obj = groups_arr[1].as_object().expect("full group object");
+    assert_eq!(full_obj.get("id"), Some(&serde_json::json!("g-full")));
+    assert_eq!(
+        full_obj.get("name"),
+        Some(&serde_json::json!("Back button"))
+    );
+    assert_eq!(full_obj.get("interactive"), Some(&serde_json::json!(true)));
+    assert_eq!(
+        full_obj.get("initial_state"),
+        Some(&serde_json::json!("disabled"))
+    );
+    assert_eq!(full_obj.get("focus_order"), Some(&serde_json::json!(3)));
+    assert_eq!(
+        full_obj.get("description"),
+        Some(&serde_json::json!("Returns to previous slide"))
+    );
+
+    let reparsed = Course::from_json(&json).expect("reparse interactive groups");
+    assert_eq!(course, reparsed);
+    assert_eq!(
+        reparsed.scenes[0].slides[0].groups,
+        vec![minimal_group, full_group]
+    );
 }

@@ -32,6 +32,7 @@ fn minimal_course(title: &str) -> Course {
                 revisit: coursecraft_course::RevisitMode::Auto,
                 player: None,
                 cue_points: Vec::new(),
+                groups: Vec::new(),
             }],
         }],
         masters: Vec::new(),

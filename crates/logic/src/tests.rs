@@ -3696,6 +3696,7 @@ fn feedback_layers_show_after_a_correct_and_a_wrong_answer() {
                 allow_seek: coursecraft_course::SeekMode::Auto,
                 revisit: coursecraft_course::RevisitMode::Auto,
                 cue_points: Vec::new(),
+                groups: Vec::new(),
             });
         }
         let question = slide.question.as_mut().expect("question");
@@ -3762,6 +3763,7 @@ fn freeform_course(attempts: u32) -> Course {
             allow_seek: coursecraft_course::SeekMode::Auto,
             revisit: RevisitMode::Auto,
             cue_points: Vec::new(),
+            groups: Vec::new(),
         });
     }
     slide.question = Some(
@@ -10178,6 +10180,7 @@ fn hello_with_try_again() -> Course {
         allow_seek: SeekMode::Auto,
         revisit: RevisitMode::Auto,
         cue_points: Vec::new(),
+        groups: Vec::new(),
     });
     let q = slide.question.as_mut().expect("question");
     q.attempts = 2;

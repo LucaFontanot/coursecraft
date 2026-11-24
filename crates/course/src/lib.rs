@@ -56,7 +56,7 @@ pub use model::{
     BUILTIN_VARIABLES, BackgroundAudio, BankDraw, BaseSlideView, Baseline, CHROME_STRINGS, Choice,
     CmpOp, Color, CompletionStatus, Condition, ConnectorStyle, Course, CropRect, Cue,
     DEFAULT_TIMER_DURATION_MS, DashStyle, Direction, DragItem, DragSpec, Easing, EditorSettings,
-    Event, FillStyle, FontFace, FontStyle, GlossaryEntry, Glow, Glue, GradientStop, Guide,
+    Event, FillStyle, FontFace, FontStyle, GlossaryEntry, Glow, Glue, GradientStop, Group, Guide,
     HotspotRegion, HotspotShape, InputKind, LOTTIE_MAX_SPEED, LOTTIE_MIN_SPEED, Layer, LineEnd,
     LineJoin, Link, ListKind, LmsStatus, MAX_CUES, MAX_FONT_FACES, MAX_FONT_FAMILY_CHARS,
     MAX_GRADIENT_STOPS, MAX_INPUT_CHARS, MAX_JAVASCRIPT_BYTES, MAX_LETTER_SPACING,

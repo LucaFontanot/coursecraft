@@ -103,6 +103,7 @@ fn make_empty_slide(id: &str, title: &str) -> Slide {
         background: None,
         objects: Vec::new(),
         layers: Vec::new(),
+        groups: Vec::new(),
         triggers: Vec::new(),
         cue_points: Vec::new(),
         transition: None,
@@ -614,6 +615,7 @@ fn fixture_session() -> Session {
             objects: Vec::new(),
             triggers: Vec::new(),
             cue_points: Vec::new(),
+            groups: Vec::new(),
         },
         Layer {
             id: "layer2".into(),
@@ -629,6 +631,7 @@ fn fixture_session() -> Session {
             objects: Vec::new(),
             triggers: Vec::new(),
             cue_points: Vec::new(),
+            groups: Vec::new(),
         },
     ];
     s1.cue_points = vec![SlideCue {

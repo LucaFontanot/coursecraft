@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use std::mem::size_of;
 
 use coursecraft_course::{
-    BackgroundAudio, BankDraw, Color, Course, EditorSettings, FontFace, GlossaryEntry, Layer,
-    MotionPath, NamedTextStyle, Object, ObjectKind, PlayerSettings, Question, QuestionBank,
+    BackgroundAudio, BankDraw, Color, Course, EditorSettings, FontFace, GlossaryEntry, Group,
+    Layer, MotionPath, NamedTextStyle, Object, ObjectKind, PlayerSettings, Question, QuestionBank,
     QuizSettings, Resource, RevisitMode, Scene, Size, Slide, SlideCue, SlidePlayerOverrides,
     StateDef, Theme, Transition, Trigger, VariableDef,
 };
@@ -142,13 +142,14 @@ fn diff_field<T: PartialEq>(before: T, after: &T, changed: &mut bool) -> Option<
     }
 }
 
-/// Sparse reversible patch over the 13 non-`objects`, non-`layers` fields of [`Slide`].
+/// Sparse reversible patch over the 14 non-`objects`, non-`layers` fields of [`Slide`].
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SlideFieldPatch {
     pub(crate) id: Option<String>,
     pub(crate) title: Option<String>,
     pub(crate) duration_ms: Option<u32>,
     pub(crate) background: Option<Option<Color>>,
+    pub(crate) groups: Option<Vec<Group>>,
     pub(crate) triggers: Option<Vec<Trigger>>,
     pub(crate) cue_points: Option<Vec<SlideCue>>,
     pub(crate) question: Option<Option<Question>>,
@@ -168,6 +169,7 @@ impl SlideFieldPatch {
             title: p_title,
             duration_ms: p_duration_ms,
             background: p_background,
+            groups: p_groups,
             triggers: p_triggers,
             cue_points: p_cue_points,
             question: p_question,
@@ -185,6 +187,7 @@ impl SlideFieldPatch {
             background,
             objects: _,
             layers: _,
+            groups,
             triggers,
             cue_points,
             question,
@@ -199,6 +202,7 @@ impl SlideFieldPatch {
         swap_if_some(p_title, title);
         swap_if_some(p_duration_ms, duration_ms);
         swap_if_some(p_background, background);
+        swap_if_some(p_groups, groups);
         swap_if_some(p_triggers, triggers);
         swap_if_some(p_cue_points, cue_points);
         swap_if_some(p_question, question);
@@ -221,6 +225,9 @@ impl SlideFieldPatch {
         }
         if let Some(Some(bg)) = &self.background {
             total = total.saturating_add(bg.0.capacity());
+        }
+        if let Some(groups) = &self.groups {
+            total = total.saturating_add(estimate_groups(groups));
         }
         if let Some(triggers) = &self.triggers {
             total = total.saturating_add(estimate_vec_plain(triggers));
@@ -288,6 +295,7 @@ impl SlideDelta {
             background: b_background,
             objects: b_objects,
             layers: mut b_layers,
+            groups: b_groups,
             triggers: b_triggers,
             cue_points: b_cue_points,
             question: b_question,
@@ -305,6 +313,7 @@ impl SlideDelta {
             background: a_background,
             objects: a_objects,
             layers: a_layers,
+            groups: a_groups,
             triggers: a_triggers,
             cue_points: a_cue_points,
             question: a_question,
@@ -320,6 +329,7 @@ impl SlideDelta {
             || b_title != *a_title
             || b_duration_ms != *a_duration_ms
             || b_background != *a_background
+            || b_groups != *a_groups
             || b_triggers != *a_triggers
             || b_cue_points != *a_cue_points
             || b_question != *a_question
@@ -343,6 +353,7 @@ impl SlideDelta {
                 title: diff_field(b_title, a_title, &mut any),
                 duration_ms: diff_field(b_duration_ms, a_duration_ms, &mut any),
                 background: diff_field(b_background, a_background, &mut any),
+                groups: diff_field(b_groups, a_groups, &mut any),
                 triggers: diff_field(b_triggers, a_triggers, &mut any),
                 cue_points: diff_field(b_cue_points, a_cue_points, &mut any),
                 question: diff_field(b_question, a_question, &mut any),
@@ -380,6 +391,7 @@ impl SlideDelta {
             background: b_background,
             objects: b_objects,
             layers: b_layers,
+            groups: b_groups,
             triggers: b_triggers,
             cue_points: b_cue_points,
             question: b_question,
@@ -505,7 +517,7 @@ fn slide_objects_mut(slide: &mut Slide, layer: Option<usize>) -> Result<&mut Vec
     }
 }
 
-/// Check whether two [`Layer`] values are identical in all 12 non-`objects` fields.
+/// Check whether two [`Layer`] values are identical in all 13 non-`objects` fields.
 /// Destructures [`Layer`] exhaustively without `..`.
 fn layer_metadata_eq(before: &Layer, after: &Layer) -> bool {
     let Layer {
@@ -522,6 +534,7 @@ fn layer_metadata_eq(before: &Layer, after: &Layer) -> bool {
         allow_seek: b_allow_seek,
         revisit: b_revisit,
         cue_points: b_cue_points,
+        groups: b_groups,
     } = before;
     let Layer {
         id: a_id,
@@ -537,6 +550,7 @@ fn layer_metadata_eq(before: &Layer, after: &Layer) -> bool {
         allow_seek: a_allow_seek,
         revisit: a_revisit,
         cue_points: a_cue_points,
+        groups: a_groups,
     } = after;
     b_id == a_id
         && b_name == a_name
@@ -550,6 +564,7 @@ fn layer_metadata_eq(before: &Layer, after: &Layer) -> bool {
         && b_allow_seek == a_allow_seek
         && b_revisit == a_revisit
         && b_cue_points == a_cue_points
+        && b_groups == a_groups
 }
 
 /// If exactly one layer differs and only in its `objects` vec, try to produce a
@@ -2794,6 +2809,15 @@ pub(crate) fn estimate_object(obj: &Object) -> usize {
         .saturating_add(estimate_object_kind_heap(&obj.kind))
 }
 
+fn estimate_groups(groups: &[Group]) -> usize {
+    groups.iter().fold(estimate_vec_plain(groups), |acc, g| {
+        acc.saturating_add(g.id.capacity())
+            .saturating_add(g.name.capacity())
+            .saturating_add(g.initial_state.capacity())
+            .saturating_add(estimate_opt_string(&g.description))
+    })
+}
+
 fn estimate_layer(layer: &Layer) -> usize {
     let obj_bytes = layer
         .objects
@@ -2805,6 +2829,7 @@ fn estimate_layer(layer: &Layer) -> usize {
         .saturating_add(obj_bytes)
         .saturating_add(estimate_vec_plain(&layer.triggers))
         .saturating_add(estimate_vec_plain(&layer.cue_points))
+        .saturating_add(estimate_groups(&layer.groups))
 }
 
 pub(crate) fn estimate_slide(slide: &Slide) -> usize {
@@ -2823,6 +2848,7 @@ pub(crate) fn estimate_slide(slide: &Slide) -> usize {
         .saturating_add(estimate_opt_string(&slide.master))
         .saturating_add(obj_bytes)
         .saturating_add(layer_bytes)
+        .saturating_add(estimate_groups(&slide.groups))
         .saturating_add(estimate_vec_plain(&slide.triggers))
         .saturating_add(estimate_vec_plain(&slide.cue_points))
         .saturating_add(slide.question.as_ref().map_or(0, estimate_question_heap))
@@ -2958,6 +2984,7 @@ mod tests {
             allow_seek: SeekMode::Auto,
             revisit: RevisitMode::Auto,
             cue_points: Vec::new(),
+            groups: Vec::new(),
         }
     }
 
@@ -2982,6 +3009,7 @@ mod tests {
                     sample_object("lo4", 340.0),
                 ],
             )],
+            groups: Vec::new(),
             triggers: Vec::new(),
             cue_points: Vec::new(),
             question: None,
@@ -3906,6 +3934,7 @@ mod tests {
             title: Some("Mutated Slide".to_owned()),
             duration_ms: None,
             background: None,
+            groups: None,
             triggers: None,
             cue_points: None,
             question: None,
@@ -4306,5 +4335,45 @@ mod tests {
         assert_u07_full_slide_collapse(&s0, &s0_json);
         assert_u07_full_course_collapse(&s0, &s0_json);
         assert_u07_mixed_sequence_merge(&s0, &s0_json);
+    }
+
+    #[test]
+    fn gb_01_slide_delta_groups_roundtrip() {
+        let base = sample_slide();
+        let sample_group = Group {
+            id: "g-btn".to_owned(),
+            name: "Continue button".to_owned(),
+            interactive: true,
+            initial_state: "normal".to_owned(),
+            focus_order: Some(2),
+            description: Some("Advances to the next slide".to_owned()),
+        };
+
+        // 1. Mutating `slide.groups` produces a compact `SlideDelta::Fields` patch and round-trips.
+        assert_slide_fields_roundtrip(&base, |s| {
+            s.groups.push(sample_group.clone());
+        });
+
+        // 2. Updating an existing `slide.groups` entry also produces `SlideDelta::Fields`.
+        let mut with_group = base.clone();
+        with_group.groups.push(sample_group.clone());
+        assert_slide_fields_roundtrip(&with_group, |s| {
+            s.groups[0].name = "Next button".to_owned();
+            s.groups[0].initial_state = "disabled".to_owned();
+        });
+
+        // 3. Mutating `layer.groups` falls back to `SlideDelta::FullSlide` and round-trips cleanly.
+        let mut after_layer_group = base.clone();
+        after_layer_group.layers[0].groups.push(Group {
+            id: "lg-btn".to_owned(),
+            name: "Close layer".to_owned(),
+            interactive: true,
+            initial_state: "normal".to_owned(),
+            focus_order: None,
+            description: None,
+        });
+        let layer_delta = assert_slide_roundtrip(base, after_layer_group);
+        assert!(matches!(layer_delta, SlideDelta::FullSlide(_)));
+        assert!(layer_delta.estimated_bytes() > 0);
     }
 }
