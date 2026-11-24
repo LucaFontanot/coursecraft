@@ -6,6 +6,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value as Json;
 use std::collections::BTreeSet;
 
+use crate::delta::UndoScope;
 use crate::{Command, EngineError, Result, Session};
 
 mod course;
@@ -44,260 +45,6 @@ pub fn registry() -> &'static [Command] {
     REGISTRY
 }
 
-/// Pre-edit snapshot scope for command `id`.
-///
-/// Unknown or unannotated commands default to [`crate::delta::UndoScope::FullCourse`].
-#[must_use]
-pub(crate) fn undo_scope(id: &str) -> crate::delta::UndoScope {
-    use crate::delta::UndoScope;
-    match id {
-        // Verified course-header-only commands (zero slides, scenes, masters, templates, or banks mutated).
-        "course.set_title"
-        | "course.update"
-        | "course.set_player"
-        | "course.set_quiz"
-        | "course.set_publish_settings"
-        | "course.set_background_audio"
-        | "course.set_theme"
-        | "theme.set_palette"
-        | "course.add_font"
-        | "course.remove_font"
-        | "view.set"
-        | "view.guides.add"
-        | "view.guides.move"
-        | "view.guides.remove"
-        | "resource.add"
-        | "resource.update"
-        | "resource.remove"
-        | "resource.move"
-        | "glossary.add"
-        | "glossary.update"
-        | "glossary.remove"
-        | "glossary.move"
-        | "glossary.sort"
-        | "variable.add"
-        | "variable.set_value" => UndoScope::CourseHeader,
-
-        // Verified single-slide commands taking `"slide"`.
-        "object.add"
-        | "object.update"
-        | "object.reorder"
-        | "object.align"
-        | "object.distribute"
-        | "object.match_size"
-        | "object.group"
-        | "object.ungroup"
-        | "object.duplicate"
-        | "object.paste"
-        | "object.set_frame"
-        | "object.set_rotation"
-        | "object.flip"
-        | "object.lock"
-        | "object.hide_in_editor"
-        | "object.set_opacity"
-        | "object.set_outline_join"
-        | "object.set_fill_style"
-        | "object.set_shadow"
-        | "object.set_glow"
-        | "object.apply_style"
-        | "object.set_drag"
-        | "object.set_lottie"
-        | "object.set_web_source"
-        | "object.set_input"
-        | "object.set_marker"
-        | "object.set_panel"
-        | "object.set_scroll_panel"
-        | "object.set_timer"
-        | "object.set_meter"
-        | "object.set_path"
-        | "object.set_crop"
-        | "object.set_captions"
-        | "object.set_media"
-        | "object.add_state"
-        | "object.update_state"
-        | "object.patch_state"
-        | "object.delete_state"
-        | "object.duplicate_state"
-        | "object.rename_state"
-        | "object.reorder_state"
-        | "object.state_add_extra"
-        | "object.state_update_extra"
-        | "object.state_delete_extra"
-        | "object.state_reorder_extra"
-        | "object.delete"
-        | "object.set_animation"
-        | "object.add_motion_path"
-        | "object.update_motion_path"
-        | "object.remove_motion_path"
-        | "object.set_autofit"
-        | "text.set"
-        | "text.style_range"
-        | "text.set_paragraph"
-        | "text.set_paragraphs"
-        | "text.set_link"
-        | "text_style.apply"
-        | "table.set_cell"
-        | "table.insert_row"
-        | "table.delete_row"
-        | "table.insert_column"
-        | "table.delete_column"
-        | "table.resize"
-        | "table.merge"
-        | "table.split"
-        | "table.set_borders"
-        | "table.set_header_row"
-        | "layer.add"
-        | "layer.update"
-        | "layer.delete"
-        | "layer.move"
-        | "layer.duplicate"
-        | "trigger.add"
-        | "trigger.update"
-        | "trigger.move"
-        | "trigger.delete"
-        | "video.add_cue"
-        | "video.set_cue"
-        | "video.remove_cue"
-        | "video.add_question_cue"
-        | "slide.update"
-        | "slide.set_duration"
-        | "slide.set_background"
-        | "slide.set_transition"
-        | "slide.set_player_overrides"
-        | "slide.add_cue"
-        | "slide.set_cue"
-        | "slide.remove_cue"
-        | "draw.update"
-        | "question.insert"
-        | "question.add_submit_button"
-        | "question.add_feedback_layers"
-        | "question.add_try_again_layer"
-        | "question.set"
-        | "question.delete"
-        | "question.set_kind"
-        | "question.add_accepted"
-        | "question.remove_accepted"
-        | "question.update_accepted"
-        | "question.set_case_sensitive"
-        | "question.add_pair"
-        | "question.remove_pair"
-        | "question.update_pair"
-        | "question.reorder_pair"
-        | "question.reorder_sequence"
-        | "question.set_hotspot_image"
-        | "question.add_region"
-        | "question.update_region"
-        | "question.remove_region"
-        | "question.set_markers"
-        | "question.add_drag_item"
-        | "question.update_drag_item"
-        | "question.remove_drag_item"
-        | "question.set_drop_targets"
-        | "question.set_drag_options" => UndoScope::SingleSlide,
-
-        // Cross-slide, multi-slide, structural, or course+slide commands stay FullCourse.
-        _ => UndoScope::FullCourse,
-    }
-}
-
-/// Whether a `SingleSlide` command may use scoped single-slide validation
-/// (`Course::validate_slide_errors`) inside `keep_valid` instead of full-course
-/// `Course::first_error`.
-///
-/// Only commands whose mutation stays strictly inside one slide's geometry,
-/// styling, text, tables, media/cues, layers, states, or slide settings are
-/// listed. Commands touching triggers, questions, bank draws, or course-wide
-/// invariants fall back to full `Course::first_error()`.
-#[must_use]
-pub(crate) fn can_use_slide_validation(id: &str) -> bool {
-    matches!(
-        id,
-        "object.add"
-            | "object.update"
-            | "object.reorder"
-            | "object.align"
-            | "object.distribute"
-            | "object.match_size"
-            | "object.group"
-            | "object.ungroup"
-            | "object.duplicate"
-            | "object.paste"
-            | "object.set_frame"
-            | "object.set_rotation"
-            | "object.flip"
-            | "object.lock"
-            | "object.hide_in_editor"
-            | "object.set_opacity"
-            | "object.set_outline_join"
-            | "object.set_fill_style"
-            | "object.set_shadow"
-            | "object.set_glow"
-            | "object.apply_style"
-            | "object.set_drag"
-            | "object.set_lottie"
-            | "object.set_web_source"
-            | "object.set_input"
-            | "object.set_marker"
-            | "object.set_panel"
-            | "object.set_scroll_panel"
-            | "object.set_timer"
-            | "object.set_meter"
-            | "object.set_path"
-            | "object.set_crop"
-            | "object.set_captions"
-            | "object.set_media"
-            | "object.add_state"
-            | "object.update_state"
-            | "object.patch_state"
-            | "object.delete_state"
-            | "object.duplicate_state"
-            | "object.rename_state"
-            | "object.reorder_state"
-            | "object.state_add_extra"
-            | "object.state_update_extra"
-            | "object.state_delete_extra"
-            | "object.state_reorder_extra"
-            | "object.delete"
-            | "object.set_animation"
-            | "object.add_motion_path"
-            | "object.update_motion_path"
-            | "object.remove_motion_path"
-            | "object.set_autofit"
-            | "text.set"
-            | "text.style_range"
-            | "text.set_paragraph"
-            | "text.set_paragraphs"
-            | "text.set_link"
-            | "text_style.apply"
-            | "table.set_cell"
-            | "table.insert_row"
-            | "table.delete_row"
-            | "table.insert_column"
-            | "table.delete_column"
-            | "table.resize"
-            | "table.merge"
-            | "table.split"
-            | "table.set_borders"
-            | "table.set_header_row"
-            | "layer.add"
-            | "layer.update"
-            | "layer.delete"
-            | "layer.move"
-            | "layer.duplicate"
-            | "video.add_cue"
-            | "video.set_cue"
-            | "video.remove_cue"
-            | "slide.update"
-            | "slide.set_duration"
-            | "slide.set_background"
-            | "slide.set_transition"
-            | "slide.set_player_overrides"
-            | "slide.add_cue"
-            | "slide.set_cue"
-            | "slide.remove_cue"
-    )
-}
-
 static REGISTRY: &[Command] = &[
     Command {
         id: "course.info",
@@ -306,6 +53,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_info,
     },
     Command {
@@ -315,6 +64,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_map,
     },
     Command {
@@ -324,6 +75,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_validate,
     },
     Command {
@@ -333,6 +86,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_audit,
     },
     Command {
@@ -342,6 +97,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"title"?: string, "id"?: string, "start_slide"?: id|null, "language"?: string|null}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::course_update,
     },
     Command {
@@ -351,6 +108,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"w": number, "h": number, "mode": "scale"|"fill"|"keep"}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_set_slide_size,
     },
     Command {
@@ -360,6 +119,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"title": string}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::course_set_title,
     },
     Command {
@@ -369,6 +130,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"show_bar"?: bool, "show_nav"?: bool, "show_menu"?: bool, "show_seekbar"?: bool, "show_speed"?: bool, "show_fullscreen"?: bool, "show_transcript"?: bool, "show_title"?: bool, "show_volume"?: bool, "show_captions"?: bool, "logo"?: string|null, "navigation"?: "free"|"restricted"|"locked", "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}, "seekbar"?: "free"|"locked"|"until_timeline_ends"}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::course_set_player,
     },
     Command {
@@ -378,6 +141,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"passing_percent": 0..=100|null}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::course_set_quiz,
     },
     Command {
@@ -387,6 +152,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"standard"?: string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::course_set_publish_settings,
     },
     Command {
@@ -396,6 +163,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"src"?: string | null, "volume"?: number, "loop"?: bool}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::course_set_background_audio,
     },
     Command {
@@ -405,6 +174,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r##"{"colors": [{"id"?: id, "name": string, "color": "#RRGGBB"}]}"##,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: styles::theme_set_palette,
     },
     Command {
@@ -414,6 +185,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r##"{"id": id, "color": "#RRGGBB", "recolor"?: bool}"##,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: styles::theme_set_palette_color,
     },
     Command {
@@ -423,6 +196,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r##"{"from": "#RRGGBB", "to": "#RRGGBB"}"##,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: styles::course_recolor,
     },
     Command {
@@ -432,6 +207,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"name": string, "from_object"?: {"slide": id, "object": id}, "style"?: TextStyle, "paragraphs"?: Paragraph | null}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: styles::text_style_create,
     },
     Command {
@@ -441,6 +218,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "name"?: string, "style"?: TextStyle fields, "paragraphs"?: Paragraph | null}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: styles::text_style_update,
     },
     Command {
@@ -450,6 +229,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: styles::text_style_delete,
     },
     Command {
@@ -459,6 +240,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "slide": id, "objects": id[], "clear_overrides"?: bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: styles::text_style_apply,
     },
     Command {
@@ -468,6 +251,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_add_finish_button,
     },
     Command {
@@ -477,6 +262,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"accent"?: color, "background"?: color, "text"?: color, "font"?: string, "bar"?: color, "bar_text"?: color}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::course_set_theme,
     },
     Command {
@@ -486,6 +273,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"src": "fonts/<file>.ttf", "family": string, "style": "regular"|"bold"|"italic"|"bold_italic"}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::course_add_font,
     },
     Command {
@@ -495,6 +284,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"family": string, "style"?: style} or {"src": "fonts/<file>.ttf"}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::course_remove_font,
     },
     Command {
@@ -504,6 +295,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"target_language": string}"#,
         mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_export_xliff,
     },
     Command {
@@ -513,6 +306,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"xliff": string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_import_xliff,
     },
     Command {
@@ -522,6 +317,8 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+Z"),
         params: "{}",
         mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::edit_undo,
     },
     Command {
@@ -531,6 +328,8 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+Y"),
         params: "{}",
         mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::edit_redo,
     },
     Command {
@@ -540,6 +339,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: "{}",
         mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::edit_history,
     },
     Command {
@@ -549,6 +350,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id"?: id, "title"?: string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::scene_add,
     },
     Command {
@@ -558,6 +361,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"scene": id, "title"?: string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::scene_update,
     },
     Command {
@@ -567,6 +372,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"scene": id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::scene_delete,
     },
     Command {
@@ -576,6 +383,8 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+M"),
         params: r#"{"id"?: id, "scene"?: id, "after"?: slide id, "title"?: string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::slide_add,
     },
     Command {
@@ -585,6 +394,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "title"?: string, "duration_ms"?: u32, "revisit"?: "auto"|"reset"|"resume", "notes"?: string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: slide::slide_update,
     },
     Command {
@@ -594,6 +405,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::slide_delete,
     },
     Command {
@@ -603,6 +416,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "scene"?: id, "index": usize}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::slide_move,
     },
     Command {
@@ -612,6 +427,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "after"?: slide id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::slide_duplicate,
     },
     Command {
@@ -621,6 +438,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"scene"?: id, "after"?: slide id, "slide": Slide}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::slide_paste,
     },
     Command {
@@ -630,6 +449,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "ms": u32}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: slide::slide_set_duration,
     },
     Command {
@@ -639,6 +460,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "background": color|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: slide::slide_set_background,
     },
     Command {
@@ -648,6 +471,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "transition": Transition|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: slide::slide_set_transition,
     },
     Command {
@@ -657,6 +482,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_bar"?: bool|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: slide::slide_set_player_overrides,
     },
     Command {
@@ -666,6 +493,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"title"?: string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::master_add,
     },
     Command {
@@ -675,6 +504,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"master": id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::master_delete,
     },
     Command {
@@ -684,6 +515,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slides": id[], "master": id|null}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::slide_set_master,
     },
     Command {
@@ -693,6 +526,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"title"?: string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::bank_create,
     },
     Command {
@@ -702,6 +537,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"bank": id, "title"?: string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::bank_update,
     },
     Command {
@@ -711,6 +548,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"bank": id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::bank_delete,
     },
     Command {
@@ -720,6 +559,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"bank": id, "kind"?: QuestionKind, "title"?: string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::bank_add_question,
     },
     Command {
@@ -729,6 +570,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"csv": string, "bank"?: string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: csv_import::bank_import_csv,
     },
     Command {
@@ -738,6 +581,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "bank": id, "index"?: usize}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::bank_move_slide,
     },
     Command {
@@ -747,6 +592,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::bank_remove_slide,
     },
     Command {
@@ -756,6 +603,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"bank": id, "count": u32, "scene"?: id, "index"?: usize}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::draw_insert,
     },
     Command {
@@ -765,6 +614,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "bank"?: id, "count"?: u32}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: slide::draw_update,
     },
     Command {
@@ -774,6 +625,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"layout": "blank"|"title"|"title_content"|"two_columns"|"picture_text"|"question", "after"?: slide id, "scene"?: id, "master"?: id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::slide_add_from_layout,
     },
     Command {
@@ -783,6 +636,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"outline": {"title"?: string|null, "scenes": [{"title": string, "slides": [{"title": string, "body"?: [string], "notes"?: string|null, "question"?: {"prompt": string, "choices": [{"text": string, "correct": bool}]}}]}]}, "after"?: slide id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::course_import_outline,
     },
     Command {
@@ -792,6 +647,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "title"?: string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::template_save,
     },
     Command {
@@ -801,6 +658,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"template": id, "after"?: slide id, "scene"?: id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::template_add_slide,
     },
     Command {
@@ -810,6 +669,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"template": id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::template_delete,
     },
     Command {
@@ -819,6 +680,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id"?: id, "slide": id, "name"?: string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: layer::layer_add,
     },
     Command {
@@ -828,6 +691,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer": id, "name"?: string, "duration_ms"?: u32, "hide_other_layers"?: bool, "pause_base_timeline"?: bool, "prevent_base_clicks"?: bool, "hide_base_objects"?: bool, "hide_when_timeline_ends"?: bool, "allow_seek"?: "auto"|"yes"|"no", "revisit"?: "auto"|"reset"|"resume"}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: layer::layer_update,
     },
     Command {
@@ -837,6 +702,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: layer::layer_delete,
     },
     Command {
@@ -846,6 +713,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer": id, "to": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: layer::layer_move,
     },
     Command {
@@ -855,6 +724,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: layer::layer_duplicate,
     },
     Command {
@@ -864,6 +735,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id"?: id, "slide": id, "layer"?: id, "kind": ObjectKind, "frame": Rect, "name"?: string, "timing"?: Timing}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_add,
     },
     Command {
@@ -873,6 +746,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "name"?: string, "kind"?: ObjectKind, "timing"?: Timing, "initial_state"?: string, "focus_order"?: u32|null, "decorative"?: bool, "description"?: string|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_update,
     },
     Command {
@@ -882,6 +757,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_reorder,
     },
     Command {
@@ -891,6 +768,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "objects": id[], "edge": "left"|"center"|"right"|"top"|"middle"|"bottom", "to"?: "selection"|"slide"}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_align,
     },
     Command {
@@ -900,6 +779,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "objects": id[], "axis": "horizontal"|"vertical"}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_distribute,
     },
     Command {
@@ -909,6 +790,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "objects": id[], "dimension": "width"|"height"|"both"}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_match_size,
     },
     Command {
@@ -918,6 +801,8 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+G"),
         params: r#"{"slide": id, "objects": id[]}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_group,
     },
     Command {
@@ -927,6 +812,8 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+Shift+G"),
         params: r#"{"slide": id, "objects": id[]}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_ungroup,
     },
     Command {
@@ -936,6 +823,8 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+D"),
         params: r#"{"slide": id, "object"?: id, "objects"?: id[]}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_duplicate,
     },
     Command {
@@ -945,6 +834,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "objects": Object[], "triggers"?: Trigger[], "offset"?: number, "source_slide"?: id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_paste,
     },
     Command {
@@ -954,6 +845,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "frame": Rect}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_frame,
     },
     Command {
@@ -963,6 +856,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "degrees": number}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_rotation,
     },
     Command {
@@ -972,6 +867,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "axis": "horizontal"|"vertical"}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_flip,
     },
     Command {
@@ -981,6 +878,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "locked": bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_lock,
     },
     Command {
@@ -990,6 +889,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "hidden": bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_hide_in_editor,
     },
     Command {
@@ -999,6 +900,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"show_rulers"?: bool, "show_grid"?: bool, "snap_to_grid"?: bool, "show_guides"?: bool, "base_slide_view"?: "show"|"dim"|"hide", "last_publish"?: {"standard": string, "lms_status"?: "auto"|"passed_incomplete"|"passed_failed"|"completed_incomplete"|"completed_failed"}}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::view_set,
     },
     Command {
@@ -1008,6 +911,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"vertical": bool, "at": number}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::view_guides_add,
     },
     Command {
@@ -1017,6 +922,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"index": usize, "at": number}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::view_guides_move,
     },
     Command {
@@ -1026,6 +933,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"index": usize}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::view_guides_remove,
     },
     Command {
@@ -1035,6 +944,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "opacity": number}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_opacity,
     },
     Command {
@@ -1044,6 +955,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "join": "miter"|"round"|"bevel"}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_outline_join,
     },
     Command {
@@ -1053,6 +966,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "fill_style": FillStyle|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_fill_style,
     },
     Command {
@@ -1062,6 +977,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "shadow": Shadow|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_shadow,
     },
     Command {
@@ -1071,6 +988,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "glow": Glow|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_glow,
     },
     Command {
@@ -1080,6 +999,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "source_slide": id, "source": id, "objects": id[]}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_apply_style,
     },
     Command {
@@ -1089,6 +1010,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "drag": DragSpec|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_drag,
     },
     Command {
@@ -1098,6 +1021,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "loop"?: bool, "autoplay"?: bool, "speed"?: number}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_lottie,
     },
     Command {
@@ -1107,6 +1032,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "source": WebSource}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_web_source,
     },
     Command {
@@ -1116,6 +1043,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {variable?, placeholder?, multiline?, max_chars?, min?, max?, step?, orientation?, start_angle?, end_angle?, label?, options?}}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_input,
     },
     Command {
@@ -1125,6 +1054,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {title?, body?, runs?, paragraphs?, icon?, color?}}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_marker,
     },
     Command {
@@ -1134,6 +1065,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "panel": id|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_panel,
     },
     Command {
@@ -1143,6 +1076,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {content_height?, bar?}}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_scroll_panel,
     },
     Command {
@@ -1152,6 +1087,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {duration_ms?, format?, autostart?, style?}}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_timer,
     },
     Command {
@@ -1161,6 +1098,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object"?: id, "objects"?: id[], "patch": {variable?, min?, max?, style?, show_value?}}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_meter,
     },
     Command {
@@ -1170,6 +1109,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "points": Point[], "start_glue"?: {object, site}|null, "end_glue"?: {object, site}|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_path,
     },
     Command {
@@ -1179,6 +1120,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "crop": {x,y,w,h}|null, "frame"?: Rect}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_crop,
     },
     Command {
@@ -1188,6 +1131,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "captions": string|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_captions,
     },
     Command {
@@ -1197,6 +1142,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "volume"?: number, "trim"?: {"start_ms", "end_ms"?} | null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object::object_set_media,
     },
     Command {
@@ -1206,6 +1153,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "at_ms"?: number, "name"?: string, "pause"?: bool, "id"?: id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: video_cues::video_add_cue,
     },
     Command {
@@ -1215,6 +1164,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "cue": id, "patch": {"at_ms"?: number, "name"?: string, "pause"?: bool}}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: video_cues::video_set_cue,
     },
     Command {
@@ -1224,6 +1175,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "cue": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: video_cues::video_remove_cue,
     },
     Command {
@@ -1233,6 +1186,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "at_ms"?: number, "name"?: string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: video_cues::video_add_question_cue,
     },
     Command {
@@ -1242,6 +1197,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: video_cues::slide_add_cue,
     },
     Command {
@@ -1251,6 +1208,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: video_cues::slide_set_cue,
     },
     Command {
@@ -1260,6 +1219,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "cue": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: video_cues::slide_remove_cue,
     },
     Command {
@@ -1269,6 +1230,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": StateDef}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_add_state,
     },
     Command {
@@ -1278,6 +1241,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": StateDef}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_update_state,
     },
     Command {
@@ -1287,6 +1252,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "name": string, "reset_all"?: bool, "patch"?: object}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_patch_state,
     },
     Command {
@@ -1296,6 +1263,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "name": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_delete_state,
     },
     Command {
@@ -1305,6 +1274,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "name": string, "new_name"?: string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_duplicate_state,
     },
     Command {
@@ -1314,6 +1285,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "from": string, "to": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_rename_state,
     },
     Command {
@@ -1323,6 +1296,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "name": string, "index": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_reorder_state,
     },
     Command {
@@ -1332,6 +1307,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": string, "extra": StateExtra}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_state_add_extra,
     },
     Command {
@@ -1341,6 +1318,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": string, "extra": id, "patch": object}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_state_update_extra,
     },
     Command {
@@ -1350,6 +1329,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": string, "extra": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_state_delete_extra,
     },
     Command {
@@ -1359,6 +1340,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "state": string, "extra": id, "index": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_state_reorder_extra,
     },
     Command {
@@ -1368,6 +1351,8 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Delete"),
         params: r#"{"slide": id, "object": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_delete,
     },
     Command {
@@ -1377,6 +1362,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "which": "entrance"|"exit", "animation": Animation|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_set_animation,
     },
     Command {
@@ -1386,6 +1373,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "points"?: Point[], "duration_ms"?: u32, "easing"?: Easing, "relative"?: bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_add_motion_path,
     },
     Command {
@@ -1395,6 +1384,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "path": id, "points"?: Point[], "duration_ms"?: u32, "easing"?: Easing, "relative"?: bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_update_motion_path,
     },
     Command {
@@ -1404,6 +1395,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "path": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: object_states::object_remove_motion_path,
     },
     Command {
@@ -1413,6 +1406,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "text": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: text::text_set,
     },
     Command {
@@ -1422,6 +1417,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "start": usize, "end": usize, "bold"?: bool, "italic"?: bool, "underline"?: bool, "strikethrough"?: bool, "baseline"?: "normal"|"superscript"|"subscript", "letter_spacing"?: number, "size"?: number, "color"?: string, "font"?: string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: text::text_style_range,
     },
     Command {
@@ -1431,6 +1428,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "align"?: "left"|"center"|"right", "valign"?: "top"|"middle"|"bottom"}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: text::text_set_paragraph,
     },
     Command {
@@ -1440,6 +1439,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "start"?: usize, "end"?: usize, "list"?: "none"|"bullet"|"number", "level"?: 0..4, "line_spacing"?: 0.8..3, "space_before"?: 0..200, "space_after"?: 0..200}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: text::text_set_paragraphs,
     },
     Command {
@@ -1449,6 +1450,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "start"?: usize, "end"?: usize, "link": Link|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: text::text_set_link,
     },
     Command {
@@ -1458,6 +1461,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "autofit": "none"|"shrink"}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: text::object_set_autofit,
     },
     Command {
@@ -1467,6 +1472,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "row": usize, "column": usize, "text"?: string, "runs"?: TextRun[], "paragraphs"?: Paragraph[], "fill"?: Color|null, "valign"?: "top"|"middle"|"bottom"}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_set_cell,
     },
     Command {
@@ -1476,6 +1483,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index"?: usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_insert_row,
     },
     Command {
@@ -1485,6 +1494,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_delete_row,
     },
     Command {
@@ -1494,6 +1505,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index"?: usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_insert_column,
     },
     Command {
@@ -1503,6 +1516,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "index": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_delete_column,
     },
     Command {
@@ -1512,6 +1527,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "columns"?: number[], "rows"?: number[]}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_resize,
     },
     Command {
@@ -1521,6 +1538,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "row": usize, "column": usize, "rows": usize, "columns": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_merge,
     },
     Command {
@@ -1530,6 +1549,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "row": usize, "column": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_split,
     },
     Command {
@@ -1539,6 +1560,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "outer"?: Outline|null, "inner"?: Outline|null}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_set_borders,
     },
     Command {
@@ -1548,6 +1571,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "object": id, "header_row": bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: true,
         run: table::table_set_header_row,
     },
     Command {
@@ -1557,6 +1582,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "trigger": Trigger, "index"?: usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: trigger::trigger_add,
     },
     Command {
@@ -1566,6 +1593,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "index": usize, "trigger": Trigger}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: trigger::trigger_update,
     },
     Command {
@@ -1575,6 +1604,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "from": usize, "to": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: trigger::trigger_move,
     },
     Command {
@@ -1584,6 +1615,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "layer"?: id, "index": usize}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: trigger::trigger_delete,
     },
     Command {
@@ -1593,6 +1626,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"title": string, "target": {"kind": "url", "url": string}|{"kind": "file", "src": string}}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::resource_add,
     },
     Command {
@@ -1602,6 +1637,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "title"?: string, "target"?: {"kind": "url", "url": string}|{"kind": "file", "src": string}}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::resource_update,
     },
     Command {
@@ -1611,6 +1648,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::resource_remove,
     },
     Command {
@@ -1620,6 +1659,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "to": usize}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::resource_move,
     },
     Command {
@@ -1629,6 +1670,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"term": string, "definition"?: string}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::glossary_add,
     },
     Command {
@@ -1638,6 +1681,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "term"?: string, "definition"?: string}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::glossary_update,
     },
     Command {
@@ -1647,6 +1692,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::glossary_remove,
     },
     Command {
@@ -1656,6 +1703,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"id": id, "to": usize}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::glossary_move,
     },
     Command {
@@ -1665,6 +1714,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::glossary_sort,
     },
     Command {
@@ -1674,6 +1725,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"name": string, "value": bool|number|string}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::variable_add,
     },
     Command {
@@ -1683,6 +1736,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"name": string, "value": bool|number|string}"#,
         mutates: true,
+        scope: UndoScope::CourseHeader,
+        slide_validation: false,
         run: course::variable_set_value,
     },
     Command {
@@ -1692,6 +1747,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"name": string}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::variable_delete,
     },
     Command {
@@ -1701,6 +1758,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "kind": "tabs"|"accordion"|"flip_cards"|"hotspot_reveal"|"process_steps"|"timeline"|"reveal_grid"|"scenario_choice"}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: interaction::interaction_insert,
     },
     Command {
@@ -1710,6 +1769,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "kind"?: QuestionKind}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_insert,
     },
     Command {
@@ -1719,6 +1780,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"after"?: slide id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::results_insert,
     },
     Command {
@@ -1728,6 +1791,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"after"?: slide id}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: slide::certificate_insert,
     },
     Command {
@@ -1737,6 +1802,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_add_submit_button,
     },
     Command {
@@ -1746,6 +1813,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_add_feedback_layers,
     },
     Command {
@@ -1755,6 +1824,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_add_try_again_layer,
     },
     Command {
@@ -1764,6 +1835,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "question": Question}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_set,
     },
     Command {
@@ -1773,6 +1846,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_delete,
     },
     Command {
@@ -1782,6 +1857,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "kind": QuestionKind}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_set_kind,
     },
     Command {
@@ -1791,6 +1868,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "text"?: string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_add_accepted,
     },
     Command {
@@ -1800,6 +1879,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "index": number}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_remove_accepted,
     },
     Command {
@@ -1809,6 +1890,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "index": number, "text": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_update_accepted,
     },
     Command {
@@ -1818,6 +1901,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "case_sensitive": bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_set_case_sensitive,
     },
     Command {
@@ -1827,6 +1912,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "left"?: string, "right"?: string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_add_pair,
     },
     Command {
@@ -1836,6 +1923,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "id": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_remove_pair,
     },
     Command {
@@ -1845,6 +1934,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "id": string, "left"?: string, "right"?: string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_update_pair,
     },
     Command {
@@ -1854,6 +1945,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "id": string, "to": number}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_reorder_pair,
     },
     Command {
@@ -1863,6 +1956,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "id": string, "to": number}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_reorder_sequence,
     },
     Command {
@@ -1872,6 +1967,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "image": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_set_hotspot_image,
     },
     Command {
@@ -1881,6 +1978,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "shape"?: HotspotShape, "x"?: number, "y"?: number, "w"?: number, "h"?: number, "correct"?: bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_add_region,
     },
     Command {
@@ -1890,6 +1989,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "id": string, "shape"?: HotspotShape, "x"?: number, "y"?: number, "w"?: number, "h"?: number, "correct"?: bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_update_region,
     },
     Command {
@@ -1899,6 +2000,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "id": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_remove_region,
     },
     Command {
@@ -1908,6 +2011,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "markers": number}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_set_markers,
     },
     Command {
@@ -1917,6 +2022,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "item": string, "target": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_add_drag_item,
     },
     Command {
@@ -1926,6 +2033,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "item": string, "target": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_update_drag_item,
     },
     Command {
@@ -1935,6 +2044,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "item": string}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_remove_drag_item,
     },
     Command {
@@ -1944,6 +2055,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "targets": [string]}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_set_drop_targets,
     },
     Command {
@@ -1953,6 +2066,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"slide": id, "snap_to_center"?: bool, "return_if_wrong"?: bool, "one_per_target"?: bool}"#,
         mutates: true,
+        scope: UndoScope::SingleSlide,
+        slide_validation: false,
         run: question::question_set_drag_options,
     },
     Command {
@@ -1962,6 +2077,8 @@ static REGISTRY: &[Command] = &[
         shortcut: Some("Ctrl+F"),
         params: r#"{"query": string, "case"?: bool, "whole_word"?: bool}"#,
         mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_find,
     },
     Command {
@@ -1971,6 +2088,8 @@ static REGISTRY: &[Command] = &[
         shortcut: None,
         params: r#"{"query": string, "replacement": string, "case"?: bool, "whole_word"?: bool, "only"?: [{"slide"?: id, "object"?: id, "layer"?: id, "field": string}]}"#,
         mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
         run: course::course_replace,
     },
 ];

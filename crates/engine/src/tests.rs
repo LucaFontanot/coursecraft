@@ -12585,7 +12585,7 @@ fn r5_01_registry_golden_lock() {
                 cmd.id,
                 cmd.mutates,
                 cmd.scope(),
-                crate::commands::can_use_slide_validation(cmd.id),
+                cmd.can_use_slide_validation(),
             )
         })
         .collect();
@@ -12593,7 +12593,7 @@ fn r5_01_registry_golden_lock() {
 
     let mut table = String::new();
     for cmd in reg {
-        let slide_val = crate::commands::can_use_slide_validation(cmd.id);
+        let slide_val = cmd.can_use_slide_validation();
         table.push_str(&format!(
             "{}\t{}\t{}\t{:?}\t{}\t{}\t{:?}\t{}\n",
             cmd.id,
