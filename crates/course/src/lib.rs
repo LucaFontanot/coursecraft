@@ -470,7 +470,80 @@ impl Slide {
         })
     }
 
-    /// Every id used on this slide (objects and layers share one namespace).
+    /// Find a group record on the base layer or any slide layer. Returns the
+    /// group and the id of the layer that owns it (`None` = base layer).
+    #[must_use]
+    pub fn group(&self, id: &str) -> Option<(&Group, Option<&str>)> {
+        if let Some(g) = self.groups.iter().find(|g| g.id == id) {
+            return Some((g, None));
+        }
+        self.layers.iter().find_map(|l| {
+            l.groups
+                .iter()
+                .find(|g| g.id == id)
+                .map(|g| (g, Some(l.id.as_str())))
+        })
+    }
+
+    /// Find an interactive group record on the base layer or any slide layer.
+    #[must_use]
+    pub fn interactive_group(&self, id: &str) -> Option<(&Group, Option<&str>)> {
+        self.group(id).filter(|(g, _)| g.interactive)
+    }
+
+    /// If `obj_id` belongs to an interactive group on its own layer, return
+    /// that group and its owning layer id (`None` = base layer).
+    #[must_use]
+    pub fn interactive_group_of_object(&self, obj_id: &str) -> Option<(&Group, Option<&str>)> {
+        let (obj, owner) = self.object(obj_id)?;
+        let group_id = obj.group.as_deref()?;
+        let groups = match owner {
+            None => self.groups.as_slice(),
+            Some(layer_id) => self.layer(layer_id)?.groups.as_slice(),
+        };
+        groups
+            .iter()
+            .find(|g| g.id == group_id && g.interactive)
+            .map(|g| (g, owner))
+    }
+
+    /// Return the member objects of `group_id`. When a [`Group`] record exists,
+    /// returns matching objects on that group's owning object list; otherwise
+    /// returns all matching objects across the slide.
+    #[must_use]
+    pub fn group_members(&self, group_id: &str) -> Vec<&Object> {
+        if let Some((_, owner)) = self.group(group_id) {
+            let objects = match owner {
+                None => self.objects.as_slice(),
+                Some(layer_id) => self
+                    .layer(layer_id)
+                    .map_or(&[][..], |l| l.objects.as_slice()),
+            };
+            return objects
+                .iter()
+                .filter(|o| o.group.as_deref() == Some(group_id))
+                .collect();
+        }
+        self.objects
+            .iter()
+            .chain(self.layers.iter().flat_map(|l| l.objects.iter()))
+            .filter(|o| o.group.as_deref() == Some(group_id))
+            .collect()
+    }
+
+    /// Whether `state` is valid for interactive group `group_id`: `"normal"`,
+    /// `"hidden"`, `"disabled"`, or a state defined on at least one member.
+    #[must_use]
+    pub fn group_has_state(&self, group_id: &str, state: &str) -> bool {
+        matches!(state, "normal" | "hidden" | "disabled")
+            || self
+                .group_members(group_id)
+                .into_iter()
+                .any(|member| member.states.iter().any(|s| s.name == state))
+    }
+
+    /// Every id used on this slide (objects, layers and group records share one
+    /// namespace).
     pub fn local_ids(&self) -> impl Iterator<Item = &str> {
         self.objects
             .iter()
@@ -481,7 +554,38 @@ impl Slide {
                     .iter()
                     .flat_map(|l| l.objects.iter().map(|o| o.id.as_str())),
             )
+            .chain(self.groups.iter().map(|g| g.id.as_str()))
+            .chain(
+                self.layers
+                    .iter()
+                    .flat_map(|l| l.groups.iter().map(|g| g.id.as_str())),
+            )
     }
+}
+
+/// Whether `obj` is disallowed as a member of an interactive group (inputs,
+/// scrolling panels, web objects, audio/video media, markers, tables, draggable
+/// objects, or question hotspot images / drag items).
+#[must_use]
+pub fn is_disallowed_interactive_group_member(obj: &Object, question: Option<&Question>) -> bool {
+    if obj.kind.input_kind().is_some()
+        || matches!(
+            obj.kind,
+            ObjectKind::ScrollPanel { .. }
+                | ObjectKind::Web { .. }
+                | ObjectKind::Audio { .. }
+                | ObjectKind::Video { .. }
+                | ObjectKind::Marker { .. }
+                | ObjectKind::Table { .. }
+        )
+        || obj.drag.is_some()
+    {
+        return true;
+    }
+    question.is_some_and(|q| {
+        q.hotspot_image.as_deref() == Some(obj.id.as_str())
+            || q.drag_items.iter().any(|d| d.item == obj.id)
+    })
 }
 
 impl Object {

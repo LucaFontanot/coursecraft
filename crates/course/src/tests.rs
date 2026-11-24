@@ -6951,3 +6951,777 @@ fn gb_01_plain_group_and_interactive_group_serde() {
         vec![minimal_group, full_group]
     );
 }
+
+fn make_group(id: &str, interactive: bool, initial_state: &str) -> crate::Group {
+    crate::Group {
+        id: id.into(),
+        name: String::new(),
+        interactive,
+        initial_state: initial_state.into(),
+        focus_order: None,
+        description: None,
+    }
+}
+
+fn make_state_def(name: &str) -> crate::StateDef {
+    crate::StateDef {
+        name: name.into(),
+        fill: None,
+        text: None,
+        src: None,
+        fill_style: None,
+        clear_fill_style: false,
+        outline: None,
+        clear_outline: false,
+        text_style: None,
+        runs: None,
+        paragraphs: None,
+        autofit: None,
+        opacity: None,
+        shadow: None,
+        clear_shadow: false,
+        glow: None,
+        clear_glow: false,
+        crop: None,
+        clear_crop: false,
+        image_shape: None,
+        clear_image_shape: false,
+        rotation: None,
+        flip_h: None,
+        flip_v: None,
+        extras: Vec::new(),
+    }
+}
+
+fn make_obj(id: &str, kind: crate::ObjectKind, group: Option<&str>) -> crate::Object {
+    let mut obj: crate::Object = serde_json::from_value(serde_json::json!({
+        "id": id,
+        "name": id,
+        "kind": { "type": "shape", "shape": "rectangle", "fill": "#2F6FEB" },
+        "frame": { "x": 10.0, "y": 10.0, "w": 120.0, "h": 48.0 }
+    }))
+    .expect("base object");
+    obj.kind = kind;
+    obj.group = group.map(str::to_owned);
+    obj
+}
+
+#[test]
+fn gb_02_validation_rejects_invalid_groups_and_plain_group_triggers() {
+    // 1. Invalid group id, colliding object id, colliding layer id, duplicate group id, 0-member group.
+    let mut c = Course::from_json(HELLO).expect("hello");
+    let slide = &mut c.scenes[0].slides[0];
+    let existing_obj_id = slide.objects[0].id.clone();
+    slide.layers.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "layer-1",
+            "name": "Layer 1"
+        }))
+        .expect("layer"),
+    );
+    slide.objects[0].group = Some("g-dup".into());
+    slide.groups.push(make_group("", true, "normal"));
+    slide
+        .groups
+        .push(make_group(&existing_obj_id, false, "normal"));
+    slide.groups.push(make_group("layer-1", false, "normal"));
+    slide.groups.push(make_group("g-dup", false, "normal"));
+    slide.groups.push(make_group("g-dup", false, "normal"));
+    slide.groups.push(make_group("g-empty", true, "normal"));
+    slide.layers[0]
+        .groups
+        .push(make_group("g-dup", false, "normal"));
+
+    let errs = errors(&c);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("group id \"\"") && e.contains("1-128")),
+        "expected invalid empty group id error, got {errs:?}"
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.contains(&existing_obj_id) && e.contains("duplicated or collides")),
+        "expected group/object id collision error, got {errs:?}"
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("layer-1") && e.contains("duplicated or collides")),
+        "expected group/layer id collision error, got {errs:?}"
+    );
+    assert!(
+        errs.iter()
+            .filter(|e| e.contains("g-dup") && e.contains("duplicated or collides"))
+            .count()
+            >= 2,
+        "expected duplicate group id errors (same layer + cross-layer), got {errs:?}"
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("g-empty") && e.contains("no member objects")),
+        "expected 0-member group error, got {errs:?}"
+    );
+
+    // 2. Interactive group on a master slide is rejected.
+    let mut c = Course::from_json(HELLO).expect("hello");
+    let master = with_master(&mut c, "m1");
+    master.objects.push(make_obj(
+        "m-rect",
+        crate::ObjectKind::Shape {
+            shape: crate::ShapeKind::Rectangle,
+            fill: crate::Color("#2F6FEB".into()),
+            fill_style: None,
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        },
+        Some("g-master"),
+    ));
+    master.groups.push(make_group("g-master", true, "normal"));
+    let errs = errors(&c);
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("must not have interactive group") && e.contains("g-master")),
+        "expected master interactive group error, got {errs:?}"
+    );
+
+    // 3. Disallowed member kinds in interactive groups.
+    let disallowed_cases: Vec<(&str, crate::ObjectKind)> = vec![
+        (
+            "bad-text-entry",
+            crate::ObjectKind::TextEntry {
+                variable: "v_text".into(),
+                placeholder: String::new(),
+                multiline: false,
+                max_chars: 0,
+            },
+        ),
+        (
+            "bad-slider",
+            crate::ObjectKind::Slider {
+                variable: "v_num".into(),
+                min: 0.0,
+                max: 100.0,
+                step: 1.0,
+                orientation: crate::Orientation::Horizontal,
+            },
+        ),
+        (
+            "bad-dial",
+            crate::ObjectKind::Dial {
+                variable: "v_num".into(),
+                min: 0.0,
+                max: 100.0,
+                step: 1.0,
+                start_angle: -135.0,
+                end_angle: 135.0,
+            },
+        ),
+        (
+            "bad-checkbox",
+            crate::ObjectKind::Checkbox {
+                variable: "v_bool".into(),
+                label: "Check".into(),
+            },
+        ),
+        (
+            "bad-radio",
+            crate::ObjectKind::RadioGroup {
+                variable: "v_text".into(),
+                options: vec![
+                    crate::RadioOption {
+                        label: "A".into(),
+                        value: "a".into(),
+                    },
+                    crate::RadioOption {
+                        label: "B".into(),
+                        value: "b".into(),
+                    },
+                ],
+            },
+        ),
+        (
+            "bad-scroll",
+            crate::ObjectKind::ScrollPanel {
+                content_height: 400.0,
+                bar: crate::ScrollBar::Visible,
+            },
+        ),
+        (
+            "bad-web",
+            crate::ObjectKind::Web {
+                source: crate::WebSource::Url {
+                    url: "https://example.com".into(),
+                },
+            },
+        ),
+        (
+            "bad-audio",
+            crate::ObjectKind::Audio {
+                src: "clip.mp3".into(),
+                autoplay: false,
+                captions: None,
+                volume: 1.0,
+                trim: None,
+            },
+        ),
+        (
+            "bad-video",
+            crate::ObjectKind::Video {
+                src: "clip.mp4".into(),
+                autoplay: false,
+                captions: None,
+                volume: 1.0,
+                trim: None,
+                cues: Vec::new(),
+                poster: None,
+            },
+        ),
+        (
+            "bad-marker",
+            crate::ObjectKind::Marker {
+                title: "Info".into(),
+                body: "Body".into(),
+                runs: Vec::new(),
+                paragraphs: Vec::new(),
+                icon: crate::MarkerIcon::Info,
+                color: None,
+            },
+        ),
+        (
+            "bad-table",
+            crate::ObjectKind::Table {
+                columns: vec![1.0],
+                rows: vec![crate::TableRow {
+                    height: 1.0,
+                    cells: vec![crate::TableCell::default()],
+                }],
+                borders: crate::TableBorders::default(),
+                header_row: false,
+            },
+        ),
+    ];
+
+    for (obj_id, kind) in disallowed_cases {
+        let mut c = Course::from_json(HELLO).expect("hello");
+        c.variables.push(crate::VariableDef {
+            name: "v_text".into(),
+            value: crate::Value::Text(String::new()),
+        });
+        c.variables.push(crate::VariableDef {
+            name: "v_num".into(),
+            value: crate::Value::Number(0.0),
+        });
+        c.variables.push(crate::VariableDef {
+            name: "v_bool".into(),
+            value: crate::Value::Bool(false),
+        });
+        let slide = &mut c.scenes[0].slides[0];
+        slide
+            .objects
+            .push(make_obj(obj_id, kind, Some("g-disallowed")));
+        slide
+            .groups
+            .push(make_group("g-disallowed", true, "normal"));
+        let errs = errors(&c);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("g-disallowed") && e.contains(obj_id)),
+            "expected disallowed member error for {obj_id}, got {errs:?}"
+        );
+    }
+
+    // Draggable object in interactive group is rejected.
+    {
+        let mut c = Course::from_json(HELLO).expect("hello");
+        let slide = &mut c.scenes[0].slides[0];
+        let mut obj = make_obj(
+            "bad-drag",
+            crate::ObjectKind::Shape {
+                shape: crate::ShapeKind::Rectangle,
+                fill: crate::Color("#2F6FEB".into()),
+                fill_style: None,
+                outline: None,
+                text: None,
+                adjust: Vec::new(),
+            },
+            Some("g-drag"),
+        );
+        obj.drag = Some(crate::DragSpec::default());
+        slide.objects.push(obj);
+        slide.groups.push(make_group("g-drag", true, "normal"));
+        let errs = errors(&c);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("g-drag") && e.contains("bad-drag")),
+            "expected draggable member error, got {errs:?}"
+        );
+    }
+
+    // Hotspot image in interactive group is rejected.
+    {
+        let mut c = Course::from_json(HELLO).expect("hello");
+        let slide = &mut c.scenes[0].slides[0];
+        slide.objects.push(make_obj(
+            "hs-img",
+            crate::ObjectKind::Image {
+                src: "pic.png".into(),
+                alt: "Map".into(),
+                crop: None,
+                outline: None,
+                shape: None,
+            },
+            Some("g-hotspot"),
+        ));
+        slide.groups.push(make_group("g-hotspot", true, "normal"));
+        slide.question = Some(
+            serde_json::from_value(serde_json::json!({
+                "kind": "hotspot",
+                "prompt": "Click the area",
+                "choices": [],
+                "hotspot_image": "hs-img",
+                "regions": [{
+                    "id": "r1",
+                    "shape": "rect",
+                    "x": 10.0,
+                    "y": 10.0,
+                    "w": 50.0,
+                    "h": 50.0,
+                    "correct": true
+                }]
+            }))
+            .expect("hotspot question"),
+        );
+        let errs = errors(&c);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("g-hotspot") && e.contains("hs-img")),
+            "expected hotspot_image member error, got {errs:?}"
+        );
+    }
+
+    // Drag-drop question drag item in interactive group is rejected.
+    {
+        let mut c = Course::from_json(HELLO).expect("hello");
+        let slide = &mut c.scenes[0].slides[0];
+        slide.objects.push(make_obj(
+            "dd-item",
+            crate::ObjectKind::Shape {
+                shape: crate::ShapeKind::Rectangle,
+                fill: crate::Color("#2F6FEB".into()),
+                fill_style: None,
+                outline: None,
+                text: None,
+                adjust: Vec::new(),
+            },
+            Some("g-dd"),
+        ));
+        slide.objects.push(make_obj(
+            "dd-target",
+            crate::ObjectKind::Shape {
+                shape: crate::ShapeKind::Rectangle,
+                fill: crate::Color("#CCCCCC".into()),
+                fill_style: None,
+                outline: None,
+                text: None,
+                adjust: Vec::new(),
+            },
+            None,
+        ));
+        slide.groups.push(make_group("g-dd", true, "normal"));
+        slide.question = Some(
+            serde_json::from_value(serde_json::json!({
+                "kind": "drag_drop",
+                "prompt": "Drag it",
+                "choices": [],
+                "drag_items": [{ "item": "dd-item", "target": "dd-target" }],
+                "drop_targets": ["dd-target"]
+            }))
+            .expect("drag_drop question"),
+        );
+        let errs = errors(&c);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("g-dd") && e.contains("dd-item")),
+            "expected drag item member error, got {errs:?}"
+        );
+    }
+
+    // 4. Triggers targeting plain (non-interactive) groups are rejected, and invalid states on
+    //    interactive groups (initial_state, ChangeState, StateChanges, ObjectState) are rejected.
+    {
+        let mut c = Course::from_json(HELLO).expect("hello");
+        let slide = &mut c.scenes[0].slides[0];
+        let rect_kind = || crate::ObjectKind::Shape {
+            shape: crate::ShapeKind::Rectangle,
+            fill: crate::Color("#2F6FEB".into()),
+            fill_style: None,
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        };
+        // Plain group without Group record
+        slide
+            .objects
+            .push(make_obj("p1", rect_kind(), Some("g-plain-norec")));
+        slide
+            .objects
+            .push(make_obj("p2", rect_kind(), Some("g-plain-norec")));
+        // Plain group with interactive: false
+        slide
+            .objects
+            .push(make_obj("p3", rect_kind(), Some("g-plain-rec")));
+        slide
+            .objects
+            .push(make_obj("p4", rect_kind(), Some("g-plain-rec")));
+        slide
+            .groups
+            .push(make_group("g-plain-rec", false, "normal"));
+        // Interactive group with invalid initial_state
+        slide
+            .objects
+            .push(make_obj("i1", rect_kind(), Some("g-inter")));
+        slide
+            .objects
+            .push(make_obj("i2", rect_kind(), Some("g-inter")));
+        slide
+            .groups
+            .push(make_group("g-inter", true, "no-such-initial"));
+
+        slide.triggers.push(Trigger {
+            when: Event::Click {
+                object: "g-plain-norec".into(),
+            },
+            action: crate::Action::PauseTimeline,
+            condition: None,
+            disabled: false,
+        });
+        slide.triggers.push(Trigger {
+            when: Event::HoverStart {
+                object: "g-plain-rec".into(),
+            },
+            action: crate::Action::ChangeState {
+                object: "g-inter".into(),
+                state: "missing-action-state".into(),
+            },
+            condition: Some(crate::Condition::ObjectState {
+                object: "g-inter".into(),
+                state: "missing-cond-state".into(),
+                is: true,
+            }),
+            disabled: false,
+        });
+        slide.triggers.push(Trigger {
+            when: Event::StateChanges {
+                object: "g-inter".into(),
+                to: Some("missing-event-state".into()),
+            },
+            action: crate::Action::PauseTimeline,
+            condition: None,
+            disabled: false,
+        });
+
+        let errs = errors(&c);
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("g-plain-norec") && e.contains("not an interactive group")),
+            "expected plain group (no record) error, got {errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("g-plain-rec") && e.contains("not an interactive group")),
+            "expected plain group (interactive=false) error, got {errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("no-such-initial") && e.contains("g-inter")),
+            "expected invalid initial_state error, got {errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("missing-action-state") && e.contains("g-inter")),
+            "expected ChangeState unknown state error, got {errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("missing-cond-state") && e.contains("g-inter")),
+            "expected ObjectState unknown state error, got {errs:?}"
+        );
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("missing-event-state") && e.contains("g-inter")),
+            "expected StateChanges unknown state error, got {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn gb_02_validation_accepts_valid_interactive_group_and_triggers() {
+    let mut c = Course::from_json(HELLO).expect("hello");
+    let slide = &mut c.scenes[0].slides[0];
+
+    let mut shape_obj = make_obj(
+        "btn-bg",
+        crate::ObjectKind::Shape {
+            shape: crate::ShapeKind::RoundedRectangle,
+            fill: crate::Color("#2F6FEB".into()),
+            fill_style: None,
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        },
+        Some("g-btn"),
+    );
+    shape_obj.states.push(make_state_def("hover"));
+    shape_obj.states.push(make_state_def("down"));
+    shape_obj.states.push(make_state_def("custom_glow"));
+
+    let text_obj = make_obj(
+        "btn-label",
+        crate::ObjectKind::Text {
+            text: "Continue".into(),
+            style: crate::TextStyle::default(),
+            runs: Vec::new(),
+            paragraphs: Vec::new(),
+            autofit: crate::Autofit::None,
+            text_style: None,
+            outline: None,
+            point_text: false,
+        },
+        Some("g-btn"),
+    );
+    let image_obj = make_obj(
+        "btn-icon",
+        crate::ObjectKind::Image {
+            src: "arrow.png".into(),
+            alt: "Arrow".into(),
+            crop: None,
+            outline: None,
+            shape: None,
+        },
+        Some("g-btn"),
+    );
+    let path_obj = make_obj(
+        "btn-line",
+        crate::ObjectKind::Path {
+            path: crate::Path {
+                points: vec![
+                    crate::PathPoint { x: 0.0, y: 0.5 },
+                    crate::PathPoint { x: 1.0, y: 0.5 },
+                ],
+                subpaths: Vec::new(),
+                style: crate::PathStyle::Straight,
+                closed: false,
+                fill: None,
+                fill_style: None,
+                text: None,
+                outline: crate::Outline {
+                    color: crate::Color("#FFFFFF".into()),
+                    width: 2.0,
+                    dash: crate::DashStyle::Solid,
+                    dash_pattern: None,
+                    join: crate::LineJoin::Miter,
+                    miter_limit: None,
+                },
+                start_end: crate::LineEnd::None,
+                end_end: crate::LineEnd::Arrow,
+                connector: None,
+                start_glue: None,
+                end_glue: None,
+            },
+        },
+        Some("g-btn"),
+    );
+    let button_obj = make_obj(
+        "btn-sub",
+        crate::ObjectKind::Button {
+            label: "Go".into(),
+            fill: crate::Color("#2F6FEB".into()),
+            fill_style: None,
+        },
+        Some("g-btn"),
+    );
+    let lottie_obj = make_obj(
+        "btn-anim",
+        crate::ObjectKind::Lottie {
+            src: "spark.json".into(),
+            loop_playback: true,
+            autoplay: true,
+            speed: 1.0,
+        },
+        Some("g-btn"),
+    );
+
+    slide.objects.extend([
+        shape_obj, text_obj, image_obj, path_obj, button_obj, lottie_obj,
+    ]);
+    slide.groups.push(crate::Group {
+        id: "g-btn".into(),
+        name: "Continue button".into(),
+        interactive: true,
+        initial_state: "normal".into(),
+        focus_order: Some(1),
+        description: Some("Continue to next section".into()),
+    });
+
+    // Interactive group on a Layer as well.
+    let mut layer: crate::Layer = serde_json::from_value(serde_json::json!({
+        "id": "layer-nav",
+        "name": "Nav Layer"
+    }))
+    .expect("layer");
+    let mut layer_shape = make_obj(
+        "l-bg",
+        crate::ObjectKind::Shape {
+            shape: crate::ShapeKind::Rectangle,
+            fill: crate::Color("#1F1F1F".into()),
+            fill_style: None,
+            outline: None,
+            text: None,
+            adjust: Vec::new(),
+        },
+        Some("g-layer-btn"),
+    );
+    layer_shape.states.push(make_state_def("selected"));
+    let layer_text = make_obj(
+        "l-txt",
+        crate::ObjectKind::Text {
+            text: "Close".into(),
+            style: crate::TextStyle::default(),
+            runs: Vec::new(),
+            paragraphs: Vec::new(),
+            autofit: crate::Autofit::None,
+            text_style: None,
+            outline: None,
+            point_text: false,
+        },
+        Some("g-layer-btn"),
+    );
+    layer.objects.extend([layer_shape, layer_text]);
+    layer
+        .groups
+        .push(make_group("g-layer-btn", true, "disabled"));
+    layer.triggers.push(Trigger {
+        when: Event::Click {
+            object: "g-layer-btn".into(),
+        },
+        action: crate::Action::ChangeState {
+            object: "g-layer-btn".into(),
+            state: "selected".into(),
+        },
+        condition: Some(crate::Condition::ObjectState {
+            object: "g-layer-btn".into(),
+            state: "disabled".into(),
+            is: false,
+        }),
+        disabled: false,
+    });
+    slide.layers.push(layer);
+
+    // Base triggers exercising all interactive-group-compatible events, actions, and conditions.
+    slide.triggers.extend([
+        Trigger {
+            when: Event::Click {
+                object: "g-btn".into(),
+            },
+            action: crate::Action::ChangeState {
+                object: "g-btn".into(),
+                state: "custom_glow".into(),
+            },
+            condition: Some(crate::Condition::ObjectState {
+                object: "g-btn".into(),
+                state: "normal".into(),
+                is: true,
+            }),
+            disabled: false,
+        },
+        Trigger {
+            when: Event::HoverStart {
+                object: "g-btn".into(),
+            },
+            action: crate::Action::PauseTimeline,
+            condition: None,
+            disabled: false,
+        },
+        Trigger {
+            when: Event::HoverEnd {
+                object: "g-btn".into(),
+            },
+            action: crate::Action::ResumeTimeline,
+            condition: None,
+            disabled: false,
+        },
+        Trigger {
+            when: Event::StateChanges {
+                object: "g-btn".into(),
+                to: Some("custom_glow".into()),
+            },
+            action: crate::Action::ChangeState {
+                object: "g-btn".into(),
+                state: "disabled".into(),
+            },
+            condition: None,
+            disabled: false,
+        },
+        Trigger {
+            when: Event::StateChanges {
+                object: "g-btn".into(),
+                to: Some("visited".into()),
+            },
+            action: crate::Action::PauseTimeline,
+            condition: None,
+            disabled: false,
+        },
+        Trigger {
+            when: Event::KeyPressed {
+                key: "enter".into(),
+                object: Some("g-btn".into()),
+            },
+            action: crate::Action::ShowLayer {
+                layer: "layer-nav".into(),
+            },
+            condition: Some(crate::Condition::ObjectState {
+                object: "g-btn".into(),
+                state: "custom_glow".into(),
+                is: true,
+            }),
+            disabled: false,
+        },
+    ]);
+
+    assert_eq!(errors(&c), Vec::<String>::new());
+
+    // Verify Slide helper methods directly.
+    let s = &c.scenes[0].slides[0];
+    assert_eq!(
+        s.group("g-btn").map(|(g, o)| (g.id.as_str(), o)),
+        Some(("g-btn", None))
+    );
+    assert_eq!(
+        s.group("g-layer-btn").map(|(g, o)| (g.id.as_str(), o)),
+        Some(("g-layer-btn", Some("layer-nav")))
+    );
+    assert!(s.group("missing").is_none());
+    assert!(s.interactive_group("g-btn").is_some());
+    assert!(s.interactive_group("g-layer-btn").is_some());
+    assert_eq!(
+        s.interactive_group_of_object("btn-label")
+            .map(|(g, o)| (g.id.as_str(), o)),
+        Some(("g-btn", None))
+    );
+    assert_eq!(
+        s.interactive_group_of_object("l-txt")
+            .map(|(g, o)| (g.id.as_str(), o)),
+        Some(("g-layer-btn", Some("layer-nav")))
+    );
+    assert!(s.interactive_group_of_object(&s.objects[0].id).is_none());
+    assert_eq!(s.group_members("g-btn").len(), 6);
+    assert_eq!(s.group_members("g-layer-btn").len(), 2);
+    assert!(s.group_has_state("g-btn", "normal"));
+    assert!(s.group_has_state("g-btn", "hidden"));
+    assert!(s.group_has_state("g-btn", "disabled"));
+    assert!(s.group_has_state("g-btn", "custom_glow"));
+    assert!(!s.group_has_state("g-btn", "nonexistent"));
+    assert!(s.group_has_state("g-layer-btn", "selected"));
+    assert!(s.local_ids().any(|id| id == "g-btn"));
+    assert!(s.local_ids().any(|id| id == "g-layer-btn"));
+}

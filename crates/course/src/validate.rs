@@ -7,8 +7,8 @@ use std::fmt::Write as _;
 use serde::Serialize;
 
 use crate::{
-    Action, Condition, Course, Event, Layer, Object, ObjectKind, QuestionKind, SCHEMA_VERSION,
-    Scoring, Slide, SlideTarget, StateExtraKind, ValueKind, ValueSource, VarOp,
+    Action, Condition, Course, Event, Group, Layer, Object, ObjectKind, QuestionKind,
+    SCHEMA_VERSION, Scoring, Slide, SlideTarget, StateExtraKind, ValueKind, ValueSource, VarOp,
 };
 
 /// Conditions nested deeper than this are rejected (and the player refuses them).
@@ -1045,7 +1045,18 @@ fn check_slide(course: &Course, cx: &mut Ctx<'_>, slide: &Slide) {
         return;
     }
     let mut ids = BTreeSet::new();
-    for id in slide.local_ids() {
+    for id in slide
+        .objects
+        .iter()
+        .map(|o| o.id.as_str())
+        .chain(slide.layers.iter().map(|l| l.id.as_str()))
+        .chain(
+            slide
+                .layers
+                .iter()
+                .flat_map(|l| l.objects.iter().map(|o| o.id.as_str())),
+        )
+    {
         if !valid_name(id) {
             cx.err(format!(
                 "object/layer id {id:?} must be 1-128 chars of [A-Za-z0-9_-]"
@@ -1078,6 +1089,14 @@ fn check_slide(course: &Course, cx: &mut Ctx<'_>, slide: &Slide) {
     if cx.should_stop() {
         return;
     }
+    if !slide.groups.is_empty() {
+        cx.with_field("groups", |cx| {
+            check_groups_list(cx, slide, &slide.objects, &slide.groups, &mut ids, false);
+        });
+    }
+    if cx.should_stop() {
+        return;
+    }
     check_slide_draggable_objects(cx, slide);
     if cx.should_stop() {
         return;
@@ -1095,7 +1114,7 @@ fn check_slide(course: &Course, cx: &mut Ctx<'_>, slide: &Slide) {
     if cx.should_stop() {
         return;
     }
-    check_slide_layers(course, cx, slide);
+    check_slide_layers(course, cx, slide, &mut ids);
     if cx.should_stop() {
         return;
     }
@@ -1121,7 +1140,12 @@ fn check_slide(course: &Course, cx: &mut Ctx<'_>, slide: &Slide) {
     }
 }
 
-fn check_slide_layers(course: &Course, cx: &mut Ctx<'_>, slide: &Slide) {
+fn check_slide_layers<'a>(
+    course: &Course,
+    cx: &mut Ctx<'_>,
+    slide: &'a Slide,
+    ids: &mut BTreeSet<&'a str>,
+) {
     if slide.layers.is_empty() {
         return;
     }
@@ -1149,6 +1173,11 @@ fn check_slide_layers(course: &Course, cx: &mut Ctx<'_>, slide: &Slide) {
                             check_group_members(cx, &layer.objects);
                         }
                         check_panel_members(cx, &layer.objects);
+                    });
+                }
+                if !cx.should_stop() && !layer.groups.is_empty() {
+                    cx.with_field("groups", |cx| {
+                        check_groups_list(cx, slide, &layer.objects, &layer.groups, ids, false);
                     });
                 }
                 if !cx.should_stop() && !layer.triggers.is_empty() {
@@ -1270,7 +1299,18 @@ fn check_master(course: &Course, cx: &mut Ctx<'_>, master: &Slide) {
         return;
     }
     let mut ids = BTreeSet::new();
-    for id in master.local_ids() {
+    for id in master
+        .objects
+        .iter()
+        .map(|o| o.id.as_str())
+        .chain(master.layers.iter().map(|l| l.id.as_str()))
+        .chain(
+            master
+                .layers
+                .iter()
+                .flat_map(|l| l.objects.iter().map(|o| o.id.as_str())),
+        )
+    {
         if !valid_name(id) {
             let label = master_label(master);
             cx.err(format!(
@@ -1285,7 +1325,7 @@ fn check_master(course: &Course, cx: &mut Ctx<'_>, master: &Slide) {
             return;
         }
     }
-    // Run the ordinary object checks, then name the master in every new message.
+    // Run the ordinary object and group checks, then name the master in every new message.
     let first_new = cx.issues.len();
     if !master.objects.is_empty() {
         cx.with_field("objects", |cx| {
@@ -1299,6 +1339,11 @@ fn check_master(course: &Course, cx: &mut Ctx<'_>, master: &Slide) {
                 check_group_members(cx, &master.objects);
             }
             check_panel_members(cx, &master.objects);
+        });
+    }
+    if !cx.should_stop() && !master.groups.is_empty() {
+        cx.with_field("groups", |cx| {
+            check_groups_list(cx, master, &master.objects, &master.groups, &mut ids, true);
         });
     }
     if cx.issues.len() > first_new {
@@ -1398,6 +1443,88 @@ fn slide_has_unsupported_script(slide: &Slide) -> bool {
                 .iter()
                 .any(|pair| bad(&pair.left) || bad(&pair.right))
     })
+}
+
+/// Validate explicit [`Group`] records on a slide base layer or slide layer.
+fn check_groups_list<'a>(
+    cx: &mut Ctx<'_>,
+    slide: &'a Slide,
+    owner_objects: &[Object],
+    groups: &'a [Group],
+    ids: &mut BTreeSet<&'a str>,
+    is_master: bool,
+) {
+    for (gi, g) in groups.iter().enumerate() {
+        cx.with_index(gi, |cx| {
+            if !valid_name(&g.id) {
+                cx.err_at(
+                    "id",
+                    format!("group id {:?} must be 1-128 chars of [A-Za-z0-9_-]", g.id),
+                );
+            }
+            if !ids.insert(g.id.as_str()) {
+                cx.err_at(
+                    "id",
+                    format!(
+                        "group id {:?} is duplicated or collides with an object or layer id on slide {:?}",
+                        g.id, slide.id
+                    ),
+                );
+            }
+            if cx.should_stop() {
+                return;
+            }
+            let members: Vec<&Object> = owner_objects
+                .iter()
+                .filter(|o| o.group.as_deref() == Some(g.id.as_str()))
+                .collect();
+            if members.is_empty() {
+                cx.err(format!(
+                    "group {:?} has no member objects on this layer",
+                    g.id
+                ));
+                if cx.should_stop() {
+                    return;
+                }
+            }
+            if !g.interactive {
+                return;
+            }
+            if is_master {
+                let label = master_label(slide);
+                cx.err_at(
+                    "interactive",
+                    format!("{label} must not have interactive group {:?}", g.id),
+                );
+                if cx.should_stop() {
+                    return;
+                }
+            }
+            for member in &members {
+                if crate::is_disallowed_interactive_group_member(member, slide.question.as_ref()) {
+                    cx.err(format!(
+                        "interactive group {:?} cannot contain object {:?} (inputs, scrolling panels, web, media, markers, tables, draggable objects, and question items are not allowed)",
+                        g.id, member.id
+                    ));
+                    if cx.should_stop() {
+                        return;
+                    }
+                }
+            }
+            if !slide.group_has_state(&g.id, &g.initial_state) {
+                cx.err_at(
+                    "initial_state",
+                    format!(
+                        "initial_state {:?} is not defined on any member of interactive group {:?}",
+                        g.initial_state, g.id
+                    ),
+                );
+            }
+        });
+        if cx.should_stop() {
+            return;
+        }
+    }
 }
 
 /// Warn when a group id has only one member on this layer.
@@ -3220,12 +3347,39 @@ fn check_object_motion_paths(cx: &mut Ctx<'_>, o: &Object) {
     });
 }
 
+enum TargetRef<'a> {
+    Object(&'a Object),
+    InteractiveGroup(&'a Group),
+}
+
 fn check_object_ref(cx: &mut Ctx<'_>, slide: &Slide, id: &str) -> Option<()> {
     if slide.object(id).is_none() {
         cx.err(format!("object {id:?} is not on slide {:?}", slide.id));
         return None;
     }
     Some(())
+}
+
+fn check_object_or_interactive_group_ref<'a>(
+    cx: &mut Ctx<'_>,
+    slide: &'a Slide,
+    id: &str,
+) -> Option<TargetRef<'a>> {
+    if let Some((o, _)) = slide.object(id) {
+        return Some(TargetRef::Object(o));
+    }
+    if let Some((g, _)) = slide.interactive_group(id) {
+        return Some(TargetRef::InteractiveGroup(g));
+    }
+    if slide.group(id).is_some() || !slide.group_members(id).is_empty() {
+        cx.err(format!(
+            "group {id:?} on slide {:?} is not an interactive group",
+            slide.id
+        ));
+    } else {
+        cx.err(format!("object {id:?} is not on slide {:?}", slide.id));
+    }
+    None
 }
 
 fn check_layer_ref(cx: &mut Ctx<'_>, slide: &Slide, id: &str) {
@@ -3313,11 +3467,10 @@ fn check_event(course: &Course, cx: &mut Ctx<'_>, slide: &Slide, e: &Event) {
                 let _ = check_object_ref(cx, slide, object);
             }
         }
-        Event::Click { object }
-        | Event::HoverStart { object }
-        | Event::HoverEnd { object }
-        | Event::MarkerOpened { object }
-        | Event::MarkerClosed { object } => {
+        Event::Click { object } | Event::HoverStart { object } | Event::HoverEnd { object } => {
+            let _ = check_object_or_interactive_group_ref(cx, slide, object);
+        }
+        Event::MarkerOpened { object } | Event::MarkerClosed { object } => {
             let _ = check_object_ref(cx, slide, object);
         }
         Event::CueReached { object, cue } => {
@@ -3337,12 +3490,27 @@ fn check_event(course: &Course, cx: &mut Ctx<'_>, slide: &Slide, e: &Event) {
             }
         }
         Event::StateChanges { object, to } => {
-            if check_object_ref(cx, slide, object).is_some()
-                && let (Some(to), Some((o, _))) = (to, slide.object(object))
-                && !o.has_state(to)
-                && !crate::BUILTIN_STATES.contains(&to.as_str())
-            {
-                cx.err(format!("state {to:?} is not defined on object {object:?}"));
+            match check_object_or_interactive_group_ref(cx, slide, object) {
+                Some(TargetRef::Object(o)) => {
+                    if let Some(to) = to
+                        && !o.has_state(to)
+                        && !crate::BUILTIN_STATES.contains(&to.as_str())
+                    {
+                        cx.err(format!("state {to:?} is not defined on object {object:?}"));
+                    }
+                }
+                Some(TargetRef::InteractiveGroup(g)) => {
+                    if let Some(to) = to
+                        && !slide.group_has_state(&g.id, to)
+                        && !crate::BUILTIN_STATES.contains(&to.as_str())
+                    {
+                        cx.err(format!(
+                            "state {to:?} is not defined on interactive group {:?}",
+                            g.id
+                        ));
+                    }
+                }
+                None => {}
             }
         }
         Event::VariableChanges { variable } => {
@@ -3371,7 +3539,7 @@ fn check_event(course: &Course, cx: &mut Ctx<'_>, slide: &Slide, e: &Event) {
             if !cx.should_stop()
                 && let Some(obj) = object
             {
-                let _ = check_object_ref(cx, slide, obj);
+                let _ = check_object_or_interactive_group_ref(cx, slide, obj);
             }
         }
         Event::DroppedOn { object, target } => {
@@ -3456,13 +3624,19 @@ fn check_action(
             }
         }
         Action::ChangeState { object, state } => {
-            if check_object_ref(cx, slide, object).is_some()
-                && let Some((o, _)) = slide.object(object)
-                && !o.has_state(state)
-            {
-                cx.err(format!(
-                    "state {state:?} is not defined on object {object:?}"
-                ));
+            match check_object_or_interactive_group_ref(cx, slide, object) {
+                Some(TargetRef::Object(o)) if !o.has_state(state) => {
+                    cx.err(format!(
+                        "state {state:?} is not defined on object {object:?}"
+                    ));
+                }
+                Some(TargetRef::InteractiveGroup(g)) if !slide.group_has_state(&g.id, state) => {
+                    cx.err(format!(
+                        "state {state:?} is not defined on interactive group {:?}",
+                        g.id
+                    ));
+                }
+                _ => {}
             }
         }
         Action::SetVariable {
@@ -3875,13 +4049,19 @@ fn check_condition(course: &Course, cx: &mut Ctx<'_>, slide: &Slide, c: &Conditi
             }
         }
         Condition::ObjectState { object, state, .. } => {
-            if check_object_ref(cx, slide, object).is_some()
-                && let Some((o, _)) = slide.object(object)
-                && !o.has_state(state)
-            {
-                cx.err(format!(
-                    "state {state:?} is not defined on object {object:?}"
-                ));
+            match check_object_or_interactive_group_ref(cx, slide, object) {
+                Some(TargetRef::Object(o)) if !o.has_state(state) => {
+                    cx.err(format!(
+                        "state {state:?} is not defined on object {object:?}"
+                    ));
+                }
+                Some(TargetRef::InteractiveGroup(g)) if !slide.group_has_state(&g.id, state) => {
+                    cx.err(format!(
+                        "state {state:?} is not defined on interactive group {:?}",
+                        g.id
+                    ));
+                }
+                _ => {}
             }
         }
     }
