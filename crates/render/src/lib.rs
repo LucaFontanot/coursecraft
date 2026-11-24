@@ -95,8 +95,8 @@ pub use focus::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use font::IndexFontProvider;
 pub use font::{
-    SystemFontData, SystemFontProvider, course_face_family, install_course_fonts, install_fonts,
-    set_system_font_provider, slide_font, slide_font_named, system_face_family,
+    SystemFontData, SystemFontProvider, course_face_family, font_epoch, install_course_fonts,
+    install_fonts, set_system_font_provider, slide_font, slide_font_named, system_face_family,
 };
 pub use icons::{Icon, icon, icon_fill, icon_text};
 pub use layout::SlideTransform;

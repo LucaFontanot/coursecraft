@@ -833,3 +833,88 @@ fn s1_guard_counters_reset_and_record_canvas_compose() {
         gc::canvas_composes()
     );
 }
+
+/// G-03: Steady idle and scroll frames perform zero `FontDefinitions` clones on
+/// both `hello-course` and a course with a registered custom font face.
+#[test]
+fn g03_steady_frames_zero_font_def_clones() {
+    // 1. hello-course: 20 idle frames + 20 scroll frames after settling.
+    let mut h = hello();
+    for _ in 0..10 {
+        let _ = h.idle_frame();
+    }
+    reset_counts();
+    for _ in 0..20 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::font_def_clones(),
+        0,
+        "20 steady idle frames on hello-course must perform zero FontDefinitions clones"
+    );
+
+    let list_pos = pos2(90.0, 300.0);
+    h.frame(vec![Event::PointerMoved(list_pos)]);
+    reset_counts();
+    for i in 0..20 {
+        let dy = if i % 2 == 0 { -120.0 } else { 120.0 };
+        h.frame(vec![wheel(dy)]);
+    }
+    assert_eq!(
+        gc::font_def_clones(),
+        0,
+        "20 scroll frames on hello-course must perform zero FontDefinitions clones"
+    );
+
+    // 2. Course with a registered custom font face: 20 idle frames after settling.
+    const TEST_FONT: &[u8] = include_bytes!("../../render/fonts/Inter-Bold.ttf");
+    let custom_json = r##"{
+        "schema_version": 1,
+        "id": "custom-font-guard",
+        "title": "Custom Font Guard",
+        "slide_size": { "w": 1280, "h": 720 },
+        "fonts": [{
+            "family": "BrandDisplay",
+            "style": "regular",
+            "src": "fonts/brand.ttf"
+        }],
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [{
+                "id": "s0",
+                "title": "Brand Slide",
+                "objects": [{
+                    "id": "t0",
+                    "kind": {
+                        "type": "text",
+                        "text": "Custom font headline",
+                        "style": { "font": "BrandDisplay", "size": 42, "color": "#111827" }
+                    },
+                    "frame": { "x": 80, "y": 80, "w": 640, "h": 120 }
+                }]
+            }]
+        }]
+    }"##;
+    let custom_course = Course::from_json(custom_json).expect("custom font course parses");
+    let mut h_custom = TestHarness::new(custom_course);
+    h_custom
+        .editor
+        .set_media(vec![("fonts/brand.ttf".into(), Arc::from(TEST_FONT))]);
+    for _ in 0..10 {
+        let _ = h_custom.idle_frame();
+    }
+    assert!(
+        coursecraft_render::font_epoch(&h_custom.ctx) > 0,
+        "custom font course should have installed fonts"
+    );
+    reset_counts();
+    for _ in 0..20 {
+        let _ = h_custom.idle_frame();
+    }
+    assert_eq!(
+        gc::font_def_clones(),
+        0,
+        "20 steady idle frames with a registered custom font face must perform zero FontDefinitions clones"
+    );
+}
