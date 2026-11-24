@@ -33,6 +33,8 @@ pub mod prefs;
 pub mod preview_server;
 pub mod publish;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod recent_previews;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod system_fonts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod template_library;
@@ -146,6 +148,9 @@ struct EditorApp {
     /// One background agent check or action at a time, on the desktop.
     #[cfg(not(target_arch = "wasm32"))]
     agents: agents::AgentClient,
+    /// Thumbnails of the recent courses, read in the background.
+    #[cfg(not(target_arch = "wasm32"))]
+    recent_previews: recent_previews::RecentPreviews,
     #[cfg(not(target_arch = "wasm32"))]
     project: Project,
     #[cfg(not(target_arch = "wasm32"))]
@@ -520,6 +525,8 @@ impl EditorApp {
             editor,
             ai: ai::AiClient::new(),
             agents: agents::AgentClient::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_previews: recent_previews::RecentPreviews::default(),
             project,
             prefs,
             config_dir,
@@ -3224,6 +3231,9 @@ impl EditorApp {
 
             // 2. Periodic autosave
             self.update_autosave(ui.ctx());
+
+            // 2a. Thumbnails of the recent courses on the start page
+            self.recent_previews.update(&mut self.editor, ui.ctx());
 
             // 2b. Background publish results
             self.poll_publish(ui.ctx());

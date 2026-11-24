@@ -1341,6 +1341,9 @@ pub struct Editor {
     pub ui: UiState,
     pub preview: Option<Preview>,
     pub recent_files: Vec<String>,
+    /// The first slide of each recent course, drawn as its thumbnail on the
+    /// start page (the desktop app reads them in the background).
+    pub recent_previews: Vec<(String, welcome::RecentPreview)>,
     pub library_templates: Vec<LibraryTemplateEntry>,
     pub library_templates_available: bool,
     pub file_ops_available: bool,
@@ -1709,6 +1712,7 @@ impl Editor {
             },
             preview: None,
             recent_files: Vec::new(),
+            recent_previews: Vec::new(),
             library_templates: Vec::new(),
             library_templates_available: false,
             file_ops_available: true,
@@ -1866,7 +1870,24 @@ impl Editor {
 
     /// Update recent files list shown in the File menu.
     pub fn set_recent(&mut self, recent: Vec<String>) {
+        self.recent_previews
+            .retain(|(path, _)| recent.iter().any(|r| r == path));
         self.recent_files = recent;
+    }
+
+    /// Remember the course at `path` (a recent file) for its thumbnail.
+    pub fn set_recent_preview(&mut self, path: String, course: &Course) {
+        let Some(preview) = welcome::RecentPreview::of(course) else {
+            return;
+        };
+        self.recent_previews.retain(|(p, _)| *p != path);
+        self.recent_previews.push((path, preview));
+    }
+
+    /// Whether the start page is on screen (its thumbnails are wanted).
+    #[must_use]
+    pub fn start_page_shown(&self) -> bool {
+        self.ui.show_welcome || self.ui.file_page.open
     }
 
     /// Update the list of templates shown under "My library".

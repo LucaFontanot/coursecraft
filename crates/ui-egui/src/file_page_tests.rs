@@ -158,3 +158,19 @@ fn a_template_on_the_start_section_opens_from_the_file_tab_too() {
     assert!(!h.editor.ui.file_page.open, "the page closes");
     assert_eq!(h.editor.session.course.id, "quick-knowledge-check");
 }
+
+#[test]
+fn recent_courses_get_a_thumbnail_and_drop_it_when_they_leave_the_list() {
+    let mut h = welcome();
+    let path = "/courses/hello.ccraft".to_owned();
+    h.editor.set_recent(vec![path.clone()]);
+    let course = Course::from_json(HELLO_COURSE).expect("hello course parses");
+    h.editor.set_recent_preview(path.clone(), &course);
+    assert_eq!(h.editor.recent_previews.len(), 1);
+    for _ in 0..2 {
+        h.idle_frame();
+    }
+    assert!(h.find_text("hello.ccraft").is_some(), "the recent row");
+    h.editor.set_recent(Vec::new());
+    assert!(h.editor.recent_previews.is_empty());
+}

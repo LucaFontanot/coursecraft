@@ -45,8 +45,10 @@ closes the page; Esc and Back return. **It is also the launch page** (2026-11-24
 on, CourseCraft opens on the File page at **Start** (new blank course, open, PowerPoint, the
 examples, the templates and recent courses, `welcome::start_content`); until a course is open,
 Back, Esc and the entries that need a course are off ("Open or create a course first"), and
-Help › Welcome opens it again. With the ribbon off the old welcome card is drawn. Still to do:
-thumbnails in Recent, and news.
+Help › Welcome opens it again. With the ribbon off the old welcome card is drawn. Recent courses
+show their first slide as a thumbnail (the desktop app reads each `course.json` once in the
+background, `apps/coursecraft/src/recent_previews.rs`; media isn't loaded, so pictures show as
+placeholders). Still to do: news.
 
 Not a ribbon tab: a full-window **File page**, the same page CourseCraft shows on launch
 (today's welcome screen, `crates/ui-egui/src/welcome.rs`). Layout per storyline-observed.md ›
@@ -61,7 +63,7 @@ and keeps all of it:
 | Record Screen | — | 🚫 | Not planned (patent watch list) |
 | Import ▾ (PowerPoint…, Questions from CSV…, Course from Document…) | `ui:file.import.*` | ✅ | File › Import |
 | Team Slides | — | — | shared cloud library; not drawn |
-| Recent (thumbnail + name) | `ui:file.openRecent` | 🟡 | names only today, in Start and Recent; add thumbnails |
+| Recent (thumbnail + name) | `ui:file.openRecent` | ✅ | first-slide thumbnail and name, in Start and Recent (pictures as placeholders) |
 | Browse for more… | `ui:file.open` | ✅ | File › Open… |
 
 Project commands (below the start actions once a course is open):

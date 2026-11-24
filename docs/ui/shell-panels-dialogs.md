@@ -24,7 +24,7 @@ Top to bottom:
 | Menu bar | none | drawn only when Preferences › Interface › Ribbon is off; with the ribbon, File is the File page and every other item has a ribbon home (ribbon.md › Where the menu bar went) | — | delete the code with the flat toolbar (step 4) |
 | Flat toolbar | none | `toolbar.rs`, drawn only when Preferences › Interface › Ribbon is off | — | its buttons are on Home, Insert, Slides and View; Format, Animate, Slide and Course are dock panels (a tab row in the fixed Inspector when docking is off); delete the code with the menu bar (step 4) |
 | Collapse ribbon (Ctrl+F1, double-click a tab) | yes | click or double-click the open tab, Ctrl+F1 | ✅ | |
-| File page = start screen (left action column, Recent with thumbnails, news) | yes | `file_page.rs` from the File tab and on launch (accent column, Start with the welcome screen's content, Recent, Import, Export, Translation, Fonts) | 🟡 | thumbnails and news |
+| File page = start screen (left action column, Recent with thumbnails, news) | yes | `file_page.rs` from the File tab and on launch (accent column, Start with the welcome screen's content, Recent with first-slide thumbnails, Import, Export, Translation, Fonts) | 🟡 | news |
 | Tooltips: name, shortcut, one sentence | yes | partial | 🟡 | every ribbon control, from the registry |
 | View tabs row with open slides | yes | `doc_tabs.rs`: Course Map tab, then each opened slide (× closes; closing the shown one shows its neighbour, the last one the map) | ✅ | breadcrumb tabs for sub-editors |
 | Device toggles in view row | yes | — | ⛔ | they set the preview device |

@@ -456,7 +456,22 @@ fn section_detail(
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or(full_path);
-                    if choice(ui, name, full_path, true, "") {
+                    let preview = editor
+                        .recent_previews
+                        .iter()
+                        .find(|(path, _)| path == full_path)
+                        .map(|(_, preview)| preview);
+                    let clicked = ui
+                        .horizontal_top(|ui| {
+                            let (thumb, _) =
+                                ui.allocate_exact_size(vec2(96.0, 54.0), egui::Sense::hover());
+                            crate::welcome::paint_recent_thumbnail(ui, preview, thumb);
+                            ui.add_space(8.0);
+                            ui.vertical(|ui| choice(ui, name, full_path, true, ""))
+                                .inner
+                        })
+                        .inner;
+                    if clicked {
                         *pick = Some(Pick::Request(EditorRequest::OpenRecent(idx)));
                     }
                 }
