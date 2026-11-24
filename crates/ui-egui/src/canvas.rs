@@ -5322,6 +5322,22 @@ pub(crate) fn apply_canvas_state_preview(
     }
 }
 
+fn canvas_media_fingerprint(media: &[(String, std::sync::Arc<[u8]>)]) -> (usize, u64) {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (name, bytes) in media {
+        for &b in name.as_bytes() {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        let ptr = bytes.as_ptr() as usize as u64;
+        hash ^= ptr ^ (bytes.len() as u64);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (media.len(), hash)
+}
+
 pub(crate) fn missing_images_as_placeholders(
     items: &mut [DrawItem],
     media: &[(String, std::sync::Arc<[u8]>)],
@@ -7104,61 +7120,130 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
             .ui
             .layers
             .extra_layer_ids(slide, editor.selection.layer.as_deref());
-        let hide_base_view = editor.selection.layer.is_some()
-            && editor.session.course.editor.base_slide_view
-                == coursecraft_course::BaseSlideView::Hide;
-        let dim_base = editor.selection.layer.is_some()
-            && editor.session.course.editor.base_slide_view
-                == coursecraft_course::BaseSlideView::Dim;
-        #[cfg(test)]
-        crate::guard_counters::note_canvas_compose();
-        let mut items = coursecraft_render::compose_authoring_layers_opts(
-            &editor.session.course,
-            slide,
+        let base_slide_view = editor.session.course.editor.base_slide_view;
+        let selected_marker_id = editor.selection.object.as_deref().filter(|sel| {
+            slide.object(sel).is_some_and(|(obj, _)| {
+                matches!(obj.kind, coursecraft_course::ObjectKind::Marker { .. })
+            })
+        });
+        let preview_state = editor
+            .selection
+            .object
+            .as_deref()
+            .zip(editor.ui.preview_state.as_deref());
+        let editing_state = editor
+            .ui
+            .editing_state
+            .as_ref()
+            .map(|session| session.object_id.as_str());
+        let inline_edit_target =
+            editor
+                .ui
+                .inline_edit
+                .as_ref()
+                .map(|edit| crate::InlineEditTargetRef {
+                    object: edit.object.as_str(),
+                    cell: edit.cell,
+                    is_extra: edit.extra_id.is_some(),
+                });
+        let media_fp = canvas_media_fingerprint(&editor.media);
+
+        let cached_items = if let Some(hit) = editor.ui.canvas_compose_cache.get_if_matching(
+            editor.session.revision,
+            &editor.selection.slide,
             editor.selection.layer.as_deref(),
             &extra_layers,
-            dim_base,
-            !hide_base_view,
-        );
-        items.retain(|item| {
-            !matches!(&item.hit, Hit::Object(id)
-                if slide.object(id).is_some_and(|(o, _)| o.editor_hidden))
-        });
-        if let Some(selected) = &editor.selection.object {
-            for item in &mut items {
-                if item.hit == Hit::Object(selected.clone())
-                    && let Visual::Marker { open, .. } = &mut item.visual
-                {
-                    *open = true;
+            base_slide_view,
+            selected_marker_id,
+            preview_state,
+            editing_state,
+            inline_edit_target,
+            media_fp,
+        ) {
+            hit
+        } else {
+            let hide_base_view = editor.selection.layer.is_some()
+                && base_slide_view == coursecraft_course::BaseSlideView::Hide;
+            let dim_base = editor.selection.layer.is_some()
+                && base_slide_view == coursecraft_course::BaseSlideView::Dim;
+            #[cfg(test)]
+            crate::guard_counters::note_canvas_compose();
+            let mut composed = coursecraft_render::compose_authoring_layers_opts(
+                &editor.session.course,
+                slide,
+                editor.selection.layer.as_deref(),
+                &extra_layers,
+                dim_base,
+                !hide_base_view,
+            );
+            composed.retain(|item| {
+                !matches!(&item.hit, Hit::Object(id)
+                    if slide.object(id).is_some_and(|(o, _)| o.editor_hidden))
+            });
+            if let Some(selected) = selected_marker_id {
+                for item in &mut composed {
+                    if matches!(&item.hit, Hit::Object(id) if id == selected)
+                        && let Visual::Marker { open, .. } = &mut item.visual
+                    {
+                        *open = true;
+                    }
                 }
             }
-        }
-        for item in &mut items {
-            if matches!(item.visual, Visual::Table(_)) {
-                item.show_table_overflow = true;
+            for item in &mut composed {
+                if matches!(item.visual, Visual::Table(_)) {
+                    item.show_table_overflow = true;
+                }
             }
-        }
-        if let (Some(sel_obj_id), Some(preview_state)) =
-            (&editor.selection.object, &editor.ui.preview_state)
-            && let Some((obj, _)) = slide.object(sel_obj_id)
-        {
-            apply_canvas_state_preview(
-                &mut items,
-                obj,
-                preview_state,
-                Some(&editor.session.course.theme),
-                crate::states::course_input_value(&editor.session.course, obj),
+            if let Some((sel_obj_id, preview_state_name)) = preview_state
+                && let Some((obj, _)) = slide.object(sel_obj_id)
+            {
+                apply_canvas_state_preview(
+                    &mut composed,
+                    obj,
+                    preview_state_name,
+                    Some(&editor.session.course.theme),
+                    crate::states::course_input_value(&editor.session.course, obj),
+                );
+            }
+            if let Some(edit) = &editor.ui.inline_edit {
+                hide_edited_text(&mut composed, edit);
+            }
+            missing_images_as_placeholders(&mut composed, &editor.media);
+            if let Some(edit_obj_id) = editing_state {
+                for item in &mut composed {
+                    item.dimmed = !matches!(&item.hit, Hit::Object(id) if id == edit_obj_id);
+                }
+            }
+            let arc_items: std::sync::Arc<[DrawItem]> = std::sync::Arc::from(composed);
+            let selected_marker_owned = selected_marker_id.map(str::to_owned);
+            let preview_state_owned = preview_state.map(|(o, s)| (o.to_owned(), s.to_owned()));
+            let editing_state_owned = editing_state.map(str::to_owned);
+            let inline_edit_owned = inline_edit_target
+                .map(|target| (target.object.to_owned(), target.cell, target.is_extra));
+            editor.ui.canvas_compose_cache.store(
+                editor.session.revision,
+                &editor.selection.slide,
+                editor.selection.layer.as_deref(),
+                extra_layers,
+                base_slide_view,
+                selected_marker_owned.as_deref(),
+                preview_state_owned
+                    .as_ref()
+                    .map(|(o, s)| (o.as_str(), s.as_str())),
+                editing_state_owned.as_deref(),
+                inline_edit_owned
+                    .as_ref()
+                    .map(|(o, cell, extra)| crate::InlineEditTargetRef {
+                        object: o.as_str(),
+                        cell: *cell,
+                        is_extra: *extra,
+                    }),
+                media_fp,
+                std::sync::Arc::clone(&arc_items),
             );
-        }
-        if let Some(edit) = &editor.ui.inline_edit {
-            hide_edited_text(&mut items, edit);
-        }
-        missing_images_as_placeholders(&mut items, &editor.media);
-        if let Some(ref session) = editor.ui.editing_state {
-            for item in &mut items {
-                item.dimmed = item.hit != Hit::Object(session.object_id.clone());
-            }
-        }
+            arc_items
+        };
+        let mut drag_items: Option<Vec<DrawItem>> = None;
 
         let popup_was_open = ui
             .ctx()
@@ -7267,7 +7352,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 .slide(&editor.selection.slide)
                 .map(|slide| {
                     timeline_animated_items(
-                        &items,
+                        &cached_items,
                         slide,
                         editor.session.course.slide_size,
                         playhead_ms,
@@ -7324,7 +7409,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                     && (response.clicked() || response.drag_stopped())
                     && let Some(pos) = current_pointer
                 {
-                    let click_items = input_animated.as_deref().unwrap_or(&items);
+                    let click_items = input_animated.as_deref().unwrap_or(&cached_items);
                     handle_canvas_click(editor, pos, &t, click_items, modifiers);
                 }
             } else {
@@ -7338,19 +7423,23 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                         editor,
                         start_pos,
                         &t,
-                        input_animated.as_deref().unwrap_or(&items),
+                        input_animated.as_deref().unwrap_or(&cached_items),
                         modifiers,
                     );
                 }
 
                 if editor.ui.canvas_drag.is_some() {
-                    process_active_drag(editor, &mut items, &t, ui);
+                    let mut owned = cached_items.to_vec();
+                    process_active_drag(editor, &mut owned, &t, ui);
+                    drag_items = Some(owned);
                 }
                 if !pointer_in_hud
                     && response.clicked()
                     && let Some(pos) = current_pointer
                 {
-                    let click_items = input_animated.as_deref().unwrap_or(&items);
+                    let click_items = input_animated
+                        .as_deref()
+                        .unwrap_or(drag_items.as_deref().unwrap_or(&cached_items));
                     if response.double_clicked() {
                         handle_canvas_double_click(editor, pos, &t, click_items, modifiers);
                     } else {
@@ -7359,6 +7448,8 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 }
             }
         }
+
+        let items: &[DrawItem] = drag_items.as_deref().unwrap_or(&cached_items);
 
         // Right-click acts on what is under the pointer. An unselected object
         // becomes the selection first; a selected one keeps a multi-selection.
@@ -7375,7 +7466,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 editor,
                 pos,
                 &t,
-                input_animated.as_deref().unwrap_or(&items),
+                input_animated.as_deref().unwrap_or(items),
             );
         }
         response.context_menu(|ui| show_canvas_context_menu(editor, ui, special_mode));
@@ -7424,7 +7515,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                 .slide(&editor.selection.slide)
                 .map(|slide| {
                     timeline_animated_items(
-                        &items,
+                        items,
                         slide,
                         editor.session.course.slide_size,
                         playhead_ms,
@@ -7433,7 +7524,7 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         } else {
             None
         };
-        let view_items = animated.as_deref().unwrap_or(&items);
+        let view_items = animated.as_deref().unwrap_or(items);
         paint(
             &painter,
             &t,

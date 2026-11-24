@@ -1031,6 +1031,143 @@ pub struct UiState {
     pub(crate) thumbnail_cache: crate::slides::ThumbnailCache,
     /// Revision-cached slide/scene/bank summaries for the left navigator.
     pub(crate) navigator_index: crate::slides::NavigatorIndex,
+    /// Cached main-canvas composed draw items for idle/hover/scroll frames.
+    pub(crate) canvas_compose_cache: CanvasComposeCache,
+}
+
+/// Cached composed draw items for the main authoring canvas.
+#[derive(Debug)]
+pub(crate) struct CanvasComposeCache {
+    key: Option<CanvasComposeKey>,
+    items: std::sync::Arc<[coursecraft_render::DrawItem]>,
+}
+
+impl Default for CanvasComposeCache {
+    fn default() -> Self {
+        Self {
+            key: None,
+            items: std::sync::Arc::from([]),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InlineEditTargetKey {
+    object: String,
+    cell: Option<(usize, usize)>,
+    is_extra: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InlineEditTargetRef<'a> {
+    pub(crate) object: &'a str,
+    pub(crate) cell: Option<(usize, usize)>,
+    pub(crate) is_extra: bool,
+}
+
+impl InlineEditTargetKey {
+    fn from_ref(target: InlineEditTargetRef<'_>) -> Self {
+        Self {
+            object: target.object.to_owned(),
+            cell: target.cell,
+            is_extra: target.is_extra,
+        }
+    }
+
+    fn as_ref(&self) -> InlineEditTargetRef<'_> {
+        InlineEditTargetRef {
+            object: self.object.as_str(),
+            cell: self.cell,
+            is_extra: self.is_extra,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CanvasComposeKey {
+    revision: u64,
+    slide_id: String,
+    layer: Option<String>,
+    extra_layers: Vec<String>,
+    base_slide_view: coursecraft_course::BaseSlideView,
+    selected_marker_id: Option<String>,
+    preview_state: Option<(String, String)>,
+    editing_state: Option<String>,
+    inline_edit_target: Option<InlineEditTargetKey>,
+    media_fingerprint: (usize, u64),
+}
+
+impl CanvasComposeCache {
+    pub(crate) fn clear(&mut self) {
+        self.key = None;
+        self.items = std::sync::Arc::from([]);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn get_if_matching(
+        &self,
+        revision: u64,
+        slide_id: &str,
+        layer: Option<&str>,
+        extra_layers: &[String],
+        base_slide_view: coursecraft_course::BaseSlideView,
+        selected_marker_id: Option<&str>,
+        preview_state: Option<(&str, &str)>,
+        editing_state: Option<&str>,
+        inline_edit_target: Option<InlineEditTargetRef<'_>>,
+        media_fingerprint: (usize, u64),
+    ) -> Option<std::sync::Arc<[coursecraft_render::DrawItem]>> {
+        let key = self.key.as_ref()?;
+        let matches = key.revision == revision
+            && key.slide_id == slide_id
+            && key.layer.as_deref() == layer
+            && key.extra_layers.as_slice() == extra_layers
+            && key.base_slide_view == base_slide_view
+            && key.selected_marker_id.as_deref() == selected_marker_id
+            && key
+                .preview_state
+                .as_ref()
+                .map(|(obj, state)| (obj.as_str(), state.as_str()))
+                == preview_state
+            && key.editing_state.as_deref() == editing_state
+            && key
+                .inline_edit_target
+                .as_ref()
+                .map(InlineEditTargetKey::as_ref)
+                == inline_edit_target
+            && key.media_fingerprint == media_fingerprint;
+        matches.then(|| std::sync::Arc::clone(&self.items))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn store(
+        &mut self,
+        revision: u64,
+        slide_id: &str,
+        layer: Option<&str>,
+        extra_layers: Vec<String>,
+        base_slide_view: coursecraft_course::BaseSlideView,
+        selected_marker_id: Option<&str>,
+        preview_state: Option<(&str, &str)>,
+        editing_state: Option<&str>,
+        inline_edit_target: Option<InlineEditTargetRef<'_>>,
+        media_fingerprint: (usize, u64),
+        items: std::sync::Arc<[coursecraft_render::DrawItem]>,
+    ) {
+        self.key = Some(CanvasComposeKey {
+            revision,
+            slide_id: slide_id.to_owned(),
+            layer: layer.map(str::to_owned),
+            extra_layers,
+            base_slide_view,
+            selected_marker_id: selected_marker_id.map(str::to_owned),
+            preview_state: preview_state.map(|(obj, state)| (obj.to_owned(), state.to_owned())),
+            editing_state: editing_state.map(str::to_owned),
+            inline_edit_target: inline_edit_target.map(InlineEditTargetKey::from_ref),
+            media_fingerprint,
+        });
+        self.items = items;
+    }
 }
 
 /// Cached per-revision / per-media-count lists for the Properties panel.
@@ -1479,6 +1616,7 @@ impl Editor {
                 media_refs_cache: MediaRefsCache::default(),
                 thumbnail_cache: crate::slides::ThumbnailCache::default(),
                 navigator_index: crate::slides::NavigatorIndex::default(),
+                canvas_compose_cache: CanvasComposeCache::default(),
             },
             preview: None,
             recent_files: Vec::new(),
@@ -1769,6 +1907,7 @@ impl Editor {
         self.ui.course_map = CourseMapState::default();
         self.ui.thumbnail_cache.clear();
         self.ui.navigator_index.clear();
+        self.ui.canvas_compose_cache.clear();
         self.ui.publish.open = false;
         self.ui.publish.phase = PublishPhase::Idle;
         self.ui.publish.status = None;

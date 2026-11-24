@@ -114,8 +114,9 @@ pub use offscreen::{
     render_ui,
 };
 pub use paint::{
-    DEFAULT_BACKGROUND_COLOR, Highlight, dial_point, paint, paint_outline, paint_shape,
-    slider_fill_rect, slider_thumb_center, slider_track_rect, value_fraction,
+    DEFAULT_BACKGROUND_COLOR, DEFAULT_SHAPE_MESH_CACHE_MAX, Highlight, clear_shape_mesh_cache,
+    dial_point, paint, paint_outline, paint_shape, set_shape_mesh_cache_limit, slider_fill_rect,
+    slider_thumb_center, slider_track_rect, value_fraction,
 };
 pub use path_geometry::{
     CONNECTOR_MIN_LEAD, PathMeshSpec, arc_points, connector_site, connector_site_direction,
@@ -134,8 +135,9 @@ pub use shape_geometry::{
 };
 pub use snapshot::{PlayerSnapshotSelect, snapshot_player};
 pub use text_layout::{
-    AUTOFIT_MIN_SCALE, INDENT_STEP, LaidLink, LaidMarker, LaidParagraph, LaidText, fill_item_links,
-    inline_edit_layout_job, justify_galley, justify_galley_snapped, layout_text,
+    AUTOFIT_MIN_SCALE, DEFAULT_TEXT_LAYOUT_CACHE_MAX, INDENT_STEP, LaidLink, LaidMarker,
+    LaidParagraph, LaidText, clear_text_layout_cache, fill_item_links, inline_edit_layout_job,
+    justify_galley, justify_galley_snapped, layout_text, set_text_layout_cache_limit,
 };
 pub use ticker::Ticker;
 pub use view::{

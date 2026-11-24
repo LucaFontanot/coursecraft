@@ -800,12 +800,11 @@ fn editing_master_or_theme_invalidates_visible_thumbnails() {
 }
 
 /// s1: `guard_counters::reset()` zeroes all new M34 counters (canvas composes,
-/// renderer counters, and engine full-course validations), and running an editor
-/// frame increments `canvas_composes()`.
+/// renderer counters, and engine full-course validations), and running an uncached
+/// editor frame increments `canvas_composes()`.
 #[test]
 fn s1_guard_counters_reset_and_record_canvas_compose() {
     let mut h = hello();
-    let _ = h.idle_frame();
 
     // Bump every new counter before resetting so we prove reset() zeroes them all.
     gc::note_canvas_compose();
@@ -835,7 +834,7 @@ fn s1_guard_counters_reset_and_record_canvas_compose() {
     let _ = h.idle_frame();
     assert!(
         gc::canvas_composes() >= 1,
-        "an editor frame must record at least one canvas compose, got {}",
+        "an uncached editor frame must record at least one canvas compose, got {}",
         gc::canvas_composes()
     );
 }
@@ -1105,5 +1104,127 @@ fn g07_arrow_nudge_uses_cached_validation_with_zero_full_validations() {
         gc::validation_runs(),
         1,
         "arrow nudge must trigger exactly one cached validation refresh"
+    );
+}
+
+/// G-05 (`M34-10`): On a settled 50-object slide with gradient shapes and
+/// overflowing `Autofit::Shrink` text boxes, 20 idle frames perform zero canvas
+/// composes, zero text layout cache misses, and zero shape mesh cache misses.
+#[test]
+fn g05_idle_frames_zero_canvas_composes_and_cache_misses() {
+    let shape_kinds = [
+        "rounded_rectangle",
+        "ellipse",
+        "star_5",
+        "arrow_right",
+        "hexagon",
+    ];
+    let mut objects = Vec::with_capacity(50);
+    for i in 0..50usize {
+        let col = i % 10;
+        let row = i / 10;
+        let x = 20.0 + (col as f32) * 124.0;
+        let y = 20.0 + (row as f32) * 136.0;
+        if i < 25 {
+            let shape = shape_kinds[i % shape_kinds.len()];
+            let fill_style = if i % 2 == 0 {
+                serde_json::json!({
+                    "type": "linear",
+                    "angle": (i as f32) * 15.0,
+                    "stops": [
+                        { "color": "#2563EB", "position": 0.0 },
+                        { "color": "#10B981", "position": 1.0 }
+                    ]
+                })
+            } else {
+                serde_json::json!({
+                    "type": "radial",
+                    "center": [0.4, 0.4],
+                    "stops": [
+                        { "color": "#F59E0B", "position": 0.0 },
+                        { "color": "#DC2626", "position": 1.0 }
+                    ]
+                })
+            };
+            objects.push(serde_json::json!({
+                "id": format!("sh-{i}"),
+                "kind": {
+                    "type": "shape",
+                    "shape": shape,
+                    "fill": "#2563EB",
+                    "fill_style": fill_style,
+                    "outline": { "color": "#1E293B", "width": 2.0 }
+                },
+                "frame": { "x": x, "y": y, "w": 110.0, "h": 110.0 }
+            }));
+        } else {
+            objects.push(serde_json::json!({
+                "id": format!("tx-{i}"),
+                "kind": {
+                    "type": "text",
+                    "text": format!("Overflowing shrink-to-fit text item {i} with enough words to trigger Autofit::Shrink binary search."),
+                    "style": { "size": 26.0, "color": "#111827" },
+                    "autofit": "shrink"
+                },
+                "frame": { "x": x, "y": y, "w": 110.0, "h": 110.0 }
+            }));
+        }
+    }
+    let course_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "g05-cache-slide",
+        "title": "G-05 Cache Slide",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [{
+                "id": "s0",
+                "title": "50 Gradient & Shrink Objects",
+                "objects": objects
+            }]
+        }]
+    });
+    let course = Course::from_json(&course_json.to_string()).expect("g05 course parses");
+    let mut h = TestHarness::new(course);
+    h.editor.selection.slide = "s0".into();
+
+    reset_counts();
+    for _ in 0..5 {
+        let _ = h.idle_frame();
+    }
+    assert!(
+        gc::canvas_composes() >= 1,
+        "initial settling must perform at least one canvas compose"
+    );
+    assert!(
+        gc::text_layout_misses() >= 25,
+        "initial settling must populate text layout cache, got {}",
+        gc::text_layout_misses()
+    );
+    assert!(
+        gc::shape_mesh_misses() >= 25,
+        "initial settling must populate shape mesh cache, got {}",
+        gc::shape_mesh_misses()
+    );
+
+    reset_counts();
+    for _ in 0..20 {
+        let _ = h.idle_frame();
+    }
+    assert_eq!(
+        gc::canvas_composes(),
+        0,
+        "20 idle frames must perform zero canvas composes"
+    );
+    assert_eq!(
+        gc::text_layout_misses(),
+        0,
+        "20 idle frames must perform zero text layout cache misses"
+    );
+    assert_eq!(
+        gc::shape_mesh_misses(),
+        0,
+        "20 idle frames must perform zero shape mesh cache misses"
     );
 }

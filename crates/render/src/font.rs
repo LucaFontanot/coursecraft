@@ -294,7 +294,12 @@ pub fn set_system_font_provider(
     if unchanged {
         return;
     }
-    ctx.data_mut(|data| data.insert_temp(id, provider));
+    ctx.data_mut(|data| {
+        data.insert_temp(id, provider);
+        let epoch_id = egui::Id::unique(FONT_EPOCH_ID);
+        let next_epoch = data.get_temp::<u64>(epoch_id).unwrap_or(0).wrapping_add(1);
+        data.insert_temp(epoch_id, next_epoch);
+    });
     clear_tried_system_faces(ctx);
 }
 

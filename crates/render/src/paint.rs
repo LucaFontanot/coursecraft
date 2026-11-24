@@ -1,8 +1,11 @@
 //! Slide painting using [`egui::Painter`].
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use coursecraft_course::{
-    Align, Color, MarkerIcon, MeterStyle, Paragraph, ScrollBar, ShapeKind, Theme, TimerFormat,
-    VAlign,
+    Align, Color, DashStyle, LineJoin, MarkerIcon, MeterStyle, Paragraph, ScrollBar, ShapeKind,
+    Theme, TimerFormat, VAlign,
 };
 use egui::emath::Rot2;
 use egui::epaint::PathShape;
@@ -22,6 +25,621 @@ use crate::shape_fill::{
     StrokeJoin, fill_contours, fill_contours_shaded, fill_contours_uv, stroke_contours_with_join,
 };
 use crate::shape_geometry::{shape_contours_adjusted, shape_text_rect};
+
+/// Default maximum number of cached shape/gradient/outline meshes per [`egui::Context`].
+pub const DEFAULT_SHAPE_MESH_CACHE_MAX: usize = 256;
+
+const SHAPE_MESH_CACHE_ID: &str = "coursecraft-shape-mesh-cache";
+
+fn f32_bits(v: f32) -> u32 {
+    if v.is_nan() {
+        f32::NAN.to_bits()
+    } else if v == 0.0 {
+        0.0_f32.to_bits()
+    } else {
+        v.to_bits()
+    }
+}
+
+fn dash_tag(dash: DashStyle) -> u8 {
+    match dash {
+        DashStyle::Solid => 0,
+        DashStyle::Dash => 1,
+        DashStyle::Dot => 2,
+        DashStyle::DashDot => 3,
+        DashStyle::Custom => 4,
+    }
+}
+
+fn join_tag(join: LineJoin) -> u8 {
+    match join {
+        LineJoin::Miter => 0,
+        LineJoin::Round => 1,
+        LineJoin::Bevel => 2,
+    }
+}
+
+struct MeshHash {
+    h1: u64,
+    h2: u64,
+}
+
+impl MeshHash {
+    fn new() -> Self {
+        Self {
+            h1: 0xcbf2_9ce4_8422_2325,
+            h2: 0x8422_2325_cbf2_9ce4,
+        }
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        const P1: u64 = 0x0000_0100_0000_01b3;
+        const P2: u64 = 0x9e37_79b9_7f4a_7c15;
+        for &b in bytes {
+            self.h1 ^= u64::from(b);
+            self.h1 = self.h1.wrapping_mul(P1);
+            self.h2 = self.h2.wrapping_mul(P2) ^ u64::from(b).wrapping_add(0x51);
+        }
+    }
+
+    fn write_u8(&mut self, v: u8) {
+        self.write_bytes(&[v]);
+    }
+
+    fn write_u32(&mut self, v: u32) {
+        self.write_bytes(&v.to_le_bytes());
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        self.write_bytes(&v.to_le_bytes());
+    }
+
+    fn write_str(&mut self, s: &str) {
+        self.write_u64(s.len() as u64);
+        self.write_bytes(s.as_bytes());
+    }
+
+    fn finish(self) -> (u64, u64) {
+        (self.h1, self.h2)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum ShapeMeshStyleKey {
+    Solid([u8; 4]),
+    Linear {
+        angle_bits: u32,
+        stops: Vec<([u8; 4], u32)>,
+        dimmed: bool,
+        opacity_bits: u32,
+    },
+    Radial {
+        center_bits: [u32; 2],
+        stops: Vec<([u8; 4], u32)>,
+        dimmed: bool,
+        opacity_bits: u32,
+    },
+    Pattern {
+        preset: String,
+        fg: [u8; 4],
+        bg: [u8; 4],
+    },
+    Outline {
+        color: [u8; 4],
+        width_bits: u32,
+        dash: u8,
+        dash_pattern: Option<Vec<u32>>,
+        join: u8,
+        miter_limit_bits: Option<u32>,
+    },
+}
+
+enum BorrowedMeshStyle<'a> {
+    Solid([u8; 4]),
+    Linear {
+        angle_bits: u32,
+        stops: &'a [crate::compose::ResolvedGradientStop],
+        dimmed: bool,
+        opacity_bits: u32,
+    },
+    Radial {
+        center_bits: [u32; 2],
+        stops: &'a [crate::compose::ResolvedGradientStop],
+        dimmed: bool,
+        opacity_bits: u32,
+    },
+    Pattern {
+        preset: &'a str,
+        fg: [u8; 4],
+        bg: [u8; 4],
+    },
+    Outline {
+        color: [u8; 4],
+        width_bits: u32,
+        dash: u8,
+        dash_pattern: Option<&'a [f32]>,
+        join: u8,
+        miter_limit_bits: Option<u32>,
+    },
+}
+
+impl BorrowedMeshStyle<'_> {
+    fn to_owned(&self) -> ShapeMeshStyleKey {
+        match self {
+            Self::Solid(color) => ShapeMeshStyleKey::Solid(*color),
+            Self::Linear {
+                angle_bits,
+                stops,
+                dimmed,
+                opacity_bits,
+            } => ShapeMeshStyleKey::Linear {
+                angle_bits: *angle_bits,
+                stops: stops
+                    .iter()
+                    .map(|s| (s.color.to_array(), f32_bits(s.position)))
+                    .collect(),
+                dimmed: *dimmed,
+                opacity_bits: *opacity_bits,
+            },
+            Self::Radial {
+                center_bits,
+                stops,
+                dimmed,
+                opacity_bits,
+            } => ShapeMeshStyleKey::Radial {
+                center_bits: *center_bits,
+                stops: stops
+                    .iter()
+                    .map(|s| (s.color.to_array(), f32_bits(s.position)))
+                    .collect(),
+                dimmed: *dimmed,
+                opacity_bits: *opacity_bits,
+            },
+            Self::Pattern { preset, fg, bg } => ShapeMeshStyleKey::Pattern {
+                preset: (*preset).to_owned(),
+                fg: *fg,
+                bg: *bg,
+            },
+            Self::Outline {
+                color,
+                width_bits,
+                dash,
+                dash_pattern,
+                join,
+                miter_limit_bits,
+            } => ShapeMeshStyleKey::Outline {
+                color: *color,
+                width_bits: *width_bits,
+                dash: *dash,
+                dash_pattern: dash_pattern.map(|p| p.iter().copied().map(f32_bits).collect()),
+                join: *join,
+                miter_limit_bits: *miter_limit_bits,
+            },
+        }
+    }
+
+    fn matches(&self, owned: &ShapeMeshStyleKey) -> bool {
+        match (self, owned) {
+            (Self::Solid(a), ShapeMeshStyleKey::Solid(b)) => a == b,
+            (
+                Self::Linear {
+                    angle_bits: a_ang,
+                    stops: a_stops,
+                    dimmed: a_dim,
+                    opacity_bits: a_op,
+                },
+                ShapeMeshStyleKey::Linear {
+                    angle_bits: b_ang,
+                    stops: b_stops,
+                    dimmed: b_dim,
+                    opacity_bits: b_op,
+                },
+            ) => {
+                a_ang == b_ang
+                    && a_dim == b_dim
+                    && a_op == b_op
+                    && a_stops.len() == b_stops.len()
+                    && a_stops
+                        .iter()
+                        .zip(b_stops.iter())
+                        .all(|(s, (c, p))| s.color.to_array() == *c && f32_bits(s.position) == *p)
+            }
+            (
+                Self::Radial {
+                    center_bits: a_c,
+                    stops: a_stops,
+                    dimmed: a_dim,
+                    opacity_bits: a_op,
+                },
+                ShapeMeshStyleKey::Radial {
+                    center_bits: b_c,
+                    stops: b_stops,
+                    dimmed: b_dim,
+                    opacity_bits: b_op,
+                },
+            ) => {
+                a_c == b_c
+                    && a_dim == b_dim
+                    && a_op == b_op
+                    && a_stops.len() == b_stops.len()
+                    && a_stops
+                        .iter()
+                        .zip(b_stops.iter())
+                        .all(|(s, (c, p))| s.color.to_array() == *c && f32_bits(s.position) == *p)
+            }
+            (
+                Self::Pattern {
+                    preset: a_p,
+                    fg: a_fg,
+                    bg: a_bg,
+                },
+                ShapeMeshStyleKey::Pattern {
+                    preset: b_p,
+                    fg: b_fg,
+                    bg: b_bg,
+                },
+            ) => a_fg == b_fg && a_bg == b_bg && *a_p == b_p.as_str(),
+            (
+                Self::Outline {
+                    color: a_col,
+                    width_bits: a_w,
+                    dash: a_dash,
+                    dash_pattern: a_pat,
+                    join: a_join,
+                    miter_limit_bits: a_miter,
+                },
+                ShapeMeshStyleKey::Outline {
+                    color: b_col,
+                    width_bits: b_w,
+                    dash: b_dash,
+                    dash_pattern: b_pat,
+                    join: b_join,
+                    miter_limit_bits: b_miter,
+                },
+            ) => {
+                a_col == b_col
+                    && a_w == b_w
+                    && a_dash == b_dash
+                    && a_join == b_join
+                    && a_miter == b_miter
+                    && match (a_pat, b_pat) {
+                        (None, None) => true,
+                        (Some(ap), Some(bp)) => {
+                            ap.len() == bp.len()
+                                && ap.iter().zip(bp.iter()).all(|(&a, &b)| f32_bits(a) == b)
+                        }
+                        _ => false,
+                    }
+            }
+            _ => false,
+        }
+    }
+
+    fn write_hash(&self, h: &mut MeshHash) {
+        match self {
+            Self::Solid(color) => {
+                h.write_u8(1);
+                h.write_bytes(color);
+            }
+            Self::Linear {
+                angle_bits,
+                stops,
+                dimmed,
+                opacity_bits,
+            } => {
+                h.write_u8(2);
+                h.write_u32(*angle_bits);
+                h.write_u8(u8::from(*dimmed));
+                h.write_u32(*opacity_bits);
+                h.write_u64(stops.len() as u64);
+                for s in *stops {
+                    h.write_bytes(&s.color.to_array());
+                    h.write_u32(f32_bits(s.position));
+                }
+            }
+            Self::Radial {
+                center_bits,
+                stops,
+                dimmed,
+                opacity_bits,
+            } => {
+                h.write_u8(3);
+                h.write_u32(center_bits[0]);
+                h.write_u32(center_bits[1]);
+                h.write_u8(u8::from(*dimmed));
+                h.write_u32(*opacity_bits);
+                h.write_u64(stops.len() as u64);
+                for s in *stops {
+                    h.write_bytes(&s.color.to_array());
+                    h.write_u32(f32_bits(s.position));
+                }
+            }
+            Self::Pattern { preset, fg, bg } => {
+                h.write_u8(4);
+                h.write_str(preset);
+                h.write_bytes(fg);
+                h.write_bytes(bg);
+            }
+            Self::Outline {
+                color,
+                width_bits,
+                dash,
+                dash_pattern,
+                join,
+                miter_limit_bits,
+            } => {
+                h.write_u8(5);
+                h.write_bytes(color);
+                h.write_u32(*width_bits);
+                h.write_u8(*dash);
+                h.write_u8(*join);
+                if let Some(m) = miter_limit_bits {
+                    h.write_u8(1);
+                    h.write_u32(*m);
+                } else {
+                    h.write_u8(0);
+                }
+                if let Some(pat) = dash_pattern {
+                    h.write_u8(1);
+                    h.write_u64(pat.len() as u64);
+                    for &v in *pat {
+                        h.write_u32(f32_bits(v));
+                    }
+                } else {
+                    h.write_u8(0);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ShapeMeshKey {
+    kind: ShapeKind,
+    width_bits: u32,
+    height_bits: u32,
+    ppp_bits: u32,
+    adjust_bits: Vec<u32>,
+    style: ShapeMeshStyleKey,
+}
+
+struct BorrowedShapeMeshKey<'a> {
+    kind: ShapeKind,
+    width_bits: u32,
+    height_bits: u32,
+    ppp_bits: u32,
+    adjust: &'a [f32],
+    style: BorrowedMeshStyle<'a>,
+}
+
+impl BorrowedShapeMeshKey<'_> {
+    fn hash128(&self) -> (u64, u64) {
+        let mut h = MeshHash::new();
+        // ShapeKind derives Hash; hash its discriminant stably via Debug or std::hash.
+        let mut kind_hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&self.kind, &mut kind_hasher);
+        h.write_u64(std::hash::Hasher::finish(&kind_hasher));
+        h.write_u32(self.width_bits);
+        h.write_u32(self.height_bits);
+        h.write_u32(self.ppp_bits);
+        h.write_u64(self.adjust.len() as u64);
+        for &v in self.adjust {
+            h.write_u32(f32_bits(v));
+        }
+        self.style.write_hash(&mut h);
+        h.finish()
+    }
+
+    fn to_owned(&self) -> ShapeMeshKey {
+        ShapeMeshKey {
+            kind: self.kind,
+            width_bits: self.width_bits,
+            height_bits: self.height_bits,
+            ppp_bits: self.ppp_bits,
+            adjust_bits: self.adjust.iter().copied().map(f32_bits).collect(),
+            style: self.style.to_owned(),
+        }
+    }
+
+    fn matches(&self, owned: &ShapeMeshKey) -> bool {
+        self.kind == owned.kind
+            && self.width_bits == owned.width_bits
+            && self.height_bits == owned.height_bits
+            && self.ppp_bits == owned.ppp_bits
+            && self.adjust.len() == owned.adjust_bits.len()
+            && self
+                .adjust
+                .iter()
+                .zip(owned.adjust_bits.iter())
+                .all(|(&a, &b)| f32_bits(a) == b)
+            && self.style.matches(&owned.style)
+    }
+}
+
+struct ShapeMeshEntry {
+    key: ShapeMeshKey,
+    mesh: Arc<egui::Mesh>,
+    last_used: u64,
+}
+
+struct ShapeMeshCache {
+    buckets: HashMap<(u64, u64), Vec<ShapeMeshEntry>>,
+    total_entries: usize,
+    max_entries: usize,
+    tick: u64,
+}
+
+impl ShapeMeshCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            buckets: HashMap::new(),
+            total_entries: 0,
+            max_entries,
+            tick: 0,
+        }
+    }
+
+    fn get(&mut self, hash: (u64, u64), key: &BorrowedShapeMeshKey<'_>) -> Option<Arc<egui::Mesh>> {
+        if self.max_entries == 0 {
+            return None;
+        }
+        let bucket = self.buckets.get_mut(&hash)?;
+        for entry in bucket.iter_mut() {
+            if key.matches(&entry.key) {
+                self.tick = self.tick.saturating_add(1);
+                entry.last_used = self.tick;
+                return Some(Arc::clone(&entry.mesh));
+            }
+        }
+        None
+    }
+
+    fn insert(&mut self, hash: (u64, u64), key: ShapeMeshKey, mesh: Arc<egui::Mesh>) {
+        if self.max_entries == 0 {
+            return;
+        }
+        self.tick = self.tick.saturating_add(1);
+        let tick = self.tick;
+        let bucket = self.buckets.entry(hash).or_default();
+        if let Some(existing) = bucket.iter_mut().find(|e| e.key == key) {
+            existing.mesh = mesh;
+            existing.last_used = tick;
+            return;
+        }
+        bucket.push(ShapeMeshEntry {
+            key,
+            mesh,
+            last_used: tick,
+        });
+        self.total_entries = self.total_entries.saturating_add(1);
+        self.evict_excess();
+    }
+
+    fn set_limit(&mut self, max_entries: usize) {
+        self.max_entries = max_entries;
+        if max_entries == 0 {
+            self.clear();
+        } else {
+            self.evict_excess();
+        }
+    }
+
+    fn clear(&mut self) {
+        self.buckets.clear();
+        self.total_entries = 0;
+    }
+
+    fn evict_excess(&mut self) {
+        while self.total_entries > self.max_entries {
+            let mut oldest: Option<(u64, (u64, u64), usize)> = None;
+            for (&hash, bucket) in &self.buckets {
+                for (idx, entry) in bucket.iter().enumerate() {
+                    if oldest.is_none_or(|(best_tick, _, _)| entry.last_used < best_tick) {
+                        oldest = Some((entry.last_used, hash, idx));
+                    }
+                }
+            }
+            let Some((_, hash, idx)) = oldest else {
+                break;
+            };
+            let mut remove_bucket = false;
+            if let Some(bucket) = self.buckets.get_mut(&hash) {
+                if idx < bucket.len() {
+                    bucket.swap_remove(idx);
+                    self.total_entries = self.total_entries.saturating_sub(1);
+                }
+                remove_bucket = bucket.is_empty();
+            }
+            if remove_bucket {
+                self.buckets.remove(&hash);
+            }
+        }
+    }
+}
+
+fn shape_mesh_cache(ctx: &egui::Context) -> Arc<Mutex<ShapeMeshCache>> {
+    let id = egui::Id::unique(SHAPE_MESH_CACHE_ID);
+    if let Some(existing) = ctx.data(|d| d.get_temp::<Arc<Mutex<ShapeMeshCache>>>(id)) {
+        return existing;
+    }
+    let created = Arc::new(Mutex::new(ShapeMeshCache::new(
+        DEFAULT_SHAPE_MESH_CACHE_MAX,
+    )));
+    ctx.data_mut(|d| {
+        if let Some(existing) = d.get_temp::<Arc<Mutex<ShapeMeshCache>>>(id) {
+            return existing;
+        }
+        d.insert_temp(id, Arc::clone(&created));
+        created
+    })
+}
+
+/// Set the maximum number of entries retained in the per-context shape mesh cache.
+///
+/// Passing `0` disables caching and clears existing entries.
+pub fn set_shape_mesh_cache_limit(ctx: &egui::Context, max_entries: usize) {
+    let cache = shape_mesh_cache(ctx);
+    let mut guard = match cache.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.set_limit(max_entries);
+}
+
+/// Clear all entries from the per-context shape mesh cache.
+pub fn clear_shape_mesh_cache(ctx: &egui::Context) {
+    let cache = shape_mesh_cache(ctx);
+    let mut guard = match cache.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.clear();
+}
+
+fn cached_shape_mesh(
+    ctx: &egui::Context,
+    key: &BorrowedShapeMeshKey<'_>,
+    build: impl FnOnce() -> egui::Mesh,
+) -> Arc<egui::Mesh> {
+    let hash = key.hash128();
+    let cache = shape_mesh_cache(ctx);
+    {
+        let mut guard = match cache.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(hit) = guard.get(hash, key) {
+            return hit;
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    crate::media::test_counts::note_shape_mesh_miss();
+
+    let mesh = Arc::new(build());
+    let owned_key = key.to_owned();
+    {
+        let mut guard = match cache.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(hash, owned_key, Arc::clone(&mesh));
+    }
+    mesh
+}
+
+fn paint_translated_mesh(painter: &Painter, base: &egui::Mesh, offset: egui::Vec2) {
+    if base.is_empty() {
+        return;
+    }
+    let mut mesh = base.clone();
+    if offset != egui::Vec2::ZERO {
+        for vertex in &mut mesh.vertices {
+            vertex.pos += offset;
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
 
 const DIM_FACTOR: f32 = 0.35;
 pub const DEFAULT_BACKGROUND_COLOR: egui::Color32 = egui::Color32::WHITE;
@@ -218,7 +836,7 @@ fn sample_gradient_side(
     stops.last().map_or(first.color, |stop| stop.color)
 }
 
-/// Paint a linear or radial gradient inside a shape's outline.
+/// Paint a linear, radial, or pattern fill inside a shape's outline using [`ShapeMeshCache`].
 fn paint_gradient_fill(
     painter: &Painter,
     rect: Rect,
@@ -228,10 +846,54 @@ fn paint_gradient_fill(
     dimmed: bool,
     opacity: f32,
 ) {
-    let Some(contours) = screen_contours(rect, kind, adjust) else {
+    if !rect.is_positive()
+        || ![rect.min.x, rect.min.y, rect.max.x, rect.max.y]
+            .iter()
+            .all(|value| value.is_finite())
+    {
         return;
+    }
+    let style_key = match style {
+        ResolvedFill::Linear { angle, stops } => BorrowedMeshStyle::Linear {
+            angle_bits: f32_bits(*angle),
+            stops,
+            dimmed,
+            opacity_bits: f32_bits(opacity),
+        },
+        ResolvedFill::Radial { center, stops } => BorrowedMeshStyle::Radial {
+            center_bits: [f32_bits(center[0]), f32_bits(center[1])],
+            stops,
+            dimmed,
+            opacity_bits: f32_bits(opacity),
+        },
+        ResolvedFill::Pattern { preset, fg, bg } => BorrowedMeshStyle::Pattern {
+            preset,
+            fg: apply_dim(*fg, dimmed, opacity).to_array(),
+            bg: apply_dim(*bg, dimmed, opacity).to_array(),
+        },
+        ResolvedFill::Picture { .. } => return,
     };
-    paint_gradient_contours(painter, rect, &contours, style, dimmed, opacity);
+    let ppp = painter.pixels_per_point();
+    let key = BorrowedShapeMeshKey {
+        kind,
+        width_bits: f32_bits(rect.width()),
+        height_bits: f32_bits(rect.height()),
+        ppp_bits: f32_bits(ppp),
+        adjust,
+        style: style_key,
+    };
+    let ctx = painter.ctx();
+    let mesh = cached_shape_mesh(ctx, &key, || {
+        let local_rect = Rect::from_min_size(pos2(0.0, 0.0), rect.size());
+        let contours =
+            shape_contours_adjusted(kind, local_rect.width(), local_rect.height(), adjust);
+        if contours.is_empty() {
+            return egui::Mesh::default();
+        }
+        build_gradient_mesh(ctx, ppp, local_rect, &contours, style, dimmed, opacity)
+            .unwrap_or_default()
+    });
+    paint_translated_mesh(painter, &mesh, rect.min.to_vec2());
 }
 
 fn pattern_pixel(preset: &str, x: usize, y: usize, n: usize) -> bool {
@@ -302,14 +964,15 @@ fn pattern_tile_texture(
     (handle, n as f32)
 }
 
-fn paint_gradient_contours(
-    painter: &Painter,
+fn build_gradient_mesh(
+    ctx: &egui::Context,
+    ppp: f32,
     rect: Rect,
     contours: &[Vec<crate::shape_geometry::Pt>],
     style: &ResolvedFill,
     dimmed: bool,
     opacity: f32,
-) {
+) -> Option<egui::Mesh> {
     let centre = rect.center();
     let mesh = match style {
         ResolvedFill::Linear { angle, stops } => {
@@ -340,7 +1003,7 @@ fn paint_gradient_contours(
             };
             crate::shape_fill::fill_contours_linear_shaded(
                 contours,
-                painter.pixels_per_point(),
+                ppp,
                 GRADIENT_MAX_EDGE,
                 &split_ts,
                 t_at,
@@ -368,45 +1031,53 @@ fn paint_gradient_contours(
                 (dx * dx + dy * dy).sqrt()
             })
             .fold(0.0_f32, f32::max);
-            fill_contours_shaded(
-                contours,
-                painter.pixels_per_point(),
-                GRADIENT_MAX_EDGE,
-                |point| {
-                    let dx = point.0 - origin.x;
-                    let dy = point.1 - origin.y;
-                    let t = if max_distance > 1e-6 {
-                        (dx * dx + dy * dy).sqrt() / max_distance
-                    } else {
-                        0.0
-                    };
-                    apply_dim(sample_gradient(stops, t), dimmed, opacity)
-                },
-            )
+            fill_contours_shaded(contours, ppp, GRADIENT_MAX_EDGE, |point| {
+                let dx = point.0 - origin.x;
+                let dy = point.1 - origin.y;
+                let t = if max_distance > 1e-6 {
+                    (dx * dx + dy * dy).sqrt() / max_distance
+                } else {
+                    0.0
+                };
+                apply_dim(sample_gradient(stops, t), dimmed, opacity)
+            })
         }
-        ResolvedFill::Picture { .. } => return,
+        ResolvedFill::Picture { .. } => return None,
         ResolvedFill::Pattern { preset, fg, bg } => {
             let fg = apply_dim(*fg, dimmed, opacity);
             let bg = apply_dim(*bg, dimmed, opacity);
-            let (handle, tile_px) = pattern_tile_texture(painter.ctx(), preset, fg, bg);
-            let mut mesh = crate::shape_fill::fill_contours_uv(
-                contours,
-                painter.pixels_per_point(),
-                |point| {
-                    (
-                        (point.0 - rect.min.x) / tile_px,
-                        (point.1 - rect.min.y) / tile_px,
-                    )
-                },
-            );
+            let (handle, tile_px) = pattern_tile_texture(ctx, preset, fg, bg);
+            let mut mesh = crate::shape_fill::fill_contours_uv(contours, ppp, |point| {
+                (
+                    (point.0 - rect.min.x) / tile_px,
+                    (point.1 - rect.min.y) / tile_px,
+                )
+            });
             mesh.texture_id = handle.id();
-            if !mesh.is_empty() {
-                painter.add(egui::Shape::mesh(mesh));
-            }
-            return;
+            mesh
         }
     };
-    if !mesh.is_empty() {
+    Some(mesh)
+}
+
+fn paint_gradient_contours(
+    painter: &Painter,
+    rect: Rect,
+    contours: &[Vec<crate::shape_geometry::Pt>],
+    style: &ResolvedFill,
+    dimmed: bool,
+    opacity: f32,
+) {
+    if let Some(mesh) = build_gradient_mesh(
+        painter.ctx(),
+        painter.pixels_per_point(),
+        rect,
+        contours,
+        style,
+        dimmed,
+        opacity,
+    ) && !mesh.is_empty()
+    {
         painter.add(egui::Shape::mesh(mesh));
     }
 }
@@ -585,13 +1256,34 @@ pub fn paint_shape(painter: &Painter, rect: Rect, kind: ShapeKind, adjust: &[f32
     if color.a() == 0 {
         return;
     }
-    let Some(translated) = screen_contours(rect, kind, adjust) else {
+    if !rect.is_positive()
+        || ![rect.min.x, rect.min.y, rect.max.x, rect.max.y]
+            .iter()
+            .all(|value| value.is_finite())
+    {
         return;
-    };
-    let mesh = fill_contours(&translated, color, painter.pixels_per_point());
-    if !mesh.is_empty() {
-        painter.add(egui::Shape::mesh(mesh));
     }
+    if kind == ShapeKind::Rectangle {
+        painter.rect_filled(rect, CornerRadius::ZERO, color);
+        return;
+    }
+    let ppp = painter.pixels_per_point();
+    let key = BorrowedShapeMeshKey {
+        kind,
+        width_bits: f32_bits(rect.width()),
+        height_bits: f32_bits(rect.height()),
+        ppp_bits: f32_bits(ppp),
+        adjust,
+        style: BorrowedMeshStyle::Solid(color.to_array()),
+    };
+    let mesh = cached_shape_mesh(painter.ctx(), &key, || {
+        let contours = shape_contours_adjusted(kind, rect.width(), rect.height(), adjust);
+        if contours.is_empty() {
+            return egui::Mesh::default();
+        }
+        fill_contours(&contours, color, ppp)
+    });
+    paint_translated_mesh(painter, &mesh, rect.min.to_vec2());
 }
 
 /// Paint a shape's outline into `rect`.
@@ -616,31 +1308,39 @@ pub fn paint_outline(
     {
         return;
     }
-    let contours = shape_contours_adjusted(kind, rect.width(), rect.height(), adjust);
-    if contours.is_empty() {
-        return;
-    }
-    let translated: Vec<Vec<(f32, f32)>> = contours
-        .into_iter()
-        .map(|contour| {
-            contour
-                .into_iter()
-                .map(|(x, y)| (rect.min.x + x, rect.min.y + y))
-                .collect()
-        })
-        .collect();
-    let mesh = stroke_contours_with_join(
-        &translated,
-        outline.color,
-        outline.width * scale,
-        outline.dash,
-        outline.dash_pattern.as_deref(),
-        StrokeJoin::from_outline(outline.join, outline.miter_limit),
-        painter.pixels_per_point(),
-    );
-    if !mesh.is_empty() {
-        painter.add(egui::Shape::mesh(mesh));
-    }
+    let stroke_width = outline.width * scale;
+    let ppp = painter.pixels_per_point();
+    let key = BorrowedShapeMeshKey {
+        kind,
+        width_bits: f32_bits(rect.width()),
+        height_bits: f32_bits(rect.height()),
+        ppp_bits: f32_bits(ppp),
+        adjust,
+        style: BorrowedMeshStyle::Outline {
+            color: outline.color.to_array(),
+            width_bits: f32_bits(stroke_width),
+            dash: dash_tag(outline.dash),
+            dash_pattern: outline.dash_pattern.as_deref(),
+            join: join_tag(outline.join),
+            miter_limit_bits: outline.miter_limit.map(f32_bits),
+        },
+    };
+    let mesh = cached_shape_mesh(painter.ctx(), &key, || {
+        let contours = shape_contours_adjusted(kind, rect.width(), rect.height(), adjust);
+        if contours.is_empty() {
+            return egui::Mesh::default();
+        }
+        stroke_contours_with_join(
+            &contours,
+            outline.color,
+            stroke_width,
+            outline.dash,
+            outline.dash_pattern.as_deref(),
+            StrokeJoin::from_outline(outline.join, outline.miter_limit),
+            ppp,
+        )
+    });
+    paint_translated_mesh(painter, &mesh, rect.min.to_vec2());
 }
 
 fn lighten_color(color: Color32, amount: f32) -> Color32 {
@@ -927,18 +1627,24 @@ fn paint_text_with_options(
         ),
     };
     let dir_marker = (rot_deg != 0.0).then(|| slide_painter.add(egui::Shape::Noop));
-    let dimmed_runs: Vec<ResolvedTextRun> = runs
-        .iter()
-        .map(|run| ResolvedTextRun {
-            color: apply_dim(run.color, dimmed, opacity),
-            ..run.clone()
-        })
-        .collect();
+    let dimmed_runs: Option<Vec<ResolvedTextRun>> = if dimmed || opacity < 1.0 {
+        Some(
+            runs.iter()
+                .map(|run| ResolvedTextRun {
+                    color: apply_dim(run.color, dimmed, opacity),
+                    ..run.clone()
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
+    let effective_runs = dimmed_runs.as_deref().unwrap_or(runs);
     let laid = crate::text_layout::layout_text_with_wrap(
         slide_painter.ctx(),
         layout_rect,
         scale,
-        &dimmed_runs,
+        effective_runs,
         paragraphs,
         *align,
         *valign,
@@ -1113,20 +1819,26 @@ fn paint_table(
             if !inner.is_positive() {
                 continue;
             }
-            let dimmed_runs: Vec<ResolvedTextRun> = cell
-                .text
-                .runs
-                .iter()
-                .map(|run| ResolvedTextRun {
-                    color: apply_dim(run.color, dimmed, opacity),
-                    ..run.clone()
-                })
-                .collect();
+            let dimmed_runs: Option<Vec<ResolvedTextRun>> = if dimmed || opacity < 1.0 {
+                Some(
+                    cell.text
+                        .runs
+                        .iter()
+                        .map(|run| ResolvedTextRun {
+                            color: apply_dim(run.color, dimmed, opacity),
+                            ..run.clone()
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            let effective_runs = dimmed_runs.as_deref().unwrap_or(&cell.text.runs);
             let laid = crate::text_layout::layout_text(
                 painter.ctx(),
                 inner,
                 scale,
-                &dimmed_runs,
+                effective_runs,
                 &cell.text.paragraphs,
                 cell.text.align,
                 cell.text.valign,

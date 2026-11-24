@@ -8925,3 +8925,366 @@ fn u03_base_definitions_covers_player_chrome_glyphs_without_default_fonts() {
         .expect("`▶` bullet must use vector bullet rendering instead of a missing glyph box");
     assert_eq!(vb.ch, '▶');
 }
+
+/// U-08 (`M34-10`, `RISK-08`, `RISK-10`): `TextLayoutCache`, `ShapeMeshCache`,
+/// and the strict convex fan fast-path produce byte-identical RGBA pixels
+/// compared to uncached rendering across cold/warm frames, two zooms, and
+/// shifted positions; `is_strictly_convex_ccw` rejects concave and
+/// self-intersecting star polygons.
+#[test]
+fn u08_cached_text_and_shape_meshes_match_uncached_pixels() {
+    use crate::compose::compose_authoring;
+    use crate::font::install_course_fonts;
+    use crate::layout::SlideTransform;
+    use crate::media::{MediaCache, MediaFetch, MediaSource};
+    use crate::offscreen::{RenderMode, RenderOptions, render_slide_rgba, render_ui};
+    use crate::paint::{Highlight, clear_shape_mesh_cache, paint, set_shape_mesh_cache_limit};
+    use crate::shape_fill::is_strictly_convex_ccw;
+    use crate::text_layout::{clear_text_layout_cache, set_text_layout_cache_limit};
+    use coursecraft_course::Course;
+    use egui::{Pos2, Rect, pos2, vec2};
+
+    // 1. Verify `is_strictly_convex_ccw` (`RISK-10`).
+    let ccw_square = vec![(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
+    assert!(
+        is_strictly_convex_ccw(&ccw_square),
+        "CCW square must be strictly convex"
+    );
+    let cw_square: Vec<_> = ccw_square.iter().copied().rev().collect();
+    assert!(
+        !is_strictly_convex_ccw(&cw_square),
+        "CW square must not pass CCW convexity check"
+    );
+    let circle_32: Vec<_> = (0..32)
+        .map(|i| {
+            let a = (i as f32) * std::f32::consts::TAU / 32.0;
+            (50.0 + 40.0 * a.cos(), 50.0 + 40.0 * a.sin())
+        })
+        .collect();
+    assert!(
+        is_strictly_convex_ccw(&circle_32),
+        "CCW 32-gon circle must be strictly convex"
+    );
+    // Concave L-shape.
+    let concave_l = vec![
+        (0.0, 0.0),
+        (100.0, 0.0),
+        (100.0, 40.0),
+        (40.0, 40.0),
+        (40.0, 100.0),
+        (0.0, 100.0),
+    ];
+    assert!(
+        !is_strictly_convex_ccw(&concave_l),
+        "concave L-shape must be rejected"
+    );
+    // Collinear midpoint on one edge.
+    let collinear_square = vec![
+        (0.0, 0.0),
+        (50.0, 0.0),
+        (100.0, 0.0),
+        (100.0, 100.0),
+        (0.0, 100.0),
+    ];
+    assert!(
+        !is_strictly_convex_ccw(&collinear_square),
+        "collinear edge vertex must be rejected"
+    );
+    // Self-intersecting pentagram: vertices 0, 2, 4, 1, 3 around a CCW circle.
+    // Every consecutive triple has positive CCW cross product, but the total
+    // exterior turning angle is 4*PI instead of 2*PI!
+    let pentagram: Vec<_> = [0, 2, 4, 1, 3]
+        .into_iter()
+        .map(|k| {
+            let a = (k as f32) * std::f32::consts::TAU / 5.0;
+            (50.0 + 40.0 * a.cos(), 50.0 + 40.0 * a.sin())
+        })
+        .collect();
+    assert!(
+        !is_strictly_convex_ccw(&pentagram),
+        "self-intersecting pentagram must be rejected by turning-angle check"
+    );
+    assert!(
+        !is_strictly_convex_ccw(&[(0.0, 0.0), (10.0, 0.0)]),
+        "fewer than 3 points must be rejected"
+    );
+    assert!(
+        !is_strictly_convex_ccw(&[(0.0, 0.0), (f32::NAN, 0.0), (0.0, 10.0)]),
+        "NaN vertices must be rejected"
+    );
+
+    // 2. Build a slide with convex + concave shapes, linear + radial gradients,
+    // outlines, and overflowing `Autofit::Shrink` text.
+    let course_json = serde_json::json!({
+        "schema_version": 1,
+        "id": "u08-cache-equiv",
+        "title": "U-08 Cache Pixel Equivalence",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc0",
+            "title": "Scene 0",
+            "slides": [{
+                "id": "s0",
+                "title": "Slide 0",
+                "objects": [
+                    {
+                        "id": "convex-ellipse",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "ellipse",
+                            "fill": "#2563EB",
+                            "outline": { "color": "#1E3A8A", "width": 3.0 }
+                        },
+                        "frame": { "x": 40, "y": 40, "w": 220, "h": 140 }
+                    },
+                    {
+                        "id": "convex-linear",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "rounded_rectangle",
+                            "fill": "#10B981",
+                            "fill_style": {
+                                "type": "linear",
+                                "angle": 35.0,
+                                "stops": [
+                                    { "color": "#059669", "position": 0.0 },
+                                    { "color": "#34D399", "position": 0.5 },
+                                    { "color": "#1D4ED8", "position": 1.0 }
+                                ]
+                            },
+                            "outline": { "color": "#065F46", "width": 2.0, "dash": "dash" }
+                        },
+                        "frame": { "x": 300, "y": 40, "w": 280, "h": 160 }
+                    },
+                    {
+                        "id": "concave-star",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "star_5",
+                            "fill": "#F59E0B",
+                            "fill_style": {
+                                "type": "linear",
+                                "angle": 90.0,
+                                "stops": [
+                                    { "color": "#F59E0B", "position": 0.0 },
+                                    { "color": "#F59E0B", "position": 0.5 },
+                                    { "color": "#DC2626", "position": 0.5 },
+                                    { "color": "#7F1D1D", "position": 1.0 }
+                                ]
+                            },
+                            "outline": { "color": "#92400E", "width": 2.0 }
+                        },
+                        "frame": { "x": 620, "y": 40, "w": 220, "h": 220 }
+                    },
+                    {
+                        "id": "concave-arrow-radial",
+                        "kind": {
+                            "type": "shape",
+                            "shape": "arrow_right",
+                            "fill": "#7C3AED",
+                            "fill_style": {
+                                "type": "radial",
+                                "center": [0.35, 0.4],
+                                "stops": [
+                                    { "color": "#DDD6FE", "position": 0.0 },
+                                    { "color": "#6D28D9", "position": 1.0 }
+                                ]
+                            }
+                        },
+                        "frame": { "x": 880, "y": 60, "w": 300, "h": 150 }
+                    },
+                    {
+                        "id": "shrink-text",
+                        "kind": {
+                            "type": "text",
+                            "text": "Overflowing shrink-to-fit text box that forces the 20-step Autofit::Shrink binary search to reduce the font size until every single word fits cleanly inside this compact frame.",
+                            "style": {
+                                "size": 30.0,
+                                "color": "#111827",
+                                "align": "center",
+                                "valign": "middle"
+                            },
+                            "autofit": "shrink"
+                        },
+                        "frame": { "x": 40, "y": 280, "w": 380, "h": 110 }
+                    },
+                    {
+                        "id": "bullet-text",
+                        "kind": {
+                            "type": "text",
+                            "text": "First bulleted item\nSecond bulleted item with extra words to wrap",
+                            "style": { "size": 22.0, "color": "#1F2937", "underline": true },
+                            "paragraphs": [
+                                { "list": "bullet", "level": 0 },
+                                { "list": "bullet", "level": 1 }
+                            ]
+                        },
+                        "frame": { "x": 460, "y": 280, "w": 340, "h": 160 }
+                    }
+                ]
+            }]
+        }]
+    });
+    let course = Course::from_json(&course_json.to_string()).expect("u08 course parses");
+    let slide = course.slide("s0").expect("s0 exists");
+    let items = compose_authoring(&course, slide, None);
+
+    struct EmptyMedia;
+    impl MediaSource for EmptyMedia {
+        fn get(&self, _src: &str) -> MediaFetch {
+            MediaFetch::Missing
+        }
+    }
+    let media = EmptyMedia;
+
+    // 3. Compare `render_slide_rgba` (cached) vs uncached (`limit = 0`) at two zooms.
+    for width in [640u32, 960u32] {
+        let height = ((width as f32 * 720.0 / 1280.0).round() as u32).max(16);
+        let opts = RenderOptions {
+            width,
+            mode: RenderMode::Authoring,
+            layers: Vec::new(),
+            at_ms: None,
+        };
+        let cached_img = render_slide_rgba(&course, "s0", &opts, &media)
+            .expect("cached render_slide_rgba succeeds");
+
+        let screen_rect = Rect::from_min_size(Pos2::ZERO, vec2(width as f32, height as f32));
+        let transform = SlideTransform::fit(screen_rect, course.slide_size).expect("transform");
+        let mut media_cache = MediaCache::new();
+        let uncached_img = render_ui(
+            width,
+            height,
+            1.0,
+            |ctx| {
+                install_course_fonts(ctx, &course, &media);
+                set_text_layout_cache_limit(ctx, 0);
+                set_shape_mesh_cache_limit(ctx, 0);
+            },
+            |ctx| {
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                paint(
+                    &painter,
+                    &transform,
+                    &items,
+                    Highlight::default(),
+                    Some((&mut media_cache, &media)),
+                    Some(&course.theme),
+                    Some(course.slide_background(slide)),
+                );
+            },
+        )
+        .expect("uncached render_ui succeeds");
+
+        assert_eq!(cached_img.width, uncached_img.width);
+        assert_eq!(cached_img.height, uncached_img.height);
+        assert_eq!(
+            cached_img.pixels, uncached_img.pixels,
+            "cached render_slide_rgba must be byte-identical to uncached render at width {width}"
+        );
+    }
+
+    // 4. Cold cache (frame 1) vs warm cache (frame 2) and shifted position:
+    // translating the slide by (+48, +32) must hit both caches (0 new misses)
+    // and produce byte-identical RGBA pixels compared to an uncached shifted render.
+    let shifted_w = 720u32;
+    let shifted_h = 420u32;
+    let base_rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(640.0, 360.0));
+    let shifted_rect = Rect::from_min_size(pos2(48.0, 32.0), vec2(640.0, 360.0));
+    let base_t = SlideTransform::fit(base_rect, course.slide_size).expect("base transform");
+    let shifted_t =
+        SlideTransform::fit(shifted_rect, course.slide_size).expect("shifted transform");
+
+    let mut media_cache_cached = MediaCache::new();
+    let mut pass_idx = 0usize;
+    let mut warm_text_misses = 0u64;
+    let mut warm_mesh_misses = 0u64;
+    let cached_shifted = render_ui(
+        shifted_w,
+        shifted_h,
+        1.0,
+        |ctx| {
+            install_course_fonts(ctx, &course, &media);
+            clear_text_layout_cache(ctx);
+            clear_shape_mesh_cache(ctx);
+        },
+        |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            if pass_idx == 0 {
+                // Pass 0: cold cache at base position (0, 0).
+                paint(
+                    &painter,
+                    &base_t,
+                    &items,
+                    Highlight::default(),
+                    Some((&mut media_cache_cached, &media)),
+                    Some(&course.theme),
+                    Some(course.slide_background(slide)),
+                );
+            } else {
+                // Pass 1+: warm cache at shifted position (+48, +32).
+                #[cfg(debug_assertions)]
+                let before_text = crate::media::test_counts::text_layout_miss_count();
+                #[cfg(debug_assertions)]
+                let before_mesh = crate::media::test_counts::shape_mesh_miss_count();
+                paint(
+                    &painter,
+                    &shifted_t,
+                    &items,
+                    Highlight::default(),
+                    Some((&mut media_cache_cached, &media)),
+                    Some(&course.theme),
+                    Some(course.slide_background(slide)),
+                );
+                #[cfg(debug_assertions)]
+                {
+                    warm_text_misses +=
+                        crate::media::test_counts::text_layout_miss_count() - before_text;
+                    warm_mesh_misses +=
+                        crate::media::test_counts::shape_mesh_miss_count() - before_mesh;
+                }
+            }
+            pass_idx += 1;
+        },
+    )
+    .expect("cached shifted render succeeds");
+
+    assert_eq!(
+        warm_text_misses, 0,
+        "translating a slide must hit TextLayoutCache with zero misses"
+    );
+    assert_eq!(
+        warm_mesh_misses, 0,
+        "translating a slide must hit ShapeMeshCache with zero misses"
+    );
+
+    let mut media_cache_uncached = MediaCache::new();
+    let uncached_shifted = render_ui(
+        shifted_w,
+        shifted_h,
+        1.0,
+        |ctx| {
+            install_course_fonts(ctx, &course, &media);
+            set_text_layout_cache_limit(ctx, 0);
+            set_shape_mesh_cache_limit(ctx, 0);
+        },
+        |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            paint(
+                &painter,
+                &shifted_t,
+                &items,
+                Highlight::default(),
+                Some((&mut media_cache_uncached, &media)),
+                Some(&course.theme),
+                Some(course.slide_background(slide)),
+            );
+        },
+    )
+    .expect("uncached shifted render succeeds");
+
+    assert_eq!(
+        cached_shifted.pixels, uncached_shifted.pixels,
+        "cached translated render must be byte-identical to uncached render at shifted position"
+    );
+}

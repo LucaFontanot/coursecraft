@@ -5,7 +5,8 @@
 //! regions and the tests all use it, so a bullet in the canvas is the same
 //! bullet in preview and in the published player.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use coursecraft_course::{Align, Autofit, Link, ListKind, NumberScheme, Paragraph, VAlign};
 use egui::epaint::text::{LayoutJob, TextFormat, TextWrapping};
@@ -13,6 +14,591 @@ use egui::{Color32, Context, Pos2, Rect, Stroke, pos2};
 
 use crate::compose::ResolvedTextRun;
 use crate::compose::{DrawItem, ResolvedLinkRect, Visual, validate_frame};
+
+/// Default maximum number of cached text layouts per [`egui::Context`].
+pub const DEFAULT_TEXT_LAYOUT_CACHE_MAX: usize = 256;
+
+const TEXT_LAYOUT_CACHE_ID: &str = "coursecraft-text-layout-cache";
+
+fn f32_bits(v: f32) -> u32 {
+    if v.is_nan() {
+        f32::NAN.to_bits()
+    } else if v == 0.0 {
+        0.0_f32.to_bits()
+    } else {
+        v.to_bits()
+    }
+}
+
+fn quantize_dim_4(v: f32) -> i32 {
+    if !v.is_finite() {
+        return 0;
+    }
+    (v * 4.0).clamp(0.0, i32::MAX as f32).round() as i32
+}
+
+fn align_tag(align: Align) -> u8 {
+    match align {
+        Align::Left => 0,
+        Align::Center => 1,
+        Align::Right => 2,
+        Align::Justify => 3,
+    }
+}
+
+fn valign_tag(valign: VAlign) -> u8 {
+    match valign {
+        VAlign::Top => 0,
+        VAlign::Middle => 1,
+        VAlign::Bottom => 2,
+    }
+}
+
+fn autofit_tag(autofit: Autofit) -> u8 {
+    match autofit {
+        Autofit::None => 0,
+        Autofit::Shrink => 1,
+    }
+}
+
+fn baseline_tag(baseline: coursecraft_course::Baseline) -> u8 {
+    match baseline {
+        coursecraft_course::Baseline::Normal => 0,
+        coursecraft_course::Baseline::Superscript => 1,
+        coursecraft_course::Baseline::Subscript => 2,
+    }
+}
+
+fn list_kind_tag(list: ListKind) -> u8 {
+    match list {
+        ListKind::None => 0,
+        ListKind::Bullet => 1,
+        ListKind::Number => 2,
+    }
+}
+
+fn number_scheme_tag(scheme: NumberScheme) -> u8 {
+    match scheme {
+        NumberScheme::ArabicPeriod => 0,
+        NumberScheme::ArabicParenR => 1,
+        NumberScheme::AlphaLcPeriod => 2,
+        NumberScheme::AlphaLcParenR => 3,
+        NumberScheme::AlphaUcPeriod => 4,
+        NumberScheme::RomanLcPeriod => 5,
+        NumberScheme::RomanUcPeriod => 6,
+    }
+}
+
+/// Independent dual 64-bit FNV-1a hash (128 bits total) for zero-allocation lookups.
+struct DualHash {
+    h1: u64,
+    h2: u64,
+}
+
+impl DualHash {
+    fn new() -> Self {
+        Self {
+            h1: 0xcbf2_9ce4_8422_2325,
+            h2: 0x8422_2325_cbf2_9ce4,
+        }
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        const P1: u64 = 0x0000_0100_0000_01b3;
+        const P2: u64 = 0x9e37_79b9_7f4a_7c15;
+        for &b in bytes {
+            self.h1 ^= u64::from(b);
+            self.h1 = self.h1.wrapping_mul(P1);
+            self.h2 = self.h2.wrapping_mul(P2) ^ u64::from(b).wrapping_add(0x51);
+        }
+    }
+
+    fn write_u8(&mut self, v: u8) {
+        self.write_bytes(&[v]);
+    }
+
+    fn write_u32(&mut self, v: u32) {
+        self.write_bytes(&v.to_le_bytes());
+    }
+
+    fn write_i32(&mut self, v: i32) {
+        self.write_bytes(&v.to_le_bytes());
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        self.write_bytes(&v.to_le_bytes());
+    }
+
+    fn write_str(&mut self, s: &str) {
+        self.write_u64(s.len() as u64);
+        self.write_bytes(s.as_bytes());
+    }
+
+    fn finish(self) -> (u64, u64) {
+        (self.h1, self.h2)
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum LinkKey {
+    Url(String),
+    Slide(String),
+}
+
+impl LinkKey {
+    fn from_link(link: &Link) -> Self {
+        match link {
+            Link::Url { url } => Self::Url(url.clone()),
+            Link::Slide { slide } => Self::Slide(slide.clone()),
+        }
+    }
+
+    fn matches(&self, link: &Link) -> bool {
+        match (self, link) {
+            (Self::Url(a), Link::Url { url: b }) => a == b,
+            (Self::Slide(a), Link::Slide { slide: b }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct RunKey {
+    text: String,
+    size_bits: u32,
+    color: [u8; 4],
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strikethrough: bool,
+    baseline: u8,
+    letter_spacing_bits: u32,
+    font: Option<String>,
+    link: Option<LinkKey>,
+}
+
+impl RunKey {
+    fn from_run(run: &ResolvedTextRun) -> Self {
+        Self {
+            text: run.text.clone(),
+            size_bits: f32_bits(run.size),
+            color: run.color.to_array(),
+            bold: run.bold,
+            italic: run.italic,
+            underline: run.underline,
+            strikethrough: run.strikethrough,
+            baseline: baseline_tag(run.baseline),
+            letter_spacing_bits: f32_bits(run.letter_spacing),
+            font: run.font.clone(),
+            link: run.link.as_ref().map(LinkKey::from_link),
+        }
+    }
+
+    fn matches(&self, run: &ResolvedTextRun) -> bool {
+        self.size_bits == f32_bits(run.size)
+            && self.color == run.color.to_array()
+            && self.bold == run.bold
+            && self.italic == run.italic
+            && self.underline == run.underline
+            && self.strikethrough == run.strikethrough
+            && self.baseline == baseline_tag(run.baseline)
+            && self.letter_spacing_bits == f32_bits(run.letter_spacing)
+            && self.font.as_deref() == run.font.as_deref()
+            && match (&self.link, &run.link) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.matches(b),
+                _ => false,
+            }
+            && self.text == run.text
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ParagraphKey {
+    list: u8,
+    level: u8,
+    line_spacing_bits: u32,
+    space_before_bits: u32,
+    space_after_bits: u32,
+    bullet: Option<String>,
+    bullet_color: Option<String>,
+    bullet_size_bits: Option<u32>,
+    number_scheme: Option<u8>,
+    start_at: Option<u32>,
+}
+
+impl ParagraphKey {
+    fn from_paragraph(p: &Paragraph) -> Self {
+        Self {
+            list: list_kind_tag(p.list),
+            level: p.level,
+            line_spacing_bits: f32_bits(p.line_spacing),
+            space_before_bits: f32_bits(p.space_before),
+            space_after_bits: f32_bits(p.space_after),
+            bullet: p.bullet.clone(),
+            bullet_color: p.bullet_color.as_ref().map(|c| c.0.clone()),
+            bullet_size_bits: p.bullet_size.map(f32_bits),
+            number_scheme: p.number_scheme.map(number_scheme_tag),
+            start_at: p.start_at,
+        }
+    }
+
+    fn matches(&self, p: &Paragraph) -> bool {
+        self.list == list_kind_tag(p.list)
+            && self.level == p.level
+            && self.line_spacing_bits == f32_bits(p.line_spacing)
+            && self.space_before_bits == f32_bits(p.space_before)
+            && self.space_after_bits == f32_bits(p.space_after)
+            && self.bullet.as_deref() == p.bullet.as_deref()
+            && self.bullet_color.as_deref() == p.bullet_color.as_ref().map(|c| c.0.as_str())
+            && self.bullet_size_bits == p.bullet_size.map(f32_bits)
+            && self.number_scheme == p.number_scheme.map(number_scheme_tag)
+            && self.start_at == p.start_at
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct TextLayoutKey {
+    font_epoch: u64,
+    ppp_bits: u32,
+    width_q: i32,
+    height_q: i32,
+    scale_bits: u32,
+    align: u8,
+    valign: u8,
+    autofit: u8,
+    wrap: bool,
+    justify_origin_x_bits: u32,
+    runs: Vec<RunKey>,
+    paragraphs: Vec<ParagraphKey>,
+}
+
+struct BorrowedTextKey<'a> {
+    font_epoch: u64,
+    ppp_bits: u32,
+    width_q: i32,
+    height_q: i32,
+    scale_bits: u32,
+    align: u8,
+    valign: u8,
+    autofit: u8,
+    wrap: bool,
+    justify_origin_x_bits: u32,
+    runs: &'a [ResolvedTextRun],
+    paragraphs: &'a [Paragraph],
+}
+
+impl BorrowedTextKey<'_> {
+    fn hash128(&self) -> (u64, u64) {
+        let mut h = DualHash::new();
+        h.write_u64(self.font_epoch);
+        h.write_u32(self.ppp_bits);
+        h.write_i32(self.width_q);
+        h.write_i32(self.height_q);
+        h.write_u32(self.scale_bits);
+        h.write_u8(self.align);
+        h.write_u8(self.valign);
+        h.write_u8(self.autofit);
+        h.write_u8(u8::from(self.wrap));
+        h.write_u32(self.justify_origin_x_bits);
+        h.write_u64(self.runs.len() as u64);
+        for run in self.runs {
+            h.write_str(&run.text);
+            h.write_u32(f32_bits(run.size));
+            h.write_bytes(&run.color.to_array());
+            h.write_u8(
+                u8::from(run.bold)
+                    | (u8::from(run.italic) << 1)
+                    | (u8::from(run.underline) << 2)
+                    | (u8::from(run.strikethrough) << 3),
+            );
+            h.write_u8(baseline_tag(run.baseline));
+            h.write_u32(f32_bits(run.letter_spacing));
+            if let Some(font) = &run.font {
+                h.write_u8(1);
+                h.write_str(font);
+            } else {
+                h.write_u8(0);
+            }
+            match &run.link {
+                None => h.write_u8(0),
+                Some(Link::Url { url }) => {
+                    h.write_u8(1);
+                    h.write_str(url);
+                }
+                Some(Link::Slide { slide }) => {
+                    h.write_u8(2);
+                    h.write_str(slide);
+                }
+            }
+        }
+        h.write_u64(self.paragraphs.len() as u64);
+        for p in self.paragraphs {
+            h.write_u8(list_kind_tag(p.list));
+            h.write_u8(p.level);
+            h.write_u32(f32_bits(p.line_spacing));
+            h.write_u32(f32_bits(p.space_before));
+            h.write_u32(f32_bits(p.space_after));
+            if let Some(b) = &p.bullet {
+                h.write_u8(1);
+                h.write_str(b);
+            } else {
+                h.write_u8(0);
+            }
+            if let Some(c) = &p.bullet_color {
+                h.write_u8(1);
+                h.write_str(&c.0);
+            } else {
+                h.write_u8(0);
+            }
+            if let Some(sz) = p.bullet_size {
+                h.write_u8(1);
+                h.write_u32(f32_bits(sz));
+            } else {
+                h.write_u8(0);
+            }
+            if let Some(scheme) = p.number_scheme {
+                h.write_u8(1);
+                h.write_u8(number_scheme_tag(scheme));
+            } else {
+                h.write_u8(0);
+            }
+            if let Some(start) = p.start_at {
+                h.write_u8(1);
+                h.write_u32(start);
+            } else {
+                h.write_u8(0);
+            }
+        }
+        h.finish()
+    }
+
+    fn to_owned_key(&self) -> TextLayoutKey {
+        TextLayoutKey {
+            font_epoch: self.font_epoch,
+            ppp_bits: self.ppp_bits,
+            width_q: self.width_q,
+            height_q: self.height_q,
+            scale_bits: self.scale_bits,
+            align: self.align,
+            valign: self.valign,
+            autofit: self.autofit,
+            wrap: self.wrap,
+            justify_origin_x_bits: self.justify_origin_x_bits,
+            runs: self.runs.iter().map(RunKey::from_run).collect(),
+            paragraphs: self
+                .paragraphs
+                .iter()
+                .map(ParagraphKey::from_paragraph)
+                .collect(),
+        }
+    }
+}
+
+impl TextLayoutKey {
+    fn matches(&self, other: &BorrowedTextKey<'_>) -> bool {
+        self.font_epoch == other.font_epoch
+            && self.ppp_bits == other.ppp_bits
+            && self.width_q == other.width_q
+            && self.height_q == other.height_q
+            && self.scale_bits == other.scale_bits
+            && self.align == other.align
+            && self.valign == other.valign
+            && self.autofit == other.autofit
+            && self.wrap == other.wrap
+            && self.justify_origin_x_bits == other.justify_origin_x_bits
+            && self.runs.len() == other.runs.len()
+            && self.paragraphs.len() == other.paragraphs.len()
+            && self
+                .runs
+                .iter()
+                .zip(other.runs.iter())
+                .all(|(k, r)| k.matches(r))
+            && self
+                .paragraphs
+                .iter()
+                .zip(other.paragraphs.iter())
+                .all(|(k, p)| k.matches(p))
+    }
+}
+
+struct TextCacheEntry {
+    key: TextLayoutKey,
+    laid: Arc<LaidText>,
+    last_used: u64,
+}
+
+struct TextLayoutCache {
+    buckets: HashMap<(u64, u64), Vec<TextCacheEntry>>,
+    total_entries: usize,
+    max_entries: usize,
+    tick: u64,
+}
+
+impl TextLayoutCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            buckets: HashMap::new(),
+            total_entries: 0,
+            max_entries,
+            tick: 0,
+        }
+    }
+
+    fn get(&mut self, hash: (u64, u64), key: &BorrowedTextKey<'_>) -> Option<Arc<LaidText>> {
+        if self.max_entries == 0 {
+            return None;
+        }
+        let bucket = self.buckets.get_mut(&hash)?;
+        for entry in bucket.iter_mut() {
+            if entry.key.matches(key) {
+                self.tick = self.tick.saturating_add(1);
+                entry.last_used = self.tick;
+                return Some(Arc::clone(&entry.laid));
+            }
+        }
+        None
+    }
+
+    fn insert(&mut self, hash: (u64, u64), key: TextLayoutKey, laid: Arc<LaidText>) {
+        if self.max_entries == 0 {
+            return;
+        }
+        self.tick = self.tick.saturating_add(1);
+        let tick = self.tick;
+        let bucket = self.buckets.entry(hash).or_default();
+        if let Some(existing) = bucket.iter_mut().find(|e| e.key == key) {
+            existing.laid = laid;
+            existing.last_used = tick;
+            return;
+        }
+        bucket.push(TextCacheEntry {
+            key,
+            laid,
+            last_used: tick,
+        });
+        self.total_entries = self.total_entries.saturating_add(1);
+        self.evict_excess();
+    }
+
+    fn set_limit(&mut self, max_entries: usize) {
+        self.max_entries = max_entries;
+        if max_entries == 0 {
+            self.clear();
+        } else {
+            self.evict_excess();
+        }
+    }
+
+    fn clear(&mut self) {
+        self.buckets.clear();
+        self.total_entries = 0;
+    }
+
+    fn evict_excess(&mut self) {
+        while self.total_entries > self.max_entries {
+            let mut oldest: Option<(u64, (u64, u64), usize)> = None;
+            for (&hash, bucket) in &self.buckets {
+                for (idx, entry) in bucket.iter().enumerate() {
+                    if oldest.is_none_or(|(best_tick, _, _)| entry.last_used < best_tick) {
+                        oldest = Some((entry.last_used, hash, idx));
+                    }
+                }
+            }
+            let Some((_, hash, idx)) = oldest else {
+                break;
+            };
+            let mut remove_bucket = false;
+            if let Some(bucket) = self.buckets.get_mut(&hash) {
+                if idx < bucket.len() {
+                    bucket.swap_remove(idx);
+                    self.total_entries = self.total_entries.saturating_sub(1);
+                }
+                remove_bucket = bucket.is_empty();
+            }
+            if remove_bucket {
+                self.buckets.remove(&hash);
+            }
+        }
+    }
+}
+
+fn text_layout_cache(ctx: &Context) -> Arc<Mutex<TextLayoutCache>> {
+    let id = egui::Id::unique(TEXT_LAYOUT_CACHE_ID);
+    if let Some(existing) = ctx.data(|d| d.get_temp::<Arc<Mutex<TextLayoutCache>>>(id)) {
+        return existing;
+    }
+    let created = Arc::new(Mutex::new(TextLayoutCache::new(
+        DEFAULT_TEXT_LAYOUT_CACHE_MAX,
+    )));
+    ctx.data_mut(|d| {
+        if let Some(existing) = d.get_temp::<Arc<Mutex<TextLayoutCache>>>(id) {
+            return existing;
+        }
+        d.insert_temp(id, Arc::clone(&created));
+        created
+    })
+}
+
+/// Set the maximum number of entries retained in the per-context text layout cache.
+///
+/// Passing `0` disables caching and clears existing entries.
+pub fn set_text_layout_cache_limit(ctx: &Context, max_entries: usize) {
+    let cache = text_layout_cache(ctx);
+    let mut guard = match cache.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.set_limit(max_entries);
+}
+
+/// Clear all entries from the per-context text layout cache.
+pub fn clear_text_layout_cache(ctx: &Context) {
+    let cache = text_layout_cache(ctx);
+    let mut guard = match cache.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.clear();
+}
+
+fn translate_laid_text(base: &LaidText, offset: egui::Vec2) -> LaidText {
+    if offset == egui::Vec2::ZERO {
+        return base.clone();
+    }
+    let paragraphs = base
+        .paragraphs
+        .iter()
+        .map(|p| LaidParagraph {
+            galley: Arc::clone(&p.galley),
+            pos: p.pos + offset,
+            marker: p.marker.as_ref().map(|m| LaidMarker {
+                galley: Arc::clone(&m.galley),
+                pos: m.pos + offset,
+                vector: m.vector,
+            }),
+            indent: p.indent,
+            height: p.height,
+            underlines: p.underlines.clone(),
+        })
+        .collect();
+    let links = base
+        .links
+        .iter()
+        .map(|l| LaidLink {
+            link: l.link.clone(),
+            text: l.text.clone(),
+            rect: l.rect.translate(offset),
+        })
+        .collect();
+    LaidText {
+        paragraphs,
+        links,
+        height: base.height,
+        width: base.width,
+        shrink: base.shrink,
+    }
+}
 
 /// Smallest scale shrink-to-fit may use.
 pub const AUTOFIT_MIN_SCALE: f32 = 0.4;
@@ -131,7 +717,92 @@ pub fn layout_text_with_wrap(
         Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1.0, 1.0))
     };
 
-    let full = layout_at(ctx, rect, scale, runs, paragraphs, align, valign, 1.0, wrap);
+    let offset = rect.min.to_vec2();
+    let local_rect = Rect::from_min_size(pos2(0.0, 0.0), rect.size());
+    let justify_x_offset = if align == Align::Justify && wrap {
+        rect.min.x
+    } else {
+        0.0
+    };
+    let epoch = crate::font::font_epoch(ctx);
+    let borrowed = BorrowedTextKey {
+        font_epoch: epoch,
+        ppp_bits: f32_bits(ctx.pixels_per_point()),
+        width_q: quantize_dim_4(local_rect.width()),
+        height_q: quantize_dim_4(local_rect.height()),
+        scale_bits: f32_bits(scale),
+        align: align_tag(align),
+        valign: valign_tag(valign),
+        autofit: autofit_tag(autofit),
+        wrap,
+        justify_origin_x_bits: f32_bits(justify_x_offset),
+        runs,
+        paragraphs,
+    };
+    let hash = borrowed.hash128();
+    let cache = text_layout_cache(ctx);
+    {
+        let mut guard = match cache.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(hit) = guard.get(hash, &borrowed) {
+            return translate_laid_text(&hit, offset);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    crate::media::test_counts::note_text_layout_miss();
+
+    let computed = compute_layout_at_origin(
+        ctx,
+        local_rect,
+        scale,
+        runs,
+        paragraphs,
+        align,
+        valign,
+        autofit,
+        wrap,
+        justify_x_offset,
+    );
+    let cached = Arc::new(computed);
+    let owned_key = borrowed.to_owned_key();
+    {
+        let mut guard = match cache.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(hash, owned_key, Arc::clone(&cached));
+    }
+    translate_laid_text(&cached, offset)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_layout_at_origin(
+    ctx: &Context,
+    rect: Rect,
+    scale: f32,
+    runs: &[ResolvedTextRun],
+    paragraphs: &[Paragraph],
+    align: Align,
+    valign: VAlign,
+    autofit: Autofit,
+    wrap: bool,
+    justify_x_offset: f32,
+) -> LaidText {
+    let full = layout_at(
+        ctx,
+        rect,
+        scale,
+        runs,
+        paragraphs,
+        align,
+        valign,
+        1.0,
+        wrap,
+        justify_x_offset,
+    );
     if autofit != Autofit::Shrink || full.fits(rect) {
         return full;
     }
@@ -146,6 +817,7 @@ pub fn layout_text_with_wrap(
         valign,
         AUTOFIT_MIN_SCALE,
         wrap,
+        justify_x_offset,
     );
     if !floor.fits(rect) {
         return floor;
@@ -156,14 +828,36 @@ pub fn layout_text_with_wrap(
     let mut high = 1.0;
     for _ in 0..20 {
         let mid = (low + high) * 0.5;
-        let candidate = layout_at(ctx, rect, scale, runs, paragraphs, align, valign, mid, wrap);
+        let candidate = layout_at(
+            ctx,
+            rect,
+            scale,
+            runs,
+            paragraphs,
+            align,
+            valign,
+            mid,
+            wrap,
+            justify_x_offset,
+        );
         if candidate.fits(rect) {
             low = mid;
         } else {
             high = mid;
         }
     }
-    layout_at(ctx, rect, scale, runs, paragraphs, align, valign, low, wrap)
+    layout_at(
+        ctx,
+        rect,
+        scale,
+        runs,
+        paragraphs,
+        align,
+        valign,
+        low,
+        wrap,
+        justify_x_offset,
+    )
 }
 
 /// Split runs at newlines. Every paragraph has at least one run so an empty
@@ -671,6 +1365,7 @@ fn layout_at(
     valign: VAlign,
     shrink: f32,
     wrap: bool,
+    justify_x_offset: f32,
 ) -> LaidText {
     let shrink = if shrink.is_finite() {
         shrink.clamp(AUTOFIT_MIN_SCALE, 1.0)
@@ -782,7 +1477,12 @@ fn layout_at(
         };
         let mut galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
         if align == Align::Justify && wrap {
-            justify_galley_snapped(&mut galley, content_width, ctx.pixels_per_point(), x);
+            justify_galley_snapped(
+                &mut galley,
+                content_width,
+                ctx.pixels_per_point(),
+                x + justify_x_offset,
+            );
         }
         let galley_h = galley.size().y;
         let indent_width = text_indent + galley.size().x;
