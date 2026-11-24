@@ -724,6 +724,7 @@ pub fn layout_text_with_wrap(
     } else {
         0.0
     };
+    let pending_before = crate::font::fonts_pending_apply(ctx);
     let epoch = crate::font::font_epoch(ctx);
     let borrowed = BorrowedTextKey {
         font_epoch: epoch,
@@ -741,7 +742,7 @@ pub fn layout_text_with_wrap(
     };
     let hash = borrowed.hash128();
     let cache = text_layout_cache(ctx);
-    {
+    if !pending_before {
         let mut guard = match cache.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -767,8 +768,12 @@ pub fn layout_text_with_wrap(
         justify_x_offset,
     );
     let cached = Arc::new(computed);
-    let owned_key = borrowed.to_owned_key();
-    {
+    // Do not cache layouts computed while a `ctx.set_fonts` update is still
+    // pending for the next pass (e.g. `install_course_fonts` called inside a
+    // frame or lazy system-font installation during layout); otherwise the
+    // stale fallback layout would be served under the new `font_epoch`.
+    if !pending_before && !crate::font::fonts_pending_apply(ctx) {
+        let owned_key = borrowed.to_owned_key();
         let mut guard = match cache.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),

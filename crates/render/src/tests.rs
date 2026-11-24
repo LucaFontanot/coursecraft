@@ -9288,3 +9288,204 @@ fn u08_cached_text_and_shape_meshes_match_uncached_pixels() {
         "cached translated render must be byte-identical to uncached render at shifted position"
     );
 }
+
+/// Regression (`RISK-08`): calling `install_course_fonts` mid-pass (as `Editor::show`
+/// and `PlayerApp::ui` do) queues `ctx.set_fonts` for the *next* pass. Laying out
+/// text on the same pass must not poison `TextLayoutCache` with the pre-font
+/// fallback layout under the new `font_epoch`.
+#[test]
+fn u08_mid_pass_course_font_install_does_not_poison_text_layout_cache() {
+    use crate::compose::ResolvedTextRun;
+    use crate::font::{install_course_fonts, install_fonts};
+    use crate::media::{MediaFetch, MediaSource};
+    use crate::text_layout::{layout_text, set_text_layout_cache_limit};
+    use coursecraft_course::{Align, Autofit, Baseline, Course, FontFace, FontStyle, VAlign};
+    use egui::{Color32, Pos2, Rect, vec2};
+    use std::sync::Arc;
+
+    const BOLD_FONT_BYTES: &[u8] = include_bytes!("../fonts/Inter-Bold.ttf");
+
+    struct CustomFontMedia;
+    impl MediaSource for CustomFontMedia {
+        fn get(&self, src: &str) -> MediaFetch {
+            if src == "fonts/wide.ttf" {
+                MediaFetch::Ready(Arc::from(BOLD_FONT_BYTES))
+            } else {
+                MediaFetch::Missing
+            }
+        }
+    }
+
+    let mut course = Course::from_json(
+        r#"{"schema_version":1,"id":"font-cache","title":"Font Cache","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[]}]}]}"#,
+    )
+    .expect("course parses");
+    course.fonts.push(FontFace {
+        family: "WideCustom".into(),
+        style: FontStyle::Regular,
+        src: "fonts/wide.ttf".into(),
+    });
+
+    let runs = vec![ResolvedTextRun {
+        text: "WWWWWWWWWWWWWW".to_owned(),
+        size: 32.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        strikethrough: false,
+        baseline: Baseline::Normal,
+        letter_spacing: 0.0,
+        font: Some("WideCustom".to_owned()),
+        link: None,
+    }];
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 200.0));
+    let raw = egui::RawInput {
+        screen_rect: Some(rect),
+        ..Default::default()
+    };
+
+    // Reference widths with caching disabled: Inter regular vs WideCustom (Inter Bold).
+    let ctx_ref = egui::Context::default();
+    install_fonts(&ctx_ref);
+    set_text_layout_cache_limit(&ctx_ref, 0);
+    let mut fallback_width = 0.0f32;
+    ctx_ref
+        .run_pass(raw.clone(), |ctx| {
+            fallback_width = layout_text(
+                ctx,
+                rect,
+                1.0,
+                &runs,
+                &[],
+                Align::Left,
+                VAlign::Top,
+                Autofit::None,
+            )
+            .width;
+        })
+        .drop_without_applying_deltas();
+    install_course_fonts(&ctx_ref, &course, &CustomFontMedia);
+    let mut custom_width = 0.0f32;
+    ctx_ref
+        .run_pass(raw.clone(), |ctx| {
+            custom_width = layout_text(
+                ctx,
+                rect,
+                1.0,
+                &runs,
+                &[],
+                Align::Left,
+                VAlign::Top,
+                Autofit::None,
+            )
+            .width;
+        })
+        .drop_without_applying_deltas();
+    assert!(
+        (custom_width - fallback_width).abs() > 1.0,
+        "test setup requires custom font width ({custom_width}) to differ from fallback ({fallback_width})"
+    );
+
+    // Now reproduce a real mid-pass font install after text has already been
+    // laid out in the same pass (e.g., editor chrome / an earlier text box on
+    // the slide, or lazy system-font installation): egui defers `set_fonts`
+    // until pass 2, so pass 1 still lays out with the pre-font fallback.
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+    ctx.run_pass(raw.clone(), |_ctx| {})
+        .drop_without_applying_deltas();
+
+    let earlier_runs = vec![ResolvedTextRun {
+        text: "Earlier slide text".to_owned(),
+        size: 16.0,
+        color: Color32::BLACK,
+        bold: false,
+        italic: false,
+        underline: false,
+        strikethrough: false,
+        baseline: Baseline::Normal,
+        letter_spacing: 0.0,
+        font: None,
+        link: None,
+    }];
+    let mut pass1_width = 0.0f32;
+    ctx.run_pass(raw.clone(), |ctx| {
+        // Touch `ctx.fonts` earlier in pass 1 so egui defers `set_fonts` to pass 2.
+        let _ = layout_text(
+            ctx,
+            rect,
+            1.0,
+            &earlier_runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+        );
+        install_course_fonts(ctx, &course, &CustomFontMedia);
+        pass1_width = layout_text(
+            ctx,
+            rect,
+            1.0,
+            &runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+        )
+        .width;
+    })
+    .drop_without_applying_deltas();
+    assert!(
+        (pass1_width - custom_width).abs() > 1.0,
+        "pass 1 must not yet have the custom font applied (pass1={pass1_width}, custom={custom_width}, fallback={fallback_width})"
+    );
+
+    let mut pass2_width = 0.0f32;
+    ctx.run_pass(raw.clone(), |ctx| {
+        install_course_fonts(ctx, &course, &CustomFontMedia);
+        pass2_width = layout_text(
+            ctx,
+            rect,
+            1.0,
+            &runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+        )
+        .width;
+    })
+    .drop_without_applying_deltas();
+    assert!(
+        (pass2_width - custom_width).abs() < 0.01,
+        "pass 2 must lay out with the newly applied custom font ({custom_width}), not the stale pass 1 fallback ({pass2_width})"
+    );
+
+    // Pass 3 must hit the cache with zero misses and keep the custom font width.
+    #[cfg(debug_assertions)]
+    let misses_before = crate::media::test_counts::text_layout_miss_count();
+    let mut pass3_width = 0.0f32;
+    ctx.run_pass(raw, |ctx| {
+        install_course_fonts(ctx, &course, &CustomFontMedia);
+        pass3_width = layout_text(
+            ctx,
+            rect,
+            1.0,
+            &runs,
+            &[],
+            Align::Left,
+            VAlign::Top,
+            Autofit::None,
+        )
+        .width;
+    })
+    .drop_without_applying_deltas();
+    assert!((pass3_width - custom_width).abs() < 0.01);
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        crate::media::test_counts::text_layout_miss_count() - misses_before,
+        0,
+        "pass 3 must hit TextLayoutCache once custom fonts are active"
+    );
+}

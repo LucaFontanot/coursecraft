@@ -90,6 +90,10 @@ const TRIED_SYSTEM_FACES_ID: &str = "coursecraft-tried-system-faces";
 /// second incremental font install in the same frame would clone stale
 /// `ctx.fonts()` definitions and clobber the first font.
 const PENDING_DEFS_ID: &str = "coursecraft-pending-font-defs";
+/// `ctx.data` key holding `(cumulative_pass_nr, data_key, Arc::as_ptr)` for the
+/// most recently queued `ctx.set_fonts` call, so downstream caches can tell
+/// whether egui has applied the queued definitions to `ctx.fonts()` yet.
+const PENDING_FONT_MARKER_ID: &str = "coursecraft-pending-font-marker";
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -247,15 +251,59 @@ fn pending_defs_for_pass(ctx: &egui::Context) -> Option<Arc<FontDefinitions>> {
     }
 }
 
-fn set_fonts_and_track(ctx: &egui::Context, defs: FontDefinitions) {
+/// Return `true` when `ctx.set_fonts` was queued during the current pass and
+/// egui has not yet applied those definitions to `ctx.fonts()`.
+///
+/// Steady frames with no pending font update take an O(1) `ctx.data` lookup
+/// without touching `ctx.fonts()`.
+pub(crate) fn fonts_pending_apply(ctx: &egui::Context) -> bool {
+    let marker_id = egui::Id::unique(PENDING_FONT_MARKER_ID);
+    let Some((saved_pass, key, ptr)) =
+        ctx.data(|data| data.get_temp::<(u64, Arc<str>, usize)>(marker_id))
+    else {
+        return false;
+    };
+    if saved_pass != ctx.cumulative_pass_nr() {
+        ctx.data_mut(|data| data.remove::<(u64, Arc<str>, usize)>(marker_id));
+        return false;
+    }
+    let applied = ctx.fonts(|fonts| {
+        fonts
+            .definitions()
+            .font_data
+            .get(key.as_ref())
+            .is_some_and(|data| Arc::as_ptr(data) as usize == ptr)
+    });
+    if applied {
+        ctx.data_mut(|data| data.remove::<(u64, Arc<str>, usize)>(marker_id));
+        false
+    } else {
+        true
+    }
+}
+
+fn set_fonts_and_track(ctx: &egui::Context, defs: FontDefinitions, marker_key: &str) {
     let pass = ctx.cumulative_pass_nr();
     let families: Arc<HashSet<FontFamily>> = Arc::new(defs.families.keys().cloned().collect());
+    let marker = defs.font_data.get(marker_key).map(|data| {
+        (
+            pass,
+            Arc::<str>::from(marker_key),
+            Arc::as_ptr(data) as usize,
+        )
+    });
     #[cfg(debug_assertions)]
     crate::media::test_counts::note_font_def_clone();
     let pending = Arc::new(defs.clone());
     ctx.data_mut(|data| {
         data.insert_temp(egui::Id::unique(PENDING_DEFS_ID), (pass, pending));
         data.insert_temp(egui::Id::unique(INSTALLED_FAMILIES_ID), families);
+        let marker_id = egui::Id::unique(PENDING_FONT_MARKER_ID);
+        if let Some(marker) = marker {
+            data.insert_temp(marker_id, marker);
+        } else {
+            data.remove::<(u64, Arc<str>, usize)>(marker_id);
+        }
         let epoch_id = egui::Id::unique(FONT_EPOCH_ID);
         let next_epoch = data.get_temp::<u64>(epoch_id).unwrap_or(0).wrapping_add(1);
         data.insert_temp(epoch_id, next_epoch);
@@ -267,7 +315,7 @@ fn install_base(ctx: &egui::Context) {
     if installed_course_font_key(ctx) == Some((0, 0)) {
         return;
     }
-    set_fonts_and_track(ctx, base_definitions());
+    set_fonts_and_track(ctx, base_definitions(), "inter_regular");
     clear_tried_system_faces(ctx);
     store_course_font_key(ctx, (0, 0));
 }
@@ -455,7 +503,7 @@ pub fn install_course_fonts(ctx: &egui::Context, course: &Course, media: &dyn Me
             .insert(course_face_family(&face.family, face.style), list);
     }
 
-    set_fonts_and_track(ctx, fonts);
+    set_fonts_and_track(ctx, fonts, "inter_regular");
     clear_tried_system_faces(ctx);
     store_course_font_key(ctx, key);
 }
@@ -533,10 +581,10 @@ fn install_system_face_incrementally(
         .cloned()
         .unwrap_or_else(|| vec!["inter_regular".to_owned()]);
     let mut list = Vec::with_capacity(1 + inter_fallback.len());
-    list.push(data_key);
+    list.push(data_key.clone());
     list.extend(inter_fallback);
     defs.families.insert(target.clone(), list);
-    set_fonts_and_track(ctx, defs);
+    set_fonts_and_track(ctx, defs, &data_key);
     ctx.request_repaint();
     target
 }
