@@ -1283,6 +1283,7 @@ pub struct Editor {
     pub media: Vec<(String, std::sync::Arc<[u8]>)>,
     media_index: std::collections::HashMap<String, usize>,
     media_index_len: usize,
+    media_index_sig: u64,
     pub media_cache: coursecraft_render::MediaCache,
     /// Cached audio waveform peak envelopes (`0.0..=1.0`, <= 2,000 peaks) keyed by media id (`src`).
     pub audio_waveforms: std::collections::HashMap<String, Option<Vec<f32>>>,
@@ -1633,6 +1634,7 @@ impl Editor {
             media: Vec::new(),
             media_index: std::collections::HashMap::new(),
             media_index_len: 0,
+            media_index_sig: media_names_sig(&[]),
             media_cache: coursecraft_render::MediaCache::new(),
             audio_waveforms: std::collections::HashMap::new(),
             video_durations: std::sync::Arc::new(std::sync::Mutex::new(
@@ -1763,7 +1765,9 @@ impl Editor {
             .slide(&slide_id)
             .map_or(100, |slide| slide.duration_ms.max(100));
         self.timeline_playback.update_clock(now_mono);
-        let media_index = (self.media_index_len == self.media.len()).then_some(&self.media_index);
+        let media_index =
+            media_index_matches_ends(&self.media, &self.media_index, self.media_index_len)
+                .then_some(&self.media_index);
         self.timeline_playback.sync_slide_indexed(
             &self.session.course,
             &slide_id,
@@ -2000,22 +2004,29 @@ impl Editor {
             self.media_index.entry(name.clone()).or_insert(idx);
         }
         self.media_index_len = self.media.len();
+        self.media_index_sig = media_names_sig(&self.media);
     }
 
     pub(crate) fn sync_media_index(&mut self) {
-        if self.media_index_len != self.media.len() {
+        if self.media_index_len != self.media.len()
+            || self.media_index_sig != media_names_sig(&self.media)
+        {
             self.rebuild_media_index();
         }
+    }
+
+    fn media_index_quick_valid(&self) -> bool {
+        media_index_matches_ends(&self.media, &self.media_index, self.media_index_len)
     }
 
     pub(crate) fn media_index_if_synced(
         &self,
     ) -> Option<&std::collections::HashMap<String, usize>> {
-        (self.media_index_len == self.media.len()).then_some(&self.media_index)
+        self.media_index_quick_valid().then_some(&self.media_index)
     }
 
     pub(crate) fn media_get(&self, src: &str) -> Option<&std::sync::Arc<[u8]>> {
-        if self.media_index_len == self.media.len() {
+        if self.media_index_quick_valid() {
             return match self.media_index.get(src) {
                 Some(&idx) => match self.media.get(idx) {
                     Some((name, bytes)) if name == src => Some(bytes),
@@ -3086,7 +3097,7 @@ impl Editor {
         kind: MediaKind,
         src: &str,
     ) -> Option<((String, Json), u32)> {
-        let (_, bytes) = self.media.iter().find(|(name, _)| name == src)?;
+        let bytes = self.media_get(src)?;
         let ms = if kind == MediaKind::Video {
             let cached = self
                 .video_durations
@@ -5168,6 +5179,33 @@ pub fn primary_button(ui: &mut Ui, label: impl Into<egui::WidgetText>) -> egui::
     ui.add(btn)
 }
 
+fn media_names_sig(media: &[(String, std::sync::Arc<[u8]>)]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (name, _) in media {
+        for &b in name.as_bytes() {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn media_index_matches_ends(
+    media: &[(String, std::sync::Arc<[u8]>)],
+    index: &std::collections::HashMap<String, usize>,
+    index_len: usize,
+) -> bool {
+    index_len == media.len()
+        && media
+            .first()
+            .is_none_or(|(name, _)| index.get(name) == Some(&0))
+        && media
+            .last()
+            .is_none_or(|(name, _)| index.get(name).is_some())
+}
+
 /// In-memory media source borrowing from an editor's media assets.
 pub struct MemoryMediaSource<'a> {
     pub media: &'a [(String, std::sync::Arc<[u8]>)],
@@ -5182,7 +5220,7 @@ impl<'a> MemoryMediaSource<'a> {
     ) -> Self {
         Self {
             media,
-            index: (index_len == media.len()).then_some(index),
+            index: media_index_matches_ends(media, index, index_len).then_some(index),
         }
     }
 

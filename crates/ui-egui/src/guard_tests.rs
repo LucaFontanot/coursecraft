@@ -1338,3 +1338,111 @@ fn g06_check_spelling_ignore_and_add_run_zero_speller_checks() {
     );
     assert_eq!(h.editor.ui.spell_check.issues.len(), SLIDES);
 }
+
+/// Regression test (`M34-12`): direct same-length replacements of `Editor::media`
+/// (including middle-entry renames) must never leave `media_index` stale.
+#[test]
+fn s11_media_index_detects_same_length_replacement() {
+    use coursecraft_render::{MediaFetch, MediaSource};
+
+    let course = Course::from_json(
+        r#"{"schema_version":1,"id":"s11-media","title":"S11 Media","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[{"id":"img0","kind":{"type":"image","src":"mid-new.png","alt":""},"frame":{"x":0,"y":0,"w":100,"h":100}}]}]}]}"#,
+    )
+    .expect("course parses");
+    let mut h = TestHarness::new(course);
+    let bytes_a: std::sync::Arc<[u8]> = std::sync::Arc::from(b"aaa".as_slice());
+    let bytes_b: std::sync::Arc<[u8]> = std::sync::Arc::from(b"bbb".as_slice());
+    let bytes_c: std::sync::Arc<[u8]> = std::sync::Arc::from(b"ccc".as_slice());
+
+    h.editor
+        .set_media(vec![("old.png".to_owned(), bytes_a.clone())]);
+    let _ = h.idle_frame();
+    assert!(h.editor.media_contains("old.png"));
+
+    // Same-length full replacement before any frame runs.
+    h.editor.media = vec![("new.png".to_owned(), bytes_b.clone())];
+    assert!(
+        matches!(h.editor.get("new.png"), MediaFetch::Ready(ref b) if b.as_ref() == b"bbb"),
+        "same-length replacement must be visible immediately via MediaSource::get"
+    );
+    assert!(matches!(h.editor.get("old.png"), MediaFetch::Missing));
+
+    // Sync a 3-item list, then replace only the middle entry's name (same length & ends).
+    h.editor.set_media(vec![
+        ("first.png".to_owned(), bytes_a.clone()),
+        ("mid-old.png".to_owned(), bytes_b.clone()),
+        ("last.png".to_owned(), bytes_c.clone()),
+    ]);
+    let _ = h.idle_frame();
+    assert!(h.editor.media_contains("mid-old.png"));
+
+    h.editor.media[1] = ("mid-new.png".to_owned(), bytes_b);
+    let _ = h.idle_frame();
+    assert!(
+        matches!(h.editor.get("mid-new.png"), MediaFetch::Ready(ref b) if b.as_ref() == b"bbb"),
+        "sync_media_index must detect same-length middle-entry replacement"
+    );
+    assert!(!h.editor.media_contains("mid-old.png"));
+    h.editor.refresh_validate_only();
+    assert!(
+        !h.editor
+            .ui
+            .validation_issues
+            .iter()
+            .any(|i| i.message.contains("Missing media")),
+        "mid-new.png must not be flagged as missing media"
+    );
+}
+
+/// Regression test (`M34-12`): `add_issue_word` removes Unicode case variants
+/// matching `Speller::add_word`, and stale issue lists refresh instead of freezing.
+#[test]
+fn s11_spell_check_unicode_add_and_stale_key_safety() {
+    let course = Course::from_json(
+        r#"{"schema_version":1,"id":"s11-spell","title":"S11 Spell","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[{"id":"t0","kind":{"type":"text","text":"Übertäx übertäx teh"},"frame":{"x":60,"y":60,"w":600,"h":120}}]}]}]}"#,
+    )
+    .expect("course parses");
+    let mut h = TestHarness::new(course);
+    let _ = h.idle_frame();
+
+    crate::spell_check::open(&mut h.editor);
+    let _ = h.idle_frame();
+    assert_eq!(h.editor.ui.spell_check.issues.len(), 3);
+
+    reset_counts();
+    crate::spell_check::add_issue_word(&mut h.editor, 0);
+    let _ = h.idle_frame();
+    assert_eq!(gc::speller_runs(), 0);
+    assert_eq!(
+        h.editor.ui.spell_check.issues.len(),
+        1,
+        "adding Übertäx must also remove übertäx in-place"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues[0].misspelling.word, "teh");
+
+    // Mutate course text so spell_check.key becomes stale relative to session.revision,
+    // then invoke ignore_issue directly: it must refresh instead of freezing stale issues.
+    assert!(
+        h.editor
+            .run(
+                "object.update",
+                serde_json::json!({
+                    "slide": "s0",
+                    "object": "t0",
+                    "kind": { "type": "text", "text": "Übertäx übertäx teh recieve" }
+                }),
+            )
+            .is_some()
+    );
+    crate::spell_check::ignore_issue(&mut h.editor, 0, false);
+    assert!(
+        h.editor
+            .ui
+            .spell_check
+            .issues
+            .iter()
+            .any(|i| i.misspelling.word == "recieve"),
+        "stale spell_check list must refresh to include newly introduced typo"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues.len(), 1);
+}

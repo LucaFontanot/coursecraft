@@ -589,28 +589,35 @@ pub fn ignore_issue(editor: &mut Editor, index: usize, all: bool) {
     let Some(issue) = editor.ui.spell_check.issues.get(index).cloned() else {
         return;
     };
+    let was_fresh =
+        editor.ui.spell_check.key == Some((editor.session.revision, editor.spell_version));
     if all {
         editor.ignore_spell_word(&issue.misspelling.word);
     } else {
         editor.ignore_spell_at(&issue.item.location, issue.misspelling.start);
     }
-    let key = (editor.session.revision, editor.spell_version);
-    let state = &mut editor.ui.spell_check;
-    if all {
-        state.issues.retain(|other| {
-            !other
-                .misspelling
-                .word
-                .eq_ignore_ascii_case(&issue.misspelling.word)
-        });
+    if was_fresh {
+        let key = (editor.session.revision, editor.spell_version);
+        let state = &mut editor.ui.spell_check;
+        if all {
+            state.issues.retain(|other| {
+                !other
+                    .misspelling
+                    .word
+                    .eq_ignore_ascii_case(&issue.misspelling.word)
+            });
+        } else {
+            state.issues.retain(|other| {
+                !(other.item.location == issue.item.location
+                    && other.misspelling.start == issue.misspelling.start)
+            });
+        }
+        state.key = Some(key);
+        sync_change_to(state);
     } else {
-        state.issues.retain(|other| {
-            !(other.item.location == issue.item.location
-                && other.misspelling.start == issue.misspelling.start)
-        });
+        refresh(editor);
+        sync_change_to(&mut editor.ui.spell_check);
     }
-    state.key = Some(key);
-    sync_change_to(state);
 }
 
 /// Add the word at `index` to the personal dictionary.
@@ -624,14 +631,28 @@ pub fn add_issue_word(editor: &mut Editor, index: usize) {
     else {
         return;
     };
+    let was_fresh =
+        editor.ui.spell_check.key == Some((editor.session.revision, editor.spell_version));
     editor.add_spell_word(&word);
-    let key = (editor.session.revision, editor.spell_version);
-    let state = &mut editor.ui.spell_check;
-    state
-        .issues
-        .retain(|other| !other.misspelling.word.eq_ignore_ascii_case(&word));
-    state.key = Some(key);
-    sync_change_to(state);
+    if was_fresh {
+        let key = (editor.session.revision, editor.spell_version);
+        let state = &mut editor.ui.spell_check;
+        if word.is_ascii() {
+            state
+                .issues
+                .retain(|other| !other.misspelling.word.eq_ignore_ascii_case(&word));
+        } else {
+            let lowered = word.to_lowercase();
+            state
+                .issues
+                .retain(|other| other.misspelling.word.to_lowercase() != lowered);
+        }
+        state.key = Some(key);
+        sync_change_to(state);
+    } else {
+        refresh(editor);
+        sync_change_to(&mut editor.ui.spell_check);
+    }
 }
 
 /// Draw the Check Spelling window when it is open.
