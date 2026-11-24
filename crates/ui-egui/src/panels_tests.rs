@@ -99,7 +99,10 @@ fn every_panel_has_a_family_and_settings_panels_have_sections() {
 #[test]
 fn every_launcher_opens_a_panel_or_says_why_not() {
     let mut launchers = 0;
-    for tab in spec::TABS {
+    for tab in spec::TABS
+        .iter()
+        .chain(spec::CONTEXT_TABS.iter().map(|c| &c.tab))
+    {
         for group in tab
             .groups
             .iter()

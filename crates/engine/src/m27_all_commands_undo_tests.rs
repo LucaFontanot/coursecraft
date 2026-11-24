@@ -956,6 +956,10 @@ fn command_cases() -> Vec<(&'static str, Json)> {
             json!({ "slide": "slide1", "transition": { "type": "fade", "duration_ms": 400 } }),
         ),
         (
+            "slide.set_transition_all",
+            json!({ "transition": { "type": "fade", "duration_ms": 400 } }),
+        ),
+        (
             "slide.set_player_overrides",
             json!({ "slide": "slide1", "show_nav": false }),
         ),

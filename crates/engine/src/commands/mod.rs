@@ -476,6 +476,17 @@ static REGISTRY: &[Command] = &[
         run: slide::slide_set_transition,
     },
     Command {
+        id: "slide.set_transition_all",
+        label: "Apply transition to all slides",
+        menu: "",
+        shortcut: None,
+        params: r#"{"transition": Transition|null}"#,
+        mutates: true,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
+        run: slide::slide_set_transition_all,
+    },
+    Command {
         id: "slide.set_player_overrides",
         label: "Slide player settings",
         menu: "",

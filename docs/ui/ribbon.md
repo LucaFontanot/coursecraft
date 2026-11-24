@@ -247,8 +247,8 @@ order against the app before building.
 
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
-| Setup | Slide Size | L | `course.set_slide_size` | ✅ | `slide_size_dialog.rs`. In the code: Themes, Colors and Fonts open the theme window; Background Styles waits for ribbon wiring (↘ opens the Slide inspector) |
-| Themes | theme gallery | G | `course.set_theme` | ✅ | `theme_dialog.rs`; gallery of built-in themes |
+| Setup | Slide Size | L | `course.set_slide_size` | ✅ | `slide_size_dialog.rs`. In the code: Colors and Fonts open the theme window; Background Styles waits for ribbon wiring (↘ opens the Slide inspector) |
+| Themes | theme gallery | G | `course.set_theme` | ✅ | `ribbon/gallery.rs`: eight built-in themes of our own (accent, background, text), ▾ shows them all, the current one is marked; Colors and Fonts open the theme window (`theme_dialog.rs`) |
 | Theme options | Colors | SS | `theme.set_palette` | ✅ | ▾ palettes, Create New Theme Colors… (`theme.set_palette_color`) |
 | | Fonts | SS | `course.update` `{fonts}` | 🟡 | ▾ font pairs, Create New Theme Fonts… |
 | Background ↘ | Background Styles | SS | `slide.set_background` | ✅ | |
@@ -261,10 +261,10 @@ Not shown in the tutorial; standard layout.
 
 | Group | Control | Kind | Action | Status |
 |---|---|---|---|---|
-| Transition to This Slide | transition gallery | G | `slide.set_transition` | ✅ (in the code: a Transition button that opens the Slide inspector until the gallery is wired) |
-| | Effect Options | LS | `slide.set_transition` `{direction}` | 🟡 |
-| Timing | Duration | N | `slide.set_transition` `{duration}` | ✅ |
-| | Apply To All | S | `slide.set_transition` (all) | ⛔ |
+| Transition to This Slide ↘ | transition gallery | G | `slide.set_transition` | ✅ (`ribbon/gallery.rs`: None, Fade, Push, Cover; ↘ opens the Slide inspector) |
+| | Effect Options | LS | `slide.set_transition` `{from}` | ✅ ▾ From Left / Right / Top / Bottom, for Push and Cover |
+| Timing | Duration | N | `slide.set_transition` `{duration_ms}` | ✅ seconds, one undo step |
+| | Apply To All | S | `slide.set_transition_all` | ✅ every slide of every scene, one undo step |
 | Publish | Preview | LS | | ✅ |
 
 ## Animations
@@ -272,9 +272,9 @@ Not shown in the tutorial; standard layout.
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
 | Advanced | Animation Painter | L | `ui:animationPainter` | ⛔ | Format Painter for animations |
-| Entrance Animations | effect gallery | LS | `object.set_animation` `{entrance}` | ✅ | in the code: Entrance and Exit buttons open the Animate inspector until the galleries are wired; Add Motion Path runs `object.add_motion_path`; None, Fade, Grow, Fly In, Float In, Split, Wipe, Shape, Wheel, Random Bars, Spin, Spin & Grow, Grow & Spin, Zoom, Swivel, Bounce; missing effects disabled in the gallery |
-| | Duration | N | `object.set_animation` `{duration}` | ✅ | |
-| | Effect Options | SS | `object.set_animation` `{direction, sequence}` | 🟡 | direction ✅; Sequence By Paragraph ⛔ |
+| Entrance Animations ↘ | effect gallery | G | `object.set_animation` `{entrance}` | ✅ | `ribbon/gallery.rs`: None, Fade, Fly In, Zoom, Wipe, Float (the effects the runtime has), on every selected object; ↘ opens the Animate inspector; Add Motion Path runs `object.add_motion_path` |
+| | Duration | N | `object.set_animation` `{duration_ms}` | ✅ | seconds |
+| | Effect Options | SS | `object.set_animation` `{from, sequence}` | 🟡 | ▾ From Left / Right / Top / Bottom ✅; Sequence By Paragraph ⛔ |
 | Exit Animations | (same three) | | `object.set_animation` `{exit}` | ✅ | |
 | Emphasis Animations | Add Emphasis Animation | LS | — | ⛔ | pulse, spin, teeter… at a time |
 | | emphasis list | G | — | ⛔ | |

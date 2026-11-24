@@ -67,13 +67,15 @@ pub enum Kind {
     Combo { width: f32 },
     /// A label and a number field (X, Y, Width, Height), the field this wide.
     Number { width: f32 },
+    /// A row of tiles this many wide, with a ▾ that shows them all.
+    Gallery { tiles: u8 },
 }
 
 impl Kind {
     /// Drawn in a column of small controls.
     #[must_use]
     pub fn is_small(self) -> bool {
-        !matches!(self, Kind::Large | Kind::LargeSplit)
+        !matches!(self, Kind::Large | Kind::LargeSplit | Kind::Gallery { .. })
     }
 
     /// Has a ▾ menu.
@@ -240,6 +242,43 @@ pub enum UiAction {
     Automation,
     /// A control of a contextual tab (`ribbon/contextual.rs`).
     Context(ContextOp),
+    /// A gallery's tiles (`ribbon/gallery.rs`).
+    Gallery(Gallery),
+    /// A gallery's options: effect direction, duration, apply to all.
+    Effect(EffectOp),
+}
+
+/// The galleries of the Design, Transitions and Animations tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gallery {
+    Themes,
+    Transitions,
+    Entrance,
+    Exit,
+}
+
+/// What an effect option acts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Motion {
+    /// The current slide's transition.
+    Transition,
+    /// The selected objects' entrance animation.
+    Entrance,
+    /// The selected objects' exit animation.
+    Exit,
+}
+
+/// The options beside a gallery.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EffectOp {
+    /// Effect Options ▾: the directions of the current effect.
+    Options(Motion),
+    /// The direction the effect comes from.
+    From(Motion, coursecraft_course::Direction),
+    /// Its duration, as a number field in seconds.
+    Duration(Motion),
+    /// The current slide's transition on every slide.
+    TransitionToAll,
 }
 
 /// Which selection shows a contextual tab (contextual-tabs.md › When each one shows).
@@ -1742,10 +1781,10 @@ const DESIGN: &[Group] = &[
                 "design.themes",
                 "Themes",
                 Icon::Palette,
-                Large,
-                Ui(UiAction::Themes),
+                Kind::Gallery { tiles: 5 },
+                Ui(UiAction::Gallery(Gallery::Themes)),
             ),
-            "Pick a theme: colors and fonts for the whole course.",
+            "Pick a theme: colors for the whole course.",
         )],
     },
     Group {
@@ -1800,28 +1839,94 @@ const DESIGN: &[Group] = &[
 // Transitions
 // ---------------------------------------------------------------------------
 
+const fn from_menu(ids: [&'static str; 4], motion: Motion) -> [Item; 4] {
+    use coursecraft_course::Direction;
+    [
+        item(
+            ids[0],
+            "From Left",
+            Icon::ArrowRight,
+            Small,
+            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Left))),
+        ),
+        item(
+            ids[1],
+            "From Right",
+            Icon::ArrowLeft,
+            Small,
+            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Right))),
+        ),
+        item(
+            ids[2],
+            "From Top",
+            Icon::ArrowDown,
+            Small,
+            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Top))),
+        ),
+        item(
+            ids[3],
+            "From Bottom",
+            Icon::ArrowUp,
+            Small,
+            Ui(UiAction::Effect(EffectOp::From(motion, Direction::Bottom))),
+        ),
+    ]
+}
+
+const TRANSITION_FROM: [Item; 4] = from_menu(
+    [
+        "transitions.from_left",
+        "transitions.from_right",
+        "transitions.from_top",
+        "transitions.from_bottom",
+    ],
+    Motion::Transition,
+);
+const ENTRANCE_FROM: [Item; 4] = from_menu(
+    [
+        "animations.entrance_left",
+        "animations.entrance_right",
+        "animations.entrance_top",
+        "animations.entrance_bottom",
+    ],
+    Motion::Entrance,
+);
+const EXIT_FROM: [Item; 4] = from_menu(
+    [
+        "animations.exit_left",
+        "animations.exit_right",
+        "animations.exit_top",
+        "animations.exit_bottom",
+    ],
+    Motion::Exit,
+);
+
 const TRANSITIONS: &[Group] = &[
     Group {
         id: "transitions.to_this_slide",
         label: "Transition to This Slide",
-        launcher: None,
+        launcher: Some(Ui(UiAction::PanelAt(
+            crate::dock::Panel::SlideInspector,
+            None,
+        ))),
         items: &[
             helped(
                 item(
                     "transitions.pick",
-                    "Transition",
+                    "Transitions",
                     Icon::FilmStrip,
-                    Large,
-                    Ui(UiAction::SlideInspector),
+                    Kind::Gallery { tiles: 4 },
+                    Ui(UiAction::Gallery(Gallery::Transitions)),
                 ),
-                "Pick the transition in the Slide inspector.",
+                "How this slide comes in.",
             ),
-            item(
+            split(
                 "transitions.options",
                 "Effect Options",
                 Icon::SlidersHorizontal,
                 LargeSplit,
-                NotYet(WIRING_SLIDE),
+                Ui(UiAction::Effect(EffectOp::Options(Motion::Transition))),
+                Menu::Items(&TRANSITION_FROM),
             ),
         ],
     },
@@ -1834,15 +1939,18 @@ const TRANSITIONS: &[Group] = &[
                 "transitions.duration",
                 "Duration",
                 Icon::Timer,
-                Small,
-                NotYet(WIRING_SLIDE),
+                Kind::Number { width: 64.0 },
+                Ui(UiAction::Effect(EffectOp::Duration(Motion::Transition))),
             ),
-            item(
-                "transitions.apply_all",
-                "Apply To All",
-                Icon::Stack,
-                Small,
-                NotYet("applying one transition to every slide"),
+            helped(
+                item(
+                    "transitions.apply_all",
+                    "Apply To All",
+                    Icon::Stack,
+                    Small,
+                    Ui(UiAction::Effect(EffectOp::TransitionToAll)),
+                ),
+                "Give every slide this slide's transition.",
             ),
         ],
     },
@@ -1869,32 +1977,66 @@ const ANIMATIONS: &[Group] = &[
     Group {
         id: "animations.entrance",
         label: "Entrance Animations",
-        launcher: None,
-        items: &[helped(
-            item(
-                "animations.entrance",
-                "Entrance",
-                Icon::ArrowRight,
-                Large,
-                Ui(UiAction::AnimateInspector),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Animate, None))),
+        items: &[
+            helped(
+                item(
+                    "animations.entrance",
+                    "Entrance",
+                    Icon::ArrowRight,
+                    Kind::Gallery { tiles: 4 },
+                    Ui(UiAction::Gallery(Gallery::Entrance)),
+                ),
+                "How the selected objects come in.",
             ),
-            "Pick how the object comes in, in the Animate inspector.",
-        )],
+            split(
+                "animations.entrance_options",
+                "Effect Options",
+                Icon::SlidersHorizontal,
+                SmallSplit,
+                Ui(UiAction::Effect(EffectOp::Options(Motion::Entrance))),
+                Menu::Items(&ENTRANCE_FROM),
+            ),
+            item(
+                "animations.entrance_duration",
+                "Duration",
+                Icon::Timer,
+                Kind::Number { width: 56.0 },
+                Ui(UiAction::Effect(EffectOp::Duration(Motion::Entrance))),
+            ),
+        ],
     },
     Group {
         id: "animations.exit",
         label: "Exit Animations",
-        launcher: None,
-        items: &[helped(
-            item(
-                "animations.exit",
-                "Exit",
-                Icon::ArrowLeft,
-                Large,
-                Ui(UiAction::AnimateInspector),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Animate, None))),
+        items: &[
+            helped(
+                item(
+                    "animations.exit",
+                    "Exit",
+                    Icon::ArrowLeft,
+                    Kind::Gallery { tiles: 4 },
+                    Ui(UiAction::Gallery(Gallery::Exit)),
+                ),
+                "How the selected objects go out.",
             ),
-            "Pick how the object goes out, in the Animate inspector.",
-        )],
+            split(
+                "animations.exit_options",
+                "Effect Options",
+                Icon::SlidersHorizontal,
+                SmallSplit,
+                Ui(UiAction::Effect(EffectOp::Options(Motion::Exit))),
+                Menu::Items(&EXIT_FROM),
+            ),
+            item(
+                "animations.exit_duration",
+                "Duration",
+                Icon::Timer,
+                Kind::Number { width: 56.0 },
+                Ui(UiAction::Effect(EffectOp::Duration(Motion::Exit))),
+            ),
+        ],
     },
     Group {
         id: "animations.emphasis",
@@ -2486,7 +2628,7 @@ const PICTURE_FORMAT: &[Group] = &[
     Group {
         id: "picture_styles",
         label: "Picture Styles",
-        launcher: Some(Ui(UiAction::FormatInspector)),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Format, None))),
         items: &[
             item(
                 "picture_fmt.styles",
@@ -2569,7 +2711,7 @@ const VIDEO_OPTIONS: &[Group] = &[
     Group {
         id: "video_options",
         label: "Video Options",
-        launcher: Some(Ui(UiAction::FormatInspector)),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Format, None))),
         items: &[
             item(
                 "video_opt.volume",
@@ -2666,7 +2808,7 @@ const AUDIO_OPTIONS: &[Group] = &[
     Group {
         id: "audio_options",
         label: "Audio Options",
-        launcher: Some(Ui(UiAction::FormatInspector)),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Format, None))),
         items: &[
             item(
                 "audio_opt.volume",
@@ -2745,7 +2887,7 @@ const TABLE_DESIGN: &[Group] = &[
     Group {
         id: "table_styles",
         label: "Table Styles",
-        launcher: Some(Ui(UiAction::FormatInspector)),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Format, None))),
         items: &[
             item(
                 "table_design.styles",
@@ -2850,7 +2992,7 @@ const TABLE_LAYOUT: &[Group] = &[
     Group {
         id: "table_cell_size",
         label: "Cell Size",
-        launcher: Some(Ui(UiAction::FormatInspector)),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Format, None))),
         items: &[
             item(
                 "table_layout.row_height",
@@ -2899,7 +3041,7 @@ const QUESTION_DESIGN: &[Group] = &[
     Group {
         id: "question_display",
         label: "Display",
-        launcher: Some(ctx(ContextOp::QuestionPanel)),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Question, None))),
         items: &[
             item(
                 "question_design.feedback",
@@ -2930,7 +3072,7 @@ const QUESTION_DESIGN: &[Group] = &[
     Group {
         id: "question_scoring",
         label: "Scoring",
-        launcher: Some(ctx(ContextOp::QuestionPanel)),
+        launcher: Some(Ui(UiAction::PanelAt(crate::dock::Panel::Question, None))),
         items: &[
             item(
                 "question_design.score",

@@ -368,25 +368,50 @@ pub(super) fn slide_set_transition(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "slide.set_transition";
     let was_valid = s.is_playable();
     let sid: String = req(C, p, "slide")?;
-    let map = obj(C, p)?;
-    let trans_val = map
-        .get("transition")
-        .ok_or_else(|| bad(C, "missing `transition`"))?;
-    let transition: Option<Transition> = match trans_val {
-        Json::Null => None,
-        val => {
-            let t: Transition = serde_json::from_value(val.clone())
-                .map_err(|e| bad(C, format!("invalid transition: {e}")))?;
-            if t.duration_ms < 1 || t.duration_ms > 60000 {
-                return Err(bad(C, "transition duration_ms must be 1..=60000"));
-            }
-            Some(t)
-        }
-    };
+    let transition = transition_param(C, p)?;
     let sl = slide_mut(s, &sid)?;
     sl.transition = transition;
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
+}
+
+/// Give every slide of every scene the same transition (Apply To All).
+pub(super) fn slide_set_transition_all(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "slide.set_transition_all";
+    let was_valid = s.is_playable();
+    let transition = transition_param(C, p)?;
+    let mut count = 0usize;
+    for slide in s
+        .course
+        .scenes
+        .iter_mut()
+        .flat_map(|sc| sc.slides.iter_mut())
+    {
+        slide.transition = transition.clone();
+        count += 1;
+    }
+    keep_valid(s, was_valid)?;
+    Ok(json!({ "slides": count }))
+}
+
+/// The `transition` param: `null` for none, or a checked [`Transition`].
+fn transition_param(cmd: &str, p: &Json) -> Result<Option<Transition>> {
+    let map = obj(cmd, p)?;
+    let trans_val = map
+        .get("transition")
+        .ok_or_else(|| bad(cmd, "missing `transition`"))?;
+    let transition: Option<Transition> = match trans_val {
+        Json::Null => None,
+        val => {
+            let t: Transition = serde_json::from_value(val.clone())
+                .map_err(|e| bad(cmd, format!("invalid transition: {e}")))?;
+            if t.duration_ms < 1 || t.duration_ms > 60000 {
+                return Err(bad(cmd, "transition duration_ms must be 1..=60000"));
+            }
+            Some(t)
+        }
+    };
+    Ok(transition)
 }
 
 /// An optional true/false override in a command's params: absent leaves it

@@ -19,13 +19,13 @@
 | Shapes, pictures and buttons | 14 | 5 | 10 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
-| Animation, transitions, timeline | 10 | 3 | 9 | 0 |
+| Animation, transitions, timeline | 12 | 2 | 8 | 0 |
 | Questions and quizzes | 9 | 3 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **108** | **39** | **61** | **12** |
+| **Total** | **110** | **38** | **60** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -67,7 +67,7 @@ Counted from the tables below; recount when a row changes.
 | Swipe gestures (prev/next) | — | ⛔ | M40 |
 | Scene index menu | — | ⛔ behaviour to confirm | M40 |
 | Focus order | audit only | 🟡 dialog missing | M38 |
-| Themes: colours, fonts, gallery | `course.set_theme`, `theme.*` | 🟡 theme-font dialog | M38 |
+| Themes: colours, fonts, gallery | `course.set_theme`, `theme.*`; Design › Themes gallery of built-in themes | 🟡 theme-font dialog | M38 |
 
 ## Text
 
@@ -192,13 +192,13 @@ Counted from the tables below; recount when a row changes.
 | Slide duration | `slide.set_duration` | ✅ | — |
 | Play / stop / zoom in timeline | `timeline_playback.rs` | ✅ | — |
 | Timeline shows current layer; group rows expand | `timeline.rs` | ✅ | — |
-| Full entrance gallery (16 effects) | | 🟡 subset | M41 |
-| Transition effect options | | 🟡 | M41 |
+| Full entrance gallery (16 effects) | Animations › Entrance / Exit galleries (`ribbon/gallery.rs`) with the six effects the runtime has | 🟡 subset | M41 |
+| Transition effect options | Transitions › Effect Options ▾ (from left, right, top, bottom) | ✅ | — |
 | Path options | | 🟡 | M41 |
 | Emphasis animations | — | ⛔ | M41 |
 | Animation painter | — | ⛔ | M41 |
 | Sequence by paragraph (build steps) | — | ⛔ | M41 |
-| Transition: apply to all | — | ⛔ | M41 |
+| Transition: apply to all | `slide.set_transition_all`, Transitions › Apply To All | ✅ | — |
 | Timeline: fit to longest, reset, align to playhead/cue | — | ⛔ | M41 |
 | Timing dialog | — | ⛔ | M41 |
 | Zoom region (camera zoom) | — | ⛔ | M41 |
@@ -271,7 +271,7 @@ Counted from the tables below; recount when a row changes.
 | Right-click menus complete (canvas, timeline, scenes) | | 🟡 | M37 |
 | Collapse panels | | 🟡 | M37 |
 | Slide Properties in the Course Map | | 🟡 | M37 |
-| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab and the File page, replacing the menu bar, and the contextual tabs (Drawing, Button, Picture, Video, Audio, Table, Question Tools; `ribbon/contextual.rs`); the galleries (themes, transitions, animations) and the modes' tab strips to come | 🟡 | M37 |
+| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab and the File page, replacing the menu bar, and the contextual tabs (Drawing, Button, Picture, Video, Audio, Table, Question Tools; `ribbon/contextual.rs`) and the theme, transition and animation galleries (`ribbon/gallery.rs`); the modes' tab strips to come | 🟡 | M37 |
 | Settings panels from the ↘ launchers, opening by themselves for the work in hand | `panels.rs` (`docs/ui/panels.md`): Text; the other categories to come | 🟡 | M37–M42 |
 | Quick access toolbar | Save, Undo, Redo, Undo History left of the tab strip; Customize to come | 🟡 | M37 |
 | Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |

@@ -5,11 +5,14 @@
 //! one whose feature is missing is drawn disabled with its reason in the tooltip.
 
 pub mod contextual;
+pub mod gallery;
 pub mod spec;
 pub mod widgets;
 
 #[cfg(test)]
 mod contextual_tests;
+#[cfg(test)]
+mod gallery_tests;
 #[cfg(test)]
 mod spec_tests;
 
@@ -295,6 +298,8 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
         | UiAction::AiSettings => Ok(()),
         UiAction::PanelAt(..) => Ok(()),
         UiAction::Context(op) => contextual::available(editor, op),
+        UiAction::Gallery(g) => gallery::available(editor, g),
+        UiAction::Effect(op) => gallery::effect_available(editor, op),
         UiAction::Panel(panel)
             if crate::panels::family(panel) == crate::panels::Family::Settings =>
         {
@@ -456,6 +461,9 @@ fn run_ui(
             requests.push(EditorRequest::SetAutomation(editor.automation_enabled));
         }
         UiAction::Context(op) => contextual::run(editor, op, requests),
+        // A gallery acts from its tiles.
+        UiAction::Gallery(_) => {}
+        UiAction::Effect(op) => gallery::run_effect(editor, op),
     }
 }
 
@@ -503,6 +511,7 @@ fn ui_selected(editor: &Editor, action: UiAction) -> bool {
         UiAction::ThemeSystem => editor.theme_pref == ThemePref::System,
         UiAction::Automation => editor.automation_available && editor.automation_enabled,
         UiAction::Context(op) => contextual::selected(editor, op),
+        UiAction::Effect(op) => gallery::effect_selected(editor, op),
         _ => false,
     }
 }
@@ -877,6 +886,7 @@ fn run_of(kind: Kind) -> Run {
         Kind::Large | Kind::LargeSplit => Run::Large,
         Kind::Small | Kind::SmallSplit => Run::Columns,
         Kind::Toggle | Kind::Combo { .. } | Kind::Number { .. } => Run::Rows,
+        Kind::Gallery { .. } => Run::Large,
     }
 }
 
@@ -1031,15 +1041,29 @@ fn control(
             widgets::combo_field(ui, label, &combo_text(editor, item.action), width, enabled),
             None,
         ),
-        Kind::Number { width } => {
-            let field = match item.action {
-                Action::Ui(UiAction::Context(spec::ContextOp::Frame(field))) => field,
-                _ => spec::FrameField::X,
-            };
-            (
+        Kind::Number { width } => match item.action {
+            Action::Ui(UiAction::Effect(spec::EffectOp::Duration(motion))) => (
+                gallery::duration_field(editor, ui, item, motion, width, enabled),
+                None,
+            ),
+            Action::Ui(UiAction::Context(spec::ContextOp::Frame(field))) => (
                 contextual::number_field(editor, ui, item, field, width, enabled),
                 None,
-            )
+            ),
+            _ => (
+                contextual::number_field(editor, ui, item, spec::FrameField::X, width, enabled),
+                None,
+            ),
+        },
+        Kind::Gallery { tiles } => {
+            let Action::Ui(UiAction::Gallery(g)) = item.action else {
+                return;
+            };
+            let resp = gallery::show(editor, ui, item, g, tiles, enabled);
+            if let Err(reason) = &state {
+                resp.on_hover_text(reason);
+            }
+            return;
         }
     };
     let tip = tooltip(item, &state);
@@ -1047,7 +1071,12 @@ fn control(
     // These open their ▾ menu from the whole control.
     let menu_only = matches!(
         item.action,
-        Action::Ui(UiAction::Arrange | UiAction::Shape | UiAction::Question)
+        Action::Ui(
+            UiAction::Arrange
+                | UiAction::Shape
+                | UiAction::Question
+                | UiAction::Effect(spec::EffectOp::Options(_))
+        )
     );
     if enabled && !menu_only && (main.clicked() || main.double_clicked()) {
         // A double click reaches the Format Painter (it keeps it on); other

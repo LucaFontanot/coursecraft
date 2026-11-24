@@ -370,7 +370,7 @@ Plan by Gemini 4 Neon: `docs/testing/m36-plan.md`; report: `docs/testing/m36-rep
 
 A Storyline 360 author should find every command where they look for it. Plan and full inventory:
 `docs/ui/` (start at `docs/ui/README.md`), taken from public beginner tutorials. Feature-level
-status: `docs/ui/feature-parity.md` (2026-11-23: 105 built, 38 partly, 64 not yet, 12 not
+status: `docs/ui/feature-parity.md` (2026-11-24: 110 built, 38 partly, 60 not yet, 12 not
 planned). Clean-room: same tabs, groups and order; our own look and coined names. Hand checks:
 `docs/release-checklist.md` § 9.
 
@@ -401,7 +401,8 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    Animations and Help followed: their buttons open the dialog or inspector that does the work
    until the galleries are wired. Then the File page (from the File tab; the menu bar is no
    longer drawn under the ribbon) and the view tabs row (Course Map, then each opened slide).
-   Still open: the galleries. The launch screen is the File page's Start section (2026-11-24).
+   The launch screen is the File page's Start section, and Design, Transitions and Animations
+   have their galleries (2026-11-24).
 3. Contextual tabs (Drawing, Picture, Button, Audio/Video, Table, Question Tools) and modes (Slide
    Master, Preview); then the menu bar and flat toolbar go, the quick access toolbar arrives.
    **Contextual tabs built (2026-11-24):** `CONTEXT_TABS` in `ribbon/spec.rs` and

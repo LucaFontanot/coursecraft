@@ -274,6 +274,7 @@ slide.paste          -                        -          {"scene"?: id, "after"?
 slide.set_duration   -                        -          {"slide": id, "ms": u32}
 slide.set_background -                        -          {"slide": id, "background": color|null}
 slide.set_transition -                        -          {"slide": id, "transition": Transition|null}
+slide.set_transition_all -                    -          {"transition": Transition|null}
 slide.set_player_overrides -                  -          {"slide": id, "next_requires"?: {"kind": "nothing"|"timeline_ends"|"variable", "name"?: string}|null, "show_bar"?: bool|null, "show_nav"?: bool|null, "show_seekbar"?: bool|null, "show_menu"?: bool|null}
 slide.add_cue        -                        -          {"slide": id, "layer"?: id, "at_ms"?: number, "name"?: string, "id"?: id}
 slide.set_cue        -                        -          {"slide": id, "layer"?: id, "cue": id, "patch": {"at_ms"?: number, "name"?: string}}
