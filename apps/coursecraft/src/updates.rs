@@ -746,12 +746,20 @@ fn check_http_status(status: u16, rate_limit_remaining: Option<u64>) -> Result<(
     Err(UpdateError::HttpStatus(status))
 }
 
+fn is_io_timeout(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::TimedOut
+        || err
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<ureq::Error>())
+            .is_some_and(|e| matches!(e, ureq::Error::Timeout(_)))
+}
+
 fn read_capped_bytes(reader: &mut dyn Read, max_bytes: usize) -> Result<Vec<u8>, UpdateError> {
     let limit = (max_bytes as u64).saturating_add(1);
     let mut buf = Vec::new();
     let mut limited = reader.take(limit);
     limited.read_to_end(&mut buf).map_err(|err| {
-        if err.kind() == io::ErrorKind::TimedOut {
+        if is_io_timeout(&err) {
             UpdateError::Timeout
         } else {
             UpdateError::Network(err.to_string())
@@ -990,7 +998,7 @@ fn stream_to_part_file(
             Ok(0) => break,
             Ok(n) => n,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            Err(err) if err.kind() == io::ErrorKind::TimedOut => return Err(UpdateError::Timeout),
+            Err(err) if is_io_timeout(&err) => return Err(UpdateError::Timeout),
             Err(err) => return Err(UpdateError::Network(err.to_string())),
         };
         downloaded = downloaded.saturating_add(n as u64);
@@ -1110,27 +1118,37 @@ const PROGRESS_MIN_BYTES: u64 = 128 * 1024;
 pub struct UreqHttp;
 
 impl UreqHttp {
-    fn build_agent(kind: RequestKind) -> ureq::Agent {
+    fn build_config(kind: RequestKind, user_agent: &str) -> ureq::config::Config {
         let mut builder = ureq::config::Config::builder()
             .max_redirects(0)
             .http_status_as_error(false)
+            .https_only(true)
+            .user_agent(user_agent)
+            .accept_encoding("")
             .timeout_connect(Some(CONNECT_TIMEOUT));
         builder = match kind {
             RequestKind::Metadata | RequestKind::Checksums => {
                 builder.timeout_global(Some(METADATA_TIMEOUT))
             }
-            RequestKind::Download => builder.timeout_recv_body(Some(DOWNLOAD_RECV_TIMEOUT)),
+            RequestKind::Download => builder
+                .timeout_resolve(Some(CONNECT_TIMEOUT))
+                .timeout_send_request(Some(CONNECT_TIMEOUT))
+                .timeout_recv_response(Some(DOWNLOAD_RECV_TIMEOUT))
+                .timeout_per_read(Some(DOWNLOAD_RECV_TIMEOUT)),
         };
-        ureq::Agent::new_with_config(builder.build())
+        builder.build()
+    }
+
+    fn build_agent(kind: RequestKind, user_agent: &str) -> ureq::Agent {
+        ureq::Agent::new_with_config(Self::build_config(kind, user_agent))
     }
 }
 
 fn map_ureq_error(err: ureq::Error) -> UpdateError {
     match err {
         ureq::Error::Timeout(_) => UpdateError::Timeout,
-        ureq::Error::Io(ref io_err) if io_err.kind() == io::ErrorKind::TimedOut => {
-            UpdateError::Timeout
-        }
+        ureq::Error::Io(ref io_err) if is_io_timeout(io_err) => UpdateError::Timeout,
+        ureq::Error::RequireHttpsOnly(_) => UpdateError::DisallowedUrl,
         other => UpdateError::Network(other.to_string()),
     }
 }
@@ -1157,7 +1175,7 @@ impl UpdateHttp for UreqHttp {
         user_agent: &str,
         kind: RequestKind,
     ) -> Result<HttpResponse, UpdateError> {
-        let agent = Self::build_agent(kind);
+        let agent = Self::build_agent(kind, user_agent);
         let mut req = agent
             .get(url)
             .header("User-Agent", user_agent)
@@ -1513,7 +1531,7 @@ impl UpdateClient {
         if self.busy != UpdateBusy::Idle {
             return false;
         }
-        self.cancel.store(false, Ordering::Relaxed);
+        let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let job = DownloadJob {
             http: Arc::clone(&self.http),
@@ -1521,7 +1539,7 @@ impl UpdateClient {
             checksums_url,
             dest_dir,
             user_agent: user_agent(&self.current_version.to_string()),
-            cancel: Arc::clone(&self.cancel),
+            cancel: Arc::clone(&cancel),
             tx,
             ctx: ctx.clone(),
         };
@@ -1534,6 +1552,7 @@ impl UpdateClient {
             return false;
         }
 
+        self.cancel = cancel;
         self.rx = Some(rx);
         self.busy = UpdateBusy::Downloading;
         true
@@ -3080,10 +3099,77 @@ mod tests {
             "/tmp/portable/coursecraft"
         )));
         assert!(!exe_path_is_portable(Path::new("")));
+    }
 
-        // Verify agent builders construct cleanly offline for every RequestKind.
-        let _ = UreqHttp::build_agent(RequestKind::Metadata);
-        let _ = UreqHttp::build_agent(RequestKind::Checksums);
-        let _ = UreqHttp::build_agent(RequestKind::Download);
+    #[test]
+    fn dl08_ureq_config_and_timeout_mapping() {
+        // Verify agent configs construct cleanly offline and apply exact per-kind timeouts.
+        let ua = "CourseCraft/0.4.3";
+        for kind in [RequestKind::Metadata, RequestKind::Checksums] {
+            let cfg = UreqHttp::build_config(kind, ua);
+            assert_eq!(cfg.max_redirects(), 0);
+            assert!(!cfg.http_status_as_error());
+            assert!(cfg.https_only());
+            assert_eq!(cfg.timeouts().connect, Some(Duration::from_secs(10)));
+            assert_eq!(cfg.timeouts().global, Some(Duration::from_secs(15)));
+            assert_eq!(cfg.timeouts().recv_body, None);
+            let _ = UreqHttp::build_agent(kind, ua);
+        }
+        let dl_cfg = UreqHttp::build_config(RequestKind::Download, ua);
+        assert_eq!(dl_cfg.max_redirects(), 0);
+        assert!(!dl_cfg.http_status_as_error());
+        assert!(dl_cfg.https_only());
+        assert_eq!(dl_cfg.timeouts().connect, Some(Duration::from_secs(10)));
+        assert_eq!(dl_cfg.timeouts().global, None);
+        // Download must NOT cap total body duration; it uses a 30 s per-read timeout so
+        // large installers on slow connections succeed while stalled reads still time out.
+        assert_eq!(dl_cfg.timeouts().recv_body, None);
+        assert_eq!(dl_cfg.timeout_per_read(), Some(Duration::from_secs(30)));
+        assert_eq!(
+            dl_cfg.timeouts().recv_response,
+            Some(Duration::from_secs(30))
+        );
+        let _ = UreqHttp::build_agent(RequestKind::Download, ua);
+
+        // Verify ureq timeout errors wrapped via BodyReader (`into_io()`) map to Timeout
+        // and clean up `.part` files.
+        assert_eq!(
+            super::map_ureq_error(ureq::Error::Timeout(ureq::Timeout::Global)),
+            UpdateError::Timeout
+        );
+        assert_eq!(
+            super::map_ureq_error(ureq::Error::RequireHttpsOnly("http://x".to_string())),
+            UpdateError::DisallowedUrl
+        );
+
+        struct UreqTimeoutReader;
+        impl Read for UreqTimeoutReader {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                Err(ureq::Error::Timeout(ureq::Timeout::PerRead).into_io())
+            }
+        }
+
+        let tmp = TempTestDir::new("dl08-ureq-timeout");
+        let http = FakeHttp::new(vec![Ok(HttpResponse {
+            status: 200,
+            location: None,
+            content_length: Some(1024),
+            rate_limit_remaining: Some(59),
+            body: Box::new(UreqTimeoutReader),
+        })]);
+        let spec = DownloadSpec {
+            url: "https://github.com/ad1-kamath/coursecraft/releases/download/v0.4.3/CourseCraft.dmg",
+            expected_size: Some(1024),
+            expected_sha256: None,
+            checksums_url: None,
+            dest_dir: tmp.path(),
+            filename: "CourseCraft.dmg",
+            user_agent: ua,
+        };
+        let cancel = AtomicBool::new(false);
+        let err = download_asset_verified(&http, &spec, &cancel, |_, _| {})
+            .expect_err("ureq per-read timeout should fail download");
+        assert_eq!(err, UpdateError::Timeout);
+        assert!(tmp.entries().is_empty());
     }
 }
