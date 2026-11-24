@@ -698,7 +698,9 @@ fn render_player_rgba_with(
     let mut items = compose(player);
     if !exclude.is_empty() {
         items.retain(|item| match &item.hit {
-            crate::compose::Hit::Object(id) => !exclude.iter().any(|excluded| excluded == id),
+            crate::compose::Hit::Object(id) => !exclude.iter().any(|excluded| {
+                excluded == id || player.interactive_group_of(excluded) == Some(id.as_str())
+            }),
             _ => true,
         });
     }

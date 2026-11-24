@@ -1262,3 +1262,149 @@ fn m31_11_clamp_point_handles_inverted_rect_and_nan() {
     assert!(x.is_finite() && y.is_finite());
     let _ = super::clamp_point(egui::Rect::NOTHING, f32::NAN, f32::INFINITY);
 }
+
+#[test]
+fn gb_08_interactive_group_tab_activate_and_union_focus_ring() {
+    let course = course(json!([{
+        "id": "s1",
+        "title": "Grouped Button Focus",
+        "groups": [{
+            "id": "g-btn",
+            "name": "Next Card",
+            "interactive": true
+        }],
+        "objects": [
+            {
+                "id": "btn-before",
+                "kind": { "type": "button", "label": "Before" },
+                "frame": { "x": 20.0, "y": 20.0, "w": 80.0, "h": 40.0 }
+            },
+            {
+                "id": "m-bg",
+                "group": "g-btn",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#224488" },
+                "frame": { "x": 100.0, "y": 100.0, "w": 120.0, "h": 60.0 },
+                "states": [{
+                    "name": "hover",
+                    "fill": "#11AA22",
+                    "extras": [{
+                        "id": "extra-badge",
+                        "frame": { "x": -50.0, "y": -50.0, "w": 300.0, "h": 300.0 },
+                        "kind": { "type": "shape", "shape": "rectangle", "fill": "#FF0000" }
+                    }]
+                }]
+            },
+            {
+                "id": "m-icon",
+                "group": "g-btn",
+                "kind": { "type": "shape", "shape": "ellipse", "fill": "#FFFFFF" },
+                "frame": { "x": 240.0, "y": 110.0, "w": 40.0, "h": 40.0 }
+            },
+            {
+                "id": "m-label",
+                "group": "g-btn",
+                "kind": { "type": "text", "text": "Continue" },
+                "frame": { "x": 120.0, "y": 170.0, "w": 140.0, "h": 30.0 }
+            },
+            {
+                "id": "btn-after",
+                "kind": { "type": "button", "label": "After" },
+                "frame": { "x": 400.0, "y": 20.0, "w": 80.0, "h": 40.0 }
+            }
+        ]
+    }]));
+    let player = player(&course);
+
+    // Focus list visits g-btn ONCE and never visits individual members.
+    let list = build_list(&player, false, false, false);
+    assert_eq!(
+        list,
+        with_transport(objects(&["btn-before", "g-btn", "btn-after"]))
+    );
+    for member in ["m-bg", "m-icon", "m-label"] {
+        assert!(!list.contains(&FocusTarget::Object(member.to_owned())));
+    }
+
+    let ctx = egui::Context::default();
+    let mut focus = FocusManager::new();
+
+    // First Tab reveals the ring on btn-before; second Tab moves to g-btn.
+    let _ = update(&ctx, &mut focus, &player, vec![real_key(egui::Key::Tab)]);
+    assert_eq!(
+        focus.focused(),
+        Some(&FocusTarget::Object("btn-before".into()))
+    );
+
+    let hover_inputs = update(&ctx, &mut focus, &player, vec![real_key(egui::Key::Tab)]);
+    assert_eq!(focus.focused(), Some(&FocusTarget::Object("g-btn".into())));
+    assert_eq!(focus.hovered_object(), Some("g-btn"));
+    assert!(
+        hover_inputs.contains(&Input::HoverStart {
+            object: "g-btn".into()
+        }),
+        "tabbing onto interactive group must start keyboard hover: {hover_inputs:?}"
+    );
+
+    // Enter emits Click { object: "g-btn" } once.
+    let enter_inputs = update(&ctx, &mut focus, &player, vec![real_key(egui::Key::Enter)]);
+    assert_eq!(
+        enter_inputs,
+        vec![Input::Click {
+            object: "g-btn".into()
+        }]
+    );
+
+    // Space emits Click { object: "g-btn" } once.
+    let space_inputs = update(&ctx, &mut focus, &player, vec![real_key(egui::Key::Space)]);
+    assert_eq!(
+        space_inputs,
+        vec![Input::Click {
+            object: "g-btn".into()
+        }]
+    );
+
+    // Painting with keyboard hover active (which includes the oversized state extra on m-bg)
+    // must draw the ring over the union of all PRIMARY members only: (100, 100) to (280, 200).
+    let items = crate::compose::compose_with_pointer(&player, Some("g-btn"), None);
+    let screen = egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(course.slide_size.w as f32, course.slide_size.h as f32),
+    );
+    let transform = crate::layout::SlideTransform::fit(screen, course.slide_size).expect("fit");
+    let raw = egui::RawInput {
+        screen_rect: Some(screen),
+        ..Default::default()
+    };
+    let full = ctx.run_ui(raw, |ui| {
+        focus.paint(ui, &player, &items, Some(&transform));
+    });
+    full.drop_without_applying_deltas();
+
+    let ring = focus.ring_rect().expect("union focus ring painted");
+    let expected = transform.to_screen_rect(egui::Rect::from_min_max(
+        egui::pos2(100.0, 100.0),
+        egui::pos2(280.0, 200.0),
+    ));
+    assert!(
+        (ring.min.x - expected.min.x).abs() < 0.5
+            && (ring.min.y - expected.min.y).abs() < 0.5
+            && (ring.max.x - expected.max.x).abs() < 0.5
+            && (ring.max.y - expected.max.y).abs() < 0.5,
+        "expected union ring {expected:?}, got {ring:?}"
+    );
+    assert!(
+        ring.width() > 140.0,
+        "union ring must be wider than any single member"
+    );
+    assert!(
+        ring.height() > 60.0,
+        "union ring must be taller than any single member"
+    );
+
+    // Next Tab moves straight to btn-after (never stops on members).
+    let _ = update(&ctx, &mut focus, &player, vec![real_key(egui::Key::Tab)]);
+    assert_eq!(
+        focus.focused(),
+        Some(&FocusTarget::Object("btn-after".into()))
+    );
+}
