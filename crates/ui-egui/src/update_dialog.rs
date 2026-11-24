@@ -291,21 +291,30 @@ fn parse_numbered_prefix(trimmed: &str) -> Option<(String, &str)> {
 fn is_safe_https_url(url: &str) -> bool {
     url.starts_with("https://")
         && url.len() > "https://".len()
-        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || is_forbidden_char(c))
+}
+
+#[derive(Default)]
+struct InlineScanState {
+    no_close_bracket: bool,
+    no_close_paren: bool,
 }
 
 fn parse_inline_spans(text: &str) -> Vec<MdSpan> {
     let mut spans = Vec::new();
     let mut plain = String::new();
     let mut rest = text;
+    let mut scan = InlineScanState::default();
 
     while !rest.is_empty() {
-        if let Some((literal, next)) = consume_image_syntax(rest) {
+        if let Some((literal, next)) = consume_image_syntax(rest, &mut scan) {
             plain.push_str(literal);
             rest = next;
             continue;
         }
-        if let Some((span, next)) = consume_inline_token(rest) {
+        if let Some((span, next)) = consume_inline_token(rest, &mut scan) {
             match span {
                 MdSpan::Text(t) => plain.push_str(&t),
                 other => {
@@ -334,19 +343,37 @@ fn flush_plain(plain: &mut String, spans: &mut Vec<MdSpan>) {
 }
 
 /// Match `![alt](url)` and return it verbatim so images stay inert text and never turn into links.
-fn consume_image_syntax(rest: &str) -> Option<(&str, &str)> {
+fn consume_image_syntax<'a>(
+    rest: &'a str,
+    scan: &mut InlineScanState,
+) -> Option<(&'a str, &'a str)> {
+    if scan.no_close_bracket || scan.no_close_paren {
+        return None;
+    }
     let after_bang = rest.strip_prefix("![")?;
-    let close_bracket = after_bang.find(']')?;
+    let Some(close_bracket) = after_bang.find(['[', ']']) else {
+        scan.no_close_bracket = true;
+        return None;
+    };
+    if after_bang.as_bytes().get(close_bracket) != Some(&b']') {
+        return None;
+    }
     let after_bracket = after_bang.get(close_bracket + 1..)?;
     let after_paren = after_bracket.strip_prefix('(')?;
-    let close_paren = after_paren.find(')')?;
+    let Some(close_paren) = after_paren.find(')') else {
+        scan.no_close_paren = true;
+        return None;
+    };
     let total_len = 2 + close_bracket + 2 + close_paren + 1;
     let literal = rest.get(..total_len)?;
     let next = rest.get(total_len..)?;
     Some((literal, next))
 }
 
-fn consume_inline_token(rest: &str) -> Option<(MdSpan, &str)> {
+fn consume_inline_token<'a>(
+    rest: &'a str,
+    scan: &mut InlineScanState,
+) -> Option<(MdSpan, &'a str)> {
     if let Some((code, next)) = consume_delimited(rest, "`") {
         return Some((MdSpan::Code(code.to_owned()), next));
     }
@@ -358,7 +385,7 @@ fn consume_inline_token(rest: &str) -> Option<(MdSpan, &str)> {
     {
         return Some((MdSpan::Italic(italic.to_owned()), next));
     }
-    consume_link(rest)
+    consume_link(rest, scan)
 }
 
 fn consume_delimited<'a>(rest: &'a str, delim: &str) -> Option<(&'a str, &'a str)> {
@@ -386,16 +413,25 @@ fn consume_italic(rest: &str) -> Option<(&str, &str)> {
     Some((inner, next))
 }
 
-fn consume_link(rest: &str) -> Option<(MdSpan, &str)> {
-    let after_open = rest.strip_prefix('[')?;
-    let close_bracket = after_open.find(']')?;
-    let label = after_open.get(..close_bracket)?;
-    if label.contains('[') {
+fn consume_link<'a>(rest: &'a str, scan: &mut InlineScanState) -> Option<(MdSpan, &'a str)> {
+    if scan.no_close_bracket || scan.no_close_paren {
         return None;
     }
+    let after_open = rest.strip_prefix('[')?;
+    let Some(close_bracket) = after_open.find(['[', ']']) else {
+        scan.no_close_bracket = true;
+        return None;
+    };
+    if after_open.as_bytes().get(close_bracket) != Some(&b']') {
+        return None;
+    }
+    let label = after_open.get(..close_bracket)?;
     let after_bracket = after_open.get(close_bracket + 1..)?;
     let after_paren = after_bracket.strip_prefix('(')?;
-    let close_paren = after_paren.find(')')?;
+    let Some(close_paren) = after_paren.find(')') else {
+        scan.no_close_paren = true;
+        return None;
+    };
     let url = after_paren.get(..close_paren)?;
     let next = after_paren.get(close_paren + 1..)?;
 
@@ -499,6 +535,10 @@ fn show_spans(ui: &mut Ui, spans: &[MdSpan], font_size: f32, default_bold: bool,
     });
 }
 
+fn semibold_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("inter-semibold".into()))
+}
+
 fn append_span_to_job(
     job: &mut egui::text::LayoutJob,
     span: &MdSpan,
@@ -508,17 +548,16 @@ fn append_span_to_job(
 ) {
     match span {
         MdSpan::Text(text) => {
-            let mut fmt = egui::TextFormat::simple(FontId::proportional(font_size), p.text);
-            if default_bold {
-                fmt.font_id = FontId::new(font_size, FontFamily::Name("semibold".into()));
-            }
+            let font_id = if default_bold {
+                semibold_font(font_size)
+            } else {
+                FontId::proportional(font_size)
+            };
+            let fmt = egui::TextFormat::simple(font_id, p.text);
             job.append(text, 0.0, fmt);
         }
         MdSpan::Bold(text) => {
-            let fmt = egui::TextFormat::simple(
-                FontId::new(font_size, FontFamily::Name("semibold".into())),
-                p.text,
-            );
+            let fmt = egui::TextFormat::simple(semibold_font(font_size), p.text);
             job.append(text, 0.0, fmt);
         }
         MdSpan::Italic(text) => {
@@ -543,14 +582,24 @@ fn append_span_to_job(
 fn show_single_span(ui: &mut Ui, span: &MdSpan, font_size: f32, default_bold: bool, p: &Palette) {
     match span {
         MdSpan::Text(text) => {
-            let mut rt = RichText::new(text).size(font_size).color(p.text);
-            if default_bold {
-                rt = rt.strong();
-            }
+            let rt = if default_bold {
+                RichText::new(text)
+                    .font(semibold_font(font_size))
+                    .color(p.text)
+            } else {
+                RichText::new(text).size(font_size).color(p.text)
+            };
             ui.add(Label::new(rt).wrap());
         }
         MdSpan::Bold(text) => {
-            ui.add(Label::new(RichText::new(text).size(font_size).strong().color(p.text)).wrap());
+            ui.add(
+                Label::new(
+                    RichText::new(text)
+                        .font(semibold_font(font_size))
+                        .color(p.text),
+                )
+                .wrap(),
+            );
         }
         MdSpan::Italic(text) => {
             ui.add(Label::new(RichText::new(text).size(font_size).italics().color(p.text)).wrap());
@@ -1193,6 +1242,27 @@ Bidi & ctrl: a\u{202E}b\u{2066}c\u{200F}d\u{0007}e\u{0000}f
             .join("\n");
         let capped_blocks = parse_release_notes(&many_lines);
         assert_eq!(capped_blocks.len(), MAX_NOTES_LINES);
+
+        // Pathological unmatched brackets/parens stay linear time (no O(n^2) freeze).
+        for hostile in [
+            "[".repeat(MAX_NOTES_BYTES),
+            format!("{}]", "[".repeat(MAX_NOTES_BYTES - 1)),
+            "[a](b".repeat(5_000),
+            format!("{}] [ok](https://example.com)", "![a".repeat(5_000)),
+        ] {
+            let blocks = parse_release_notes(&hostile);
+            assert_eq!(blocks.len(), 1);
+        }
+
+        // Direct release_url guard rejects bidi overrides and non-https schemes.
+        assert_eq!(
+            safe_release_url("https://github.com/ad1-kamath/\u{202E}evil"),
+            crate::project_links::releases_url()
+        );
+        assert_eq!(
+            safe_release_url("javascript:alert(1)"),
+            crate::project_links::releases_url()
+        );
     }
 
     /// UI-02: Update dialog renders every state in Dark and Light themes and emits exact requests.
@@ -1337,6 +1407,29 @@ Bidi & ctrl: a\u{202E}b\u{2066}c\u{200F}d\u{0007}e\u{0000}f
                 assert!(reqs.contains(&EditorRequest::CheckForUpdates));
                 assert!(h.find_text_last("Open releases page").is_some());
             }
+
+            assert_download_failed_and_empty_notes(mode);
         }
+    }
+
+    fn assert_download_failed_and_empty_notes(mode: ThemeMode) {
+        let mut h = TestHarness::new_with_theme(sample_course(), (1280.0, 800.0), mode);
+        let mut info = sample_update_info(true);
+        info.notes_markdown.clear();
+        h.editor.ui.update.open = true;
+        h.editor.ui.update.status = UpdateCheckStatus::Available(info);
+        h.editor.ui.update.download = UpdateDownloadState::Failed(
+            "The downloaded file didn't pass verification and was removed.".to_owned(),
+        );
+        h.idle_frame();
+        h.idle_frame();
+
+        assert!(
+            h.find_text_containing("No release notes were included")
+                .is_some()
+        );
+        let retry_pos = h.find_text_last("Try again").expect("Try again button");
+        let reqs = h.click_at_requests(retry_pos);
+        assert!(reqs.contains(&EditorRequest::DownloadUpdate));
     }
 }
