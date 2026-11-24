@@ -8,8 +8,11 @@
 > the selection shows and runs the controls that act on the selected object. The coloured caption
 > sits in the tab strip, left of its tabs. Built features that the ribbon doesn't reach yet are
 > drawn disabled with "Not available yet: ribbon wiring (use the Format inspector…)"; the ↘
-> launchers open the matching settings panel or the Format inspector. The modes (Slide Master,
-> Feedback Master, Question form view, Preview) don't replace the tab strip yet.
+> launchers open the matching settings panel or the Format inspector. **Slide Master mode is
+> built** (2026-11-24): Master View opens on the Slide Master tab and the strip shows only Home,
+> Insert, Transitions, Animations, View and Help beside it (`MASTER_TAB`, `MASTER_STRIP`);
+> closing Master View goes back to Home. Feedback Master, Question form view and the Preview tab
+> don't replace the strip yet.
 
 ## When each one shows
 
@@ -181,17 +184,17 @@ as data.
 
 | Group | Control | Kind | Action | Status |
 |---|---|---|---|---|
-| Edit Master | Insert Slide Master | L | `master.add` | ✅ |
-| | Insert Layout | L | `master.add` `{layout}` | ✅ |
-| | Delete | S | `master.delete` | ✅ |
-| | Rename | S | `ui:rename` | ✅ |
+| Edit Master | Insert Slide Master | L | `master.add` | ✅ wired |
+| | Insert Layout | L | `master.add` `{layout}` | ⛔ masters have no layouts yet; drawn disabled |
+| | Delete | S | `master.delete` | ✅ wired, asks first when slides use the master |
+| | Rename | S | `ui:rename` | ✅ wired, renames in the masters panel |
 | | Preserve | T | — | ⛔ |
 | Master Layout | Insert Placeholder | LS | — | ⛔ ▾ Content, Text, Picture, Media… |
 | | Title | K | — | ⛔ |
-| Edit Theme | Themes | LS | `course.set_theme` | ✅ |
+| Edit Theme | Themes | G | `course.set_theme` | ✅ the theme gallery |
 | | Colors / Fonts | SS | as Design | as Design |
 | Background ↘ | Background Styles, Hide Background Graphics | | as Design | as Design |
-| Close | Close Master View | L | `ui:view.slide` | ✅ |
+| Close | Close Master View | L | `ui:view.slide` | ✅ wired |
 
 ## Feedback Master tab
 

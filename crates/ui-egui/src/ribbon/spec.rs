@@ -244,6 +244,10 @@ pub enum UiAction {
     Context(ContextOp),
     /// A gallery's tiles (`ribbon/gallery.rs`).
     Gallery(Gallery),
+    // Slide Master
+    InsertMaster,
+    DeleteMaster,
+    RenameMaster,
     /// A gallery's options: effect direction, duration, apply to all.
     Effect(EffectOp),
 }
@@ -3108,6 +3112,165 @@ const QUESTION_DESIGN: &[Group] = &[
     PUBLISH,
 ];
 
+// ---------------------------------------------------------------------------
+// Slide Master (contextual-tabs.md › Slide Master tab)
+// ---------------------------------------------------------------------------
+
+const SLIDE_MASTER: &[Group] = &[
+    Group {
+        id: "master.edit",
+        label: "Edit Master",
+        launcher: None,
+        items: &[
+            helped(
+                item(
+                    "master.insert",
+                    "Insert Slide Master",
+                    Icon::PlusSquare,
+                    Large,
+                    Ui(UiAction::InsertMaster),
+                ),
+                "Add a new, empty slide master.",
+            ),
+            item(
+                "master.insert_layout",
+                "Insert Layout",
+                Icon::Layout,
+                Large,
+                NotYet("layouts inside a slide master"),
+            ),
+            item(
+                "master.delete",
+                "Delete",
+                Icon::Trash,
+                Small,
+                Ui(UiAction::DeleteMaster),
+            ),
+            item(
+                "master.rename",
+                "Rename",
+                Icon::PencilSimple,
+                Small,
+                Ui(UiAction::RenameMaster),
+            ),
+            item(
+                "master.preserve",
+                "Preserve",
+                Icon::Lock,
+                Small,
+                NotYet("keeping an unused master"),
+            ),
+        ],
+    },
+    Group {
+        id: "master.layout",
+        label: "Master Layout",
+        launcher: None,
+        items: &[
+            item(
+                "master.placeholder",
+                "Insert Placeholder",
+                Icon::FrameCorners,
+                LargeSplit,
+                NotYet("placeholders on a master"),
+            ),
+            item(
+                "master.title",
+                "Title",
+                Icon::TextT,
+                Small,
+                NotYet("placeholders on a master"),
+            ),
+        ],
+    },
+    Group {
+        id: "master.theme",
+        label: "Edit Theme",
+        launcher: None,
+        items: &[
+            item(
+                "master.themes",
+                "Themes",
+                Icon::Palette,
+                Kind::Gallery { tiles: 3 },
+                Ui(UiAction::Gallery(Gallery::Themes)),
+            ),
+            item(
+                "master.colors",
+                "Colors",
+                Icon::Drop,
+                Small,
+                Ui(UiAction::Themes),
+            ),
+            item(
+                "master.fonts",
+                "Fonts",
+                Icon::TextAa,
+                Small,
+                Ui(UiAction::Themes),
+            ),
+        ],
+    },
+    Group {
+        id: "master.background",
+        label: "Background",
+        launcher: Some(Ui(UiAction::PanelAt(
+            crate::dock::Panel::SlideInspector,
+            None,
+        ))),
+        items: &[
+            item(
+                "master.background_styles",
+                "Background Styles",
+                Icon::Image,
+                SmallSplit,
+                NotYet(WIRING_SLIDE),
+            ),
+            item(
+                "master.hide_background",
+                "Hide Background Graphics",
+                Icon::EyeSlash,
+                Small,
+                NotYet("hiding the master's graphics on one slide"),
+            ),
+        ],
+    },
+    Group {
+        id: "master.close",
+        label: "Close",
+        launcher: None,
+        items: &[helped(
+            item(
+                "master.close_view",
+                "Close Master View",
+                Icon::XCircle,
+                Large,
+                Ui(UiAction::SlideView),
+            ),
+            "Go back to the slides.",
+        )],
+    },
+];
+
+/// The Slide Master tab, first in the strip while Master View is open.
+pub const MASTER_TAB: Tab = Tab {
+    id: "slide_master",
+    label: "Slide Master",
+    when: TabWhen::Always,
+    groups: SLIDE_MASTER,
+    map_groups: None,
+};
+
+/// The main tabs drawn next to Slide Master in Master View, in order.
+pub const MASTER_STRIP: &[&str] = &[
+    "home",
+    "insert",
+    "transitions",
+    "animations",
+    "view",
+    "help",
+];
+
 /// A tab shown right of Help, under its context's caption, while the
 /// selection needs it.
 pub struct ContextTab {
@@ -3225,6 +3388,7 @@ pub const TABS: &[Tab] = &[
 #[must_use]
 pub fn tab(id: &str) -> Option<&'static Tab> {
     TABS.iter()
+        .chain(std::iter::once(&MASTER_TAB))
         .chain(CONTEXT_TABS.iter().map(|c| &c.tab))
         .find(|t| t.id == id)
 }
@@ -3245,6 +3409,7 @@ pub fn all_items() -> impl Iterator<Item = &'static Item> {
         out
     }
     TABS.iter()
+        .chain(std::iter::once(&MASTER_TAB))
         .chain(CONTEXT_TABS.iter().map(|c| &c.tab))
         .flat_map(|t| t.groups.iter().chain(t.map_groups.unwrap_or(&[]).iter()))
         .flat_map(|g| g.items.iter())

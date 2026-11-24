@@ -200,3 +200,37 @@ fn picture_controls_need_a_picture() {
     assert!(super::contextual::available(&h.editor, ContextOp::Crop).is_err());
     assert!(super::contextual::available(&h.editor, ContextOp::ReplaceMedia).is_err());
 }
+
+#[test]
+fn master_view_shows_the_slide_master_tab_and_its_strip() {
+    let mut h = harness(shape(), false);
+    h.editor.ui.ribbon.tab = "design";
+    h.editor.create_master();
+    frames(&mut h, 3);
+    assert!(h.editor.ui.master_view);
+    assert_eq!(h.editor.ui.ribbon.tab, "slide_master");
+    for text in ["Slide Master", "Edit Master", "Close", "Home", "View"] {
+        assert!(h.find_text(text).is_some(), "{text:?} is not drawn");
+    }
+    // Tabs that don't apply to masters leave the strip.
+    for text in ["Slides", "Design"] {
+        assert!(
+            h.find_text(text).is_none(),
+            "{text:?} is drawn in Master View"
+        );
+    }
+    let masters = h.editor.session.course.masters.len();
+    let insert = h
+        .find_text("Insert\nSlide Master")
+        .expect("Insert Slide Master");
+    h.click_at(insert);
+    frames(&mut h, 2);
+    assert_eq!(h.editor.session.course.masters.len(), masters + 1);
+    let close = h
+        .find_text_containing("Master View")
+        .expect("Close Master View");
+    h.click_at(close);
+    frames(&mut h, 2);
+    assert!(!h.editor.ui.master_view);
+    assert_eq!(h.editor.ui.ribbon.tab, "home");
+}

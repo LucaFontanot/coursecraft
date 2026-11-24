@@ -48,6 +48,8 @@ pub struct RibbonState {
     pub rect: Rect,
     /// What the text controls act on this frame (`crate::text_format`).
     pub text: Result<crate::text_format::TextState, &'static str>,
+    /// Master View was open last frame (it opens on the Slide Master tab).
+    pub in_master: bool,
     /// The current slide's object ids last frame: a selected id missing there
     /// was just inserted, and opens its contextual tab.
     pub seen_objects: Option<(String, Vec<String>)>,
@@ -63,6 +65,7 @@ impl Default for RibbonState {
             rect: Rect::NOTHING,
             text: Err(""),
             seen_objects: None,
+            in_master: false,
         }
     }
 }
@@ -299,6 +302,20 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
         UiAction::PanelAt(..) => Ok(()),
         UiAction::Context(op) => contextual::available(editor, op),
         UiAction::Gallery(g) => gallery::available(editor, g),
+        UiAction::InsertMaster => Ok(()),
+        UiAction::DeleteMaster | UiAction::RenameMaster => {
+            if editor.ui.master_view
+                && editor
+                    .session
+                    .course
+                    .master(&editor.selection.slide)
+                    .is_some()
+            {
+                Ok(())
+            } else {
+                Err("Select a slide master first")
+            }
+        }
         UiAction::Effect(op) => gallery::effect_available(editor, op),
         UiAction::Panel(panel)
             if crate::panels::family(panel) == crate::panels::Family::Settings =>
@@ -463,6 +480,15 @@ fn run_ui(
         UiAction::Context(op) => contextual::run(editor, op, requests),
         // A gallery acts from its tiles.
         UiAction::Gallery(_) => {}
+        UiAction::InsertMaster => editor.create_master(),
+        UiAction::DeleteMaster => {
+            let id = editor.selection.slide.clone();
+            crate::slides::request_master_delete(editor, &id);
+        }
+        UiAction::RenameMaster => {
+            let id = editor.selection.slide.clone();
+            crate::slides::start_master_rename(editor, &id);
+        }
         UiAction::Effect(op) => gallery::run_effect(editor, op),
     }
 }
@@ -521,6 +547,7 @@ pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>)
     if spec::tab(editor.ui.ribbon.tab).is_none() {
         editor.ui.ribbon.tab = "home";
     }
+    follow_master_view(editor);
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F1)) {
         editor.ui.ribbon.collapsed = !editor.ui.ribbon.collapsed;
     }
@@ -550,6 +577,40 @@ pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>)
                 show_tab(editor, ui, tab, available, requests);
             });
         });
+}
+
+/// Master View opens on the Slide Master tab and shows only the tabs that
+/// apply to masters; leaving it goes back to Home.
+fn follow_master_view(editor: &mut Editor) {
+    let tab = editor.ui.ribbon.tab;
+    let was = editor.ui.ribbon.in_master;
+    let now = editor.ui.master_view;
+    editor.ui.ribbon.in_master = now;
+    if now {
+        let shown = tab == spec::MASTER_TAB.id
+            || spec::MASTER_STRIP.contains(&tab)
+            || spec::context_tab_of(tab).is_some();
+        if !was || !shown {
+            editor.ui.ribbon.tab = spec::MASTER_TAB.id;
+        }
+    } else if tab == spec::MASTER_TAB.id {
+        editor.ui.ribbon.tab = "home";
+    }
+}
+
+/// The main tabs of the strip now, in order.
+fn main_tabs(editor: &Editor) -> Vec<&'static Tab> {
+    if editor.ui.master_view {
+        std::iter::once(&spec::MASTER_TAB)
+            .chain(
+                spec::TABS
+                    .iter()
+                    .filter(|t| spec::MASTER_STRIP.contains(&t.id)),
+            )
+            .collect()
+    } else {
+        spec::TABS.iter().collect()
+    }
 }
 
 /// The quick access toolbar: Save, Undo, Redo, left of the tab strip.
@@ -659,7 +720,7 @@ fn tab_strip(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>
         crate::file_page::open(editor);
     }
 
-    for tab in spec::TABS {
+    for tab in main_tabs(editor) {
         let r = tab_rect(ui, &mut x, tl!(tab.label));
         strip_tab(editor, ui, r, tab, None);
     }
