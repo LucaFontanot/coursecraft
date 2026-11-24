@@ -11809,3 +11809,52 @@ fn w01_next_wake_ms_scales_with_playback_speed() {
     p.handle(&Input::SetSpeed { rate: 1.5 });
     assert_eq!(p.next_wake_ms(), Some(667));
 }
+
+#[test]
+fn m37_golden_suspend_data_resume() {
+    let c = course();
+    let mut p = Player::new(&c).expect("player");
+    to_quiz(&mut p);
+
+    // Record a graded quiz answer on s-quiz so slide, visited slides, modified
+    // object states (tab1/tab2/tab3 visited, btn-next normal), modified variable
+    // (tabs_seen = 3), and quiz answers are all exercised in the golden payload.
+    p.handle(&Input::SelectChoice { choice: "b".into() });
+    let fx = p.handle(&click("btn-submit"));
+    assert!(has(
+        &fx,
+        &Effect::QuestionAnswered {
+            slide: "s-quiz".into(),
+            correct: true,
+            points: 10,
+            attempts_left: Some(1),
+        }
+    ));
+
+    const GOLDEN_SUSPEND: &str = "cc1:AAIDAAECAQEEAAMBAwIDAwABAAEAAAAAAAAIQAECAQEK";
+    let encoded = encode_suspend(&c, p.state());
+    assert_eq!(
+        encoded, GOLDEN_SUSPEND,
+        "pre-M37 suspend_data changed: got {encoded:?}"
+    );
+
+    let decoded = decode_suspend(&c, GOLDEN_SUSPEND).expect("decode golden suspend_data");
+    assert_eq!(decoded.slide, p.state().slide);
+    assert_eq!(decoded.visited, p.state().visited);
+    assert_eq!(decoded.object_states, p.state().object_states);
+    assert_eq!(decoded.variables, p.state().variables);
+    assert_eq!(decoded.answers, p.state().answers);
+
+    let mut resumed = Player::resume(&c, decoded).expect("resume from golden suspend_data");
+    let start_fx = resumed.handle(&Input::Start);
+    assert_eq!(start_fx.first(), Some(&slide_entered("s-quiz")));
+    assert_eq!(
+        resumed.current_slide().map(|s| s.id.as_str()),
+        Some("s-quiz")
+    );
+    assert_eq!(resumed.state().visited, p.state().visited);
+    assert_eq!(resumed.state().object_states, p.state().object_states);
+    assert_eq!(resumed.variable("tabs_seen"), Some(&Value::Number(3.0)));
+    assert_eq!(resumed.state().answers, p.state().answers);
+    assert_eq!(encode_suspend(&c, resumed.state()), GOLDEN_SUSPEND);
+}

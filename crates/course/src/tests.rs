@@ -6442,3 +6442,52 @@ fn r1_01_visit_media_scopes_and_roles() {
         );
     }
 }
+
+#[test]
+fn m37_golden_course_json_roundtrip() {
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    const SHOWCASE: &str = include_str!("../../../examples/showcase/course.json");
+    let expected: [(&str, usize, u64); 2] = [
+        ("hello-course", 19_660, 0x59fa_a48f_cd1e_912e),
+        ("showcase", 92_522, 0x6f5c_2ed0_e4bd_8a69),
+    ];
+
+    let mut actual = Vec::new();
+    for (name, raw) in [("hello-course", HELLO), ("showcase", SHOWCASE)] {
+        let course = Course::from_json(raw).expect("parse example course");
+        let first = course.to_json().expect("canonical serialize");
+        let reparsed = Course::from_json(&first).expect("reparse canonical course");
+        let second = reparsed.to_json().expect("second serialize");
+
+        assert_eq!(
+            first, second,
+            "{name}: second round-trip must be byte-identical"
+        );
+        assert_eq!(course, reparsed, "{name}: model must round-trip cleanly");
+        assert!(
+            !first.contains("\"point_text\""),
+            "{name}: pre-M37 course must not emit point_text"
+        );
+        assert!(
+            !first.contains("\"groups\""),
+            "{name}: pre-M37 course must not emit groups"
+        );
+
+        let bytes = first.as_bytes();
+        actual.push((name, bytes.len(), fnv1a64(bytes)));
+    }
+
+    assert_eq!(
+        actual.as_slice(),
+        &expected,
+        "canonical course.json changed: {actual:#x?}"
+    );
+}
