@@ -162,17 +162,21 @@ impl std::fmt::Debug for MediaEntry {
     }
 }
 
-/// Test-only picture-decode counter. Gated on `debug_assertions` rather than
+/// Test-only renderer work counters. Gated on `debug_assertions` rather than
 /// `test` because the guard tests live in `coursecraft-ui-egui`, and a
 /// dependency is not built with `cfg(test)` for its caller's tests. Debug
-/// builds (which include the normal `cargo test` run) have the counter; release
-/// builds compile it away, so a shipped frame never pays for it.
+/// builds (which include the normal `cargo test` run) have the counters; release
+/// builds compile them away, so a shipped frame never pays for them.
 #[cfg(debug_assertions)]
 pub mod test_counts {
     use std::cell::Cell;
 
     thread_local! {
         static PICTURE_DECODES: Cell<u64> = const { Cell::new(0) };
+        static FONT_DEF_CLONES: Cell<u64> = const { Cell::new(0) };
+        static TEXT_LAYOUT_MISSES: Cell<u64> = const { Cell::new(0) };
+        static SHAPE_MESH_MISSES: Cell<u64> = const { Cell::new(0) };
+        static FULL_RES_THUMBNAIL_DECODES: Cell<u64> = const { Cell::new(0) };
     }
 
     /// Called only after `decode_image` actually produced a texture.
@@ -186,9 +190,62 @@ pub mod test_counts {
         PICTURE_DECODES.get()
     }
 
-    /// Zero the count before the measured part of a guard test.
+    /// Zero the picture decode count before the measured part of a guard test.
     pub fn reset_picture_decode_count() {
         PICTURE_DECODES.set(0);
+    }
+
+    /// Record a `FontDefinitions` clone from pending-pass lookup.
+    pub fn note_font_def_clone() {
+        FONT_DEF_CLONES.set(FONT_DEF_CLONES.get().saturating_add(1));
+    }
+
+    /// Number of `FontDefinitions` clones on this thread since the last reset.
+    #[must_use]
+    pub fn font_def_clone_count() -> u64 {
+        FONT_DEF_CLONES.get()
+    }
+
+    /// Record a text layout cache miss.
+    pub fn note_text_layout_miss() {
+        TEXT_LAYOUT_MISSES.set(TEXT_LAYOUT_MISSES.get().saturating_add(1));
+    }
+
+    /// Number of text layout cache misses on this thread since the last reset.
+    #[must_use]
+    pub fn text_layout_miss_count() -> u64 {
+        TEXT_LAYOUT_MISSES.get()
+    }
+
+    /// Record a shape mesh cache miss.
+    pub fn note_shape_mesh_miss() {
+        SHAPE_MESH_MISSES.set(SHAPE_MESH_MISSES.get().saturating_add(1));
+    }
+
+    /// Number of shape mesh cache misses on this thread since the last reset.
+    #[must_use]
+    pub fn shape_mesh_miss_count() -> u64 {
+        SHAPE_MESH_MISSES.get()
+    }
+
+    /// Record a full-resolution decode triggered while drawing a thumbnail.
+    pub fn note_full_res_thumbnail_decode() {
+        FULL_RES_THUMBNAIL_DECODES.set(FULL_RES_THUMBNAIL_DECODES.get().saturating_add(1));
+    }
+
+    /// Number of full-resolution thumbnail decodes on this thread since the last reset.
+    #[must_use]
+    pub fn full_res_thumbnail_decode_count() -> u64 {
+        FULL_RES_THUMBNAIL_DECODES.get()
+    }
+
+    /// Reset all renderer test counters on this thread to zero.
+    pub fn reset_all() {
+        PICTURE_DECODES.set(0);
+        FONT_DEF_CLONES.set(0);
+        TEXT_LAYOUT_MISSES.set(0);
+        SHAPE_MESH_MISSES.set(0);
+        FULL_RES_THUMBNAIL_DECODES.set(0);
     }
 }
 
@@ -341,6 +398,31 @@ impl MediaCache {
             total.saturating_add(frame_bytes.saturating_mul(uploaded))
         });
         still.saturating_add(anim)
+    }
+
+    /// Total bytes held across picture textures, uploaded animation frames,
+    /// SVG raster textures, and decoded animation CPU frame buffers.
+    #[must_use]
+    pub fn total_bytes(&self) -> u64 {
+        let svg = self.svg.values().fold(0u64, |total, asset| {
+            asset.entries.iter().fold(total, |acc, entry| {
+                let bytes = u64::from(entry.target.0)
+                    .saturating_mul(u64::from(entry.target.1))
+                    .saturating_mul(4);
+                acc.saturating_add(bytes)
+            })
+        });
+        let anim_cpu = self.animations.values().fold(0u64, |total, entry| {
+            let Some(anim) = &entry.animation else {
+                return total;
+            };
+            anim.frames.iter().fold(total, |acc, frame| {
+                acc.saturating_add(frame.image.pixels.len() as u64)
+            })
+        });
+        self.picture_bytes()
+            .saturating_add(svg)
+            .saturating_add(anim_cpu)
     }
 
     /// Remember that a decoded picture was handed out on the current frame.
@@ -1476,5 +1558,39 @@ mod tests {
         cache.set_animation_time(None);
         assert_eq!(cache.picture_bytes(), 0);
         assert!(cache.animations.is_empty());
+    }
+
+    #[test]
+    fn s1_media_cache_total_bytes_tracks_pictures_svgs_and_animations() {
+        let ctx = egui::Context::default();
+        let mut source = TestSource::new();
+        source.add("pic.png", solid_png(4, 4));
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#00aa00"/></svg>"##;
+        source.add("vec.svg", svg.to_vec());
+        source.add("anim.gif", tiny_animated_gif());
+
+        let mut cache = MediaCache::new();
+        assert_eq!(cache.total_bytes(), 0);
+
+        cache.begin_frame();
+        let pic = cache.texture(&ctx, "pic.png", &source);
+        assert!(matches!(pic, MediaView::Ready { size: [4, 4], .. }));
+        let pic_bytes = 4 * 4 * 4;
+        assert_eq!(cache.total_bytes(), pic_bytes);
+
+        let svg_view = cache.texture_for(&ctx, "vec.svg", &source, (8, 8));
+        assert!(matches!(svg_view, MediaView::Ready { size: [8, 8], .. }));
+        let svg_bytes = 8 * 8 * 4;
+        assert_eq!(cache.total_bytes(), pic_bytes + svg_bytes);
+
+        cache.set_animation_time(Some(0));
+        let anim_view = cache.texture_for(&ctx, "anim.gif", &source, (2, 2));
+        assert!(matches!(anim_view, MediaView::Ready { size: [2, 2], .. }));
+        // 2x2x4 = 16 bytes uploaded GPU texture for frame 0 + 2 * 16 bytes CPU frames.
+        let anim_bytes = (2 * 2 * 4) + (2 * (2 * 2 * 4));
+        assert_eq!(cache.total_bytes(), pic_bytes + svg_bytes + anim_bytes);
+
+        cache.set_animation_time(None);
+        assert_eq!(cache.total_bytes(), pic_bytes + svg_bytes);
     }
 }

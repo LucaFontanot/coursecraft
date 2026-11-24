@@ -206,8 +206,12 @@ fn store_fingerprint(ctx: &egui::Context, fingerprint: FontFingerprint) {
 fn pending_defs_for_pass(ctx: &egui::Context) -> Option<FontDefinitions> {
     let pass = ctx.cumulative_pass_nr();
     ctx.data(|data| {
-        data.get_temp::<(u64, FontDefinitions)>(egui::Id::unique(PENDING_DEFS_ID))
-            .and_then(|(saved_pass, defs)| (saved_pass == pass).then_some(defs))
+        let entry = data.get_temp::<(u64, FontDefinitions)>(egui::Id::unique(PENDING_DEFS_ID));
+        #[cfg(debug_assertions)]
+        if entry.is_some() {
+            crate::media::test_counts::note_font_def_clone();
+        }
+        entry.and_then(|(saved_pass, defs)| (saved_pass == pass).then_some(defs))
     })
 }
 

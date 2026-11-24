@@ -75,9 +75,20 @@ fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
 
 /// A valid RGB PNG of random pixels in stored (uncompressed) deflate blocks.
 fn random_png(rng: &mut Lcg, side: usize) -> Vec<u8> {
-    let mut raw = vec![0u8; side * (side * 3 + 1)];
+    random_png_rect(rng, side, side)
+}
+
+/// A valid RGB PNG of deterministic pixels with arbitrary dimensions.
+fn distinct_png(seed: u64, width: usize, height: usize) -> Vec<u8> {
+    let mut rng = Lcg(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1));
+    random_png_rect(&mut rng, width, height)
+}
+
+fn random_png_rect(rng: &mut Lcg, width: usize, height: usize) -> Vec<u8> {
+    let stride = width * 3 + 1;
+    let mut raw = vec![0u8; height * stride];
     rng.fill(&mut raw);
-    for row in raw.chunks_mut(side * 3 + 1) {
+    for row in raw.chunks_mut(stride) {
         if let Some(first) = row.first_mut() {
             *first = 0; // filter: none
         }
@@ -93,8 +104,8 @@ fn random_png(rng: &mut Lcg, side: usize) -> Vec<u8> {
     z.extend_from_slice(&adler32(&raw).to_be_bytes());
     let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
     let mut ihdr = Vec::new();
-    ihdr.extend_from_slice(&(side as u32).to_be_bytes());
-    ihdr.extend_from_slice(&(side as u32).to_be_bytes());
+    ihdr.extend_from_slice(&(width as u32).to_be_bytes());
+    ihdr.extend_from_slice(&(height as u32).to_be_bytes());
     ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
     chunk(&mut png, b"IHDR", &ihdr);
     chunk(&mut png, b"IDAT", &z);
@@ -164,8 +175,19 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
     }
 }
 
-/// Current resident memory in MB (0 off unix, where `ps` is unavailable).
+/// Current resident memory in MB (0 off unix, where neither `/proc/self/statm`
+/// nor `ps` is available).
 fn rss_mb() -> f64 {
+    #[cfg(target_os = "linux")]
+    if let Ok(statm) = std::fs::read_to_string("/proc/self/statm")
+        && let Some(pages) = statm
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse::<f64>().ok())
+        && pages > 0.0
+    {
+        return (pages * 4096.0) / 1_048_576.0;
+    }
     let pid = std::process::id().to_string();
     std::process::Command::new("ps")
         .args(["-o", "rss=", "-p", &pid])
@@ -529,11 +551,73 @@ fn visit_every_slide_with_real_pictures() {
     }
     let rss_after = rss_mb();
     let pictures = h.editor.media_cache.decoded_picture_count();
+    let media_mib = h.editor.media_cache.total_bytes() as f64 / (1024.0 * 1024.0);
     report_note(
         "visit every slide, real pictures",
         33.0,
         &samples,
-        &format!("rss {rss_before:.0} -> {rss_after:.0} MB, {pictures} decoded pictures"),
+        &format!(
+            "rss {rss_before:.0} -> {rss_after:.0} MB, media {media_mib:.1} MiB, {pictures} decoded pictures"
+        ),
+    );
+}
+
+/// PF-05: 300-slide low-end benchmark with distinct 1280×720 PNGs, linear-gradient
+/// shapes, and overflowing `Autofit::Shrink` text boxes under a 64 MiB media ceiling.
+#[test]
+#[ignore = "timing test: run in release with --ignored --nocapture"]
+fn low_end_lite_mode_300_slides() {
+    const DISTINCT_IMAGES: usize = 31;
+    let mut scenes = Vec::with_capacity(10);
+    for scene in 0..10 {
+        let mut slides = Vec::with_capacity(30);
+        for n in scene * 30..(scene + 1) * 30 {
+            slides.push(format!(
+                r##"{{"id":"s-{n}","title":"Slide {n}","duration_ms":3000,"objects":[
+                {{"id":"t{n}","kind":{{"type":"text","text":"Slide {n} overflowing text block with repeated words so autofit shrink always searches for a smaller font size inside this compact frame. Additional copy to guarantee overflow across multiple lines.","style":{{"size":24}},"autofit":"shrink"}},"frame":{{"x":60,"y":40,"w":320,"h":60}}}},
+                {{"id":"p{n}","kind":{{"type":"image","src":"img/p{n}.png","alt":"Slide {n} picture"}},"frame":{{"x":420,"y":120,"w":640,"h":360}}}},
+                {{"id":"g{n}","kind":{{"type":"shape","shape":"rounded_rectangle","fill":"#2E8B57","fill_style":{{"type":"linear","angle":45.0,"stops":[{{"position":0.0,"color":"#1D4ED8"}},{{"position":1.0,"color":"#10B981"}}]}}}},"frame":{{"x":60,"y":520,"w":240,"h":90}}}}]}}"##
+            ));
+        }
+        scenes.push(format!(
+            r#"{{"id":"sc{scene}","title":"Scene {scene}","slides":[{}]}}"#,
+            slides.join(",")
+        ));
+    }
+    let json = format!(
+        r#"{{"schema_version":1,"id":"low-end-300","title":"Low-End 300","slide_size":{{"w":1280,"h":720}},"scenes":[{}]}}"#,
+        scenes.join(",")
+    );
+    let course = Course::from_json(&json).expect("low-end 300-slide course parses");
+    let distinct_pngs: Vec<Arc<[u8]>> = (0..DISTINCT_IMAGES)
+        .map(|seed| Arc::from(distinct_png(seed as u64 + 1, 1280, 720)))
+        .collect();
+    let media: Vec<(String, Arc<[u8]>)> = (0..SLIDES)
+        .map(|n| {
+            (
+                format!("img/p{n}.png"),
+                Arc::clone(&distinct_pngs[n % DISTINCT_IMAGES]),
+            )
+        })
+        .collect();
+
+    let mut h = TestHarness::new(course);
+    h.editor.set_media(media);
+    h.editor.media_cache.set_picture_budget(64 * 1024 * 1024);
+
+    let mut samples = Vec::with_capacity(60);
+    for step in 0..60 {
+        let slide_idx = step * 5;
+        h.editor.selection.slide = format!("s-{slide_idx}");
+        samples.push(timed(&mut h, Vec::new()));
+    }
+    let media_mib = h.editor.media_cache.total_bytes() as f64 / (1024.0 * 1024.0);
+    let undo_kib = h.editor.session.undo_estimated_bytes() as f64 / 1024.0;
+    report_note(
+        "low-end lite 300 slides",
+        33.0,
+        &samples,
+        &format!("media {media_mib:.1} MiB, undo {undo_kib:.1} KiB"),
     );
 }
 

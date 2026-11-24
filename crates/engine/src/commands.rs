@@ -1957,6 +1957,8 @@ fn keep_valid(s: &mut Session, was_valid: bool) -> Result<()> {
     if !was_valid {
         return Ok(());
     }
+    #[cfg(debug_assertions)]
+    crate::test_counts::note_full_course_validation();
     match s
         .course
         .validate()

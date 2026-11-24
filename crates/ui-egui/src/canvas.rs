@@ -7110,6 +7110,8 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
         let dim_base = editor.selection.layer.is_some()
             && editor.session.course.editor.base_slide_view
                 == coursecraft_course::BaseSlideView::Dim;
+        #[cfg(test)]
+        crate::guard_counters::note_canvas_compose();
         let mut items = coursecraft_render::compose_authoring_layers_opts(
             &editor.session.course,
             slide,

@@ -353,6 +353,8 @@ impl Session {
         {
             self.is_playable_checks += 1;
         }
+        #[cfg(debug_assertions)]
+        crate::test_counts::note_full_course_validation();
         let valid = self.course.is_playable();
         self.valid_at_revision = Some((self.revision, valid));
         valid

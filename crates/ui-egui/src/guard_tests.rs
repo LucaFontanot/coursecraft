@@ -792,3 +792,44 @@ fn editing_master_or_theme_invalidates_visible_thumbnails() {
         "selecting another already-visible slide must compose zero thumbnails"
     );
 }
+
+/// s1: `guard_counters::reset()` zeroes all new M34 counters (canvas composes,
+/// renderer counters, and engine full-course validations), and running an editor
+/// frame increments `canvas_composes()`.
+#[test]
+fn s1_guard_counters_reset_and_record_canvas_compose() {
+    let mut h = hello();
+    let _ = h.idle_frame();
+
+    // Bump every new counter before resetting so we prove reset() zeroes them all.
+    gc::note_canvas_compose();
+    coursecraft_render::test_counts::note_font_def_clone();
+    coursecraft_render::test_counts::note_text_layout_miss();
+    coursecraft_render::test_counts::note_shape_mesh_miss();
+    coursecraft_render::test_counts::note_full_res_thumbnail_decode();
+    coursecraft_engine::test_counts::note_full_course_validation();
+
+    assert!(gc::canvas_composes() > 0);
+    assert!(gc::font_def_clones() > 0);
+    assert!(gc::text_layout_misses() > 0);
+    assert!(gc::shape_mesh_misses() > 0);
+    assert!(gc::full_res_thumbnail_decodes() > 0);
+    assert!(gc::full_course_validations() > 0);
+
+    gc::reset();
+
+    assert_eq!(gc::canvas_composes(), 0);
+    assert_eq!(gc::font_def_clones(), 0);
+    assert_eq!(gc::text_layout_misses(), 0);
+    assert_eq!(gc::shape_mesh_misses(), 0);
+    assert_eq!(gc::full_res_thumbnail_decodes(), 0);
+    assert_eq!(gc::full_course_validations(), 0);
+    assert_eq!(picture_decodes(), 0);
+
+    let _ = h.idle_frame();
+    assert!(
+        gc::canvas_composes() >= 1,
+        "an editor frame must record at least one canvas compose, got {}",
+        gc::canvas_composes()
+    );
+}

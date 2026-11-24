@@ -101,6 +101,8 @@ pub use font::{
 pub use icons::{Icon, icon, icon_fill, icon_text};
 pub use layout::SlideTransform;
 pub use lottie::{LottieInfo, MAX_LOTTIE_BYTES, frame_at, info_of, parse_composition, parse_info};
+#[cfg(debug_assertions)]
+pub use media::test_counts;
 pub use media::{LottieView, MediaCache, MediaEntry, MediaFetch, MediaSource, MediaView};
 pub use media_driver::{
     CaptionFrame, CaptionStore, MediaDriver, PlaybackMediaSource, collect_video_ids,
