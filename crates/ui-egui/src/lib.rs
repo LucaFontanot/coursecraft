@@ -177,6 +177,8 @@ mod history_tests;
 #[cfg(test)]
 mod idle_tests;
 #[cfg(test)]
+mod issue8_timeline_group_tests;
+#[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
 mod m25_input_tests;
