@@ -3175,7 +3175,7 @@ pub fn bottom_tab_unavailable(editor: &Editor, tab: BottomTab) -> Option<&'stati
     (tab == BottomTab::Question && slide_is_draw).then(|| tl!("A draw slide has no question."))
 }
 
-fn show_timeline_content(
+pub(crate) fn show_timeline_content(
     editor: &mut Editor,
     ui: &mut Ui,
     actions: &mut Vec<(&'static str, Json)>,

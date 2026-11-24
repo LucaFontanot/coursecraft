@@ -44,10 +44,15 @@ pub enum Panel {
     Triggers,
     Variables,
     Question,
+    /// Slide Layers, beside the Timeline's group (it used to share the
+    /// Timeline panel).
+    Layers,
+    /// The slide's notes, a tab of the Timeline's group.
+    Notes,
 }
 
 impl Panel {
-    pub const ALL: [Panel; 12] = [
+    pub const ALL: [Panel; 14] = [
         Panel::Slides,
         Panel::Canvas,
         Panel::Timeline,
@@ -55,6 +60,8 @@ impl Panel {
         Panel::Triggers,
         Panel::Variables,
         Panel::Question,
+        Panel::Notes,
+        Panel::Layers,
         Panel::Format,
         Panel::Animate,
         Panel::SlideInspector,
@@ -94,7 +101,9 @@ impl Panel {
             | Panel::States
             | Panel::Triggers
             | Panel::Variables
-            | Panel::Question => None,
+            | Panel::Question
+            | Panel::Layers
+            | Panel::Notes => None,
         }
     }
 
@@ -113,7 +122,9 @@ impl Panel {
             | Panel::Animate
             | Panel::SlideInspector
             | Panel::CourseInspector
-            | Panel::Text => None,
+            | Panel::Text
+            | Panel::Layers
+            | Panel::Notes => None,
         }
     }
 
@@ -156,6 +167,8 @@ impl Panel {
             Panel::Triggers => "Triggers",
             Panel::Variables => "Variables",
             Panel::Question => "Question",
+            Panel::Layers => "Slide Layers",
+            Panel::Notes => "Notes",
         }
     }
 
@@ -178,7 +191,9 @@ impl Panel {
             | Panel::States
             | Panel::Triggers
             | Panel::Variables
-            | Panel::Question => Permissions::default(),
+            | Panel::Question
+            | Panel::Layers
+            | Panel::Notes => Permissions::default(),
         }
     }
 
@@ -190,7 +205,9 @@ impl Panel {
             | Panel::States
             | Panel::Triggers
             | Panel::Variables
-            | Panel::Question => vec2(320.0, crate::timeline::TIMELINE_PANEL_MIN_HEIGHT),
+            | Panel::Question
+            | Panel::Notes => vec2(320.0, crate::timeline::TIMELINE_PANEL_MIN_HEIGHT),
+            Panel::Layers => vec2(160.0, crate::timeline::TIMELINE_PANEL_MIN_HEIGHT),
             Panel::Format
             | Panel::Animate
             | Panel::SlideInspector
@@ -431,9 +448,21 @@ pub fn default_layout() -> Layout<Panel> {
             panels: vec![Panel::Canvas],
             active: 0,
         }),
-        second: Box::new(Node::Tabs {
-            panels: Panel::BOTTOM.to_vec(),
-            active: 0,
+        second: Box::new(Node::Split {
+            axis: SplitAxis::Horizontal,
+            size: SplitSize::FixedSecond(crate::LAYERS_PANEL_WIDTH),
+            first: Box::new(Node::Tabs {
+                panels: Panel::BOTTOM
+                    .iter()
+                    .copied()
+                    .chain([Panel::Notes])
+                    .collect(),
+                active: 0,
+            }),
+            second: Box::new(Node::Tabs {
+                panels: vec![Panel::Layers],
+                active: 0,
+            }),
         }),
     };
     Layout {
@@ -469,6 +498,15 @@ impl DockContent<Panel> for Content<'_> {
                 }
             }
             Panel::Text => crate::panels::body(self.editor, ui, *panel),
+            Panel::Layers => {
+                if self.editor.ui.master_view {
+                    ui.add_space(8.0);
+                    ui.label(tl!("Slide masters have no layers."));
+                } else {
+                    self.editor.layers_body(ui);
+                }
+            }
+            Panel::Notes => crate::properties::show_notes_panel(self.editor, ui),
             Panel::Timeline => {
                 if self.editor.ui.master_view {
                     ui.add_space(8.0);

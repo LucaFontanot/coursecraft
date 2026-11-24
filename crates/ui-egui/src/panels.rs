@@ -74,7 +74,9 @@ pub fn family(panel: Panel) -> Family {
         | Panel::States
         | Panel::Triggers
         | Panel::Variables
-        | Panel::Question => Family::Workspace,
+        | Panel::Question
+        | Panel::Layers
+        | Panel::Notes => Family::Workspace,
         Panel::Format | Panel::Animate | Panel::SlideInspector | Panel::CourseInspector => {
             Family::Inspectors
         }
@@ -94,6 +96,8 @@ pub fn sections(panel: Panel) -> &'static [Section] {
         | Panel::Triggers
         | Panel::Variables
         | Panel::Question
+        | Panel::Layers
+        | Panel::Notes
         | Panel::Format
         | Panel::Animate
         | Panel::SlideInspector
@@ -186,6 +190,8 @@ pub fn body(editor: &mut Editor, ui: &mut egui::Ui, panel: Panel) {
         | Panel::Triggers
         | Panel::Variables
         | Panel::Question
+        | Panel::Layers
+        | Panel::Notes
         | Panel::Format
         | Panel::Animate
         | Panel::SlideInspector

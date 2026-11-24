@@ -262,8 +262,8 @@ Counted from the tables below; recount when a row changes.
 | Light / dark editor | View › Theme | ✅ | — |
 | Scenes panel with scene combo | `slides.rs` | ✅ | — |
 | Triggers panel | `triggers.rs` | ✅ | — |
-| Slide layers panel | `layers.rs` | ✅ | — |
-| Timeline, States, Notes tabs | `timeline.rs`, `states.rs`; docked, Timeline, States, Triggers, Variables and Question are dock panels of their own, tabbed together by default (`dock.rs`) | ✅ | — |
+| Slide layers panel | `layers.rs`; docked, a panel of its own to the right of the Timeline's group | ✅ | — |
+| Timeline, States, Notes tabs | `timeline.rs`, `states.rs`; docked, Timeline, States, Triggers, Variables, Question and Notes are dock panels of their own, tabbed together by default (`dock.rs`); with the Notes panel open the Slide inspector leaves the notes to it | ✅ | — |
 | Canvas zoom and fit | | ✅ | — |
 | Tooltips with name, shortcut and help | | 🟡 | M37 |
 | Status bar: slide n of m, size, theme, zoom | `status.rs` | 🟡 | M37 |

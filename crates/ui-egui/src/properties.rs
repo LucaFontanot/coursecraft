@@ -4656,6 +4656,7 @@ fn show_slide_tab(
     // The pinned inspector header already reads "Slide"; don't repeat it as a caption.
     let mut narrate_requested = false;
     let bool_names = crate::course_settings::bool_variable_names(&editor.session.course);
+    let show_notes = !crate::panels::is_shown(editor, crate::dock::Panel::Notes);
     if let Some(act) = show_slide_properties(
         &mut editor.ui.properties,
         slide,
@@ -4663,6 +4664,7 @@ fn show_slide_tab(
         is_master,
         &mut narrate_requested,
         &bool_names,
+        show_notes,
     ) {
         actions_to_run.push(act);
     }
@@ -9920,6 +9922,7 @@ fn show_slide_properties(
     is_master: bool,
     narrate_requested: &mut bool,
     bool_names: &[String],
+    show_notes: bool,
 ) -> Option<(&'static str, Json)> {
     let mut action_to_run = None;
 
@@ -10097,34 +10100,80 @@ fn show_slide_properties(
                 }
             });
         }
-        // Notes take the full width, so they are comfortable to read and write.
-        let p = coursecraft_render::palette(ui.ctx());
-        ui.horizontal(|ui| {
-            ui.label(coursecraft_render::body("Notes").color(p.text_secondary));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::quiet_button(ui, "Narrate…", crate::QuietTone::Accent, true).clicked() {
-                    *narrate_requested = true;
-                }
-            });
-        });
-        let r = ui.add_sized(
-            [ui.available_width(), 52.0],
-            TextEdit::multiline(&mut props.slide_notes)
-                .id_salt("prop_slide_notes")
-                .desired_rows(3),
-        );
-        if is_committed(&r, ui) && props.slide_notes != slide.notes {
-            action_to_run = Some((
-                "slide.update",
-                serde_json::json!({
-                    "slide": slide.id,
-                    "notes": props.slide_notes.trim(),
-                }),
-            ));
+        // With the Notes panel open the notes live there, as in Storyline.
+        if show_notes && let Some(act) = notes_editor(ui, props, slide, narrate_requested, 52.0) {
+            action_to_run = Some(act);
         }
     }
 
     action_to_run
+}
+
+/// The slide's notes, full width: a "Notes" caption with Narrate…, then the
+/// text, at least `height` tall. Shared by the Slide inspector and the Notes panel.
+fn notes_editor(
+    ui: &mut Ui,
+    props: &mut PropertiesState,
+    slide: &coursecraft_course::Slide,
+    narrate_requested: &mut bool,
+    height: f32,
+) -> Option<(&'static str, Json)> {
+    let p = coursecraft_render::palette(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(coursecraft_render::body(tl!("Notes")).color(p.text_secondary));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if crate::quiet_button(ui, tl!("Narrate…"), crate::QuietTone::Accent, true).clicked()
+            {
+                *narrate_requested = true;
+            }
+        });
+    });
+    let r = ui.add_sized(
+        [ui.available_width(), height.max(52.0)],
+        TextEdit::multiline(&mut props.slide_notes)
+            .id_salt("prop_slide_notes")
+            .desired_rows(3),
+    );
+    (is_committed(&r, ui) && props.slide_notes != slide.notes).then(|| {
+        (
+            "slide.update",
+            serde_json::json!({
+                "slide": slide.id,
+                "notes": props.slide_notes.trim(),
+            }),
+        )
+    })
+}
+
+/// The Notes dock panel: the current slide's notes, filling the panel.
+pub fn show_notes_panel(editor: &mut Editor, ui: &mut Ui) {
+    prepare(editor, ui);
+    let slide_id = editor.selection.slide.clone();
+    let Some(slide) = editor.session.course.slide(&slide_id) else {
+        ui.add_space(8.0);
+        ui.label(tl!("Select a slide to write its notes."));
+        return;
+    };
+    let mut actions_to_run = Vec::new();
+    let mut narrate_requested = false;
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::same(coursecraft_render::PANEL_MARGIN as i8))
+        .show(ui, |ui| {
+            let height = ui.available_height() - 28.0;
+            if let Some(act) = notes_editor(
+                ui,
+                &mut editor.ui.properties,
+                slide,
+                &mut narrate_requested,
+                height,
+            ) {
+                actions_to_run.push(act);
+            }
+        });
+    if narrate_requested {
+        editor.open_narration_from_notes(&slide_id);
+    }
+    finish(editor, actions_to_run);
 }
 
 /// "Course default / <on_label> / <off_label>". Returns the new choice (`None` clears it).

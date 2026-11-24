@@ -323,7 +323,9 @@ fn a_layout_naming_a_panel_this_build_does_not_know_still_loads() {
 fn the_bottom_tabs_are_dock_panels_tabbed_with_the_timeline() {
     let h = harness(true);
     let group = group_of(&h, Panel::Timeline);
-    assert_eq!(group, Panel::BOTTOM.to_vec(), "one tab group: {group:?}");
+    let mut expected = Panel::BOTTOM.to_vec();
+    expected.push(Panel::Notes);
+    assert_eq!(group, expected, "one tab group: {group:?}");
     for panel in Panel::BOTTOM {
         assert_eq!(panels::family(panel), Family::Workspace, "{panel:?}");
     }
@@ -373,4 +375,67 @@ fn a_layout_saved_with_the_old_bottom_tab_strip_gains_the_new_panels() {
     for panel in Panel::BOTTOM {
         assert!(loaded.layout.contains(&panel), "{panel:?} added");
     }
+}
+
+#[test]
+fn slide_layers_is_a_panel_of_its_own_beside_the_timeline() {
+    let mut h = harness(true);
+    frames(&mut h, 2);
+    assert_eq!(group_of(&h, Panel::Layers), vec![Panel::Layers]);
+    assert_eq!(panels::family(Panel::Layers), Family::Workspace);
+    let layers = h.editor.ui.dock.rect(Panel::Layers).expect("drawn");
+    let timeline = h.editor.ui.dock.rect(Panel::Timeline).expect("drawn");
+    assert!(
+        layers.min.x >= timeline.max.x,
+        "to the right of the timeline"
+    );
+    // Closed, the timeline does not draw its own copy.
+    dock::set_open(&mut h.editor, Panel::Layers, false);
+    frames(&mut h, 2);
+    assert!(h.editor.ui.dock.rect(Panel::Layers).is_none());
+}
+
+#[test]
+fn the_notes_panel_edits_the_slides_notes_and_the_slide_inspector_leaves_them_to_it() {
+    let mut h = harness(true);
+    dock::reveal(&mut h.editor, Panel::Notes);
+    frames(&mut h, 2);
+    let rect = h.editor.ui.dock.rect(Panel::Notes).expect("drawn");
+    h.click_at(rect.center());
+    h.type_text("Say hello");
+    // Commit by clicking away, on the canvas.
+    let canvas = h.editor.ui.dock.rect(Panel::Canvas).expect("canvas");
+    h.click_at(canvas.left_top() + egui::vec2(4.0, 4.0));
+    frames(&mut h, 2);
+    let slide = h.editor.selection.slide.clone();
+    let notes = h
+        .editor
+        .session
+        .course
+        .slide(&slide)
+        .map(|s| s.notes.clone())
+        .unwrap_or_default();
+    assert!(notes.contains("Say hello"), "notes: {notes:?}");
+    h.editor.ui.inspector_tab = crate::InspectorTab::Slide;
+    frames(&mut h, 2);
+    let inspector = h.editor.ui.dock.rect(Panel::SlideInspector).expect("drawn");
+    assert!(
+        h.find_text_in("Narrate…", inspector).is_none(),
+        "the Slide inspector leaves the notes to the Notes panel"
+    );
+}
+
+#[test]
+fn a_layout_saved_before_layers_and_notes_gains_them() {
+    let h = harness(true);
+    let saved = serde_json::to_value(&h.editor.ui.dock.workspace).expect("serializes");
+    let text = saved
+        .to_string()
+        .replace(r#","notes""#, "")
+        .replace(r#""layers""#, r#""future_panel""#);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("still JSON");
+    let loaded = dock::load_workspace(Some(&value));
+    assert_eq!(loaded.validate(), Ok(()));
+    assert!(loaded.layout.contains(&Panel::Notes), "Notes added");
+    assert!(loaded.layout.contains(&Panel::Layers), "Layers added");
 }

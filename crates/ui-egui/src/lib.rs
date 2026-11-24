@@ -4623,7 +4623,22 @@ impl Editor {
     /// The timeline's contents; its edits run as commands.
     pub(crate) fn timeline_body(&mut self, ui: &mut Ui) {
         let mut actions = Vec::new();
-        timeline::show_timeline_panel(self, ui, &mut actions);
+        // Docked, Slide Layers is a panel of its own beside the Timeline;
+        // the fixed Timeline panel keeps it on its right.
+        if self.ui.dock.enabled {
+            timeline::show_timeline_content(self, ui, &mut actions);
+        } else {
+            timeline::show_timeline_panel(self, ui, &mut actions);
+        }
+        for (cmd, params) in actions {
+            self.run(cmd, params);
+        }
+    }
+
+    /// The Slide Layers dock panel.
+    pub(crate) fn layers_body(&mut self, ui: &mut Ui) {
+        let mut actions = Vec::new();
+        layers::show_layers_panel(self, ui, &mut actions);
         for (cmd, params) in actions {
             self.run(cmd, params);
         }

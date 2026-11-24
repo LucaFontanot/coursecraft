@@ -28,7 +28,7 @@ Top to bottom:
 | Tooltips: name, shortcut, one sentence | yes | partial | 🟡 | every ribbon control, from the registry |
 | View tabs row with open slides | yes | `doc_tabs.rs`: Course Map tab, then each opened slide (× closes; closing the shown one shows its neighbour, the last one the map) | ✅ | breadcrumb tabs for sub-editors |
 | Device toggles in view row | yes | — | ⛔ | they set the preview device |
-| Panels undock / float / dock back | yes | docked by default (`dock.rs`); View › Panels closes and reopens; saved in prefs; Timeline, States, Triggers, Variables, Question are dock panels of their own; a floating panel can be dragged out of the app window into its own OS window (desktop; off on Wayland, which reports no window positions), and keys typed there reach the editor's shortcuts | ✅ | Slide Layers, Notes as dock panels of their own (step 6) |
+| Panels undock / float / dock back | yes | docked by default (`dock.rs`); View › Panels closes and reopens; saved in prefs; Timeline, States, Triggers, Variables, Question and Notes are dock panels of their own, and Slide Layers sits beside them; a floating panel can be dragged out of the app window into its own OS window (desktop; off on Wayland, which reports no window positions), and keys typed there reach the editor's shortcuts | ✅ | — |
 | Status bar: Slide n of m, size, theme | yes | `status.rs` | 🟡 | add size and theme name |
 | Status bar: view buttons, zoom %, slider, fit | yes | zoom in View | 🟡 | |
 
@@ -64,7 +64,7 @@ CourseCraft has Timeline (`timeline.rs`), States (`states.rs`, M29) and Notes. P
 
 | Feature | Status |
 |---|---|
-| Tabs Timeline, States, Notes; collapse to a one-line bar; undock | 🟡 (docked: Timeline, States, Triggers, Variables, Question undock as dock panels; Notes and collapse to come) |
+| Tabs Timeline, States, Notes; collapse to a one-line bar; undock | 🟡 (docked: Timeline, States, Triggers, Variables, Question and Notes undock as dock panels, and Slide Layers is one beside them; collapse to come) |
 | Eye and lock columns | ✅ (`object.hide_in_editor`, `object.lock`) |
 | Double-click a row to rename | ✅ |
 | Bars with entrance/exit wedges; drag start, end, ends | ✅ |
