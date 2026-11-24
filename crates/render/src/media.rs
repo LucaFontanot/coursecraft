@@ -1,7 +1,7 @@
 //! In-memory media cache and abstractions for the slide compositor (L3).
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use coursecraft_course::ObjectKind;
@@ -296,15 +296,94 @@ struct ContentKey {
     tiled: bool,
 }
 
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for &byte in bytes {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(PRIME);
+/// Fast, deterministic 64-bit word-at-a-time content hash for image byte deduplication.
+///
+/// Processes 32-byte blocks across four independent accumulators to avoid serial
+/// byte-by-byte multiply chains on multi-megabyte images.
+fn content_hash_64(bytes: &[u8]) -> u64 {
+    const P1: u64 = 0x9e37_79b1_85eb_ca87;
+    const P2: u64 = 0xc2b2_ae3d_27d4_eb4f;
+    const P3: u64 = 0x1656_67b1_9e37_79f9;
+    const P4: u64 = 0x85eb_ca77_c2b2_ae63;
+    const P5: u64 = 0x27d4_eb2f_1656_67c5;
+
+    let mut s1 = P1.wrapping_add(P2);
+    let mut s2 = P2;
+    let mut s3 = 0u64;
+    let mut s4 = 0u64.wrapping_sub(P1);
+
+    let (blocks, remainder) = bytes.as_chunks::<32>();
+    for block in blocks {
+        let w1 = u64::from_le_bytes([
+            block[0], block[1], block[2], block[3], block[4], block[5], block[6], block[7],
+        ]);
+        let w2 = u64::from_le_bytes([
+            block[8], block[9], block[10], block[11], block[12], block[13], block[14], block[15],
+        ]);
+        let w3 = u64::from_le_bytes([
+            block[16], block[17], block[18], block[19], block[20], block[21], block[22], block[23],
+        ]);
+        let w4 = u64::from_le_bytes([
+            block[24], block[25], block[26], block[27], block[28], block[29], block[30], block[31],
+        ]);
+        s1 = s1
+            .wrapping_add(w1.wrapping_mul(P2))
+            .rotate_left(31)
+            .wrapping_mul(P1);
+        s2 = s2
+            .wrapping_add(w2.wrapping_mul(P2))
+            .rotate_left(31)
+            .wrapping_mul(P1);
+        s3 = s3
+            .wrapping_add(w3.wrapping_mul(P2))
+            .rotate_left(31)
+            .wrapping_mul(P1);
+        s4 = s4
+            .wrapping_add(w4.wrapping_mul(P2))
+            .rotate_left(31)
+            .wrapping_mul(P1);
     }
+
+    let mut hash = s1
+        .rotate_left(1)
+        .wrapping_add(s2.rotate_left(7))
+        .wrapping_add(s3.rotate_left(12))
+        .wrapping_add(s4.rotate_left(18))
+        .wrapping_add(bytes.len() as u64);
+
+    let (tail_words, tail_bytes) = remainder.as_chunks::<8>();
+    for word in tail_words {
+        let v = u64::from_le_bytes(*word);
+        let k = v.wrapping_mul(P2).rotate_left(31).wrapping_mul(P1);
+        hash ^= k;
+        hash = hash.rotate_left(27).wrapping_mul(P1).wrapping_add(P4);
+    }
+
+    for &byte in tail_bytes {
+        hash ^= u64::from(byte).wrapping_mul(P5);
+        hash = hash.rotate_left(11).wrapping_mul(P1);
+    }
+
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(P2);
+    hash ^= hash >> 29;
+    hash = hash.wrapping_mul(P3);
+    hash ^= hash >> 32;
     hash
+}
+
+/// Maximum number of `Arc<[u8]>` identity hashes cached before pruning dead entries.
+const MAX_ARC_HASH_ENTRIES: usize = 256;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ArcPtrKey {
+    ptr: usize,
+    len: usize,
+}
+
+struct ArcHashEntry {
+    weak: Weak<[u8]>,
+    hash: u64,
 }
 
 struct SharedTexture {
@@ -330,6 +409,7 @@ pub struct MediaCache {
     entries: HashMap<String, MediaEntry>,
     picture_meta: HashMap<String, PictureMeta>,
     shared_textures: HashMap<ContentKey, SharedTexture>,
+    arc_hashes: HashMap<ArcPtrKey, ArcHashEntry>,
     svg: HashMap<String, SvgAsset>,
     animations: HashMap<String, AnimationEntry>,
     lottie: HashMap<String, LottieEntry>,
@@ -386,6 +466,7 @@ impl Default for MediaCache {
             entries: HashMap::new(),
             picture_meta: HashMap::new(),
             shared_textures: HashMap::new(),
+            arc_hashes: HashMap::new(),
             svg: HashMap::new(),
             animations: HashMap::new(),
             lottie: HashMap::new(),
@@ -427,6 +508,10 @@ impl MediaCache {
     /// evicted, even if the cache is over budget for that frame.
     pub fn begin_frame(&mut self) {
         self.frame = self.frame.saturating_add(1);
+        if self.frame.is_multiple_of(60) && !self.arc_hashes.is_empty() {
+            self.arc_hashes
+                .retain(|_, entry| entry.weak.strong_count() > 0);
+        }
     }
 
     /// Set the unified memory ceiling in bytes across decoded pictures, uploaded
@@ -705,6 +790,8 @@ impl MediaCache {
                 }
             }
         }
+        self.arc_hashes
+            .retain(|_, entry| entry.weak.strong_count() > 0);
     }
 
     /// Set the clock animations follow, in milliseconds since the view started.
@@ -1279,6 +1366,37 @@ impl MediaCache {
         }
     }
 
+    fn content_hash(&mut self, bytes: &Arc<[u8]>) -> u64 {
+        let ptr_key = ArcPtrKey {
+            ptr: bytes.as_ptr() as usize,
+            len: bytes.len(),
+        };
+        if let Some(entry) = self.arc_hashes.get(&ptr_key)
+            && entry
+                .weak
+                .upgrade()
+                .is_some_and(|alive| Arc::ptr_eq(&alive, bytes))
+        {
+            return entry.hash;
+        }
+        let hash = content_hash_64(bytes);
+        if self.arc_hashes.len() >= MAX_ARC_HASH_ENTRIES {
+            self.arc_hashes
+                .retain(|_, entry| entry.weak.strong_count() > 0);
+            if self.arc_hashes.len() >= MAX_ARC_HASH_ENTRIES {
+                self.arc_hashes.clear();
+            }
+        }
+        self.arc_hashes.insert(
+            ptr_key,
+            ArcHashEntry {
+                weak: Arc::downgrade(bytes),
+                hash,
+            },
+        );
+        hash
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn texture_with_key<'a>(
         &'a mut self,
@@ -1304,7 +1422,7 @@ impl MediaCache {
                 MediaFetch::Ready(bytes) => {
                     let content_key = ContentKey {
                         len: bytes.len(),
-                        hash: fnv1a_64(&bytes),
+                        hash: self.content_hash(&bytes),
                         tier: requested_tier,
                         tiled,
                     };
@@ -1443,6 +1561,8 @@ impl MediaCache {
         });
         self.lottie.retain(|key, _| keep(key.as_str()));
         self.video.retain(|key, _| keep(key.as_str()));
+        self.arc_hashes
+            .retain(|_, entry| entry.weak.strong_count() > 0);
     }
 
     /// Retain only textures whose keys are in `srcs`, dropping all others.
@@ -2166,5 +2286,53 @@ mod tests {
         assert!(is_animated_src("émoji/🎞.GiF"));
         assert!(!is_animated_src("gif"));
         assert!(!is_animated_src("photo.jpg"));
+    }
+
+    #[test]
+    fn content_hash_deduplicates_shared_and_distinct_arcs_and_prunes_dead_weaks() {
+        let mut cache = MediaCache::new();
+        let bytes = solid_png(16, 16);
+        let shared = Arc::<[u8]>::from(bytes.clone());
+        let distinct = Arc::<[u8]>::from(bytes);
+
+        let h1 = cache.content_hash(&shared);
+        let h2 = cache.content_hash(&shared);
+        let h3 = cache.content_hash(&distinct);
+        assert_eq!(h1, h2, "shared Arc hits identity cache with same hash");
+        assert_eq!(
+            h1, h3,
+            "distinct Arc with identical bytes must produce the same content hash"
+        );
+
+        let different = Arc::<[u8]>::from(distinct_png(16, 16, 42));
+        assert_ne!(
+            h1,
+            cache.content_hash(&different),
+            "distinct image bytes must produce a different content hash"
+        );
+
+        // Verify tail-length sensitivity across block boundaries (0..=64 bytes).
+        let base: Vec<u8> = (0u8..64).collect();
+        for len in 1..=64 {
+            let mut flipped = base[..len].to_vec();
+            flipped[len - 1] ^= 0x01;
+            assert_ne!(
+                content_hash_64(&base[..len]),
+                content_hash_64(&flipped),
+                "single-bit flip at tail byte {len} must change content_hash_64"
+            );
+        }
+
+        // Dropping an Arc allows retain_slice / periodic begin_frame to prune its Weak entry.
+        let weak_probe = Arc::downgrade(&distinct);
+        drop(distinct);
+        assert_eq!(weak_probe.strong_count(), 0);
+        assert_eq!(cache.arc_hashes.len(), 3);
+        cache.retain_slice(&[]);
+        assert_eq!(
+            cache.arc_hashes.len(),
+            2,
+            "retain_slice must prune dropped Arc weak entries so buffers are not pinned"
+        );
     }
 }

@@ -88,7 +88,13 @@ impl SpellCache {
         self.suggestions.push((word.to_owned(), list));
     }
 
-    /// Forget everything: personal and ignored words change what is correct.
+    /// Forget cached per-text misspelling lists while preserving word suggestions.
+    pub fn clear_entries(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Forget everything: personal dictionary edits can change both misspellings
+    /// and the suggestions returned for other words.
     pub fn clear(&mut self) {
         self.entries.clear();
         self.suggestions.clear();
@@ -398,7 +404,7 @@ impl Editor {
         {
             self.ui.spell_ignored.push(word.to_owned());
         }
-        self.spell_changed();
+        self.spell_ignore_changed();
     }
 
     /// Ignore one occurrence in one field, for this session only.
@@ -407,7 +413,7 @@ impl Editor {
         if !self.ui.spell_ignored_at.contains(&entry) {
             self.ui.spell_ignored_at.push(entry);
         }
-        self.spell_changed();
+        self.spell_ignore_changed();
     }
 
     /// Load the personal dictionary and the as-you-type preference at start-up.
@@ -428,6 +434,14 @@ impl Editor {
 
     fn spell_changed(&mut self) {
         self.spell_cache.clear();
+        self.spell_version = self.spell_version.wrapping_add(1);
+        self.ui.spell_check.key = None;
+    }
+
+    /// Session ignores do not alter the speller's dictionary, so cached word
+    /// suggestions remain valid across Ignore / Ignore all steps.
+    fn spell_ignore_changed(&mut self) {
+        self.spell_cache.clear_entries();
         self.spell_version = self.spell_version.wrapping_add(1);
         self.ui.spell_check.key = None;
     }

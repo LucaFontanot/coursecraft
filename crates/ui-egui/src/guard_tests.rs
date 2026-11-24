@@ -1446,3 +1446,54 @@ fn s11_spell_check_unicode_add_and_stale_key_safety() {
     );
     assert_eq!(h.editor.ui.spell_check.issues.len(), 1);
 }
+
+/// Regression test (`G-06` follow-up): ignoring an occurrence or word preserves
+/// cached word suggestions (0 suggestion lookups on repeated words), while
+/// adding a word to the dictionary clears cached suggestions so the new word
+/// can be suggested.
+#[test]
+fn g06_ignore_preserves_cached_suggestions() {
+    let course = Course::from_json(
+        r#"{"schema_version":1,"id":"g06-sug","title":"G-06 Suggestions","slide_size":{"w":1280,"h":720},"scenes":[{"id":"sc0","title":"Scene 0","slides":[{"id":"s0","title":"Slide 0","objects":[{"id":"t0","kind":{"type":"text","text":"teh first"},"frame":{"x":60,"y":60,"w":600,"h":120}}]},{"id":"s1","title":"Slide 1","objects":[{"id":"t1","kind":{"type":"text","text":"teh second"},"frame":{"x":60,"y":60,"w":600,"h":120}}]},{"id":"s2","title":"Slide 2","objects":[{"id":"t2","kind":{"type":"text","text":"teh third"},"frame":{"x":60,"y":60,"w":600,"h":120}}]}]}]}"#,
+    )
+    .expect("course parses");
+    let mut h = TestHarness::new(course);
+    let _ = h.idle_frame();
+
+    crate::spell_check::open(&mut h.editor);
+    let _ = h.idle_frame();
+    assert_eq!(h.editor.ui.spell_check.issues.len(), 3);
+
+    reset_counts();
+    crate::spell_check::ignore_issue(&mut h.editor, 0, false);
+    let _ = h.idle_frame();
+    assert_eq!(
+        gc::speller_runs(),
+        0,
+        "Ignore must perform zero speller runs"
+    );
+    assert_eq!(
+        gc::suggestion_lookups(),
+        0,
+        "Ignore must preserve cached suggestions for the next identical word"
+    );
+    assert_eq!(h.editor.ui.spell_check.issues.len(), 2);
+
+    // Ignoring another word (session-only) also keeps cached suggestions intact.
+    h.editor.ignore_spell_word("recieve");
+    let _ = h.editor.spell_suggestions("teh");
+    assert_eq!(
+        gc::suggestion_lookups(),
+        0,
+        "ignore_spell_word must preserve cached suggestions"
+    );
+
+    // Adding a word to the personal dictionary does invalidate cached suggestions.
+    h.editor.add_spell_word("customword");
+    let _ = h.editor.spell_suggestions("teh");
+    assert_eq!(
+        gc::suggestion_lookups(),
+        1,
+        "add_spell_word must clear cached suggestions because the dictionary changed"
+    );
+}
