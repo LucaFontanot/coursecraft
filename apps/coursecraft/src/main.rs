@@ -37,6 +37,8 @@ pub mod system_fonts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod template_library;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod updates;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod versions;
 #[cfg(any(target_arch = "wasm32", test))]
 pub mod web_state;

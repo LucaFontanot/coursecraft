@@ -41,6 +41,9 @@ eframe = { workspace = true, features = ["default_fonts"] }
 # arboard directly to read pasted images.
 egui-winit = { version = "0.37", default-features = false, features = ["clipboard"] }
 arboard = { version = "3.6", default-features = false, features = ["image-data"] }
+ureq.workspace = true
+semver.workspace = true
+ring.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys.workspace = true

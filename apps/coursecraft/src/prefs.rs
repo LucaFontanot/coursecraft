@@ -271,6 +271,15 @@ pub struct Prefs {
     /// Editor performance mode (`auto` / `standard` / `lite`).
     #[serde(default)]
     pub performance_mode: PerformanceModePref,
+    /// Check GitHub at most once a day on startup for a newer desktop version.
+    #[serde(default = "default_true")]
+    pub auto_check_updates: bool,
+    /// Unix timestamp (seconds) of the last completed or rate-limited update check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_update_check_unix: Option<u64>,
+    /// Semver version string the user chose to skip (e.g. `"0.4.4"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skipped_update_version: Option<String>,
 }
 
 /// Largest autosave interval, in minutes.
@@ -444,6 +453,9 @@ impl Default for Prefs {
             spell_check_as_you_type: true,
             spell_words: Vec::new(),
             performance_mode: PerformanceModePref::default(),
+            auto_check_updates: true,
+            last_update_check_unix: None,
+            skipped_update_version: None,
         }
     }
 }
@@ -580,6 +592,36 @@ mod tests {
             let render_mode: coursecraft_ui_egui::coursecraft_render::PerformanceMode = mode.into();
             assert_eq!(PerformanceModePref::from(render_mode), mode);
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn up09_update_prefs_backward_compat_and_round_trip() {
+        let dir =
+            std::env::temp_dir().join(format!("coursecraft-prefs-up09-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        // Legacy prefs.json lacking the 3 update fields must load with defaults.
+        std::fs::write(dir.join("prefs.json"), r#"{"recent": []}"#).expect("write legacy prefs");
+        let legacy = load_prefs(&dir);
+        assert!(legacy.auto_check_updates);
+        assert_eq!(legacy.last_update_check_unix, None);
+        assert_eq!(legacy.skipped_update_version, None);
+
+        // Saving and reloading with all 3 fields populated must preserve them exactly.
+        let populated = Prefs {
+            auto_check_updates: false,
+            last_update_check_unix: Some(1_700_000_000),
+            skipped_update_version: Some("0.4.4".to_owned()),
+            ..Prefs::default()
+        };
+        save_prefs(&dir, &populated).expect("save prefs");
+        let reloaded = load_prefs(&dir);
+        assert!(!reloaded.auto_check_updates);
+        assert_eq!(reloaded.last_update_check_unix, Some(1_700_000_000));
+        assert_eq!(reloaded.skipped_update_version.as_deref(), Some("0.4.4"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
