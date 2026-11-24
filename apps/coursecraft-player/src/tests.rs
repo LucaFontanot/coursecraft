@@ -1357,3 +1357,163 @@ fn u03_player_chrome_renders_strings_and_symbols_cleanly() {
         "ended state must render non-empty text, got: {ended_texts:?}"
     );
 }
+
+/// G-01 (player): Start gate, learner-paused playback, and finished slides do
+/// not schedule immediate repaints, whereas starting playback or running an
+/// active animation/timer does schedule a wake.
+#[test]
+fn g01_player_start_gate_and_finished_slide_do_not_repaint() {
+    use std::time::Duration;
+
+    let json = r##"{
+      "schema_version": 1,
+      "id": "g01-player-idle",
+      "title": "G01 Player Idle",
+      "slide_size": { "w": 960, "h": 540 },
+      "scenes": [{
+        "id": "sc1",
+        "title": "Scene 1",
+        "slides": [{
+          "id": "s1",
+          "title": "Short Slide",
+          "duration_ms": 400,
+          "objects": [
+            {
+              "id": "card",
+              "kind": { "type": "shape", "shape": "rectangle", "fill": "#336699" },
+              "frame": { "x": 100.0, "y": 100.0, "w": 200.0, "h": 120.0 },
+              "entrance": { "effect": { "type": "fade" }, "duration_ms": 200 }
+            }
+          ]
+        }]
+      }]
+    }"##;
+    let course = Course::from_json(json).expect("valid course");
+    let mut playing = Playing::from_course(course, false)
+        .expect("valid playing")
+        .with_backend(Box::new(coursecraft_playback::NullBackend::new()));
+    playing.frame.awaiting_start = true;
+    playing.frame.reduced_motion = true;
+
+    let ctx = egui::Context::default();
+    coursecraft_render::install_fonts(&ctx);
+    let mut style = (*ctx.global_style()).clone();
+    style.animation_time = 0.0;
+    ctx.set_global_style(style);
+
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 720.0));
+    let mut time = 0.0;
+
+    let run_frame = |ctx: &egui::Context,
+                     playing: &mut Playing,
+                     time: &mut f64,
+                     dt: f64,
+                     events: Vec<egui::Event>|
+     -> Duration {
+        *time += dt;
+        let raw = egui::RawInput {
+            screen_rect: Some(screen),
+            time: Some(*time),
+            events,
+            ..Default::default()
+        };
+        let out = ctx.run_ui(raw, |ui| {
+            playing.show_ui(ui);
+        });
+        let delay = out
+            .viewport_output
+            .get(&ctx.viewport_id())
+            .map_or(Duration::ZERO, |vp| vp.repaint_delay);
+        out.drop_without_applying_deltas();
+        delay
+    };
+
+    // 1. Start gate: settle, then assert idle frame schedules no repaint < 1 s.
+    for _ in 0..8 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    }
+    let start_gate_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    assert!(
+        !ctx.requested_repaint_last_pass(),
+        "start gate must not request immediate repaints while idle"
+    );
+    assert!(
+        start_gate_delay >= Duration::from_secs(1),
+        "start gate must stay quiet while waiting, got delay {start_gate_delay:?}"
+    );
+
+    // 2. Clicking Start begins playback; entrance animation [0, 200 ms) must schedule immediate wake.
+    let start_btn = playing
+        .frame
+        .start_button_rect()
+        .expect("start gate button rect");
+    let click_start = vec![
+        egui::Event::PointerMoved(start_btn.center()),
+        egui::Event::PointerButton {
+            pos: start_btn.center(),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        },
+        egui::Event::PointerButton {
+            pos: start_btn.center(),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        },
+    ];
+    let after_start_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, click_start);
+    assert!(
+        !playing.frame.awaiting_start,
+        "clicking Start must leave start gate"
+    );
+    assert_eq!(
+        after_start_delay,
+        Duration::ZERO,
+        "active entrance animation after Start must request an immediate repaint"
+    );
+
+    // 3. Learner pause: settle, then assert idle frame schedules no repaint < 1 s.
+    playing.handle_input(&Input::PlayerPause, Some(&ctx));
+    for _ in 0..8 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    }
+    let paused_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    assert!(
+        !ctx.requested_repaint_last_pass(),
+        "paused player must not request immediate repaints"
+    );
+    assert!(
+        paused_delay >= Duration::from_secs(1),
+        "paused player must stay quiet, got delay {paused_delay:?}"
+    );
+
+    // 4. Resume playback and advance past duration_ms (400 ms) until slide finishes.
+    playing.handle_input(&Input::PlayerResume, Some(&ctx));
+    let resumed_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    assert!(
+        resumed_delay < Duration::from_secs(1),
+        "resumed active slide must schedule a wake, got {resumed_delay:?}"
+    );
+
+    for _ in 0..8 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.10, Vec::new());
+    }
+    assert!(
+        playing.player.state().base.ended,
+        "short slide should have reached its timeline end"
+    );
+    // Settling frames after timeline ends.
+    for _ in 0..8 {
+        let _ = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    }
+    let finished_delay = run_frame(&ctx, &mut playing, &mut time, 0.02, Vec::new());
+    assert!(
+        !ctx.requested_repaint_last_pass(),
+        "finished slide must not request immediate repaints"
+    );
+    assert!(
+        finished_delay >= Duration::from_secs(1),
+        "finished slide must stay quiet, got delay {finished_delay:?}"
+    );
+}

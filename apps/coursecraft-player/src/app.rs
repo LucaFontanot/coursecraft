@@ -74,6 +74,10 @@ pub struct Playing {
     pub frame: PlayerFrame,
     /// Clock accumulator ticking real time.
     pub ticker: Ticker,
+    /// Last egui frame timestamp (`InputState::time`), used to compute real
+    /// elapsed wall time across delayed wakes without losing precision to
+    /// `stable_dt`'s 100 ms cap.
+    last_frame_time: Option<f64>,
     /// Media texture cache.
     pub media_cache: coursecraft_render::MediaCache,
     /// Host media provider for images.
@@ -175,6 +179,7 @@ impl Playing {
             view: SlideView::new(),
             frame: PlayerFrame::new(),
             ticker: Ticker::new(),
+            last_frame_time: None,
             media_cache: coursecraft_render::MediaCache::new(),
             media_source,
             media: MediaDriver::new(),
@@ -235,6 +240,7 @@ impl Playing {
             view: SlideView::new(),
             frame,
             ticker: Ticker::new(),
+            last_frame_time: None,
             media_cache: coursecraft_render::MediaCache::new(),
             media_source: crate::media::WebMediaSource::new(ctx),
             media: MediaDriver::new(),
@@ -371,6 +377,7 @@ impl Playing {
             self.player = player;
             self.ended = false;
             self.ticker = Ticker::new();
+            self.last_frame_time = None;
             self.view = SlideView::new();
             self.frame.restart();
             self.media.set_rate(1.0);
@@ -1079,8 +1086,6 @@ impl Playing {
     pub(crate) fn show_ui(&mut self, ui: &mut egui::Ui) {
         let playing = self;
         playing.media_cache.begin_frame();
-        // 5. Repaint continuously while playing so the clock advances
-        ui.ctx().request_repaint();
 
         #[cfg(target_arch = "wasm32")]
         if let Some(ref xapi) = playing.xapi {
@@ -1126,7 +1131,12 @@ impl Playing {
 
         // 1. Advance ticker and handle tick input if emitted. Nothing runs
         // until the learner presses Play on the start gate.
-        let dt = ui.input(|i| i.stable_dt);
+        let (now, stable_dt) = ui.input(|i| (i.time, i.stable_dt));
+        let dt = match playing.last_frame_time {
+            Some(prev) if (now - prev).is_finite() && now > prev => (now - prev) as f32,
+            _ => stable_dt,
+        };
+        playing.last_frame_time = Some(now);
         if !playing.frame.awaiting_start
             && let Some(tick) = playing.ticker.advance(dt)
         {
@@ -1249,9 +1259,10 @@ impl Playing {
 
         // Poll media ends, pending async media fetches, and update video element layout
         playing.poll_media(Some(ui.ctx()));
-        let dt = ui.input(|i| i.stable_dt);
         let dt_ms = if dt.is_finite() && dt > 0.0 {
-            (f64::from(dt) * 1000.0).round().clamp(0.0, u64::MAX as f64) as u64
+            (f64::from(dt.min(1.0)) * 1000.0)
+                .round()
+                .clamp(0.0, u64::MAX as f64) as u64
         } else {
             0
         };
@@ -1262,6 +1273,29 @@ impl Playing {
             playing
                 .web_objects
                 .layout(&playing.player, &playing.view, hide);
+        }
+
+        // Schedule the next wake only when time-driven work is pending.
+        let mut wake: Option<u32> = if playing.frame.awaiting_start || playing.ended {
+            None
+        } else {
+            playing.player.next_wake_ms()
+        };
+        if playing.view.transition_active() || playing.media.pending_len() > 0 {
+            wake = Some(0);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if !playing.media_source.is_idle() {
+            wake = Some(0);
+        }
+        match wake {
+            Some(0) => ui.ctx().request_repaint(),
+            Some(ms) => ui
+                .ctx()
+                .request_repaint_after(std::time::Duration::from_millis(u64::from(
+                    ms.clamp(1, 1000),
+                ))),
+            None => {}
         }
     }
 }
