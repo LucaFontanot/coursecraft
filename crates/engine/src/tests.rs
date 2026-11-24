@@ -14375,3 +14375,416 @@ fn gb_12_opt_out_plain_colliding_group_and_hostile_paste_groups() {
         .is_err()
     );
 }
+
+fn gb_15_setup_slide_with_interactive_groups() -> (Session, String, String, String) {
+    let mut s = Session::blank("Slide Duplicate Interactive Groups");
+    ok(
+        &mut s,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "l1", "name": "Overlay" }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#1D4ED8" },
+            "frame": { "x": 40.0, "y": 40.0, "w": 160.0, "h": 50.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "lbl",
+            "kind": { "type": "text", "text": "Submit" },
+            "frame": { "x": 60.0, "y": 50.0, "w": 100.0, "h": 30.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add_state",
+        json!({
+            "slide": "slide1",
+            "object": "bg",
+            "state": { "name": "selected", "fill": "#1E40AF" }
+        }),
+    );
+    let base_gid = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["bg", "lbl"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": base_gid, "interactive": true }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "disable_btn",
+            "kind": { "type": "button", "label": "Disable" },
+            "frame": { "x": 240.0, "y": 40.0, "w": 120.0, "h": 44.0 }
+        }),
+    );
+    // Coexisting plain (non-interactive) group on base slide must keep its JSON shape.
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "plain_a",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#64748B" },
+            "frame": { "x": 40.0, "y": 140.0, "w": 50.0, "h": 50.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "plain_b",
+            "kind": { "type": "shape", "shape": "ellipse", "fill": "#94A3B8" },
+            "frame": { "x": 100.0, "y": 140.0, "w": 50.0, "h": 50.0 }
+        }),
+    );
+    let plain_gid = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["plain_a", "plain_b"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "id": "l_bg",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#0F766E" },
+            "frame": { "x": 80.0, "y": 80.0, "w": 140.0, "h": 44.0 }
+        }),
+    );
+    ok(
+        &mut s,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "id": "l_lbl",
+            "kind": { "type": "text", "text": "Close" },
+            "frame": { "x": 100.0, "y": 90.0, "w": 100.0, "h": 24.0 }
+        }),
+    );
+    let layer_gid = ok(
+        &mut s,
+        "object.group",
+        json!({ "slide": "slide1", "objects": ["l_bg", "l_lbl"] }),
+    )["group"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ok(
+        &mut s,
+        "group.set_interactive",
+        json!({ "slide": "slide1", "group": layer_gid, "interactive": true }),
+    );
+    (s, base_gid, plain_gid, layer_gid)
+}
+
+fn gb_15_add_group_triggers(s: &mut Session, base_gid: &str, layer_gid: &str) {
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": base_gid },
+                "action": { "action": "show_layer", "layer": "l1" }
+            }
+        }),
+    );
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": "disable_btn" },
+                "condition": { "object_state": { "object": base_gid, "state": "normal", "is": true } },
+                "action": { "action": "change_state", "object": base_gid, "state": "disabled" }
+            }
+        }),
+    );
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "state_changes", "object": base_gid, "to": "disabled" },
+                "action": { "action": "pause_timeline" }
+            }
+        }),
+    );
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "trigger": {
+                "when": { "event": "click", "object": layer_gid },
+                "action": { "action": "hide_layer" }
+            }
+        }),
+    );
+    ok(
+        s,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "trigger": {
+                "when": { "event": "timeline_starts", "layer": "l1" },
+                "condition": { "object_state": { "object": layer_gid, "state": "normal", "is": true } },
+                "action": { "action": "change_state", "object": base_gid, "state": "selected" }
+            }
+        }),
+    );
+}
+
+fn gb_15_assert_copied_groups(
+    copy: &coursecraft_course::Slide,
+    base_gid: &str,
+    plain_gid: &str,
+    layer_gid: &str,
+) -> (String, String) {
+    assert_eq!(copy.groups.len(), 1);
+    let new_base_gid = copy.groups[0].id.clone();
+    assert_ne!(new_base_gid, base_gid);
+    assert!(new_base_gid.starts_with("grp-"));
+    assert!(copy.groups[0].interactive);
+    assert_eq!(copy.groups[0].name, "Submit");
+    assert_eq!(copy.group_members(&new_base_gid).len(), 2);
+    assert!(
+        copy.group_members(&new_base_gid)
+            .iter()
+            .all(|o| o.id != "bg" && o.id != "lbl")
+    );
+    assert!(copy.group(plain_gid).is_none());
+    assert_eq!(copy.group_members(plain_gid).len(), 2);
+
+    assert_eq!(copy.layers.len(), 1);
+    let copy_layer = &copy.layers[0];
+    assert_ne!(copy_layer.id, "l1");
+    assert_eq!(copy_layer.groups.len(), 1);
+    let new_layer_gid = copy_layer.groups[0].id.clone();
+    assert_ne!(new_layer_gid, layer_gid);
+    assert_ne!(new_layer_gid, new_base_gid);
+    assert!(new_layer_gid.starts_with("grp-"));
+    assert!(copy_layer.groups[0].interactive);
+    assert_eq!(copy_layer.groups[0].name, "Close");
+    assert_eq!(copy.group_members(&new_layer_gid).len(), 2);
+    assert!(
+        copy.group_members(&new_layer_gid)
+            .iter()
+            .all(|o| o.id != "l_bg" && o.id != "l_lbl")
+    );
+    (new_base_gid, new_layer_gid)
+}
+
+fn gb_15_assert_copied_base_triggers(
+    copy: &coursecraft_course::Slide,
+    orig: &coursecraft_course::Slide,
+    new_base_gid: &str,
+) {
+    let copy_layer_id = &copy.layers[0].id;
+    assert_eq!(copy.triggers.len(), orig.triggers.len());
+    assert!(matches!(
+        &copy.triggers[0].when,
+        coursecraft_course::Event::Click { object } if object == new_base_gid
+    ));
+    assert!(matches!(
+        &copy.triggers[0].action,
+        coursecraft_course::Action::ShowLayer { layer } if layer == copy_layer_id
+    ));
+    let copy_disable_btn = copy
+        .objects
+        .iter()
+        .find(|o| matches!(&o.kind, coursecraft_course::ObjectKind::Button { label, .. } if label == "Disable"))
+        .expect("copied disable button")
+        .id
+        .clone();
+    assert_ne!(copy_disable_btn, "disable_btn");
+    assert!(matches!(
+        &copy.triggers[1].when,
+        coursecraft_course::Event::Click { object } if object == &copy_disable_btn
+    ));
+    assert!(matches!(
+        &copy.triggers[1].condition,
+        Some(coursecraft_course::Condition::ObjectState { object, state, is: true })
+            if object == new_base_gid && state == "normal"
+    ));
+    assert!(matches!(
+        &copy.triggers[1].action,
+        coursecraft_course::Action::ChangeState { object, state }
+            if object == new_base_gid && state == "disabled"
+    ));
+    assert!(matches!(
+        &copy.triggers[2].when,
+        coursecraft_course::Event::StateChanges { object, to }
+            if object == new_base_gid && to.as_deref() == Some("disabled")
+    ));
+}
+
+fn gb_15_assert_copied_layer_triggers(
+    copy_layer: &coursecraft_course::Layer,
+    orig_layer: &coursecraft_course::Layer,
+    new_base_gid: &str,
+    new_layer_gid: &str,
+) {
+    assert_eq!(copy_layer.triggers.len(), orig_layer.triggers.len());
+    assert!(matches!(
+        &copy_layer.triggers[0].when,
+        coursecraft_course::Event::Click { object } if object == new_layer_gid
+    ));
+    assert!(matches!(
+        &copy_layer.triggers[0].action,
+        coursecraft_course::Action::HideLayer { layer: None }
+    ));
+    assert!(matches!(
+        &copy_layer.triggers[1].when,
+        coursecraft_course::Event::TimelineStarts { layer: Some(l) } if l == &copy_layer.id
+    ));
+    assert!(matches!(
+        &copy_layer.triggers[1].condition,
+        Some(coursecraft_course::Condition::ObjectState { object, state, is: true })
+            if object == new_layer_gid && state == "normal"
+    ));
+    assert!(matches!(
+        &copy_layer.triggers[1].action,
+        coursecraft_course::Action::ChangeState { object, state }
+            if object == new_base_gid && state == "selected"
+    ));
+}
+
+fn gb_15_assert_no_group_slide_duplicate_identical() {
+    let mut no_grp = Session::blank("No Groups");
+    ok(
+        &mut no_grp,
+        "layer.add",
+        json!({ "slide": "slide1", "id": "l1", "name": "L1" }),
+    );
+    ok(
+        &mut no_grp,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "id": "btn1",
+            "kind": { "type": "button", "label": "Go" },
+            "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut no_grp,
+        "object.add",
+        json!({
+            "slide": "slide1",
+            "layer": "l1",
+            "id": "sh1",
+            "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+            "frame": { "x": 20.0, "y": 20.0, "w": 60.0, "h": 40.0 }
+        }),
+    );
+    ok(
+        &mut no_grp,
+        "trigger.add",
+        json!({
+            "slide": "slide1",
+            "trigger": {
+                "when": { "event": "click", "object": "btn1" },
+                "action": { "action": "show_layer", "layer": "l1" }
+            }
+        }),
+    );
+    let no_grp_before = no_grp.course.clone();
+    let res = ok(&mut no_grp, "slide.duplicate", json!({ "slide": "slide1" }));
+    assert_eq!(res["id"], "slide2");
+    assert_eq!(res["skipped"], 0);
+    let copied = no_grp.course.slide("slide2").unwrap();
+    assert_eq!(copied.objects.len(), 1);
+    assert_eq!(copied.objects[0].id, "button1");
+    assert!(copied.objects[0].group.is_none());
+    assert_eq!(copied.layers.len(), 1);
+    assert_eq!(copied.layers[0].id, "layer1");
+    assert_eq!(copied.layers[0].objects[0].id, "shape1");
+    assert!(copied.groups.is_empty());
+    assert!(copied.layers[0].groups.is_empty());
+    assert_eq!(copied.triggers.len(), 1);
+    assert!(matches!(
+        &copied.triggers[0].when,
+        coursecraft_course::Event::Click { object } if object == "button1"
+    ));
+    assert!(matches!(
+        &copied.triggers[0].action,
+        coursecraft_course::Action::ShowLayer { layer } if layer == "layer1"
+    ));
+    let serialized = no_grp.course.to_json().unwrap();
+    assert!(!serialized.contains("\"groups\""));
+    assert!(no_grp.course.first_error().is_none());
+    ok(&mut no_grp, "edit.undo", json!({}));
+    assert_eq!(no_grp.course, no_grp_before);
+}
+
+#[test]
+fn gb_15_slide_duplicate_remaps_interactive_group_triggers() {
+    let (mut s, base_gid, plain_gid, layer_gid) = gb_15_setup_slide_with_interactive_groups();
+    gb_15_add_group_triggers(&mut s, &base_gid, &layer_gid);
+
+    let before_course = s.course.clone();
+    let before_slide1 = s.course.slide("slide1").unwrap().clone();
+    let undo_before = s.undo_len();
+
+    let dup = ok(&mut s, "slide.duplicate", json!({ "slide": "slide1" }));
+    assert_eq!(dup["skipped"], 0, "no interactive group triggers dropped");
+    let copy_id = dup["id"].as_str().unwrap().to_owned();
+    assert_ne!(copy_id, "slide1");
+
+    // Original slide is untouched.
+    assert_eq!(s.course.slide("slide1").unwrap(), &before_slide1);
+
+    let copy = s.course.slide(&copy_id).unwrap();
+    let (new_base_gid, new_layer_gid) =
+        gb_15_assert_copied_groups(copy, &base_gid, &plain_gid, &layer_gid);
+    gb_15_assert_copied_base_triggers(copy, &before_slide1, &new_base_gid);
+    gb_15_assert_copied_layer_triggers(
+        &copy.layers[0],
+        &before_slide1.layers[0],
+        &new_base_gid,
+        &new_layer_gid,
+    );
+
+    assert!(
+        s.course.first_error().is_none(),
+        "course with duplicated interactive groups must validate: {:?}",
+        s.course.first_error()
+    );
+
+    // Single undo step restores the course exactly.
+    assert_eq!(s.undo_len(), undo_before + 1);
+    ok(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.course, before_course);
+
+    gb_15_assert_no_group_slide_duplicate_identical();
+}
