@@ -91,8 +91,9 @@ Shown when the Course Map view tab is active.
 > `crates/ui-egui/src/ribbon/spec.rs`; the ribbon is on by default (Preferences › Interface) and
 > replaces the flat toolbar, with Save, Undo and Redo in a quick access toolbar left of the tab
 > strip. The Status column is the feature's status. Built features that the ribbon doesn't reach
-> yet (Hyperlink, Apply Layout, Question Banks, Quick Styles, Shape
-> Fill/Outline/Effect) are drawn disabled with "Not available yet: ribbon wiring". Groups that
+> yet (Hyperlink, Apply Layout, Question Banks, Quick Styles) are drawn disabled with "Not
+> available yet: ribbon wiring". Shape Fill, Shape Outline and Shape Effect open the Shape Style
+> settings panel at their section. Groups that
 > don't fit the window shrink to one button, rightmost first, which opens the group in a popup.
 >
 > **Font and Paragraph** go through `crates/ui-egui/src/text_format.rs`, the one place that
@@ -173,9 +174,9 @@ Shown when the Course Map view tab is active.
 | | ↘ Paragraph | — | `UiAction::PanelAt(Text, Paragraph)` | ✅ | opens the Text settings panel at Paragraph |
 | Drawing ↘ | Arrange | LS | `object.reorder`, `object.align`, `object.distribute`, `object.group` | ✅ | ▾ Order, Group, Align, Rotate (as Edit › Order/Align) |
 | | Quick Styles | LS | `object.apply_style` | ✅ | |
-| | Shape Fill | SS | `object.set_fill_style` | ✅ | |
-| | Shape Outline | SS | `object.update` `{outline}` | ✅ | |
-| | Shape Effect | SS | `object.set_shadow`, `object.set_glow` | 🟡 | Shadow ✅, Glow ✅, Reflection ⛔, Soft Edges ⛔ |
+| | Shape Fill | SS | `object.set_fill_style` | ✅ | opens the Shape Style panel at Fill |
+| | Shape Outline | SS | `object.update` `{outline}` | ✅ | opens the Shape Style panel at Outline |
+| | Shape Effect | SS | `object.set_shadow`, `object.set_glow` | 🟡 | opens the Shape Style panel; Shadow ✅, Glow ✅, Reflection ⛔, Soft Edges ⛔ |
 | | ↘ Format Shape | — | `UiAction::PanelAt(ShapeStyle, Fill)` | ✅ | opens the Shape Style settings panel: Fill, Outline and Effects, with the Format inspector's own rows ([panels.md](panels.md)) |
 | Publish | Player / Preview / Publish | | as Course Map | ✅ | |
 

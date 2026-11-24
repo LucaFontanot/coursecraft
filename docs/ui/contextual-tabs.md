@@ -3,6 +3,14 @@
 > Part of [the ribbon plan](README.md). Kinds, actions and status marks as in [ribbon.md](ribbon.md).
 > Reference: [storyline-observed.md](storyline-observed.md) §3.
 
+> **In the code (M37 step 3, 2026-11-24):** every contextual tab below is drawn from
+> `CONTEXT_TABS` in `crates/ui-egui/src/ribbon/spec.rs`; `ribbon/contextual.rs` decides which ones
+> the selection shows and runs the controls that act on the selected object. The coloured caption
+> sits in the tab strip, left of its tabs. Built features that the ribbon doesn't reach yet are
+> drawn disabled with "Not available yet: ribbon wiring (use the Format inspector…)"; the ↘
+> launchers open the matching settings panel or the Format inspector. The modes (Slide Master,
+> Feedback Master, Question form view, Preview) don't replace the tab strip yet.
+
 ## When each one shows
 
 Contextual tabs sit right of Help under a coloured caption. Selecting the object does **not**
@@ -20,7 +28,9 @@ when the object is just inserted.
 | Question Tools | **Design** | the slide is a question slide (any selection) |
 
 Several captions can show at once (Question Tools + Drawing Tools). If the current tab disappears
-because the selection changed, the ribbon returns to Home.
+because the selection changed, the ribbon returns to Home. **Built:** all three rules, and the
+switch to the object's tab right after it is inserted (an object id the slide didn't have the
+frame before).
 
 Modes replace the tab strip:
 
@@ -38,24 +48,24 @@ Modes replace the tab strip:
 |---|---|---|---|---|---|
 | Insert Shapes | shape gallery | G | `object.add` `{shape}` | ✅ | `shape_gallery.rs` |
 | | Change Shape | SS | `object.update` `{shape}` | ⛔ | keep size and format, change geometry |
-| | Edit Points | S | `ui:editPoints` | ✅ | today Edit › Edit points |
+| | Edit Points | S | `ContextOp::EditPoints` | ✅ | a freeform (path) selected |
 | | Text Box | S | `object.add` `{text}` | ✅ | |
-| Shape Styles ↘ | style gallery | G | `object.apply_style` | ✅ | |
-| | Shape Fill | SS | `object.set_fill_style` | ✅ | solid, gradient, picture; eyedropper |
-| | Shape Outline | SS | `object.update` `{outline}`, `object.set_outline_join` | ✅ | |
-| | Shape Effect | SS | `object.set_shadow`, `object.set_glow` | 🟡 | ▸ Shadow ✅, Glow ✅, Reflection ⛔, Soft Edges ⛔ |
+| Shape Styles ↘ | style gallery | G | `object.apply_style` | ✅ | drawn disabled until the galleries; ↘ opens the Shape Style panel |
+| | Shape Fill | SS | `object.set_fill_style` | ✅ | opens the Shape Style panel at Fill |
+| | Shape Outline | SS | `object.update` `{outline}`, `object.set_outline_join` | ✅ | opens the Shape Style panel at Outline |
+| | Shape Effect | SS | `object.set_shadow`, `object.set_glow` | 🟡 | opens the Shape Style panel; ▸ Shadow ✅, Glow ✅, Reflection ⛔, Soft Edges ⛔ |
 | Arrange and Align | Arrange | SS | `object.reorder` | ✅ | Bring to Front/Forward, Send Backward/to Back |
 | | Group | SS | `object.group`, `object.ungroup` | ✅ | |
-| | Rotate | SS | `object.set_rotation`, `object.flip` | ✅ | |
-| | align grid (9) | S | `object.align`, `object.distribute`, `object.match_size` | ✅ | Align to Slide toggle |
-| Size and Position ↘ | X, Y, Width, Height | N | `object.update` | ✅ | ↘ will open the Size and Position panel (built; Animations › Size and Position opens it today) |
+| | Rotate | SS | `object.set_rotation`, `object.flip` | ✅ | opens the Size and Position panel at Rotate |
+| | align grid (9) | S | `object.align`, `object.distribute`, `object.match_size` | ✅ | in the Arrange ▾ menu; Align to Slide toggle |
+| Size and Position ↘ | X, Y, Width, Height | N | `object.set_frame` | ✅ | number fields; one edit is one undo step; ↘ opens the Size and Position panel |
 | Publish | Preview | LS | | ✅ | |
 
 ## Button Tools › Format
 
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
-| Action | When Clicked Action | L | `trigger.add` (on click) | 🟡 | opens the trigger editor pre-filled with "when the user clicks" this button |
+| Action | When Clicked Action | L | `trigger.add` (on click) | 🟡 | opens the trigger editor; pre-filling "when the user clicks" this button ⛔ |
 | Button Icons | icon gallery | G | `object.update` `{icon}` | ⛔ | built-in arrow / check / play icons inside the button |
 | | Align Icon | SS | `object.update` `{icon_align}` | ⛔ | left, right, top, bottom, centre |
 | | Icon Color | SS | `object.update` `{icon_color}` | ⛔ | |
@@ -76,15 +86,15 @@ already creates them (M29), check the set matches.
 | Adjust | Brightness | SS | — | ⛔ | |
 | | Contrast | SS | — | ⛔ | (`contrast` in code is the accessibility checker) |
 | | Recolor | SS | `course.recolor` | 🟡 | recolours SVG/icons; photos ⛔ |
-| | Replace Picture | SS | `object.update` `{src}` | ✅ | ▾ From File…, From Media Library… |
-| | Reset Picture | SS | `object.set_crop` (clear) + reset size | 🟡 | |
+| | Replace Picture | SS | `object.update` `{src}` | ✅ | from a file (▾ From Media Library ⛔) |
+| | Reset Picture | SS | `object.set_crop` (clear) + reset size | ✅ | clears the crop, back to the picture's own size |
 | Picture Styles ↘ | style gallery | G | `object.apply_style` | ⛔ | frames, bevels: needs picture style presets |
 | | Picture Shape | SS | `object.set_crop` `{mask}` | ⛔ | crop to shape |
-| | Picture Border | SS | `object.update` `{outline}` | ✅ | |
+| | Picture Border | SS | `object.update` `{outline}` | ✅ | drawn disabled: ribbon wiring (Format inspector) |
 | | Picture Effects | SS | `object.set_shadow`, `object.set_glow` | 🟡 | as Shape Effect |
 | Arrange and Align | as Drawing Tools | | | ✅ | |
 | Size and Position ↘ | Zoom Picture | L | `object.update` `{zoom_on_click}` | ⛔ | learner clicks to enlarge |
-| | Crop | L | `object.set_crop` | ✅ | `crop.rs` |
+| | Crop | L | `object.set_crop` | ✅ | starts crop mode on the canvas (`crop.rs`) |
 | | X, Y, Width, Height | N | `object.update` | ✅ | |
 | Publish | Preview | LS | | ✅ | |
 
@@ -97,13 +107,13 @@ Not shown in the tutorial; mirrors Audio Tools plus video specifics.
 | Play | Preview | L | `ui:media.preview` | ✅ |
 | Video Options ↘ | Volume | LS | `object.set_media` `{volume}` | ✅ |
 | | Video Editor (trim) | L | `object.set_media` `{trim}` | 🟡 |
-| | Replace Video | SS | `object.update` `{src}` | ✅ |
+| | Replace Video | SS | `object.update` `{src}` | ✅ wired |
 | | Export Video | S | `ui:media.export` | ⛔ |
 | | Show Video: On Slide / In New Window | C | `object.set_media` | ⛔ |
 | | Play Video: Automatically / When Clicked / From Trigger | C | `object.set_media` `{autoplay}` | ✅ |
 | | Video Controls: Show / Hide | C | `object.set_media` `{controls}` | ✅ |
 | | Compression | C | — | ⛔ |
-| Closed Captions | Add / Import / Export / Delete | | `object.set_captions` | 🟡 import ✅ |
+| Closed Captions | Add / Import / Export / Delete | | `object.set_captions` | 🟡 Import Captions ✅ wired |
 | Cue points | Add Cue / Question at time | | `video.add_cue`, `video.add_question_cue` | ✅ (CourseCraft extra) |
 | Publish | Preview | LS | | ✅ |
 
@@ -114,11 +124,11 @@ Not shown in the tutorial; mirrors Audio Tools plus video specifics.
 | Play | Preview | L | `ui:media.preview` | ✅ |
 | Audio Options ↘ | Audio Volume | LS | `object.set_media` `{volume}` | ✅ |
 | | Audio Editor | L | `ui:audioEditor` | 🟡 trim ✅, edit waveform ⛔ |
-| | Replace Audio | SS | `object.update` `{src}` | ✅ ▾ From File, Record Mic, Text-to-Speech |
+| | Replace Audio | SS | `object.update` `{src}` | ✅ wired, from a file (▾ Record Mic, Text-to-Speech ⛔ here) |
 | | Export Audio | S | `ui:media.export` | ⛔ |
 | | Compression | C | — | ⛔ |
 | Closed Captions | Add Captions | L | `object.set_captions` | 🟡 |
-| | Import / Export / Delete | S | `object.set_captions` | 🟡 |
+| | Import / Export / Delete | S | `object.set_captions` | 🟡 Import Captions ✅ wired |
 | Publish | Preview | LS | | ✅ |
 
 ## Table Tools › Design and Layout
@@ -127,11 +137,11 @@ Not shown in the tutorial. CourseCraft already has the commands.
 
 | Tab | Group | Controls | Action | Status |
 |---|---|---|---|---|
-| Design | Table Style Options | Header Row (K) | `table.set_header_row` | ✅ |
+| Design | Table Style Options | Header Row (K) | `table.set_header_row` | ✅ wired |
 | | Table Styles | gallery, Shading, Borders | `table.set_cell`, `table.set_borders` | 🟡 |
-| Layout | Rows & Columns | Insert Above/Below/Left/Right, Delete | `table.insert_row`, `table.insert_column`, `table.delete_row`, `table.delete_column` | ✅ |
-| | Merge | Merge Cells, Split Cells | `table.merge`, `table.split` | ✅ |
-| | Cell Size | row height, column width | `table.resize` | ✅ |
+| Layout | Rows & Columns | Insert Above/Below/Left/Right, Delete | `table.insert_row`, `table.insert_column`, `table.delete_row`, `table.delete_column` | ✅ wired, at the selected cell |
+| | Merge | Merge Cells, Split Cells | `table.merge`, `table.split` | 🟡 Split ✅ wired; Merge needs a range of cells selected ⛔ |
+| | Cell Size | row height, column width | `table.resize` | ✅ drawn disabled: ribbon wiring |
 | | Alignment | cell text alignment | `table.set_cell` | 🟡 |
 
 ## Question Tools › Design
@@ -140,11 +150,11 @@ Not shown in the tutorial. CourseCraft already has the commands.
 |---|---|---|---|---|---|
 | Feedback | Feedback Master | LS | — | ⛔ | |
 | Display | Feedback: By Question / By Choice / None | C | `question.set` `{feedback}` | 🟡 | per-choice feedback to verify |
-| | Shuffle: Answers / None | C | `question.set` `{shuffle}` | ✅ | |
+| | Shuffle: Answers / None | C | `question.set` `{shuffle}` | ✅ | Shuffle Answers toggle, wired |
 | | Results Slide | C | `question.set` `{results}` | ✅ | |
 | Scoring | Score: By Question / By Choice | C | `question.set` `{scoring}` | 🟡 | |
 | | Attempts | C | `question.set` `{attempts}` | ✅ | |
-| AI | Edit Question / Insert Question | L | — | ⛔ | |
+| AI | Edit Question / Insert Question | L | — | ⛔ | an Edit Question button opens the Question panel |
 | Publish | Player / Preview / Publish | | | ✅ | |
 
 The right panel gains a **Question** pane with a **Form View | Slide View** toggle (today

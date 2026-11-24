@@ -4,9 +4,12 @@
 //! menu bar and toolbar, behind View › Ribbon. Every control comes from the spec;
 //! one whose feature is missing is drawn disabled with its reason in the tooltip.
 
+pub mod contextual;
 pub mod spec;
 pub mod widgets;
 
+#[cfg(test)]
+mod contextual_tests;
 #[cfg(test)]
 mod spec_tests;
 
@@ -42,6 +45,9 @@ pub struct RibbonState {
     pub rect: Rect,
     /// What the text controls act on this frame (`crate::text_format`).
     pub text: Result<crate::text_format::TextState, &'static str>,
+    /// The current slide's object ids last frame: a selected id missing there
+    /// was just inserted, and opens its contextual tab.
+    pub seen_objects: Option<(String, Vec<String>)>,
 }
 
 impl Default for RibbonState {
@@ -53,6 +59,7 @@ impl Default for RibbonState {
             group_widths: Vec::new(),
             rect: Rect::NOTHING,
             text: Err(""),
+            seen_objects: None,
         }
     }
 }
@@ -121,9 +128,9 @@ fn select_all_available(editor: &Editor) -> Result<(), &'static str> {
     }
 }
 
-const MASTER: &str = "Not available in Master View";
+pub(crate) const MASTER: &str = "Not available in Master View";
 
-const STATE: &str = "Not available inside a state";
+pub(crate) const STATE: &str = "Not available inside a state";
 
 /// The user documentation, on the project's site.
 const GUIDE_URL: &str = "https://github.com/ad1-kamath/coursecraft/tree/main/docs";
@@ -287,6 +294,7 @@ fn ui_available(editor: &Editor, action: UiAction) -> Result<(), &'static str> {
         | UiAction::ConnectAgent
         | UiAction::AiSettings => Ok(()),
         UiAction::PanelAt(..) => Ok(()),
+        UiAction::Context(op) => contextual::available(editor, op),
         UiAction::Panel(panel)
             if crate::panels::family(panel) == crate::panels::Family::Settings =>
         {
@@ -444,6 +452,7 @@ fn run_ui(
             editor.automation_enabled = !editor.automation_enabled;
             requests.push(EditorRequest::SetAutomation(editor.automation_enabled));
         }
+        UiAction::Context(op) => contextual::run(editor, op, requests),
     }
 }
 
@@ -490,6 +499,7 @@ fn ui_selected(editor: &Editor, action: UiAction) -> bool {
         UiAction::ThemeDark => editor.theme_pref == ThemePref::Dark,
         UiAction::ThemeSystem => editor.theme_pref == ThemePref::System,
         UiAction::Automation => editor.automation_available && editor.automation_enabled,
+        UiAction::Context(op) => contextual::selected(editor, op),
         _ => false,
     }
 }
@@ -502,6 +512,7 @@ pub fn show(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>)
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F1)) {
         editor.ui.ribbon.collapsed = !editor.ui.ribbon.collapsed;
     }
+    contextual::follow_selection(editor);
     editor.ui.ribbon.rect = ui.max_rect();
     editor.ui.ribbon.text = crate::text_format::targets(editor).and_then(|_| {
         crate::text_format::state(editor).ok_or("Select a text box, or a shape that holds text")
@@ -595,21 +606,21 @@ fn tab_strip(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>
     let font = FontId::proportional(13.0);
     let top = ui.max_rect().min;
     let mut x = quick_access(editor, ui, requests) + 4.0;
-    let mut tab_rect = |ui: &Ui, label: &str| {
+    let tab_rect = |ui: &Ui, x: &mut f32, label: &str| {
         let w = ui
             .painter()
             .layout_no_wrap(label.to_owned(), font.clone(), p.text)
             .size()
             .x
             + 20.0;
-        let r = Rect::from_min_size(pos2(x, top.y + 1.0), vec2(w, STRIP_H - 2.0));
-        x += w + 2.0;
+        let r = Rect::from_min_size(pos2(*x, top.y + 1.0), vec2(w, STRIP_H - 2.0));
+        *x += w + 2.0;
         r
     };
 
     // File: opens the full-window File page (ribbon.md › File).
     let file = tl!("File");
-    let r = tab_rect(ui, file);
+    let r = tab_rect(ui, &mut x, file);
     let resp = ui.interact(r, ui.scope_id().with("ribbon_tab_file"), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Tab, true, file));
     let fill = if resp.hovered() {
@@ -637,46 +648,105 @@ fn tab_strip(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>
     }
 
     for tab in spec::TABS {
-        let label = tl!(tab.label);
-        let r = tab_rect(ui, label);
-        let resp = ui.interact(
-            r,
-            ui.scope_id().with(("ribbon_tab", tab.id)),
-            Sense::click(),
-        );
-        let active = editor.ui.ribbon.tab == tab.id;
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, active, label));
-        if resp.hovered() && !active {
-            ui.painter().rect_filled(
-                r.shrink(2.0),
-                egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
-                p.hover,
-            );
+        let r = tab_rect(ui, &mut x, tl!(tab.label));
+        strip_tab(editor, ui, r, tab, None);
+    }
+
+    // Contextual tabs, right of Help, each context under its coloured caption.
+    let visible = contextual::visible_tabs(editor);
+    let mut i = 0;
+    while let Some(first) = visible.get(i) {
+        let context = first.context;
+        let tabs: Vec<&'static spec::ContextTab> = visible[i..]
+            .iter()
+            .take_while(|t| t.context == context)
+            .copied()
+            .collect();
+        i += tabs.len();
+        let color = contextual::caption_color(context);
+        let caption = tl!(context.caption());
+        let caption_font = FontId::proportional(10.0);
+        let caption_w = ui
+            .painter()
+            .layout_no_wrap(caption.to_owned(), caption_font.clone(), color)
+            .size()
+            .x
+            + 12.0;
+        let block_min = x + 2.0;
+        x = block_min + caption_w;
+        let mut rects = Vec::new();
+        for t in &tabs {
+            rects.push(tab_rect(ui, &mut x, tl!(t.tab.label)));
         }
-        let color = if active { p.text } else { p.text_secondary };
-        ui.painter().text(
-            r.center(),
-            Align2::CENTER_CENTER,
-            label,
-            font.clone(),
+        let block =
+            Rect::from_min_max(pos2(block_min, top.y + 1.0), pos2(x, top.y + STRIP_H - 1.0));
+        ui.painter().rect_filled(
+            block,
+            egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+            color.gamma_multiply(0.16),
+        );
+        ui.painter().rect_filled(
+            Rect::from_min_size(block.min, vec2(block.width(), 2.0)),
+            egui::CornerRadius::same(1),
             color,
         );
-        if active {
-            ui.painter().rect_filled(
-                Rect::from_center_size(
-                    pos2(r.center().x, r.max.y - 1.0),
-                    vec2((r.width() - 16.0).max(12.0), 2.5),
-                ),
-                egui::CornerRadius::same(1),
-                p.accent,
-            );
+        ui.painter().text(
+            pos2(block.min.x + 6.0, block.center().y),
+            Align2::LEFT_CENTER,
+            caption,
+            caption_font,
+            color,
+        );
+        for (t, r) in tabs.iter().zip(rects) {
+            strip_tab(editor, ui, r, &t.tab, Some(caption));
         }
-        if resp.double_clicked() || (resp.clicked() && active) {
-            editor.ui.ribbon.collapsed = !editor.ui.ribbon.collapsed;
-        } else if resp.clicked() {
-            editor.ui.ribbon.tab = tab.id;
-            editor.ui.ribbon.collapsed = false;
-        }
+        x += 2.0;
+    }
+}
+
+/// One tab of the strip; `caption` names a contextual tab's tools.
+fn strip_tab(editor: &mut Editor, ui: &mut Ui, r: Rect, tab: &'static Tab, caption: Option<&str>) {
+    let p = coursecraft_render::palette(ui.ctx());
+    let font = FontId::proportional(13.0);
+    let label = tl!(tab.label);
+    let resp = ui.interact(
+        r,
+        ui.scope_id().with(("ribbon_tab", tab.id)),
+        Sense::click(),
+    );
+    let active = editor.ui.ribbon.tab == tab.id;
+    let name = caption.map_or_else(|| label.to_owned(), |c| format!("{c}: {label}"));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, active, &name));
+    if resp.hovered() && !active {
+        ui.painter().rect_filled(
+            r.shrink(2.0),
+            egui::CornerRadius::same(coursecraft_render::RADIUS_SM as u8),
+            p.hover,
+        );
+    }
+    let color = if active { p.text } else { p.text_secondary };
+    ui.painter()
+        .text(r.center(), Align2::CENTER_CENTER, label, font, color);
+    if active {
+        ui.painter().rect_filled(
+            Rect::from_center_size(
+                pos2(r.center().x, r.max.y - 1.0),
+                vec2((r.width() - 16.0).max(12.0), 2.5),
+            ),
+            egui::CornerRadius::same(1),
+            p.accent,
+        );
+    }
+    let resp = if caption.is_some() {
+        resp.on_hover_text(&name)
+    } else {
+        resp
+    };
+    if resp.double_clicked() || (resp.clicked() && active) {
+        editor.ui.ribbon.collapsed = !editor.ui.ribbon.collapsed;
+    } else if resp.clicked() {
+        editor.ui.ribbon.tab = tab.id;
+        editor.ui.ribbon.collapsed = false;
     }
 }
 
@@ -803,7 +873,7 @@ fn run_of(kind: Kind) -> Run {
     match kind {
         Kind::Large | Kind::LargeSplit => Run::Large,
         Kind::Small | Kind::SmallSplit => Run::Columns,
-        Kind::Toggle | Kind::Combo { .. } => Run::Rows,
+        Kind::Toggle | Kind::Combo { .. } | Kind::Number { .. } => Run::Rows,
     }
 }
 
@@ -958,6 +1028,16 @@ fn control(
             widgets::combo_field(ui, label, &combo_text(editor, item.action), width, enabled),
             None,
         ),
+        Kind::Number { width } => {
+            let field = match item.action {
+                Action::Ui(UiAction::Context(spec::ContextOp::Frame(field))) => field,
+                _ => spec::FrameField::X,
+            };
+            (
+                contextual::number_field(editor, ui, item, field, width, enabled),
+                None,
+            )
+        }
     };
     let tip = tooltip(item, &state);
     let main = main.on_hover_text(&tip);

@@ -404,6 +404,12 @@ planned). Clean-room: same tabs, groups and order; our own look and coined names
    Still open: the galleries and merging the launch screen into the File page.
 3. Contextual tabs (Drawing, Picture, Button, Audio/Video, Table, Question Tools) and modes (Slide
    Master, Preview); then the menu bar and flat toolbar go, the quick access toolbar arrives.
+   **Contextual tabs built (2026-11-24):** `CONTEXT_TABS` in `ribbon/spec.rs` and
+   `ribbon/contextual.rs`: each shows for its selection under a coloured caption, opens by itself
+   right after the object is inserted, and goes back to Home when deselected; X, Y, Width and
+   Height fields, Edit Points, Crop, Replace and Reset Picture, Replace media, Import Captions,
+   the table's rows, columns, header row and split, Shuffle Answers. Still open: the modes' tab
+   strips.
 4. File page (the welcome screen restyled: start actions, Recent with thumbnails, Close project).
 5. Shell: view tabs for open slides, status bar, right panel (Triggers over Slide Layers), Slide
    Properties in the Course Map, collapsible and undockable panels, Reset Panels, tooltips with

@@ -65,6 +65,8 @@ pub enum Kind {
     Toggle,
     /// A text field with a ▾ (font family, size), this wide.
     Combo { width: f32 },
+    /// A label and a number field (X, Y, Width, Height), the field this wide.
+    Number { width: f32 },
 }
 
 impl Kind {
@@ -236,6 +238,70 @@ pub enum UiAction {
     ConnectAgent,
     AiSettings,
     Automation,
+    /// A control of a contextual tab (`ribbon/contextual.rs`).
+    Context(ContextOp),
+}
+
+/// Which selection shows a contextual tab (contextual-tabs.md › When each one shows).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Context {
+    Drawing,
+    Button,
+    Picture,
+    Video,
+    Audio,
+    Table,
+    Question,
+}
+
+impl Context {
+    /// The coloured caption over the context's tabs.
+    #[must_use]
+    pub fn caption(self) -> &'static str {
+        match self {
+            Context::Drawing => "Drawing Tools",
+            Context::Button => "Button Tools",
+            Context::Picture => "Picture Tools",
+            Context::Video => "Video Tools",
+            Context::Audio => "Audio Tools",
+            Context::Table => "Table Tools",
+            Context::Question => "Question Tools",
+        }
+    }
+}
+
+/// One side of the selected object's frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameField {
+    X,
+    Y,
+    Width,
+    Height,
+}
+
+/// The controls of the contextual tabs that need the selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextOp {
+    /// A number field of the selected object's frame.
+    Frame(FrameField),
+    EditPoints,
+    Crop,
+    /// Replace the selected picture, video or audio with another file.
+    ReplaceMedia,
+    /// Clear the crop and go back to the picture's own size.
+    ResetPicture,
+    ImportCaptions,
+    TableHeaderRow,
+    TableInsertAbove,
+    TableInsertBelow,
+    TableInsertLeft,
+    TableInsertRight,
+    TableDeleteRow,
+    TableDeleteColumn,
+    TableSplit,
+    /// Open the Question panel.
+    QuestionPanel,
+    QuestionShuffle,
 }
 
 /// A split control's ▾ menu.
@@ -735,22 +801,22 @@ const HOME_SLIDE: &[Group] = &[
                 "drawing.fill",
                 "Shape Fill",
                 Icon::PaintBrush,
-                SmallSplit,
-                NotYet(WIRING_FORMAT),
+                Small,
+                SHAPE_FILL,
             ),
             item(
                 "drawing.outline",
                 "Shape Outline",
                 Icon::Square,
-                SmallSplit,
-                NotYet(WIRING_FORMAT),
+                Small,
+                SHAPE_OUTLINE,
             ),
             item(
                 "drawing.effect",
                 "Shape Effect",
                 Icon::Sparkle,
-                SmallSplit,
-                NotYet(WIRING_FORMAT),
+                Small,
+                SHAPE_EFFECT,
             ),
         ],
     },
@@ -2100,6 +2166,849 @@ const HELP: &[Group] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// Contextual tabs (contextual-tabs.md)
+// ---------------------------------------------------------------------------
+
+/// Why a contextual control whose feature exists is still in the Format panel.
+const WIRING_MEDIA: &str = "ribbon wiring (use the Format inspector's media rows)";
+const WIRING_QUESTION: &str = "ribbon wiring (use the Question panel)";
+
+const fn ctx(op: ContextOp) -> Action {
+    Ui(UiAction::Context(op))
+}
+
+const fn number(id: &'static str, label: &'static str, field: FrameField) -> Item {
+    item(
+        id,
+        label,
+        Icon::FrameCorners,
+        Kind::Number { width: 64.0 },
+        ctx(ContextOp::Frame(field)),
+    )
+}
+
+const ARRANGE_AND_ALIGN: Group = Group {
+    id: "ctx_arrange",
+    label: "Arrange and Align",
+    launcher: None,
+    items: &[
+        helped(
+            split(
+                "ctx.arrange",
+                "Arrange",
+                Icon::Stack,
+                LargeSplit,
+                Ui(UiAction::Arrange),
+                Menu::Ui(UiMenu::Arrange),
+            ),
+            "Order, align and distribute the selected objects.",
+        ),
+        item(
+            "ctx.group",
+            "Group",
+            Icon::SquaresFour,
+            Small,
+            Command("object.group"),
+        ),
+        item(
+            "ctx.ungroup",
+            "Ungroup",
+            Icon::SquaresFour,
+            Small,
+            Command("object.ungroup"),
+        ),
+        item(
+            "ctx.rotate",
+            "Rotate",
+            Icon::ArrowClockwise,
+            Small,
+            Ui(UiAction::PanelAt(
+                crate::dock::Panel::SizePosition,
+                Some(crate::panels::Section::Rotate),
+            )),
+        ),
+    ],
+};
+
+const SIZE_AND_POSITION: Group = Group {
+    id: "ctx_size",
+    label: "Size and Position",
+    launcher: Some(Ui(UiAction::PanelAt(
+        crate::dock::Panel::SizePosition,
+        Some(crate::panels::Section::Size),
+    ))),
+    items: &[
+        number("ctx.x", "X", FrameField::X),
+        number("ctx.y", "Y", FrameField::Y),
+        number("ctx.width", "Width", FrameField::Width),
+        number("ctx.height", "Height", FrameField::Height),
+    ],
+};
+
+const SHAPE_STYLE_LAUNCHER: Option<Action> = Some(Ui(UiAction::PanelAt(
+    crate::dock::Panel::ShapeStyle,
+    Some(crate::panels::Section::Fill),
+)));
+
+const SHAPE_FILL: Action = Ui(UiAction::PanelAt(
+    crate::dock::Panel::ShapeStyle,
+    Some(crate::panels::Section::Fill),
+));
+const SHAPE_OUTLINE: Action = Ui(UiAction::PanelAt(
+    crate::dock::Panel::ShapeStyle,
+    Some(crate::panels::Section::Outline),
+));
+const SHAPE_EFFECT: Action = Ui(UiAction::PanelAt(crate::dock::Panel::ShapeStyle, None));
+
+const DRAWING_FORMAT: &[Group] = &[
+    Group {
+        id: "insert_shapes",
+        label: "Insert Shapes",
+        launcher: None,
+        items: &[
+            helped(
+                split(
+                    "drawing_fmt.shapes",
+                    "Shapes",
+                    Icon::Shapes,
+                    LargeSplit,
+                    Ui(UiAction::Shape),
+                    Menu::Ui(UiMenu::Shapes),
+                ),
+                "Draw a shape on the slide.",
+            ),
+            item(
+                "drawing_fmt.change_shape",
+                "Change Shape",
+                Icon::Shapes,
+                SmallSplit,
+                NotYet("changing a shape's geometry and keeping its format"),
+            ),
+            helped(
+                item(
+                    "drawing_fmt.edit_points",
+                    "Edit Points",
+                    Icon::Path,
+                    Small,
+                    ctx(ContextOp::EditPoints),
+                ),
+                "Move the points of the selected freeform.",
+            ),
+            item(
+                "drawing_fmt.text_box",
+                "Text Box",
+                Icon::TextT,
+                Small,
+                Ui(UiAction::TextBox),
+            ),
+        ],
+    },
+    Group {
+        id: "shape_styles",
+        label: "Shape Styles",
+        launcher: SHAPE_STYLE_LAUNCHER,
+        items: &[
+            item(
+                "drawing_fmt.styles",
+                "Quick Styles",
+                Icon::Palette,
+                LargeSplit,
+                NotYet("the style gallery in the ribbon"),
+            ),
+            item(
+                "drawing_fmt.fill",
+                "Shape Fill",
+                Icon::PaintBrush,
+                Small,
+                SHAPE_FILL,
+            ),
+            item(
+                "drawing_fmt.outline",
+                "Shape Outline",
+                Icon::Square,
+                Small,
+                SHAPE_OUTLINE,
+            ),
+            item(
+                "drawing_fmt.effect",
+                "Shape Effect",
+                Icon::Sparkle,
+                Small,
+                SHAPE_EFFECT,
+            ),
+        ],
+    },
+    ARRANGE_AND_ALIGN,
+    SIZE_AND_POSITION,
+    PUBLISH,
+];
+
+const BUTTON_FORMAT: &[Group] = &[
+    Group {
+        id: "button_action",
+        label: "Action",
+        launcher: None,
+        items: &[helped(
+            item(
+                "button_fmt.action",
+                "When Clicked Action",
+                Icon::CursorClick,
+                Large,
+                Ui(UiAction::Trigger),
+            ),
+            "Add a trigger to the slide (pick this button and \"user clicks\").",
+        )],
+    },
+    Group {
+        id: "button_icons",
+        label: "Button Icons",
+        launcher: None,
+        items: &[
+            item(
+                "button_fmt.icons",
+                "Icons",
+                Icon::Sparkle,
+                LargeSplit,
+                NotYet("icons inside buttons"),
+            ),
+            item(
+                "button_fmt.icon_align",
+                "Align Icon",
+                Icon::TextAlignLeft,
+                SmallSplit,
+                NotYet("icons inside buttons"),
+            ),
+            item(
+                "button_fmt.icon_color",
+                "Icon Color",
+                Icon::Palette,
+                SmallSplit,
+                NotYet("icons inside buttons"),
+            ),
+            item(
+                "button_fmt.icon_remove",
+                "Remove Icon",
+                Icon::X,
+                Small,
+                NotYet("icons inside buttons"),
+            ),
+        ],
+    },
+    Group {
+        id: "button_styles",
+        label: "Button Styles",
+        launcher: SHAPE_STYLE_LAUNCHER,
+        items: &[
+            item(
+                "button_fmt.styles",
+                "Quick Styles",
+                Icon::Palette,
+                LargeSplit,
+                NotYet("the style gallery in the ribbon"),
+            ),
+            item(
+                "button_fmt.fill",
+                "Button Fill",
+                Icon::PaintBrush,
+                Small,
+                SHAPE_FILL,
+            ),
+            item(
+                "button_fmt.border",
+                "Button Border",
+                Icon::Square,
+                Small,
+                SHAPE_OUTLINE,
+            ),
+            item(
+                "button_fmt.effects",
+                "Button Effects",
+                Icon::Sparkle,
+                Small,
+                SHAPE_EFFECT,
+            ),
+        ],
+    },
+    ARRANGE_AND_ALIGN,
+    SIZE_AND_POSITION,
+    PUBLISH,
+];
+
+const PICTURE_FORMAT: &[Group] = &[
+    Group {
+        id: "picture_adjust",
+        label: "Adjust",
+        launcher: None,
+        items: &[
+            item(
+                "picture_fmt.brightness",
+                "Brightness",
+                Icon::Sun,
+                SmallSplit,
+                NotYet("picture brightness"),
+            ),
+            item(
+                "picture_fmt.contrast",
+                "Contrast",
+                Icon::Drop,
+                SmallSplit,
+                NotYet("picture contrast"),
+            ),
+            item(
+                "picture_fmt.recolor",
+                "Recolor",
+                Icon::Palette,
+                SmallSplit,
+                NotYet("recolouring photos"),
+            ),
+            helped(
+                item(
+                    "picture_fmt.replace",
+                    "Replace Picture",
+                    Icon::Image,
+                    Small,
+                    ctx(ContextOp::ReplaceMedia),
+                ),
+                "Pick another picture file; size, position and triggers stay.",
+            ),
+            helped(
+                item(
+                    "picture_fmt.reset",
+                    "Reset Picture",
+                    Icon::ArrowCounterClockwise,
+                    Small,
+                    ctx(ContextOp::ResetPicture),
+                ),
+                "Remove the crop and go back to the picture's own size.",
+            ),
+        ],
+    },
+    Group {
+        id: "picture_styles",
+        label: "Picture Styles",
+        launcher: Some(Ui(UiAction::FormatInspector)),
+        items: &[
+            item(
+                "picture_fmt.styles",
+                "Picture Styles",
+                Icon::FrameCorners,
+                LargeSplit,
+                NotYet("picture style presets"),
+            ),
+            item(
+                "picture_fmt.shape",
+                "Picture Shape",
+                Icon::Circle,
+                SmallSplit,
+                NotYet("cropping a picture to a shape"),
+            ),
+            item(
+                "picture_fmt.border",
+                "Picture Border",
+                Icon::Square,
+                SmallSplit,
+                NotYet(WIRING_FORMAT),
+            ),
+            item(
+                "picture_fmt.effects",
+                "Picture Effects",
+                Icon::Sparkle,
+                SmallSplit,
+                NotYet(WIRING_FORMAT),
+            ),
+        ],
+    },
+    ARRANGE_AND_ALIGN,
+    Group {
+        id: "picture_size",
+        label: "Size",
+        launcher: Some(Ui(UiAction::PanelAt(
+            crate::dock::Panel::SizePosition,
+            Some(crate::panels::Section::Size),
+        ))),
+        items: &[
+            item(
+                "picture_fmt.zoom",
+                "Zoom Picture",
+                Icon::MagnifyingGlassPlus,
+                Large,
+                NotYet("enlarging a picture when the learner clicks it"),
+            ),
+            helped(
+                item(
+                    "picture_fmt.crop",
+                    "Crop",
+                    Icon::FrameCorners,
+                    Large,
+                    ctx(ContextOp::Crop),
+                ),
+                "Drag the crop handles on the canvas; Enter applies.",
+            ),
+            number("picture_fmt.x", "X", FrameField::X),
+            number("picture_fmt.y", "Y", FrameField::Y),
+            number("picture_fmt.width", "Width", FrameField::Width),
+            number("picture_fmt.height", "Height", FrameField::Height),
+        ],
+    },
+    PUBLISH,
+];
+
+const VIDEO_OPTIONS: &[Group] = &[
+    Group {
+        id: "video_play",
+        label: "Play",
+        launcher: None,
+        items: &[item(
+            "video_opt.play",
+            "Play",
+            Icon::Play,
+            Large,
+            NotYet("playing one media object in the editor"),
+        )],
+    },
+    Group {
+        id: "video_options",
+        label: "Video Options",
+        launcher: Some(Ui(UiAction::FormatInspector)),
+        items: &[
+            item(
+                "video_opt.volume",
+                "Volume",
+                Icon::SpeakerHigh,
+                LargeSplit,
+                NotYet(WIRING_MEDIA),
+            ),
+            item(
+                "video_opt.editor",
+                "Video Editor",
+                Icon::FilmStrip,
+                Large,
+                NotYet(WIRING_MEDIA),
+            ),
+            helped(
+                item(
+                    "video_opt.replace",
+                    "Replace Video",
+                    Icon::VideoCamera,
+                    Small,
+                    ctx(ContextOp::ReplaceMedia),
+                ),
+                "Pick another video file; size, position and triggers stay.",
+            ),
+            item(
+                "video_opt.export",
+                "Export Video",
+                Icon::Export,
+                Small,
+                NotYet("exporting media from the course"),
+            ),
+            item(
+                "video_opt.show",
+                "Show Video",
+                Icon::Monitor,
+                SmallSplit,
+                NotYet("playing video in a new window"),
+            ),
+            item(
+                "video_opt.play_mode",
+                "Play Video",
+                Icon::PlayCircle,
+                SmallSplit,
+                NotYet(WIRING_MEDIA),
+            ),
+            item(
+                "video_opt.controls",
+                "Video Controls",
+                Icon::SlidersHorizontal,
+                SmallSplit,
+                NotYet(WIRING_MEDIA),
+            ),
+            item(
+                "video_opt.compression",
+                "Compression",
+                Icon::ArrowsIn,
+                SmallSplit,
+                NotYet("media compression settings"),
+            ),
+        ],
+    },
+    Group {
+        id: "video_captions",
+        label: "Closed Captions",
+        launcher: None,
+        items: &[helped(
+            item(
+                "video_opt.captions",
+                "Import Captions",
+                Icon::Subtitles,
+                Large,
+                ctx(ContextOp::ImportCaptions),
+            ),
+            "Add captions from a WebVTT or SRT file.",
+        )],
+    },
+    PUBLISH,
+];
+
+const AUDIO_OPTIONS: &[Group] = &[
+    Group {
+        id: "audio_play",
+        label: "Play",
+        launcher: None,
+        items: &[item(
+            "audio_opt.play",
+            "Play",
+            Icon::Play,
+            Large,
+            NotYet("playing one media object in the editor"),
+        )],
+    },
+    Group {
+        id: "audio_options",
+        label: "Audio Options",
+        launcher: Some(Ui(UiAction::FormatInspector)),
+        items: &[
+            item(
+                "audio_opt.volume",
+                "Audio Volume",
+                Icon::SpeakerHigh,
+                LargeSplit,
+                NotYet(WIRING_MEDIA),
+            ),
+            item(
+                "audio_opt.editor",
+                "Audio Editor",
+                Icon::Headphones,
+                Large,
+                NotYet(WIRING_MEDIA),
+            ),
+            helped(
+                item(
+                    "audio_opt.replace",
+                    "Replace Audio",
+                    Icon::SpeakerHigh,
+                    Small,
+                    ctx(ContextOp::ReplaceMedia),
+                ),
+                "Pick another audio file; timing and triggers stay.",
+            ),
+            item(
+                "audio_opt.export",
+                "Export Audio",
+                Icon::Export,
+                Small,
+                NotYet("exporting media from the course"),
+            ),
+            item(
+                "audio_opt.compression",
+                "Compression",
+                Icon::ArrowsIn,
+                SmallSplit,
+                NotYet("media compression settings"),
+            ),
+        ],
+    },
+    Group {
+        id: "audio_captions",
+        label: "Closed Captions",
+        launcher: None,
+        items: &[helped(
+            item(
+                "audio_opt.captions",
+                "Import Captions",
+                Icon::Subtitles,
+                Large,
+                ctx(ContextOp::ImportCaptions),
+            ),
+            "Add captions from a WebVTT or SRT file.",
+        )],
+    },
+    PUBLISH,
+];
+
+const TABLE_DESIGN: &[Group] = &[
+    Group {
+        id: "table_style_options",
+        label: "Table Style Options",
+        launcher: None,
+        items: &[helped(
+            item(
+                "table_design.header_row",
+                "Header Row",
+                Icon::Rows,
+                Small,
+                ctx(ContextOp::TableHeaderRow),
+            ),
+            "Format the first row as a header.",
+        )],
+    },
+    Group {
+        id: "table_styles",
+        label: "Table Styles",
+        launcher: Some(Ui(UiAction::FormatInspector)),
+        items: &[
+            item(
+                "table_design.styles",
+                "Table Styles",
+                Icon::SquaresFour,
+                LargeSplit,
+                NotYet("table style presets"),
+            ),
+            item(
+                "table_design.shading",
+                "Shading",
+                Icon::PaintBrush,
+                SmallSplit,
+                NotYet(WIRING_FORMAT),
+            ),
+            item(
+                "table_design.borders",
+                "Borders",
+                Icon::Square,
+                SmallSplit,
+                NotYet(WIRING_FORMAT),
+            ),
+        ],
+    },
+    PUBLISH,
+];
+
+const TABLE_LAYOUT: &[Group] = &[
+    Group {
+        id: "table_rows_columns",
+        label: "Rows & Columns",
+        launcher: None,
+        items: &[
+            item(
+                "table_layout.delete_row",
+                "Delete Row",
+                Icon::Trash,
+                Small,
+                ctx(ContextOp::TableDeleteRow),
+            ),
+            item(
+                "table_layout.delete_column",
+                "Delete Column",
+                Icon::Trash,
+                Small,
+                ctx(ContextOp::TableDeleteColumn),
+            ),
+            item(
+                "table_layout.insert_above",
+                "Insert Above",
+                Icon::ArrowUp,
+                Small,
+                ctx(ContextOp::TableInsertAbove),
+            ),
+            item(
+                "table_layout.insert_below",
+                "Insert Below",
+                Icon::ArrowDown,
+                Small,
+                ctx(ContextOp::TableInsertBelow),
+            ),
+            item(
+                "table_layout.insert_left",
+                "Insert Left",
+                Icon::ArrowLeft,
+                Small,
+                ctx(ContextOp::TableInsertLeft),
+            ),
+            item(
+                "table_layout.insert_right",
+                "Insert Right",
+                Icon::ArrowRight,
+                Small,
+                ctx(ContextOp::TableInsertRight),
+            ),
+        ],
+    },
+    Group {
+        id: "table_merge",
+        label: "Merge",
+        launcher: None,
+        items: &[
+            item(
+                "table_layout.merge",
+                "Merge Cells",
+                Icon::CornersIn,
+                Small,
+                NotYet("selecting a range of table cells"),
+            ),
+            helped(
+                item(
+                    "table_layout.split",
+                    "Split Cells",
+                    Icon::CornersOut,
+                    Small,
+                    ctx(ContextOp::TableSplit),
+                ),
+                "Split the selected merged cell back into single cells.",
+            ),
+        ],
+    },
+    Group {
+        id: "table_cell_size",
+        label: "Cell Size",
+        launcher: Some(Ui(UiAction::FormatInspector)),
+        items: &[
+            item(
+                "table_layout.row_height",
+                "Row Height",
+                Icon::ArrowsDownUp,
+                Small,
+                NotYet(WIRING_FORMAT),
+            ),
+            item(
+                "table_layout.column_width",
+                "Column Width",
+                Icon::ArrowsOut,
+                Small,
+                NotYet(WIRING_FORMAT),
+            ),
+        ],
+    },
+    Group {
+        id: "table_alignment",
+        label: "Alignment",
+        launcher: None,
+        items: &[item(
+            "table_layout.align",
+            "Cell Alignment",
+            Icon::TextAlignCenter,
+            SmallSplit,
+            NotYet(WIRING_FORMAT),
+        )],
+    },
+    PUBLISH,
+];
+
+const QUESTION_DESIGN: &[Group] = &[
+    Group {
+        id: "question_feedback",
+        label: "Feedback",
+        launcher: None,
+        items: &[item(
+            "question_design.feedback_master",
+            "Feedback Master",
+            Icon::Layout,
+            LargeSplit,
+            NotYet("feedback masters"),
+        )],
+    },
+    Group {
+        id: "question_display",
+        label: "Display",
+        launcher: Some(ctx(ContextOp::QuestionPanel)),
+        items: &[
+            item(
+                "question_design.feedback",
+                "Feedback",
+                Icon::Notepad,
+                SmallSplit,
+                NotYet(WIRING_QUESTION),
+            ),
+            helped(
+                item(
+                    "question_design.shuffle",
+                    "Shuffle Answers",
+                    Icon::ArrowsDownUp,
+                    Small,
+                    ctx(ContextOp::QuestionShuffle),
+                ),
+                "Show the choices in a new order each time.",
+            ),
+            item(
+                "question_design.results",
+                "Results Slide",
+                Icon::Trophy,
+                SmallSplit,
+                NotYet(WIRING_QUESTION),
+            ),
+        ],
+    },
+    Group {
+        id: "question_scoring",
+        label: "Scoring",
+        launcher: Some(ctx(ContextOp::QuestionPanel)),
+        items: &[
+            item(
+                "question_design.score",
+                "Score",
+                Icon::Target,
+                SmallSplit,
+                NotYet(WIRING_QUESTION),
+            ),
+            item(
+                "question_design.attempts",
+                "Attempts",
+                Icon::ArrowClockwise,
+                SmallSplit,
+                NotYet(WIRING_QUESTION),
+            ),
+        ],
+    },
+    Group {
+        id: "question_edit",
+        label: "Question",
+        launcher: None,
+        items: &[helped(
+            item(
+                "question_design.edit",
+                "Edit Question",
+                Icon::PencilSimple,
+                Large,
+                ctx(ContextOp::QuestionPanel),
+            ),
+            "Open the question's choices, feedback and scoring.",
+        )],
+    },
+    PUBLISH,
+];
+
+/// A tab shown right of Help, under its context's caption, while the
+/// selection needs it.
+pub struct ContextTab {
+    pub context: Context,
+    pub tab: Tab,
+}
+
+const fn context_tab(
+    context: Context,
+    id: &'static str,
+    label: &'static str,
+    groups: &'static [Group],
+) -> ContextTab {
+    ContextTab {
+        context,
+        tab: Tab {
+            id,
+            label,
+            when: TabWhen::SlideOpen,
+            groups,
+            map_groups: None,
+        },
+    }
+}
+
+/// The contextual tabs, in strip order (contextual-tabs.md).
+pub const CONTEXT_TABS: &[ContextTab] = &[
+    context_tab(Context::Drawing, "drawing_format", "Format", DRAWING_FORMAT),
+    context_tab(Context::Button, "button_format", "Format", BUTTON_FORMAT),
+    context_tab(Context::Picture, "picture_format", "Format", PICTURE_FORMAT),
+    context_tab(Context::Video, "video_options", "Options", VIDEO_OPTIONS),
+    context_tab(Context::Audio, "audio_options", "Options", AUDIO_OPTIONS),
+    context_tab(Context::Table, "table_design", "Design", TABLE_DESIGN),
+    context_tab(Context::Table, "table_layout", "Layout", TABLE_LAYOUT),
+    context_tab(
+        Context::Question,
+        "question_design",
+        "Design",
+        QUESTION_DESIGN,
+    ),
+];
+
+// ---------------------------------------------------------------------------
 // The strip
 // ---------------------------------------------------------------------------
 
@@ -2173,7 +3082,15 @@ pub const TABS: &[Tab] = &[
 /// The tab with this id.
 #[must_use]
 pub fn tab(id: &str) -> Option<&'static Tab> {
-    TABS.iter().find(|t| t.id == id)
+    TABS.iter()
+        .chain(CONTEXT_TABS.iter().map(|c| &c.tab))
+        .find(|t| t.id == id)
+}
+
+/// The contextual tab with this id.
+#[must_use]
+pub fn context_tab_of(id: &str) -> Option<&'static ContextTab> {
+    CONTEXT_TABS.iter().find(|c| c.tab.id == id)
 }
 
 /// Every item of every tab, menus included, for checks.
@@ -2186,6 +3103,7 @@ pub fn all_items() -> impl Iterator<Item = &'static Item> {
         out
     }
     TABS.iter()
+        .chain(CONTEXT_TABS.iter().map(|c| &c.tab))
         .flat_map(|t| t.groups.iter().chain(t.map_groups.unwrap_or(&[]).iter()))
         .flat_map(|g| g.items.iter())
         .flat_map(with_menu)

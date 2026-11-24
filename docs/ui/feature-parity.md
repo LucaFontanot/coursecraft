@@ -271,7 +271,7 @@ Counted from the tables below; recount when a row changes.
 | Right-click menus complete (canvas, timeline, scenes) | | 🟡 | M37 |
 | Collapse panels | | 🟡 | M37 |
 | Slide Properties in the Course Map | | 🟡 | M37 |
-| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab and the File page, replacing the menu bar; the galleries (themes, transitions, animations) and the contextual tabs to come | 🟡 | M37 |
+| **Tabbed ribbon** with contextual tabs | on by default (`ribbon/`): every main tab and the File page, replacing the menu bar, and the contextual tabs (Drawing, Button, Picture, Video, Audio, Table, Question Tools; `ribbon/contextual.rs`); the galleries (themes, transitions, animations) and the modes' tab strips to come | 🟡 | M37 |
 | Settings panels from the ↘ launchers, opening by themselves for the work in hand | `panels.rs` (`docs/ui/panels.md`): Text; the other categories to come | 🟡 | M37–M42 |
 | Quick access toolbar | Save, Undo, Redo, Undo History left of the tab strip; Customize to come | 🟡 | M37 |
 | Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |
