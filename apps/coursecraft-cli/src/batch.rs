@@ -6,17 +6,22 @@
 //! half-written course.
 
 use std::collections::HashSet;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use coursecraft_course::{Course, MediaHashes, Severity};
 use coursecraft_engine::Session;
 use coursecraft_format::{FolderRecord, fnv1a64};
 use coursecraft_publish::{
-    PackageFile, PackageInput, PackageStandard, build_package_standard_with_folders, zip_package,
+    PackageFile, PackageStandard, SharedPackageFile, SharedPackageInput, build_package_shared,
+    zip_shared_package_to,
 };
 
-use super::{Res, StandardArg, Step, collect_player_files, read, write_course_output};
+use super::{
+    Res, StandardArg, Step, collect_player_files, open_ccraft_file, read, write_course_output,
+};
 
 /// Most courses one batch takes.
 const MAX_COURSES: usize = 10_000;
@@ -47,7 +52,7 @@ enum Source {
 struct Loaded {
     source: Source,
     course: Course,
-    media: Vec<(String, Vec<u8>)>,
+    media: Vec<(String, Arc<[u8]>)>,
     record: Option<FolderRecord>,
 }
 
@@ -204,13 +209,15 @@ fn parse_replacements(raw: &[String]) -> Res<Vec<Replacement>> {
 fn load(path: &Path) -> Res<Loaded> {
     let shown = display_name(path);
     if is_ccraft(path) {
-        let bytes = std::fs::read(path).map_err(|e| format!("{shown}: {e}"))?;
-        let project =
-            coursecraft_format::open_project(&bytes).map_err(|e| format!("{shown}: {e}"))?;
+        let project = open_ccraft_file(path)?;
         return Ok(Loaded {
             source: Source::Ccraft,
             course: project.course,
-            media: project.media,
+            media: project
+                .media
+                .into_iter()
+                .map(|(name, bytes)| (name, Arc::from(bytes)))
+                .collect(),
             record: None,
         });
     }
@@ -231,7 +238,12 @@ fn load(path: &Path) -> Res<Loaded> {
         return Ok(Loaded {
             source: Source::Folder,
             course: opened.project.course,
-            media: opened.project.media,
+            media: opened
+                .project
+                .media
+                .into_iter()
+                .map(|(name, bytes)| (name, Arc::from(bytes)))
+                .collect(),
             record: Some(opened.record),
         });
     }
@@ -315,7 +327,7 @@ fn media_kind(name: &str, bytes: &[u8]) -> MediaKind {
 
 /// Swap the bytes of a media file, keeping its path, after checking that the
 /// new file is the same kind as the old one.
-fn replace_media(media: &mut [(String, Vec<u8>)], item: &Replacement) -> Res<bool> {
+fn replace_media(media: &mut [(String, Arc<[u8]>)], item: &Replacement) -> Res<bool> {
     let Some(slot) = media.iter_mut().find(|(name, _)| *name == item.path) else {
         return Err(format!("media file {:?} is not in this course", item.path));
     };
@@ -336,12 +348,12 @@ fn replace_media(media: &mut [(String, Vec<u8>)], item: &Replacement) -> Res<boo
             old.word()
         ));
     }
-    let changed = slot.1 != bytes;
-    slot.1 = bytes;
+    let changed = slot.1.as_ref() != bytes.as_slice();
+    slot.1 = Arc::from(bytes);
     Ok(changed)
 }
 
-fn hashes(media: &[(String, Vec<u8>)]) -> MediaHashes {
+fn hashes(media: &[(String, Arc<[u8]>)]) -> MediaHashes {
     media
         .iter()
         .map(|(name, bytes)| (name.clone(), fnv1a64(bytes)))
@@ -371,7 +383,7 @@ fn error_count(course: &Course) -> usize {
 /// The result of running the script on one course, before anything is written.
 struct Edited {
     course: Course,
-    media: Vec<(String, Vec<u8>)>,
+    media: Vec<(String, Arc<[u8]>)>,
     changed: bool,
 }
 
@@ -498,8 +510,13 @@ fn save_to_dir(out_dir: &Path, name: &str, loaded: &Loaded, edited: &Edited) -> 
 
 // ----------------------------------------------------------------- publish
 
-/// Build the package in memory: where it goes and its bytes.
-fn build_publish(job: &Job<'_>, name: &str, edited: &Edited) -> Res<Option<(PathBuf, Vec<u8>)>> {
+/// Prepare the package file list using shared `Arc<[u8]>` buffers without
+/// copying media or building the zip in memory.
+fn build_publish(
+    job: &Job<'_>,
+    name: &str,
+    edited: &Edited,
+) -> Res<Option<(PathBuf, Vec<SharedPackageFile>)>> {
     let (Some(standard), Some(dir), Some(player)) =
         (job.args.publish, &job.args.publish_dir, &job.player)
     else {
@@ -511,46 +528,44 @@ fn build_publish(job: &Job<'_>, name: &str, edited: &Edited) -> Res<Option<(Path
             "cannot publish: course has {errors} validation error(s)"
         ));
     }
-    let mut json = edited.course.to_json().map_err(|e| e.to_string())?;
-    json.push('\n');
-    let lookup: std::collections::HashMap<&str, &[u8]> = edited
-        .media
-        .iter()
-        .map(|(n, b)| (n.as_str(), b.as_slice()))
-        .collect();
-    let media = |src: &str| lookup.get(src).map(|b| b.to_vec());
+    let json = edited.course.to_json_compact().map_err(|e| e.to_string())?;
+    let lookup: std::collections::HashMap<&str, &Arc<[u8]>> =
+        edited.media.iter().map(|(n, b)| (n.as_str(), b)).collect();
+    let media = |src: &str| lookup.get(src).map(|b| Arc::clone(b));
     let web = |folder: &str| {
         let prefix = format!("{}/", folder.trim_end_matches('/'));
-        let files: Vec<(String, Vec<u8>)> = edited
+        let files: Vec<(String, Arc<[u8]>)> = edited
             .media
             .iter()
-            .filter_map(|(n, b)| {
-                n.strip_prefix(&prefix)
-                    .map(|rest| (rest.to_owned(), b.clone()))
-            })
+            .filter(|(n, _)| n.starts_with(&prefix))
+            .map(|(n, b)| (n.clone(), Arc::clone(b)))
             .collect();
         (!files.is_empty()).then_some(files)
     };
-    let input = PackageInput {
+    let input = SharedPackageInput {
         course: &edited.course,
         course_json: &json,
         player_files: player,
         media: &media,
     };
-    let files = build_package_standard_with_folders(&input, PackageStandard::from(standard), &web)
+    let files = build_package_shared(&input, PackageStandard::from(standard), &web)
         .map_err(|e| format!("publish error: {e}"))?;
-    let zip = zip_package(&files).map_err(|e| format!("zip error: {e}"))?;
-    Ok(Some((dir.join(format!("{}.zip", stem(name))), zip)))
+    Ok(Some((dir.join(format!("{}.zip", stem(name))), files)))
 }
 
-fn write_publish(package: Option<(PathBuf, Vec<u8>)>) -> Res<()> {
-    let Some((target, zip)) = package else {
+fn write_publish(package: Option<(PathBuf, Vec<SharedPackageFile>)>) -> Res<()> {
+    let Some((target, files)) = package else {
         return Ok(());
     };
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
-    std::fs::write(&target, zip).map_err(|e| format!("{}: {e}", target.display()))
+    let file = std::fs::File::create(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+    let mut writer = std::io::BufWriter::with_capacity(256 * 1024, file);
+    zip_shared_package_to(&files, &mut writer).map_err(|e| format!("zip error: {e}"))?;
+    writer
+        .flush()
+        .map_err(|e| format!("{}: {e}", target.display()))
 }
 
 // -------------------------------------------------------------- one course

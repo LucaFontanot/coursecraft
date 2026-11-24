@@ -356,6 +356,14 @@ impl Course {
         serde_json::to_string_pretty(self)
     }
 
+    /// Serialise to compact (single-line, no whitespace) JSON for published packages.
+    ///
+    /// # Errors
+    /// Only if a value cannot be represented in JSON (e.g. a non-finite number).
+    pub fn to_json_compact(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
     /// All slides in play order (scene order, then slide order). Masters and
     /// templates are never in play order.
     pub fn slides(&self) -> impl Iterator<Item = &Slide> {

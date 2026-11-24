@@ -1017,3 +1017,171 @@ fn u09_is_safe_relative_path_matches_course_is_safe_media_path() {
         assert_eq!(fmt_ok, expected, "unexpected result for {path:?}");
     }
 }
+
+/// U-06: streaming `open_project_from` / `open_project_from_with_limits` matches
+/// `open_project` / `open_project_with_limits` on valid archives and rejects
+/// oversized, zip-bomb, duplicate, and unsafe-path archives identically.
+#[test]
+fn u06_open_project_from_matches_open_project_and_rejects_hostile_zips() {
+    // 1. Valid archive matches byte-for-byte via BufReader over Cursor.
+    let course = Course::from_json(HELLO_COURSE_JSON).expect("valid hello-course");
+    let media = vec![
+        (
+            "images/badge.png".to_string(),
+            vec![0x89, b'P', b'N', b'G', 1, 2, 3],
+        ),
+        (
+            "captions/intro.vtt".to_string(),
+            b"WEBVTT\n\n00:00.000 --> 00:01.000\nHi\n".to_vec(),
+        ),
+    ];
+    let saved = save_project(&course, &media).expect("save_project");
+    let from_slice = open_project(&saved).expect("open_project");
+    let from_reader = open_project_from(std::io::BufReader::with_capacity(
+        256 * 1024,
+        std::io::Cursor::new(&saved),
+    ))
+    .expect("open_project_from");
+    assert_eq!(from_reader, from_slice);
+
+    // 2. Oversized single entry, oversized total archive, and too many entries.
+    let big_media = vec![
+        ("m1.png".to_string(), vec![1u8; 4000]),
+        ("m2.png".to_string(), vec![2u8; 4000]),
+        ("m3.png".to_string(), vec![3u8; 4000]),
+    ];
+    let big_zip = save_project(&minimal_course("limits"), &big_media).expect("save big");
+    for limits in [
+        Limits {
+            max_entry_bytes: 2000,
+            ..Limits::default()
+        },
+        Limits {
+            max_entry_bytes: 5000,
+            max_total_bytes: 5000,
+            ..Limits::default()
+        },
+        Limits {
+            max_entries: 2,
+            ..Limits::default()
+        },
+    ] {
+        let err_slice = open_project_with_limits(&big_zip, limits).expect_err("slice rejects");
+        let err_reader = open_project_from_with_limits(
+            std::io::BufReader::new(std::io::Cursor::new(&big_zip)),
+            limits,
+        )
+        .expect_err("reader rejects");
+        assert_eq!(err_reader, err_slice);
+    }
+
+    // 3. Zip-bomb (inflated declared size).
+    let mut bomb_buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut bomb_buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let course_json = minimal_course("bomb").to_json().expect("json");
+        writer
+            .start_file("course.json", opts)
+            .expect("start course");
+        writer
+            .write_all(course_json.as_bytes())
+            .expect("write course");
+        writer.start_file("media/a.txt", opts).expect("start media");
+        writer.write_all(b"tiny").expect("write media");
+        writer.finish().expect("finish");
+    }
+    let mut bomb = bomb_buf.into_inner();
+    let inflated_le = (150u32 * 1024 * 1024).to_le_bytes();
+    for i in 0..bomb.len().saturating_sub(30) {
+        if &bomb[i..i + 4] == b"PK\x03\x04" {
+            let name_len = u16::from_le_bytes([bomb[i + 26], bomb[i + 27]]) as usize;
+            if bomb.get(i + 30..i + 30 + name_len) == Some(b"media/a.txt") {
+                bomb[i + 22..i + 26].copy_from_slice(&inflated_le);
+            }
+        }
+    }
+    for i in 0..bomb.len().saturating_sub(46) {
+        if &bomb[i..i + 4] == b"PK\x01\x02" {
+            let name_len = u16::from_le_bytes([bomb[i + 28], bomb[i + 29]]) as usize;
+            if bomb.get(i + 46..i + 46 + name_len) == Some(b"media/a.txt") {
+                bomb[i + 24..i + 28].copy_from_slice(&inflated_le);
+            }
+        }
+    }
+    let bomb_limits = Limits {
+        max_entries: 10,
+        max_entry_bytes: 256 * 1024 * 1024,
+        max_total_bytes: 100 * 1024 * 1024,
+    };
+    assert_eq!(
+        open_project_from_with_limits(std::io::Cursor::new(&bomb), bomb_limits),
+        open_project_with_limits(&bomb, bomb_limits)
+    );
+    assert_eq!(
+        open_project_from_with_limits(std::io::Cursor::new(&bomb), bomb_limits),
+        Err(FormatError::TooLarge)
+    );
+
+    // 4. Duplicate entry (patched central directory + local header).
+    let mut dup_buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut dup_buf);
+        let opts = zip::write::SimpleFileOptions::default();
+        let course_json = minimal_course("dup").to_json().expect("json");
+        writer
+            .start_file("course.json", opts)
+            .expect("start course");
+        writer
+            .write_all(course_json.as_bytes())
+            .expect("write course");
+        writer.start_file("media/a.png", opts).expect("start a");
+        writer.write_all(b"one").expect("write a");
+        writer.start_file("media/b.png", opts).expect("start b");
+        writer.write_all(b"two").expect("write b");
+        writer.finish().expect("finish");
+    }
+    let mut dup = dup_buf.into_inner();
+    for i in 0..dup.len().saturating_sub(11) {
+        if &dup[i..i + 11] == b"media/b.png" {
+            dup[i..i + 11].copy_from_slice(b"media/a.png");
+        }
+    }
+    let dup_slice = open_project(&dup).expect_err("slice rejects duplicate");
+    let dup_reader = open_project_from(std::io::BufReader::new(std::io::Cursor::new(&dup)))
+        .expect_err("reader rejects duplicate");
+    assert_eq!(dup_reader, dup_slice);
+    assert!(
+        matches!(dup_reader, FormatError::DuplicateEntry(_)),
+        "expected DuplicateEntry, got {dup_reader:?}"
+    );
+
+    // 5. Unsafe path entry.
+    let mut evil_buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = zip::ZipWriter::new(&mut evil_buf);
+        let opts = zip::write::SimpleFileOptions::default();
+        let course_json = minimal_course("evil").to_json().expect("json");
+        writer
+            .start_file("course.json", opts)
+            .expect("start course");
+        writer
+            .write_all(course_json.as_bytes())
+            .expect("write course");
+        writer
+            .start_file("../escape.png", opts)
+            .expect("start evil");
+        writer.write_all(b"bad").expect("write evil");
+        writer.finish().expect("finish");
+    }
+    let evil = evil_buf.into_inner();
+    assert_eq!(
+        open_project_from(std::io::BufReader::new(std::io::Cursor::new(&evil))),
+        open_project(&evil)
+    );
+    assert_eq!(
+        open_project_from(std::io::Cursor::new(&evil)),
+        Err(FormatError::UnsafePath("../escape.png".to_string()))
+    );
+}
