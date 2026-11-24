@@ -2,6 +2,19 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## 0.4.5
+
+Groups are easier to work with on the timeline, and the code underneath is tidier.
+
+**Timeline** (part of issue #8):
+- A group now shows as a **folder row** above its members. Click the arrow, or double-click the name, to collapse or expand it; this only changes your view, not the course.
+- Drag the folder row's bar to move all the members' timing together (snaps to 100 ms, 10 ms with Shift, Escape cancels). It's one undo step.
+- The eye and lock on the folder row show, hide, lock or unlock every member at once.
+
+**Under the hood:**
+- Media is tracked in one place, so new kinds of media can't be missed when saving, publishing or checking a course.
+- Publishing shares media instead of copying it, and the command code is split into smaller files by area. Nothing changes in how CourseCraft works or what it saves.
+
 ## 0.4.4
 
 CourseCraft is now much lighter on low-end computers, and it can tell you when an update is out.
