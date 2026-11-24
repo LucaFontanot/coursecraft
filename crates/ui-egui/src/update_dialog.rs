@@ -527,12 +527,74 @@ fn show_spans(ui: &mut Ui, spans: &[MdSpan], font_size: f32, default_bold: bool,
         return;
     }
 
+    let max_row_w = ui.available_width().max(80.0);
+    let style = InlineStyle {
+        font_size,
+        default_bold,
+        max_row_w,
+        palette: p,
+    };
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         for span in spans {
-            show_single_span(ui, span, font_size, default_bold, p);
+            show_single_span(ui, span, &style);
         }
     });
+}
+
+struct InlineStyle<'a> {
+    font_size: f32,
+    default_bold: bool,
+    max_row_w: f32,
+    palette: &'a Palette,
+}
+
+fn split_wrap_tokens(text: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut start = 0usize;
+    let mut seen_non_ws = false;
+    for (idx, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            seen_non_ws = false;
+        } else if !seen_non_ws && idx > start {
+            if let Some(chunk) = text.get(start..idx) {
+                tokens.push(chunk);
+            }
+            start = idx;
+            seen_non_ws = true;
+        } else {
+            seen_non_ws = true;
+        }
+    }
+    if let Some(tail) = text.get(start..)
+        && !tail.is_empty()
+    {
+        tokens.push(tail);
+    }
+    tokens
+}
+
+fn add_inline_label(
+    ui: &mut Ui,
+    text: &str,
+    rt: RichText,
+    font_id: FontId,
+    sense: Sense,
+    style: &InlineStyle<'_>,
+) -> egui::Response {
+    let single_w = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font_id, style.palette.text)
+        .size()
+        .x;
+    if single_w <= style.max_row_w {
+        ui.add(Label::new(rt).extend().sense(sense))
+    } else {
+        if ui.cursor().min.x > ui.max_rect().min.x + 1.0 {
+            ui.end_row();
+        }
+        ui.add(Label::new(rt).wrap().sense(sense))
+    }
 }
 
 fn semibold_font(size: f32) -> FontId {
@@ -579,61 +641,80 @@ fn append_span_to_job(
     }
 }
 
-fn show_single_span(ui: &mut Ui, span: &MdSpan, font_size: f32, default_bold: bool, p: &Palette) {
+fn show_single_span(ui: &mut Ui, span: &MdSpan, style: &InlineStyle<'_>) {
+    let p = style.palette;
     match span {
         MdSpan::Text(text) => {
-            let rt = if default_bold {
-                RichText::new(text)
-                    .font(semibold_font(font_size))
-                    .color(p.text)
+            let font_id = if style.default_bold {
+                semibold_font(style.font_size)
             } else {
-                RichText::new(text).size(font_size).color(p.text)
+                FontId::proportional(style.font_size)
             };
-            ui.add(Label::new(rt).wrap());
-        }
-        MdSpan::Bold(text) => {
-            ui.add(
-                Label::new(
-                    RichText::new(text)
-                        .font(semibold_font(font_size))
-                        .color(p.text),
-                )
-                .wrap(),
-            );
-        }
-        MdSpan::Italic(text) => {
-            ui.add(Label::new(RichText::new(text).size(font_size).italics().color(p.text)).wrap());
-        }
-        MdSpan::Code(text) => {
-            ui.add(
-                Label::new(
-                    RichText::new(text)
-                        .monospace()
-                        .size(coursecraft_render::SIZE_MONO)
-                        .color(p.text)
-                        .background_color(p.input),
-                )
-                .wrap(),
-            );
-        }
-        MdSpan::Link { label, url } => {
-            let resp = ui
-                .add(
-                    Label::new(
-                        RichText::new(label)
-                            .size(font_size)
-                            .color(p.accent_text)
-                            .underline(),
-                    )
-                    .wrap()
-                    .sense(Sense::click()),
-                )
-                .on_hover_text(url)
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            if resp.clicked() {
-                crate::report::open_link(ui.ctx(), url);
+            for token in split_wrap_tokens(text) {
+                let rt = RichText::new(token).font(font_id.clone()).color(p.text);
+                add_inline_label(ui, token, rt, font_id.clone(), Sense::hover(), style);
             }
         }
+        MdSpan::Bold(text) => {
+            let font_id = semibold_font(style.font_size);
+            for token in split_wrap_tokens(text) {
+                let rt = RichText::new(token).font(font_id.clone()).color(p.text);
+                add_inline_label(ui, token, rt, font_id.clone(), Sense::hover(), style);
+            }
+        }
+        MdSpan::Italic(text) => {
+            let font_id = FontId::proportional(style.font_size);
+            for token in split_wrap_tokens(text) {
+                let rt = RichText::new(token)
+                    .size(style.font_size)
+                    .italics()
+                    .color(p.text);
+                add_inline_label(ui, token, rt, font_id.clone(), Sense::hover(), style);
+            }
+        }
+        MdSpan::Code(text) => {
+            let font_id = FontId::monospace(coursecraft_render::SIZE_MONO);
+            let rt = RichText::new(text)
+                .monospace()
+                .size(coursecraft_render::SIZE_MONO)
+                .color(p.text)
+                .background_color(p.input);
+            add_inline_label(ui, text, rt, font_id, Sense::hover(), style);
+        }
+        MdSpan::Link { label, url } => {
+            show_link_span(ui, label, url, style);
+        }
+    }
+}
+
+fn show_link_span(ui: &mut Ui, label: &str, url: &str, style: &InlineStyle<'_>) {
+    let p = style.palette;
+    let font_id = FontId::proportional(style.font_size);
+    let full_w = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font_id.clone(), p.accent_text)
+        .size()
+        .x;
+    let pieces: Vec<&str> = if full_w <= style.max_row_w {
+        vec![label]
+    } else {
+        split_wrap_tokens(label)
+    };
+    let mut clicked = false;
+    for piece in pieces {
+        let rt = RichText::new(piece)
+            .size(style.font_size)
+            .color(p.accent_text)
+            .underline();
+        let resp = add_inline_label(ui, piece, rt, font_id.clone(), Sense::click(), style)
+            .on_hover_text(url)
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if resp.clicked() {
+            clicked = true;
+        }
+    }
+    if clicked {
+        crate::report::open_link(ui.ctx(), url);
     }
 }
 

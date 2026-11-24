@@ -512,6 +512,7 @@ fn uiux_sweep_scale_2_and_fixtures() {
         "window-find",
         "window-preferences",
         "window-preview",
+        "window-update",
     ];
     let surfaces = all_surfaces();
     let mut violations = Vec::new();
@@ -619,5 +620,56 @@ fn uiux_sweep_modals_and_tooltips() {
             .cloned()
             .collect::<Vec<_>>()
             .join("\n")
+    );
+}
+
+/// UI-07: Status bar "Update available" hint handles narrow widths cleanly across themes and scales (RISK-08).
+#[test]
+fn ui07_update_status_bar_hint_handles_narrow_width() {
+    let base_course = showcase();
+    let mut violations = Vec::new();
+    for size in [(1024.0, 600.0), (1280.0, 800.0)] {
+        for &(mode, _) in &MATRIX_THEMES {
+            for &scale in &MATRIX_SCALES {
+                let effective_size = if scale > 1.0 && size == (1024.0, 600.0) {
+                    (1536.0, 900.0)
+                } else {
+                    size
+                };
+                let mut h = TestHarness::new_with_config(
+                    base_course.clone(),
+                    effective_size,
+                    mode,
+                    scale,
+                    true,
+                );
+                base_select().apply(&mut h.editor);
+                assert!(crate::snapshot::open_window(&mut h.editor, "update"));
+                h.editor.ui.update.open = false;
+                let report = h.audit_surface_report(3, mode);
+                if scale <= 1.0 && size == (1280.0, 800.0) {
+                    assert!(
+                        report.painted("Update available"),
+                        "expected status-bar \"Update available\" hint at {size:?} {mode:?} scale={scale}"
+                    );
+                }
+                for f in report.findings {
+                    let (rule, detail) = parse_rule_prefix(&f);
+                    if match_allowlist(rule, "status-bar-update-hint", detail).is_some() {
+                        continue;
+                    }
+                    violations.push(format!(
+                        "[{rule}] status-bar-update-hint {}x{} {:?} scale={scale}: {detail}",
+                        effective_size.0, effective_size.1, mode
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "status-bar update hint sweep found {} violations:\n{}",
+        violations.len(),
+        violations.join("\n")
     );
 }
