@@ -228,7 +228,7 @@ pub fn show_preferences_window(
                 ui.label(tl!("Updates"));
                 ui.checkbox(&mut auto_check, tl!("Check for updates automatically"));
                 ui.small(tl!(
-                    "Checks GitHub once a day on startup. No personal data is sent."
+                    "Checks GitHub each time CourseCraft starts. No personal data is sent."
                 ));
             }
         });

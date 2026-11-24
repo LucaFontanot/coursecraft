@@ -46,6 +46,14 @@ pub fn set_current(lang: Lang) {
     CURRENT.with(|c| c.set(lang));
 }
 
+/// `template` (English, the catalog key) in the current language, its `{name}` placeholders
+/// filled from `args`. For libraries that take a translate function, such as craft-update's
+/// prompts, whose English stays when the catalogs have no row for it.
+#[must_use]
+pub fn translate_with(template: &str, args: &[(&str, &str)]) -> String {
+    craft_i18n::fmt(I18N.t(current(), template), args)
+}
+
 /// The language for a saved setting: [`AUTO`] (or empty) follows the system,
 /// a known code picks that language, anything else is English.
 #[must_use]

@@ -383,12 +383,6 @@ pub fn show_status_bar(editor: &mut Editor, ui: &mut Ui) {
                     editor.open_slide_size_dialog();
                 }
             }
-            if editor.updates_available && editor.ui.update.has_available_hint() {
-                let hint_w = crate::update_dialog::status_bar_hint_width(ui);
-                if ui.available_width() >= hint_w + 8.0 {
-                    crate::update_dialog::show_status_bar_hint(editor, ui);
-                }
-            }
         });
     });
 

@@ -468,6 +468,10 @@ fn run_ui(
         UiAction::GitHub => crate::report::open_link(&resp.ctx, crate::project_links::REPO_URL),
         UiAction::ReportProblem => editor.open_report(),
         UiAction::SuggestFeature => crate::report::open_feature_request(&resp.ctx),
+        // The desktop app checks and reports; the web build shows the releases page.
+        UiAction::CheckUpdates if editor.updates_available => {
+            requests.push(EditorRequest::CheckForUpdates);
+        }
         UiAction::CheckUpdates => {
             crate::report::open_link(&resp.ctx, &crate::project_links::releases_url());
         }

@@ -93,7 +93,6 @@ pub mod toolbar;
 pub mod translate_ai;
 pub mod translation;
 pub mod triggers;
-pub mod update_dialog;
 pub mod variables;
 pub mod version_history;
 pub mod web_insert;
@@ -678,16 +677,8 @@ pub enum EditorRequest {
         /// Command id and parameters to run after the font is added.
         apply: Option<(String, serde_json::Value)>,
     },
-    /// Ask the desktop host shell to check GitHub Releases for a newer version.
+    /// Ask the desktop host shell to check for a newer release and report the outcome.
     CheckForUpdates,
-    /// Ask the desktop host shell to download the matched installer for the available update.
-    DownloadUpdate,
-    /// Ask the desktop host shell to cancel an in-progress update download.
-    CancelUpdateDownload,
-    /// Persist that the user chose to skip automatic notifications for this version.
-    SkipUpdateVersion(String),
-    /// Reveal the verified downloaded installer in the OS file manager.
-    RevealDownloadedUpdate,
     /// Persist whether CourseCraft checks for updates automatically on desktop startup.
     SetAutoCheckUpdates(bool),
 }
@@ -1028,8 +1019,6 @@ pub struct UiState {
     pub versions: version_history::VersionHistoryState,
     /// Report a Problem window, crash prompt and recent status messages.
     pub report: report::ReportState,
-    /// Software update dialog and status-bar/menu hint state.
-    pub update: update_dialog::UpdateState,
     pub slide_size_dialog: slide_size_dialog::SlideSizeState,
     /// Rulers, grid and user guides (editor only).
     pub rulers: rulers::RulerState,
@@ -1672,7 +1661,6 @@ impl Editor {
                 prefs: preferences::PrefsState::default(),
                 versions: version_history::VersionHistoryState::default(),
                 report: report::ReportState::default(),
-                update: update_dialog::UpdateState::default(),
                 slide_size_dialog: slide_size_dialog::SlideSizeState::default(),
                 rulers: rulers::RulerState::default(),
                 snap_guides: Vec::new(),
@@ -5129,7 +5117,6 @@ impl Editor {
         if self.ui.show_welcome {
             shortcuts::show_shortcuts_dialog(self, ui.ctx());
             report::show_report_windows(self, ui.ctx(), &mut requests);
-            update_dialog::show_update_dialog(self, ui.ctx(), &mut requests);
             translation::show_translation_windows(self, ui.ctx(), &mut requests);
             outline::show_outline_dialog(self, ui.ctx());
             document::show_document_dialog(self, ui.ctx(), &mut requests);
@@ -5363,7 +5350,6 @@ impl Editor {
         preferences::show_preferences_window(self, ui.ctx(), &mut requests);
         version_history::show_version_history_window(self, ui.ctx(), &mut requests);
         report::show_report_windows(self, ui.ctx(), &mut requests);
-        update_dialog::show_update_dialog(self, ui.ctx(), &mut requests);
 
         // XLIFF export language dialog and import report
         translation::show_translation_windows(self, ui.ctx(), &mut requests);

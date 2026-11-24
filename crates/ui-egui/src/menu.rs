@@ -1220,7 +1220,6 @@ pub(crate) fn show_preview_menu_items(
 fn show_project_help_items(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<EditorRequest>) {
     use crate::project_links::REPO_URL;
     use crate::report::{open_feature_request, open_link};
-    use crate::update_dialog::{UpdateCheckStatus, UpdateDownloadState};
 
     if ui.button("Report a problem…").clicked() {
         editor.open_report();
@@ -1234,24 +1233,9 @@ fn show_project_help_items(editor: &mut Editor, ui: &mut Ui, requests: &mut Vec<
         open_link(ui.ctx(), REPO_URL);
         ui.close();
     }
-    if editor.updates_available {
-        let mut btn = Button::new("Check for updates…");
-        if editor.ui.update.has_available_hint() {
-            let p = coursecraft_render::palette(ui.ctx());
-            btn = btn.shortcut_text(egui::RichText::new("Update available").color(p.accent_text));
-        }
-        if ui.add(btn).clicked() {
-            editor.ui.update.open = true;
-            if !matches!(
-                editor.ui.update.download,
-                UpdateDownloadState::Downloading { .. }
-            ) && !editor.ui.update.has_available_hint()
-            {
-                editor.ui.update.status = UpdateCheckStatus::Checking;
-                requests.push(EditorRequest::CheckForUpdates);
-            }
-            ui.close();
-        }
+    if editor.updates_available && ui.button("Check for updates…").clicked() {
+        requests.push(EditorRequest::CheckForUpdates);
+        ui.close();
     }
 }
 
