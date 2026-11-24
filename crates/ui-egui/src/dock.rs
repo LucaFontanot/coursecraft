@@ -11,8 +11,8 @@
 //! Slide Layers) and tabs them (Timeline, States, Notes), which panes don't do.
 
 use craft_ui::docking::{
-    Action, Column, DockArea, DockContent, DockStyle, Group, Layout, Node, PanelLimits,
-    Permissions, Side, Workspace,
+    Action, DockArea, DockContent, DockStyle, Group, Layout, Node, PanelLimits, Permissions, Side,
+    Workspace,
 };
 use craft_ui::layout::{SplitAxis, SplitSize};
 use egui::{Rect, Ui, vec2};
@@ -335,6 +335,11 @@ pub fn load_workspace(saved: Option<&serde_json::Value>) -> Workspace<Panel> {
     forget_unknown_panels(&mut value);
     match serde_json::from_value::<Workspace<Panel>>(value) {
         Ok(mut workspace) if workspace.version <= Workspace::<Panel>::VERSION => {
+            undock(&mut workspace.layout);
+            if workspace.layout.validate().is_err() {
+                log::warn!("saved panel layout ignored: its dock columns don't convert");
+                return default;
+            }
             workspace.reconcile(|_| true, |p: &Panel| p.permissions(), &default);
             workspace
         }
@@ -343,6 +348,94 @@ pub fn load_workspace(saved: Option<&serde_json::Value>) -> Workspace<Panel> {
             default
         }
     }
+}
+
+/// Turn the dock columns of a layout saved by an older build into plain
+/// splits of the same widths, so the outer edges take full-width drops.
+pub fn undock(layout: &mut Layout<Panel>) {
+    if let Some(root) = layout.root.take() {
+        layout.root = undock_node(root);
+    }
+}
+
+fn undock_node(node: Node<Panel>) -> Option<Node<Panel>> {
+    match node {
+        Node::Split {
+            axis,
+            size,
+            first,
+            second,
+        } => match (undock_node(*first), undock_node(*second)) {
+            (Some(first), Some(second)) => Some(Node::Split {
+                axis,
+                size,
+                first: Box::new(first),
+                second: Box::new(second),
+            }),
+            (Some(only), None) | (None, Some(only)) => Some(only),
+            (None, None) => None,
+        },
+        Node::Dock { side, columns } => {
+            // Columns run from the window edge inwards.
+            let mut built: Option<Node<Panel>> = None;
+            for column in columns.into_iter().rev() {
+                let width = column.width;
+                let Some(col) = column_node(column.groups) else {
+                    continue;
+                };
+                built = Some(match (built, side) {
+                    (None, _) => col,
+                    (Some(inner), Side::Start) => Node::Split {
+                        axis: SplitAxis::Horizontal,
+                        size: SplitSize::FixedFirst(width),
+                        first: Box::new(col),
+                        second: Box::new(inner),
+                    },
+                    (Some(inner), _) => Node::Split {
+                        axis: SplitAxis::Horizontal,
+                        size: SplitSize::FixedSecond(width),
+                        first: Box::new(inner),
+                        second: Box::new(col),
+                    },
+                });
+            }
+            built
+        }
+        leaf => Some(leaf),
+    }
+}
+
+/// A dock column's groups, top to bottom, as even vertical splits.
+fn column_node(groups: Vec<Group<Panel>>) -> Option<Node<Panel>> {
+    let mut nodes: Vec<Node<Panel>> = groups
+        .into_iter()
+        .map(|g| Node::Tabs {
+            panels: g.panels,
+            active: g.active,
+        })
+        .collect();
+    let mut built = nodes.pop()?;
+    let mut below = 1usize;
+    while let Some(node) = nodes.pop() {
+        below += 1;
+        built = Node::Split {
+            axis: SplitAxis::Vertical,
+            size: SplitSize::Ratio(1.0 / below as f32),
+            first: Box::new(node),
+            second: Box::new(built),
+        };
+    }
+    Some(built)
+}
+
+/// The docking profile: plain splits, with drop zones on each group's sides
+/// and a band along every outer edge of the window, where a drop adds a
+/// full-width row (top, bottom) or a full-height column (left, right).
+fn style(ui: &Ui) -> DockStyle {
+    let mut style = DockStyle::from_ui(ui);
+    style.side_edge_zones = true;
+    style.new_dock_zones = false;
+    style
 }
 
 /// The saved id of every panel this build knows.
@@ -449,24 +542,19 @@ pub fn reset(editor: &mut Editor) {
     editor.ui.dock.workspace = Workspace::new(default_layout());
 }
 
-fn group(panel: Panel) -> Group<Panel> {
-    Group::new(vec![panel], 0)
-}
-
-/// Today's arrangement: slides at the start edge, the Inspector at the end
-/// edge, the canvas over the timeline between them.
+/// Today's arrangement: slides at the left, the Inspector at the right, the
+/// canvas over the timeline between them. Every part is a plain split (no
+/// dock columns), so a panel dropped on an outer edge of the window takes
+/// the whole width or height there (`style`).
 #[must_use]
 pub fn default_layout() -> Layout<Panel> {
-    let slides = Node::Dock {
-        side: Side::Start,
-        columns: vec![Column::new(vec![group(Panel::Slides)], 220.0)],
+    let slides = Node::Tabs {
+        panels: vec![Panel::Slides],
+        active: 0,
     };
-    let inspector = Node::Dock {
-        side: Side::End,
-        columns: vec![Column::new(
-            vec![Group::new(Panel::INSPECTORS.to_vec(), 0)],
-            crate::PROPERTIES_PANEL_WIDTH,
-        )],
+    let inspector = Node::Tabs {
+        panels: Panel::INSPECTORS.to_vec(),
+        active: 0,
     };
     let centre = Node::Split {
         axis: SplitAxis::Vertical,
@@ -571,7 +659,7 @@ pub fn show(editor: &mut Editor, ui: &mut Ui) {
     reveal_inspector(editor);
     reveal_bottom_tab(editor);
     crate::panels::follow_work(editor);
-    let style = DockStyle::from_ui(ui);
+    let style = style(ui);
     let layout = editor.ui.dock.workspace.layout.clone();
     let mut content = Content {
         editor,

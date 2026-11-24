@@ -276,7 +276,7 @@ Counted from the tables below; recount when a row changes.
 | Quick access toolbar | Save, Undo, Redo, Undo History left of the tab strip; Customize to come | 🟡 | M37 |
 | Collapse ribbon | click or double-click the open tab, Ctrl+F1 | ✅ | — |
 | View tabs for open slides | `doc_tabs.rs`: a Course Map tab, then a tab per opened slide (× closes it), under the ribbon | ✅ | — |
-| Undock / float / redock panels | docked by default (`dock.rs`, craft-ui docking): move, tab, float, close and reopen (View › Panels), the four inspectors included; a floating panel can leave the app window as its own OS window (desktop, not Wayland); the arrangement is saved in the preferences; Preferences › Interface turns it off | ✅ | — |
+| Undock / float / redock panels | docked by default (`dock.rs`, craft-ui docking): move, tab, float, close and reopen (View › Panels), the four inspectors included; a floating panel can leave the app window as its own OS window (desktop, not Wayland); a panel dropped on the window's outer edge takes the whole width (bottom, top) or height (left, right); the arrangement is saved in the preferences; Preferences › Interface turns it off | ✅ | — |
 | Reset panel layout | View › Panels › Reset Panel Layout | ✅ | — |
 | Slide-flow arrows in the Scenes panel | — | ⛔ | M37 |
 | Comments tab | — | ⛔ needs review workflow | — |

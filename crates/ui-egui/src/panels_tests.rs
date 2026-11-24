@@ -610,3 +610,129 @@ fn shape_style_opens_from_drawing_and_edits_the_shapes_outline() {
         "outline switched on"
     );
 }
+
+#[test]
+fn the_timeline_can_take_the_whole_width_at_the_bottom() {
+    use craft_ui::docking::{Action as DockAction, Placement, Zone};
+    let mut h = harness(true);
+    let slides = h.editor.ui.dock.rect(Panel::Slides).expect("slides drawn");
+    let inspector = h
+        .editor
+        .ui
+        .dock
+        .rects
+        .iter()
+        .find(|(p, _)| p.inspector().is_some())
+        .map(|(_, r)| *r)
+        .expect("inspector drawn");
+    // What a drop on the window's bottom edge band asks for.
+    dock::apply(
+        &mut h.editor,
+        vec![DockAction::Move {
+            panel: Panel::Timeline,
+            anchor: Panel::Slides,
+            placement: Placement::Edge(Zone::Bottom),
+        }],
+    );
+    frames(&mut h, 3);
+    let timeline = h
+        .editor
+        .ui
+        .dock
+        .rect(Panel::Timeline)
+        .expect("timeline drawn");
+    assert!(
+        timeline.left() <= slides.left() + 1.0 && timeline.right() >= inspector.right() - 1.0,
+        "the timeline spans the window: {timeline:?}, slides {slides:?}, inspector {inspector:?}"
+    );
+    let slides_now = h.editor.ui.dock.rect(Panel::Slides).expect("slides drawn");
+    assert!(
+        slides_now.bottom() <= timeline.top() + 1.0,
+        "the slides end above it: {slides_now:?}"
+    );
+}
+
+#[test]
+fn a_layout_saved_with_dock_columns_loads_as_plain_splits() {
+    use craft_ui::docking::{Column, Group, Layout, Node, Side, Workspace};
+    use craft_ui::layout::{SplitAxis, SplitSize};
+    let old = Layout {
+        root: Some(Node::Split {
+            axis: SplitAxis::Horizontal,
+            size: SplitSize::FixedFirst(220.0),
+            first: Box::new(Node::Dock {
+                side: Side::Start,
+                columns: vec![Column::new(vec![Group::new(vec![Panel::Slides], 0)], 220.0)],
+            }),
+            second: Box::new(Node::Split {
+                axis: SplitAxis::Horizontal,
+                size: SplitSize::FixedSecond(300.0),
+                first: Box::new(Node::Tabs {
+                    panels: vec![Panel::Canvas],
+                    active: 0,
+                }),
+                second: Box::new(Node::Dock {
+                    side: Side::End,
+                    columns: vec![Column::new(
+                        vec![
+                            Group::new(Panel::INSPECTORS.to_vec(), 0),
+                            Group::new(vec![Panel::Timeline], 0),
+                        ],
+                        300.0,
+                    )],
+                }),
+            }),
+        }),
+        floating: Vec::new(),
+    };
+    old.validate().expect("the old layout is valid");
+    let saved = serde_json::to_value(Workspace::new(old)).expect("serializes");
+    let loaded = dock::load_workspace(Some(&saved));
+    loaded
+        .layout
+        .validate()
+        .expect("the converted layout is valid");
+    assert!(loaded.layout.contains(&Panel::Slides));
+    assert!(loaded.layout.contains(&Panel::Timeline));
+    let text = serde_json::to_string(&loaded.layout).expect("serializes");
+    assert!(!text.contains("\"Dock\""), "no dock columns left: {text}");
+}
+
+#[test]
+fn dragging_the_timeline_tab_to_the_bottom_edge_spans_the_window() {
+    let mut h = harness(true);
+    let slides = h.editor.ui.dock.rect(Panel::Slides).expect("slides drawn");
+    let bottom = h
+        .editor
+        .ui
+        .dock
+        .rects
+        .iter()
+        .map(|(_, r)| r.bottom())
+        .fold(f32::MIN, f32::max);
+    let timeline_rect = h
+        .editor
+        .ui
+        .dock
+        .rect(Panel::Timeline)
+        .expect("timeline drawn");
+    let tab = h
+        .find_texts("Timeline")
+        .into_iter()
+        .filter(|p| p.y < timeline_rect.top() && p.y > timeline_rect.top() - 40.0)
+        .min_by(|a, b| a.x.total_cmp(&b.x))
+        .expect("the Timeline tab");
+    let target = egui::pos2(slides.center().x + 60.0, bottom - 2.0);
+    h.drag_by(tab, target - tab, 12, egui::Modifiers::NONE);
+    frames(&mut h, 3);
+    let timeline = h
+        .editor
+        .ui
+        .dock
+        .rect(Panel::Timeline)
+        .expect("timeline drawn");
+    assert!(
+        timeline.left() <= slides.left() + 1.0,
+        "the timeline starts at the window's left edge: {timeline:?}, slides were {slides:?}"
+    );
+}
