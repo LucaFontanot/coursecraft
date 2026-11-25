@@ -624,23 +624,50 @@ impl EditorApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn import_media_files(&mut self) {
         let mut added = 0usize;
+        let mut failed = 0usize;
+        let mut failures = Vec::new();
         for path in self.pick_media_files() {
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("media")
                 .to_string();
-            if let Ok(bytes) = std::fs::read(&path)
-                && self.editor.add_media_bytes(&name, &bytes).is_some()
-            {
-                added = added.saturating_add(1);
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    if self.editor.add_media_bytes(&name, &bytes).is_some() {
+                        added = added.saturating_add(1);
+                    }
+                }
+                Err(error) => {
+                    failed += 1;
+                    if failures.len() < 3 {
+                        failures.push(format!("{name} ({error})"));
+                    }
+                }
+            }
+        }
+        let mut status = String::new();
+        if added > 0 {
+            status = format!(
+                "Imported {added} {}. ",
+                if added == 1 { "file" } else { "files" }
+            );
+        }
+        if failed > 0 {
+            status.push_str(&format!("Couldn't read {failed}: {}", failures.join(", ")));
+            if failed > failures.len() {
+                status.push_str(&format!(" and {} more", failed - failures.len()));
+            }
+            status.push('.');
+            if added > 0 {
+                status.push(' ');
             }
         }
         if added > 0 {
-            self.editor.set_status(format!(
-                "Imported {added} {}. File operations are not undoable.",
-                if added == 1 { "file" } else { "files" }
-            ));
+            status.push_str("File operations are not undoable.");
+        }
+        if !status.is_empty() {
+            self.editor.set_status(status);
         }
     }
 
@@ -1351,8 +1378,13 @@ impl EditorApp {
                         .and_then(|n| n.to_str())
                         .unwrap_or("image.png")
                         .to_string();
-                    if let Ok(bytes) = std::fs::read(&path) {
-                        self.editor.import_image(&name, &bytes);
+                    match std::fs::read(&path) {
+                        Ok(bytes) => {
+                            self.editor.import_image(&name, &bytes);
+                        }
+                        Err(error) => self
+                            .editor
+                            .set_status(format!("Couldn't read {name}: {error}")),
                     }
                 }
             }
@@ -1369,8 +1401,13 @@ impl EditorApp {
                         .and_then(|n| n.to_str())
                         .unwrap_or("video.mp4")
                         .to_string();
-                    if let Ok(bytes) = std::fs::read(&path) {
-                        self.editor.import_video(&name, &bytes);
+                    match std::fs::read(&path) {
+                        Ok(bytes) => {
+                            self.editor.import_video(&name, &bytes);
+                        }
+                        Err(error) => self
+                            .editor
+                            .set_status(format!("Couldn't read {name}: {error}")),
                     }
                 }
             }
@@ -1383,8 +1420,13 @@ impl EditorApp {
                         .and_then(|n| n.to_str())
                         .unwrap_or("captions.vtt")
                         .to_string();
-                    if let Ok(bytes) = std::fs::read(&path) {
-                        self.editor.import_captions(&name, &bytes);
+                    match std::fs::read(&path) {
+                        Ok(bytes) => {
+                            self.editor.import_captions(&name, &bytes);
+                        }
+                        Err(error) => self
+                            .editor
+                            .set_status(format!("Couldn't read {name}: {error}")),
                     }
                 }
             }
