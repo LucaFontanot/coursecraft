@@ -3674,13 +3674,56 @@ fn tr_12_default_tracking_manifests_and_strict_lms() {
     );
 
     let hello_cmi5_xml = tr_12_find_text(&hello_cmi5, "cmi5.xml");
-    if let Some(q) = hello.quiz {
-        assert!(hello_cmi5_xml.contains("moveOn=\"Passed\""));
-        let expected_mastery = format!("masteryScore=\"{}\"", f64::from(q.passing_percent) / 100.0);
-        assert!(hello_cmi5_xml.contains(&expected_mastery));
-    } else {
-        assert!(hello_cmi5_xml.contains("moveOn=\"Completed\""));
-        assert!(!hello_cmi5_xml.contains("masteryScore"));
+    let expected_cmi5 = cmi5_xml(&PackageSpec {
+        course_id: hello.id.clone(),
+        title: hello.title.clone(),
+        mastery_score: hello.quiz.map(|q| q.passing_percent),
+        move_on: MoveOn::Auto,
+    });
+    assert_eq!(hello_cmi5_xml, expected_cmi5);
+    assert!(hello_cmi5_xml.contains("moveOn=\"Passed\""));
+    assert!(hello_cmi5_xml.contains("masteryScore=\"0.8\""));
+
+    let expected_scorm12_files: Vec<String> = hello_scorm12
+        .iter()
+        .filter(|f| f.path != "imsmanifest.xml")
+        .map(|f| f.path.clone())
+        .collect();
+    let expected_scorm12 = coursecraft_scorm::manifest_scorm12(&coursecraft_scorm::ManifestSpec {
+        identifier: format!("coursecraft.{}", hello.id),
+        title: hello.title.clone(),
+        launch: "index.html".to_string(),
+        files: expected_scorm12_files,
+        mastery_score: hello.quiz.map(|q| q.passing_percent),
+    })
+    .expect("expected scorm12 manifest");
+    let hello_scorm12_xml = tr_12_find_text(&hello_scorm12, "imsmanifest.xml");
+    assert_eq!(hello_scorm12_xml, expected_scorm12);
+    assert!(hello_scorm12_xml.contains("<adlcp:masteryscore>80</adlcp:masteryscore>"));
+
+    let expected_scorm2004_files: Vec<String> = hello_scorm2004
+        .iter()
+        .filter(|f| f.path != "imsmanifest.xml")
+        .map(|f| f.path.clone())
+        .collect();
+    let expected_scorm2004 =
+        coursecraft_scorm::manifest_scorm2004(&coursecraft_scorm::ManifestSpec {
+            identifier: format!("coursecraft.{}", hello.id),
+            title: hello.title.clone(),
+            launch: "index.html".to_string(),
+            files: expected_scorm2004_files,
+            mastery_score: hello.quiz.map(|q| q.passing_percent),
+        })
+        .expect("expected scorm2004 manifest");
+    assert_eq!(
+        tr_12_find_text(&hello_scorm2004, "imsmanifest.xml"),
+        expected_scorm2004
+    );
+
+    for pkg in [&hello_scorm12, &hello_scorm2004, &hello_cmi5] {
+        let published_json = tr_12_find_text(pkg, "course.json");
+        assert_eq!(published_json, hello_json);
+        assert!(!published_json.contains("\"tracking\""));
     }
 }
 
@@ -3826,4 +3869,122 @@ fn tr_12_slides_viewed_and_quiz_uses_completed_or_passed() {
     let reparsed_both =
         Course::from_json(tr_12_find_text(&both_scorm12, "course.json")).expect("reparse both");
     assert_eq!(reparsed_both.tracking, both.tracking);
+}
+
+#[test]
+fn tr_12_quiz_only_and_no_quiz_settings_tracking_manifests() {
+    use coursecraft_course::{QuizSettings, QuizTracking, SlidesViewedTracking, TrackingSettings};
+    use coursecraft_strict_lms::{PackageStandardKind, validate_cmi5_xml, validate_package};
+
+    let player_files = fake_player();
+    let no_media = |_src: &str| -> Option<Arc<[u8]>> { None };
+
+    // Quiz-only tracking with passing_percent set -> Passed + masteryScore + SCORM masteryscore.
+    let mut quiz_with_pass = minimal_course("Quiz Only With Pass");
+    quiz_with_pass.quiz = Some(QuizSettings {
+        passing_percent: 75,
+    });
+    quiz_with_pass.tracking = TrackingSettings {
+        slides_viewed: None,
+        quiz: Some(QuizTracking { slide: None }),
+    };
+    let quiz_with_pass_json = quiz_with_pass.to_json_compact().expect("compact");
+    let quiz_with_pass_input = PackageInput {
+        course: &quiz_with_pass,
+        course_json: &quiz_with_pass_json,
+        player_files: &player_files,
+        media: &no_media,
+    };
+    let qp_cmi5 =
+        build_package_standard(&quiz_with_pass_input, PackageStandard::Xapi(Flavor::Cmi5))
+            .expect("qp cmi5");
+    let qp_cmi5_xml = tr_12_find_text(&qp_cmi5, "cmi5.xml");
+    assert!(qp_cmi5_xml.contains("moveOn=\"Passed\""), "{qp_cmi5_xml}");
+    assert!(
+        qp_cmi5_xml.contains("masteryScore=\"0.75\""),
+        "{qp_cmi5_xml}"
+    );
+    assert!(validate_cmi5_xml(qp_cmi5_xml).is_empty());
+    assert!(validate_package(PackageStandardKind::Cmi5, &tr_12_strict_files(&qp_cmi5)).is_empty());
+
+    let qp_scorm12 = build_package_standard(
+        &quiz_with_pass_input,
+        PackageStandard::Scorm(Standard::Scorm12),
+    )
+    .expect("qp scorm12");
+    assert!(
+        tr_12_find_text(&qp_scorm12, "imsmanifest.xml")
+            .contains("<adlcp:masteryscore>75</adlcp:masteryscore>")
+    );
+    assert!(
+        validate_package(
+            PackageStandardKind::Scorm12,
+            &tr_12_strict_files(&qp_scorm12)
+        )
+        .is_empty()
+    );
+
+    // Quiz-only tracking without course.quiz -> Completed without masteryScore or masteryscore.
+    let mut quiz_no_pass = minimal_course("Quiz Only No Pass");
+    quiz_no_pass.quiz = None;
+    quiz_no_pass.tracking = TrackingSettings {
+        slides_viewed: None,
+        quiz: Some(QuizTracking { slide: None }),
+    };
+    let quiz_no_pass_json = quiz_no_pass.to_json_compact().expect("compact");
+    let quiz_no_pass_input = PackageInput {
+        course: &quiz_no_pass,
+        course_json: &quiz_no_pass_json,
+        player_files: &player_files,
+        media: &no_media,
+    };
+    let qn_cmi5 = build_package_standard(&quiz_no_pass_input, PackageStandard::Xapi(Flavor::Cmi5))
+        .expect("qn cmi5");
+    let qn_cmi5_xml = tr_12_find_text(&qn_cmi5, "cmi5.xml");
+    assert!(
+        qn_cmi5_xml.contains("moveOn=\"Completed\""),
+        "{qn_cmi5_xml}"
+    );
+    assert!(!qn_cmi5_xml.contains("masteryScore"), "{qn_cmi5_xml}");
+    assert!(validate_cmi5_xml(qn_cmi5_xml).is_empty());
+    assert!(validate_package(PackageStandardKind::Cmi5, &tr_12_strict_files(&qn_cmi5)).is_empty());
+
+    let qn_scorm12 = build_package_standard(
+        &quiz_no_pass_input,
+        PackageStandard::Scorm(Standard::Scorm12),
+    )
+    .expect("qn scorm12");
+    assert!(!tr_12_find_text(&qn_scorm12, "imsmanifest.xml").contains("masteryscore"));
+    assert!(
+        validate_package(
+            PackageStandardKind::Scorm12,
+            &tr_12_strict_files(&qn_scorm12)
+        )
+        .is_empty()
+    );
+
+    // Slides viewed + quiz without course.quiz -> CompletedOrPassed without masteryScore.
+    let mut both_no_pass = minimal_course("Both No Pass");
+    both_no_pass.quiz = None;
+    both_no_pass.tracking = TrackingSettings {
+        slides_viewed: Some(SlidesViewedTracking::All),
+        quiz: Some(QuizTracking { slide: None }),
+    };
+    let both_no_pass_json = both_no_pass.to_json_compact().expect("compact");
+    let both_no_pass_input = PackageInput {
+        course: &both_no_pass,
+        course_json: &both_no_pass_json,
+        player_files: &player_files,
+        media: &no_media,
+    };
+    let bn_cmi5 = build_package_standard(&both_no_pass_input, PackageStandard::Xapi(Flavor::Cmi5))
+        .expect("bn cmi5");
+    let bn_cmi5_xml = tr_12_find_text(&bn_cmi5, "cmi5.xml");
+    assert!(
+        bn_cmi5_xml.contains("moveOn=\"CompletedOrPassed\""),
+        "{bn_cmi5_xml}"
+    );
+    assert!(!bn_cmi5_xml.contains("masteryScore"), "{bn_cmi5_xml}");
+    assert!(validate_cmi5_xml(bn_cmi5_xml).is_empty());
+    assert!(validate_package(PackageStandardKind::Cmi5, &tr_12_strict_files(&bn_cmi5)).is_empty());
 }
