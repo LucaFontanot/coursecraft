@@ -73,6 +73,7 @@ impl LtiReporter {
         let mut best_status: Option<&'static str> = None;
         let mut best_rank: u8 = 0;
         let mut score_percent: Option<u8> = None;
+        let mut score_rank: u8 = 0;
         for effect in effects {
             let (effect_percent, status) = match effect {
                 Effect::Score {
@@ -82,12 +83,15 @@ impl LtiReporter {
                 _ => continue,
             };
             let rank = status_rank(status);
-            if let Some(percent) = effect_percent
-                && (best_status.is_none() || rank >= best_rank || score_percent.is_none())
-            {
-                score_percent = Some(percent);
+            if let Some(percent) = effect_percent {
+                if score_percent.is_none() || rank > score_rank {
+                    score_percent = Some(percent);
+                    score_rank = rank;
+                } else if rank == score_rank {
+                    score_percent = Some(score_percent.map_or(percent, |prev| prev.max(percent)));
+                }
             }
-            if best_status.is_none() || rank >= best_rank {
+            if best_status.is_none() || rank > best_rank {
                 best_status = Some(status);
                 best_rank = rank;
             }
@@ -100,20 +104,33 @@ impl LtiReporter {
             status,
         };
 
-        let pending_pass = self.pending.front().filter(|r| r.status == "passed");
+        let pending_pass_score = self
+            .pending
+            .iter()
+            .filter(|r| r.status == "passed")
+            .filter_map(|r| r.percent)
+            .max();
         let in_flight_pass = self.in_flight.as_ref().filter(|r| r.status == "passed");
-        let has_passed = self.passed || in_flight_pass.is_some() || pending_pass.is_some();
-        let has_completed = self.ever_completed
-            || self.in_flight.is_some_and(|r| status_rank(r.status) >= 2)
-            || self
-                .pending
-                .front()
-                .is_some_and(|r| status_rank(r.status) >= 2)
-            || self.last_sent.is_some_and(|r| status_rank(r.status) >= 2);
+        let current_rank = [
+            if self.passed { 3 } else { 0 },
+            if self.ever_completed { 2 } else { 0 },
+            u8::from(self.sent_final),
+            self.in_flight.map_or(0, |r| status_rank(r.status)),
+            self.pending
+                .iter()
+                .map(|r| status_rank(r.status))
+                .max()
+                .unwrap_or(0),
+            self.last_sent.map_or(0, |r| status_rank(r.status)),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
         let prior_failed_score = self
             .pending
-            .front()
-            .filter(|r| r.status == "failed")
+            .iter()
+            .rev()
+            .find(|r| r.status == "failed")
             .and_then(|r| r.percent)
             .or_else(|| {
                 self.in_flight
@@ -122,14 +139,15 @@ impl LtiReporter {
             })
             .or(self.last_failed_score);
 
-        if has_passed {
+        let incoming_rank = status_rank(report.status);
+        if current_rank >= 3 {
             if report.status != "passed" {
                 return;
             }
             let best_score = [
                 self.best_passed_score,
                 in_flight_pass.and_then(|r| r.percent),
-                pending_pass.and_then(|r| r.percent),
+                pending_pass_score,
             ]
             .into_iter()
             .flatten()
@@ -139,16 +157,19 @@ impl LtiReporter {
                 (Some(new_percent), Some(best)) if new_percent <= best => return,
                 _ => {}
             }
+        } else if incoming_rank < current_rank {
+            return;
         } else if report.status == "completed" && report.percent.is_none() {
-            if has_completed {
+            if current_rank >= 2 {
                 return;
             }
             if let Some(prior_score) = prior_failed_score {
                 report.percent = Some(prior_score);
-            } else if self.sent_final {
-                return;
             }
-        } else if has_completed && status_rank(report.status) < 2 {
+        } else if report.status == "failed"
+            && report.percent.is_none()
+            && (prior_failed_score.is_some() || current_rank >= 1)
+        {
             return;
         }
 

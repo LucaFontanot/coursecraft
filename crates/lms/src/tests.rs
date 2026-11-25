@@ -2472,17 +2472,22 @@ fn tr_08_scorm12_monotonic_all_five_lms_status_modes() {
         );
         assert_eq!(api.get_value("cmi.core.score.raw"), "90");
 
-        // Retry pass (90) -> fail (20): never downgrades.
+        // Retry pass (90) -> fail (20) or bare Completed: never downgrades.
         let _ = bridge.after_input(
             &mut api,
             &course,
             &state,
-            &[Effect::Score {
-                raw: 20,
-                max: 100,
-                percent: 20,
-                status: CompletionStatus::Failed,
-            }],
+            &[
+                Effect::Score {
+                    raw: 20,
+                    max: 100,
+                    percent: 20,
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Completed,
+                },
+            ],
             400,
         );
         assert_eq!(api.get_value("cmi.core.lesson_status"), after_pass);
@@ -2495,7 +2500,7 @@ fn tr_08_scorm12_monotonic_all_five_lms_status_modes() {
             api.inner.violations()
         );
 
-        // 2. Fail (40%) -> then same-batch [Score(40, Failed), Completion(Failed), Completion(Completed)].
+        // 2. Same-batch [Score(40, Failed), Completion(Failed), Completion(Completed)].
         let mut api2 = Strict12TestApi::new();
         let mut bridge2 = LmsBridge::new();
         let _ = bridge2.start(&mut api2, &course);
@@ -2702,6 +2707,151 @@ fn tr_09_scorm2004_monotonic_completion_and_success_status() {
     assert_eq!(relaunch.get_value("cmi.completion_status"), "completed");
     assert_eq!(relaunch.get_value("cmi.success_status"), "passed");
     assert_eq!(relaunch.get_value("cmi.score.raw"), "90");
+    let _ = bridge2.finish_session(&mut relaunch, 200);
+    assert!(
+        relaunch.inner.violations().is_empty(),
+        "{:?}",
+        relaunch.inner.violations()
+    );
+}
+
+#[test]
+fn tr_08_scorm12_cross_batch_fail_then_slides_viewed() {
+    use coursecraft_course::LmsStatus;
+    let state = PlayerState::default();
+    let modes = [
+        (LmsStatus::Auto, "failed", "completed"),
+        (LmsStatus::PassedIncomplete, "incomplete", "passed"),
+        (LmsStatus::PassedFailed, "failed", "passed"),
+        (LmsStatus::CompletedIncomplete, "incomplete", "completed"),
+        (LmsStatus::CompletedFailed, "failed", "completed"),
+    ];
+
+    for (mode, after_fail, after_slides) in modes {
+        let course = course_with_lms_status(mode);
+        let mut api = Strict12TestApi::new();
+        let mut bridge = LmsBridge::new();
+        let (_, w) = bridge.start(&mut api, &course);
+        assert!(w.is_empty(), "{mode:?}: {w:?}");
+
+        let _ = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 40,
+                    max: 100,
+                    percent: 40,
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Failed,
+                },
+            ],
+            100,
+        );
+        assert_eq!(
+            api.get_value("cmi.core.lesson_status"),
+            after_fail,
+            "{mode:?} fail alone"
+        );
+        assert_eq!(api.get_value("cmi.core.score.raw"), "40");
+
+        let _ = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[Effect::Completion {
+                status: CompletionStatus::Completed,
+            }],
+            200,
+        );
+        assert_eq!(
+            api.get_value("cmi.core.lesson_status"),
+            after_slides,
+            "{mode:?} fail then slides"
+        );
+        assert_eq!(api.get_value("cmi.core.score.raw"), "40");
+
+        let _ = bridge.finish_session(&mut api, 300);
+        assert!(
+            api.inner.violations().is_empty(),
+            "{mode:?}: {:?}",
+            api.inner.violations()
+        );
+    }
+}
+
+#[test]
+fn tr_09_scorm2004_ever_completed_blocks_incomplete_and_resumes() {
+    let course = hello_course();
+    let state = PlayerState::default();
+
+    let mut api = Strict2004TestApi::new();
+    let mut bridge = LmsBridge::for_standard(Standard::Scorm2004);
+    let (_, w) = bridge.start(&mut api, &course);
+    assert!(w.is_empty(), "{w:?}");
+
+    let _ = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[Effect::Completion {
+            status: CompletionStatus::Completed,
+        }],
+        100,
+    );
+    assert_eq!(api.get_value("cmi.completion_status"), "completed");
+    assert_eq!(api.get_value("cmi.success_status"), "unknown");
+
+    // Incomplete (both completion and score) while not yet passed must not downgrade completion_status.
+    let _ = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[
+            Effect::Completion {
+                status: CompletionStatus::Incomplete,
+            },
+            Effect::Score {
+                raw: 0,
+                max: 100,
+                percent: 0,
+                status: CompletionStatus::Incomplete,
+            },
+        ],
+        150,
+    );
+    assert_eq!(api.get_value("cmi.completion_status"), "completed");
+    assert_eq!(api.get_value("cmi.success_status"), "unknown");
+
+    let _ = bridge.finish_session(&mut api, 200);
+    assert!(api.inner.violations().is_empty());
+
+    // Resume when completed-only (not passed) seeds ever_completed and blocks Incomplete.
+    let persisted = api.inner.export_persisted_json();
+    let mut strict = coursecraft_strict_lms::StrictScorm2004::new();
+    strict
+        .import_persisted_json(&persisted)
+        .expect("import persisted");
+    let mut relaunch = Strict2004TestApi::from_strict(strict);
+    let mut bridge2 = LmsBridge::for_standard(Standard::Scorm2004);
+    let (_, w) = bridge2.start(&mut relaunch, &course);
+    assert!(w.is_empty(), "{w:?}");
+
+    let _ = bridge2.after_input(
+        &mut relaunch,
+        &course,
+        &state,
+        &[Effect::Completion {
+            status: CompletionStatus::Incomplete,
+        }],
+        100,
+    );
+    assert_eq!(relaunch.get_value("cmi.completion_status"), "completed");
+    assert_eq!(relaunch.get_value("cmi.success_status"), "unknown");
+
     let _ = bridge2.finish_session(&mut relaunch, 200);
     assert!(
         relaunch.inner.violations().is_empty(),

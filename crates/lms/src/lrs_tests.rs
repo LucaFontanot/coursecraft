@@ -1628,5 +1628,125 @@ fn tr_10_xapi_cmi5_monotonic_and_deduped_completion() {
             "{bridge_flavor:?}: {:?}",
             api.lrs.violations()
         );
+
+        // 4. Reverse order: quiz fail (40%) FIRST, then slides viewed -> zero duplicate completed.
+        let mut lrs_rev = StrictLrs::new();
+        let params_rev = register_strict_launch(
+            &mut lrs_rev,
+            strict_flavor,
+            bridge_flavor,
+            "sess-rev",
+            Some("f-rev"),
+            "tok-rev",
+        );
+        let mut api_rev = StrictLrsBridgeAdapter::new(lrs_rev);
+        let mut bridge_rev = XapiBridge::new(params_rev, bridge_flavor, &course);
+        let mut now_rev = strict_handshake(&mut bridge_rev, &mut api_rev, &course);
+        bridge_rev.after_input(
+            &mut api_rev,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 40,
+                    max: 100,
+                    percent: 40,
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Failed,
+                },
+            ],
+            100,
+            now_rev,
+        );
+        now_rev += 100;
+        bridge_rev.after_input(
+            &mut api_rev,
+            &course,
+            &state,
+            &[Effect::Completion {
+                status: CompletionStatus::Completed,
+            }],
+            200,
+            now_rev,
+        );
+        bridge_rev.finish_session(&mut api_rev, &course, Some(&state), 300);
+        assert_eq!(
+            strict_verbs(&api_rev.lrs),
+            vec!["initialized", "failed", "completed", "terminated"],
+            "{bridge_flavor:?} fail then slides"
+        );
+        assert_eq!(
+            api_rev.lrs.statements()[1]
+                .pointer("/result/score/scaled")
+                .and_then(Value::as_f64),
+            Some(0.4)
+        );
+        assert!(
+            api_rev.lrs.violations().is_empty(),
+            "{bridge_flavor:?} rev: {:?}",
+            api_rev.lrs.violations()
+        );
+
+        // 5. Slides viewed -> then quiz pass (90%) in one session -> zero duplicate completed.
+        let mut lrs_pass = StrictLrs::new();
+        let params_pass = register_strict_launch(
+            &mut lrs_pass,
+            strict_flavor,
+            bridge_flavor,
+            "sess-pass",
+            Some("f-pass"),
+            "tok-pass",
+        );
+        let mut api_pass = StrictLrsBridgeAdapter::new(lrs_pass);
+        let mut bridge_pass = XapiBridge::new(params_pass, bridge_flavor, &course);
+        let mut now_pass = strict_handshake(&mut bridge_pass, &mut api_pass, &course);
+        bridge_pass.after_input(
+            &mut api_pass,
+            &course,
+            &state,
+            &[Effect::Completion {
+                status: CompletionStatus::Completed,
+            }],
+            100,
+            now_pass,
+        );
+        now_pass += 100;
+        bridge_pass.after_input(
+            &mut api_pass,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 90,
+                    max: 100,
+                    percent: 90,
+                    status: CompletionStatus::Passed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Passed,
+                },
+            ],
+            200,
+            now_pass,
+        );
+        bridge_pass.finish_session(&mut api_pass, &course, Some(&state), 300);
+        assert_eq!(
+            strict_verbs(&api_pass.lrs),
+            vec!["initialized", "completed", "passed", "terminated"],
+            "{bridge_flavor:?} slides then pass"
+        );
+        assert_eq!(
+            api_pass.lrs.statements()[2]
+                .pointer("/result/score/scaled")
+                .and_then(Value::as_f64),
+            Some(0.9)
+        );
+        assert!(
+            api_pass.lrs.violations().is_empty(),
+            "{bridge_flavor:?} slides+pass: {:?}",
+            api_pass.lrs.violations()
+        );
     }
 }
