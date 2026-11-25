@@ -25,8 +25,8 @@ mod run;
 pub mod suspend;
 
 pub use animation::{
-    AnimationPhase, ClipFrac, ObjectSample, TransitionSample, ease, sample_animation,
-    sample_motion_path, sample_transition,
+    AnimationPhase, ClipFrac, ConvexPoly, MAX_MASK_POLYS, MAX_POLY_POINTS, Mask, ObjectSample,
+    Tint, TransitionSample, ease, sample_animation, sample_motion_path, sample_transition,
 };
 pub use suspend::{SUSPEND_PREFIX, SuspendError, decode_suspend, encode_suspend};
 
@@ -2080,9 +2080,7 @@ impl<'c> Player<'c> {
                 anim_sample.offset.0 + motion_offset.0 + drag_pos.0,
                 anim_sample.offset.1 + motion_offset.1 + drag_pos.1,
             ),
-            scale: anim_sample.scale,
-            opacity: anim_sample.opacity,
-            clip: anim_sample.clip,
+            ..anim_sample
         })
     }
 
@@ -2111,11 +2109,10 @@ impl<'c> Player<'c> {
         if sample.opacity <= 0.0 {
             return None;
         }
-        let scale = sample.scale;
         let cx = obj.frame.x + sample.offset.0 + obj.frame.w * 0.5;
         let cy = obj.frame.y + sample.offset.1 + obj.frame.h * 0.5;
-        let w = (obj.frame.w * scale).abs();
-        let h = (obj.frame.h * scale).abs();
+        let w = (obj.frame.w * sample.scale.0).abs();
+        let h = (obj.frame.h * sample.scale.1).abs();
         Some(coursecraft_course::Rect {
             x: cx - w * 0.5,
             y: cy - h * 0.5,

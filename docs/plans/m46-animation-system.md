@@ -201,6 +201,26 @@ DeckCraft's mesh-based 3-D ones (Cube, Flip, Gallery, Doors). They use the same 
 Each phase updates `docs/spec/triggers.md`, `docs/ui/ribbon.md` and `docs/ui/feature-parity.md`
 (with counts) where it changes behaviour or UI, as CLAUDE.md requires.
 
+## Notes from DeckCraft
+
+- DeckCraft's galleries draw one star per class in code: green for entrance, gold for emphasis,
+  red for exit, and a dotted path for motion paths. We take the colour-by-kind idea, but each of our
+  icons also shows its own effect's motion, because the same star on every effect doesn't help
+  tell them apart.
+- `deckcraft/crates/model/src/anim.rs` lists a full entrance, emphasis and exit catalogue with each
+  effect's option values. Use it as a checklist for phase 3 (credit it if any code is taken).
+
+## Phase 2 as built
+
+- `ObjectSample` has `scale: (f32, f32)`, `rotation_deg`, `tint: Option<Tint>` and
+  `mask: Option<Mask>`. The rectangular `clip` stays as a fast path, and `Mask` is an
+  `Arc<[ConvexPoly]>`.
+- `compose::apply_sample_to_items` (shared by the player and the canvas timeline preview) moves,
+  scales and turns the rect, and stores scale, tint and the placed mask in `DrawItem::anim`.
+- `paint_items` lays content out at `rect / scale`. `mesh_post::MeshPost` then scales, rotates,
+  flips, clips to the mask and tints each tessellated mesh. It is our own code; nothing came from
+  DeckCraft's `mesh.rs`.
+
 ## On stock icons from Magnific / Freepik
 
 Searching the stock library for animation icons returned a mixed, mostly premium set ("Sputnik",

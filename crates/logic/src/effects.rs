@@ -112,7 +112,7 @@ fn fly_in(effect: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
 fn zoom(_: &AnimEffect, ctx: &EffectCtx) -> ObjectSample {
     let s = ctx.shown();
     ObjectSample {
-        scale: s,
+        scale: ObjectSample::uniform(s),
         opacity: s,
         ..ObjectSample::IDENTITY
     }
@@ -215,7 +215,8 @@ mod tests {
             for p in [f32::NAN, -1.0, 0.0, 0.3, 0.5, 2.0] {
                 let s = sample_effect(&e, &ctx(AnimationPhase::Entering, p));
                 assert!(s.offset.0.is_finite() && s.offset.1.is_finite());
-                assert!(s.scale.is_finite() && (0.0..=1.0).contains(&s.opacity));
+                assert!(s.scale.0.is_finite() && s.scale.1.is_finite());
+                assert!((0.0..=1.0).contains(&s.opacity));
             }
         }
     }
@@ -241,5 +242,45 @@ mod tests {
             sample_effect(&unknown, &ctx),
             sample_effect(&AnimEffect::new(FALLBACK_EFFECT), &ctx)
         );
+    }
+
+    #[test]
+    fn sanitizing_repairs_every_new_field() {
+        use crate::animation::{ConvexPoly, MAX_MASK_POLYS, Mask, Tint};
+        let s = ObjectSample {
+            scale: (f32::NAN, 1e9),
+            rotation_deg: f32::INFINITY,
+            tint: Some(Tint {
+                rgb: [1, 2, 3],
+                amount: f32::NAN,
+            }),
+            mask: Some(Mask::new(vec![
+                ConvexPoly(vec![(0.0, 0.0), (1.0, 0.0)]),
+                ConvexPoly(vec![(f32::NAN, 0.0), (1.0, 0.0), (1.0, 1.0)]),
+                ConvexPoly(vec![(0.0, 0.0), (0.5, 0.5), (1.0, 1.0)]),
+                ConvexPoly(vec![(-9.0, 0.0), (9.0, 0.0), (9.0, 1.0), (-9.0, 1.0)]),
+            ])),
+            ..ObjectSample::IDENTITY
+        }
+        .sanitized();
+        assert_eq!(s.scale, (1.0, 100.0));
+        assert_eq!(s.rotation_deg, 0.0);
+        assert_eq!(s.tint, None);
+        let mask = s.mask.expect("mask kept");
+        assert_eq!(mask.polys().len(), 1, "only the real polygon survives");
+        assert!(
+            mask.polys()[0]
+                .0
+                .iter()
+                .all(|&(x, _)| (-1.0..=2.0).contains(&x))
+        );
+
+        let many = vec![ConvexPoly::rect(0.0, 0.0, 1.0, 1.0); MAX_MASK_POLYS + 1];
+        let s = ObjectSample {
+            mask: Some(Mask::new(many)),
+            ..ObjectSample::IDENTITY
+        }
+        .sanitized();
+        assert_eq!(s.mask, None, "too many polygons show the object whole");
     }
 }

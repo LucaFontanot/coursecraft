@@ -2473,7 +2473,7 @@ fn hotspot_rect(player: &Player<'_>) -> Option<Rect> {
         }
         rect = rect.translate(vec2(sample.offset.0, sample.offset.1));
         let center = rect.center();
-        let half = rect.size() * 0.5 * sample.scale;
+        let half = rect.size() * 0.5 * vec2(sample.scale.0, sample.scale.1);
         rect = Rect::from_min_max(center - half, center + half);
     }
     Some(rect)

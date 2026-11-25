@@ -3051,21 +3051,21 @@ fn sampling_zoom() {
     let z_in_0 = sample_animation(&zoom, AnimationPhase::Entering, 0.0, frame, slide_size);
     let z_in_mid = sample_animation(&zoom, AnimationPhase::Entering, 0.5, frame, slide_size);
     let z_in_1 = sample_animation(&zoom, AnimationPhase::Entering, 1.0, frame, slide_size);
-    assert_eq!(z_in_0.scale, 0.0);
+    assert_eq!(z_in_0.scale, (0.0, 0.0));
     assert_eq!(z_in_0.opacity, 0.0);
-    assert_eq!(z_in_mid.scale, 0.5);
+    assert_eq!(z_in_mid.scale, (0.5, 0.5));
     assert_eq!(z_in_mid.opacity, 0.5);
-    assert_eq!(z_in_1.scale, 1.0);
+    assert_eq!(z_in_1.scale, (1.0, 1.0));
     assert_eq!(z_in_1.opacity, 1.0);
 
     let z_out_0 = sample_animation(&zoom, AnimationPhase::Exiting, 0.0, frame, slide_size);
     let z_out_mid = sample_animation(&zoom, AnimationPhase::Exiting, 0.5, frame, slide_size);
     let z_out_1 = sample_animation(&zoom, AnimationPhase::Exiting, 1.0, frame, slide_size);
-    assert_eq!(z_out_0.scale, 1.0);
+    assert_eq!(z_out_0.scale, (1.0, 1.0));
     assert_eq!(z_out_0.opacity, 1.0);
-    assert_eq!(z_out_mid.scale, 0.5);
+    assert_eq!(z_out_mid.scale, (0.5, 0.5));
     assert_eq!(z_out_mid.opacity, 0.5);
-    assert_eq!(z_out_1.scale, 0.0);
+    assert_eq!(z_out_1.scale, (0.0, 0.0));
     assert_eq!(z_out_1.opacity, 0.0);
 }
 

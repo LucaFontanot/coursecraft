@@ -44,31 +44,139 @@ pub struct ClipFrac {
     pub max_y: f32,
 }
 
-/// Sampled visual transform and clipping of an object at a point in time.
+/// Colour wash over an object: every painted colour moves toward `rgb` by `amount`
+/// (0 none, 1 fully that colour; textures are multiplied by it). Alpha is kept.
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tint {
+    pub rgb: [u8; 3],
+    pub amount: f32,
+}
+
+/// A convex polygon in the object's frame, as fractions: `(0, 0)` top-left, `(1, 1)`
+/// bottom-right. Points may lie outside `[0, 1]` (a circle that covers the corners). Either
+/// winding works.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConvexPoly(pub Vec<(f32, f32)>);
+
+/// Most polygons a [`Mask`] keeps; a sample function that makes more gets no mask (the
+/// object shows whole), so a hostile or runaway effect cannot cost unbounded clipping work.
+pub const MAX_MASK_POLYS: usize = 64;
+/// Most points one [`ConvexPoly`] keeps; longer polygons are dropped.
+pub const MAX_POLY_POINTS: usize = 64;
+
+/// The visible part of an object: the union of its polygons, which must not overlap (an
+/// overlap paints twice). An empty mask shows nothing. Moves, scales and rotates with the
+/// object; it is never mirrored by a flip.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mask(pub std::sync::Arc<[ConvexPoly]>);
+
+impl Mask {
+    /// A mask of `polys`.
+    #[must_use]
+    pub fn new(polys: Vec<ConvexPoly>) -> Self {
+        Self(polys.into())
+    }
+
+    /// The polygons.
+    #[must_use]
+    pub fn polys(&self) -> &[ConvexPoly] {
+        &self.0
+    }
+
+    /// Drop polygons with non-finite points, fewer than 3 points, too many points or no
+    /// area, and clamp points to `[-1, 2]`. `None` when there are more than
+    /// [`MAX_MASK_POLYS`] polygons.
+    #[must_use]
+    pub fn sanitized(&self) -> Option<Self> {
+        if self.0.len() > MAX_MASK_POLYS {
+            return None;
+        }
+        let polys: Vec<ConvexPoly> = self
+            .0
+            .iter()
+            .filter(|p| {
+                (3..=MAX_POLY_POINTS).contains(&p.0.len())
+                    && p.0.iter().all(|(x, y)| x.is_finite() && y.is_finite())
+            })
+            .map(|p| {
+                ConvexPoly(
+                    p.0.iter()
+                        .map(|&(x, y)| (x.clamp(-1.0, 2.0), y.clamp(-1.0, 2.0)))
+                        .collect(),
+                )
+            })
+            .filter(|p| p.area().abs() > 1e-9)
+            .collect();
+        Some(Self::new(polys))
+    }
+}
+
+impl ConvexPoly {
+    /// Signed area (positive for clockwise on screen, where y grows down).
+    #[must_use]
+    pub fn area(&self) -> f32 {
+        let n = self.0.len();
+        let mut twice = 0.0;
+        for i in 0..n {
+            let (x0, y0) = self.0[i];
+            let (x1, y1) = self.0[(i + 1) % n];
+            twice += x0 * y1 - x1 * y0;
+        }
+        twice * 0.5
+    }
+
+    /// The axis-aligned rectangle `[x0, x1] × [y0, y1]`.
+    #[must_use]
+    pub fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Self {
+        Self(vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)])
+    }
+}
+
+/// Sampled look of an object at a point in time, on top of its resting frame.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ObjectSample {
+    /// Translation in slide pixels.
     pub offset: (f32, f32),
-    pub scale: f32,
+    /// Horizontal and vertical scale about the frame centre, in the object's own axes.
+    pub scale: (f32, f32),
+    /// Extra clockwise rotation in degrees about the frame centre.
+    pub rotation_deg: f32,
     pub opacity: f32,
+    /// Rectangular reveal (fast path; see also `mask`).
     pub clip: Option<ClipFrac>,
+    pub tint: Option<Tint>,
+    /// Shaped reveal: only the inside of these polygons shows.
+    pub mask: Option<Mask>,
 }
 
 impl ObjectSample {
     pub const IDENTITY: Self = Self {
         offset: (0.0, 0.0),
-        scale: 1.0,
+        scale: (1.0, 1.0),
+        rotation_deg: 0.0,
         opacity: 1.0,
         clip: None,
+        tint: None,
+        mask: None,
     };
 
-    /// Repair non-finite numbers (to identity) and clamp opacity to `[0, 1]` and scale to
-    /// `>= 0`, so a sample function can never hand the renderer hostile values.
+    /// The same scale on both axes.
+    #[must_use]
+    pub const fn uniform(s: f32) -> (f32, f32) {
+        (s, s)
+    }
+
+    /// Repair non-finite numbers (to identity), clamp opacity and tint amount to `[0, 1]`,
+    /// scale to `[0, 100]` and rotation to ±3600°, and sanitize the mask, so a sample function
+    /// can never hand the renderer hostile values.
     #[must_use]
     pub fn sanitized(self) -> Self {
         let fin = |v: f32, d: f32| if v.is_finite() { v } else { d };
+        let scale = |v: f32| fin(v, 1.0).clamp(0.0, 100.0);
         Self {
             offset: (fin(self.offset.0, 0.0), fin(self.offset.1, 0.0)),
-            scale: fin(self.scale, 1.0).max(0.0),
+            scale: (scale(self.scale.0), scale(self.scale.1)),
+            rotation_deg: fin(self.rotation_deg, 0.0).clamp(-3600.0, 3600.0),
             opacity: fin(self.opacity, 1.0).clamp(0.0, 1.0),
             clip: self.clip.map(|c| ClipFrac {
                 min_x: fin(c.min_x, 0.0).clamp(0.0, 1.0),
@@ -76,6 +184,14 @@ impl ObjectSample {
                 max_x: fin(c.max_x, 1.0).clamp(0.0, 1.0),
                 max_y: fin(c.max_y, 1.0).clamp(0.0, 1.0),
             }),
+            tint: self
+                .tint
+                .map(|t| Tint {
+                    rgb: t.rgb,
+                    amount: fin(t.amount, 0.0).clamp(0.0, 1.0),
+                })
+                .filter(|t| t.amount > 0.0),
+            mask: self.mask.as_ref().and_then(Mask::sanitized),
         }
     }
 }

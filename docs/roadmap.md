@@ -505,8 +505,14 @@ rebuilt Animations panel; live preview on the canvas.
   match), the ribbon galleries and the Animate inspector list effects from the registry, the
   `animation.effects` command, and `object.set_animation` refuses unknown effects and options.
   Unknown ids in a file warn and play as Fade.
-- Next: renderer (rotation, x/y scale, tint, shaped reveals), effect pack 1, icons, Animations
-  panel and canvas preview, emphasis, build by paragraph, transitions.
+- Phase 2 (renderer) **built (2026-11-25)**: animation samples carry x/y scale, rotation, tint
+  and shaped masks (convex polygons). The renderer applies them in one mesh pass
+  (`coursecraft-render` `mesh_post`: scale, turn, flip, Sutherland–Hodgman clip, tint) on the
+  player, the editor's timeline preview and offscreen renders; scaled text shrinks instead of
+  rewrapping. Pixel tests cover each part, and every effect ends pixel-identical to its resting
+  object. No effect uses the new parts yet.
+- Next: effect pack 1, icons, Animations panel and canvas preview, emphasis, build by paragraph,
+  transitions.
 
 ## After the first release
 

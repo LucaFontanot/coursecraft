@@ -8654,20 +8654,7 @@ pub(crate) fn timeline_animated_items(
                 return None;
             }
             let mut item = item.clone();
-            let offset = vec2(sample.offset.0, sample.offset.1);
-            let scale = if sample.scale.is_finite() {
-                sample.scale.max(0.0)
-            } else {
-                1.0
-            };
-            if offset.x.is_finite() && offset.y.is_finite() {
-                item.rect = item.rect.translate(offset);
-            }
-            let center = item.rect.center();
-            let half = item.rect.size() * 0.5 * scale;
-            item.rect = Rect::from_min_max(center - half, center + half);
-            item.opacity = (item.opacity * sample.opacity).clamp(0.0, 1.0);
-            item.clip = sample.clip;
+            coursecraft_render::apply_sample_to_items(std::slice::from_mut(&mut item), &sample);
             Some(item)
         })
         .collect()

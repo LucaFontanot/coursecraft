@@ -27,6 +27,7 @@ pub mod layout;
 pub mod lottie;
 pub mod media;
 pub mod media_driver;
+mod mesh_post;
 pub mod offscreen;
 pub mod paint;
 pub mod path_geometry;
@@ -46,6 +47,8 @@ mod justify_tests;
 mod m29_state_extras_tests;
 #[cfg(test)]
 mod m29_state_resolver_tests;
+#[cfg(test)]
+mod m46_anim_render_tests;
 #[cfg(test)]
 mod outline_tests;
 #[cfg(test)]
@@ -70,13 +73,14 @@ pub use chrome::{
 };
 pub use color::parse_color;
 pub use compose::{
-    DEFAULT_BUTTON_COLOR, DEFAULT_TEXT_COLOR, DrawItem, Hit, ResolvedCellText, ResolvedLinkRect,
-    ResolvedOutline, ResolvedPath, ResolvedShapeText, ResolvedTable, ResolvedTableCell,
-    ResolvedTableRow, ResolvedTextRun, ReviewMark, Visual, compose, compose_authoring,
-    compose_authoring_layers, compose_authoring_layers_opts, compose_object, compose_object_items,
-    compose_object_with_theme, compose_object_with_value, compose_with_pointer, flip_point,
-    item_bounds, item_corners, item_hit_test, item_link_at, item_local_point, question_prompt_rect,
-    resolve_text_runs, rotate_point,
+    AnimLook, DEFAULT_BUTTON_COLOR, DEFAULT_TEXT_COLOR, DrawItem, Hit, PlacedMask,
+    ResolvedCellText, ResolvedLinkRect, ResolvedOutline, ResolvedPath, ResolvedShapeText,
+    ResolvedTable, ResolvedTableCell, ResolvedTableRow, ResolvedTextRun, ReviewMark, Visual,
+    apply_sample_to_items, compose, compose_authoring, compose_authoring_layers,
+    compose_authoring_layers_opts, compose_object, compose_object_items, compose_object_with_theme,
+    compose_object_with_value, compose_with_pointer, flip_point, item_bounds, item_corners,
+    item_hit_test, item_link_at, item_local_point, question_prompt_rect, resolve_text_runs,
+    rotate_point,
 };
 pub use design::{
     CONTROL_COMPACT, CONTROL_PRIMARY, CONTROL_TOOLBAR, ICON_SM, ICON_TOOLBAR, PANEL_MARGIN,

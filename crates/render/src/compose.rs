@@ -451,6 +451,70 @@ pub struct DrawItem {
     pub mark: Option<ReviewMark>,
     /// True when this item is a visual-only extra from an active object state.
     pub is_state_extra: bool,
+    /// Animation scale, tint and shaped reveal the painter applies to what it paints.
+    pub anim: AnimLook,
+}
+
+/// The parts of an animation sample the painter applies to the painted meshes. Offset,
+/// rotation, opacity and the rectangular clip go into the item's own fields instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimLook {
+    /// Scale already applied to `rect`. The painter lays the content out at `rect / scale`
+    /// and then scales the painted meshes, so text and borders shrink with the object instead
+    /// of rewrapping.
+    pub scale: (f32, f32),
+    pub tint: Option<coursecraft_logic::Tint>,
+    /// Shaped reveal, placed on the animated object's frame.
+    pub mask: Option<PlacedMask>,
+}
+
+/// A [`coursecraft_logic::Mask`] placed on the slide: its polygons are fractions of `frame`,
+/// turned `rotation` degrees clockwise about the frame centre. State extras share their
+/// object's placement, so one reveal covers the object and its extras.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedMask {
+    pub mask: coursecraft_logic::Mask,
+    /// The object's frame in slide coordinates, after the animation's move and scale.
+    pub frame: egui::Rect,
+    /// How the frame looks turned on screen. A single flip turns the other way, and the
+    /// mask itself is never mirrored.
+    pub rotation: f32,
+}
+
+impl PlacedMask {
+    /// The polygons in slide coordinates, shifted by `offset`.
+    #[must_use]
+    pub fn slide_polys(&self, offset: egui::Vec2) -> Vec<Vec<egui::Pos2>> {
+        let f = self.frame.translate(offset);
+        let c = f.center();
+        self.mask
+            .polys()
+            .iter()
+            .map(|p| {
+                p.0.iter()
+                    .map(|&(x, y)| {
+                        let pt = egui::pos2(f.min.x + x * f.width(), f.min.y + y * f.height());
+                        rotate_point(pt, c, self.rotation)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+impl AnimLook {
+    /// No scale, tint or mask.
+    pub const IDENTITY: Self = Self {
+        scale: (1.0, 1.0),
+        tint: None,
+        mask: None,
+    };
+
+    /// Whether the painter has anything to do.
+    #[must_use]
+    pub fn is_identity(&self) -> bool {
+        self.scale == (1.0, 1.0) && self.tint.is_none() && self.mask.is_none()
+    }
 }
 
 /// A stored crop as source fractions, or `None` when it would draw wrongly or
@@ -1913,6 +1977,7 @@ fn compose_object_opts(
         clip_rect: None,
         mark: None,
         is_state_extra: false,
+        anim: AnimLook::IDENTITY,
     })
 }
 
@@ -2155,6 +2220,7 @@ fn compose_state_extra(
         clip_rect: None,
         mark: None,
         is_state_extra: true,
+        anim: AnimLook::IDENTITY,
     })
 }
 
@@ -2257,6 +2323,7 @@ fn push_item(items: &mut Vec<DrawItem>, hit: Hit, rect: egui::Rect, visual: Visu
         clip_rect: None,
         mark: None,
         is_state_extra: false,
+        anim: AnimLook::IDENTITY,
     });
 }
 
@@ -2698,29 +2765,52 @@ fn push_base_items(
     }
 }
 
-fn apply_sample_to_items(items: &mut [DrawItem], sample: &coursecraft_logic::ObjectSample) {
+/// Apply an animation sample to one object's draw items: the first is the object, the rest
+/// (state extras) move, scale and turn with it about its centre.
+pub fn apply_sample_to_items(items: &mut [DrawItem], sample: &coursecraft_logic::ObjectSample) {
     let Some((first, rest)) = items.split_first_mut() else {
         return;
     };
-    first.rect = first
-        .rect
-        .translate(egui::vec2(sample.offset.0, sample.offset.1));
+    let fin = |v: f32, d: f32| if v.is_finite() { v } else { d };
+    let offset = egui::vec2(fin(sample.offset.0, 0.0), fin(sample.offset.1, 0.0));
+    let scale = egui::vec2(
+        fin(sample.scale.0, 1.0).max(0.0),
+        fin(sample.scale.1, 1.0).max(0.0),
+    );
+    let turn = fin(sample.rotation_deg, 0.0);
+    let opacity = fin(sample.opacity, 1.0);
+
+    first.rect = first.rect.translate(offset);
     let parent_center = first.rect.center();
-    let parent_half = first.rect.size() * 0.5 * sample.scale;
-    first.rect = egui::Rect::from_min_max(parent_center - parent_half, parent_center + parent_half);
-    first.opacity = (first.opacity * sample.opacity).clamp(0.0, 1.0);
+    first.rect = egui::Rect::from_center_size(parent_center, first.rect.size() * scale);
+    first.opacity = (first.opacity * opacity).clamp(0.0, 1.0);
     first.clip = sample.clip;
+    first.rotation += turn;
+    let mirrored = first.flip_h != first.flip_v;
+    let look = AnimLook {
+        scale: (scale.x, scale.y),
+        tint: sample.tint,
+        mask: sample.mask.clone().map(|mask| PlacedMask {
+            mask,
+            frame: first.rect,
+            rotation: if mirrored {
+                -first.rotation
+            } else {
+                first.rotation
+            },
+        }),
+    };
+    first.anim = look.clone();
 
     for extra in rest {
-        extra.rect = extra
-            .rect
-            .translate(egui::vec2(sample.offset.0, sample.offset.1));
-        let rel_center = extra.rect.center() - parent_center;
-        let new_center = parent_center + rel_center * sample.scale;
-        let new_half = extra.rect.size() * 0.5 * sample.scale;
-        extra.rect = egui::Rect::from_min_max(new_center - new_half, new_center + new_half);
-        extra.opacity = (extra.opacity * sample.opacity).clamp(0.0, 1.0);
+        extra.rect = extra.rect.translate(offset);
+        let rel_center = (extra.rect.center() - parent_center) * scale;
+        let new_center = rotate_point(parent_center + rel_center, parent_center, turn);
+        extra.rect = egui::Rect::from_center_size(new_center, extra.rect.size() * scale);
+        extra.opacity = (extra.opacity * opacity).clamp(0.0, 1.0);
         extra.clip = sample.clip;
+        extra.rotation += turn;
+        extra.anim = look.clone();
     }
 }
 
@@ -2885,6 +2975,7 @@ pub fn compose_with_pointer(
                 clip_rect: None,
                 mark: None,
                 is_state_extra: false,
+                anim: AnimLook::IDENTITY,
             };
             items.push(pill);
             items.push(label);
