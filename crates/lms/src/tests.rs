@@ -2274,3 +2274,438 @@ fn scorm_does_not_overwrite_a_pass_with_a_later_fail_or_lower_score() {
         Some("95")
     );
 }
+
+struct Strict12TestApi {
+    inner: coursecraft_strict_lms::StrictScorm12,
+}
+
+impl Strict12TestApi {
+    fn new() -> Self {
+        Self {
+            inner: coursecraft_strict_lms::StrictScorm12::new(),
+        }
+    }
+
+    fn from_strict(inner: coursecraft_strict_lms::StrictScorm12) -> Self {
+        Self { inner }
+    }
+}
+
+impl CmiApi for Strict12TestApi {
+    fn initialize(&mut self) -> bool {
+        self.inner.lms_initialize("") == "true"
+    }
+
+    fn get_value(&mut self, key: &str) -> String {
+        self.inner.lms_get_value(key)
+    }
+
+    fn set_value(&mut self, key: &str, value: &str) -> bool {
+        self.inner.lms_set_value(key, value) == "true"
+    }
+
+    fn commit(&mut self) -> bool {
+        self.inner.lms_commit("") == "true"
+    }
+
+    fn finish(&mut self) -> bool {
+        self.inner.lms_finish("") == "true"
+    }
+
+    fn last_error(&mut self) -> String {
+        let code = self.inner.lms_get_last_error();
+        let text = self.inner.lms_get_error_string(code);
+        format!("{code}: {text}")
+    }
+}
+
+struct Strict2004TestApi {
+    inner: coursecraft_strict_lms::StrictScorm2004,
+}
+
+impl Strict2004TestApi {
+    fn new() -> Self {
+        Self {
+            inner: coursecraft_strict_lms::StrictScorm2004::new(),
+        }
+    }
+
+    fn from_strict(inner: coursecraft_strict_lms::StrictScorm2004) -> Self {
+        Self { inner }
+    }
+}
+
+impl CmiApi for Strict2004TestApi {
+    fn initialize(&mut self) -> bool {
+        self.inner.initialize("") == "true"
+    }
+
+    fn get_value(&mut self, key: &str) -> String {
+        self.inner.get_value(key)
+    }
+
+    fn set_value(&mut self, key: &str, value: &str) -> bool {
+        self.inner.set_value(key, value) == "true"
+    }
+
+    fn commit(&mut self) -> bool {
+        self.inner.commit("") == "true"
+    }
+
+    fn finish(&mut self) -> bool {
+        self.inner.terminate("") == "true"
+    }
+
+    fn last_error(&mut self) -> String {
+        let code = self.inner.get_last_error();
+        let text = self.inner.get_error_string(code);
+        format!("{code}: {text}")
+    }
+}
+
+fn course_with_lms_status(lms_status: coursecraft_course::LmsStatus) -> Course {
+    let mut course = hello_course();
+    course.editor.last_publish = Some(coursecraft_course::PublishSettings {
+        standard: "scorm12".to_string(),
+        lms_status,
+    });
+    course
+}
+
+#[test]
+fn tr_08_scorm12_monotonic_all_five_lms_status_modes() {
+    use coursecraft_course::LmsStatus;
+    let state = PlayerState::default();
+
+    let modes = [
+        (LmsStatus::Auto, "completed", "completed", "passed"),
+        (LmsStatus::PassedIncomplete, "passed", "passed", "passed"),
+        (LmsStatus::PassedFailed, "passed", "passed", "passed"),
+        (
+            LmsStatus::CompletedIncomplete,
+            "completed",
+            "completed",
+            "completed",
+        ),
+        (
+            LmsStatus::CompletedFailed,
+            "completed",
+            "completed",
+            "completed",
+        ),
+    ];
+
+    for (mode, after_slides, after_slides_then_fail, after_pass) in modes {
+        let course = course_with_lms_status(mode);
+
+        // 1. Slides viewed -> then quiz fail (40%) -> never downgrades -> then quiz pass (90%).
+        let mut api = Strict12TestApi::new();
+        let mut bridge = LmsBridge::new();
+        let (_, w) = bridge.start(&mut api, &course);
+        assert!(w.is_empty(), "{mode:?}: {w:?}");
+
+        let w = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[Effect::Completion {
+                status: CompletionStatus::Completed,
+            }],
+            100,
+        );
+        assert!(w.is_empty(), "{mode:?}: {w:?}");
+        assert_eq!(
+            api.get_value("cmi.core.lesson_status"),
+            after_slides,
+            "{mode:?} after slides"
+        );
+
+        let w = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 40,
+                    max: 100,
+                    percent: 40,
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Failed,
+                },
+            ],
+            200,
+        );
+        assert!(w.is_empty(), "{mode:?}: {w:?}");
+        assert_eq!(
+            api.get_value("cmi.core.lesson_status"),
+            after_slides_then_fail,
+            "{mode:?} slides-then-fail"
+        );
+        if mode == LmsStatus::Auto {
+            assert_eq!(api.get_value("cmi.core.score.raw"), "40");
+        }
+
+        let w = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 90,
+                    max: 100,
+                    percent: 90,
+                    status: CompletionStatus::Passed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Passed,
+                },
+            ],
+            300,
+        );
+        assert!(w.is_empty(), "{mode:?}: {w:?}");
+        assert_eq!(
+            api.get_value("cmi.core.lesson_status"),
+            after_pass,
+            "{mode:?} after pass"
+        );
+        assert_eq!(api.get_value("cmi.core.score.raw"), "90");
+
+        // Retry pass (90) -> fail (20): never downgrades.
+        let _ = bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[Effect::Score {
+                raw: 20,
+                max: 100,
+                percent: 20,
+                status: CompletionStatus::Failed,
+            }],
+            400,
+        );
+        assert_eq!(api.get_value("cmi.core.lesson_status"), after_pass);
+        assert_eq!(api.get_value("cmi.core.score.raw"), "90");
+        let w = bridge.finish_session(&mut api, 500);
+        assert!(w.is_empty(), "{mode:?} finish: {w:?}");
+        assert!(
+            api.inner.violations().is_empty(),
+            "{mode:?}: {:?}",
+            api.inner.violations()
+        );
+
+        // 2. Fail (40%) -> then same-batch [Score(40, Failed), Completion(Failed), Completion(Completed)].
+        let mut api2 = Strict12TestApi::new();
+        let mut bridge2 = LmsBridge::new();
+        let _ = bridge2.start(&mut api2, &course);
+        let _ = bridge2.after_input(
+            &mut api2,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 40,
+                    max: 100,
+                    percent: 40,
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Completed,
+                },
+            ],
+            100,
+        );
+        assert_eq!(
+            api2.get_value("cmi.core.lesson_status"),
+            after_slides,
+            "{mode:?} fail+slides batch"
+        );
+        assert_eq!(api2.get_value("cmi.core.score.raw"), "40");
+        let _ = bridge2.finish_session(&mut api2, 200);
+        assert!(
+            api2.inner.violations().is_empty(),
+            "{mode:?}: {:?}",
+            api2.inner.violations()
+        );
+
+        // 3. Resume after relaunch when already completed: never downgrades on fail.
+        let mut relaunch_strict = coursecraft_strict_lms::StrictScorm12::new();
+        relaunch_strict.seed_status(after_slides, Some("40"));
+        let mut relaunch = Strict12TestApi::from_strict(relaunch_strict);
+        let mut bridge3 = LmsBridge::new();
+        let (_, w) = bridge3.start(&mut relaunch, &course);
+        assert!(w.is_empty(), "{mode:?} relaunch: {w:?}");
+        let _ = bridge3.after_input(
+            &mut relaunch,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 15,
+                    max: 100,
+                    percent: 15,
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Incomplete,
+                },
+            ],
+            100,
+        );
+        assert_eq!(
+            relaunch.get_value("cmi.core.lesson_status"),
+            after_slides,
+            "{mode:?} relaunch no downgrade"
+        );
+        let _ = bridge3.finish_session(&mut relaunch, 200);
+        assert!(
+            relaunch.inner.violations().is_empty(),
+            "{mode:?} relaunch: {:?}",
+            relaunch.inner.violations()
+        );
+    }
+}
+
+#[test]
+fn tr_09_scorm2004_monotonic_completion_and_success_status() {
+    let course = hello_course();
+    let state = PlayerState::default();
+
+    let mut api = Strict2004TestApi::new();
+    let mut bridge = LmsBridge::for_standard(Standard::Scorm2004);
+    let (_, w) = bridge.start(&mut api, &course);
+    assert!(w.is_empty(), "{w:?}");
+
+    // 1. Slides viewed -> completion_status = "completed", success_status untouched ("unknown").
+    let w = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[Effect::Completion {
+            status: CompletionStatus::Completed,
+        }],
+        100,
+    );
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(api.get_value("cmi.completion_status"), "completed");
+    assert_eq!(api.get_value("cmi.success_status"), "unknown");
+
+    // 2. Quiz fail (40%) -> completion stays "completed", success = "failed", score = 40 / 0.4.
+    let w = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[
+            Effect::Score {
+                raw: 40,
+                max: 100,
+                percent: 40,
+                status: CompletionStatus::Failed,
+            },
+            Effect::Completion {
+                status: CompletionStatus::Failed,
+            },
+        ],
+        200,
+    );
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(api.get_value("cmi.completion_status"), "completed");
+    assert_eq!(api.get_value("cmi.success_status"), "failed");
+    assert_eq!(api.get_value("cmi.score.raw"), "40");
+    assert_eq!(api.get_value("cmi.score.scaled"), "0.4");
+
+    // 3. Retry -> pass (90%) -> upgrades success_status "failed" -> "passed".
+    let w = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[
+            Effect::Score {
+                raw: 90,
+                max: 100,
+                percent: 90,
+                status: CompletionStatus::Passed,
+            },
+            Effect::Completion {
+                status: CompletionStatus::Passed,
+            },
+        ],
+        300,
+    );
+    assert!(w.is_empty(), "{w:?}");
+    assert_eq!(api.get_value("cmi.completion_status"), "completed");
+    assert_eq!(api.get_value("cmi.success_status"), "passed");
+    assert_eq!(api.get_value("cmi.score.raw"), "90");
+    assert_eq!(api.get_value("cmi.score.scaled"), "0.9");
+
+    // 4. Later fail/incomplete never downgrades "passed" or "completed".
+    let _ = bridge.after_input(
+        &mut api,
+        &course,
+        &state,
+        &[
+            Effect::Score {
+                raw: 20,
+                max: 100,
+                percent: 20,
+                status: CompletionStatus::Failed,
+            },
+            Effect::Completion {
+                status: CompletionStatus::Incomplete,
+            },
+        ],
+        400,
+    );
+    assert_eq!(api.get_value("cmi.completion_status"), "completed");
+    assert_eq!(api.get_value("cmi.success_status"), "passed");
+    assert_eq!(api.get_value("cmi.score.raw"), "90");
+
+    let w = bridge.finish_session(&mut api, 500);
+    assert!(w.is_empty(), "{w:?}");
+    assert!(
+        api.inner.violations().is_empty(),
+        "{:?}",
+        api.inner.violations()
+    );
+
+    // 5. Resume preserves both and never downgrades.
+    let persisted = api.inner.export_persisted_json();
+    let mut relaunch_strict = coursecraft_strict_lms::StrictScorm2004::new();
+    relaunch_strict
+        .import_persisted_json(&persisted)
+        .expect("import persisted");
+    let mut relaunch = Strict2004TestApi::from_strict(relaunch_strict);
+    let mut bridge2 = LmsBridge::for_standard(Standard::Scorm2004);
+    let (_, w) = bridge2.start(&mut relaunch, &course);
+    assert!(w.is_empty(), "{w:?}");
+    let _ = bridge2.after_input(
+        &mut relaunch,
+        &course,
+        &state,
+        &[
+            Effect::Score {
+                raw: 10,
+                max: 100,
+                percent: 10,
+                status: CompletionStatus::Failed,
+            },
+            Effect::Completion {
+                status: CompletionStatus::Incomplete,
+            },
+        ],
+        100,
+    );
+    assert_eq!(relaunch.get_value("cmi.completion_status"), "completed");
+    assert_eq!(relaunch.get_value("cmi.success_status"), "passed");
+    assert_eq!(relaunch.get_value("cmi.score.raw"), "90");
+    let _ = bridge2.finish_session(&mut relaunch, 200);
+    assert!(
+        relaunch.inner.violations().is_empty(),
+        "{:?}",
+        relaunch.inner.violations()
+    );
+}

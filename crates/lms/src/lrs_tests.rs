@@ -1333,3 +1333,300 @@ fn a_mastery_score_does_not_fail_a_course_with_no_quiz() {
 
     assert_eq!(verbs(&lrs), vec!["initialized", "completed", "terminated"]);
 }
+
+struct StrictLrsBridgeAdapter {
+    lrs: coursecraft_strict_lms::StrictLrs,
+    inbox: std::collections::VecDeque<LrsResponse>,
+    uuid_counter: u64,
+}
+
+impl StrictLrsBridgeAdapter {
+    fn new(lrs: coursecraft_strict_lms::StrictLrs) -> Self {
+        Self {
+            lrs,
+            inbox: std::collections::VecDeque::new(),
+            uuid_counter: 0,
+        }
+    }
+}
+
+impl LrsApi for StrictLrsBridgeAdapter {
+    fn send(&mut self, request: LrsRequest) {
+        let method = match request.method {
+            LrsMethod::Get => "GET",
+            LrsMethod::Post => "POST",
+            LrsMethod::Put => "PUT",
+        };
+        let body = request.body.as_deref().unwrap_or("").as_bytes();
+        let (path, query) = request.url.split_once('?').unwrap_or((&request.url, ""));
+        let resp = if let Some(fetch_id) = path
+            .rsplit("/fetch/")
+            .next()
+            .filter(|_| path.contains("/fetch/"))
+        {
+            self.lrs.handle_fetch(method, fetch_id, &request.headers)
+        } else if path.ends_with("/statements") {
+            self.lrs.handle_statements(method, &request.headers, body)
+        } else if path.ends_with("/activities/state") {
+            self.lrs.handle_state(method, query, &request.headers, body)
+        } else {
+            coursecraft_strict_lms::LrsResponse {
+                status: 404,
+                headers: vec![],
+                body: b"not found".to_vec(),
+            }
+        };
+        self.inbox.push_back(LrsResponse {
+            id: request.id,
+            status: resp.status,
+            body: String::from_utf8_lossy(&resp.body).into_owned(),
+        });
+    }
+
+    fn poll(&mut self) -> Vec<LrsResponse> {
+        self.inbox.drain(..).collect()
+    }
+
+    fn now_iso(&mut self) -> String {
+        "2026-11-25T10:00:00Z".to_owned()
+    }
+
+    fn new_uuid(&mut self) -> String {
+        self.uuid_counter += 1;
+        format!("00000000-0000-4000-8000-{:012x}", self.uuid_counter)
+    }
+}
+
+fn strict_verbs(lrs: &coursecraft_strict_lms::StrictLrs) -> Vec<String> {
+    lrs.statements()
+        .iter()
+        .filter_map(|s| {
+            s.get("verb")
+                .and_then(|v| v.get("id"))
+                .and_then(Value::as_str)
+                .and_then(|id| id.rsplit('/').next())
+                .map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+fn strict_handshake(
+    bridge: &mut XapiBridge,
+    api: &mut StrictLrsBridgeAdapter,
+    course: &Course,
+) -> u64 {
+    bridge.start(api);
+    let mut now = 100;
+    for _ in 0..10 {
+        let tick = bridge.tick(api, course, now);
+        if tick.plan.is_some() {
+            return now;
+        }
+        now += 100;
+    }
+    panic!("handshake did not finish");
+}
+
+fn register_strict_launch(
+    lrs: &mut coursecraft_strict_lms::StrictLrs,
+    strict_flavor: coursecraft_strict_lms::Flavor,
+    bridge_flavor: Flavor,
+    session_id: &str,
+    fetch_id: Option<&str>,
+    auth_token: &str,
+) -> LaunchParams {
+    use coursecraft_strict_lms::{Flavor as StrictFlavor, LaunchSpec, build_cmi5_launch_data};
+    let activity_id = "https://lms.example/activities/hello";
+    let registration = "11111111-1111-4111-8111-111111111111";
+    let actor = serde_json::json!({
+        "objectType": "Agent",
+        "account": { "homePage": "https://lms.example", "name": "alice" },
+        "name": "Alice"
+    });
+    let launch_doc = (strict_flavor == StrictFlavor::Cmi5)
+        .then(|| build_cmi5_launch_data(activity_id, session_id, "Normal", None, None));
+    let expected_auth = match strict_flavor {
+        StrictFlavor::Cmi5 => auth_token.to_owned(),
+        StrictFlavor::Xapi => format!("Basic {auth_token}"),
+    };
+    lrs.register_launch(
+        LaunchSpec {
+            flavor: strict_flavor,
+            activity_id: activity_id.to_owned(),
+            actor,
+            registration: Some(registration.to_owned()),
+            launch_mode: "Normal".to_owned(),
+            mastery_score: None,
+            session_id: session_id.to_owned(),
+            grouping_ids: vec![activity_id.to_owned()],
+            fetch_id: fetch_id.map(str::to_owned),
+            auth_token: Some(expected_auth),
+        },
+        launch_doc,
+    );
+    let query = match strict_flavor {
+        StrictFlavor::Cmi5 => format!(
+            "endpoint=https://lrs.example/xapi&fetch=https://lrs.example/fetch/{}&actor=%7B%22objectType%22%3A%22Agent%22%2C%22account%22%3A%7B%22homePage%22%3A%22https%3A%2F%2Flms.example%22%2C%22name%22%3A%22alice%22%7D%2C%22name%22%3A%22Alice%22%7D&registration={registration}&activityId=https%3A%2F%2Flms.example%2Factivities%2Fhello",
+            fetch_id.unwrap_or("f1")
+        ),
+        StrictFlavor::Xapi => format!(
+            "endpoint=https://lrs.example/xapi&auth=Basic%20{auth_token}&actor=%7B%22objectType%22%3A%22Agent%22%2C%22account%22%3A%7B%22homePage%22%3A%22https%3A%2F%2Flms.example%22%2C%22name%22%3A%22alice%22%7D%2C%22name%22%3A%22Alice%22%7D&registration={registration}&activity_id=https%3A%2F%2Flms.example%2Factivities%2Fhello"
+        ),
+    };
+    LaunchParams::parse(&query, bridge_flavor).expect("launch params")
+}
+
+#[test]
+fn tr_10_xapi_cmi5_monotonic_and_deduped_completion() {
+    use coursecraft_strict_lms::{Flavor as StrictFlavor, StrictLrs};
+
+    let course = hello_course();
+    let state = PlayerState::default();
+
+    for (strict_flavor, bridge_flavor) in [
+        (StrictFlavor::Cmi5, Flavor::Cmi5),
+        (StrictFlavor::Xapi, Flavor::Xapi),
+    ] {
+        // 1. Slides viewed -> completed; then quiz fail -> failed (zero duplicate completed).
+        let mut lrs = StrictLrs::new();
+        let params = register_strict_launch(
+            &mut lrs,
+            strict_flavor,
+            bridge_flavor,
+            "sess-1",
+            Some("f1"),
+            "tok-1",
+        );
+        let mut api = StrictLrsBridgeAdapter::new(lrs);
+        let mut bridge = XapiBridge::new(params, bridge_flavor, &course);
+        let mut now = strict_handshake(&mut bridge, &mut api, &course);
+
+        bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[Effect::Completion {
+                status: CompletionStatus::Completed,
+            }],
+            100,
+            now,
+        );
+        now += 100;
+        bridge.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 40,
+                    max: 100,
+                    percent: 40,
+                    status: CompletionStatus::Failed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Failed,
+                },
+            ],
+            200,
+            now,
+        );
+        bridge.finish_session(&mut api, &course, Some(&state), 300);
+        assert_eq!(
+            strict_verbs(&api.lrs),
+            vec!["initialized", "completed", "failed", "terminated"],
+            "{bridge_flavor:?} slides+fail"
+        );
+        assert!(
+            api.lrs.violations().is_empty(),
+            "{bridge_flavor:?}: {:?}",
+            api.lrs.violations()
+        );
+
+        // 2. Relaunch same registration after fail -> retry pass -> emits passed (no duplicate completed).
+        let params2 = register_strict_launch(
+            &mut api.lrs,
+            strict_flavor,
+            bridge_flavor,
+            "sess-2",
+            Some("f2"),
+            "tok-2",
+        );
+        let before_count = api.lrs.statements().len();
+        let mut bridge2 = XapiBridge::new(params2, bridge_flavor, &course);
+        let now2 = strict_handshake(&mut bridge2, &mut api, &course);
+        bridge2.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[
+                Effect::Score {
+                    raw: 90,
+                    max: 100,
+                    percent: 90,
+                    status: CompletionStatus::Passed,
+                },
+                Effect::Completion {
+                    status: CompletionStatus::Passed,
+                },
+            ],
+            100,
+            now2,
+        );
+        bridge2.finish_session(&mut api, &course, Some(&state), 200);
+        let session2_verbs: Vec<String> = strict_verbs(&api.lrs)
+            .into_iter()
+            .skip(before_count)
+            .collect();
+        assert_eq!(
+            session2_verbs,
+            vec!["initialized", "passed", "terminated"],
+            "{bridge_flavor:?} relaunch retry pass"
+        );
+        assert!(
+            api.lrs.violations().is_empty(),
+            "{bridge_flavor:?}: {:?}",
+            api.lrs.violations()
+        );
+
+        // 3. Relaunch after pass -> fail ignored (passed_saved == true).
+        let params3 = register_strict_launch(
+            &mut api.lrs,
+            strict_flavor,
+            bridge_flavor,
+            "sess-3",
+            Some("f3"),
+            "tok-3",
+        );
+        let before_count3 = api.lrs.statements().len();
+        let mut bridge3 = XapiBridge::new(params3, bridge_flavor, &course);
+        let now3 = strict_handshake(&mut bridge3, &mut api, &course);
+        bridge3.after_input(
+            &mut api,
+            &course,
+            &state,
+            &[Effect::Score {
+                raw: 20,
+                max: 100,
+                percent: 20,
+                status: CompletionStatus::Failed,
+            }],
+            100,
+            now3,
+        );
+        bridge3.finish_session(&mut api, &course, Some(&state), 200);
+        let session3_verbs: Vec<String> = strict_verbs(&api.lrs)
+            .into_iter()
+            .skip(before_count3)
+            .collect();
+        assert_eq!(
+            session3_verbs,
+            vec!["initialized", "terminated"],
+            "{bridge_flavor:?} relaunch after pass ignores fail"
+        );
+        assert!(
+            api.lrs.violations().is_empty(),
+            "{bridge_flavor:?}: {:?}",
+            api.lrs.violations()
+        );
+    }
+}

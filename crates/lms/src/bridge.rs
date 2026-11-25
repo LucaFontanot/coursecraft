@@ -435,6 +435,7 @@ pub struct LmsBridge {
     last_suspend: Option<String>,
     finished: bool,
     completed: bool,
+    ever_completed: bool,
     passed: bool,
     best_passed_score: Option<f64>,
     /// Next `cmi.interactions.n` index, or `None` when reporting is unavailable.
@@ -532,6 +533,16 @@ impl LmsBridge {
         }
 
         let statuses = self.mapping.read_statuses(api);
+        self.ever_completed = match self.mapping.standard {
+            Standard::Scorm12 => matches!(
+                statuses.first().map(String::as_str),
+                Some("completed" | "passed")
+            ),
+            Standard::Scorm2004 => {
+                statuses.first().is_some_and(|s| s == "completed")
+                    || statuses.get(1).is_some_and(|s| s == "passed")
+            }
+        };
         if self.mapping.is_finished(&statuses) {
             self.completed = true;
         } else if self.mapping.is_first_launch(&statuses) {
@@ -745,8 +756,33 @@ impl LmsBridge {
             return;
         }
         self.mapping.write_score(api, percent, warnings);
-        self.mapping
-            .write_status(api, status, last_status, warnings, self.lms_status);
+        let allow_status_write = match self.mapping.standard {
+            Standard::Scorm12 => {
+                let mapped = map_status(status, self.lms_status);
+                !(self.ever_completed
+                    && matches!(mapped, LessonStatus::Incomplete | LessonStatus::Failed))
+            }
+            Standard::Scorm2004 => !(self.ever_completed && status == CompletionStatus::Incomplete),
+        };
+        if allow_status_write {
+            self.mapping
+                .write_status(api, status, last_status, warnings, self.lms_status);
+            let now_ever_completed = match self.mapping.standard {
+                Standard::Scorm12 => matches!(
+                    map_status(status, self.lms_status),
+                    LessonStatus::Completed | LessonStatus::Passed
+                ),
+                Standard::Scorm2004 => matches!(
+                    status,
+                    CompletionStatus::Passed
+                        | CompletionStatus::Completed
+                        | CompletionStatus::Failed
+                ),
+            };
+            if now_ever_completed {
+                self.ever_completed = true;
+            }
+        }
         if status_allowed {
             self.passed = true;
             self.best_passed_score = Some(
@@ -790,8 +826,33 @@ impl LmsBridge {
         if self.passed && protected_after_pass {
             return;
         }
+        if self.ever_completed {
+            let protected_after_complete = match self.mapping.standard {
+                Standard::Scorm12 => matches!(
+                    map_status(status, self.lms_status),
+                    LessonStatus::Incomplete | LessonStatus::Failed
+                ),
+                Standard::Scorm2004 => status == CompletionStatus::Incomplete,
+            };
+            if protected_after_complete {
+                return;
+            }
+        }
         self.mapping
             .write_status(api, status, last_status, warnings, self.lms_status);
+        let now_ever_completed = match self.mapping.standard {
+            Standard::Scorm12 => matches!(
+                map_status(status, self.lms_status),
+                LessonStatus::Completed | LessonStatus::Passed
+            ),
+            Standard::Scorm2004 => matches!(
+                status,
+                CompletionStatus::Passed | CompletionStatus::Completed | CompletionStatus::Failed
+            ),
+        };
+        if now_ever_completed {
+            self.ever_completed = true;
+        }
         if status == CompletionStatus::Passed
             || (self.mapping.standard == Standard::Scorm12
                 && is_protected_status(map_status(status, self.lms_status), self.lms_status))

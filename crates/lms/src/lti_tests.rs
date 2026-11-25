@@ -178,3 +178,82 @@ fn a_sent_pass_cannot_be_overwritten_by_a_later_fail_or_lower_score() {
         })
     );
 }
+
+#[test]
+fn tr_11_lti_reporter_monotonic_and_batch_combination() {
+    // 1. Slides-viewed alone -> {percent: None, status: "completed"}.
+    let mut r = LtiReporter::new();
+    r.record(&[completion(CompletionStatus::Completed)]);
+    assert_eq!(
+        r.take_pending(),
+        Some(ScoreReport {
+            percent: None,
+            status: "completed",
+        })
+    );
+    r.mark_sent();
+
+    // View-all-slides-then-fail: never downgrades "completed" to "failed".
+    r.record(&[
+        score(40, CompletionStatus::Failed),
+        completion(CompletionStatus::Failed),
+    ]);
+    assert_eq!(r.take_pending(), None);
+
+    // View-all-slides-then-pass: upgrades to {Some(90), "passed"}.
+    r.record(&[
+        score(90, CompletionStatus::Passed),
+        completion(CompletionStatus::Passed),
+    ]);
+    assert_eq!(
+        r.take_pending(),
+        Some(ScoreReport {
+            percent: Some(90),
+            status: "passed",
+        })
+    );
+    r.mark_sent();
+
+    // Pass -> fail: never downgrades.
+    r.record(&[score(20, CompletionStatus::Failed)]);
+    assert_eq!(r.take_pending(), None);
+
+    // 2. Fail-then-view-all-slides across batches: upgrades to {Some(40), "completed"}.
+    let mut r2 = LtiReporter::new();
+    r2.record(&[
+        score(40, CompletionStatus::Failed),
+        completion(CompletionStatus::Failed),
+    ]);
+    assert_eq!(
+        r2.take_pending(),
+        Some(ScoreReport {
+            percent: Some(40),
+            status: "failed",
+        })
+    );
+    r2.mark_sent();
+
+    r2.record(&[completion(CompletionStatus::Completed)]);
+    assert_eq!(
+        r2.take_pending(),
+        Some(ScoreReport {
+            percent: Some(40),
+            status: "completed",
+        })
+    );
+
+    // 3. Same-batch [Score(40, Failed), Completion(Completed)] -> {Some(40), "completed"}.
+    let mut r3 = LtiReporter::new();
+    r3.record(&[
+        score(40, CompletionStatus::Failed),
+        completion(CompletionStatus::Failed),
+        completion(CompletionStatus::Completed),
+    ]);
+    assert_eq!(
+        r3.take_pending(),
+        Some(ScoreReport {
+            percent: Some(40),
+            status: "completed",
+        })
+    );
+}

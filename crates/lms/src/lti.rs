@@ -41,8 +41,10 @@ impl ScoreReport {
 pub struct LtiReporter {
     pending: VecDeque<ScoreReport>,
     sent_final: bool,
+    ever_completed: bool,
     passed: bool,
     best_passed_score: Option<u8>,
+    last_failed_score: Option<u8>,
     in_flight: Option<ScoreReport>,
     retried: bool,
     lost: bool,
@@ -58,51 +60,68 @@ impl LtiReporter {
 
     /// Record the reports in one input's effects.
     ///
-    /// A `Score` effect wins over a `Completion` effect in the same batch, so a
-    /// quiz result is sent once with its percentage. A `Completion` on its own
-    /// is sent with `percent: None`. Only the latest unsent report is kept, and
-    /// a report identical to the last one sent is ignored.
+    /// Within a single batch, the highest-rank status (`incomplete < failed <
+    /// completed < passed`) wins while preserving any `Score` percentage.
+    /// Across batches, status is monotonic: `completed` never downgrades to
+    /// `failed` or `incomplete`, `failed` + later `completed` upgrades while
+    /// keeping the recorded failed score, and `passed` only updates on a
+    /// strictly higher passing score.
     pub fn record(&mut self, effects: &[Effect]) {
         if self.lost {
             return;
         }
-        let has_score = effects
-            .iter()
-            .any(|effect| matches!(effect, Effect::Score { .. }));
-        let mut report = None;
+        let mut best_status: Option<&'static str> = None;
+        let mut best_rank: u8 = 0;
+        let mut score_percent: Option<u8> = None;
         for effect in effects {
-            match effect {
+            let (effect_percent, status) = match effect {
                 Effect::Score {
                     percent, status, ..
-                } => {
-                    report = Some(ScoreReport {
-                        percent: Some(*percent),
-                        status: status_id(*status),
-                    });
-                }
-                Effect::Completion { status } if !has_score => {
-                    report = Some(ScoreReport {
-                        percent: None,
-                        status: status_id(*status),
-                    });
-                }
-                _ => {}
+                } => (Some(*percent), status_id(*status)),
+                Effect::Completion { status } => (None, status_id(*status)),
+                _ => continue,
+            };
+            let rank = status_rank(status);
+            if let Some(percent) = effect_percent
+                && (best_status.is_none() || rank >= best_rank || score_percent.is_none())
+            {
+                score_percent = Some(percent);
+            }
+            if best_status.is_none() || rank >= best_rank {
+                best_status = Some(status);
+                best_rank = rank;
             }
         }
-        let Some(report) = report else {
+        let Some(status) = best_status else {
             return;
         };
-        if self.in_flight == Some(report) || self.last_sent == Some(report) {
-            return;
-        }
-        if self.sent_final && report.percent.is_none() {
-            // A final score already went out; a later bare completion must not
-            // replace it with a progress-only report.
-            return;
-        }
+        let mut report = ScoreReport {
+            percent: score_percent,
+            status,
+        };
+
         let pending_pass = self.pending.front().filter(|r| r.status == "passed");
         let in_flight_pass = self.in_flight.as_ref().filter(|r| r.status == "passed");
         let has_passed = self.passed || in_flight_pass.is_some() || pending_pass.is_some();
+        let has_completed = self.ever_completed
+            || self.in_flight.is_some_and(|r| status_rank(r.status) >= 2)
+            || self
+                .pending
+                .front()
+                .is_some_and(|r| status_rank(r.status) >= 2)
+            || self.last_sent.is_some_and(|r| status_rank(r.status) >= 2);
+        let prior_failed_score = self
+            .pending
+            .front()
+            .filter(|r| r.status == "failed")
+            .and_then(|r| r.percent)
+            .or_else(|| {
+                self.in_flight
+                    .filter(|r| r.status == "failed")
+                    .and_then(|r| r.percent)
+            })
+            .or(self.last_failed_score);
+
         if has_passed {
             if report.status != "passed" {
                 return;
@@ -120,6 +139,26 @@ impl LtiReporter {
                 (Some(new_percent), Some(best)) if new_percent <= best => return,
                 _ => {}
             }
+        } else if report.status == "completed" && report.percent.is_none() {
+            if has_completed {
+                return;
+            }
+            if let Some(prior_score) = prior_failed_score {
+                report.percent = Some(prior_score);
+            } else if self.sent_final {
+                return;
+            }
+        } else if has_completed && status_rank(report.status) < 2 {
+            return;
+        }
+
+        if self.in_flight == Some(report) || self.last_sent == Some(report) {
+            return;
+        }
+        if report.status == "failed"
+            && let Some(percent) = report.percent
+        {
+            self.last_failed_score = Some(percent);
         }
         if self.in_flight.is_none() {
             self.retried = false;
@@ -145,6 +184,9 @@ impl LtiReporter {
         };
         if report.status != "incomplete" {
             self.sent_final = true;
+        }
+        if report.status == "completed" || report.status == "passed" {
+            self.ever_completed = true;
         }
         if report.status == "passed" {
             self.passed = true;
@@ -196,6 +238,16 @@ fn status_id(status: CompletionStatus) -> &'static str {
         CompletionStatus::Failed => "failed",
         CompletionStatus::Completed => "completed",
         CompletionStatus::Incomplete => "incomplete",
+    }
+}
+
+fn status_rank(status: &str) -> u8 {
+    match status {
+        "incomplete" => 0,
+        "failed" => 1,
+        "completed" => 2,
+        "passed" => 3,
+        _ => 0,
     }
 }
 
