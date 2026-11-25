@@ -11,6 +11,7 @@ What changed in each release, newest first. Versions follow [semantic versioning
 - The Windows installer and Linux packages now register `.ccraft` files to open in CourseCraft.
 - macOS releases now include an Intel Mac download alongside Apple Silicon.
 - Unticking and re-ticking Fill on a shape or button now restores its previous colour instead of resetting to the default.
+- Shortening an audio bar on the timeline now crops playback at the bar's end and keeps the waveform at its real time scale.
 
 ## 0.5.1
 

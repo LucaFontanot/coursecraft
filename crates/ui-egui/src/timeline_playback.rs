@@ -110,6 +110,8 @@ pub struct TimelineTrack {
     pub start_ms: u32,
     /// Effective end of the track on the slide timeline (exclusive).
     pub end_ms: u32,
+    /// Optional file-time trim bounds.
+    pub trim: Option<coursecraft_course::Trim>,
     /// Media bytes, resolved from the editor's store at sync time.
     pub bytes: Arc<[u8]>,
     /// The backend has a live (paused or playing) track for this object.
@@ -136,6 +138,8 @@ pub struct TrackSpec {
     pub kind: MediaKind,
     /// Stored timing.
     pub timing: Timing,
+    /// Optional file-time trim bounds.
+    pub trim: Option<coursecraft_course::Trim>,
 }
 
 /// Every audio and video object on `slide_id`, base and layers in order.
@@ -146,9 +150,9 @@ pub fn timeline_track_specs(course: &Course, slide_id: &str) -> Vec<TrackSpec> {
     };
     let mut specs = Vec::new();
     let mut push = |object: &coursecraft_course::Object| {
-        let (src, kind) = match &object.kind {
-            ObjectKind::Audio { src, .. } => (src.clone(), MediaKind::Audio),
-            ObjectKind::Video { src, .. } => (src.clone(), MediaKind::Video),
+        let (src, kind, trim) = match &object.kind {
+            ObjectKind::Audio { src, trim, .. } => (src.clone(), MediaKind::Audio, *trim),
+            ObjectKind::Video { src, trim, .. } => (src.clone(), MediaKind::Video, *trim),
             _ => return,
         };
         specs.push(TrackSpec {
@@ -156,6 +160,7 @@ pub fn timeline_track_specs(course: &Course, slide_id: &str) -> Vec<TrackSpec> {
             src,
             kind,
             timing: object.timing,
+            trim,
         });
     };
     for object in &slide.objects {
@@ -175,6 +180,33 @@ pub fn timeline_track_specs(course: &Course, slide_id: &str) -> Vec<TrackSpec> {
 #[must_use]
 pub fn timing_includes(start_ms: u32, end_ms: u32, playhead_ms: u32) -> bool {
     playhead_ms >= start_ms && playhead_ms <= end_ms
+}
+
+/// Whether `playhead_ms` falls inside the half-open playback window `[start_ms, end_ms)`.
+fn playback_includes(start_ms: u32, end_ms: u32, playhead_ms: u32) -> bool {
+    playhead_ms >= start_ms && playhead_ms < end_ms
+}
+
+/// File-time offset in ms for `track` at `playhead_ms`, accounting for `trim.start_ms`.
+fn track_file_offset_ms(track: &TimelineTrack, playhead_ms: u32) -> u64 {
+    track
+        .trim
+        .map_or(0, |t| t.start_ms)
+        .saturating_add(u64::from(playhead_ms.saturating_sub(track.start_ms)))
+}
+
+/// Effective end of playable media in file time, taking the minimum of
+/// probed duration and `trim.end_ms` when present.
+fn effective_media_end_ms(
+    media_dur: Option<u64>,
+    trim: Option<coursecraft_course::Trim>,
+) -> Option<u64> {
+    match (media_dur, trim.and_then(|t| t.end_ms)) {
+        (Some(d), Some(e)) => Some(d.min(e)),
+        (Some(d), None) => Some(d),
+        (None, Some(e)) => Some(e),
+        (None, None) => None,
+    }
 }
 
 /// Clamp `ms` into the checked `u32` range for slide time.
@@ -376,6 +408,7 @@ impl TimelinePlayback {
                     kind: spec.kind,
                     start_ms,
                     end_ms,
+                    trim: spec.trim,
                     bytes,
                     started: false,
                     ended: false,
@@ -409,6 +442,7 @@ impl TimelinePlayback {
                     && old.kind == new.kind
                     && old.start_ms == new.start_ms
                     && old.end_ms == new.end_ms
+                    && old.trim == new.trim
             });
         if same {
             self.duration_ms = duration_ms;
@@ -518,10 +552,9 @@ impl TimelinePlayback {
                 continue;
             }
             if let Some(frame) = self.backend.video_frame(&track.object_id) {
-                let raw_expected = u64::from(playhead_ms.saturating_sub(track.start_ms));
-                let expected = track
-                    .media_duration_ms
-                    .map_or(raw_expected, |dur| raw_expected.min(dur));
+                let raw_expected = track_file_offset_ms(track, playhead_ms);
+                let expected = effective_media_end_ms(track.media_duration_ms, track.trim)
+                    .map_or(raw_expected, |end| raw_expected.min(end));
                 if frame.pts_ms.abs_diff(expected) <= 100 {
                     track.pending_since_mono = None;
                     continue;
@@ -566,7 +599,9 @@ impl TimelinePlayback {
             if !timing_includes(track.start_ms, track.end_ms, playhead_ms) {
                 continue;
             }
-            let offset = u64::from(playhead_ms.saturating_sub(track.start_ms));
+            let raw_offset = track_file_offset_ms(&track, playhead_ms);
+            let offset = effective_media_end_ms(track.media_duration_ms, track.trim)
+                .map_or(raw_offset, |end| raw_offset.min(end));
             self.backend.play(
                 &track.object_id,
                 &track.src,
@@ -597,10 +632,8 @@ impl TimelinePlayback {
         } else {
             playhead_ms
         };
-        if effective == 0 {
-            for track in &mut self.tracks {
-                track.ended = false;
-            }
+        for track in &mut self.tracks {
+            track.ended = false;
         }
         self.playing = true;
         self.anchor_playhead = effective;
@@ -680,25 +713,33 @@ impl TimelinePlayback {
         let playhead_ms = playhead_ms.min(self.duration_ms);
         let playing = self.playing;
         for index in 0..self.tracks.len() {
-            let in_window = self
-                .tracks
-                .get(index)
-                .is_some_and(|track| timing_includes(track.start_ms, track.end_ms, playhead_ms));
+            let in_window = self.tracks.get(index).is_some_and(|track| {
+                if playing {
+                    playback_includes(track.start_ms, track.end_ms, playhead_ms)
+                } else {
+                    timing_includes(track.start_ms, track.end_ms, playhead_ms)
+                }
+            });
             if in_window {
                 let media_dur = self.tracks.get_mut(index).and_then(ensure_media_duration);
                 let Some(track) = self.tracks.get(index).cloned() else {
                     continue;
                 };
-                let (object_id, src, kind, start_ms, bytes, started) = (
+                let (object_id, src, kind, bytes, started) = (
                     track.object_id.clone(),
                     track.src.clone(),
                     track.kind,
-                    track.start_ms,
                     Arc::clone(&track.bytes),
                     track.started,
                 );
-                let offset = u64::from(playhead_ms.saturating_sub(start_ms));
-                let past_media_end = media_dur.is_some_and(|dur| offset >= dur);
+                let raw_offset = track_file_offset_ms(&track, playhead_ms);
+                let eff_end = effective_media_end_ms(media_dur, track.trim);
+                let offset = if playing {
+                    raw_offset
+                } else {
+                    eff_end.map_or(raw_offset, |end| raw_offset.min(end))
+                };
+                let past_media_end = eff_end.is_some_and(|end| raw_offset >= end);
                 if let Some(track) = self.tracks.get_mut(index) {
                     track.ended = past_media_end;
                 }
@@ -795,10 +836,11 @@ impl TimelinePlayback {
                 && track.started
                 && let Some(position) = self.backend.position_ms(&track.object_id)
             {
+                let rel = position.saturating_sub(track.trim.map_or(0, |t| t.start_ms));
                 master = Some(
                     track
                         .start_ms
-                        .saturating_add(clamp_playhead(position, u32::MAX))
+                        .saturating_add(clamp_playhead(rel, u32::MAX))
                         .min(duration_ms),
                 );
                 break;
@@ -812,10 +854,11 @@ impl TimelinePlayback {
                     && track.started
                     && let Some(position) = self.backend.position_ms(&track.object_id)
                 {
+                    let rel = position.saturating_sub(track.trim.map_or(0, |t| t.start_ms));
                     master = Some(
                         track
                             .start_ms
-                            .saturating_add(clamp_playhead(position, u32::MAX))
+                            .saturating_add(clamp_playhead(rel, u32::MAX))
                             .min(duration_ms),
                     );
                     break;
@@ -834,29 +877,19 @@ impl TimelinePlayback {
         // already reached its natural end.
         for index in 0..self.tracks.len() {
             let media_dur = self.tracks.get_mut(index).and_then(ensure_media_duration);
-            let (in_window, started, ended, start_ms) = self
-                .tracks
-                .get(index)
-                .map(|track| {
-                    (
-                        timing_includes(track.start_ms, track.end_ms, new_playhead),
-                        track.started,
-                        track.ended,
-                        track.start_ms,
-                    )
-                })
-                .unwrap_or((false, false, false, 0));
-            if in_window && !started && !ended {
-                let offset = u64::from(new_playhead.saturating_sub(start_ms));
-                if media_dur.is_some_and(|dur| offset >= dur) {
+            let Some(track) = self.tracks.get(index).cloned() else {
+                continue;
+            };
+            let in_window = playback_includes(track.start_ms, track.end_ms, new_playhead);
+            if in_window && !track.started && !track.ended {
+                let offset = track_file_offset_ms(&track, new_playhead);
+                let eff_end = effective_media_end_ms(media_dur, track.trim);
+                if eff_end.is_some_and(|end| offset >= end) {
                     if let Some(track) = self.tracks.get_mut(index) {
                         track.ended = true;
                     }
                     continue;
                 }
-                let Some(track) = self.tracks.get(index).cloned() else {
-                    continue;
-                };
                 self.backend.play(
                     &track.object_id,
                     &track.src,
@@ -870,29 +903,25 @@ impl TimelinePlayback {
             }
         }
         for index in 0..self.tracks.len() {
-            let (in_window, started) = self
-                .tracks
-                .get(index)
-                .map(|track| {
-                    (
-                        timing_includes(track.start_ms, track.end_ms, new_playhead),
-                        track.started,
-                    )
-                })
-                .unwrap_or((false, false));
-            if !in_window && started && new_playhead < duration_ms {
-                // A slot whose window the playhead just left keeps its
-                // last frame; the canvas draws the poster outside the
-                // timing. Pause only when playback passes the end, or
-                // when a seek moved before the window; the latter is
-                // handled by flush_seeks.
-                if let Some(track) = self.tracks.get(index)
-                    && new_playhead < track.start_ms
-                {
-                    let object_id = track.object_id.clone();
-                    self.backend.pause(&object_id);
-                    if let Some(track) = self.tracks.get_mut(index) {
-                        track.started = false;
+            let Some(track) = self.tracks.get(index) else {
+                continue;
+            };
+            if !track.started || new_playhead >= duration_ms {
+                continue;
+            }
+            let in_window = playback_includes(track.start_ms, track.end_ms, new_playhead);
+            let past_trim_end = track
+                .trim
+                .and_then(|t| t.end_ms)
+                .is_some_and(|te| track_file_offset_ms(track, new_playhead) >= te);
+            if !in_window || past_trim_end {
+                let reached_end = new_playhead >= track.end_ms || past_trim_end;
+                let object_id = track.object_id.clone();
+                self.backend.pause(&object_id);
+                if let Some(track) = self.tracks.get_mut(index) {
+                    track.started = false;
+                    if reached_end {
+                        track.ended = true;
                     }
                 }
             }
@@ -947,10 +976,9 @@ impl TimelinePlayback {
             match self.backend.video_frame(&track.object_id) {
                 None => true,
                 Some(frame) => {
-                    let raw_expected = u64::from(playhead_ms.saturating_sub(track.start_ms));
-                    let expected = track
-                        .media_duration_ms
-                        .map_or(raw_expected, |dur| raw_expected.min(dur));
+                    let raw_expected = track_file_offset_ms(track, playhead_ms);
+                    let expected = effective_media_end_ms(track.media_duration_ms, track.trim)
+                        .map_or(raw_expected, |end| raw_expected.min(end));
                     // One frame of tolerance (the decoder returns the
                     // frame at or just after the seek).
                     frame.pts_ms.abs_diff(expected) > 100
@@ -968,16 +996,25 @@ impl TimelinePlayback {
 
     fn start_tracks_in_window(&mut self, playhead_ms: u32) {
         for index in 0..self.tracks.len() {
+            let media_dur = self.tracks.get_mut(index).and_then(ensure_media_duration);
             let Some(track) = self.tracks.get(index).cloned() else {
                 continue;
             };
-            if !timing_includes(track.start_ms, track.end_ms, playhead_ms) {
+            if !playback_includes(track.start_ms, track.end_ms, playhead_ms) {
                 if let Some(track) = self.tracks.get_mut(index) {
                     track.started = false;
                 }
                 continue;
             }
-            let offset = u64::from(playhead_ms.saturating_sub(track.start_ms));
+            let offset = track_file_offset_ms(&track, playhead_ms);
+            let eff_end = effective_media_end_ms(media_dur, track.trim);
+            if eff_end.is_some_and(|end| offset >= end) {
+                if let Some(track) = self.tracks.get_mut(index) {
+                    track.ended = true;
+                    track.started = false;
+                }
+                continue;
+            }
             self.backend.play(
                 &track.object_id,
                 &track.src,
@@ -1544,5 +1581,126 @@ pub(crate) mod tests {
             after_end.pts_ms
         );
         playback.reset();
+    }
+
+    #[test]
+    fn audio_bar_cropped_to_5s_stops_at_bar_end_and_ignores_play_after_end() {
+        let json = serde_json::json!({
+            "schema_version": 1,
+            "id": "cropped-audio",
+            "title": "Cropped audio",
+            "slide_size": { "w": 1280, "h": 720 },
+            "scenes": [{
+                "id": "scene1",
+                "title": "Scene 1",
+                "slides": [{
+                    "id": "s1",
+                    "title": "One",
+                    "duration_ms": 10000,
+                    "objects": [{
+                        "id": "aud",
+                        "kind": { "type": "audio", "src": "note.wav", "autoplay": false },
+                        "frame": { "x": 0, "y": 400, "w": 48, "h": 48 },
+                        "timing": { "start_ms": 0, "end_ms": 5000 }
+                    }]
+                }]
+            }]
+        });
+        let course = Course::from_json(&json.to_string()).expect("valid course");
+        let mut playback = TimelinePlayback::with_backend(Box::new(FakeTimelineMedia::new()));
+        playback.sync_slide(&course, "s1", 10000, &media(), 0);
+
+        let started = playback.start_play(0, 0, 10000);
+        assert_eq!(started, 0);
+        assert!(
+            playback
+                .backend_calls_for_test()
+                .contains(&"play:aud:note.wav".to_owned())
+        );
+
+        playback.advance_clock_for_test(5000);
+        let playhead = playback.tick(0, 5000, 10000);
+        assert_eq!(playhead, 5000);
+        assert!(
+            playback
+                .backend_calls_for_test()
+                .contains(&"pause:aud".to_owned()),
+            "audio must pause when playhead reaches bar end: {:?}",
+            playback.backend_calls_for_test()
+        );
+        assert!(!playback.tracks()[0].started);
+
+        // Continue past bar end to slide end: audio must not restart.
+        let play_count_before = playback
+            .backend_calls_for_test()
+            .iter()
+            .filter(|c| c.starts_with("play:aud"))
+            .count();
+        let playhead = playback.tick(5000, 10000, 10000);
+        assert_eq!(playhead, 10000);
+        let play_count_after = playback
+            .backend_calls_for_test()
+            .iter()
+            .filter(|c| c.starts_with("play:aud"))
+            .count();
+        assert_eq!(play_count_before, play_count_after);
+
+        // Starting Play at or after bar end emits no play:aud.
+        let mut playback2 = TimelinePlayback::with_backend(Box::new(FakeTimelineMedia::new()));
+        playback2.sync_slide(&course, "s1", 10000, &media(), 5000);
+        let _ = playback2.start_play(5000, 0, 10000);
+        let _ = playback2.start_play(6000, 100, 10000);
+        assert!(
+            !playback2
+                .backend_calls_for_test()
+                .iter()
+                .any(|c| c.starts_with("play:aud")),
+            "must not play at/after bar end: {:?}",
+            playback2.backend_calls_for_test()
+        );
+    }
+
+    #[test]
+    fn trimmed_audio_mid_bar_play_seeks_from_trim_start() {
+        let json = serde_json::json!({
+            "schema_version": 1,
+            "id": "trimmed-audio",
+            "title": "Trimmed audio",
+            "slide_size": { "w": 1280, "h": 720 },
+            "scenes": [{
+                "id": "scene1",
+                "title": "Scene 1",
+                "slides": [{
+                    "id": "s1",
+                    "title": "One",
+                    "duration_ms": 10000,
+                    "objects": [{
+                        "id": "aud",
+                        "kind": {
+                            "type": "audio",
+                            "src": "note.wav",
+                            "autoplay": false,
+                            "trim": { "start_ms": 2000 }
+                        },
+                        "frame": { "x": 0, "y": 400, "w": 48, "h": 48 },
+                        "timing": { "start_ms": 1000, "end_ms": 6000 }
+                    }]
+                }]
+            }]
+        });
+        let course = Course::from_json(&json.to_string()).expect("valid course");
+        let mut playback = TimelinePlayback::with_backend(Box::new(FakeTimelineMedia::new()));
+        playback.sync_slide(&course, "s1", 10000, &media(), 3500);
+
+        let started = playback.start_play(3500, 0, 10000);
+        assert_eq!(started, 3500);
+        let calls = playback.backend_calls_for_test();
+        assert!(calls.contains(&"play:aud:note.wav".to_owned()), "{calls:?}");
+        assert!(calls.contains(&"seek:aud:4500".to_owned()), "{calls:?}");
+
+        // Advancing audio file clock by 500 ms (to 5000 ms) maps back to playhead 4000 ms.
+        playback.advance_clock_for_test(500);
+        let playhead = playback.tick(3500, 500, 10000);
+        assert_eq!(playhead, 4000);
     }
 }

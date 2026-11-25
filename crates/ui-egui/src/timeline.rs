@@ -1070,8 +1070,8 @@ fn draw_bar_or_preview(
     bar_rect: Rect,
     row_y: f32,
     is_selected: bool,
-    _eff_start: u32,
-    _timing: &Timing,
+    eff_start: u32,
+    timing: &Timing,
     duration_ms: u32,
     track_width: f32,
     track_rect: Rect,
@@ -1123,31 +1123,46 @@ fn draw_bar_or_preview(
         let bar_color = if is_selected { p.accent } else { p.pressed };
         painter.rect_filled(bar_rect, radius, bar_color);
 
-        if let Some(peaks) = audio_peaks_for_object(editor, oid)
+        if let Some((peaks, file_dur_ms, trim)) = audio_waveform_for_object(editor, oid)
             && !peaks.is_empty()
             && bar_rect.width() >= 4.0
         {
-            let wf_painter = painter.with_clip_rect(painter.clip_rect().intersect(bar_rect));
-            let center_y = bar_rect.center().y;
-            let max_half_h = (bar_rect.height() * 0.42).max(1.0);
-            let wf_color = Color32::from_white_alpha(if is_selected { 175 } else { 135 });
-            let stroke = Stroke::new(1.0, wf_color);
-            let step = 2.0_f32;
-            let width = bar_rect.width().max(1.0);
-            let n = peaks.len();
-            let mut x = bar_rect.min.x + 1.0;
-            while x < bar_rect.max.x - 1.0 {
-                let t0 = ((x - bar_rect.min.x) / width).clamp(0.0, 1.0);
-                let t1 = ((x + step - bar_rect.min.x) / width).clamp(0.0, 1.0);
-                let i0 = ((t0 * n as f32).floor() as usize).min(n - 1);
-                let i1 = ((t1 * n as f32).ceil() as usize).max(i0 + 1).min(n);
-                let peak = peaks[i0..i1].iter().copied().fold(0.0_f32, f32::max);
-                let half_h = (peak * max_half_h).max(1.0);
-                wf_painter.line_segment(
-                    [pos2(x, center_y - half_h), pos2(x, center_y + half_h)],
-                    stroke,
-                );
-                x += step;
+            let shift = group_drag_shift(editor, oid);
+            let eff_end = timing
+                .end_ms
+                .map_or(duration_ms, |end| shifted_ms(end, shift));
+            let bar_len_ms = u64::from(eff_end.saturating_sub(eff_start));
+            let window = match file_dur_ms {
+                Some(dur) if dur > 0 => audio_waveform_window(dur, bar_len_ms, trim),
+                _ => Some((0.0, 1.0, 1.0)),
+            };
+            if let Some((peak_start_frac, peak_end_frac, bar_fill_frac)) = window {
+                let wf_painter = painter.with_clip_rect(painter.clip_rect().intersect(bar_rect));
+                let center_y = bar_rect.center().y;
+                let max_half_h = (bar_rect.height() * 0.42).max(1.0);
+                let wf_color = Color32::from_white_alpha(if is_selected { 175 } else { 135 });
+                let stroke = Stroke::new(1.0, wf_color);
+                let step = 2.0_f32;
+                let wf_width = (bar_rect.width() * bar_fill_frac).max(1.0);
+                let wf_max_x = (bar_rect.min.x + wf_width).min(bar_rect.max.x - 1.0);
+                let peak_span = (peak_end_frac - peak_start_frac).max(0.0);
+                let n = peaks.len();
+                let mut x = bar_rect.min.x + 1.0;
+                while x < wf_max_x {
+                    let u0 = ((x - bar_rect.min.x) / wf_width).clamp(0.0, 1.0);
+                    let u1 = ((x + step - bar_rect.min.x) / wf_width).clamp(0.0, 1.0);
+                    let t0 = (peak_start_frac + u0 * peak_span).clamp(0.0, 1.0);
+                    let t1 = (peak_start_frac + u1 * peak_span).clamp(0.0, 1.0);
+                    let i0 = ((t0 * n as f32).floor() as usize).min(n - 1);
+                    let i1 = ((t1 * n as f32).ceil() as usize).max(i0 + 1).min(n);
+                    let peak = peaks[i0..i1].iter().copied().fold(0.0_f32, f32::max);
+                    let half_h = (peak * max_half_h).max(1.0);
+                    wf_painter.line_segment(
+                        [pos2(x, center_y - half_h), pos2(x, center_y + half_h)],
+                        stroke,
+                    );
+                    x += step;
+                }
             }
         }
 
@@ -1426,14 +1441,51 @@ fn handle_row_drag(
     }
 }
 
-/// Cues on the object `oid` on the current timeline, when it is a video.
-fn audio_peaks_for_object<'a>(editor: &'a Editor, oid: &str) -> Option<&'a [f32]> {
+/// Portion of a full-file peak envelope to draw in a timeline bar at real time scale.
+///
+/// Returns `Some((peak_start_frac, peak_end_frac, bar_fill_frac))`, all in `0.0..=1.0`:
+/// - `peak_start_frac..peak_end_frac` is the kept slice of the file's peak array.
+/// - `bar_fill_frac` is the fraction of the bar width occupied by audio (`< 1.0` when
+///   the bar is longer than the remaining audio).
+///
+/// Returns `None` when nothing is audible in the bar (zero-length bar or trim past end).
+pub(crate) fn audio_waveform_window(
+    file_duration_ms: u64,
+    bar_len_ms: u64,
+    trim: Option<coursecraft_course::Trim>,
+) -> Option<(f32, f32, f32)> {
+    if file_duration_ms == 0 || bar_len_ms == 0 {
+        return None;
+    }
+    let clip_start = trim.map_or(0, |t| t.start_ms).min(file_duration_ms);
+    let clip_end = trim
+        .and_then(|t| t.end_ms)
+        .map_or(file_duration_ms, |e| e.min(file_duration_ms))
+        .max(clip_start);
+    let shown_end = clip_start.saturating_add(bar_len_ms).min(clip_end);
+    let drawn_ms = shown_end.saturating_sub(clip_start);
+    if drawn_ms == 0 {
+        return None;
+    }
+    let peak_start = (clip_start as f64 / file_duration_ms as f64).clamp(0.0, 1.0) as f32;
+    let peak_end =
+        (shown_end as f64 / file_duration_ms as f64).clamp(peak_start as f64, 1.0) as f32;
+    let bar_fill = (drawn_ms as f64 / bar_len_ms as f64).clamp(0.0, 1.0) as f32;
+    Some((peak_start, peak_end, bar_fill))
+}
+
+fn audio_waveform_for_object<'a>(
+    editor: &'a Editor,
+    oid: &str,
+) -> Option<(&'a [f32], Option<u64>, Option<coursecraft_course::Trim>)> {
     let slide = editor.session.course.slide(&editor.selection.slide)?;
     let (obj, _) = slide.object(oid)?;
-    let coursecraft_course::ObjectKind::Audio { src, .. } = &obj.kind else {
+    let coursecraft_course::ObjectKind::Audio { src, trim, .. } = &obj.kind else {
         return None;
     };
-    editor.audio_waveforms.get(src)?.as_deref()
+    let peaks = editor.audio_waveforms.get(src)?.as_deref()?;
+    let dur = editor.audio_durations.get(src).copied().flatten();
+    Some((peaks, dur, *trim))
 }
 
 fn object_cues(editor: &Editor, oid: &str) -> Vec<Cue> {
@@ -3571,5 +3623,48 @@ mod tests {
         let ticks = visible_ruler_ticks(u32::MAX, 0.0, 800.0, 0.0, 800.0);
         assert!(!ticks.is_empty());
         assert!(ticks.len() <= 500, "too many ticks: {}", ticks.len());
+    }
+
+    #[test]
+    fn audio_waveform_window_keeps_real_time_scale_for_shorter_trimmed_and_longer_bars() {
+        assert_eq!(
+            audio_waveform_window(10_000, 5_000, None),
+            Some((0.0, 0.5, 1.0))
+        );
+
+        let trim_start = Some(coursecraft_course::Trim {
+            start_ms: 2_000,
+            end_ms: None,
+        });
+        assert_eq!(
+            audio_waveform_window(10_000, 5_000, trim_start),
+            Some((0.2, 0.7, 1.0))
+        );
+
+        let (ps, pe, fill) = audio_waveform_window(10_000, 15_000, None).expect("window");
+        assert_eq!((ps, pe), (0.0, 1.0));
+        assert!((fill - (10.0_f32 / 15.0_f32)).abs() < 1e-5);
+
+        let trim_both = Some(coursecraft_course::Trim {
+            start_ms: 2_000,
+            end_ms: Some(6_000),
+        });
+        assert_eq!(
+            audio_waveform_window(10_000, 8_000, trim_both),
+            Some((0.2, 0.6, 0.5))
+        );
+
+        assert_eq!(audio_waveform_window(10_000, 0, None), None);
+        assert_eq!(
+            audio_waveform_window(
+                10_000,
+                5_000,
+                Some(coursecraft_course::Trim {
+                    start_ms: 10_000,
+                    end_ms: None,
+                })
+            ),
+            None
+        );
     }
 }

@@ -13800,3 +13800,114 @@ fn tr_07_combined_options_and_resume() {
             .any(|e| matches!(e, Effect::Completion { .. }))
     );
 }
+
+#[test]
+fn audio_stops_when_visible_window_ends() {
+    let json = serde_json::json!({
+        "schema_version": 1,
+        "id": "window-end",
+        "title": "Window End",
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "s1",
+                "title": "Slide 1",
+                "duration_ms": 10000,
+                "objects": [
+                    {
+                        "id": "aud_crop",
+                        "kind": { "type": "audio", "src": "crop.mp3", "autoplay": true },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 },
+                        "timing": { "start_ms": 0, "end_ms": 5000 }
+                    },
+                    {
+                        "id": "aud_exit",
+                        "kind": { "type": "audio", "src": "exit.mp3", "autoplay": true },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 },
+                        "timing": { "start_ms": 0 },
+                        "exit": { "effect": { "type": "fade" }, "duration_ms": 500 }
+                    },
+                    {
+                        "id": "aud_open",
+                        "kind": { "type": "audio", "src": "open.mp3", "autoplay": true },
+                        "frame": { "x": 0.0, "y": 0.0, "w": 48.0, "h": 48.0 },
+                        "timing": { "start_ms": 0 }
+                    }
+                ],
+                "triggers": [
+                    {
+                        "when": { "event": "media_ends", "object": "aud_crop" },
+                        "action": { "action": "play_media", "object": "aud_crop" }
+                    }
+                ]
+            }]
+        }]
+    })
+    .to_string();
+    let c = Course::from_json(&json).expect("valid course");
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+    assert!(p.is_media_playing("aud_crop"));
+    assert!(p.is_media_playing("aud_exit"));
+    assert!(p.is_media_playing("aud_open"));
+
+    let fx_mid = p.handle(&Input::Tick { ms: 4000 });
+    assert!(!has(&fx_mid, &media_effect("aud_crop", MediaOp::Stop)));
+    assert!(p.is_media_playing("aud_crop"));
+
+    // Crossing 5000 ms stops aud_crop without firing media_ends (so its loop trigger does not restart it).
+    let fx_end = p.handle(&Input::Tick { ms: 1000 });
+    assert!(has(&fx_end, &media_effect("aud_crop", MediaOp::Stop)));
+    assert!(!has(&fx_end, &media_effect("aud_crop", MediaOp::Play)));
+    assert!(!p.is_media_playing("aud_crop"));
+    assert!(p.is_media_playing("aud_exit"));
+    assert!(p.is_media_playing("aud_open"));
+
+    // Reaching 10000 ms stops aud_exit (has exit) while aud_open (no end_ms, no exit) stays playing.
+    let fx_tl = p.handle(&Input::Tick { ms: 5000 });
+    assert!(has(&fx_tl, &media_effect("aud_exit", MediaOp::Stop)));
+    assert!(!p.is_media_playing("aud_exit"));
+    assert!(!has(&fx_tl, &media_effect("aud_open", MediaOp::Stop)));
+    assert!(p.is_media_playing("aud_open"));
+}
+
+#[test]
+fn audio_mid_bar_seek_uses_trim_start_offset_and_after_bar_plays_nothing() {
+    let mut c = media_test_course();
+    c.scenes[0].slides[0].duration_ms = 10000;
+    if let Some(obj) = c.scenes[0].slides[0]
+        .objects
+        .iter_mut()
+        .find(|o| o.id == "aud_auto")
+    {
+        obj.timing.start_ms = 1000;
+        obj.timing.end_ms = Some(5000);
+        if let ObjectKind::Audio { trim, .. } = &mut obj.kind {
+            *trim = Some(Trim {
+                start_ms: 2000,
+                end_ms: None,
+            });
+        }
+    }
+    let mut p = Player::new(&c).expect("player");
+    p.handle(&Input::Start);
+
+    let fx = p.handle(&Input::PlayerSeek { ms: 3500 });
+    assert!(has(&fx, &media_effect("aud_auto", MediaOp::Play)), "{fx:?}");
+    assert!(has(&fx, &seek_effect("aud_auto", 4500)), "{fx:?}");
+    assert!(p.is_media_playing("aud_auto"));
+
+    // Seeking to bar end stops it.
+    let fx = p.handle(&Input::PlayerSeek { ms: 5000 });
+    assert!(has(&fx, &media_effect("aud_auto", MediaOp::Stop)), "{fx:?}");
+    assert!(!p.is_media_playing("aud_auto"));
+
+    // Seeking past bar end while untracked starts nothing.
+    let fx = p.handle(&Input::PlayerSeek { ms: 6000 });
+    assert!(!fx.iter().any(|e| matches!(
+        e,
+        Effect::Media { object, .. } | Effect::MediaSeek { object, .. } if object == "aud_auto"
+    )));
+    assert!(!p.is_media_playing("aud_auto"));
+}

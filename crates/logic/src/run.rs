@@ -81,6 +81,14 @@ fn object_in_timing_window(obj: &coursecraft_course::Object, t: u32, duration_ms
     obj.timing.start_ms <= t && obj.timing.end_ms.is_none_or(|end| t < end) && !exited
 }
 
+/// Clock time when `obj`'s visible window ends on a timeline of length `duration_ms`,
+/// or `None` when the object stays visible past the timeline end (`end_ms: None` and no exit).
+fn object_visible_end_ms(obj: &coursecraft_course::Object, duration_ms: u32) -> Option<u32> {
+    obj.timing
+        .end_ms
+        .or_else(|| obj.exit.is_some().then_some(duration_ms))
+}
+
 /// Links carried by an object's text, in run order. Adjacent runs with the same
 /// link are one target, so a link split by formatting is still one tab stop.
 fn object_links(object: &coursecraft_course::Object) -> Vec<Link> {
@@ -1772,7 +1780,7 @@ impl<'c> Player<'c> {
         // Starting at a restored clock already past 0 must not replay the
         // start cue or autoplay cues that are behind the learner.
         if self.st.base.ms == 0 {
-            self.autoplay(&slide.objects, 0, out);
+            self.autoplay(&slide.objects, 0, slide.duration_ms, out);
             self.push(q, Event::TimelineStarts { layer: None });
         }
         for id in restored_layers {
@@ -1781,7 +1789,7 @@ impl<'c> Player<'c> {
             if clock.ms == 0
                 && let Some(layer) = slide.layer(&id)
             {
-                self.autoplay(&layer.objects, 0, out);
+                self.autoplay(&layer.objects, 0, layer.duration_ms, out);
                 self.push(
                     q,
                     Event::TimelineStarts {
@@ -2043,7 +2051,7 @@ impl<'c> Player<'c> {
         // A resumed clock past 0 must not replay start cues or autoplay that
         // are behind the learner. Ticking on crosses later cues normally.
         if clock.ms == 0 {
-            self.autoplay(&layer.objects, 0, out);
+            self.autoplay(&layer.objects, 0, layer.duration_ms, out);
             self.push(
                 q,
                 Event::TimelineStarts {
@@ -2563,7 +2571,7 @@ impl<'c> Player<'c> {
         out.push(Effect::LightboxOpened {
             slide: slide.id.clone(),
         });
-        self.autoplay(&slide.objects, 0, out);
+        self.autoplay(&slide.objects, 0, slide.duration_ms, out);
         self.push(q, Event::TimelineStarts { layer: None });
         self.check_intersections(q);
     }
@@ -3266,7 +3274,10 @@ impl<'c> Player<'c> {
                     );
                 }
             }
-            if old < o.timing.start_ms && o.timing.start_ms <= new {
+            if old < o.timing.start_ms
+                && o.timing.start_ms <= new
+                && object_in_timing_window(o, new, duration)
+            {
                 let auto = matches!(
                     o.kind,
                     ObjectKind::Audio { autoplay: true, .. }
@@ -3277,6 +3288,19 @@ impl<'c> Player<'c> {
                     let elapsed = u64::from(new.saturating_sub(o.timing.start_ms));
                     self.start_autoplay(&o.id, elapsed, out);
                 }
+            }
+            if matches!(o.kind, ObjectKind::Audio { .. } | ObjectKind::Video { .. })
+                && let Some(end_ms) = object_visible_end_ms(o, duration)
+                && old < end_ms
+                && end_ms <= new
+                && self.st.media_playback.remove(&o.id).is_some()
+            {
+                self.st.media_clocks.remove(&o.id);
+                self.clear_cue_state(&o.id);
+                out.push(Effect::Media {
+                    object: o.id.clone(),
+                    op: MediaOp::Stop,
+                });
             }
         }
         let ended = new >= duration;
@@ -3337,6 +3361,7 @@ impl<'c> Player<'c> {
         &mut self,
         objects: &[coursecraft_course::Object],
         at_ms: u32,
+        duration: u32,
         out: &mut Vec<Effect>,
     ) {
         for o in objects {
@@ -3346,7 +3371,7 @@ impl<'c> Player<'c> {
                     | ObjectKind::Video { autoplay: true, .. }
                     | ObjectKind::Lottie { autoplay: true, .. }
             );
-            if auto && o.timing.start_ms == at_ms {
+            if auto && o.timing.start_ms == at_ms && object_in_timing_window(o, at_ms, duration) {
                 self.start_autoplay(&o.id, 0, out);
             }
         }

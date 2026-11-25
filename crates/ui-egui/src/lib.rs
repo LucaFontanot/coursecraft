@@ -1353,6 +1353,8 @@ pub struct Editor {
     pub media_cache: coursecraft_render::MediaCache,
     /// Cached audio waveform peak envelopes (`0.0..=1.0`, <= 2,000 peaks) keyed by media id (`src`).
     pub audio_waveforms: std::collections::HashMap<String, Option<Vec<f32>>>,
+    /// Cached audio file durations in ms keyed by media id (`src`).
+    pub audio_durations: std::collections::HashMap<String, Option<u64>>,
     /// Cached video durations in ms keyed by media `src`, populated off the UI thread.
     pub video_durations:
         std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<u64>>>>,
@@ -1723,6 +1725,7 @@ impl Editor {
             media: MediaStore::new(),
             media_cache: coursecraft_render::MediaCache::new(),
             audio_waveforms: std::collections::HashMap::new(),
+            audio_durations: std::collections::HashMap::new(),
             video_durations: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
@@ -2048,6 +2051,7 @@ impl Editor {
         self.ui.timeline.slide_cue_selected = None;
         self.ui.timeline.slide_cue_rename = None;
         self.audio_waveforms.clear();
+        self.audio_durations.clear();
         self.ui.last_seen_revision = u64::MAX;
         self.ui.last_error = None;
         self.ui.error_history.clear();
@@ -2331,6 +2335,7 @@ impl Editor {
         }
         self.media_cache = coursecraft_render::MediaCache::new();
         self.audio_waveforms.remove(src);
+        self.audio_durations.remove(src);
         self.ensure_audio_waveform(src);
         self.mark_media_changed();
         self.set_status(format!(
@@ -3201,18 +3206,19 @@ impl Editor {
     /// Compute (once) and return the cached peak envelope for audio `src`.
     pub(crate) fn ensure_audio_waveform(&mut self, src: &str) -> Option<&[f32]> {
         if !self.audio_waveforms.contains_key(src) {
-            let peaks = self
-                .media
-                .iter()
-                .find(|(name, _)| name == src)
-                .and_then(|(_, bytes)| {
-                    coursecraft_playback::audio_peak_envelope(
-                        src,
-                        bytes,
-                        coursecraft_playback::MAX_WAVEFORM_PEAKS,
-                    )
-                });
+            let found = self.media.iter().find(|(name, _)| name == src);
+            let peaks = found.and_then(|(_, bytes)| {
+                coursecraft_playback::audio_peak_envelope(
+                    src,
+                    bytes,
+                    coursecraft_playback::MAX_WAVEFORM_PEAKS,
+                )
+            });
+            let dur = found.and_then(|(_, bytes)| {
+                coursecraft_playback::media_duration_ms(MediaKind::Audio, src, bytes)
+            });
             self.audio_waveforms.insert(src.to_owned(), peaks);
+            self.audio_durations.insert(src.to_owned(), dur);
         }
         self.audio_waveforms.get(src).and_then(|v| v.as_deref())
     }
