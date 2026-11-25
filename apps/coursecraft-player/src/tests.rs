@@ -2351,49 +2351,98 @@ fn tr_17_tracking_effects(effects: &[Effect]) -> Vec<Effect> {
         .collect()
 }
 
-fn tr_17_assert_player_matches_simulate(label: &str, course: Course, inputs: &[Input]) {
-    // 1. Simulate path (`Player::handle`).
+fn tr_17_assert_player_matches_simulate(
+    label: &str,
+    course: Course,
+    inputs: &[Input],
+    expected_tracking: &[Effect],
+) -> Vec<Vec<Effect>> {
+    // 1. Simulate path (`Player::handle`), tracking step-by-step effects and visited counts.
     let mut sim_player = coursecraft_logic::Player::new(&course).expect("valid sim player");
-    let mut sim_effects = sim_player.handle(&Input::Start);
+    let mut sim_steps: Vec<(Vec<Effect>, usize)> = Vec::with_capacity(inputs.len() + 1);
+    sim_steps.push((
+        tr_17_tracking_effects(&sim_player.handle(&Input::Start)),
+        sim_player.state().visited.len(),
+    ));
     for inp in inputs {
-        sim_effects.extend(sim_player.handle(inp));
+        sim_steps.push((
+            tr_17_tracking_effects(&sim_player.handle(inp)),
+            sim_player.state().visited.len(),
+        ));
     }
-    let sim_tracking = tr_17_tracking_effects(&sim_effects);
-    let sim_visited = sim_player.state().visited.len();
 
-    // 2. Published player path (`Playing::handle_input`).
+    // 2. Published player path (`Playing::handle_input`), step-by-step.
     let mut playing = Playing::from_course(course, false).expect("valid playing");
+    let parse_log = |lines: &[String]| -> Vec<Effect> {
+        let parsed: Vec<Effect> = lines
+            .iter()
+            .filter_map(|line| serde_json::from_str::<Effect>(line).ok())
+            .collect();
+        tr_17_tracking_effects(&parsed)
+    };
+    let mut pub_steps: Vec<(Vec<Effect>, usize)> = Vec::with_capacity(inputs.len() + 1);
     playing.handle_input(&Input::Start, None);
+    let mut log_cursor = playing.log.len();
+    pub_steps.push((
+        parse_log(&playing.log),
+        playing.player.state().visited.len(),
+    ));
     for inp in inputs {
         playing.handle_input(inp, None);
+        pub_steps.push((
+            parse_log(&playing.log[log_cursor..]),
+            playing.player.state().visited.len(),
+        ));
+        log_cursor = playing.log.len();
     }
-    let pub_effects: Vec<Effect> = playing
-        .log
-        .iter()
-        .filter_map(|line| serde_json::from_str::<Effect>(line).ok())
-        .collect();
-    let pub_tracking = tr_17_tracking_effects(&pub_effects);
-    let pub_visited = playing.player.state().visited.len();
 
     assert_eq!(
-        pub_tracking, sim_tracking,
-        "{label}: Published player Completion/Score sequence must match simulate"
+        pub_steps, sim_steps,
+        "{label}: Published player per-step Completion/Score sequence and visited counts must match simulate"
     );
+    let all_tracking: Vec<Effect> = sim_steps
+        .iter()
+        .flat_map(|(effects, _)| effects.iter().cloned())
+        .collect();
     assert_eq!(
-        pub_visited, sim_visited,
-        "{label}: Published player visited slide count must match simulate"
+        all_tracking, expected_tracking,
+        "{label}: unexpected aggregate Completion/Score effects"
     );
+    sim_steps.into_iter().map(|(effects, _)| effects).collect()
 }
 
 #[test]
 fn tr_17_published_player_vs_simulate_tracking_parity() {
-    use coursecraft_course::{QuizTracking, SlidesViewedTracking, TrackingSettings};
+    use coursecraft_course::{
+        CompletionStatus, QuizTracking, SlidesViewedTracking, TrackingSettings,
+    };
 
     let click = |id: &str| Input::Click {
         object: id.to_owned(),
     };
+    let completed = Effect::Completion {
+        status: CompletionStatus::Completed,
+    };
+    let passed_score = Effect::Score {
+        raw: 20,
+        max: 20,
+        percent: 100,
+        status: CompletionStatus::Passed,
+    };
+    let passed = Effect::Completion {
+        status: CompletionStatus::Passed,
+    };
+    let failed_score = Effect::Score {
+        raw: 0,
+        max: 20,
+        percent: 0,
+        status: CompletionStatus::Failed,
+    };
+    let failed = Effect::Completion {
+        status: CompletionStatus::Failed,
+    };
 
-    tr_17_assert_player_matches_simulate(
+    let steps = tr_17_assert_player_matches_simulate(
         "slides-all",
         tr_17_plain_course(
             3,
@@ -2403,9 +2452,12 @@ fn tr_17_published_player_vs_simulate_tracking_parity() {
             },
         ),
         &[Input::Next, Input::Next],
+        std::slice::from_ref(&completed),
     );
+    assert!(steps[0].is_empty() && steps[1].is_empty());
+    assert_eq!(steps[2], vec![completed.clone()]);
 
-    tr_17_assert_player_matches_simulate(
+    let steps = tr_17_assert_player_matches_simulate(
         "slides-at-least-2",
         tr_17_plain_course(
             3,
@@ -2415,7 +2467,10 @@ fn tr_17_published_player_vs_simulate_tracking_parity() {
             },
         ),
         &[Input::Next, Input::Next],
+        std::slice::from_ref(&completed),
     );
+    assert!(steps[0].is_empty() && steps[2].is_empty());
+    assert_eq!(steps[1], vec![completed.clone()]);
 
     let quiz_inputs = vec![
         Input::SelectChoice { choice: "a".into() },
@@ -2437,6 +2492,7 @@ fn tr_17_published_player_vs_simulate_tracking_parity() {
             },
         ),
         &quiz_inputs,
+        &[passed_score.clone(), passed.clone()],
     );
 
     tr_17_assert_player_matches_simulate(
@@ -2449,6 +2505,7 @@ fn tr_17_published_player_vs_simulate_tracking_parity() {
             },
         ),
         &quiz_inputs,
+        &[passed_score.clone(), passed.clone()],
     );
 
     tr_17_assert_player_matches_simulate(
@@ -2461,5 +2518,29 @@ fn tr_17_published_player_vs_simulate_tracking_parity() {
             },
         ),
         &quiz_inputs,
+        &[completed.clone(), passed_score, passed],
+    );
+
+    let fail_quiz_inputs = vec![
+        Input::SelectChoice { choice: "b".into() },
+        click("submit-q1"),
+        Input::Next,
+        Input::SelectChoice { choice: "b".into() },
+        click("submit-q2"),
+        Input::Next,
+    ];
+    tr_17_assert_player_matches_simulate(
+        "combined-fail-quiz-and-slides-all",
+        tr_17_quiz_course(
+            true,
+            TrackingSettings {
+                slides_viewed: Some(SlidesViewedTracking::All),
+                quiz: Some(QuizTracking {
+                    slide: Some("results".into()),
+                }),
+            },
+        ),
+        &fail_quiz_inputs,
+        &[failed_score, failed, completed],
     );
 }
