@@ -233,6 +233,18 @@ Each phase updates `docs/spec/triggers.md`, `docs/ui/ribbon.md` and `docs/ui/fea
 - The Effect Options menu (`UiMenu::EffectOptions`) and `gallery::set_option` set a value only on
   selected objects whose effect takes it, checked with `EffectDef::option_problems`.
 
+## Phase 5 as built
+
+- `anim_preview.rs`: `PreviewState` in `UiState` holds one preview (slide, objects, slot,
+  animation, once or hover, start time). The canvas applies it with
+  `coursecraft_logic::sample_animation` and `apply_sample_to_items` when the timeline is at rest.
+  A pass is 150 ms before, the animation, then a 600 ms hold. A hover preview lives while the
+  tile calls `hover` every frame. A press on the slide or a different selection ends it.
+- `anim_panel.rs`: the Entrance and Exit cards; `properties::show_anim_row` hosts them and
+  keeps the old buffers and `animation_command`, so single and multi-selection work as before.
+- The Emphasis card arrives with phase 6, and Animation Painter with it. There is no reduced-motion
+  setting in the editor yet; Auto-preview is the switch for now.
+
 ## On stock icons from Magnific / Freepik
 
 Searching the stock library for animation icons returned a mixed, mostly premium set ("Sputnik",

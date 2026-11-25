@@ -23,7 +23,7 @@ fn select_button_animate(harness: &mut TestHarness) {
     harness.idle_frame();
 }
 
-/// Find the "None" (or current label) combo button in the Exit Animation section
+/// Find the "None" (or current label) effect picker in the Exit Animation section
 /// by looking below the "Exit Animation" header inside the right panel.
 fn find_text_below_in_inspector(
     harness: &mut TestHarness,
@@ -57,6 +57,7 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
         .expect("entrance effect combo");
     harness.click_at(ent_combo);
     harness.idle_frame();
+    harness.idle_frame();
 
     for expected in [
         "None", "Fade in", "Fly in", "Zoom in", "Wipe in", "Float in",
@@ -76,6 +77,8 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
     let exit_combo = find_text_below_in_inspector(&mut harness, "None", exit_header.y)
         .expect("exit effect combo");
     harness.click_at(exit_combo);
+    // The effect gallery lays out its scroll area on its first frame.
+    harness.idle_frame();
     harness.idle_frame();
 
     for expected in [
@@ -192,6 +195,8 @@ fn multi_selection_shows_entrance_and_exit_names_and_undo_redo() {
     let exit_combo = find_text_below_in_inspector(&mut harness, "None", exit_header.y)
         .expect("exit effect combo");
     harness.click_at(exit_combo);
+    // The effect gallery lays out its scroll area on its first frame.
+    harness.idle_frame();
     harness.idle_frame();
 
     let zoom_out = harness.find_text_last("Zoom out").expect("Zoom out option");

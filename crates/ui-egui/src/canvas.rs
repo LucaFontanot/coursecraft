@@ -8267,7 +8267,31 @@ pub fn show_canvas_and_layers(editor: &mut Editor, ui: &mut Ui) {
                     )
                 })
         } else {
-            None
+            // A live preview (M46 phase 5) plays the selected objects' animation in place;
+            // pressing on the canvas stops it.
+            if editor.ui.anim_preview.is_playing()
+                && ui.input(|i| {
+                    i.pointer.any_pressed()
+                        && i.pointer
+                            .interact_pos()
+                            .is_some_and(|p| t.slide_rect().contains(p))
+                })
+            {
+                editor.ui.anim_preview.stop();
+            }
+            let ids = editor.selection.ids();
+            let (now, pass) = (ui.input(|i| i.time), ui.ctx().cumulative_pass_nr());
+            let previewed = editor.ui.anim_preview.items(
+                &editor.session.course,
+                (&editor.selection.slide, &ids),
+                items,
+                now,
+                pass,
+            );
+            if previewed.is_some() {
+                ui.ctx().request_repaint();
+            }
+            previewed
         };
         let base_view_items = animated.as_deref().unwrap_or(items);
         let live_view_items_owned = apply_inline_edit_live_rect(editor, base_view_items);

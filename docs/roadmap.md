@@ -522,7 +522,13 @@ rebuilt Animations panel; live preview on the canvas.
   reveals), green for entrances and red for exits, playing in a loop on hover. Effect Options ▾
   of the Entrance and Exit galleries is built from the registry: a compass of arrows for
   directions and rows with Phosphor icons for shape, in/out, spokes and orientation.
-- Next: Animations panel and canvas preview, emphasis, build by paragraph, transitions.
+- Phase 5 (Animations panel and canvas preview) **built (2026-11-26)**: the Animate inspector's
+  Entrance and Exit cards (effect picker with drawn icons, search, Recent and category headers;
+  icon buttons per option; Duration in seconds; Easing as curves; ▶ Preview; Remove) and a live
+  preview on the canvas through the player's sampler: once on ▶ or a pick, looping while an effect
+  tile is hovered in the ribbon or the picker, stopped by a click on the slide or a new selection.
+  Auto-preview turns the automatic previews off.
+- Next: emphasis, build by paragraph, transitions.
 
 ## After the first release
 

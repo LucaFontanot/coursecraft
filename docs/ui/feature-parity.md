@@ -19,13 +19,13 @@
 | Shapes, pictures and buttons | 16 | 4 | 9 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
-| Animation, transitions, timeline | 14 | 1 | 8 | 0 |
+| Animation, transitions, timeline | 15 | 1 | 8 | 0 |
 | Questions and quizzes | 8 | 4 | 3 | 0 |
 | Player, preview, publish | 10 | 4 | 7 | 2 |
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **112** | **38** | **58** | **12** |
+| **Total** | **113** | **38** | **58** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -182,7 +182,8 @@ Counted from the tables below; recount when a row changes.
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
 | Entrance and exit animations | `object.set_animation` | ✅ | — |
-| Animation duration and effect options (8 directions, shape, in/out, spokes, orientation) | `object.set_animation`; Animate inspector lists each option the effect takes | ✅ | — |
+| Animation duration and effect options (8 directions, shape, in/out, spokes, orientation) | `object.set_animation`; the Animate inspector's Entrance and Exit cards (`anim_panel.rs`) show one row of icon buttons per option the effect takes | ✅ | — |
+| Preview an animation on the canvas | `anim_preview.rs`: plays the selected objects' entrance or exit in place through the player's sampler, once on ▶ Preview or a pick, in a loop while an effect tile is hovered; Auto-preview turns the automatic ones off | ✅ | M46 |
 | Motion paths (add, duration, name, options) | `object.*motion_path` | ✅ | — |
 | Slide transitions and duration | `slide.set_transition` | ✅ | — |
 | Timeline: bars, drag timing, rename, restack | `timeline.rs` | ✅ | — |

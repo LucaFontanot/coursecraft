@@ -29,7 +29,7 @@ What there was when the plan was written. What is built since is under [Order of
 | Canvas | the slide being edited | no (protected) |
 | Timeline | bottom tabs Timeline, States, Triggers, Variables, Question (`timeline.rs` `BottomTab`), and Slide Layers on its right (`layers.rs`) | yes |
 | Format | inspector: Position & Size, Shape, Text, Image, Path, Effects, Frame, Rotate, Table (Rows, Columns, Cell, Borders), Draggable, Question, States, Accessibility (`properties.rs`) | yes |
-| Animate | inspector: Transition, Animations, Motion Paths | yes |
+| Animate | inspector: Auto-preview, Entrance and Exit cards (M46: effect picker with drawn icons, search, Recent and category headers; one row of icon buttons per option; Duration in seconds; Easing drawn as curves; ▶ Preview; Remove), Motion Paths, Transition | yes |
 | Slide | inspector: Draw, Master, Question, Notes, background, advance and revisit | yes |
 | Course | inspector: Title, Pass mark, Slides | yes |
 

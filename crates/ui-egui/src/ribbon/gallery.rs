@@ -320,8 +320,69 @@ pub fn apply(editor: &mut Editor, gallery: Gallery, index: usize) {
             for (slide, object, animation) in changes {
                 set_animation(editor, &slide, &object, motion, animation.as_ref());
             }
+            if let Some(d) = index.checked_sub(1).and_then(|i| EFFECTS.get(i)) {
+                editor.ui.anim_preview.picked(d.id);
+            }
+            preview_current(editor, motion);
         }
     }
+}
+
+fn slot_of(motion: Motion) -> crate::anim_preview::Slot {
+    crate::anim_preview::Slot::of_exit(motion == Motion::Exit)
+}
+
+/// Play the first selected object's `motion` animation once on the canvas, when
+/// Auto-preview is on.
+pub fn preview_current(editor: &mut Editor, motion: Motion) {
+    if !editor.ui.anim_preview.auto || motion == Motion::Transition {
+        return;
+    }
+    let Some(a) = objects(editor)
+        .first()
+        .and_then(|o| animation(o, motion))
+        .cloned()
+    else {
+        return;
+    };
+    let slide = editor.selection.slide.clone();
+    let ids = editor.selection.ids();
+    editor.ui.anim_preview.play(&slide, ids, slot_of(motion), a);
+}
+
+/// Loop `effect` on the selected objects while its tile is hovered (keeps their duration and
+/// easing, or the effect's defaults).
+pub fn preview_hover(
+    editor: &mut Editor,
+    ctx: &egui::Context,
+    motion: Motion,
+    effect: &AnimEffect,
+) {
+    let old = objects(editor)
+        .first()
+        .and_then(|o| animation(o, motion))
+        .cloned();
+    let duration = old.as_ref().map_or_else(
+        || effect.def().map_or(500, |d| d.default_duration_ms),
+        |a| a.duration_ms,
+    );
+    let easing = old.map_or(Easing::EaseOut, |a| a.easing);
+    // A hovered tile shows its own effect, with the options the object has where they apply.
+    let effect = match objects(editor).first().and_then(|o| animation(o, motion)) {
+        Some(a) if a.effect.id != effect.id => a.effect.switched_to(&effect.id),
+        _ => effect.clone(),
+    };
+    let slide = editor.selection.slide.clone();
+    let ids = editor.selection.ids();
+    editor.ui.anim_preview.hover(
+        &slide,
+        ids,
+        slot_of(motion),
+        effect,
+        duration,
+        easing,
+        ctx.cumulative_pass_nr(),
+    );
 }
 
 fn set_transition(editor: &mut Editor, slide: &str, transition: Option<&Transition>) {
@@ -680,6 +741,25 @@ fn tile(ui: &mut Ui, t: &Tile, enabled: bool) -> Response {
     resp.on_hover_text(label)
 }
 
+/// One effect tile (the Animate panel's effect gallery uses the ribbon's tiles): `effect`
+/// drawn by its own sample function, or the None tile.
+pub fn effect_tile(
+    ui: &mut Ui,
+    label: &'static str,
+    effect: Option<AnimEffect>,
+    exit: bool,
+    selected: bool,
+) -> Response {
+    let t = Tile {
+        label,
+        icon: Icon::XCircle,
+        swatch: None,
+        effect: effect.map(|e| (e, exit)),
+        selected,
+    };
+    tile(ui, &t, true)
+}
+
 /// Draw `gallery` in the ribbon: its first `shown` tiles and a ▾ for all.
 pub fn show(
     editor: &mut Editor,
@@ -691,6 +771,7 @@ pub fn show(
 ) -> Response {
     let tiles = tiles(editor, gallery);
     let mut picked = None;
+    let mut hovered = None;
     let inner = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         // Keep the selected tile in view.
@@ -700,8 +781,12 @@ pub fn show(
             .position(|t| t.selected)
             .map_or(0, |i| i.saturating_sub(shown.saturating_sub(1)));
         for (i, t) in tiles.iter().enumerate().skip(start).take(shown) {
-            if tile(ui, t, enabled).clicked() {
+            let r = tile(ui, t, enabled);
+            if r.clicked() {
                 picked = Some(i);
+            }
+            if r.hovered() {
+                hovered = Some(i);
             }
         }
         let (more_rect, more) = ui.allocate_exact_size(
@@ -730,9 +815,13 @@ pub fn show(
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
                 for (i, t) in tiles.iter().enumerate() {
-                    if tile(ui, t, enabled).clicked() {
+                    let r = tile(ui, t, enabled);
+                    if r.clicked() {
                         picked = Some(i);
                         ui.close();
+                    }
+                    if r.hovered() {
+                        hovered = Some(i);
                     }
                 }
             });
@@ -740,6 +829,12 @@ pub fn show(
     });
     if let Some(index) = picked {
         apply(editor, gallery, index);
+    } else if enabled
+        && let Some((effect, _)) = hovered
+            .and_then(|i| tiles.get(i))
+            .and_then(|t| t.effect.as_ref())
+    {
+        preview_hover(editor, ui.ctx(), motion_of(gallery), effect);
     }
     inner.response
 }
@@ -872,4 +967,5 @@ pub fn set_option(editor: &mut Editor, motion: Motion, value: super::effect_art:
             }
         },
     );
+    preview_current(editor, motion);
 }

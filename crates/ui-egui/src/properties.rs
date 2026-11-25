@@ -1962,113 +1962,8 @@ pub(crate) fn show_paired_numeric_row(
     })
 }
 
-/// Label for an animation effect id (`"none"` or a registry id), phrased as an entrance or
-/// exit depending on `which` (`"entrance"` or `"exit"`). English; callers pass it through `tl!`.
-fn anim_effect_label(which: &str, effect: &str) -> &'static str {
-    if effect == "none" {
-        return "None";
-    }
-    coursecraft_course::effect_def(effect).map_or("Unknown effect", |d| d.label(which == "exit"))
-}
-
-/// One option combo of the Animations section: `label` row, values with English labels.
-fn anim_option_row<T: PartialEq + Copy>(
-    ui: &mut Ui,
-    id: String,
-    label: &str,
-    current: &mut Option<T>,
-    shown: T,
-    values: &[T],
-    name: impl Fn(T) -> String,
-) -> bool {
-    let mut changed = false;
-    inspector_row(ui, label, |ui| {
-        let rem_w = ui.available_width().max(30.0);
-        crate::widgets::styled_combo(ui, id, rem_w)
-            .selected_text(name(shown))
-            .show_ui(ui, |ui| {
-                for &v in values {
-                    if ui.selectable_label(shown == v, name(v)).clicked() {
-                        *current = Some(v);
-                        changed = true;
-                    }
-                }
-            });
-    });
-    changed
-}
-
-/// The option rows of `fx` (its id already set), one per option its effect takes, in registry
-/// order. Returns whether one changed.
-fn show_anim_options(ui: &mut Ui, which: &str, fx: &mut AnimEffect) -> bool {
-    use coursecraft_course::{EffectOptionDef, InOut, Orientation, RevealShape};
-    let Some(def) = fx.def() else {
-        return false;
-    };
-    let mut changed = false;
-    for option in def.options {
-        let id = format!("anim_{}_{which}", option.field());
-        let label = crate::tl!(option.label());
-        changed |= match *option {
-            EffectOptionDef::Direction { allowed, .. } => {
-                let shown = fx.direction().unwrap_or_default();
-                anim_option_row(
-                    ui,
-                    id,
-                    label,
-                    &mut fx.from,
-                    shown,
-                    allowed,
-                    |d: Direction| crate::tl!(d.label()).to_string(),
-                )
-            }
-            EffectOptionDef::Shape { allowed, .. } => {
-                let shown = fx.shape().unwrap_or_default();
-                anim_option_row(
-                    ui,
-                    id,
-                    label,
-                    &mut fx.shape,
-                    shown,
-                    allowed,
-                    |v: RevealShape| crate::tl!(v.label()).to_string(),
-                )
-            }
-            EffectOptionDef::InOut { .. } => {
-                let shown = fx.inout().unwrap_or_default();
-                anim_option_row(
-                    ui,
-                    id,
-                    label,
-                    &mut fx.inout,
-                    shown,
-                    &InOut::ALL,
-                    |v: InOut| crate::tl!(v.label()).to_string(),
-                )
-            }
-            EffectOptionDef::Spokes { allowed, .. } => {
-                let shown = fx.spokes().unwrap_or(1);
-                anim_option_row(ui, id, label, &mut fx.spokes, shown, allowed, |v: u8| {
-                    v.to_string()
-                })
-            }
-            EffectOptionDef::Orientation { .. } => {
-                let shown = fx.orientation().unwrap_or_default();
-                anim_option_row(
-                    ui,
-                    id,
-                    label,
-                    &mut fx.orientation,
-                    shown,
-                    &Orientation::ALL,
-                    |v: Orientation| crate::tl!(v.label()).to_string(),
-                )
-            }
-        };
-    }
-    changed
-}
-
+/// One Entrance or Exit card of the Animate panel (`anim_panel`): a change sets
+/// `action_to_run` to the `object.set_animation` call for `obj_id`.
 #[allow(clippy::too_many_arguments)]
 fn show_anim_row(
     ui: &mut Ui,
@@ -2081,81 +1976,22 @@ fn show_anim_row(
     slide_id: &str,
     obj_id: &str,
     action_to_run: &mut Option<(&'static str, Json)>,
+    pv: &mut crate::anim_preview::PreviewState,
+    preview: &mut Option<crate::anim_panel::PanelPreview>,
 ) {
     inspector_section_header(ui, title);
-    let mut changed = false;
-
-    let effect_label = anim_effect_label(which, effect_str.as_str());
-
-    inspector_row(ui, "Effect", |ui| {
-        let rem_w = ui.available_width().max(30.0);
-        crate::widgets::styled_combo(ui, format!("anim_effect_{which}"), rem_w)
-            .selected_text(crate::tl!(effect_label))
-            .show_ui(ui, |ui| {
-                let ids =
-                    std::iter::once("none").chain(coursecraft_course::EFFECTS.iter().map(|d| d.id));
-                for id in ids {
-                    if ui
-                        .selectable_value(
-                            effect_str,
-                            id.to_owned(),
-                            crate::tl!(anim_effect_label(which, id)),
-                        )
-                        .clicked()
-                    {
-                        changed = true;
-                    }
-                }
-            });
-    });
-
-    if effect_str.as_str() != "none" {
-        inspector_row(ui, "Duration", |ui| {
-            let rem_w = ui.available_width().max(30.0);
-            let r = add_drag_left(
-                ui,
-                [rem_w, coursecraft_render::CONTROL_COMPACT],
-                DragValue::new(duration_ms)
-                    .speed(50.0)
-                    .range(1..=60000)
-                    .suffix(" ms"),
-            );
-            let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if r.drag_stopped() || r.lost_focus() || enter {
-                changed = true;
-            }
-        });
-
-        if fx.id != *effect_str {
-            *fx = fx.switched_to(effect_str);
-        }
-        changed |= show_anim_options(ui, which, fx);
-
-        let ease_label = match easing {
-            Easing::Linear => "Linear",
-            Easing::EaseIn => "EaseIn",
-            Easing::EaseOut => "EaseOut",
-            Easing::EaseInOut => "EaseInOut",
-        };
-        inspector_row(ui, "Easing", |ui| {
-            let rem_w = ui.available_width().max(30.0);
-            crate::widgets::styled_combo(ui, format!("anim_ease_{which}"), rem_w)
-                .selected_text(ease_label)
-                .show_ui(ui, |ui| {
-                    for (val, l) in [
-                        (Easing::EaseOut, "EaseOut"),
-                        (Easing::Linear, "Linear"),
-                        (Easing::EaseIn, "EaseIn"),
-                        (Easing::EaseInOut, "EaseInOut"),
-                    ] {
-                        if ui.selectable_value(easing, val, l).clicked() {
-                            changed = true;
-                        }
-                    }
-                });
-        });
-    }
-
+    let changed = crate::anim_panel::show_card(
+        ui,
+        which,
+        crate::anim_panel::CardState {
+            effect: effect_str,
+            fx,
+            duration_ms,
+            easing,
+        },
+        pv,
+        preview,
+    );
     if changed {
         *action_to_run = Some(animation_command(
             which,
@@ -2166,6 +2002,71 @@ fn show_anim_row(
             slide_id,
             obj_id,
         ));
+        if pv.auto && effect_str.as_str() != "none" {
+            *preview = Some(crate::anim_panel::PanelPreview::Play);
+        }
+    }
+}
+
+/// Start the canvas preview a card asked for, on the selected objects.
+fn run_card_preview(
+    editor: &mut Editor,
+    ctx: &egui::Context,
+    exit: bool,
+    preview: Option<crate::anim_panel::PanelPreview>,
+) {
+    let Some(preview) = preview else {
+        return;
+    };
+    let props = &editor.ui.properties;
+    let (effect, fx, duration_ms, easing) = if exit {
+        (
+            &props.exit_effect,
+            &props.exit_fx,
+            props.exit_duration_ms,
+            props.exit_easing,
+        )
+    } else {
+        (
+            &props.entrance_effect,
+            &props.entrance_fx,
+            props.entrance_duration_ms,
+            props.entrance_easing,
+        )
+    };
+    let slot = crate::anim_preview::Slot::of_exit(exit);
+    let slide = editor.selection.slide.clone();
+    let ids = editor.selection.ids();
+    match preview {
+        crate::anim_panel::PanelPreview::Play => {
+            if effect.as_str() == "none" {
+                return;
+            }
+            let animation = coursecraft_course::Animation {
+                effect: fx.switched_to(effect),
+                duration_ms,
+                easing,
+            };
+            editor.ui.anim_preview.play(&slide, ids, slot, animation);
+        }
+        crate::anim_panel::PanelPreview::Hover(effect) => {
+            let duration = if props.entrance_effect == "none" && !exit
+                || props.exit_effect == "none" && exit
+            {
+                effect.def().map_or(500, |d| d.default_duration_ms)
+            } else {
+                duration_ms
+            };
+            editor.ui.anim_preview.hover(
+                &slide,
+                ids,
+                slot,
+                effect,
+                duration,
+                easing,
+                ctx.cumulative_pass_nr(),
+            );
+        }
     }
 }
 
@@ -4814,9 +4715,12 @@ fn show_animate_tab(
         if editor.selection.is_multi() {
             let slide_id = editor.selection.slide.clone();
             let ids = editor.selection.ids();
+            auto_preview_toggle(ui, &mut editor.ui.anim_preview.auto);
             let props = &mut editor.ui.properties;
+            let pv = &mut editor.ui.anim_preview;
             let mut entrance_action: Option<(&'static str, Json)> = None;
             let mut exit_action: Option<(&'static str, Json)> = None;
+            let (mut entrance_preview, mut exit_preview) = (None, None);
             show_anim_row(
                 ui,
                 "Entrance animation",
@@ -4828,6 +4732,8 @@ fn show_animate_tab(
                 &slide_id,
                 "",
                 &mut entrance_action,
+                pv,
+                &mut entrance_preview,
             );
             inspector_separator(ui);
             show_anim_row(
@@ -4841,7 +4747,12 @@ fn show_animate_tab(
                 &slide_id,
                 "",
                 &mut exit_action,
+                pv,
+                &mut exit_preview,
             );
+            run_card_preview(editor, ui.ctx(), false, entrance_preview);
+            run_card_preview(editor, ui.ctx(), true, exit_preview);
+            let props = &mut editor.ui.properties;
             if entrance_action.is_some() {
                 for id in &ids {
                     actions_to_run.push(animation_command(
@@ -11605,6 +11516,15 @@ fn handle_image_actions(
     }
 }
 
+/// The Auto-preview switch at the top of the Animate panel.
+fn auto_preview_toggle(ui: &mut Ui, auto: &mut bool) {
+    ui.checkbox(auto, crate::tl!("Auto-preview"))
+        .on_hover_text(crate::tl!(
+            "Play an animation on the canvas when you pick it or hover over an effect"
+        ));
+    ui.add_space(6.0);
+}
+
 pub fn show_animations_section(
     editor: &mut Editor,
     ui: &mut Ui,
@@ -11620,8 +11540,11 @@ pub fn show_animations_section(
         return;
     };
 
+    auto_preview_toggle(ui, &mut editor.ui.anim_preview.auto);
     let props = &mut editor.ui.properties;
+    let pv = &mut editor.ui.anim_preview;
     let mut action_to_run: Option<(&'static str, Json)> = None;
+    let (mut entrance_preview, mut exit_preview) = (None, None);
 
     show_anim_row(
         ui,
@@ -11634,6 +11557,8 @@ pub fn show_animations_section(
         &slide.id,
         &obj.id,
         &mut action_to_run,
+        pv,
+        &mut entrance_preview,
     );
     inspector_separator(ui);
     show_anim_row(
@@ -11647,6 +11572,8 @@ pub fn show_animations_section(
         &slide.id,
         &obj.id,
         &mut action_to_run,
+        pv,
+        &mut exit_preview,
     );
     inspector_separator(ui);
     inspector_section_header(ui, "Motion paths");

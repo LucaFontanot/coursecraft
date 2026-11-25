@@ -1559,8 +1559,9 @@ fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
 
     // Animate tab: Effect None -> Fly in.
     click_inspector_tab(&mut harness, "Animate");
-    let effect = topmost_in_inspector(&mut harness, "None").expect("entrance effect combo");
+    let effect = topmost_in_inspector(&mut harness, "None").expect("entrance effect picker");
     harness.click_at(effect);
+    harness.idle_frame();
     harness.idle_frame();
     let fly = harness.find_text_last("Fly in").expect("Fly in option");
     harness.click_at(fly);
@@ -1576,10 +1577,14 @@ fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
     );
 
     // Direction Bottom -> Left.
-    let dir = topmost_in_inspector(&mut harness, "Bottom").expect("direction combo");
-    harness.click_at(dir);
-    harness.idle_frame();
-    let left = harness.find_text_last("Left").expect("Left option");
+    // Direction is a row of arrow buttons named by their side.
+    let panel = harness.right_panel_rect();
+    let left = harness
+        .last_widgets
+        .iter()
+        .find(|w| w.label.as_deref() == Some("Left") && panel.contains(w.bounds.center()))
+        .map(|w| w.bounds.center())
+        .expect("Left direction button");
     harness.click_at(left);
     harness.idle_frame();
     let entrance = object_on(&harness, &slide, &id).entrance;
@@ -1590,7 +1595,7 @@ fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
 
     // Duration 500 -> 1200.
     let duration = topmost_in_inspector(&mut harness, "Duration").expect("Duration row");
-    harness.set_field(duration + vec2(120.0, 0.0), "1200");
+    harness.set_field(duration + vec2(120.0, 0.0), "1.2");
     harness.idle_frame();
     let entrance = object_on(&harness, &slide, &id).entrance;
     assert_eq!(entrance.as_ref().map(|a| a.duration_ms), Some(1200));
@@ -1599,6 +1604,7 @@ fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
     let revision = harness.editor.session.revision;
     let effect = topmost_in_inspector(&mut harness, "Fly in").expect("effect shows Fly in");
     harness.click_at(effect);
+    harness.idle_frame();
     harness.idle_frame();
     let fly = harness.find_text_last("Fly in").expect("Fly in option");
     harness.click_at(fly);
