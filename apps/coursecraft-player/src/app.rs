@@ -670,6 +670,8 @@ pub struct PlayerApp {
     ctx: egui::Context,
     #[cfg(target_arch = "wasm32")]
     log_effects: bool,
+    #[cfg(target_arch = "wasm32")]
+    loading_overlay_removed: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -775,6 +777,7 @@ impl PlayerApp {
             web_loader: Some(loader),
             ctx: cc.egui_ctx.clone(),
             log_effects: crate::load::web_log_effects(),
+            loading_overlay_removed: false,
         }
     }
 
@@ -1043,6 +1046,11 @@ pub(crate) fn show_failed_screen(ui: &mut egui::Ui, message: &str) {
 
 impl eframe::App for PlayerApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        #[cfg(target_arch = "wasm32")]
+        if !self.loading_overlay_removed {
+            self.loading_overlay_removed = true;
+            crate::remove_loading_overlay();
+        }
         #[cfg(target_arch = "wasm32")]
         if matches!(self.state, State::Loading) {
             self.poll_web_loader();

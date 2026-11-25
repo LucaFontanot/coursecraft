@@ -33,6 +33,42 @@ mod tests;
 
 pub use app::{PlayerApp, Playing, State};
 
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) const LOADING_OVERLAY_ID: &str = "coursecraft_loading";
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) const LOADING_SPINNER_ID: &str = "coursecraft_loading_spinner";
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) const LOADING_TEXT_ID: &str = "coursecraft_loading_text";
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) const LOADING_START_ERROR: &str =
+    "Unable to start the course player. Reload the page or try another browser.";
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn remove_loading_overlay() {
+    if let Some(overlay) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id(LOADING_OVERLAY_ID))
+    {
+        overlay.remove();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn show_loading_error(message: &str) {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if let Some(spinner) = document.get_element_by_id(LOADING_SPINNER_ID) {
+        spinner.remove();
+    }
+    if let Some(target) = document
+        .get_element_by_id(LOADING_TEXT_ID)
+        .or_else(|| document.get_element_by_id(LOADING_OVERLAY_ID))
+    {
+        target.set_text_content(Some(message));
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -61,6 +97,7 @@ fn main() {
             .and_then(|d| d.get_element_by_id("coursecraft_canvas"))
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok());
         let Some(canvas) = canvas else {
+            show_loading_error(LOADING_START_ERROR);
             web_sys::console::error_1(&"coursecraft: canvas #coursecraft_canvas not found".into());
             return;
         };
@@ -72,6 +109,7 @@ fn main() {
             )
             .await
         {
+            show_loading_error(LOADING_START_ERROR);
             web_sys::console::error_1(&e);
         }
     });

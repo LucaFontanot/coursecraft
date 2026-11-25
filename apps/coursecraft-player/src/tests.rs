@@ -2544,3 +2544,16 @@ fn tr_17_published_player_vs_simulate_tracking_parity() {
         &[failed_score, failed, completed],
     );
 }
+
+#[test]
+fn web_player_index_html_has_loading_indicator_and_reduced_motion() {
+    let html = include_str!("../index.html");
+    assert!(html.contains(&format!("id=\"{}\"", crate::LOADING_OVERLAY_ID)));
+    assert!(html.contains(&format!("id=\"{}\"", crate::LOADING_SPINNER_ID)));
+    assert!(html.contains(&format!("id=\"{}\"", crate::LOADING_TEXT_ID)));
+    assert!(html.contains("Loading course…"));
+    assert!(html.contains("prefers-reduced-motion: reduce"));
+    assert!(!html.to_ascii_lowercase().contains("<script"));
+    assert!(!crate::LOADING_START_ERROR.is_empty());
+    assert!(!crate::LOADING_START_ERROR.contains('<'));
+}
