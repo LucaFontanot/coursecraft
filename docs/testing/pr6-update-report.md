@@ -189,3 +189,76 @@ Per the task instructions, the items below are **flagged for review without modi
 - **End-to-end GitHub Actions execution on `ubuntu-24.04`, `windows-2022`, and `macos-15`:** confirming `appimagetool 1.9.1` downloads cleanly, passes the pinned SHA-256 check, validates `coursecraft.desktop`, and builds a working squashfs AppImage under `APPIMAGE_EXTRACT_AND_RUN=1`; confirming the Windows job produces only `coursecraft-<ver>-windows-x64-setup.exe` and no portable zip; confirming `SHA256SUMS.txt` lists all four `coursecraft-*` files.
 - **Launching the built `.AppImage` on real Linux desktops** (Ubuntu/Fedora/Wayland/X11) to verify GTK 3 runtime linking, desktop icon/window-class matching, and in-place self-update from an older `.AppImage` (`$APPIMAGE` set) and from an unpacked `.tar.gz` (`$APPIMAGE` unset) against a live GitHub release.
 - **Live Windows update check on an old portable copy (`portable.txt` beside `coursecraft.exe`)** against a tagged `v0.5.0` release to verify the prompt notice and browser download of `coursecraft-0.5.0-windows-x64-setup.exe`.
+
+
+---
+
+## 9. Clean-room cleanup
+
+Addressed all owner decisions from Section 7 plus the in-flight update cancellation fix, in five logical commits (`9cbe6b4`, `cc6eb5a`, `4b0c8c1`, `d177b97`, `dc9ca94`).
+
+### Files Changed (Sections 1–5)
+
+1. **Section 1 — Remove Storyline references (`9cbe6b4`):**
+   - Deleted: `docs/ui/storyline-observed.md`
+   - Modified: `AGENTS.md`, `README.md`, `docs/contributing.md`, `docs/release-checklist.md`, `docs/roadmap.md`, `docs/ui/README.md`, `docs/ui/contextual-tabs.md`, `docs/ui/feature-parity.md`, `docs/ui/implementation.md`, `docs/ui/panels.md`, `docs/ui/ribbon.md`, `docs/ui/shell-panels-dialogs.md`, `crates/ui-egui/src/doc_tabs.rs`, `crates/ui-egui/src/dock.rs`, `crates/ui-egui/src/properties.rs`, `crates/ui-egui/src/ribbon/spec.rs`
+2. **Section 2 — Rename coined labels and remove undefined `Index` placeholder (`cc6eb5a`):**
+   - Renamed `"When Clicked Action"` → `"On Click"`, `"Feedback Master"` → `"Feedback Layouts"`, `"Zoom Region"` → `"Camera Zoom"`, `"Button Set"` → `"Selection Group"`, `"Starting Scene"` → `"Start Section"`; removed `"Index"` (`map.index`); kept `Focus Order`, `Scrolling Panel`, `Preserve`.
+   - Modified: `crates/ui-egui/src/ribbon/spec.rs`, `crates/ui-egui/src/ribbon/spec_tests.rs`, `docs/roadmap.md`, `docs/ui/README.md`, `docs/ui/contextual-tabs.md`, `docs/ui/feature-parity.md`, `docs/ui/implementation.md`, `docs/ui/ribbon.md`, `docs/ui/shell-panels-dialogs.md`
+3. **Section 3 — Hide `NotPlanned` placeholder buttons while keeping spec entries (`4b0c8c1`):**
+   - Filtered `Action::NotPlanned` (`map.record_screen`, `insert.characters`, `insert.photos`, `insert.illustrations`, `insert.videos`, `insert.image_360`) out of ribbon groups, shrunk groups, launchers, menus, tooltips, and the accessibility tree with zero empty gaps; kept entries in `spec.rs` with owner-decision comments. Added `ribbon::spec_tests::not_planned_controls_stay_in_spec_but_are_never_rendered_or_focusable`.
+   - Modified: `crates/ui-egui/src/ribbon/mod.rs`, `crates/ui-egui/src/ribbon/spec.rs`, `crates/ui-egui/src/ribbon/spec_tests.rs`, `docs/roadmap.md`, `docs/ui/implementation.md`
+4. **Section 4 — Licence verification and attribution for `craft-libs` & Craft forks (`d177b97`):**
+   - Modified: `ATTRIBUTION.md`, `CHANGELOG.md`
+5. **Section 5 — Cancel in-flight Update and Restart on prompt dismissal (`dc9ca94`):**
+   - CourseCraft's wrapper (`apps/coursecraft/src/updates.rs`) now manages `StartupPrompt` and the self-update worker with a `craft_update::Stop` token passed to `prepare_update` (both for download and its pre-swap `last` check). Clicking **Later** / **Dismiss** or closing the prompt (`Esc` / `×`) cancels the in-flight update immediately so the app does not close, swap binaries/bundles, or install on exit, while allowing a later explicit **Update and Restart** to start and complete cleanly. Added `updates::tests::closing_prompt_while_downloading_cancels_update_and_allows_retry`. Updated `CHANGELOG.md` 0.5.0 entry.
+   - Modified: `apps/coursecraft/src/updates.rs`, `CHANGELOG.md`
+
+### Verified `craft-libs` and Fork Licences
+
+Checked directly in `~/.cargo/git/checkouts/`:
+- **`storytold/craft-libs`** (`rev 63196e66f3033a6623eb629af95a104d26986725` — `craft-ui`, `craft-i18n`, `craft-update`): **`MIT OR Apache-2.0`** (`LICENSE-MIT`, `LICENSE-APACHE`; `Copyright (c) 2026 ArtCraft Team and the craft-libs contributors`). Compatible with CourseCraft's `MIT OR Apache-2.0`.
+- **`storytold/egui`** (`rev 6d518fc799681571963842f95b55a6b68431b15a`): **`MIT OR Apache-2.0`** (`LICENSE-MIT`, `LICENSE-APACHE`).
+- **`storytold/winit`** (`rev a517b3846ee8457d84ee4975110bfda6797c44dc`): **`Apache-2.0`** (`LICENSE`).
+- **DeckCraft** ribbon widget patterns (`crates/ui-egui/src/ribbon/widgets.rs`, commit `7fbdc085`): **`MIT OR Apache-2.0`**.
+
+### Final `git grep -niE "storyline|articulate"` Output (Excluding This Report)
+
+Zero new matches relative to `main` (every line below already existed on `main`):
+
+```text
+AGENTS.md:3:CourseCraft is an open-source, native, Storyline-comparable eLearning authoring tool written in **Rust only**. The product name is always **CourseCraft** in user-facing text. Machine names are lowercase (`coursecraft-*`).
+PRODUCT.md:14:  - professional instructional designers who know Storyline/Captivate and build courses daily: they want density, speed, keyboard shortcuts and precise control;
+PRODUCT.md:21:CourseCraft is an open-source, native, Storyline-comparable eLearning authoring tool written in Rust only. Authors build interactive slide-based courses (layers, states, triggers, variables, media, animations, eight question types) and publish them as SCORM packages that run in any LMS. Success: an author can build and publish a good-looking, working course without fighting the tool, and the learner experience looks modern by default.
+PRODUCT.md:44:- Clean-room: match Storyline's capabilities, not its look or assets.
+README.md:5:An open-source, clean-room alternative to Articulate Storyline 360, written in pure Rust. You build interactive eLearning with slides, layers, states, triggers, variables and quizzes, and publish it to any LMS.
+README.md:154:MIT OR Apache-2.0. CourseCraft is not affiliated with Articulate or Adobe. "Storyline" and "Articulate" are trademarks of Articulate Global; "Captivate" and "Adobe" are trademarks of Adobe. They are used only to describe comparable features.
+crates/spell/dictionaries/en_US.dic:12612:articulate/YGNPDSX
+crates/spell/dictionaries/en_US.dic:12613:articulateness/IM
+crates/spell/dictionaries/en_US.dic:27979:inarticulate/Y
+crates/spell/dictionaries/en_US.dic:35568:particulate/SM
+docs/contributing.md:43:- Never copy another product's code, player JS/CSS, icons, templates, fonts, characters or other assets from closed-source or commercial tools (Articulate, Adobe or any other). Never decompile or unpack their players.
+docs/contributing.md:46:- In docs, competitor names may describe comparable features ("what a Storyline author expects"), never "copied from" or "in the style of". The README carries the trademark notice.
+docs/plans/feedback-3.md:3:The limits round 2 left open: Storyline's layer options, and shapes that can carry an outline and text, be adjusted, and be drawn freely. Each step ends with `cargo xtask ci` passing.
+docs/plans/feedback-3.md:15:- **Layer options are play-time behaviour,** so they live in `coursecraft-logic` and `docs/spec/triggers.md` changes with them. Storyline specifics we can't check are marked `[verify]`.
+docs/plans/m11-basics.md:3:Goal: what a Storyline or PowerPoint author expects in the first hour. Every step keeps old `course.json` files loading unchanged (new fields default and are omitted when default), goes through engine commands with undo, has an inspector control, and is drawn the same way on the canvas, in preview, in the published player and in the offscreen renderer (one code path in `coursecraft-render`). PowerPoint import picks up the same property where the file has it. Spell check is left for later.
+docs/plans/m12-interactions.md:3:Goal: the interactive building blocks Storyline authors reach for, without writing code. Every runtime change lives in `coursecraft-logic` and is written into `docs/spec/triggers.md` in the same change. Every new object works on the canvas, in preview, in the published player and in offscreen renders, is reachable by keyboard and announced on the web, goes through engine commands with undo, and is driveable from the CLI and MCP.
+docs/plans/m13-quizzes.md:3:Goal: quizzes that match what Storyline authors expect: flexible scoring, surveys, question banks, results slides, retry, review and certificates. Every runtime change lives in `coursecraft-logic` and is written into `docs/spec/triggers.md` in the same change.
+docs/plans/m8-authoring.md:3:Goal: the everyday speed of Storyline 360. An author can select many things, copy, paste, line them up, reuse layouts and fix text across a course without touching slides one at a time.
+docs/roadmap.md:80:Priority (the user's): people can use CourseCraft themselves, in the visual editor, without spending any money. AI is optional help on top and is never required, because requiring it would mean paying for an AI subscription. The first release comes after M9, and later milestones aim to bring it as close to Storyline 360 as possible.
+docs/roadmap.md:128:## Toward Storyline 360 and Captivate
+docs/roadmap.md:210:Goal: things Storyline and Captivate can't do at all, built on the command engine and the open `course.json`.
+docs/roadmap.md:480:- Phone-friendly, scrolling lessons, once CourseCraft can compete with Storyline 360. This is where it starts to stand apart from the competition.
+docs/testing/m28-noe-states-analysis.md:187:| **(c) Both: Widened `StateDef` overrides + constrained visual-only `extras` (RECOMMENDED)** | Combine (a) for modifying the host object itself with (b) for adding visual-only child decorations (`extras: Vec<StateExtra>`) positioned relative to the host's `(frame.x, frame.y)`. | Full Storyline-class authoring capability while preserving single-source-of-truth inheritance for the host object AND keeping `coursecraft-logic` completely untouched. | More surface area to implement; cleanly mitigated by shipping in two incremental stages (**c1**: widened `StateDef` + canvas state-edit mode; **c2**: `extras`). |
+docs/testing/m28-noe-states-analysis.md:279:Delivers the full Storyline-class, clean-room Object States experience in three shippable slices:
+```
+
+### Gate Results
+
+- **`cargo xtask ci`: PASS**
+  - `cargo fmt --all --check`: PASS
+  - `cargo clippy --workspace --all-targets -- -D warnings`: PASS (0 warnings)
+  - `cargo test --workspace`: **4,104 passed; 0 failed; 17 ignored**
+  - `cargo xtask layers`: `layers: ok`
+  - `cargo check --target wasm32-unknown-unknown`: PASS
+- **`cargo xtask build-player`: PASS** (`trunk build --release` succeeded; written to `target/player-dist`)
