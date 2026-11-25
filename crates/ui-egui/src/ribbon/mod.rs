@@ -1058,11 +1058,11 @@ fn show_group(
     r.width() + 8.0 + ui.spacing().item_spacing.x
 }
 
-fn tooltip(item: &Item, state: &Result<(), String>) -> String {
+fn tooltip(label: &str, help: &'static str, state: &Result<(), String>) -> String {
     match state {
-        Err(reason) => format!("{}\n{reason}", tl!(item.label)),
-        Ok(()) if item.help.is_empty() => tl!(item.label).to_owned(),
-        Ok(()) => format!("{}\n{}", tl!(item.label), tl!(item.help)),
+        Err(reason) => format!("{label}\n{reason}"),
+        Ok(()) if help.is_empty() => label.to_owned(),
+        Ok(()) => format!("{label}\n{}", tl!(help)),
     }
 }
 
@@ -1075,8 +1075,16 @@ fn control(
 ) {
     let state = availability(editor, item.action, blocked);
     let enabled = state.is_ok();
-    let label = tl!(item.label);
+    let group_interactive = item.action == Action::Command("group.set_interactive")
+        && crate::menu::selected_group_interactive_info(editor)
+            .is_some_and(|(_, _, interactive)| interactive);
+    let label = if group_interactive {
+        tl!("Remove button behaviour")
+    } else {
+        tl!(item.label)
+    };
     let selected = match item.action {
+        Action::Command("group.set_interactive") => group_interactive,
         Action::Ui(a) => ui_selected(editor, a),
         Action::Text(op) => text_selected(editor, op),
         _ => false,
@@ -1131,7 +1139,7 @@ fn control(
             return;
         }
     };
-    let tip = tooltip(item, &state);
+    let tip = tooltip(label, item.help, &state);
     let main = main.on_hover_text(&tip);
     // These open their ▾ menu from the whole control.
     let menu_only = matches!(
@@ -1195,6 +1203,7 @@ fn text_selected(editor: &Editor, op: spec::TextOp) -> bool {
         TextOp::AlignCenter => st.align == Some(Align::Center),
         TextOp::AlignRight => st.align == Some(Align::Right),
         TextOp::Justify => st.align == Some(Align::Justify),
+        TextOp::WrapText => st.wrap == Some(true),
         _ => false,
     }
 }
@@ -1241,6 +1250,7 @@ fn text_change(editor: &Editor, op: spec::TextOp) -> Option<crate::text_format::
         TextOp::AlignCenter => Change::Align(Align::Center),
         TextOp::AlignRight => Change::Align(Align::Right),
         TextOp::Justify => Change::Align(Align::Justify),
+        TextOp::WrapText => Change::Wrap,
         TextOp::TextStyles
         | TextOp::Font
         | TextOp::Size

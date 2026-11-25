@@ -57,8 +57,9 @@ Modes replace the tab strip:
 | | Shape Fill | SS | `object.set_fill_style` | ✅ | opens the Shape Style panel at Fill |
 | | Shape Outline | SS | `object.update` `{outline}`, `object.set_outline_join` | ✅ | opens the Shape Style panel at Outline |
 | | Shape Effect | SS | `object.set_shadow`, `object.set_glow` | 🟡 | opens the Shape Style panel; ▸ Shadow ✅, Glow ✅, Reflection ⛔, Soft Edges ⛔ |
-| Arrange and Align | Arrange | SS | `object.reorder` | ✅ | Bring to Front/Forward, Send Backward/to Back |
+| Arrange and Align | Arrange | SS | `object.reorder`, `group.set_interactive` | ✅ | Bring to Front/Forward, Send Backward/to Back, Group/Ungroup, Make button from group / Remove button behaviour |
 | | Group | SS | `object.group`, `object.ungroup` | ✅ | |
+| | Make button from group / Remove button behaviour | S | `group.set_interactive` | ✅ | CourseCraft extra; shares button states and triggers across the selected group |
 | | Rotate | SS | `object.set_rotation`, `object.flip` | ✅ | opens the Size and Position panel at Rotate |
 | | align grid (9) | S | `object.align`, `object.distribute`, `object.match_size` | ✅ | in the Arrange ▾ menu; Align to Slide toggle |
 | Size and Position ↘ | X, Y, Width, Height | N | `object.set_frame` | ✅ | number fields; one edit is one undo step; ↘ opens the Size and Position panel |

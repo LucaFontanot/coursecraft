@@ -63,6 +63,7 @@ pub struct TextState {
     pub color: Option<String>,
     pub align: Option<Align>,
     pub valign: Option<VAlign>,
+    pub wrap: Option<bool>,
     pub list: Option<ListKind>,
     pub level: Option<u8>,
     pub line_spacing: Option<f32>,
@@ -84,6 +85,8 @@ pub enum Change {
     Spacing(f32),
     Align(Align),
     VAlign(VAlign),
+    /// Toggle wrapping text inside the box width (converts point text to area text).
+    Wrap,
     /// Bullets or Numbering: on, or off when every target paragraph has it.
     List(ListKind),
     /// One indent level in (`1`) or out (`-1`).
@@ -312,6 +315,7 @@ fn one_state(editor: &Editor, target: &Target) -> Option<TextState> {
         color: Some(color),
         align: Some(parts.style.align),
         valign: Some(parts.style.valign),
+        wrap: Some(parts.style.wrap),
         list: list.or(covered.is_empty().then_some(ListKind::None)),
         level: level.or(Some(0)),
         line_spacing: same(&|p| p.line_spacing).or(covered.is_empty().then_some(1.0)),
@@ -363,6 +367,7 @@ pub fn state(editor: &Editor) -> Option<TextState> {
     let mut color = None;
     let mut align = None;
     let mut valign = None;
+    let mut wrap = None;
     let mut list = None;
     let mut level = None;
     let mut spacing = None;
@@ -376,6 +381,7 @@ pub fn state(editor: &Editor) -> Option<TextState> {
         merge(&mut color, s.color);
         merge(&mut align, s.align);
         merge(&mut valign, s.valign);
+        merge(&mut wrap, s.wrap);
         merge(&mut list, s.list);
         merge(&mut level, s.level);
         merge(&mut spacing, s.line_spacing);
@@ -390,6 +396,7 @@ pub fn state(editor: &Editor) -> Option<TextState> {
         color: color.flatten(),
         align: align.flatten(),
         valign: valign.flatten(),
+        wrap: wrap.flatten(),
         list: list.flatten(),
         level: level.flatten(),
         line_spacing: spacing.flatten(),
@@ -465,6 +472,7 @@ fn character_fields(change: &Change, now: &TextState, size: f32) -> Option<Json>
         Change::Spacing(points) => json!({ "letter_spacing": points }),
         Change::Align(_)
         | Change::VAlign(_)
+        | Change::Wrap
         | Change::List(_)
         | Change::Indent(_)
         | Change::LineSpacing(_) => return None,
@@ -580,6 +588,7 @@ pub fn apply(editor: &mut Editor, change: &Change) -> bool {
         match change {
             Change::Align(align) => params["align"] = json!(align_name(*align)),
             Change::VAlign(valign) => params["valign"] = json!(valign_name(*valign)),
+            Change::Wrap => params["wrap"] = json!(now.wrap != Some(true)),
             Change::List(_) | Change::Indent(_) | Change::LineSpacing(_) => {
                 let (first, end) = paragraph_range(target.scope, &parts.text);
                 if target.scope != Scope::Whole {

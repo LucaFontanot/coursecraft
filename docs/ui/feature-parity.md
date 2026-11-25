@@ -73,7 +73,7 @@ Counted from the tables below; recount when a row changes.
 
 | Feature | CourseCraft | Status | Milestone |
 |---|---|---|---|
-| Text boxes, placeholders, autofit | `object.add`, `object.set_autofit` | ✅ | — |
+| Text boxes, point text, placeholders, autofit | `object.add`, `object.set_autofit`, `text.set_paragraph` `{wrap}` (click places point text; Wrap Text in Home › Paragraph and Text panel › Text Box converts to area text) | ✅ | — |
 | Font family and size, grow/shrink | `text.style_range`; Home › Font through `text_format.rs` | ✅ | — |
 | Bold, italic, underline, strikethrough | `text.style_range` | ✅ | — |
 | Superscript, subscript | `text.style_range` | ✅ | — |
@@ -107,7 +107,7 @@ Counted from the tables below; recount when a row changes.
 | Outline, joins | `object.update` | ✅ | — |
 | Quick styles / shape styles | `object.apply_style` | ✅ | — |
 | Shadow, glow | `object.set_shadow`, `object.set_glow` | ✅ | — |
-| Arrange, group, align, distribute, match size | `object.*` | ✅ | — |
+| Arrange, group, interactive button groups, align, distribute, match size | `object.*`, `group.set_interactive`, `group.update` (Home › Arrange, contextual Arrange and Align, Format inspector, Timeline Button pill) | ✅ | — |
 | Rotate, flip | `object.set_rotation`, `object.flip` | ✅ | — |
 | X, Y, width, height | `object.update` | ✅ | — |
 | Smart guides, grid, guides, rulers | `snap.rs`, `rulers.rs`; the Grid and Guides panel (`grid_panel.rs`) sets the grid spacing and lists the guides | ✅ | — |

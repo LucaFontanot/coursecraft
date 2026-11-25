@@ -2636,7 +2636,36 @@ pub fn show_text_panel(editor: &mut Editor, ui: &mut Ui) {
                 });
             ui.add_space(coursecraft_render::PANEL_MARGIN);
         });
+    let mut synced_inline_text = None;
+    if !actions_to_run.is_empty()
+        && let Some(edit) = editor.ui.inline_edit.as_ref().filter(|e| {
+            e.state_name.is_none()
+                && e.extra_id.is_none()
+                && !e.is_button
+                && e.buffer != e.original
+        })
+        && actions_to_run.iter().any(|(cmd, params)| {
+            *cmd != "text.set"
+                && params.get("slide").and_then(Json::as_str) == Some(edit.slide.as_str())
+                && params.get("object").and_then(Json::as_str) == Some(edit.object.as_str())
+        })
+    {
+        let mut params = serde_json::json!({
+            "slide": edit.slide,
+            "object": edit.object,
+            "text": edit.buffer,
+        });
+        if let Some((row, column)) = edit.cell {
+            params["row"] = serde_json::json!(row);
+            params["column"] = serde_json::json!(column);
+        }
+        actions_to_run.insert(0, ("text.set", params));
+        synced_inline_text = Some(edit.buffer.clone());
+    }
     finish(editor, actions_to_run);
+    if let (Some(buf), Some(edit)) = (synced_inline_text, editor.ui.inline_edit.as_mut()) {
+        edit.original = buf;
+    }
 }
 
 /// The text the Text panel edits, with any state being edited applied.
@@ -2817,6 +2846,7 @@ fn text_panel_sections(
                 None,
                 target.autofit,
                 target.point_text,
+                false,
                 system_fonts,
                 &mut font_requests,
             ) {
@@ -2858,6 +2888,19 @@ fn text_panel_sections(
     not_yet_row(ui, tl!("Tab stops"), tl!("tab stops"));
 
     section_header(focus, ui, Section::TextBox);
+    if let (Some(target), Some(slide), Some(obj)) = (&target, slide, obj)
+        && let Some(action) = show_text_box_controls(
+            ui,
+            &slide.id,
+            &obj.id,
+            &target.style,
+            prefix,
+            target.autofit,
+            target.point_text,
+        )
+    {
+        action_to_run = Some(route(action, target));
+    }
     not_yet_row(ui, tl!("Columns"), tl!("text columns"));
 
     editor.pending_requests.append(&mut font_requests);
@@ -3729,10 +3772,10 @@ fn show_multi_properties(
         ui.add_space(coursecraft_render::SPACE_SM);
         let mut interactive = interactive_group.is_some();
         let cb = ui
-            .checkbox(&mut interactive, "Act as one button")
-            .on_hover_text(
-                "Share hover, down, selected, visited, and disabled states across all objects in this group",
-            );
+            .checkbox(&mut interactive, tl!("Act as one button"))
+            .on_hover_text(tl!(
+                "Share hover, down, selected, visited, and disabled states across all objects in this group"
+            ));
         if cb.changed() {
             actions_to_run.push((
                 "group.set_interactive",
@@ -3747,7 +3790,7 @@ fn show_multi_properties(
         if let Some(ref group) = interactive_group {
             ui.add_space(coursecraft_render::SPACE_SM);
 
-            inspector_row(ui, "Name", |ui| {
+            inspector_row(ui, tl!("Name"), |ui| {
                 let rem_w = ui.available_width().max(30.0);
                 let r = ui.add_sized(
                     [rem_w, coursecraft_render::CONTROL_COMPACT],
@@ -3766,7 +3809,7 @@ fn show_multi_properties(
                 }
             });
 
-            inspector_row(ui, "Initial state", |ui| {
+            inspector_row(ui, tl!("Initial state"), |ui| {
                 let rem_w = ui.available_width().max(30.0);
                 let mut current_state = group.initial_state.clone();
                 crate::widgets::styled_combo(ui, "prop_group_initial_state", rem_w)
@@ -3792,7 +3835,7 @@ fn show_multi_properties(
                     });
             });
 
-            inspector_row(ui, "Accessible description", |ui| {
+            inspector_row(ui, tl!("Accessible description"), |ui| {
                 let rem_w = ui.available_width().max(30.0);
                 let r = ui.add_sized(
                     [rem_w, coursecraft_render::CONTROL_COMPACT],
@@ -3818,7 +3861,7 @@ fn show_multi_properties(
                 }
             });
 
-            inspector_row(ui, "Focus order", |ui| {
+            inspector_row(ui, tl!("Focus order"), |ui| {
                 let mut order = props.group_focus_order.unwrap_or(0);
                 let r = ui.add(DragValue::new(&mut order).speed(1.0));
                 if r.changed() {
@@ -3842,10 +3885,10 @@ fn show_multi_properties(
                 if ui
                     .add_enabled(
                         props.group_focus_order.is_some(),
-                        egui::Button::new("Clear")
+                        egui::Button::new(tl!("Clear"))
                             .min_size(vec2(24.0, coursecraft_render::CONTROL_COMPACT)),
                     )
-                    .on_disabled_hover_text("No focus order set")
+                    .on_disabled_hover_text(tl!("No focus order set"))
                     .clicked()
                 {
                     props.group_focus_order = None;
@@ -3863,7 +3906,7 @@ fn show_multi_properties(
             ui.add_space(coursecraft_render::SPACE_SM);
             if ui
                 .add(
-                    egui::Button::new("Add trigger…")
+                    egui::Button::new(tl!("Add trigger…"))
                         .min_size(vec2(0.0, coursecraft_render::CONTROL_COMPACT)),
                 )
                 .clicked()
@@ -4963,6 +5006,186 @@ fn show_course_tab(
     });
 }
 
+fn show_autofit_row(
+    ui: &mut Ui,
+    slide_id: &str,
+    obj_id: &str,
+    id_prefix: &str,
+    autofit: Autofit,
+) -> Option<(&'static str, Json)> {
+    let mut action_to_run = None;
+    inspector_row(ui, tl!("Autofit"), |ui| {
+        let selected = if autofit == Autofit::Shrink {
+            tl!("Shrink text on overflow")
+        } else {
+            tl!("Off")
+        };
+        let mut chosen = None;
+        let rem_w = ui.available_width().max(30.0);
+        crate::widgets::styled_combo(ui, ("autofit", id_prefix, obj_id), rem_w)
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(autofit == Autofit::None, tl!("Off"))
+                    .clicked()
+                {
+                    chosen = Some(Autofit::None);
+                }
+                if ui
+                    .selectable_label(autofit == Autofit::Shrink, tl!("Shrink text on overflow"))
+                    .clicked()
+                {
+                    chosen = Some(Autofit::Shrink);
+                }
+            });
+        if let Some(value) = chosen
+            && value != autofit
+        {
+            action_to_run = Some((
+                "object.set_autofit",
+                serde_json::json!({
+                    "slide": slide_id,
+                    "object": obj_id,
+                    "autofit": if value == Autofit::Shrink { "shrink" } else { "none" },
+                }),
+            ));
+        }
+    });
+    action_to_run
+}
+
+fn show_text_box_rows(
+    ui: &mut Ui,
+    slide_id: &str,
+    obj_id: &str,
+    style: &TextStyle,
+    point_text: bool,
+) -> Option<(&'static str, Json)> {
+    let mut action_to_run = None;
+    inspector_row(ui, tl!("VAlign"), |ui| {
+        let cur_valign = style.valign;
+        for (valign, name) in [
+            (VAlign::Top, "top"),
+            (VAlign::Middle, "middle"),
+            (VAlign::Bottom, "bottom"),
+        ] {
+            let label = match valign {
+                VAlign::Top => tl!("Top"),
+                VAlign::Middle => tl!("Middle"),
+                VAlign::Bottom => tl!("Bottom"),
+            };
+            if ui.selectable_label(cur_valign == valign, label).clicked() && cur_valign != valign {
+                action_to_run = Some((
+                    "text.set_paragraph",
+                    serde_json::json!({ "slide": slide_id, "object": obj_id, "valign": name }),
+                ));
+            }
+        }
+    });
+
+    inspector_row(ui, tl!("Wrap"), |ui| {
+        let mut wrap = style.wrap;
+        let resp = ui.checkbox(&mut wrap, tl!("Wrap text"));
+        let resp = if point_text {
+            resp.on_hover_text(tl!(
+                "Fits width to text. Turn on wrap or drag a side handle for fixed width."
+            ))
+        } else {
+            resp
+        };
+        if resp.changed() {
+            action_to_run = Some((
+                "text.set_paragraph",
+                serde_json::json!({ "slide": slide_id, "object": obj_id, "wrap": wrap }),
+            ));
+        }
+    });
+
+    inspector_row(ui, tl!("Direction"), |ui| {
+        let cur_dir = style.direction;
+        for (dir, name, label) in [
+            (
+                coursecraft_course::TextDirection::Horizontal,
+                "horizontal",
+                tl!("Horiz"),
+            ),
+            (
+                coursecraft_course::TextDirection::Vertical,
+                "vertical",
+                tl!("Vert 90"),
+            ),
+            (
+                coursecraft_course::TextDirection::Vertical270,
+                "vertical270",
+                tl!("Vert 270"),
+            ),
+        ] {
+            if ui.selectable_label(cur_dir == dir, label).clicked() && cur_dir != dir {
+                action_to_run = Some((
+                    "text.set_paragraph",
+                    serde_json::json!({ "slide": slide_id, "object": obj_id, "direction": name }),
+                ));
+            }
+        }
+    });
+
+    inspector_row(ui, tl!("Insets"), |ui| {
+        let mut ins = style.insets.unwrap_or_default();
+        let mut changed = false;
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for pair in [
+                [("L", &mut ins.left), ("T", &mut ins.top)],
+                [("R", &mut ins.right), ("B", &mut ins.bottom)],
+            ] {
+                ui.horizontal(|ui| {
+                    for (label, val) in pair {
+                        ui.label(label);
+                        let r = ui.add(
+                            DragValue::new(val)
+                                .speed(0.5)
+                                .range(0.0..=200.0)
+                                .max_decimals(1)
+                                .suffix(" px"),
+                        );
+                        if r.changed() {
+                            changed = true;
+                        }
+                    }
+                });
+            }
+        });
+        if changed {
+            action_to_run = Some((
+                "text.set_paragraph",
+                serde_json::json!({ "slide": slide_id, "object": obj_id, "insets": ins }),
+            ));
+        }
+    });
+    action_to_run
+}
+
+fn show_text_box_controls(
+    ui: &mut Ui,
+    slide_id: &str,
+    obj_id: &str,
+    style: &TextStyle,
+    id_prefix: &str,
+    autofit: Option<Autofit>,
+    point_text: bool,
+) -> Option<(&'static str, Json)> {
+    let mut action_to_run = None;
+    if let Some(autofit) = autofit
+        && let Some(action) = show_autofit_row(ui, slide_id, obj_id, id_prefix, autofit)
+    {
+        action_to_run = Some(action);
+    }
+    if let Some(action) = show_text_box_rows(ui, slide_id, obj_id, style, point_text) {
+        action_to_run = Some(action);
+    }
+    action_to_run
+}
+
 /// The Text panel controls, shared by text objects and shape text.
 ///
 /// `current_text` is the text being edited and `id_prefix` keeps the text box's
@@ -4982,6 +5205,7 @@ fn show_text_controls(
     cell: Option<(usize, usize)>,
     autofit: Option<Autofit>,
     point_text: bool,
+    include_box_controls: bool,
     system_fonts: Option<&[crate::SystemFontChoice]>,
     font_requests: &mut Vec<crate::EditorRequest>,
 ) -> Option<(&'static str, Json)> {
@@ -5150,44 +5374,11 @@ fn show_text_controls(
         }
     });
 
-    if let Some(autofit) = autofit {
-        inspector_row(ui, "Autofit", |ui| {
-            let selected = if autofit == Autofit::Shrink {
-                "Shrink text on overflow"
-            } else {
-                "Off"
-            };
-            let mut chosen = None;
-            let rem_w = ui.available_width().max(30.0);
-            crate::widgets::styled_combo(ui, ("autofit", id_prefix, obj_id), rem_w)
-                .selected_text(selected)
-                .show_ui(ui, |ui| {
-                    if ui
-                        .selectable_label(autofit == Autofit::None, "Off")
-                        .clicked()
-                    {
-                        chosen = Some(Autofit::None);
-                    }
-                    if ui
-                        .selectable_label(autofit == Autofit::Shrink, "Shrink text on overflow")
-                        .clicked()
-                    {
-                        chosen = Some(Autofit::Shrink);
-                    }
-                });
-            if let Some(value) = chosen
-                && value != autofit
-            {
-                action_to_run = Some((
-                    "object.set_autofit",
-                    serde_json::json!({
-                        "slide": slide_id,
-                        "object": obj_id,
-                        "autofit": if value == Autofit::Shrink { "shrink" } else { "none" },
-                    }),
-                ));
-            }
-        });
+    if include_box_controls
+        && let Some(autofit) = autofit
+        && let Some(action) = show_autofit_row(ui, slide_id, obj_id, id_prefix, autofit)
+    {
+        action_to_run = Some(action);
     }
 
     // Formatting toolbar
@@ -5467,106 +5658,11 @@ fn show_text_controls(
         }
     });
 
-    inspector_row(ui, "VAlign", |ui| {
-        let cur_valign = style.valign;
-        for (valign, name) in [
-            (VAlign::Top, "top"),
-            (VAlign::Middle, "middle"),
-            (VAlign::Bottom, "bottom"),
-        ] {
-            let label = match valign {
-                VAlign::Top => "Top",
-                VAlign::Middle => "Middle",
-                VAlign::Bottom => "Bottom",
-            };
-            if ui.selectable_label(cur_valign == valign, label).clicked() && cur_valign != valign {
-                action_to_run = Some((
-                    "text.set_paragraph",
-                    serde_json::json!({ "slide": slide_id, "object": obj_id, "valign": name }),
-                ));
-            }
-        }
-    });
-
-    inspector_row(ui, "Wrap", |ui| {
-        let mut wrap = style.wrap;
-        let resp = ui.checkbox(&mut wrap, "Wrap text");
-        let resp = if point_text {
-            resp.on_hover_text(
-                "Fits width to text. Turn on wrap or drag a side handle for fixed width.",
-            )
-        } else {
-            resp
-        };
-        if resp.changed() {
-            action_to_run = Some((
-                "text.set_paragraph",
-                serde_json::json!({ "slide": slide_id, "object": obj_id, "wrap": wrap }),
-            ));
-        }
-    });
-
-    inspector_row(ui, "Direction", |ui| {
-        let cur_dir = style.direction;
-        for (dir, name, label) in [
-            (
-                coursecraft_course::TextDirection::Horizontal,
-                "horizontal",
-                "Horiz",
-            ),
-            (
-                coursecraft_course::TextDirection::Vertical,
-                "vertical",
-                "Vert 90",
-            ),
-            (
-                coursecraft_course::TextDirection::Vertical270,
-                "vertical270",
-                "Vert 270",
-            ),
-        ] {
-            if ui.selectable_label(cur_dir == dir, label).clicked() && cur_dir != dir {
-                action_to_run = Some((
-                    "text.set_paragraph",
-                    serde_json::json!({ "slide": slide_id, "object": obj_id, "direction": name }),
-                ));
-            }
-        }
-    });
-
-    inspector_row(ui, "Insets", |ui| {
-        let mut ins = style.insets.unwrap_or_default();
-        let mut changed = false;
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            for pair in [
-                [("L", &mut ins.left), ("T", &mut ins.top)],
-                [("R", &mut ins.right), ("B", &mut ins.bottom)],
-            ] {
-                ui.horizontal(|ui| {
-                    for (label, val) in pair {
-                        ui.label(label);
-                        let r = ui.add(
-                            DragValue::new(val)
-                                .speed(0.5)
-                                .range(0.0..=200.0)
-                                .max_decimals(1)
-                                .suffix(" px"),
-                        );
-                        if r.changed() {
-                            changed = true;
-                        }
-                    }
-                });
-            }
-        });
-        if changed {
-            action_to_run = Some((
-                "text.set_paragraph",
-                serde_json::json!({ "slide": slide_id, "object": obj_id, "insets": ins }),
-            ));
-        }
-    });
+    if include_box_controls
+        && let Some(action) = show_text_box_rows(ui, slide_id, obj_id, style, point_text)
+    {
+        action_to_run = Some(action);
+    }
 
     inspector_row(ui, "Text content", |ui| {
         let rem_w = ui.available_width().max(30.0);
@@ -6946,6 +7042,7 @@ fn show_table_controls(
             Some((row, column)),
             None,
             false,
+            true,
             system_fonts,
             font_requests,
         ) {
@@ -8358,6 +8455,7 @@ fn show_object_properties(
                 None,
                 Some(eff_autofit),
                 *point_text,
+                true,
                 system_fonts,
                 &mut font_requests,
             ) {
@@ -8732,6 +8830,7 @@ fn show_object_properties(
                     None,
                     eff_autofit,
                     false,
+                    true,
                     system_fonts,
                     &mut font_requests,
                 ) {

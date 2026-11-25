@@ -177,9 +177,10 @@ Shown when the Course Map view tab is active.
 | | Align Left / Center / Right / Justify | T | `text.set_paragraph` `{align}` | ✅ | |
 | | Text Direction | SS | — | ⛔ | horizontal, rotate 90°/270°, stacked |
 | | Align Text | SS | `text.set_paragraph` `{valign}` | ✅ | ▾ top / middle / bottom |
+| | Wrap Text | S | `text.set_paragraph` `{wrap}` | ✅ | CourseCraft extra; turning Wrap on converts point text to fixed-width area text |
 | | Find / Replace | SS | `course.find`, `course.replace` | ✅ | `find.rs` |
 | | ↘ Paragraph | — | `UiAction::PanelAt(Text, Paragraph)` | ✅ | opens the Text settings panel at Paragraph |
-| Drawing ↘ | Arrange | LS | `object.reorder`, `object.align`, `object.distribute`, `object.group` | ✅ | ▾ Order, Group, Align, Rotate (as Edit › Order/Align) |
+| Drawing ↘ | Arrange | LS | `object.reorder`, `object.align`, `object.distribute`, `object.group`, `group.set_interactive` | ✅ | ▾ Order, Group, Ungroup, Make button from group / Remove button behaviour, Align, Rotate (as Edit › Order/Align) |
 | | Quick Styles | LS | `object.apply_style` | ✅ | |
 | | Shape Fill | SS | `object.set_fill_style` | ✅ | opens the Shape Style panel at Fill |
 | | Shape Outline | SS | `object.update` `{outline}` | ✅ | opens the Shape Style panel at Outline |

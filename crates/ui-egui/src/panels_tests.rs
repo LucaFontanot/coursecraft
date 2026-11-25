@@ -736,3 +736,96 @@ fn dragging_the_timeline_tab_to_the_bottom_edge_spans_the_window() {
         "the timeline starts at the window's left edge: {timeline:?}, slides were {slides:?}"
     );
 }
+
+#[test]
+fn point_text_wrap_from_text_panel_and_ribbon_converts_to_area_text() {
+    use coursecraft_course::ObjectKind;
+
+    let json = serde_json::json!({
+        "schema_version": 1,
+        "id": "pt-panel",
+        "title": "Point text panel",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [{
+                "id": "sl1",
+                "title": "Slide 1",
+                "duration_ms": 5000,
+                "objects": [{
+                    "id": "pt1",
+                    "kind": {
+                        "type": "text",
+                        "text": "Headline",
+                        "point_text": true,
+                        "style": { "wrap": false }
+                    },
+                    "frame": { "x": 120, "y": 100, "w": 110, "h": 34 }
+                }]
+            }]
+        }]
+    });
+    let course = Course::from_json(&json.to_string()).expect("valid course");
+    let mut h = TestHarness::new_with_size(course, (1800.0, 900.0));
+    h.editor.ui.dock.enabled = true;
+    h.editor.ui.ribbon.visible = true;
+    h.editor.selection = crate::Selection::new("sl1");
+    h.editor.selection.object = Some("pt1".into());
+    panels::open_at(&mut h.editor, Panel::Text, Some(Section::TextBox));
+    frames(&mut h, 3);
+
+    let text_rect = h.editor.ui.dock.rect(Panel::Text).expect("Text panel drawn");
+    let wrap_pos = h
+        .find_text_in("Wrap text", text_rect)
+        .expect("Wrap text checkbox in Text panel › Text Box");
+
+    // Verify pseudo-locale translation on Text panel and ribbon Wrap Text.
+    h.editor.set_language("pseudo");
+    frames(&mut h, 2);
+    assert!(h.find_text_in("⟦Wrap text⟧", text_rect).is_some());
+    assert!(
+        h.find_text_in("⟦Wrap Text⟧", h.editor.ui.ribbon.rect)
+            .is_some()
+    );
+    h.editor.set_language("en");
+    frames(&mut h, 2);
+
+    // 1. Turning Wrap text on in the Text panel converts point text to area text.
+    h.click_at(wrap_pos);
+    frames(&mut h, 2);
+    let is_point_and_wrap = |h: &TestHarness| {
+        let slide = h.editor.session.course.slide("sl1").expect("slide");
+        match &slide.object("pt1").expect("pt1").0.kind {
+            ObjectKind::Text {
+                point_text, style, ..
+            } => (*point_text, style.wrap),
+            other => panic!("expected text, got {other:?}"),
+        }
+    };
+    assert_eq!(
+        is_point_and_wrap(&h),
+        (false, true),
+        "Text panel Wrap text must convert point text to area text"
+    );
+
+    // 1-step undo restores point text.
+    h.editor.run("edit.undo", serde_json::json!({}));
+    frames(&mut h, 2);
+    assert_eq!(is_point_and_wrap(&h), (true, false));
+
+    // 2. Turning Wrap Text on from the Home › Paragraph ribbon converts point text to area text too.
+    let ribbon_wrap = h
+        .find_text_in("Wrap Text", h.editor.ui.ribbon.rect)
+        .expect("Wrap Text on Home › Paragraph ribbon");
+    h.click_at(ribbon_wrap);
+    frames(&mut h, 2);
+    assert_eq!(
+        is_point_and_wrap(&h),
+        (false, true),
+        "Ribbon Wrap Text must convert point text to area text via text.set_paragraph"
+    );
+    h.editor.run("edit.undo", serde_json::json!({}));
+    frames(&mut h, 2);
+    assert_eq!(is_point_and_wrap(&h), (true, false));
+}

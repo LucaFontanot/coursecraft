@@ -530,6 +530,17 @@ pub fn adapter(editor: &Editor, id: &str) -> Option<Json> {
                 "objects": editor.selection.ids(),
             }))
         }
+        "group.set_interactive" => {
+            if editor.ui.editing_state.is_some() {
+                return None;
+            }
+            let (slide_id, group_id, is_interactive) = selected_group_interactive_info(editor)?;
+            Some(serde_json::json!({
+                "slide": slide_id,
+                "group": group_id,
+                "interactive": !is_interactive,
+            }))
+        }
         _ => None,
     }
 }
@@ -617,6 +628,15 @@ pub fn adapter_reason(editor: &Editor, id: &str) -> &'static str {
                 "This object isn't in a group"
             } else {
                 ""
+            }
+        }
+        "group.set_interactive" => {
+            if editor.ui.master_view {
+                "Not available in slide masters"
+            } else if editor.ui.editing_state.is_some() {
+                crate::STATE_LOCK_TOOLTIP
+            } else {
+                "Select a group first"
             }
         }
         _ => "Command not yet implemented",
@@ -1708,7 +1728,7 @@ pub(crate) fn show_object_row_menu(editor: &mut Editor, ui: &mut Ui) {
     }
 }
 
-fn selected_group_interactive_info(editor: &Editor) -> Option<(String, String, bool)> {
+pub(crate) fn selected_group_interactive_info(editor: &Editor) -> Option<(String, String, bool)> {
     if editor.ui.master_view || !editor.selection.is_one_group(&editor.session.course) {
         return None;
     }
@@ -1761,9 +1781,9 @@ fn render_group_ungroup_items(editor: &mut Editor, ui: &mut Ui, shortcuts: bool)
 
     if let Some((slide_id, group_id, is_interactive)) = selected_group_interactive_info(editor) {
         let label = if is_interactive {
-            "Remove button behaviour"
+            tl!("Remove button behaviour")
         } else {
-            "Make button from group"
+            tl!("Make button from group")
         };
         if menu_button(ui, label, None, true, None).clicked() {
             editor.run(
@@ -2256,9 +2276,9 @@ fn render_arrange_extras(
 ) {
     if let Some((slide_id, group_id, is_interactive)) = selected_group_interactive_info(editor) {
         let label = if is_interactive {
-            "Remove button behaviour"
+            tl!("Remove button behaviour")
         } else {
-            "Make button from group"
+            tl!("Make button from group")
         };
         if menu_button(ui, label, None, true, None).clicked() {
             *action_to_run = Some((

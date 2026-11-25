@@ -2277,7 +2277,7 @@ fn paint_group_row_label(
     };
     let badge_galley = is_interactive_group.then(|| {
         painter.layout_no_wrap(
-            "Button".to_owned(),
+            tl!("Button").to_owned(),
             FontId::proportional(coursecraft_render::SIZE_CAPTION),
             p.text_secondary,
         )

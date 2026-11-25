@@ -132,6 +132,8 @@ pub enum TextOp {
     Justify,
     /// Align Text ▾: top, middle, bottom.
     AlignText,
+    /// Wrap text inside the box width (turns point text into area text).
+    WrapText,
 }
 
 impl TextOp {
@@ -807,6 +809,16 @@ const HOME_SLIDE: &[Group] = &[
             ),
             helped(
                 item(
+                    "paragraph.wrap_text",
+                    "Wrap Text",
+                    Icon::Article,
+                    Small,
+                    Text(TextOp::WrapText),
+                ),
+                "Wrap text inside the box width. Turning this on converts point text to a fixed-width text box.",
+            ),
+            helped(
+                item(
                     "paragraph.find",
                     "Find / Replace",
                     Icon::MagnifyingGlass,
@@ -1264,7 +1276,7 @@ const INSERT: &[Group] = &[
                     Large,
                     Ui(UiAction::TextBox),
                 ),
-                "Drag on the slide to place a text box.",
+                "Click on the slide to add a single-line label, or drag to draw a fixed-width text box.",
             ),
             item(
                 "insert.table",
@@ -2362,6 +2374,16 @@ const ARRANGE_AND_ALIGN: Group = Group {
             Icon::SquaresFour,
             Small,
             Command("object.ungroup"),
+        ),
+        helped(
+            item(
+                "ctx.group_button",
+                "Make button from group",
+                Icon::CursorClick,
+                Small,
+                Command("group.set_interactive"),
+            ),
+            "Share button states and triggers across every object in the selected group.",
         ),
         item(
             "ctx.rotate",
