@@ -3885,16 +3885,16 @@ mod tests {
 
         // 5 of 10 slides changed (exactly 50%, not strictly > 50%) -> Patch
         let mut five = base.clone();
-        for i in 0..5 {
-            five.scenes[0].slides[i].title = format!("Edited {i}");
+        for (i, slide) in five.scenes[0].slides.iter_mut().take(5).enumerate() {
+            slide.title = format!("Edited {i}");
         }
         let d_five = assert_course_roundtrip(base.clone(), five);
         assert!(matches!(d_five, CourseDelta::Patch(_)));
 
         // 6 of 10 slides changed (> 50%) -> FullCourse
         let mut six = base.clone();
-        for i in 0..6 {
-            six.scenes[0].slides[i].title = format!("Scaled {i}");
+        for (i, slide) in six.scenes[0].slides.iter_mut().take(6).enumerate() {
+            slide.title = format!("Scaled {i}");
         }
         let d_six = assert_course_roundtrip(base.clone(), six);
         assert!(

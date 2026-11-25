@@ -19,6 +19,7 @@ mod audit;
 mod connector_route;
 mod course_map;
 mod diff;
+pub mod effects;
 mod media;
 mod model;
 mod named_styles;
@@ -31,6 +32,9 @@ mod validate;
 
 pub use connector_route::{
     CONNECTOR_MIN_LEAD, connector_site, connector_site_direction, route_connector,
+};
+pub use effects::{
+    EFFECTS, EffectCategory, EffectDef, EffectOptionDef, FALLBACK_EFFECT, effect_def,
 };
 
 pub use course_map::{

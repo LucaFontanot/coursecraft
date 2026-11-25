@@ -150,69 +150,51 @@ fn c1_1_all_five_mapped_entrance_effects_and_directions() {
 
     let slide = &course.scenes[0].slides[0];
     let expected: [(&str, AnimEffect, u32); 11] = [
-        ("Shape 2", AnimEffect::Fade, 500),
+        ("Shape 2", AnimEffect::new("fade"), 500),
         (
             "Shape 3",
-            AnimEffect::FlyIn {
-                from: Direction::Top,
-            },
+            AnimEffect::with_from("fly_in", Direction::Top),
             400,
         ),
         (
             "Shape 4",
-            AnimEffect::FlyIn {
-                from: Direction::Right,
-            },
+            AnimEffect::with_from("fly_in", Direction::Right),
             400,
         ),
         (
             "Shape 5",
-            AnimEffect::FlyIn {
-                from: Direction::Bottom,
-            },
+            AnimEffect::with_from("fly_in", Direction::Bottom),
             400,
         ),
         (
             "Shape 6",
-            AnimEffect::FlyIn {
-                from: Direction::Left,
-            },
+            AnimEffect::with_from("fly_in", Direction::Left),
             400,
         ),
         (
             "Shape 7",
-            AnimEffect::Wipe {
-                from: Direction::Top,
-            },
+            AnimEffect::with_from("wipe", Direction::Top),
             600,
         ),
         (
             "Shape 8",
-            AnimEffect::Wipe {
-                from: Direction::Right,
-            },
+            AnimEffect::with_from("wipe", Direction::Right),
             600,
         ),
         (
             "Shape 9",
-            AnimEffect::Wipe {
-                from: Direction::Bottom,
-            },
+            AnimEffect::with_from("wipe", Direction::Bottom),
             600,
         ),
         (
             "Shape 10",
-            AnimEffect::Wipe {
-                from: Direction::Left,
-            },
+            AnimEffect::with_from("wipe", Direction::Left),
             600,
         ),
-        ("Shape 11", AnimEffect::Zoom, 700),
+        ("Shape 11", AnimEffect::new("zoom"), 700),
         (
             "Shape 12",
-            AnimEffect::Float {
-                from: Direction::Bottom,
-            },
+            AnimEffect::with_from("float", Direction::Bottom),
             550,
         ),
     ];
@@ -308,27 +290,21 @@ fn c1_3_all_five_mapped_exit_effects_and_player_sampling() {
     let (course, _report) = import_and_validate(&shapes, timing);
     let slide = &course.scenes[0].slides[0];
     let expected: [(&str, AnimEffect, u32); 5] = [
-        ("Exit 2", AnimEffect::Fade, 500),
+        ("Exit 2", AnimEffect::new("fade"), 500),
         (
             "Exit 3",
-            AnimEffect::FlyIn {
-                from: Direction::Right,
-            },
+            AnimEffect::with_from("fly_in", Direction::Right),
             400,
         ),
         (
             "Exit 4",
-            AnimEffect::Wipe {
-                from: Direction::Left,
-            },
+            AnimEffect::with_from("wipe", Direction::Left),
             600,
         ),
-        ("Exit 5", AnimEffect::Zoom, 500),
+        ("Exit 5", AnimEffect::new("zoom"), 500),
         (
             "Exit 6",
-            AnimEffect::Float {
-                from: Direction::Top,
-            },
+            AnimEffect::with_from("float", Direction::Top),
             500,
         ),
     ];
@@ -646,7 +622,7 @@ fn c1_8_group_and_connector_targeting() {
         assert_eq!(
             obj.entrance,
             Some(Animation {
-                effect: AnimEffect::Fade,
+                effect: AnimEffect::new("fade"),
                 duration_ms: 500,
                 easing: Easing::EaseOut,
             })
@@ -656,9 +632,7 @@ fn c1_8_group_and_connector_targeting() {
     assert_eq!(
         conn.entrance,
         Some(Animation {
-            effect: AnimEffect::Wipe {
-                from: Direction::Left,
-            },
+            effect: AnimEffect::with_from("wipe", Direction::Left),
             duration_ms: 400,
             easing: Easing::EaseOut,
         })
@@ -755,18 +729,22 @@ fn c1_10_unsupported_preset_fallback_and_diagonal_direction() {
 
     let bounce = obj_by_name(slide, "BounceBox");
     assert_eq!(bounce.timing.start_ms, 200);
-    assert_eq!(bounce.entrance.as_ref().unwrap().effect, AnimEffect::Fade);
+    assert_eq!(
+        bounce.entrance.as_ref().unwrap().effect,
+        AnimEffect::new("fade")
+    );
 
     let exotic = obj_by_name(slide, "ExoticBox");
     assert_eq!(exotic.timing.start_ms, 400);
-    assert_eq!(exotic.entrance.as_ref().unwrap().effect, AnimEffect::Fade);
+    assert_eq!(
+        exotic.entrance.as_ref().unwrap().effect,
+        AnimEffect::new("fade")
+    );
 
     let diag = obj_by_name(slide, "DiagFly");
     assert_eq!(
         diag.entrance.as_ref().unwrap().effect,
-        AnimEffect::FlyIn {
-            from: Direction::Bottom,
-        }
+        AnimEffect::with_from("fly_in", Direction::Bottom)
     );
 
     let notes = anim_notes(&report);
@@ -856,7 +834,10 @@ fn c1_12_overlapping_exit_before_start_and_duplicate_entrance() {
     let (course, report) = import_and_validate(&shapes, timing);
     let slide = &course.scenes[0].slides[0];
     let obj = obj_by_name(slide, "ConflictBox");
-    assert_eq!(obj.entrance.as_ref().unwrap().effect, AnimEffect::Fade);
+    assert_eq!(
+        obj.entrance.as_ref().unwrap().effect,
+        AnimEffect::new("fade")
+    );
     assert_eq!(obj.timing.start_ms, 1000);
     assert!(obj.timing.end_ms.is_some_and(|e| e > obj.timing.start_ms));
     assert!(

@@ -62,25 +62,16 @@ fn a3_1_real_multi_slide_transition_and_every_exit_effect() {
         serde_json::json!({ "type": "cover", "from": "right", "duration_ms": 500 }),
     ];
     let exits: [(&str, AnimEffect); 5] = [
-        ("fade", AnimEffect::Fade),
-        (
-            "fly_left",
-            AnimEffect::FlyIn {
-                from: Direction::Left,
-            },
-        ),
-        ("zoom", AnimEffect::Zoom),
+        ("fade", AnimEffect::new("fade")),
+        ("fly_left", AnimEffect::with_from("fly_in", Direction::Left)),
+        ("zoom", AnimEffect::new("zoom")),
         (
             "wipe_right",
-            AnimEffect::Wipe {
-                from: Direction::Right,
-            },
+            AnimEffect::with_from("wipe", Direction::Right),
         ),
         (
             "float_bottom",
-            AnimEffect::Float {
-                from: Direction::Bottom,
-            },
+            AnimEffect::with_from("float", Direction::Bottom),
         ),
     ];
 

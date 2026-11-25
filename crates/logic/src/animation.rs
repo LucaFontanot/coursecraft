@@ -5,8 +5,7 @@
 //! and headless renderers.
 
 use coursecraft_course::{
-    AnimEffect, Animation, Direction, Easing, MotionPath, Point, Rect, Size, Transition,
-    TransitionEffect,
+    Animation, Direction, Easing, MotionPath, Point, Rect, Size, Transition, TransitionEffect,
 };
 
 /// Evaluate an easing curve on normalized time `t` in `[0, 1]`.
@@ -61,6 +60,24 @@ impl ObjectSample {
         opacity: 1.0,
         clip: None,
     };
+
+    /// Repair non-finite numbers (to identity) and clamp opacity to `[0, 1]` and scale to
+    /// `>= 0`, so a sample function can never hand the renderer hostile values.
+    #[must_use]
+    pub fn sanitized(self) -> Self {
+        let fin = |v: f32, d: f32| if v.is_finite() { v } else { d };
+        Self {
+            offset: (fin(self.offset.0, 0.0), fin(self.offset.1, 0.0)),
+            scale: fin(self.scale, 1.0).max(0.0),
+            opacity: fin(self.opacity, 1.0).clamp(0.0, 1.0),
+            clip: self.clip.map(|c| ClipFrac {
+                min_x: fin(c.min_x, 0.0).clamp(0.0, 1.0),
+                min_y: fin(c.min_y, 0.0).clamp(0.0, 1.0),
+                max_x: fin(c.max_x, 1.0).clamp(0.0, 1.0),
+                max_y: fin(c.max_y, 1.0).clamp(0.0, 1.0),
+            }),
+        }
+    }
 }
 
 /// Whether the animation is entering or exiting.
@@ -74,6 +91,8 @@ pub enum AnimationPhase {
 ///
 /// For `Entering`, progress 0 is off-screen/hidden, 1 is fully entered.
 /// For `Exiting`, progress 0 is resting/visible, 1 is fully exited.
+/// The effect is looked up in the registry ([`crate::effects`]); an unknown id plays as
+/// [`coursecraft_course::FALLBACK_EFFECT`].
 #[must_use]
 pub fn sample_animation(
     anim: &Animation,
@@ -82,142 +101,13 @@ pub fn sample_animation(
     frame: Rect,
     slide_size: Size,
 ) -> ObjectSample {
-    let p = ease(anim.easing, progress);
-    let slide_w = slide_size.w as f32;
-    let slide_h = slide_size.h as f32;
-
-    match anim.effect {
-        AnimEffect::Fade => {
-            let opacity = match phase {
-                AnimationPhase::Entering => p,
-                AnimationPhase::Exiting => 1.0 - p,
-            };
-            ObjectSample {
-                offset: (0.0, 0.0),
-                scale: 1.0,
-                opacity,
-                clip: None,
-            }
-        }
-        AnimEffect::FlyIn { from } => {
-            let full_offset = match from {
-                Direction::Left => (-(frame.x + frame.w), 0.0),
-                Direction::Right => (slide_w - frame.x, 0.0),
-                Direction::Top => (0.0, -(frame.y + frame.h)),
-                Direction::Bottom => (0.0, slide_h - frame.y),
-            };
-            let factor = match phase {
-                AnimationPhase::Entering => 1.0 - p,
-                AnimationPhase::Exiting => p,
-            };
-            ObjectSample {
-                offset: (full_offset.0 * factor, full_offset.1 * factor),
-                scale: 1.0,
-                opacity: 1.0,
-                clip: None,
-            }
-        }
-        AnimEffect::Zoom => {
-            let (scale, opacity) = match phase {
-                AnimationPhase::Entering => (p, p),
-                AnimationPhase::Exiting => (1.0 - p, 1.0 - p),
-            };
-            ObjectSample {
-                offset: (0.0, 0.0),
-                scale,
-                opacity,
-                clip: None,
-            }
-        }
-        AnimEffect::Wipe { from } => {
-            let clip = match phase {
-                AnimationPhase::Entering => match from {
-                    Direction::Left => ClipFrac {
-                        min_x: 0.0,
-                        min_y: 0.0,
-                        max_x: p,
-                        max_y: 1.0,
-                    },
-                    Direction::Right => ClipFrac {
-                        min_x: 1.0 - p,
-                        min_y: 0.0,
-                        max_x: 1.0,
-                        max_y: 1.0,
-                    },
-                    Direction::Top => ClipFrac {
-                        min_x: 0.0,
-                        min_y: 0.0,
-                        max_x: 1.0,
-                        max_y: p,
-                    },
-                    Direction::Bottom => ClipFrac {
-                        min_x: 0.0,
-                        min_y: 1.0 - p,
-                        max_x: 1.0,
-                        max_y: 1.0,
-                    },
-                },
-                AnimationPhase::Exiting => match from {
-                    Direction::Left => ClipFrac {
-                        min_x: 0.0,
-                        min_y: 0.0,
-                        max_x: 1.0 - p,
-                        max_y: 1.0,
-                    },
-                    Direction::Right => ClipFrac {
-                        min_x: p,
-                        min_y: 0.0,
-                        max_x: 1.0,
-                        max_y: 1.0,
-                    },
-                    Direction::Top => ClipFrac {
-                        min_x: 0.0,
-                        min_y: 0.0,
-                        max_x: 1.0,
-                        max_y: 1.0 - p,
-                    },
-                    Direction::Bottom => ClipFrac {
-                        min_x: 0.0,
-                        min_y: p,
-                        max_x: 1.0,
-                        max_y: 1.0,
-                    },
-                },
-            };
-            let clip =
-                if clip.min_x <= 0.0 && clip.min_y <= 0.0 && clip.max_x >= 1.0 && clip.max_y >= 1.0
-                {
-                    None
-                } else {
-                    Some(clip)
-                };
-            ObjectSample {
-                offset: (0.0, 0.0),
-                scale: 1.0,
-                opacity: 1.0,
-                clip,
-            }
-        }
-        AnimEffect::Float { from } => {
-            let dist = 40.0;
-            let full_offset = match from {
-                Direction::Left => (-dist, 0.0),
-                Direction::Right => (dist, 0.0),
-                Direction::Top => (0.0, -dist),
-                Direction::Bottom => (0.0, dist),
-            };
-            let (factor, opacity) = match phase {
-                AnimationPhase::Entering => (1.0 - p, p),
-                AnimationPhase::Exiting => (p, 1.0 - p),
-            };
-            ObjectSample {
-                offset: (full_offset.0 * factor, full_offset.1 * factor),
-                scale: 1.0,
-                opacity,
-                clip: None,
-            }
-        }
-    }
+    let ctx = crate::effects::EffectCtx {
+        phase,
+        eased: ease(anim.easing, progress),
+        frame,
+        slide_size,
+    };
+    crate::effects::sample_effect(&anim.effect, &ctx)
 }
 
 /// Sample an active motion path at `elapsed_ms`, returning the offset relative to authored frame.

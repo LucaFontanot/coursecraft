@@ -2,7 +2,7 @@
 //! Transitions, Animations).
 
 use crate::test_harness::TestHarness;
-use coursecraft_course::{AnimEffect, Course, Direction, TransitionEffect};
+use coursecraft_course::{Course, Direction, TransitionEffect};
 
 fn frames(h: &mut TestHarness, n: usize) {
     for _ in 0..n {
@@ -96,8 +96,8 @@ fn the_entrance_gallery_animates_the_selected_object() {
     let mut h = harness();
     h.editor.selection.object = Some("sh1".into());
     open_tab(&mut h, "animations");
-    let tiles = h.find_texts("Fly In");
-    let fly = tiles.first().copied().expect("Fly In tile");
+    let tiles = h.find_texts("Fly in");
+    let fly = tiles.first().copied().expect("Fly in tile");
     h.click_at(fly);
     frames(&mut h, 2);
     let object = |h: &TestHarness| {
@@ -111,9 +111,9 @@ fn the_entrance_gallery_animates_the_selected_object() {
     };
     assert!(matches!(
         object(&h).entrance.map(|a| a.effect),
-        Some(AnimEffect::FlyIn { .. })
+        Some(e) if e.id == "fly_in"
     ));
-    assert!(object(&h).exit.is_none(), "the first Fly In is Entrance");
+    assert!(object(&h).exit.is_none(), "the first Fly in is Entrance");
 }
 
 #[test]

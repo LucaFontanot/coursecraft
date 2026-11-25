@@ -3812,7 +3812,7 @@ fn compose_with_animated_object_scales_and_translates() {
         .find(|o| o.id == "btn-start")
         .expect("btn");
     btn.entrance = Some(coursecraft_course::Animation {
-        effect: coursecraft_course::AnimEffect::Fade,
+        effect: coursecraft_course::AnimEffect::new("fade"),
         duration_ms: 1000,
         easing: coursecraft_course::Easing::Linear,
     });
@@ -8321,14 +8321,12 @@ fn exit_animations_render_with_and_without_slide_transition() {
             .expect("fade-obj"),
         ];
         s2.objects[0].exit = Some(Animation {
-            effect: AnimEffect::FlyIn {
-                from: Direction::Left,
-            },
+            effect: AnimEffect::with_from("fly_in", Direction::Left),
             duration_ms: 1000,
             easing: Easing::Linear,
         });
         s2.objects[1].exit = Some(Animation {
-            effect: AnimEffect::Fade,
+            effect: AnimEffect::new("fade"),
             duration_ms: 1000,
             easing: Easing::Linear,
         });

@@ -92,7 +92,7 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
         );
     }
 
-    // Select "Fly out" for exit and verify stored AnimEffect::FlyIn is unchanged.
+    // Select "Fly out" for exit and verify stored fly_in is unchanged.
     let fly_out = harness.find_text_last("Fly out").expect("Fly out option");
     harness.click_at(fly_out);
     harness.idle_frame();
@@ -108,9 +108,9 @@ fn exit_effect_dropdown_shows_exit_names_and_entrance_shows_entrance_names() {
     assert!(
         matches!(
             obj.exit.as_ref().map(|a| &a.effect),
-            Some(AnimEffect::FlyIn { .. })
+            Some(e) if e.id == "fly_in"
         ),
-        "selecting 'Fly out' stores AnimEffect::FlyIn: {:?}",
+        "selecting 'Fly out' stores fly_in: {:?}",
         obj.exit
     );
 
@@ -131,14 +131,12 @@ fn existing_course_with_fly_in_exit_loads_and_shows_fly_out() {
         .find(|o| o.id == "btn-start")
         .expect("btn-start");
     obj.entrance = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::EaseOut,
     });
     obj.exit = Some(Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Right,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Right),
         duration_ms: 600,
         easing: Easing::EaseOut,
     });
@@ -211,7 +209,7 @@ fn multi_selection_shows_entrance_and_exit_names_and_undo_redo() {
             .0;
         assert_eq!(
             obj.exit.as_ref().map(|a| &a.effect),
-            Some(&AnimEffect::Zoom),
+            Some(&AnimEffect::new("zoom")),
             "object {id} should have Zoom exit"
         );
     }

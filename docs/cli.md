@@ -360,6 +360,7 @@ object.state_update_extra -                   -          {"slide": id, "object":
 object.state_delete_extra -                   -          {"slide": id, "object": id, "state": string, "extra": id}
 object.state_reorder_extra -                  -          {"slide": id, "object": id, "state": string, "extra": id, "index": usize}
 object.delete        Edit/Delete              Delete     {"slide": id, "object": id}
+animation.effects    -                        -          {}
 object.set_animation -                        -          {"slide": id, "object": id, "which": "entrance"|"exit", "animation": Animation|null}
 interaction.insert   -                        -          {"slide": id, "kind": "tabs"|"accordion"}
 object.add_motion_path -                        -          {"slide": id, "object": id, "points"?: Point[], "duration_ms"?: u32, "easing"?: Easing, "relative"?: bool}

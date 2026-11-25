@@ -565,15 +565,15 @@ Objects may define entrance and exit animations, and one or more motion paths:
 
 ```json
 {
-  "entrance": { "type": "fade", "duration_ms": 500, "easing": "ease_out" },
-  "exit": { "type": "fly_in", "from": "right", "duration_ms": 500, "easing": "ease_out" },
+  "entrance": { "effect": { "type": "fade" }, "duration_ms": 500, "easing": "ease_out" },
+  "exit": { "effect": { "type": "fly_in", "from": "right" }, "duration_ms": 500, "easing": "ease_out" },
   "motion_paths": [
     { "id": "path1", "points": [{"x": 0.0, "y": 0.0}, {"x": 200.0, "y": 0.0}], "duration_ms": 1000, "easing": "ease_out", "relative": true }
   ]
 }
 ```
 
-- **Effects (`AnimEffect`):** `fade`, `fly_in { from }`, `zoom`, `wipe { from }`, `float { from }`. The same stored effect ids are used for both `entrance` and `exit` (for example, `fly_in` is shown as "Fly in" for entrances and "Fly out" for exits).
+- **Effects (`AnimEffect`):** `{ "type": id, ...options }`. The ids and the options each one takes come from the effect registry (`crates/course/src/effects.rs`, listed by the `animation.effects` command): today `fade`, `fly_in { from }`, `zoom`, `wipe { from }`, `float { from }`. The same stored id is used for `entrance` and `exit` (`fly_in` is shown as "Fly In" for entrances and "Fly Out" for exits). Unknown fields are refused when parsing. An unknown `type` (a file from a newer version) still opens: the validator warns and it plays as `fade`. An option the effect doesn't take is a warning and is ignored. `object.set_animation` refuses both.
 - **Direction (`Direction`):** `left`, `right`, `top`, `bottom` (default `bottom`). For exits, `from` indicates the direction the object leaves toward.
 - **Easing (`Easing`):** `linear`, `ease_in`, `ease_out` (default), `ease_in_out`.
 - **Duration (`duration_ms`):** default 500 ms for animations, 1000 ms for motion paths (allowed 1–60000 ms).

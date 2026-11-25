@@ -2,9 +2,9 @@
 
 use crate::Editor;
 use coursecraft_course::{
-    Align, AnimEffect, Autofit, Color, Course, Direction, Easing, Glow, ListKind, ObjectKind,
-    Paragraph, RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing,
-    TransitionEffect, Trim, VAlign, paragraphs_for,
+    Align, Autofit, Color, Course, Direction, Easing, Glow, ListKind, ObjectKind, Paragraph,
+    RevisitMode, Shadow, ShapeKind, TextRun, TextStyle, TimerFormat, Timing, TransitionEffect,
+    Trim, VAlign, paragraphs_for,
 };
 use coursecraft_render::parse_color;
 use egui::{
@@ -832,19 +832,8 @@ impl PropertiesState {
             self.focus_order = obj.focus_order;
 
             if let Some(ref a) = obj.entrance {
-                self.entrance_effect = match a.effect {
-                    AnimEffect::Fade => "fade".to_owned(),
-                    AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
-                    AnimEffect::Zoom => "zoom".to_owned(),
-                    AnimEffect::Wipe { .. } => "wipe".to_owned(),
-                    AnimEffect::Float { .. } => "float".to_owned(),
-                };
-                self.entrance_direction = match a.effect {
-                    AnimEffect::FlyIn { from }
-                    | AnimEffect::Wipe { from }
-                    | AnimEffect::Float { from } => from,
-                    _ => Direction::Bottom,
-                };
+                self.entrance_effect = a.effect.id.clone();
+                self.entrance_direction = a.effect.direction().unwrap_or(Direction::Bottom);
                 self.entrance_duration_ms = a.duration_ms;
                 self.entrance_easing = a.easing;
             } else {
@@ -855,19 +844,8 @@ impl PropertiesState {
             }
 
             if let Some(ref a) = obj.exit {
-                self.exit_effect = match a.effect {
-                    AnimEffect::Fade => "fade".to_owned(),
-                    AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
-                    AnimEffect::Zoom => "zoom".to_owned(),
-                    AnimEffect::Wipe { .. } => "wipe".to_owned(),
-                    AnimEffect::Float { .. } => "float".to_owned(),
-                };
-                self.exit_direction = match a.effect {
-                    AnimEffect::FlyIn { from }
-                    | AnimEffect::Wipe { from }
-                    | AnimEffect::Float { from } => from,
-                    _ => Direction::Bottom,
-                };
+                self.exit_effect = a.effect.id.clone();
+                self.exit_direction = a.effect.direction().unwrap_or(Direction::Bottom);
                 self.exit_duration_ms = a.duration_ms;
                 self.exit_easing = a.easing;
             } else {
@@ -1221,19 +1199,8 @@ impl PropertiesState {
             .first()
             .is_some_and(|first| objects.iter().all(|o| o.entrance == first.entrance));
         if same_entrance && let Some(a) = objects.first().and_then(|o| o.entrance.as_ref()) {
-            self.entrance_effect = match a.effect {
-                AnimEffect::Fade => "fade".to_owned(),
-                AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
-                AnimEffect::Zoom => "zoom".to_owned(),
-                AnimEffect::Wipe { .. } => "wipe".to_owned(),
-                AnimEffect::Float { .. } => "float".to_owned(),
-            };
-            self.entrance_direction = match a.effect {
-                AnimEffect::FlyIn { from }
-                | AnimEffect::Wipe { from }
-                | AnimEffect::Float { from } => from,
-                _ => Direction::Bottom,
-            };
+            self.entrance_effect = a.effect.id.clone();
+            self.entrance_direction = a.effect.direction().unwrap_or(Direction::Bottom);
             self.entrance_duration_ms = a.duration_ms;
             self.entrance_easing = a.easing;
         } else {
@@ -1247,19 +1214,8 @@ impl PropertiesState {
             .first()
             .is_some_and(|first| objects.iter().all(|o| o.exit == first.exit));
         if same_exit && let Some(a) = objects.first().and_then(|o| o.exit.as_ref()) {
-            self.exit_effect = match a.effect {
-                AnimEffect::Fade => "fade".to_owned(),
-                AnimEffect::FlyIn { .. } => "fly_in".to_owned(),
-                AnimEffect::Zoom => "zoom".to_owned(),
-                AnimEffect::Wipe { .. } => "wipe".to_owned(),
-                AnimEffect::Float { .. } => "float".to_owned(),
-            };
-            self.exit_direction = match a.effect {
-                AnimEffect::FlyIn { from }
-                | AnimEffect::Wipe { from }
-                | AnimEffect::Float { from } => from,
-                _ => Direction::Bottom,
-            };
+            self.exit_effect = a.effect.id.clone();
+            self.exit_direction = a.effect.direction().unwrap_or(Direction::Bottom);
             self.exit_duration_ms = a.duration_ms;
             self.exit_easing = a.easing;
         } else {
@@ -2004,48 +1960,28 @@ pub(crate) fn show_paired_numeric_row(
     })
 }
 
-/// Human-readable label for an animation effect id (`"none"`, `"fade"`,
-/// `"fly_in"`, `"zoom"`, `"wipe"`, `"float"`), phrased as an entrance or exit
-/// depending on `which` (`"entrance"` or `"exit"`).
+/// Label for an animation effect id (`"none"` or a registry id), phrased as an entrance or
+/// exit depending on `which` (`"entrance"` or `"exit"`). English; callers pass it through `tl!`.
 fn anim_effect_label(which: &str, effect: &str) -> &'static str {
-    let is_exit = which == "exit";
-    match effect {
-        "fade" => {
-            if is_exit {
-                "Fade out"
-            } else {
-                "Fade in"
-            }
-        }
-        "fly_in" => {
-            if is_exit {
-                "Fly out"
-            } else {
-                "Fly in"
-            }
-        }
-        "zoom" => {
-            if is_exit {
-                "Zoom out"
-            } else {
-                "Zoom in"
-            }
-        }
-        "wipe" => {
-            if is_exit {
-                "Wipe out"
-            } else {
-                "Wipe in"
-            }
-        }
-        "float" => {
-            if is_exit {
-                "Float out"
-            } else {
-                "Float in"
-            }
-        }
-        _ => "None",
+    if effect == "none" {
+        return "None";
+    }
+    coursecraft_course::effect_def(effect).map_or("Unknown effect", |d| d.label(which == "exit"))
+}
+
+/// The direction choices of `effect`, from the registry (empty when it has none).
+fn anim_effect_directions(effect: &str) -> &'static [Direction] {
+    coursecraft_course::effect_def(effect)
+        .and_then(coursecraft_course::EffectDef::direction)
+        .map_or(&[], |(_, allowed)| allowed)
+}
+
+fn direction_label(d: Direction) -> &'static str {
+    match d {
+        Direction::Left => "Left",
+        Direction::Right => "Right",
+        Direction::Top => "Top",
+        Direction::Bottom => "Bottom",
     }
 }
 
@@ -2070,11 +2006,17 @@ fn show_anim_row(
     inspector_row(ui, "Effect", |ui| {
         let rem_w = ui.available_width().max(30.0);
         crate::widgets::styled_combo(ui, format!("anim_effect_{which}"), rem_w)
-            .selected_text(effect_label)
+            .selected_text(crate::tl!(effect_label))
             .show_ui(ui, |ui| {
-                for id in ["none", "fade", "fly_in", "zoom", "wipe", "float"] {
+                let ids =
+                    std::iter::once("none").chain(coursecraft_course::EFFECTS.iter().map(|d| d.id));
+                for id in ids {
                     if ui
-                        .selectable_value(effect_str, id.to_owned(), anim_effect_label(which, id))
+                        .selectable_value(
+                            effect_str,
+                            id.to_owned(),
+                            crate::tl!(anim_effect_label(which, id)),
+                        )
                         .clicked()
                     {
                         changed = true;
@@ -2100,25 +2042,18 @@ fn show_anim_row(
             }
         });
 
-        if matches!(effect_str.as_str(), "fly_in" | "wipe" | "float") {
-            let dir_label = match direction {
-                Direction::Left => "Left",
-                Direction::Right => "Right",
-                Direction::Top => "Top",
-                Direction::Bottom => "Bottom",
-            };
+        let directions = anim_effect_directions(effect_str);
+        if !directions.is_empty() {
             inspector_row(ui, "Direction", |ui| {
                 let rem_w = ui.available_width().max(30.0);
                 crate::widgets::styled_combo(ui, format!("anim_dir_{which}"), rem_w)
-                    .selected_text(dir_label)
+                    .selected_text(crate::tl!(direction_label(*direction)))
                     .show_ui(ui, |ui| {
-                        for (val, l) in [
-                            (Direction::Bottom, "Bottom"),
-                            (Direction::Left, "Left"),
-                            (Direction::Right, "Right"),
-                            (Direction::Top, "Top"),
-                        ] {
-                            if ui.selectable_value(direction, val, l).clicked() {
+                        for &val in directions {
+                            if ui
+                                .selectable_value(direction, val, crate::tl!(direction_label(val)))
+                                .clicked()
+                            {
                                 changed = true;
                             }
                         }
@@ -2182,7 +2117,7 @@ pub(crate) fn animation_command(
         Json::Null
     } else {
         let mut effect_json = serde_json::json!({ "type": effect });
-        if matches!(effect, "fly_in" | "wipe" | "float") {
+        if !anim_effect_directions(effect).is_empty() {
             effect_json["from"] = serde_json::json!(direction);
         }
         serde_json::json!({

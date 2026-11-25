@@ -953,6 +953,7 @@ pub(super) fn object_set_animation(s: &mut Session, p: &Json) -> Result<Json> {
             if a.duration_ms < 1 || a.duration_ms > 60000 {
                 return Err(bad(C, "animation duration_ms must be 1..=60000"));
             }
+            check_effect(C, &a.effect)?;
             Some(a)
         }
     };
@@ -965,6 +966,47 @@ pub(super) fn object_set_animation(s: &mut Session, p: &Json) -> Result<Json> {
     }
     keep_valid(s, was_valid)?;
     Ok(Json::Null)
+}
+
+/// Refuse an effect id the registry doesn't know, or an option the effect doesn't take, so
+/// authoring never stores what the runtime would ignore. (Files from newer versions still open:
+/// the parser and validator only warn.)
+fn check_effect(cmd: &str, effect: &coursecraft_course::AnimEffect) -> Result<()> {
+    let Some(def) = effect.def() else {
+        return Err(bad(
+            cmd,
+            format!(
+                "unknown effect {:?}; `animation.effects` lists them",
+                effect.id
+            ),
+        ));
+    };
+    if let Some(from) = effect.from {
+        match def.direction() {
+            Some((_, allowed)) if allowed.contains(&from) => {}
+            Some(_) => {
+                return Err(bad(
+                    cmd,
+                    format!("effect {:?} cannot come from {from:?}", def.id),
+                ));
+            }
+            None => {
+                return Err(bad(
+                    cmd,
+                    format!("effect {:?} takes no direction (`from`)", def.id),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `animation.effects`: the effect registry, for agents and tools.
+pub(super) fn animation_effects(_s: &mut Session, _p: &Json) -> Result<Json> {
+    Ok(serde_json::json!({
+        "effects": coursecraft_course::EFFECTS,
+        "fallback": coursecraft_course::FALLBACK_EFFECT,
+    }))
 }
 
 pub(super) fn object_add_motion_path(s: &mut Session, p: &Json) -> Result<Json> {

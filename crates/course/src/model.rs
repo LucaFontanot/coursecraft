@@ -1565,23 +1565,22 @@ pub fn d1000() -> u32 {
     1000
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AnimEffect {
-    Fade,
-    FlyIn {
-        #[serde(default)]
-        from: Direction,
-    },
-    Zoom,
-    Wipe {
-        #[serde(default)]
-        from: Direction,
-    },
-    Float {
-        #[serde(default)]
-        from: Direction,
-    },
+/// An entrance or exit effect: a registry id plus its options.
+///
+/// Stored as `{ "type": "fly_in", "from": "left" }`. The id is checked against
+/// [`crate::effects::EFFECTS`] by the validator, not by the parser, so a file with an effect
+/// from a newer version still opens (it plays as [`crate::effects::FALLBACK_EFFECT`]).
+/// Options are typed fields; unknown fields are refused, options the effect does not take are
+/// reported by the validator and ignored by the runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnimEffect {
+    /// Registry id (`"fade"`, `"fly_in"`, …).
+    #[serde(rename = "type")]
+    pub id: String,
+    /// Side the object enters from, or leaves toward for exits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<Direction>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

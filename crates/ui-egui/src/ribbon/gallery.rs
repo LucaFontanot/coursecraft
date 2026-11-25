@@ -3,7 +3,7 @@
 //! (effect direction, duration, Apply To All). A pick is one command.
 
 use coursecraft_course::{
-    AnimEffect, Animation, Direction, Easing, Object, Slide, Transition, TransitionEffect,
+    AnimEffect, Animation, Direction, EFFECTS, Easing, Object, Slide, Transition, TransitionEffect,
 };
 use coursecraft_render::Icon;
 use egui::{Align2, Color32, CornerRadius, FontFamily, FontId, Rect, Response, Sense, Stroke, Ui};
@@ -89,15 +89,17 @@ const TRANSITIONS: &[(&str, Icon)] = &[
     ("Cover", Icon::Stack),
 ];
 
-/// The entrance and exit effects, in gallery order.
-const EFFECTS: &[(&str, Icon)] = &[
-    ("None", Icon::XCircle),
-    ("Fade", Icon::Drop),
-    ("Fly In", Icon::ArrowRight),
-    ("Zoom", Icon::MagnifyingGlassPlus),
-    ("Wipe", Icon::TextAlignLeft),
-    ("Float", Icon::ArrowUp),
-];
+/// The gallery icon of an entrance/exit effect (registry id).
+fn effect_icon(id: &str) -> Icon {
+    match id {
+        "fade" => Icon::Drop,
+        "fly_in" => Icon::ArrowRight,
+        "zoom" => Icon::MagnifyingGlassPlus,
+        "wipe" => Icon::TextAlignLeft,
+        "float" => Icon::ArrowUp,
+        _ => Icon::Sparkle,
+    }
+}
 
 fn hex(color: &str) -> Color32 {
     coursecraft_render::parse_color(&coursecraft_course::Color(color.to_owned()))
@@ -142,14 +144,15 @@ fn transition_index(t: Option<&Transition>) -> usize {
     }
 }
 
-fn effect_index(a: Option<&Animation>) -> usize {
-    match a.map(|a| &a.effect) {
-        None => 0,
-        Some(AnimEffect::Fade) => 1,
-        Some(AnimEffect::FlyIn { .. }) => 2,
-        Some(AnimEffect::Zoom) => 3,
-        Some(AnimEffect::Wipe { .. }) => 4,
-        Some(AnimEffect::Float { .. }) => 5,
+/// Tile index of an animation: 0 is None, then the registry in order. An unknown effect
+/// selects no tile.
+fn effect_index(a: Option<&Animation>) -> Option<usize> {
+    match a {
+        None => Some(0),
+        Some(a) => EFFECTS
+            .iter()
+            .position(|d| d.id == a.effect.id)
+            .map(|i| i + 1),
     }
 }
 
@@ -188,16 +191,21 @@ pub fn tiles(editor: &Editor, gallery: Gallery) -> Vec<Tile> {
             let motion = motion_of(gallery);
             let current = objects(editor)
                 .first()
-                .map(|o| effect_index(animation(o, motion)));
-            EFFECTS
-                .iter()
-                .enumerate()
-                .map(|(i, (label, icon))| Tile {
-                    label,
-                    icon: *icon,
+                .and_then(|o| effect_index(animation(o, motion)));
+            let exit = motion == Motion::Exit;
+            let none = Tile {
+                label: "None",
+                icon: Icon::XCircle,
+                swatch: None,
+                selected: current == Some(0),
+            };
+            std::iter::once(none)
+                .chain(EFFECTS.iter().enumerate().map(|(i, d)| Tile {
+                    label: d.label(exit),
+                    icon: effect_icon(d.id),
                     swatch: None,
-                    selected: current == Some(i),
-                })
+                    selected: current == Some(i + 1),
+                }))
                 .collect()
         }
     }
@@ -286,20 +294,19 @@ pub fn apply(editor: &mut Editor, gallery: Gallery, index: usize) {
                     .iter()
                     .map(|o| {
                         let old = animation(o, motion);
-                        let from = old
-                            .and_then(|a| effect_from(&a.effect))
-                            .unwrap_or(Direction::Bottom);
-                        let effect = match index {
-                            1 => Some(AnimEffect::Fade),
-                            2 => Some(AnimEffect::FlyIn { from }),
-                            3 => Some(AnimEffect::Zoom),
-                            4 => Some(AnimEffect::Wipe { from }),
-                            5 => Some(AnimEffect::Float { from }),
-                            _ => None,
-                        };
+                        let def = index.checked_sub(1).and_then(|i| EFFECTS.get(i));
+                        let effect = def.map(|d| {
+                            old.map_or_else(
+                                || AnimEffect::new(d.id),
+                                |a| a.effect.switched_to(d.id),
+                            )
+                        });
                         let animation = effect.map(|effect| Animation {
                             effect,
-                            duration_ms: old.map_or(500, |a| a.duration_ms),
+                            duration_ms: old
+                                .map_or(def.map_or(500, |d| d.default_duration_ms), |a| {
+                                    a.duration_ms
+                                }),
                             easing: old.map_or(Easing::EaseOut, |a| a.easing),
                         });
                         (s.id.clone(), o.id.clone(), animation)
@@ -346,12 +353,7 @@ fn transition_from(effect: &TransitionEffect) -> Option<Direction> {
 }
 
 fn effect_from(effect: &AnimEffect) -> Option<Direction> {
-    match effect {
-        AnimEffect::FlyIn { from } | AnimEffect::Wipe { from } | AnimEffect::Float { from } => {
-            Some(*from)
-        }
-        AnimEffect::Fade | AnimEffect::Zoom => None,
-    }
+    effect.direction()
 }
 
 /// The current direction of `motion`'s effect, when it has one.
@@ -435,11 +437,9 @@ pub fn run_effect(editor: &mut Editor, op: EffectOp) {
 }
 
 fn set_from(editor: &mut Editor, motion: Motion, dir: Direction) {
-    let with_from = |effect: &AnimEffect| match effect {
-        AnimEffect::FlyIn { .. } => AnimEffect::FlyIn { from: dir },
-        AnimEffect::Wipe { .. } => AnimEffect::Wipe { from: dir },
-        AnimEffect::Float { .. } => AnimEffect::Float { from: dir },
-        other => other.clone(),
+    let with_from = |effect: &AnimEffect| match effect.def().and_then(|d| d.direction()) {
+        Some((_, allowed)) if allowed.contains(&dir) => AnimEffect::with_from(&effect.id, dir),
+        _ => effect.clone(),
     };
     update(
         editor,

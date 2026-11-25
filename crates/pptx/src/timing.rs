@@ -963,48 +963,46 @@ fn map_entrance_exit_preset(
         1 => None,
         2 => {
             let from = map_direction(preset_subtype, obj_name, tracker);
-            Some(AnimEffect::FlyIn { from })
+            Some(AnimEffect::with_from("fly_in", from))
         }
-        10 => Some(AnimEffect::Fade),
+        10 => Some(AnimEffect::new("fade")),
         22 => {
             let from = map_direction(preset_subtype, obj_name, tracker);
-            Some(AnimEffect::Wipe { from })
+            Some(AnimEffect::with_from("wipe", from))
         }
-        23 => Some(AnimEffect::Zoom),
+        23 => Some(AnimEffect::new("zoom")),
         42 => {
             let from = match preset_subtype {
                 1 | 2 | 4 | 8 => map_direction(preset_subtype, obj_name, tracker),
                 _ => Direction::Bottom,
             };
-            Some(AnimEffect::Float { from })
+            Some(AnimEffect::with_from("float", from))
         }
-        47 => Some(AnimEffect::Float {
-            from: Direction::Top,
-        }),
+        47 => Some(AnimEffect::with_from("float", Direction::Top)),
         12 => {
             let from = map_direction(preset_subtype, obj_name, tracker);
             tracker.report_animation(format!(
                 "Peek preset (id=12) approximated as Wipe on {obj_name}"
             ));
-            Some(AnimEffect::Wipe { from })
+            Some(AnimEffect::with_from("wipe", from))
         }
         53 => {
             tracker.report_animation(format!(
                 "Grow & Turn preset (id=53) approximated as Zoom on {obj_name}"
             ));
-            Some(AnimEffect::Zoom)
+            Some(AnimEffect::new("zoom"))
         }
         16 => {
             tracker.report_animation(format!(
                 "Animation preset Split (id=16) approximated as Fade on {obj_name}"
             ));
-            Some(AnimEffect::Fade)
+            Some(AnimEffect::new("fade"))
         }
         other => {
             tracker.report_animation(format!(
                 "Unsupported animation preset (id={other}) approximated as Fade on {obj_name}"
             ));
-            Some(AnimEffect::Fade)
+            Some(AnimEffect::new("fade"))
         }
     }
 }
@@ -1136,7 +1134,7 @@ mod tests {
         assert_eq!(
             objects[0].entrance,
             Some(Animation {
-                effect: AnimEffect::Fade,
+                effect: AnimEffect::new("fade"),
                 duration_ms: 500,
                 easing: Easing::EaseOut,
             })
@@ -1145,9 +1143,7 @@ mod tests {
         assert_eq!(
             objects[1].entrance,
             Some(Animation {
-                effect: AnimEffect::FlyIn {
-                    from: Direction::Left
-                },
+                effect: AnimEffect::with_from("fly_in", Direction::Left),
                 duration_ms: 400,
                 easing: Easing::EaseIn,
             })
@@ -1157,9 +1153,7 @@ mod tests {
         assert_eq!(
             objects[0].exit,
             Some(Animation {
-                effect: AnimEffect::Wipe {
-                    from: Direction::Right
-                },
+                effect: AnimEffect::with_from("wipe", Direction::Right),
                 duration_ms: 500,
                 easing: Easing::EaseInOut,
             })
@@ -1216,7 +1210,7 @@ mod tests {
             assert_eq!(
                 obj.entrance,
                 Some(Animation {
-                    effect: AnimEffect::Fade,
+                    effect: AnimEffect::new("fade"),
                     duration_ms: 500,
                     easing: Easing::EaseOut,
                 })
@@ -1280,7 +1274,7 @@ mod tests {
         assert_eq!(
             objects[1].entrance,
             Some(Animation {
-                effect: AnimEffect::Fade,
+                effect: AnimEffect::new("fade"),
                 duration_ms: 60_000,
                 easing: Easing::EaseOut,
             })

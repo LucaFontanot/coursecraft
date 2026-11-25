@@ -1400,6 +1400,17 @@ static REGISTRY: &[Command] = &[
         run: object_states::object_delete,
     },
     Command {
+        id: "animation.effects",
+        label: "List animation effects",
+        menu: "",
+        shortcut: None,
+        params: "{}",
+        mutates: false,
+        scope: UndoScope::FullCourse,
+        slide_validation: false,
+        run: object_states::animation_effects,
+    },
+    Command {
         id: "object.set_animation",
         label: "Set animation",
         menu: "",

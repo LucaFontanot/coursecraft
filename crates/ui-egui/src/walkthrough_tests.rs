@@ -1569,7 +1569,7 @@ fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
     assert!(
         matches!(
             entrance.as_ref().map(|a| &a.effect),
-            Some(AnimEffect::FlyIn { .. })
+            Some(e) if e.id == "fly_in"
         ),
         "Fly in stored: {entrance:?} / {:?}",
         harness.editor.ui.last_error
@@ -1585,9 +1585,7 @@ fn author_sets_an_animation_and_notes_through_the_inspector_and_previews() {
     let entrance = object_on(&harness, &slide, &id).entrance;
     assert_eq!(
         entrance.as_ref().map(|a| a.effect.clone()),
-        Some(AnimEffect::FlyIn {
-            from: Direction::Left
-        })
+        Some(AnimEffect::with_from("fly_in", Direction::Left))
     );
 
     // Duration 500 -> 1200.

@@ -463,8 +463,8 @@ form view, feedback and scoring by choice, media per choice and feedback.
 
 ## M42 Animation and timeline depth (planned)
 
-Full entrance/exit gallery, emphasis animations, animation painter, sequence by paragraph with
-build steps on the timeline, transition effect options and Apply to All, path options, camera
+The effects themselves (full entrance/exit gallery, emphasis, animation painter, sequence by
+paragraph, transition effects) moved to M46. Here: path options, camera
 zoom, timeline menu (fit to longest, reset, align to playhead or cue point, Timing dialog),
 C adds a cue point while playing, Course Map scene collapse and branch lines.
 
@@ -492,6 +492,21 @@ Plan: `docs/testing/m45-plan.md`; report: `docs/testing/m45-report.md`. Briefs a
 - `.ccraft` file association on Windows and Linux; Intel Mac dmg built by the release workflow.
 - The Fill toggle restores the previous colour; trimming an audio bar on the timeline stops the audio at the bar end.
 - Released as 0.5.2 with the media read errors, `course.json` media folder and Theme font picker fixes.
+
+## M46 Animation system (in progress)
+
+Plan: `docs/plans/m46-animation-system.md`. One effect registry that the player, renderer,
+editor, validator, CLI and MCP all read; more effects with icons for each effect and option; a
+rebuilt Animations panel; live preview on the canvas.
+
+- Phase 1 (registry, no visible change) **built (2026-11-25)**: `coursecraft-course::effects`
+  (`EFFECTS`, `EffectDef`, `effect_def`), `AnimEffect` is a registry id plus typed options (same
+  JSON), `coursecraft-logic::effects` (one sample function per id, tests that the two tables
+  match), the ribbon galleries and the Animate inspector list effects from the registry, the
+  `animation.effects` command, and `object.set_animation` refuses unknown effects and options.
+  Unknown ids in a file warn and play as Fade.
+- Next: renderer (rotation, x/y scale, tint, shaped reveals), effect pack 1, icons, Animations
+  panel and canvas preview, emphasis, build by paragraph, transitions.
 
 ## After the first release
 

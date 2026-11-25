@@ -2970,7 +2970,7 @@ fn sampling_fade_and_fly_in() {
 
     // 1. Fade
     let fade = Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
     };
@@ -2990,9 +2990,7 @@ fn sampling_fade_and_fly_in() {
 
     // 2. FlyIn
     let fly_bottom = Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Bottom,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Bottom),
         duration_ms: 500,
         easing: Easing::Linear,
     };
@@ -3046,7 +3044,7 @@ fn sampling_zoom() {
 
     // 3. Zoom
     let zoom = Animation {
-        effect: AnimEffect::Zoom,
+        effect: AnimEffect::new("zoom"),
         duration_ms: 500,
         easing: Easing::Linear,
     };
@@ -3086,9 +3084,7 @@ fn sampling_wipe_and_float() {
 
     // 4. Wipe
     let wipe = Animation {
-        effect: AnimEffect::Wipe {
-            from: Direction::Left,
-        },
+        effect: AnimEffect::with_from("wipe", Direction::Left),
         duration_ms: 500,
         easing: Easing::Linear,
     };
@@ -3140,9 +3136,7 @@ fn sampling_wipe_and_float() {
 
     // 5. Float
     let float = Animation {
-        effect: AnimEffect::Float {
-            from: Direction::Bottom,
-        },
+        effect: AnimEffect::with_from("float", Direction::Bottom),
         duration_ms: 500,
         easing: Easing::Linear,
     };
@@ -3178,7 +3172,7 @@ fn exit_with_none_end_ms_makes_object_not_live() {
     obj.timing.start_ms = 0;
     obj.timing.end_ms = None;
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
     });
@@ -3439,7 +3433,7 @@ fn entrance_animation_completes_event_fires_once_at_right_tick() {
     let obj = s.objects.iter_mut().find(|o| o.id == "btn-start").unwrap();
     obj.timing.start_ms = 1000;
     obj.entrance = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
     });
@@ -3500,7 +3494,7 @@ fn entrance_trigger_ignores_path_and_exit_completions() {
     obj.timing.start_ms = 0;
     obj.timing.end_ms = Some(3000);
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
     });
@@ -10094,14 +10088,12 @@ fn timed_animation_follows_entrance_timing_and_exit() {
         panic!("valid object");
     };
     obj.entrance = Some(Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Left,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Left),
         duration_ms: 1000,
         easing: Easing::Linear,
     });
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 500,
         easing: Easing::Linear,
     });
@@ -11095,7 +11087,7 @@ fn exit_animations_with_slide_transition_fly_out_and_disappear() {
 
     // Silence unused import warning if needed by using Animation/AnimEffect directly.
     let _ = Animation {
-        effect: AnimEffect::Zoom,
+        effect: AnimEffect::new("zoom"),
         duration_ms: 500,
         easing: Easing::Linear,
     };
@@ -11109,26 +11101,14 @@ fn every_exit_effect_with_and_without_transition_and_entrance_exit() {
     };
 
     let effects = [
-        AnimEffect::Fade,
-        AnimEffect::FlyIn {
-            from: Direction::Left,
-        },
-        AnimEffect::FlyIn {
-            from: Direction::Right,
-        },
-        AnimEffect::FlyIn {
-            from: Direction::Top,
-        },
-        AnimEffect::FlyIn {
-            from: Direction::Bottom,
-        },
-        AnimEffect::Zoom,
-        AnimEffect::Wipe {
-            from: Direction::Left,
-        },
-        AnimEffect::Float {
-            from: Direction::Bottom,
-        },
+        AnimEffect::new("fade"),
+        AnimEffect::with_from("fly_in", Direction::Left),
+        AnimEffect::with_from("fly_in", Direction::Right),
+        AnimEffect::with_from("fly_in", Direction::Top),
+        AnimEffect::with_from("fly_in", Direction::Bottom),
+        AnimEffect::new("zoom"),
+        AnimEffect::with_from("wipe", Direction::Left),
+        AnimEffect::with_from("float", Direction::Bottom),
     ];
 
     for with_transition in [false, true] {
@@ -11150,7 +11130,7 @@ fn every_exit_effect_with_and_without_transition_and_entrance_exit() {
                 .expect("obj"),
             ];
             s.objects[0].entrance = Some(Animation {
-                effect: AnimEffect::Fade,
+                effect: AnimEffect::new("fade"),
                 duration_ms: 1000,
                 easing: Easing::Linear,
             });
@@ -11517,12 +11497,12 @@ fn w01_next_wake_ms_immediate_during_entrance_exit_and_motion_path() {
         .find(|o| o.id == "box1")
         .expect("box1");
     box1.entrance = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 400,
         easing: Easing::Linear,
     });
     box1.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 300,
         easing: Easing::Linear,
     });

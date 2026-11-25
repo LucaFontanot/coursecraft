@@ -781,14 +781,12 @@ fn animation_and_transition_serialization_and_validation() {
 
     let obj = s.objects.iter_mut().find(|o| o.id == "btn-start").unwrap();
     obj.entrance = Some(Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Bottom,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Bottom),
         duration_ms: 400,
         easing: Easing::EaseOut,
     });
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 300,
         easing: Easing::EaseIn,
     });
@@ -890,7 +888,7 @@ fn animation_and_transition_serialization_and_validation() {
         .find(|o| o.id == "btn-start")
         .unwrap();
     bad_obj.entrance = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 70000,
         easing: Easing::Linear,
     });

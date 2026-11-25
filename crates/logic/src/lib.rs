@@ -20,6 +20,7 @@
 
 pub mod animation;
 mod draw;
+pub mod effects;
 mod run;
 pub mod suspend;
 

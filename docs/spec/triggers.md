@@ -518,6 +518,7 @@ Entrance and exit animations and motion paths describe object visual motion and 
   - `ease_in`: `t³`
   - `ease_out`: `1 - (1 - t)³`
   - `ease_in_out`: cubic in/out (`4t³` for `t < 0.5`, `1 - 4(1 - t)³` for `t >= 0.5`)
+- **Effects:** what an entrance or exit looks like comes from the effect registry (`coursecraft-course::EFFECTS`, sample functions in `coursecraft-logic::effects`). An exit plays its effect backwards (a `fly_in` exit leaves toward `from`). An effect id the build doesn't know plays as `fade`; an option the effect doesn't take, or a direction it doesn't allow, plays as the effect's default. Samples are sanitised before drawing: non-finite numbers become identity, opacity is clamped to `[0, 1]` and scale to `>= 0`.
 - **Entrance:** Runs over `[start_ms, start_ms + duration)`.
   - When the clock crosses `start_ms + duration`, event `animation_completes { object, path: None }` fires.
 - **Exit:** Runs over `[end - duration, end)`, where `end` is `timing.end_ms` or the owning timeline's duration (`slide.duration_ms` / `layer.duration_ms`).

@@ -3299,6 +3299,11 @@ fn check_state_extras(course: &Course, cx: &mut Ctx<'_>, extras: &[crate::StateE
 }
 
 fn check_object_animations(cx: &mut Ctx<'_>, o: &Object) {
+    for (which, anim) in [("entrance", &o.entrance), ("exit", &o.exit)] {
+        if let Some(anim) = anim {
+            check_anim_effect(cx, which, &anim.effect);
+        }
+    }
     if let Some(ref anim) = o.entrance
         && (anim.duration_ms == 0 || anim.duration_ms > 60000)
     {
@@ -3314,6 +3319,42 @@ fn check_object_animations(cx: &mut Ctx<'_>, o: &Object) {
             "exit/duration_ms",
             "animation duration_ms must be 1..=60000",
         );
+    }
+}
+
+/// Unknown effect ids and options the effect does not take are warnings: the file still
+/// plays (an unknown effect as a fade, an extra option ignored).
+fn check_anim_effect(cx: &mut Ctx<'_>, which: &str, effect: &crate::AnimEffect) {
+    let Some(def) = effect.def() else {
+        cx.warn_at(
+            &format!("{which}/effect/type"),
+            format!(
+                "unknown animation effect `{}`; it plays as `{}`",
+                effect.id,
+                crate::FALLBACK_EFFECT
+            ),
+        );
+        return;
+    };
+    if let Some(from) = effect.from {
+        match def.direction() {
+            None => cx.warn_at(
+                &format!("{which}/effect/from"),
+                format!("effect `{}` takes no direction; `from` is ignored", def.id),
+            ),
+            Some((_, allowed)) if !allowed.contains(&from) => cx.warn_at(
+                &format!("{which}/effect/from"),
+                format!(
+                    "effect `{}` cannot come from `{}`; it plays from its default",
+                    def.id,
+                    serde_json::to_value(from)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_default()
+                ),
+            ),
+            Some(_) => {}
+        }
     }
 }
 

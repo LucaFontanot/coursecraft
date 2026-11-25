@@ -18449,26 +18449,11 @@ fn animation_panel_settings_are_stored_for_every_effect() {
     let mut harness = TestHarness::new(timeline_media_course());
     harness.editor.selection.slide = "s1".into();
     for (effect, expected) in [
-        ("fade", AnimEffect::Fade),
-        (
-            "fly_in",
-            AnimEffect::FlyIn {
-                from: Direction::Top,
-            },
-        ),
-        ("zoom", AnimEffect::Zoom),
-        (
-            "wipe",
-            AnimEffect::Wipe {
-                from: Direction::Top,
-            },
-        ),
-        (
-            "float",
-            AnimEffect::Float {
-                from: Direction::Top,
-            },
-        ),
+        ("fade", AnimEffect::new("fade")),
+        ("fly_in", AnimEffect::with_from("fly_in", Direction::Top)),
+        ("zoom", AnimEffect::new("zoom")),
+        ("wipe", AnimEffect::with_from("wipe", Direction::Top)),
+        ("float", AnimEffect::with_from("float", Direction::Top)),
     ] {
         for which in ["entrance", "exit"] {
             let (cmd, params) = crate::properties::animation_command(
@@ -18623,14 +18608,12 @@ fn timeline_play_shows_entrance_and_exit_on_the_canvas() {
         end_ms: Some(5000),
     };
     obj.entrance = Some(Animation {
-        effect: AnimEffect::FlyIn {
-            from: Direction::Left,
-        },
+        effect: AnimEffect::with_from("fly_in", Direction::Left),
         duration_ms: 1000,
         easing: Easing::Linear,
     });
     obj.exit = Some(Animation {
-        effect: AnimEffect::Fade,
+        effect: AnimEffect::new("fade"),
         duration_ms: 1000,
         easing: Easing::Linear,
     });

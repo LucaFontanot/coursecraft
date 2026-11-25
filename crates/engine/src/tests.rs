@@ -10732,7 +10732,7 @@ fn registry_labels_and_menu_leaves_use_sentence_case() {
     };
 
     let cmds = crate::registry();
-    assert_eq!(cmds.len(), 190, "unexpected registry command count");
+    assert_eq!(cmds.len(), 191, "unexpected registry command count");
 
     for cmd in cmds {
         check_phrase(cmd.label, &format!("label for {}", cmd.id));
@@ -12248,7 +12248,7 @@ fn r5_01_registry_golden_lock() {
     use crate::delta::UndoScope;
 
     let reg = registry();
-    assert_eq!(reg.len(), 190);
+    assert_eq!(reg.len(), 191);
 
     const EXPECTED: &[(&str, bool, UndoScope, bool)] = &[
         ("course.info", false, UndoScope::FullCourse, false),
@@ -12434,6 +12434,7 @@ fn r5_01_registry_golden_lock() {
             true,
         ),
         ("object.delete", true, UndoScope::SingleSlide, true),
+        ("animation.effects", false, UndoScope::FullCourse, false),
         ("object.set_animation", true, UndoScope::SingleSlide, true),
         ("object.add_motion_path", true, UndoScope::SingleSlide, true),
         (
@@ -12616,10 +12617,10 @@ fn r5_01_registry_golden_lock() {
             slide_val
         ));
     }
-    assert_eq!(table.len(), 24_565, "registry golden table byte length");
+    assert_eq!(table.len(), 24_638, "registry golden table byte length");
     assert_eq!(
         fnv1a_64(table.as_bytes()),
-        17_905_909_594_708_050_050,
+        8_547_860_670_930_556_965,
         "registry golden table FNV-1a hash"
     );
 }
@@ -15694,4 +15695,45 @@ fn tr_13_course_set_tracking_rejects_invalid_params() {
         );
         assert_eq!(s.undo_len(), 0);
     }
+}
+
+#[test]
+fn animation_effects_lists_the_registry_and_set_animation_checks_it() {
+    let mut s = Session::blank("Test");
+    let list = s.execute("animation.effects", &json!({})).unwrap();
+    let ids: Vec<&str> = list["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["id"].as_str())
+        .collect();
+    assert_eq!(ids.len(), coursecraft_course::EFFECTS.len());
+    assert!(ids.contains(&"fly_in"));
+    assert_eq!(list["fallback"], "fade");
+
+    let obj_id = s
+        .execute(
+            "object.add",
+            &json!({
+                "slide": "slide1",
+                "kind": { "type": "shape", "shape": "rectangle", "fill": "#112233" },
+                "frame": { "x": 10.0, "y": 10.0, "w": 100.0, "h": 50.0 }
+            }),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let set = |s: &mut Session, effect: serde_json::Value| {
+        s.execute(
+            "object.set_animation",
+            &json!({
+                "slide": "slide1", "object": obj_id, "which": "entrance",
+                "animation": { "effect": effect, "duration_ms": 500 }
+            }),
+        )
+    };
+    assert!(set(&mut s, json!({ "type": "from_the_future" })).is_err());
+    assert!(set(&mut s, json!({ "type": "zoom", "from": "left" })).is_err());
+    assert!(set(&mut s, json!({ "type": "float", "from": "left" })).is_ok());
 }
