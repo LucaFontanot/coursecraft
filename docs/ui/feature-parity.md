@@ -16,7 +16,7 @@
 | Project and file | 7 | 2 | 1 | 2 |
 | Structure: scenes, slides, masters | 8 | 3 | 6 | 0 |
 | Text | 13 | 3 | 8 | 0 |
-| Shapes, pictures and buttons | 14 | 5 | 10 | 0 |
+| Shapes, pictures and buttons | 15 | 4 | 10 | 0 |
 | Media | 10 | 3 | 5 | 1 |
 | Interactivity | 12 | 3 | 2 | 0 |
 | Animation, transitions, timeline | 12 | 2 | 8 | 0 |
@@ -25,7 +25,7 @@
 | Editor shell and panels | 12 | 9 | 2 | 0 |
 | AI | 3 | 1 | 6 | 0 |
 | Assets and services | 0 | 0 | 1 | 7 |
-| **Total** | **110** | **38** | **59** | **12** |
+| **Total** | **111** | **37** | **59** | **12** |
 
 Counted from the tables below; recount when a row changes.
 
@@ -66,7 +66,7 @@ Counted from the tables below; recount when a row changes.
 | Slide properties: advance, revisit, prev/next/submit | `slide.update`, `slide.set_player_overrides` | ✅ | — |
 | Swipe gestures (prev/next) | — | ⛔ | M41 |
 | Focus order | audit only | 🟡 dialog missing | M39 |
-| Themes: colours, fonts, gallery | `course.set_theme`, `theme.*`; Design › Themes gallery of built-in themes | 🟡 theme-font dialog | M39 |
+| Themes: colours, fonts, gallery | `course.set_theme`, `theme.*`; Design › Themes gallery of built-in themes; Theme dialog uses the shared font picker for the course theme font | 🟡 custom font-pair creation dialog still planned | M39 |
 
 ## Text
 
@@ -118,7 +118,7 @@ Counted from the tables below; recount when a row changes.
 | Reset picture | | 🟡 | M40 |
 | Picture effects | | 🟡 as shape effects | M40 |
 | Button styles, fill, border, effects | | 🟡 | M40 |
-| On Click on a button | trigger editor | 🟡 not pre-filled | M40 |
+| On Click on a button | trigger editor with the click event and selected button pre-filled | ✅ | — |
 | Reflection, soft edges | — | ⛔ | M40 |
 | Change shape (keep format) | — | ⛔ | M40 |
 | Size and Position dialog | the Size and Position panel (`size_panel.rs`): width and height with an aspect lock, rotation, flips, position from the top left or the centre, lock | ✅ | — |

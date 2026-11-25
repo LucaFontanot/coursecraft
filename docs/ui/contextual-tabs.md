@@ -67,7 +67,7 @@ Modes replace the tab strip:
 
 | Group | Control | Kind | Action | Status | Notes |
 |---|---|---|---|---|---|
-| Action | On Click | L | `trigger.add` (on click) | 🟡 | opens the trigger editor; pre-filling "when the user clicks" this button ⛔ |
+| Action | On Click | L | `trigger.add` (on click) | ✅ | opens the trigger editor with the click event and this button pre-filled |
 | Button Icons | icon gallery | G | `object.update` `{icon}` | ⛔ | built-in arrow / check / play icons inside the button |
 | | Align Icon | SS | `object.update` `{icon_align}` | ⛔ | left, right, top, bottom, centre |
 | | Icon Color | SS | `object.update` `{icon_color}` | ⛔ | |

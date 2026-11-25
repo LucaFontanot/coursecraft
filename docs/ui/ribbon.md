@@ -246,7 +246,7 @@ Shown when the Course Map view tab is active.
 | Setup | Slide Size | L | `course.set_slide_size` | ✅ | `slide_size_dialog.rs`. In the code: Colors and Fonts open the theme window; Background Styles waits for ribbon wiring (↘ opens the Slide inspector) |
 | Themes | theme gallery | G | `course.set_theme` | ✅ | `ribbon/gallery.rs`: eight built-in themes of our own (accent, background, text), ▾ shows them all, the current one is marked; Colors and Fonts open the theme window (`theme_dialog.rs`) |
 | Theme options | Colors | SS | `theme.set_palette` | ✅ | ▾ palettes, Create New Theme Colors… (`theme.set_palette_color`) |
-| | Fonts | SS | `course.update` `{fonts}` | 🟡 | ▾ font pairs, Create New Theme Fonts… |
+| | Fonts | SS | `UiAction::Themes` → `course.set_theme` | 🟡 | opens the Theme dialog with the shared picker for the course theme font; font pairs and Create New Theme Fonts… are planned |
 | Background ↘ | Background Styles | SS | `slide.set_background` | ✅ | |
 | | Hide Background Graphics | K | `slide.update` `{hide_master_graphics}` | ⛔ | |
 | Publish | Preview | LS | | ✅ | |

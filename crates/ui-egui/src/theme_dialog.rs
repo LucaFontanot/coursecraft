@@ -1,10 +1,10 @@
 //! Theme window dialog: accent, background, text color, player bar colors, font name.
 
+use crate::EditorRequest;
 use crate::dialog::Dialog;
-use coursecraft_course::{Course, Theme};
-use egui::TextEdit;
-
+use crate::font_picker::{FontPickerAction, show_font_picker};
 use crate::properties::{is_committed, show_color_field};
+use coursecraft_course::{Course, Theme};
 
 /// Local buffers for editing the Course Theme.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -44,6 +44,11 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
         .ui
         .theme_dialog
         .sync(&editor.session.course, editor.session.revision);
+    editor.ui.properties_lists.ensure(
+        editor.session.revision,
+        &editor.session.course,
+        &editor.media,
+    );
 
     let mut open = true;
     let mut close = false;
@@ -141,24 +146,45 @@ pub fn show_theme_dialog_window(editor: &mut crate::Editor, ctx: &egui::Context)
 
                 ui.add_space(8.0);
                 ui.separator();
-                ui.heading("Typography");
+                ui.heading(tl!("Typography"));
 
-                crate::properties::inspector_row(ui, "Font name", |ui| {
-                    let r = ui.add(
-                        TextEdit::singleline(&mut editor.ui.theme_dialog.font)
-                            .id_salt("theme_font_name")
-                            .desired_width(ui.available_width()),
-                    );
-                    if is_committed(&r, ui)
-                        && !editor.ui.theme_dialog.font.trim().is_empty()
-                        && editor.ui.theme_dialog.font.trim() != editor.session.course.theme.font
-                    {
-                        update_theme = Some(serde_json::json!({
-                            "font": editor.ui.theme_dialog.font.trim(),
-                        }));
-                    }
+                let state = &mut editor.ui;
+                let picked = crate::properties::inspector_row(ui, tl!("Font name"), |ui| {
+                    show_font_picker(
+                        ui,
+                        "theme_font",
+                        &state.theme_dialog.font,
+                        &state.properties_lists.font_families,
+                        &mut state.properties.recent_fonts,
+                        state.system_fonts.as_deref(),
+                        &mut state.properties.system_fonts_list_requested,
+                        &mut state.properties.system_font_search,
+                        &mut editor.pending_requests,
+                    )
                 });
-                ui.small("Renders as Inter for now");
+                match picked {
+                    Some(FontPickerAction::PickCourseOrRecent(name))
+                        if state.theme_dialog.font != name =>
+                    {
+                        state.theme_dialog.font = name;
+                        update_theme = Some(serde_json::json!({ "font": state.theme_dialog.font }));
+                    }
+                    Some(FontPickerAction::PickSystem(name)) => {
+                        // The host applies the command only after embedding succeeds.
+                        // The dialog then picks up the new font on revision sync.
+                        editor.pending_requests.push(EditorRequest::AddSystemFont {
+                            family: name.clone(),
+                            apply: Some((
+                                "course.set_theme".to_owned(),
+                                serde_json::json!({ "font": name }),
+                            )),
+                        });
+                    }
+                    Some(FontPickerAction::AddFont) => {
+                        editor.pending_requests.push(EditorRequest::PickFonts);
+                    }
+                    Some(FontPickerAction::PickCourseOrRecent(_)) | None => {}
+                }
             });
             dialog.footer(|ui| {
                 ui.horizontal(|ui| {

@@ -2550,7 +2550,7 @@ const BUTTON_FORMAT: &[Group] = &[
                 Large,
                 Ui(UiAction::Trigger),
             ),
-            "Add a trigger to the slide (pick this button and \"user clicks\").",
+            "Add a trigger that runs when this button is clicked.",
         )],
     },
     Group {

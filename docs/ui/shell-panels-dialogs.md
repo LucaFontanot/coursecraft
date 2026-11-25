@@ -128,6 +128,7 @@ New Slide ▸, New Scene, Apply Layout ▸, Duplicate, Delete, Rename, Move to S
 |---|---|---|---|
 | Slide Size | Design › Slide Size | `slide_size_dialog.rs` | ✅ add Lock aspect ratio, Current Default Size, Scale existing content ⛔ |
 | Create New Theme Colors | Design › Colors ▾ | `theme_dialog.rs` | 🟡 match the slot list: Light 1, Dark 1, Light 2, Dark 2, Accent 1–6, Hyperlink, Control, Quiz Correct, Quiz Incorrect, Custom 1–2 |
+| Theme | Design › Colors or Fonts | `theme_dialog.rs` | ✅ shared picker for the course theme font: course, recent and installed fonts, plus Add font… |
 | Create New Theme Fonts | Design › Fonts ▾ | `font_picker.rs` | ⛔ heading + body + sample + name |
 | Trigger | Triggers › New | `triggers.rs` (inline editor) | 🟡 add the dialog form: Action, target, When, Object, Conditions |
 | Insert Slide | New Slide ▾ | `slides::show_new_slide_popup`, `interaction_gallery.rs` | 🟡 one dialog with filters (Type, In Use), search, sort, preview pane, multi-select |

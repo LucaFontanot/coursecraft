@@ -6090,15 +6090,33 @@ fn typing_in_styled_text_preserves_runs() {
 }
 
 #[test]
-fn theme_dialog_changes_dispatch_course_set_theme() {
-    let course = Course::from_json(COURSE_JSON).expect("valid course");
+fn theme_dialog_picks_course_font_and_resets_to_defaults() {
+    let mut course = Course::from_json(COURSE_JSON).expect("valid course");
+    course.fonts.push(coursecraft_course::FontFace {
+        family: "Lato".into(),
+        style: coursecraft_course::FontStyle::Regular,
+        src: "fonts/lato.ttf".into(),
+    });
     let mut harness = TestHarness::new(course);
+    harness.editor.set_media(vec![(
+        "fonts/lato.ttf".into(),
+        std::sync::Arc::from(coursecraft_media::text_metrics::INTER_REGULAR),
+    )]);
     harness.editor.ui.show_theme_window = true;
     harness.idle_frame();
     harness.idle_frame();
 
-    assert!(harness.find_text("Theme").is_some());
-    assert!(harness.find_text("Reset to defaults").is_some());
+    let def = coursecraft_course::Theme::default();
+    let picker = harness
+        .find_text_last(&def.font)
+        .expect("theme font picker");
+    harness.click_at(picker);
+    let course_font = harness.find_text("Lato").expect("course font");
+    let undo_len = harness.editor.undo_len_for_test();
+    harness.click_at(course_font);
+    assert_eq!(harness.editor.session.course.theme.font, "Lato");
+    assert_eq!(harness.editor.ui.theme_dialog.font, "Lato");
+    assert_eq!(harness.editor.undo_len_for_test(), undo_len + 1);
 
     let reset_btn = harness
         .find_text("Reset to defaults")
@@ -6106,8 +6124,56 @@ fn theme_dialog_changes_dispatch_course_set_theme() {
     harness.click_at(reset_btn);
     harness.idle_frame();
 
-    let def = coursecraft_course::Theme::default();
+    assert_eq!(harness.editor.ui.theme_dialog.font, def.font);
     assert_eq!(harness.editor.session.course.theme, def);
+    harness.editor.run("edit.undo", serde_json::json!({}));
+    harness.idle_frame();
+    assert_eq!(harness.editor.session.course.theme.font, "Lato");
+    assert_eq!(harness.editor.ui.theme_dialog.font, "Lato");
+}
+
+#[test]
+fn theme_dialog_requests_embedding_and_add_font() {
+    let course = Course::from_json(COURSE_JSON).expect("valid course");
+    let default_font = course.theme.font.clone();
+    let mut harness = TestHarness::new(course);
+    harness.editor.ui.system_fonts = Some(vec![crate::SystemFontChoice {
+        name: "Georgia".into(),
+        embedding_restricted: false,
+    }]);
+    harness.editor.ui.show_theme_window = true;
+    harness.idle_frame();
+    harness.idle_frame();
+
+    let picker = harness
+        .find_text_last(&default_font)
+        .expect("theme font picker");
+    harness.click_at(picker);
+    let system_font = harness.find_text("Georgia").expect("installed font");
+    let requests = click_for_requests(&mut harness, system_font);
+    let (command, params) = requests
+        .iter()
+        .find_map(|req| match req {
+            EditorRequest::AddSystemFont { family, apply } if family == "Georgia" => apply.as_ref(),
+            _ => None,
+        })
+        .expect("apply theme font after embedding");
+    assert_eq!(command, "course.set_theme");
+    assert_eq!(params, &serde_json::json!({ "font": "Georgia" }));
+    assert_eq!(harness.editor.session.course.theme.font, default_font);
+    assert_eq!(harness.editor.ui.theme_dialog.font, default_font);
+
+    let picker = harness
+        .find_text_last(&default_font)
+        .expect("theme font picker");
+    harness.click_at(picker);
+    let add_font = harness.find_text("Add font…").expect("Add font button");
+    let requests = click_for_requests(&mut harness, add_font);
+    assert!(
+        requests
+            .iter()
+            .any(|req| matches!(req, EditorRequest::PickFonts))
+    );
 }
 
 #[test]
