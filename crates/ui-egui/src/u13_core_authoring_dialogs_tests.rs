@@ -345,8 +345,12 @@ fn t10_3_course_settings_resizable_combos_and_resources_growth() {
 fn t10_4_publish_dialog_validation_feedback_disabled_tooltip_and_footer() {
     let mut h = TestHarness::new_with_size(base_course(), (1024.0, 600.0));
     h.ctx.set_pixels_per_point(1.5);
+    // Let egui apply the zoom factor before opening Publish so screen_rect is 1024x600,
+    // not egui's uninitialized 10000/ppp frame-0 fallback.
+    h.idle_frame();
     h.editor.ui.validation_errors = 2;
     h.editor.ui.publish.open = true;
+    h.idle_frame();
     h.idle_frame();
 
     let win_rect = dialog_rect(&h, "Publish course").expect("Publish course rect");

@@ -191,17 +191,10 @@ impl<'a> Dialog<'a> {
                     .data(|d| d.get_temp::<f32>(footer_id(window_id)))
                     .unwrap_or(0.0);
                 let start_y = ui.cursor().min.y;
-                // On the very first frame before egui records content_rect, area.height() can be
-                // the uninitialized 10000/ppp fallback; cap it so tall dialogs still scroll.
-                let area_h = if area.height() > 2000.0 {
-                    492.0
-                } else {
-                    area.height()
-                };
                 let mut dialog = DialogUi {
                     ui,
                     window_id,
-                    max_body_height: (area_h - FRAME_CHROME - footer_h).max(80.0),
+                    max_body_height: (area.height() - FRAME_CHROME - footer_h).max(80.0),
                     start_y,
                     fixed_width,
                 };

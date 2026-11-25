@@ -192,4 +192,56 @@ fn tr_16_tracking_ui_draws_every_string_through_tl() {
         h.find_text(web_note).is_none(),
         "{web_note:?} is drawn without tl! in Publish Web"
     );
+
+    // 4. Passing score note, missing results slide label/warning, and remaining summary variants
+    h.editor.ui.publish.open = false;
+    h.editor.run(
+        "course.set_quiz",
+        serde_json::json!({ "passing_percent": 80 }),
+    );
+    h.editor.run(
+        "course.set_tracking",
+        serde_json::json!({
+            "slides_viewed": { "mode": "all" },
+            "quiz": { "slide": "gone" }
+        }),
+    );
+    h.editor.ui.show_course_settings_window = true;
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    if let Some(pos) = h.find_text_last("⟦Tracking⟧") {
+        h.scroll_over(pos, -250.0);
+        h.idle_frame();
+    }
+    for text in [
+        "Missing slide (gone)",
+        "Passing score is 80% in Quiz settings.",
+        "Selected results slide no longer exists.",
+    ] {
+        assert!(
+            h.find_text(&format!("⟦{text}⟧")).is_some(),
+            "{text:?} is not drawn through tl!"
+        );
+        assert!(h.find_text(text).is_none(), "{text:?} is drawn without tl!");
+    }
+    assert!(
+        h.find_text("⟦Slides viewed (all)⟧, ⟦Quiz result⟧, ⟦Triggers⟧")
+            .is_some(),
+        "all-slides summary is not drawn through tl!"
+    );
+
+    h.editor.run(
+        "course.set_tracking",
+        serde_json::json!({ "slides_viewed": null, "quiz": null }),
+    );
+    h.idle_frame();
+    assert!(
+        h.find_text("⟦Triggers only⟧").is_some(),
+        "Triggers only summary is not drawn through tl!"
+    );
+    assert!(
+        h.find_text("Triggers only").is_none(),
+        "Triggers only summary is drawn without tl!"
+    );
 }

@@ -21276,6 +21276,10 @@ fn tr_15_tracking_ui_results_combo_publish_undo_and_web() {
     let pos = h.find_text("SCORM 1.2").expect("SCORM 1.2");
     h.scroll_over(pos, -200.0);
     h.idle_frame();
+    assert!(
+        h.find_text("Course quiz (all graded questions)").is_some(),
+        "Publish dialog must reflect Quiz result state set in Course Settings"
+    );
 
     let sv_pos = h
         .find_text_last("Slides viewed")
@@ -21322,4 +21326,54 @@ fn tr_15_tracking_ui_results_combo_publish_undo_and_web() {
     );
     assert!(h.find_text("Slides viewed").is_none());
     assert!(h.find_text("Quiz result").is_none());
+}
+
+#[test]
+fn tr_15_tracking_ui_custom_and_missing_quiz_slide_labels() {
+    let session = Session::blank("Course");
+    let custom_slide_id = session.course.scenes[0].slides[0].id.clone();
+    let custom_slide_title = session.course.scenes[0].slides[0].title.clone();
+    let mut h = TestHarness::new_with_size(session.course, (1280.0, 1200.0));
+
+    // A play-order slide without a SubmitResults trigger must show its title, not "Missing slide".
+    h.editor.run(
+        "course.set_tracking",
+        serde_json::json!({ "quiz": { "slide": custom_slide_id } }),
+    );
+    h.editor.ui.show_course_settings_window = true;
+    for _ in 0..3 {
+        h.idle_frame();
+    }
+    let pos = h.find_text("Course title").expect("Course title");
+    h.scroll_over(pos, -250.0);
+    h.idle_frame();
+    assert!(
+        h.find_text_last(&custom_slide_title).is_some(),
+        "valid play-order non-results slide must display its title in Results slide combo"
+    );
+    assert!(
+        h.find_text_containing("Missing slide").is_none(),
+        "valid play-order slide must not be labeled Missing slide"
+    );
+    assert!(
+        h.find_text("Selected results slide no longer exists.")
+            .is_none(),
+        "valid play-order slide must not show missing-slide warning"
+    );
+
+    // A genuinely missing slide id must display both the fallback combo label and warning.
+    h.editor.run(
+        "course.set_tracking",
+        serde_json::json!({ "quiz": { "slide": "deleted-slide" } }),
+    );
+    h.idle_frame();
+    assert!(
+        h.find_text("Missing slide (deleted-slide)").is_some(),
+        "missing slide id must show fallback combo label"
+    );
+    assert!(
+        h.find_text("Selected results slide no longer exists.")
+            .is_some(),
+        "missing slide id must show inline warning"
+    );
 }

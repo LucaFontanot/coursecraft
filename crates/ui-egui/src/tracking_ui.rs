@@ -63,7 +63,8 @@ pub fn show_tracking_controls(
                         next_tracking.slides_viewed = Some(SlidesViewedTracking::All);
                     }
 
-                    let default_count = (total as u32).max(1);
+                    let total_u32 = u32::try_from(total).unwrap_or(u32::MAX);
+                    let default_count = total_u32.max(1);
                     let mut count = match sv {
                         SlidesViewedTracking::AtLeast { count } => count.max(1),
                         SlidesViewedTracking::All => default_count,
@@ -74,7 +75,7 @@ pub fn show_tracking_controls(
                             next_tracking.slides_viewed =
                                 Some(SlidesViewedTracking::AtLeast { count });
                         }
-                        let max_val = (total as u32).max(count).max(1);
+                        let max_val = total_u32.max(count).max(1);
                         let dv = ui.add(
                             egui::DragValue::new(&mut count)
                                 .range(1..=max_val)
@@ -90,7 +91,7 @@ pub fn show_tracking_controls(
 
                     if let Some(SlidesViewedTracking::AtLeast { count }) =
                         next_tracking.slides_viewed
-                        && count as usize > total
+                        && count > total_u32
                         && total > 0
                     {
                         let msg = craft_i18n::fmt(
@@ -115,25 +116,25 @@ pub fn show_tracking_controls(
             if let Some(ref mut qt) = next_tracking.quiz {
                 ui.indent((id_prefix, "quiz"), |ui| {
                     let current_slide = qt.slide.clone();
+                    let current_play_slide = current_slide
+                        .as_deref()
+                        .and_then(|id| editor.session.course.slides().find(|s| s.id == id));
+                    let slide_in_play_order =
+                        current_slide.is_none() || current_play_slide.is_some();
                     let selected_label = match &current_slide {
                         None => tl!("Course quiz (all graded questions)").to_owned(),
-                        Some(id) => results_slides
-                            .iter()
-                            .find(|(sid, _)| sid == id)
-                            .map(|(_, title)| {
-                                if title.trim().is_empty() {
+                        Some(id) => current_play_slide
+                            .map(|slide| {
+                                if slide.title.trim().is_empty() {
                                     id.clone()
                                 } else {
-                                    title.clone()
+                                    slide.title.clone()
                                 }
                             })
                             .unwrap_or_else(|| {
                                 craft_i18n::fmt(tl!("Missing slide ({id})"), &[("id", id)])
                             }),
                     };
-                    let slide_in_play_order = current_slide
-                        .as_ref()
-                        .is_none_or(|id| editor.session.course.slide_index(id).is_some());
 
                     ui.horizontal_wrapped(|ui| {
                         ui.label(tl!("Results slide"));
