@@ -283,6 +283,7 @@ impl Session {
             banks: Vec::new(),
             start_slide: None,
             quiz: None,
+            tracking: Default::default(),
             player: PlayerSettings::default(),
             language: None,
             strings: std::collections::BTreeMap::new(),

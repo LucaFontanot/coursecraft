@@ -7725,3 +7725,244 @@ fn gb_02_validation_accepts_valid_interactive_group_and_triggers() {
     assert!(s.local_ids().any(|id| id == "g-btn"));
     assert!(s.local_ids().any(|id| id == "g-layer-btn"));
 }
+
+#[test]
+fn tr_01_existing_courses_round_trip_byte_identically_and_tracking_serde() {
+    fn fnv1a64(bytes: &[u8]) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    const SHOWCASE: &str = include_str!("../../../examples/showcase/course.json");
+    let expected: [(&str, &str, usize, u64); 2] = [
+        ("hello-course", HELLO, 19_660, 0x59fa_a48f_cd1e_912e),
+        ("showcase", SHOWCASE, 92_522, 0x6f5c_2ed0_e4bd_8a69),
+    ];
+
+    for (name, raw, expected_len, expected_hash) in expected {
+        let course = Course::from_json(raw).expect("parse example course");
+        assert_eq!(
+            course.tracking,
+            crate::TrackingSettings::default(),
+            "{name}: existing course must default tracking"
+        );
+        let serialized = course.to_json().expect("serialize");
+        assert!(
+            !serialized.contains("\"tracking\""),
+            "{name}: default tracking must be omitted"
+        );
+        let bytes = serialized.as_bytes();
+        assert_eq!(bytes.len(), expected_len, "{name}: byte length");
+        assert_eq!(fnv1a64(bytes), expected_hash, "{name}: fnv1a64");
+    }
+
+    // Round-trip every TrackingSettings variant.
+    let base = Course::from_json(HELLO).expect("parse hello");
+    let variants = [
+        crate::TrackingSettings {
+            slides_viewed: Some(crate::SlidesViewedTracking::All),
+            quiz: None,
+        },
+        crate::TrackingSettings {
+            slides_viewed: Some(crate::SlidesViewedTracking::AtLeast { count: 2 }),
+            quiz: None,
+        },
+        crate::TrackingSettings {
+            slides_viewed: None,
+            quiz: Some(crate::QuizTracking {
+                slide: Some("s-results".into()),
+            }),
+        },
+        crate::TrackingSettings {
+            slides_viewed: None,
+            quiz: Some(crate::QuizTracking { slide: None }),
+        },
+        crate::TrackingSettings {
+            slides_viewed: Some(crate::SlidesViewedTracking::AtLeast { count: 3 }),
+            quiz: Some(crate::QuizTracking {
+                slide: Some("s-results".into()),
+            }),
+        },
+    ];
+    for tracking in variants {
+        let mut c = base.clone();
+        c.tracking = tracking.clone();
+        let json = c.to_json().expect("serialize tracking variant");
+        assert!(json.contains("\"tracking\""));
+        let reparsed = Course::from_json(&json).expect("reparse tracking variant");
+        assert_eq!(reparsed.tracking, tracking);
+    }
+
+    // Unknown fields inside tracking, slides_viewed, and quiz are rejected.
+    for bad in [
+        r#"{"slides_viewed":{"mode":"all"},"unknown":true}"#,
+        r#"{"slides_viewed":{"mode":"at_least","count":1,"extra":1}}"#,
+        r#"{"quiz":{"slide":null,"extra":1}}"#,
+    ] {
+        let err = serde_json::from_str::<crate::TrackingSettings>(bad).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "expected unknown field error for {bad}: {err}"
+        );
+    }
+}
+
+#[test]
+fn tr_02_tracking_validation_reports_result_and_diff() {
+    let base = Course::from_json(HELLO).expect("parse hello");
+
+    // 1. AtLeast { count: 0 } -> Error at /tracking/slides_viewed/count.
+    let mut zero_count = base.clone();
+    zero_count.tracking.slides_viewed = Some(crate::SlidesViewedTracking::AtLeast { count: 0 });
+    assert!(
+        zero_count
+            .validate()
+            .iter()
+            .any(|i| i.severity == Severity::Error
+                && i.path == "/tracking/slides_viewed/count"
+                && i.message.contains("at least 1")),
+        "{:#?}",
+        zero_count.validate()
+    );
+
+    // 2. count > play_slide_count() (including bank-draw counts) -> Warning.
+    let mut bank_course = course_with_bank();
+    let total = bank_course.play_slide_count();
+    assert!(total > 2, "expected bank draw to expand play_slide_count");
+    bank_course.tracking.slides_viewed = Some(crate::SlidesViewedTracking::AtLeast {
+        count: (total as u32) + 2,
+    });
+    assert!(
+        bank_course
+            .validate()
+            .iter()
+            .any(|i| i.severity == Severity::Warning
+                && i.path == "/tracking/slides_viewed/count"
+                && i.message.contains("exceeds the course slide count")),
+        "{:#?}",
+        bank_course.validate()
+    );
+
+    // 3. quiz.slide missing / master / bank -> Warning.
+    for bad_id in ["missing-slide", "m-master", "bq1"] {
+        let mut c = course_with_bank();
+        with_master(&mut c, "m-master");
+        c.quiz = Some(crate::QuizSettings {
+            passing_percent: 80,
+        });
+        c.tracking.quiz = Some(crate::QuizTracking {
+            slide: Some(bad_id.into()),
+        });
+        assert!(
+            c.validate().iter().any(|i| i.severity == Severity::Warning
+                && i.path == "/tracking/quiz/slide"
+                && i.message.contains("does not exist in play order")),
+            "expected warning for {bad_id}: {:#?}",
+            c.validate()
+        );
+    }
+
+    // 4. quiz.slide without submit_results or question -> Warning.
+    let mut no_trigger = base.clone();
+    let first_id = no_trigger.scenes[0].slides[0].id.clone();
+    no_trigger.scenes[0].slides[0].question = None;
+    no_trigger.scenes[0].slides[0].triggers.clear();
+    no_trigger.quiz = Some(crate::QuizSettings {
+        passing_percent: 80,
+    });
+    no_trigger.tracking.quiz = Some(crate::QuizTracking {
+        slide: Some(first_id),
+    });
+    assert!(
+        no_trigger
+            .validate()
+            .iter()
+            .any(|i| i.severity == Severity::Warning
+                && i.path == "/tracking/quiz/slide"
+                && i.message.contains("no Submit results trigger or question")),
+        "{:#?}",
+        no_trigger.validate()
+    );
+
+    // 5. quiz: { slide: None } with no graded questions or results slide -> Warning.
+    let mut no_quiz_content = base.clone();
+    for scene in &mut no_quiz_content.scenes {
+        for slide in &mut scene.slides {
+            slide.question = None;
+            slide.triggers.clear();
+            for layer in &mut slide.layers {
+                layer.triggers.clear();
+            }
+        }
+    }
+    no_quiz_content.quiz = Some(crate::QuizSettings {
+        passing_percent: 80,
+    });
+    no_quiz_content.tracking.quiz = Some(crate::QuizTracking { slide: None });
+    assert!(
+        no_quiz_content
+            .validate()
+            .iter()
+            .any(|i| i.severity == Severity::Warning
+                && i.path == "/tracking/quiz"
+                && i.message.contains("no graded questions or results slide")),
+        "{:#?}",
+        no_quiz_content.validate()
+    );
+
+    // 6. quiz.is_some() with course.quiz.is_none() -> Warning.
+    let mut no_passing = base.clone();
+    no_passing.quiz = None;
+    no_passing.tracking.quiz = Some(crate::QuizTracking { slide: None });
+    assert!(
+        no_passing
+            .validate()
+            .iter()
+            .any(|i| i.severity == Severity::Warning
+                && i.path == "/tracking/quiz"
+                && i.message.contains("no passing score is set")),
+        "{:#?}",
+        no_passing.validate()
+    );
+
+    // 7. reports_result() returns true for valid slides_viewed or quiz tracking,
+    //    suppressing "this course never reports a result".
+    let mut plain = base.clone();
+    for scene in &mut plain.scenes {
+        for slide in &mut scene.slides {
+            slide.triggers.clear();
+            for layer in &mut slide.layers {
+                layer.triggers.clear();
+            }
+        }
+    }
+    assert!(!plain.reports_result());
+    assert!(
+        plain
+            .validate()
+            .iter()
+            .any(|i| i.message.contains("never reports a result"))
+    );
+
+    plain.tracking.slides_viewed = Some(crate::SlidesViewedTracking::All);
+    assert!(plain.reports_result());
+    assert!(
+        !plain
+            .validate()
+            .iter()
+            .any(|i| i.message.contains("never reports a result"))
+    );
+
+    // 8. diff reports tracking changes.
+    let mut updated = base.clone();
+    updated.tracking.slides_viewed = Some(crate::SlidesViewedTracking::All);
+    let changes = crate::diff(&base, &updated);
+    assert!(
+        changes.iter().any(|c| c.path.contains("tracking")),
+        "{changes:#?}"
+    );
+}

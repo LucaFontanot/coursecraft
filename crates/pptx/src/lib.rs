@@ -1583,6 +1583,7 @@ pub fn import_pptx_with_limits(
         banks: Vec::new(),
         start_slide: None,
         quiz: None,
+        tracking: Default::default(),
         player: coursecraft_course::PlayerSettings::default(),
         theme: coursecraft_course::Theme::default(),
         language: None,

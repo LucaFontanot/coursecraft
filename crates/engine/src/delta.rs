@@ -15,7 +15,7 @@ use coursecraft_course::{
     BackgroundAudio, BankDraw, Color, Course, EditorSettings, FontFace, GlossaryEntry, Group,
     Layer, MotionPath, NamedTextStyle, Object, ObjectKind, PlayerSettings, Question, QuestionBank,
     QuizSettings, Resource, RevisitMode, Scene, Size, Slide, SlideCue, SlidePlayerOverrides,
-    StateDef, Theme, Transition, Trigger, VariableDef,
+    StateDef, Theme, TrackingSettings, Transition, Trigger, VariableDef,
 };
 
 use crate::{EngineError, Result};
@@ -694,6 +694,7 @@ pub(crate) struct CourseHeaderSnapshot {
     pub(crate) variables: Vec<VariableDef>,
     pub(crate) start_slide: Option<String>,
     pub(crate) quiz: Option<QuizSettings>,
+    pub(crate) tracking: TrackingSettings,
     pub(crate) player: PlayerSettings,
     pub(crate) theme: Theme,
     pub(crate) language: Option<String>,
@@ -722,6 +723,7 @@ impl CourseHeaderSnapshot {
             banks: _,
             start_slide,
             quiz,
+            tracking,
             player,
             theme,
             language,
@@ -741,6 +743,7 @@ impl CourseHeaderSnapshot {
             variables: variables.clone(),
             start_slide: start_slide.clone(),
             quiz: *quiz,
+            tracking: tracking.clone(),
             player: player.clone(),
             theme: theme.clone(),
             language: language.clone(),
@@ -764,6 +767,7 @@ impl CourseHeaderSnapshot {
             variables: s_variables,
             start_slide: s_start_slide,
             quiz: s_quiz,
+            tracking: s_tracking,
             player: s_player,
             theme: s_theme,
             language: s_language,
@@ -787,6 +791,7 @@ impl CourseHeaderSnapshot {
             banks: _,
             start_slide,
             quiz,
+            tracking,
             player,
             theme,
             language,
@@ -805,6 +810,7 @@ impl CourseHeaderSnapshot {
         *variables = s_variables;
         *start_slide = s_start_slide;
         *quiz = s_quiz;
+        *tracking = s_tracking;
         *player = s_player;
         *theme = s_theme;
         *language = s_language;
@@ -828,6 +834,7 @@ pub(crate) struct CourseHeaderPatch {
     pub(crate) variables: Option<Vec<VariableDef>>,
     pub(crate) start_slide: Option<Option<String>>,
     pub(crate) quiz: Option<Option<QuizSettings>>,
+    pub(crate) tracking: Option<TrackingSettings>,
     pub(crate) player: Option<PlayerSettings>,
     pub(crate) theme: Option<Theme>,
     pub(crate) language: Option<Option<String>>,
@@ -853,6 +860,7 @@ impl CourseHeaderPatch {
             variables: b_variables,
             start_slide: b_start_slide,
             quiz: b_quiz,
+            tracking: b_tracking,
             player: b_player,
             theme: b_theme,
             language: b_language,
@@ -876,6 +884,7 @@ impl CourseHeaderPatch {
             banks: _,
             start_slide: a_start_slide,
             quiz: a_quiz,
+            tracking: a_tracking,
             player: a_player,
             theme: a_theme,
             language: a_language,
@@ -897,6 +906,7 @@ impl CourseHeaderPatch {
             variables: diff_field(b_variables, a_variables, &mut changed),
             start_slide: diff_field(b_start_slide, a_start_slide, &mut changed),
             quiz: diff_field(b_quiz, a_quiz, &mut changed),
+            tracking: diff_field(b_tracking, a_tracking, &mut changed),
             player: diff_field(b_player, a_player, &mut changed),
             theme: diff_field(b_theme, a_theme, &mut changed),
             language: diff_field(b_language, a_language, &mut changed),
@@ -921,6 +931,7 @@ impl CourseHeaderPatch {
             variables: p_variables,
             start_slide: p_start_slide,
             quiz: p_quiz,
+            tracking: p_tracking,
             player: p_player,
             theme: p_theme,
             language: p_language,
@@ -944,6 +955,7 @@ impl CourseHeaderPatch {
             banks: _,
             start_slide,
             quiz,
+            tracking,
             player,
             theme,
             language,
@@ -962,6 +974,7 @@ impl CourseHeaderPatch {
         swap_if_some(p_variables, variables);
         swap_if_some(p_start_slide, start_slide);
         swap_if_some(p_quiz, quiz);
+        swap_if_some(p_tracking, tracking);
         swap_if_some(p_player, player);
         swap_if_some(p_theme, theme);
         swap_if_some(p_language, language);
@@ -1695,6 +1708,7 @@ impl CourseDelta {
             banks: b_banks,
             start_slide: b_start_slide,
             quiz: b_quiz,
+            tracking: b_tracking,
             player: b_player,
             theme: b_theme,
             language: b_language,
@@ -1715,6 +1729,7 @@ impl CourseDelta {
             variables: b_variables,
             start_slide: b_start_slide,
             quiz: b_quiz,
+            tracking: b_tracking,
             player: b_player,
             theme: b_theme,
             language: b_language,
@@ -3918,6 +3933,7 @@ mod tests {
             variables: None,
             start_slide: None,
             quiz: None,
+            tracking: None,
             player: None,
             theme: None,
             language: None,
@@ -4075,6 +4091,7 @@ mod tests {
                     variables: None,
                     start_slide: None,
                     quiz: None,
+                    tracking: None,
                     player: None,
                     theme: None,
                     language: None,
@@ -4375,5 +4392,29 @@ mod tests {
         let layer_delta = assert_slide_roundtrip(base, after_layer_group);
         assert!(matches!(layer_delta, SlideDelta::FullSlide(_)));
         assert!(layer_delta.estimated_bytes() > 0);
+    }
+
+    #[test]
+    fn tr_header_delta_tracking_roundtrip() {
+        let before = multi_scene_course();
+        let before_json = before.to_json().unwrap();
+        let mut after = before.clone();
+        after.tracking = coursecraft_course::TrackingSettings {
+            slides_viewed: Some(coursecraft_course::SlidesViewedTracking::AtLeast { count: 2 }),
+            quiz: Some(coursecraft_course::QuizTracking {
+                slide: Some("s1".into()),
+            }),
+        };
+        let after_json = after.to_json().unwrap();
+
+        let snap = CourseHeaderSnapshot::capture(&before);
+        let mut patch = CourseHeaderPatch::diff(snap, &after).expect("tracking diff");
+        assert!(patch.tracking.is_some());
+
+        let mut course = after;
+        patch.apply(&mut course);
+        assert_eq!(course.to_json().unwrap(), before_json);
+        patch.apply(&mut course);
+        assert_eq!(course.to_json().unwrap(), after_json);
     }
 }

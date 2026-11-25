@@ -107,6 +107,7 @@ pub fn save_template(
         banks: Vec::new(),
         start_slide: None,
         quiz: None,
+        tracking: Default::default(),
         player: PlayerSettings::default(),
         theme: Theme::default(),
         language: None,
