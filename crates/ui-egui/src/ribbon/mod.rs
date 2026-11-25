@@ -850,8 +850,10 @@ fn show_tab(
         return;
     }
     let blocked = (tab.when == TabWhen::SlideOpen && map).then_some("Open a slide first");
-    let shrunk = shrunk_groups(&editor.ui.ribbon, groups, available);
-    for (group, shrink) in groups.iter().zip(shrunk) {
+    let visible_groups: Vec<&'static Group> =
+        groups.iter().filter(|g| g.has_visible_items()).collect();
+    let shrunk = shrunk_groups(&editor.ui.ribbon, &visible_groups, available);
+    for (group, shrink) in visible_groups.into_iter().zip(shrunk) {
         if shrink {
             shrunk_group(editor, ui, group, blocked, requests);
         } else {
@@ -866,8 +868,8 @@ const SHRUNK_W: f32 = 64.0;
 
 /// Which groups to draw as one button so the rest fit in `available`,
 /// rightmost first. A group not measured yet counts as a shrunk one.
-fn shrunk_groups(state: &RibbonState, groups: &[Group], available: f32) -> Vec<bool> {
-    let width = |g: &Group| {
+fn shrunk_groups(state: &RibbonState, groups: &[&'static Group], available: f32) -> Vec<bool> {
+    let width = |g: &&'static Group| {
         state
             .group_widths
             .iter()
@@ -908,7 +910,11 @@ fn shrunk_group(
     blocked: Option<&'static str>,
     requests: &mut Vec<EditorRequest>,
 ) {
-    let icon = group.items.first().map_or(Icon::DotsThree, |i| i.icon);
+    let icon = group
+        .items
+        .iter()
+        .find(|i| !i.is_hidden())
+        .map_or(Icon::DotsThree, |i| i.icon);
     let caption = tl!(group.label);
     let inner = ui.vertical(|ui| {
         ui.set_width(SHRUNK_W - 8.0);
@@ -963,6 +969,8 @@ fn show_group(
     blocked: Option<&'static str>,
     requests: &mut Vec<EditorRequest>,
 ) -> f32 {
+    let visible_items: Vec<&'static Item> = group.items.iter().filter(|i| !i.is_hidden()).collect();
+    let launcher = group.launcher.filter(|a| !a.is_hidden());
     let p = coursecraft_render::palette(ui.ctx());
     let caption = tl!(group.label);
     let caption_font = FontId::proportional(11.0);
@@ -971,13 +979,13 @@ fn show_group(
         .layout_no_wrap(caption.to_owned(), caption_font.clone(), p.text)
         .size()
         .x
-        + if group.launcher.is_some() { 22.0 } else { 8.0 };
+        + if launcher.is_some() { 22.0 } else { 8.0 };
     let inner = ui.vertical(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
         let controls = ui.horizontal_top(|ui| {
             ui.set_min_height(CONTROLS_H);
             ui.set_min_width(caption_w);
-            let mut rest = group.items;
+            let mut rest = visible_items.as_slice();
             while let Some(first) = rest.first() {
                 let kind = run_of(first.kind);
                 let len = rest.iter().take_while(|i| run_of(i.kind) == kind).count();
@@ -1025,7 +1033,7 @@ fn show_group(
         });
         let width = controls.response.rect.width().max(caption_w);
         let (rect, _) = ui.allocate_exact_size(vec2(width, CAPTION_H), Sense::hover());
-        let text_rect = if group.launcher.is_some() {
+        let text_rect = if launcher.is_some() {
             Rect::from_min_max(rect.min, pos2(rect.max.x - 16.0, rect.max.y))
         } else {
             rect
@@ -1037,7 +1045,7 @@ fn show_group(
             caption_font,
             p.text_secondary,
         );
-        if let Some(action) = group.launcher {
+        if let Some(action) = launcher {
             let r =
                 Rect::from_center_size(pos2(rect.max.x - 8.0, rect.center().y), vec2(14.0, 14.0));
             let name = craft_i18n::fmt(tl!("{group} settings"), &[("group", caption)]);
@@ -1073,6 +1081,9 @@ fn control(
     blocked: Option<&'static str>,
     requests: &mut Vec<EditorRequest>,
 ) {
+    if item.is_hidden() {
+        return;
+    }
     let state = availability(editor, item.action, blocked);
     let enabled = state.is_ok();
     let group_interactive = item.action == Action::Command("group.set_interactive")
@@ -1410,7 +1421,7 @@ fn menu(
     match item.menu {
         Menu::None => {}
         Menu::Items(entries) => {
-            for entry in entries {
+            for entry in entries.iter().filter(|e| !e.is_hidden()) {
                 let state = availability(editor, entry.action, blocked);
                 let resp = ui.add_enabled(state.is_ok(), egui::Button::new(tl!(entry.label)));
                 let resp = match &state {

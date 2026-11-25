@@ -73,7 +73,7 @@ pub enum Action {
     Command(&'static str),          // engine command id; enabled = registry `enabled` check
     Ui(UiAction),                    // editor-side action (open dialog, switch view, preview)
     NotYet(&'static str),            // drawn disabled: "Not available yet: {0}"
-    NotPlanned(&'static str),        // drawn disabled: "Not planned: {0}"
+    NotPlanned(&'static str),        // kept in spec for possible future use; hidden from the UI
 }
 
 pub enum TabWhen { Always, SlideOpen, MasterMode, Contextual(Ctx) }

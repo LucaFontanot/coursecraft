@@ -399,8 +399,9 @@ CourseCraft's tabbed ribbon and dockable panel workspace. Plan and full inventor
    (2026-11-23):** the arrangement goes to `prefs.json`, View › Panels closes and reopens
    panels, and Preferences › Interface turns the ribbon and docking off.
 2. Every main tab (File, Home, Insert, Slides, Design, Transitions, Animations, View, Help) with
-   built controls wired and the rest **drawn disabled** with a "Not available yet" or "Not planned"
-   tooltip; the shared New Slide ▾ menu. **Insert, Slides and View built (2026-11-23)**, with a
+   built controls wired and planned unbuilt controls **drawn disabled** with a "Not available yet"
+   tooltip (`NotPlanned` placeholders stay in the spec and are hidden from the UI); the shared
+   New Slide ▾ menu. **Insert, Slides and View built (2026-11-23)**, with a
    quick access toolbar (Save, Undo, Redo), Ctrl+F1, and groups that shrink to one button when
    the window is narrow. The ribbon replaces the flat toolbar and the menu bar's Insert menu;
    Format, Animate, Slide and Course are dock panels of their own, and the AI controls have

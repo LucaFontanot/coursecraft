@@ -461,10 +461,15 @@ fn groups_that_do_not_fit_shrink_to_one_button() {
         h.idle_frame();
     }
     let tab = spec::tab("insert").expect("insert");
-    let shrunk = super::shrunk_groups(&h.editor.ui.ribbon, tab.groups, 1000.0 - 30.0);
+    let visible: Vec<&'static spec::Group> = tab
+        .groups
+        .iter()
+        .filter(|g| g.has_visible_items())
+        .collect();
+    let shrunk = super::shrunk_groups(&h.editor.ui.ribbon, &visible, 1000.0 - 30.0);
     assert!(shrunk.iter().any(|s| *s), "something shrinks at 1000 px");
     assert!(!shrunk[0], "the leftmost group stays whole");
-    let wide = super::shrunk_groups(&h.editor.ui.ribbon, tab.groups, 5000.0);
+    let wide = super::shrunk_groups(&h.editor.ui.ribbon, &visible, 5000.0);
     assert!(wide.iter().all(|s| !*s));
 }
 
@@ -518,4 +523,128 @@ fn renamed_coursecraft_labels_replace_coined_terms() {
         spec::all_items().all(|i| i.id != "map.index"),
         "removed placeholder map.index still in spec"
     );
+}
+
+#[test]
+fn not_planned_controls_stay_in_spec_but_are_never_rendered_or_focusable() {
+    // 1. The spec still retains the NotPlanned entries for possible future use.
+    let not_planned: Vec<&'static spec::Item> = spec::all_items()
+        .filter(|i| matches!(i.action, Action::NotPlanned(_)))
+        .collect();
+    let np_ids: HashSet<&str> = not_planned.iter().map(|i| i.id).collect();
+    for expected in [
+        "map.record_screen",
+        "insert.characters",
+        "insert.photos",
+        "insert.illustrations",
+        "insert.videos",
+        "insert.image_360",
+    ] {
+        assert!(
+            np_ids.contains(expected),
+            "spec must still keep NotPlanned entry {expected}"
+        );
+    }
+    let np_labels: Vec<&str> = not_planned.iter().map(|i| i.label).collect();
+
+    // 2. Render every main tab (including Home's Course Map variant) and every
+    //    contextual/master tab at wide width so no group shrinks, and verify no
+    //    NotPlanned control is painted or present in the widget/accessibility tree.
+    let course = Course::from_json(HELLO_COURSE).expect("hello course parses");
+    let mut h = TestHarness::new_with_size(course, (2600.0, 900.0));
+    h.editor.ui.ribbon.visible = true;
+
+    let assert_no_not_planned = |h: &mut TestHarness, label: &str| {
+        let ribbon = h.editor.ui.ribbon.rect;
+        for np in &np_labels {
+            let wrapped = np.replace(' ', "\n");
+            assert!(
+                h.find_text_in(np, ribbon).is_none() && h.find_text_in(&wrapped, ribbon).is_none(),
+                "{label}: NotPlanned control {np:?} must not be painted"
+            );
+            assert!(
+                !h.last_widgets.iter().any(|w| {
+                    w.label
+                        .as_deref()
+                        .is_some_and(|l| l == *np || l == wrapped || l.contains("Not planned"))
+                }),
+                "{label}: NotPlanned control {np:?} must not exist in widget/a11y tree"
+            );
+        }
+    };
+
+    // Main tabs in Slide view
+    for tab in TABS {
+        h.editor.ui.story_view = false;
+        h.editor.ui.master_view = false;
+        h.editor.ui.ribbon.tab = tab.id;
+        h.idle_frame();
+        assert_no_not_planned(&mut h, tab.id);
+    }
+
+    // Home tab in Course Map view (where map.record_screen lives in spec)
+    h.editor.ui.story_view = true;
+    h.editor.ui.ribbon.tab = "home";
+    h.idle_frame();
+    assert_no_not_planned(&mut h, "home(map)");
+    assert!(
+        h.find_text_in("Duplicate", h.editor.ui.ribbon.rect)
+            .is_some(),
+        "visible sibling control Duplicate must still render in Course Map Slide group"
+    );
+
+    // 3. On Insert tab, verify no empty gaps in Library or Media groups and
+    //    keyboard Tab traversal never reaches any NotPlanned widget.
+    h.editor.ui.story_view = false;
+    h.editor.ui.ribbon.tab = "insert";
+    h.idle_frame();
+    let ribbon = h.editor.ui.ribbon.rect;
+    let icons_pos = h
+        .find_text_in("Icons", ribbon)
+        .expect("Library › Icons (NotYet) must still render");
+    let lib_caption = h
+        .find_text_in("Library", ribbon)
+        .expect("Library group caption must still render");
+    assert!(
+        (icons_pos.x - lib_caption.x).abs() < 40.0,
+        "Icons should sit centred in Library without gaps from hidden buttons"
+    );
+    let picture = h
+        .last_widgets
+        .iter()
+        .find(|w| w.label.as_deref() == Some("Picture") && ribbon.intersects(w.bounds))
+        .map(|w| w.bounds)
+        .expect("Media › Picture widget");
+    let shape = h
+        .last_widgets
+        .iter()
+        .find(|w| w.label.as_deref() == Some("Shape") && ribbon.intersects(w.bounds))
+        .map(|w| w.bounds)
+        .expect("Media › Shape widget");
+    let gap = shape.min.x - picture.max.x;
+    assert!(
+        (0.0..24.0).contains(&gap),
+        "hiding 360° Image must not leave an empty gap between Picture and Shape (gap={gap:.1}px)"
+    );
+
+    // Walk keyboard focus with Tab and ensure no focused widget is a NotPlanned item.
+    for _ in 0..40 {
+        h.press(egui::Key::Tab, egui::Modifiers::NONE);
+        h.idle_frame();
+        if let Some(focused_id) = h.ctx.memory(|m| m.focused()) {
+            let focused_label = h
+                .last_widgets
+                .iter()
+                .find(|w| w.id == focused_id.accesskit_id())
+                .and_then(|w| w.label.as_deref());
+            if let Some(lbl) = focused_label {
+                assert!(
+                    !np_labels
+                        .iter()
+                        .any(|np| *np == lbl || np.replace(' ', "\n") == lbl),
+                    "Tab focus reached hidden NotPlanned control {lbl:?}"
+                );
+            }
+        }
+    }
 }

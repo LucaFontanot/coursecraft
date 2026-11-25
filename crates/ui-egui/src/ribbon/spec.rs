@@ -1,9 +1,11 @@
 //! The ribbon as data: every tab, group and control in order (docs/ui/ribbon.md).
 //!
 //! The drawing code in `ribbon/mod.rs` walks these tables, so the docs and the UI
-//! stay in step and a control whose feature is missing is drawn disabled with its
-//! reason, never left out. Every label, caption and reason here is English source
-//! text, looked up through `tl!` when drawn.
+//! stay in step: a planned control whose feature is missing (`Action::NotYet`) is
+//! drawn disabled with its reason, while controls marked `Action::NotPlanned` are
+//! kept here for possible future use and hidden from the UI by owner decision.
+//! Every label, caption and reason here is English source text, looked up through
+//! `tl!` when drawn.
 
 use coursecraft_render::Icon;
 
@@ -36,6 +38,14 @@ pub struct Group {
     pub items: &'static [Item],
 }
 
+impl Group {
+    /// Whether the group has at least one control visible in the UI.
+    #[must_use]
+    pub fn has_visible_items(&self) -> bool {
+        self.items.iter().any(|item| !item.is_hidden())
+    }
+}
+
 /// One control.
 pub struct Item {
     /// Unique across the ribbon.
@@ -48,6 +58,14 @@ pub struct Item {
     pub help: &'static str,
     /// The ▾ menu of a split control.
     pub menu: Menu,
+}
+
+impl Item {
+    /// Hidden from the drawn ribbon, menus, tooltips and accessibility tree.
+    #[must_use]
+    pub const fn is_hidden(&self) -> bool {
+        self.action.is_hidden()
+    }
 }
 
 /// How a control is drawn. Consecutive small kinds stack in columns of three.
@@ -94,11 +112,20 @@ pub enum Action {
     Ui(UiAction),
     /// Drawn disabled: "Not available yet: {reason}".
     NotYet(&'static str),
-    /// Drawn disabled: "Not planned: {reason}".
+    /// Kept in the spec for possible future use and hidden from the UI by owner decision.
     NotPlanned(&'static str),
     /// A text formatting control (`crate::text_format`): it acts on the text
     /// being edited or the selected text objects.
     Text(TextOp),
+}
+
+impl Action {
+    /// Kept in the spec for possible future use; hidden from the ribbon, menus,
+    /// tooltips and accessibility tree by owner decision.
+    #[must_use]
+    pub const fn is_hidden(self) -> bool {
+        matches!(self, Self::NotPlanned(_))
+    }
 }
 
 /// The text formatting controls of Home › Font and Home › Paragraph.
@@ -960,6 +987,7 @@ const HOME_MAP: &[Group] = &[
                 Small,
                 Ui(UiAction::DuplicateSlide),
             ),
+            // Kept for possible future use; hidden from the UI by owner decision.
             item(
                 "map.record_screen",
                 "Record Screen",
@@ -1140,6 +1168,7 @@ const INSERT: &[Group] = &[
         label: "Library",
         launcher: None,
         items: &[
+            // Kept for possible future use; hidden from the UI by owner decision.
             item(
                 "insert.characters",
                 "Characters",
@@ -1147,6 +1176,7 @@ const INSERT: &[Group] = &[
                 Large,
                 NotPlanned("characters"),
             ),
+            // Kept for possible future use; hidden from the UI by owner decision.
             item(
                 "insert.photos",
                 "Photos",
@@ -1154,6 +1184,7 @@ const INSERT: &[Group] = &[
                 Large,
                 NotPlanned("a stock asset library"),
             ),
+            // Kept for possible future use; hidden from the UI by owner decision.
             item(
                 "insert.illustrations",
                 "Illustrations",
@@ -1168,6 +1199,7 @@ const INSERT: &[Group] = &[
                 Small,
                 NotYet("a bundled icon set"),
             ),
+            // Kept for possible future use; hidden from the UI by owner decision.
             item(
                 "insert.videos",
                 "Videos",
@@ -1193,6 +1225,7 @@ const INSERT: &[Group] = &[
                 ),
                 "Insert a picture from a file.",
             ),
+            // Kept for possible future use; hidden from the UI by owner decision.
             item(
                 "insert.image_360",
                 "360° Image",
