@@ -2250,3 +2250,216 @@ fn gb_11_web_player_interactive_group_pointer_keyboard_and_a11y() {
     assert_eq!(playing.player.variable("clicks"), Some(&Value::Number(3.0)));
     assert_eq!(playing.player.object_state("g-back"), Some("selected"));
 }
+
+fn tr_17_plain_course(
+    slide_count: usize,
+    tracking: coursecraft_course::TrackingSettings,
+) -> Course {
+    let mut slides = Vec::new();
+    for i in 1..=slide_count {
+        slides.push(serde_json::json!({
+            "id": format!("s{i}"),
+            "title": format!("Slide {i}"),
+            "duration_ms": 5000
+        }));
+    }
+    let json = serde_json::json!({
+        "schema_version": 1,
+        "id": "tr-17-player-plain",
+        "title": "TR-17 Player Plain",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": slides
+        }]
+    });
+    let mut c = Course::from_json(&json.to_string()).expect("tr_17_plain_course");
+    c.tracking = tracking;
+    c
+}
+
+fn tr_17_quiz_course(
+    with_results_trigger: bool,
+    tracking: coursecraft_course::TrackingSettings,
+) -> Course {
+    let results_triggers = if with_results_trigger {
+        serde_json::json!([{
+            "when": { "event": "timeline_starts" },
+            "action": { "action": "submit_results" }
+        }])
+    } else {
+        serde_json::json!([])
+    };
+    let make_q = |id: &str| {
+        serde_json::json!({
+            "id": id,
+            "title": id,
+            "duration_ms": 5000,
+            "question": {
+                "kind": "multiple_choice",
+                "prompt": format!("Question {id}"),
+                "choices": [
+                    { "id": "a", "text": "A", "correct": true },
+                    { "id": "b", "text": "B" }
+                ],
+                "points": 10,
+                "attempts": 1
+            },
+            "objects": [{
+                "id": format!("submit-{id}"),
+                "kind": { "type": "button", "label": "Submit" },
+                "frame": { "x": 100, "y": 100, "w": 120, "h": 40 }
+            }],
+            "triggers": [{
+                "when": { "event": "click", "object": format!("submit-{id}") },
+                "action": { "action": "submit_question" }
+            }]
+        })
+    };
+    let json = serde_json::json!({
+        "schema_version": 1,
+        "id": "tr-17-player-quiz",
+        "title": "TR-17 Player Quiz",
+        "slide_size": { "w": 1280, "h": 720 },
+        "quiz": { "passing_percent": 80 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [
+                make_q("q1"),
+                make_q("q2"),
+                {
+                    "id": "results",
+                    "title": "Results",
+                    "duration_ms": 5000,
+                    "triggers": results_triggers
+                }
+            ]
+        }]
+    });
+    let mut c = Course::from_json(&json.to_string()).expect("tr_17_quiz_course");
+    c.tracking = tracking;
+    c
+}
+
+fn tr_17_tracking_effects(effects: &[Effect]) -> Vec<Effect> {
+    effects
+        .iter()
+        .filter(|e| matches!(e, Effect::Completion { .. } | Effect::Score { .. }))
+        .cloned()
+        .collect()
+}
+
+fn tr_17_assert_player_matches_simulate(label: &str, course: Course, inputs: &[Input]) {
+    // 1. Simulate path (`Player::handle`).
+    let mut sim_player = coursecraft_logic::Player::new(&course).expect("valid sim player");
+    let mut sim_effects = sim_player.handle(&Input::Start);
+    for inp in inputs {
+        sim_effects.extend(sim_player.handle(inp));
+    }
+    let sim_tracking = tr_17_tracking_effects(&sim_effects);
+    let sim_visited = sim_player.state().visited.len();
+
+    // 2. Published player path (`Playing::handle_input`).
+    let mut playing = Playing::from_course(course, false).expect("valid playing");
+    playing.handle_input(&Input::Start, None);
+    for inp in inputs {
+        playing.handle_input(inp, None);
+    }
+    let pub_effects: Vec<Effect> = playing
+        .log
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Effect>(line).ok())
+        .collect();
+    let pub_tracking = tr_17_tracking_effects(&pub_effects);
+    let pub_visited = playing.player.state().visited.len();
+
+    assert_eq!(
+        pub_tracking, sim_tracking,
+        "{label}: Published player Completion/Score sequence must match simulate"
+    );
+    assert_eq!(
+        pub_visited, sim_visited,
+        "{label}: Published player visited slide count must match simulate"
+    );
+}
+
+#[test]
+fn tr_17_published_player_vs_simulate_tracking_parity() {
+    use coursecraft_course::{QuizTracking, SlidesViewedTracking, TrackingSettings};
+
+    let click = |id: &str| Input::Click {
+        object: id.to_owned(),
+    };
+
+    tr_17_assert_player_matches_simulate(
+        "slides-all",
+        tr_17_plain_course(
+            3,
+            TrackingSettings {
+                slides_viewed: Some(SlidesViewedTracking::All),
+                quiz: None,
+            },
+        ),
+        &[Input::Next, Input::Next],
+    );
+
+    tr_17_assert_player_matches_simulate(
+        "slides-at-least-2",
+        tr_17_plain_course(
+            3,
+            TrackingSettings {
+                slides_viewed: Some(SlidesViewedTracking::AtLeast { count: 2 }),
+                quiz: None,
+            },
+        ),
+        &[Input::Next, Input::Next],
+    );
+
+    let quiz_inputs = vec![
+        Input::SelectChoice { choice: "a".into() },
+        click("submit-q1"),
+        Input::Next,
+        Input::SelectChoice { choice: "a".into() },
+        click("submit-q2"),
+        Input::Next,
+    ];
+    tr_17_assert_player_matches_simulate(
+        "quiz-results-slide",
+        tr_17_quiz_course(
+            true,
+            TrackingSettings {
+                slides_viewed: None,
+                quiz: Some(QuizTracking {
+                    slide: Some("results".into()),
+                }),
+            },
+        ),
+        &quiz_inputs,
+    );
+
+    tr_17_assert_player_matches_simulate(
+        "quiz-auto-lock",
+        tr_17_quiz_course(
+            false,
+            TrackingSettings {
+                slides_viewed: None,
+                quiz: Some(QuizTracking { slide: None }),
+            },
+        ),
+        &quiz_inputs,
+    );
+
+    tr_17_assert_player_matches_simulate(
+        "combined-slides-and-quiz",
+        tr_17_quiz_course(
+            false,
+            TrackingSettings {
+                slides_viewed: Some(SlidesViewedTracking::AtLeast { count: 2 }),
+                quiz: Some(QuizTracking { slide: None }),
+            },
+        ),
+        &quiz_inputs,
+    );
+}

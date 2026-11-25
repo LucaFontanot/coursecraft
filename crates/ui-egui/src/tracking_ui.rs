@@ -70,7 +70,7 @@ pub fn show_tracking_controls(
                         SlidesViewedTracking::All => default_count,
                     };
                     let is_at_least = matches!(sv, SlidesViewedTracking::AtLeast { .. });
-                    ui.horizontal_wrapped(|ui| {
+                    ui.horizontal(|ui| {
                         if ui.radio(is_at_least, tl!("At least")).clicked() {
                             next_tracking.slides_viewed =
                                 Some(SlidesViewedTracking::AtLeast { count });
@@ -136,7 +136,7 @@ pub fn show_tracking_controls(
                             }),
                     };
 
-                    ui.horizontal_wrapped(|ui| {
+                    ui.horizontal(|ui| {
                         ui.label(tl!("Results slide"));
                         crate::widgets::styled_combo(
                             ui,

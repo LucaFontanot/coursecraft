@@ -633,3 +633,270 @@ fn gb_10_preview_and_published_player_interactive_group_parity() {
     assert_eq!(pub_h.player.object_state("g-btn"), Some("disabled"));
     assert_parity("after disabled click attempt", &harness, &pub_h);
 }
+
+fn tr_17_plain_course(
+    slide_count: usize,
+    tracking: coursecraft_course::TrackingSettings,
+) -> Course {
+    let mut slides = Vec::new();
+    for i in 1..=slide_count {
+        slides.push(serde_json::json!({
+            "id": format!("s{i}"),
+            "title": format!("Slide {i}"),
+            "duration_ms": 5000
+        }));
+    }
+    let json = serde_json::json!({
+        "schema_version": 1,
+        "id": "tr-17-plain",
+        "title": "TR-17 Plain",
+        "slide_size": { "w": 1280, "h": 720 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": slides
+        }]
+    });
+    let mut c = Course::from_json(&json.to_string()).expect("tr_17_plain_course");
+    c.tracking = tracking;
+    c
+}
+
+fn tr_17_quiz_course(
+    with_results_trigger: bool,
+    tracking: coursecraft_course::TrackingSettings,
+) -> Course {
+    let results_triggers = if with_results_trigger {
+        serde_json::json!([{
+            "when": { "event": "timeline_starts" },
+            "action": { "action": "submit_results" }
+        }])
+    } else {
+        serde_json::json!([])
+    };
+    let make_q = |id: &str| {
+        serde_json::json!({
+            "id": id,
+            "title": id,
+            "duration_ms": 5000,
+            "question": {
+                "kind": "multiple_choice",
+                "prompt": format!("Question {id}"),
+                "choices": [
+                    { "id": "a", "text": "A", "correct": true },
+                    { "id": "b", "text": "B" }
+                ],
+                "points": 10,
+                "attempts": 1
+            },
+            "objects": [{
+                "id": format!("submit-{id}"),
+                "kind": { "type": "button", "label": "Submit" },
+                "frame": { "x": 100, "y": 100, "w": 120, "h": 40 }
+            }],
+            "triggers": [{
+                "when": { "event": "click", "object": format!("submit-{id}") },
+                "action": { "action": "submit_question" }
+            }]
+        })
+    };
+    let json = serde_json::json!({
+        "schema_version": 1,
+        "id": "tr-17-quiz",
+        "title": "TR-17 Quiz",
+        "slide_size": { "w": 1280, "h": 720 },
+        "quiz": { "passing_percent": 80 },
+        "scenes": [{
+            "id": "sc1",
+            "title": "Scene 1",
+            "slides": [
+                make_q("q1"),
+                make_q("q2"),
+                {
+                    "id": "results",
+                    "title": "Results",
+                    "duration_ms": 5000,
+                    "triggers": results_triggers
+                }
+            ]
+        }]
+    });
+    let mut c = Course::from_json(&json.to_string()).expect("tr_17_quiz_course");
+    c.tracking = tracking;
+    c
+}
+
+fn tr_17_tracking_effects(effects: &[coursecraft_logic::Effect]) -> Vec<coursecraft_logic::Effect> {
+    effects
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                coursecraft_logic::Effect::Completion { .. }
+                    | coursecraft_logic::Effect::Score { .. }
+            )
+        })
+        .cloned()
+        .collect()
+}
+
+fn tr_17_assert_preview_matches_simulate(
+    label: &str,
+    course: Course,
+    inputs: &[coursecraft_logic::Input],
+) {
+    use coursecraft_logic::{Effect, Input, Player};
+
+    // 1. Simulate path (`Player::handle`).
+    let mut sim_player = Player::new(&course).expect("valid sim player");
+    let mut sim_effects = sim_player.handle(&Input::Start);
+    for inp in inputs {
+        sim_effects.extend(sim_player.handle(inp));
+    }
+    let sim_tracking = tr_17_tracking_effects(&sim_effects);
+    let sim_visited = sim_player.state().visited.len();
+
+    // 2. Editor full-course Preview (`editor.open_preview_at(None)`).
+    let mut h = TestHarness::new_with_theme(course, (1280.0, 800.0), ThemeMode::Dark);
+    h.editor.open_preview_at(None);
+    let preview = h.editor.preview.as_mut().expect("preview opened");
+    for inp in inputs {
+        preview.handle(inp, None);
+    }
+    let prev_effects: Vec<Effect> = preview
+        .log
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Effect>(line).ok())
+        .collect();
+    let prev_tracking = tr_17_tracking_effects(&prev_effects);
+    let prev_visited = preview.state.as_ref().map_or(0, |st| st.visited.len());
+
+    assert_eq!(
+        prev_tracking, sim_tracking,
+        "{label}: Preview Completion/Score sequence must match simulate"
+    );
+    assert_eq!(
+        prev_visited, sim_visited,
+        "{label}: Preview visited slide count must match simulate"
+    );
+}
+
+#[test]
+fn tr_17_preview_vs_simulate_tracking_parity() {
+    use coursecraft_course::{
+        CompletionStatus, QuizTracking, SlidesViewedTracking, TrackingSettings,
+    };
+    use coursecraft_logic::{Effect, Input};
+
+    let click = |id: &str| Input::Click {
+        object: id.to_owned(),
+    };
+
+    // (a1) Slides viewed: All
+    tr_17_assert_preview_matches_simulate(
+        "slides-all",
+        tr_17_plain_course(
+            3,
+            TrackingSettings {
+                slides_viewed: Some(SlidesViewedTracking::All),
+                quiz: None,
+            },
+        ),
+        &[Input::Next, Input::Next],
+    );
+
+    // (a2) Slides viewed: AtLeast { count: 2 }
+    tr_17_assert_preview_matches_simulate(
+        "slides-at-least-2",
+        tr_17_plain_course(
+            3,
+            TrackingSettings {
+                slides_viewed: Some(SlidesViewedTracking::AtLeast { count: 2 }),
+                quiz: None,
+            },
+        ),
+        &[Input::Next, Input::Next],
+    );
+
+    // (b1) Quiz result: specific results slide with SubmitResults trigger
+    let quiz_inputs = vec![
+        Input::SelectChoice { choice: "a".into() },
+        click("submit-q1"),
+        Input::Next,
+        Input::SelectChoice { choice: "a".into() },
+        click("submit-q2"),
+        Input::Next,
+    ];
+    tr_17_assert_preview_matches_simulate(
+        "quiz-results-slide",
+        tr_17_quiz_course(
+            true,
+            TrackingSettings {
+                slides_viewed: None,
+                quiz: Some(QuizTracking {
+                    slide: Some("results".into()),
+                }),
+            },
+        ),
+        &quiz_inputs,
+    );
+
+    // (b2) Quiz result: course quiz (slide: None, auto-report on lock)
+    tr_17_assert_preview_matches_simulate(
+        "quiz-auto-lock",
+        tr_17_quiz_course(
+            false,
+            TrackingSettings {
+                slides_viewed: None,
+                quiz: Some(QuizTracking { slide: None }),
+            },
+        ),
+        &quiz_inputs,
+    );
+
+    // (c) Combined: slides_viewed (AtLeast 2) + quiz (slide: None)
+    tr_17_assert_preview_matches_simulate(
+        "combined-slides-and-quiz",
+        tr_17_quiz_course(
+            false,
+            TrackingSettings {
+                slides_viewed: Some(SlidesViewedTracking::AtLeast { count: 2 }),
+                quiz: Some(QuizTracking { slide: None }),
+            },
+        ),
+        &quiz_inputs,
+    );
+
+    // (d) Partial-slide preview (`preview_subset.is_some()`) must NOT falsely emit
+    // slides_viewed completion on slide 1 of a multi-slide course.
+    let partial_course = tr_17_plain_course(
+        3,
+        TrackingSettings {
+            slides_viewed: Some(SlidesViewedTracking::All),
+            quiz: None,
+        },
+    );
+    let mut h = TestHarness::new_with_theme(partial_course, (1280.0, 800.0), ThemeMode::Dark);
+    h.editor.selection.slide = "s1".into();
+    h.editor.selection.also_slides.clear();
+    h.editor.open_preview_selected();
+    let preview = h.editor.preview.as_ref().expect("partial preview opened");
+    assert!(
+        preview.is_partial_preview(),
+        "must be a partial preview subset"
+    );
+    let partial_effects: Vec<Effect> = preview
+        .log
+        .iter()
+        .filter_map(|line| serde_json::from_str::<Effect>(line).ok())
+        .collect();
+    assert!(
+        !partial_effects.iter().any(|e| matches!(
+            e,
+            Effect::Completion {
+                status: CompletionStatus::Completed
+            }
+        )),
+        "partial-slide preview must not emit slides_viewed completion on slide 1"
+    );
+}

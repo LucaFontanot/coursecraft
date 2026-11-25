@@ -1170,3 +1170,133 @@ fn gb_14_m37_point_text_and_interactive_group_uiux_sweep() {
             .join("\n")
     );
 }
+
+/// TR-18: M28 UI/UX sweep with non-default Tracking enabled across `course-settings`,
+/// `publish`, and `inspector-course` at all matrix sizes, themes, and scales (`0 MUST violations`).
+#[test]
+fn tr_18_tracking_surfaces_zero_must_violations() {
+    use coursecraft_course::{QuizTracking, SlidesViewedTracking, TrackingSettings};
+
+    let mut course = showcase();
+    course.tracking = TrackingSettings {
+        slides_viewed: Some(SlidesViewedTracking::AtLeast { count: 2 }),
+        quiz: Some(QuizTracking { slide: None }),
+    };
+
+    let target_labels = [
+        "window-course-settings",
+        "window-publish",
+        "inspector-course",
+    ];
+    let surfaces: Vec<SurfaceCase> = all_surfaces()
+        .into_iter()
+        .filter(|c| target_labels.contains(&c.label.as_str()))
+        .collect();
+    assert_eq!(surfaces.len(), target_labels.len());
+
+    let mut violations = Vec::new();
+    let mut unopened = Vec::new();
+    let mut total_frames = 0usize;
+
+    for case in &surfaces {
+        for &size in &MATRIX_SIZES {
+            for &(mode, _) in &MATRIX_THEMES {
+                for &scale in &MATRIX_SCALES {
+                    let effective_size = if scale > 1.0 && size == (1024.0, 600.0) {
+                        (1536.0, 900.0)
+                    } else {
+                        size
+                    };
+                    total_frames += 1;
+                    let mut h = TestHarness::new_with_config(
+                        course.clone(),
+                        effective_size,
+                        mode,
+                        scale,
+                        true,
+                    );
+                    case.select.apply(&mut h.editor);
+                    if case.label == "inspector-course" {
+                        h.editor.selection.clear_objects();
+                        h.editor.ui.inspector_tab = InspectorTab::Course;
+                    }
+                    if let Some(setup) = case.extra_setup {
+                        setup(&mut h.editor);
+                    }
+                    let report = h.audit_surface_report(3, mode);
+                    if scale <= 1.0
+                        && let Some(needle) = case.shows
+                        && !report.painted(needle)
+                    {
+                        unopened.push(format!(
+                            "{} {}x{} {:?} scale={scale}: \"{needle}\" was not painted",
+                            case.label, effective_size.0, effective_size.1, mode
+                        ));
+                    }
+                    for f in report.findings {
+                        let (rule, detail) = parse_rule_prefix(&f);
+                        violations.push(format!(
+                            "[{rule}] {} {}x{} {:?} scale={scale}: {detail}",
+                            case.label, effective_size.0, effective_size.1, mode
+                        ));
+                    }
+
+                    // Also scroll to the Tracking section so it is painted and audited in every viewport.
+                    let scroll_pos = if case.label == "inspector-course" {
+                        let right = h.right_panel_rect();
+                        h.find_text_in("Slides", right)
+                            .unwrap_or_else(|| right.center())
+                    } else {
+                        let anchor = if case.label == "window-course-settings" {
+                            "Course title"
+                        } else {
+                            "SCORM 1.2"
+                        };
+                        h.find_text(anchor)
+                            .unwrap_or_else(|| h.screen_rect.center())
+                    };
+                    for _ in 0..16 {
+                        if h.find_text("Tracking").is_some() {
+                            break;
+                        }
+                        h.scroll_over(scroll_pos, -80.0);
+                    }
+                    let scrolled_report = h.audit_surface_report(2, mode);
+                    let expect_tracking_visible =
+                        case.label != "inspector-course" || (effective_size.1 / scale) > 605.0;
+                    if expect_tracking_visible && !scrolled_report.painted("Tracking") {
+                        unopened.push(format!(
+                            "{} {}x{} {:?} scale={scale}: \"Tracking\" was not painted after scrolling",
+                            case.label, effective_size.0, effective_size.1, mode
+                        ));
+                    }
+                    for f in scrolled_report.findings {
+                        let (rule, detail) = parse_rule_prefix(&f);
+                        violations.push(format!(
+                            "[{rule}] {} (scrolled) {}x{} {:?} scale={scale}: {detail}",
+                            case.label, effective_size.0, effective_size.1, mode
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        unopened.is_empty(),
+        "TR-18 unopened/missing Tracking controls ({}):\n{}",
+        unopened.len(),
+        unopened.join("\n")
+    );
+    assert!(
+        violations.is_empty(),
+        "TR-18 UI/UX sweep found {} MUST violations across {total_frames} audited frames:\n{}",
+        violations.len(),
+        violations
+            .iter()
+            .take(50)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
