@@ -484,6 +484,15 @@ Plan by Gemini 4 Neon: `docs/testing/m44-plan.md`; report: `docs/testing/m44-rep
 - SCORM 1.2 gains Automatic (completion stays) beside the default Automatic (quiz result wins).
 - Released as 0.5.1 with the quiz choices layout fix and live text box resizing.
 
+## M45 Quick wins ✅
+
+Plan: `docs/testing/m45-plan.md`; report: `docs/testing/m45-report.md`. Briefs and step reviews by Gemini 4 Neon, implemented by Gemini 4 Hydrogen. From the everyday-user research and owner feedback.
+
+- Caption opens the callout shapes; web player loading indicator; spell check follows the course language.
+- `.ccraft` file association on Windows and Linux; Intel Mac dmg built by the release workflow.
+- The Fill toggle restores the previous colour; trimming an audio bar on the timeline stops the audio at the bar end.
+- Released as 0.5.2 with the media read errors, `course.json` media folder and Theme font picker fixes.
+
 ## After the first release
 
 - Interface translations: `coursecraft.tsv` catalogs in the craft-i18n data repository, starting with de, fr, es, it, pt-br, nl, pl (Latin script); the wiring lands in M38 (`docs/ui/localization.md`).

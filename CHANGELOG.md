@@ -2,8 +2,13 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
-## Unreleased
+## 0.5.2
 
+Quick fixes for everyday authoring, an Intel Mac download, and two fixes from user feedback.
+
+- Choosing pictures, video, captions or media files that can't be read now says which file failed and why, instead of doing nothing.
+- The Theme window picks fonts with the same font picker as the text panel.
+- The Button Tools › On Click tooltip now says what it does.
 - Insert › Media › Caption now opens the callout shapes so you can pick and draw one on the slide.
 - Opening a `course.json` now loads its pictures, audio and video from the `media/` folder beside it.
 - Published web courses now show a loading indicator until the player starts, or a short message if it fails to start.
