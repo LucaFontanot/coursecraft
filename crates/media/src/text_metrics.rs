@@ -396,6 +396,217 @@ pub fn point_text_box_size(
     if vertical { (h, w) } else { (w, h) }
 }
 
+/// One measured character with its advance width and line height for wrapping.
+struct WrappedChar {
+    ch: char,
+    advance: f32,
+    row_height: f32,
+}
+
+/// Wrap one paragraph's measured characters to `avail_w` and return its content
+/// height (sum of wrapped line heights times `line_spacing`, plus before/after
+/// spacing), always at least one line tall.
+fn wrap_paragraph_height(
+    chars: &[WrappedChar],
+    pm: ParagraphMetrics,
+    default_row_h: f32,
+    wrap_width: f32,
+) -> f32 {
+    let line_spacing = sanitize(pm.line_spacing, 1.0, MIN_LINE_SPACING, MAX_LINE_SPACING);
+    let space_before = sanitize(pm.space_before, 0.0, 0.0, MAX_PARAGRAPH_SPACE);
+    let space_after = sanitize(pm.space_after, 0.0, 0.0, MAX_PARAGRAPH_SPACE);
+    let list_indent = sanitize(pm.list_indent, 0.0, 0.0, MAX_LIST_INDENT);
+    let avail_w = (wrap_width - list_indent).max(1.0);
+
+    if chars.is_empty() {
+        return (space_before + default_row_h * line_spacing + space_after)
+            .clamp(1.0, POINT_TEXT_MAX_DIM);
+    }
+
+    let mut total_lines_h = 0.0_f32;
+    let mut line_w = 0.0_f32;
+    let mut line_h = 0.0_f32;
+    let mut line_has_content = false;
+    let mut idx = 0_usize;
+
+    while idx < chars.len() {
+        // Group consecutive whitespace or consecutive non-whitespace (a word).
+        let is_ws = chars[idx].ch.is_whitespace();
+        let start = idx;
+        let mut token_w = 0.0_f32;
+        let mut token_h = 0.0_f32;
+        while idx < chars.len() && chars[idx].ch.is_whitespace() == is_ws {
+            token_w = (token_w + chars[idx].advance).min(POINT_TEXT_MAX_DIM);
+            token_h = token_h.max(chars[idx].row_height);
+            idx += 1;
+        }
+
+        if is_ws {
+            // Trailing whitespace stays on the current line without forcing a
+            // spurious blank wrap, matching egui/epaint's galley wrapping.
+            line_w = (line_w + token_w).min(POINT_TEXT_MAX_DIM);
+            line_h = line_h.max(token_h);
+            line_has_content = true;
+            continue;
+        }
+
+        if line_has_content && line_w + token_w > avail_w {
+            let h = if line_h > 0.0 { line_h } else { default_row_h };
+            total_lines_h = (total_lines_h + h * line_spacing).min(POINT_TEXT_MAX_DIM);
+            line_w = 0.0;
+            line_h = 0.0;
+            line_has_content = false;
+        }
+
+        if token_w <= avail_w {
+            line_w = (line_w + token_w).min(POINT_TEXT_MAX_DIM);
+            line_h = line_h.max(token_h);
+            line_has_content = true;
+        } else {
+            // Single word wider than `avail_w`: break by character.
+            for wc in &chars[start..idx] {
+                if line_has_content && line_w + wc.advance > avail_w {
+                    let h = if line_h > 0.0 { line_h } else { default_row_h };
+                    total_lines_h = (total_lines_h + h * line_spacing).min(POINT_TEXT_MAX_DIM);
+                    line_w = 0.0;
+                    line_h = 0.0;
+                }
+                line_w = (line_w + wc.advance).min(POINT_TEXT_MAX_DIM);
+                line_h = line_h.max(wc.row_height);
+                line_has_content = true;
+            }
+        }
+    }
+
+    let final_h = if line_has_content && line_h > 0.0 {
+        line_h
+    } else {
+        default_row_h
+    };
+    total_lines_h = (total_lines_h + final_h * line_spacing).min(POINT_TEXT_MAX_DIM);
+    (space_before + total_lines_h + space_after).clamp(1.0, POINT_TEXT_MAX_DIM)
+}
+
+/// Measure wrapped text content height in slide pixels for a fixed `wrap_width`.
+///
+/// Splits runs on `\n` into paragraphs, wraps words at `wrap_width` (breaking
+/// overlong words by character) using `skrifa` against the bundled Inter faces,
+/// and returns total content height before box padding or insets (never smaller
+/// than one line, clamped to `1.0..=POINT_TEXT_MAX_DIM`).
+#[must_use]
+pub fn measure_wrapped_text_height(
+    runs: &[MeasuredRun<'_>],
+    paragraphs: &[ParagraphMetrics],
+    default_size: f32,
+    wrap_width: f32,
+) -> f32 {
+    let default_size = sanitize(
+        default_size,
+        DEFAULT_FONT_SIZE,
+        MIN_FONT_SIZE,
+        MAX_FONT_SIZE,
+    );
+    let wrap_width = sanitize(wrap_width, POINT_TEXT_MIN_W, 1.0, POINT_TEXT_MAX_DIM);
+    let default_font = skrifa::FontRef::new(INTER_REGULAR).ok();
+    let default_row_h = font_row_height(default_font.as_ref(), default_size);
+
+    let mut total_h = 0.0_f32;
+    let mut para_idx = 0_usize;
+    let mut para_chars: Vec<WrappedChar> = Vec::new();
+    let mut remaining_chars = MAX_CHARS;
+
+    for run in runs.iter().take(MAX_RUNS) {
+        if remaining_chars == 0 {
+            break;
+        }
+        let base_size = sanitize(run.size, default_size, MIN_FONT_SIZE, MAX_FONT_SIZE);
+        let script_scale = if run.script_scale.is_finite() && run.script_scale > 0.0 {
+            run.script_scale.clamp(MIN_SCRIPT_SCALE, MAX_SCRIPT_SCALE)
+        } else {
+            1.0
+        };
+        let scaled_size = (base_size * script_scale).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+        let letter_spacing = sanitize(
+            run.letter_spacing,
+            0.0,
+            MIN_LETTER_SPACING,
+            MAX_LETTER_SPACING,
+        );
+        let font = skrifa::FontRef::new(font_bytes_for_style(run.bold, run.italic)).ok();
+        let run_row_h = font_row_height(font.as_ref(), scaled_size);
+        let size = Size::new(scaled_size);
+        let location = LocationRef::default();
+        let charmap = font.as_ref().map(|f| f.charmap());
+        let glyph_metrics = font.as_ref().map(|f| f.glyph_metrics(size, location));
+
+        let mut first = true;
+        for segment in run.text.split('\n') {
+            if !first {
+                if remaining_chars == 0 {
+                    break;
+                }
+                remaining_chars -= 1;
+                let pm = paragraphs.get(para_idx).copied().unwrap_or_default();
+                let para_h = wrap_paragraph_height(&para_chars, pm, default_row_h, wrap_width);
+                total_h = (total_h + para_h).min(POINT_TEXT_MAX_DIM);
+                para_chars.clear();
+                para_idx = para_idx.saturating_add(1);
+            }
+            first = false;
+
+            for ch in segment.chars() {
+                if remaining_chars == 0 {
+                    break;
+                }
+                remaining_chars -= 1;
+                if ch == '\r' {
+                    continue;
+                }
+                let raw_adv = match (&charmap, &glyph_metrics) {
+                    (Some(cm), Some(gm)) => match cm.map(ch) {
+                        Some(gid) if gid != GlyphId::NOTDEF => gm
+                            .advance_width(gid)
+                            .filter(|v| v.is_finite() && *v >= 0.0)
+                            .unwrap_or_else(|| fallback_advance(ch, scaled_size)),
+                        _ => fallback_advance(ch, scaled_size),
+                    },
+                    _ => fallback_advance(ch, scaled_size),
+                };
+                let advance = (raw_adv + letter_spacing).clamp(0.0, POINT_TEXT_MAX_DIM);
+                para_chars.push(WrappedChar {
+                    ch,
+                    advance,
+                    row_height: run_row_h,
+                });
+            }
+            if remaining_chars == 0 {
+                break;
+            }
+        }
+    }
+
+    let pm = paragraphs.get(para_idx).copied().unwrap_or_default();
+    let para_h = wrap_paragraph_height(&para_chars, pm, default_row_h, wrap_width);
+    total_h = (total_h + para_h).min(POINT_TEXT_MAX_DIM);
+
+    let min_h = default_row_h.clamp(1.0, POINT_TEXT_MAX_DIM);
+    sanitize(total_h, min_h, min_h, POINT_TEXT_MAX_DIM)
+}
+
+/// Convert a measured wrapped content height into a fitted Grow text-box height.
+///
+/// Adds vertical insets (`top + bottom`) and `2.0 * POINT_TEXT_PAD_Y`, rounds up
+/// with `ceil()`, and clamps to `1.0..=POINT_TEXT_MAX_DIM`.
+#[must_use]
+pub fn grow_text_box_height(content_h: f32, insets: TextBoxInsets) -> f32 {
+    let ch = sanitize(content_h, 1.0, 1.0, POINT_TEXT_MAX_DIM);
+    let top = sanitize(insets.top, 0.0, 0.0, POINT_TEXT_MAX_DIM);
+    let bottom = sanitize(insets.bottom, 0.0, 0.0, POINT_TEXT_MAX_DIM);
+    (ch + top + bottom + 2.0 * POINT_TEXT_PAD_Y)
+        .ceil()
+        .clamp(1.0, POINT_TEXT_MAX_DIM)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +784,69 @@ mod tests {
         nl_flood.push_str("Should not be reached");
         let (w_nl_tail, _) = measure_unwrapped_text(&[plain_run(&nl_flood, 20.0)], &[], 20.0);
         assert_eq!(w_nl_tail, 0.0);
+    }
+
+    #[test]
+    fn wrapped_height_grows_as_width_narrows_and_never_below_one_line() {
+        let (_, one_line_h) = measure_unwrapped_text(&[plain_run("A", 20.0)], &[], 20.0);
+        let empty_h = measure_wrapped_text_height(&[plain_run("", 20.0)], &[], 20.0, 200.0);
+        assert!(
+            (empty_h - one_line_h).abs() < 0.01,
+            "empty wrapped text must be at least one line: {empty_h} vs {one_line_h}"
+        );
+
+        let sentence = "The quick brown fox jumps over the lazy dog again and again";
+        let h_wide = measure_wrapped_text_height(&[plain_run(sentence, 20.0)], &[], 20.0, 1000.0);
+        let h_mid = measure_wrapped_text_height(&[plain_run(sentence, 20.0)], &[], 20.0, 200.0);
+        let h_narrow = measure_wrapped_text_height(&[plain_run(sentence, 20.0)], &[], 20.0, 80.0);
+
+        assert!(
+            (h_wide - one_line_h).abs() < 0.01,
+            "wide box should fit on 1 line: {h_wide} vs {one_line_h}"
+        );
+        assert!(
+            h_mid >= one_line_h * 2.5,
+            "medium box should wrap onto >=3 lines: {h_mid} vs {one_line_h}"
+        );
+        assert!(
+            h_narrow > h_mid * 1.5,
+            "narrow box should wrap onto more lines: {h_narrow} vs {h_mid}"
+        );
+
+        let box_h = grow_text_box_height(
+            h_mid,
+            TextBoxInsets {
+                left: 8.0,
+                top: 6.0,
+                right: 8.0,
+                bottom: 4.0,
+            },
+        );
+        assert_eq!(box_h, (h_mid + 10.0 + 2.0 * POINT_TEXT_PAD_Y).ceil());
+    }
+
+    #[test]
+    fn wrapped_height_hostile_inputs_clamped_without_panic() {
+        let hostile = [MeasuredRun {
+            text: &"Supercalifragilisticexpialidocious ".repeat(4000),
+            size: f32::NAN,
+            bold: true,
+            italic: false,
+            letter_spacing: f32::INFINITY,
+            script_scale: -10.0,
+        }];
+        let h = measure_wrapped_text_height(&hostile, &[], f32::NEG_INFINITY, f32::NAN);
+        assert!(h.is_finite() && (1.0..=POINT_TEXT_MAX_DIM).contains(&h));
+
+        let bh = grow_text_box_height(
+            f32::INFINITY,
+            TextBoxInsets {
+                left: f32::NAN,
+                top: f32::INFINITY,
+                right: -5.0,
+                bottom: f32::NEG_INFINITY,
+            },
+        );
+        assert!(bh.is_finite() && (1.0..=POINT_TEXT_MAX_DIM).contains(&bh));
     }
 }

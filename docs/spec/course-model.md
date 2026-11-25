@@ -552,7 +552,7 @@ A `text` object can define formatted segments via `runs: [TextRun]`. When `runs`
 
 A run may carry `link`, either `{ "type": "url", "url": "https://…" }` or `{ "type": "slide", "slide": "slide-id" }`. A URL must start with `http://`, `https://` or `mailto:`; a slide must exist. An invalid link is a validation error and is dropped by the renderer. Clicking a link in preview or the player runs the same effect as the `open_url` / `jump_to_slide` actions (see `triggers.md`), and does not fire the object's own click triggers. Links are underlined in the theme accent unless the run sets its own colour, are in the keyboard focus order after their object, and are announced as links on the web.
 
-`autofit` is `none` (the default, omitted) or `shrink`. `shrink` lays the text out at full size and reduces the font scale until it fits, never below 40 %. It applies to runs, list markers and paragraph spacing, and works on text objects and shape text alike. A shape's `text` uses the same `runs`, `paragraphs` and `autofit` fields.
+`autofit` is `none` (the default, omitted), `shrink`, or `grow`. `shrink` lays the text out at full size and reduces the font scale until it fits, never below 40 %. `grow` ("Resize box to fit text") keeps the box width fixed and adjusts its frame height to fit the wrapped text (never smaller than one line) whenever text, paragraphs, or style are edited; it is authoring/model-only (the player draws the committed frame as stored). `shrink` applies to runs, list markers and paragraph spacing, and works on text objects and shape text alike. A shape's `text` uses the same `runs`, `paragraphs` and `autofit` fields.
 
 ## Animations and Motion Paths
 
