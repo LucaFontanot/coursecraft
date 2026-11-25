@@ -1,8 +1,9 @@
 //! Project state, open/save file dialogs, and serialization helpers.
 
-use coursecraft_course::Course;
+use coursecraft_course::{Course, media_references};
 use coursecraft_engine::Session;
-use coursecraft_format::{FolderRecord, open_project_from};
+use coursecraft_format::{FolderRecord, is_safe_relative_path, open_project_from};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// A media entry stored alongside the course.
@@ -468,7 +469,8 @@ pub fn remove_stale_temps(path: &Path) {
     }
 }
 
-/// Open a `.ccraft` archive or bare `.json` course from disk.
+/// Open a `.ccraft` archive or bare `.json` course from disk, with any available
+/// referenced files from the JSON course's sibling `media/` folder.
 ///
 /// # Errors
 /// Returns an error if the file cannot be read or parsed.
@@ -493,13 +495,42 @@ pub fn open_from(path: &Path) -> Result<LoadedCourse, String> {
             }
         })?;
         let course = Course::from_json(&json_str).map_err(|e| damaged(e.to_string()))?;
-        Ok((course, Vec::new()))
+        let media = read_sibling_media(path, &course);
+        Ok((course, media))
     } else {
         let file = std::fs::File::open(path).map_err(|e| format!("Failed to read file: {e}"))?;
         let reader = std::io::BufReader::with_capacity(256 * 1024, file);
         let proj = open_project_from(reader).map_err(|e| damaged(e.to_string()))?;
         Ok((proj.course, proj.media))
     }
+}
+
+fn read_sibling_media(path: &Path, course: &Course) -> Vec<MediaItem> {
+    let Some(parent) = path.parent() else {
+        return Vec::new();
+    };
+    let Ok(media_dir) = parent.join("media").canonicalize() else {
+        return Vec::new();
+    };
+
+    let sources: BTreeSet<_> = media_references(course)
+        .into_iter()
+        .map(|reference| reference.src)
+        .filter(|src| is_safe_relative_path(src))
+        .collect();
+
+    sources
+        .into_iter()
+        .filter_map(|src| {
+            let file = media_dir.join(&src).canonicalize().ok()?;
+            // Don't follow links outside the media folder or read special files.
+            if !file.starts_with(&media_dir) || !file.is_file() {
+                return None;
+            }
+            let bytes = std::fs::read(file).ok()?;
+            Some((src, bytes))
+        })
+        .collect()
 }
 
 /// A folder copied into `media/web/<name>/` for a web object.

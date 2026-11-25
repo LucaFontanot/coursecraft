@@ -2,6 +2,10 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
+## Unreleased
+
+- Opening a `course.json` now loads its pictures, audio and video from the `media/` folder beside it.
+
 ## 0.5.1
 
 Choose how a course reports completion to the LMS, plus two editor fixes.

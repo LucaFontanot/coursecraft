@@ -1,5 +1,5 @@
-//! Tests for safe saving: crash safety, verification, locked files, files that
-//! changed on disk, damaged files and leftover temp files.
+//! Tests for opening courses and safe saving: crash safety, verification, locked
+//! files, files that changed on disk, damaged files and leftover temp files.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -293,6 +293,115 @@ fn damaged_project_files_give_a_plain_error_and_stay_untouched() {
         assert!(err.contains("can't be opened"), "{name}: {err}");
         assert_eq!(std::fs::read(&path).unwrap(), bytes, "{name} untouched");
     }
+}
+
+struct LooseCourseDir(PathBuf);
+
+impl LooseCourseDir {
+    fn new(name: &str) -> Self {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "coursecraft-json-{name}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn write_course(&self, sources: &[(&str, &str)]) -> PathBuf {
+        let mut course = course_titled("Loose course");
+        let objects = &mut course.scenes[0].slides[0].objects;
+        let template = objects[0].clone();
+        for (index, (kind, src)) in sources.iter().enumerate() {
+            let mut object = template.clone();
+            object.id = format!("media-{index}");
+            object.kind = serde_json::from_value(serde_json::json!({
+                "type": kind,
+                "src": src,
+            }))
+            .unwrap();
+            objects.push(object);
+        }
+        let path = self.0.join("course.json");
+        std::fs::write(&path, course.to_json().unwrap()).unwrap();
+        path
+    }
+}
+
+impl Drop for LooseCourseDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn bare_json_loads_only_referenced_sibling_media_once_and_keeps_it_on_save() {
+    let dir = LooseCourseDir::new("sibling-media");
+    let assets = dir.0.join("media");
+    std::fs::create_dir_all(assets.join("pics")).unwrap();
+    std::fs::write(assets.join("pics/logo.png"), b"picture").unwrap();
+    std::fs::write(assets.join("voice.mp3"), b"audio").unwrap();
+    std::fs::write(assets.join("clip.mp4"), b"video").unwrap();
+    std::fs::write(assets.join("unused.png"), b"unreferenced").unwrap();
+    let path = dir.write_course(&[
+        ("image", "pics/logo.png"),
+        ("audio", "voice.mp3"),
+        ("video", "clip.mp4"),
+        ("image", "pics/logo.png"),
+    ]);
+
+    let (course, media) = open_from(&path).unwrap();
+    assert_eq!(
+        media,
+        vec![
+            ("clip.mp4".to_owned(), b"video".to_vec()),
+            ("pics/logo.png".to_owned(), b"picture".to_vec()),
+            ("voice.mp3".to_owned(), b"audio".to_vec()),
+        ]
+    );
+    let archive = dir.0.join("converted.ccraft");
+    save_to(&archive, &course, &media).unwrap();
+    assert_eq!(open_from(&archive).unwrap().1, media);
+}
+
+#[test]
+fn bare_json_skips_missing_and_unreadable_media() {
+    let dir = LooseCourseDir::new("missing-media");
+    let assets = dir.0.join("media");
+    std::fs::create_dir_all(assets.join("directory.png")).unwrap();
+    std::fs::write(assets.join("present.png"), b"present").unwrap();
+    let path = dir.write_course(&[
+        ("image", "missing.png"),
+        ("image", "directory.png"),
+        ("image", "present.png"),
+    ]);
+
+    let (_, media) = open_from(&path).unwrap();
+    assert_eq!(media, vec![("present.png".to_owned(), b"present".to_vec())]);
+}
+
+#[test]
+fn bare_json_skips_unsafe_media_paths() {
+    let dir = LooseCourseDir::new("unsafe-media");
+    std::fs::create_dir(dir.0.join("media")).unwrap();
+    std::fs::write(dir.0.join("secret.png"), b"outside media").unwrap();
+    let path = dir.write_course(&[("image", "../secret.png")]);
+
+    let (_, media) = open_from(&path).unwrap();
+    assert!(media.is_empty());
+}
+
+#[test]
+fn bare_json_opens_without_a_media_folder() {
+    let dir = LooseCourseDir::new("no-media");
+    let path = dir.write_course(&[("image", "logo.png")]);
+
+    let (course, media) = open_from(&path).unwrap();
+    assert_eq!(course.title, "Loose course");
+    assert!(media.is_empty());
 }
 
 #[test]
