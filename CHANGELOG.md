@@ -2,8 +2,18 @@
 
 What changed in each release, newest first. Versions follow [semantic versioning](https://semver.org): until 1.0, a minor version (0.x) may change things, but a project saved by an older CourseCraft always opens in a newer one.
 
-## 0.5.1 (unreleased)
+## 0.5.1
 
+Choose how a course reports completion to the LMS, plus two editor fixes.
+
+**LMS tracking options** (issue #9, thanks to apomultimedia70):
+- A new Tracking section in Course Settings, the Publish window and the Course panel. Report completion when the learner has viewed all slides or at least a number of slides, from a quiz result, or both. Completion triggers keep working either way, and existing courses stay triggers-only.
+- cmi5 and SCORM packages describe the chosen tracking to the LMS, so the LMS judges completion the same way the course does.
+- A reported completion or pass is never lowered by a later attempt, a lower score or a relaunch, in SCORM 2004, cmi5, xAPI and LTI 1.3.
+- SCORM 1.2 **Report status as** has two automatic choices. **Automatic (quiz result wins)**, the default, shows a failed quiz as failed even after the course was completed. **Automatic (completion stays)** keeps a completed course completed and still records the quiz score.
+- Agents can set tracking with the new `course.set_tracking` command from the CLI and MCP.
+
+**Fixes:**
 - Question choices no longer squeeze into a narrow column when the question editor is in a narrow panel.
 - Text boxes now resize while you type (one-line boxes grow sideways, wrapping boxes grow downward).
 

@@ -475,6 +475,15 @@ trigger log from the simulator), publish quality, LRS beside an LMS, editable pl
 save and import player settings. The AI group through the user's own agent: quiz, question and
 summary from course content, insert and edit text, image, sound effects and music, and an AI panel.
 
+## M44 LMS tracking options ✅
+
+Plan by Gemini 4 Neon: `docs/testing/m44-plan.md`; report: `docs/testing/m44-report.md`. Implemented by Gemini 4 Hydrogen, reviewed step by step by Gemini 4 Neon. From GitHub issue #9.
+
+- Tracking by slides viewed (all or at least N), by quiz result, or both, alongside completion triggers; set in Course Settings, Publish and the Course panel, and by `course.set_tracking`.
+- cmi5 `moveOn` and SCORM mastery score follow the tracking choice; reported status never goes down.
+- SCORM 1.2 gains Automatic (completion stays) beside the default Automatic (quiz result wins).
+- Released as 0.5.1 with the quiz choices layout fix and live text box resizing.
+
 ## After the first release
 
 - Interface translations: `coursecraft.tsv` catalogs in the craft-i18n data repository, starting with de, fr, es, it, pt-br, nl, pl (Latin script); the wiring lands in M38 (`docs/ui/localization.md`).
