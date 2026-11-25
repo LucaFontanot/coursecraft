@@ -393,3 +393,97 @@ fn spell_check_flags_misspelled_words_in_glossary_definitions() {
         "expected misspelled word in glossary definition: {issues:?}"
     );
 }
+
+#[test]
+fn unsupported_course_language_accepts_none_and_english_tags() {
+    assert_eq!(spell_check::unsupported_course_language(None), None);
+    assert_eq!(spell_check::unsupported_course_language(Some("")), None);
+    assert_eq!(spell_check::unsupported_course_language(Some("   ")), None);
+    assert_eq!(spell_check::unsupported_course_language(Some("en")), None);
+    assert_eq!(
+        spell_check::unsupported_course_language(Some("en-GB")),
+        None
+    );
+    assert_eq!(
+        spell_check::unsupported_course_language(Some("EN-us")),
+        None
+    );
+    assert_eq!(
+        spell_check::unsupported_course_language(Some("fr-CA")),
+        Some("fr-CA")
+    );
+    assert_eq!(
+        spell_check::unsupported_course_language(Some("de")),
+        Some("de")
+    );
+}
+
+#[test]
+fn spell_check_checks_when_course_has_no_language_or_en_gb() {
+    let mut editor = Editor::new(course_with_typos());
+    assert!(editor.session.course.language.is_none());
+    assert!(!editor.spell_words("Teh cat").is_empty());
+    assert!(!spell_check::collect_issues(&mut editor).is_empty());
+
+    let mut course = course_with_typos();
+    course.language = Some("en-GB".to_owned());
+    let mut harness = TestHarness::new(course);
+    assert!(!harness.editor.spell_words("Teh cat").is_empty());
+    assert!(!spell_check::collect_issues(&mut harness.editor).is_empty());
+    spell_check::open(&mut harness.editor);
+    harness.idle_frame();
+    assert!(
+        harness
+            .find_text("Spelling is checked in English only.")
+            .is_none()
+    );
+}
+
+#[test]
+fn spell_check_skips_squiggles_and_shows_note_for_fr_ca() {
+    let mut course = course_with_typos();
+    course.language = Some("fr-CA".to_owned());
+    let mut harness = TestHarness::new(course);
+
+    assert!(harness.editor.spell_words("Teh cat").is_empty());
+    assert!(spell_check::collect_issues(&mut harness.editor).is_empty());
+
+    harness.editor.selection.slide = "s2".to_owned();
+    harness.editor.ui.inline_edit = Some(InlineEdit {
+        slide: "s2".to_owned(),
+        object: "t2".to_owned(),
+        buffer: "Teh cat".to_owned(),
+        original: String::new(),
+        is_button: false,
+        is_shape: false,
+        cell: None,
+        just_entered: false,
+        live_runs: Vec::new(),
+        live_paragraphs: Vec::new(),
+        last_revision: 0,
+        state_name: None,
+        extra_id: None,
+    });
+    harness.idle_frame();
+    assert!(
+        harness.editor.ui.spell_inline_debug.is_empty(),
+        "no squiggles should be drawn for non-English courses"
+    );
+
+    spell_check::open(&mut harness.editor);
+    harness.idle_frame();
+    assert!(
+        harness
+            .find_text("Spelling is checked in English only. This course's language is fr-CA.")
+            .is_some()
+    );
+    assert!(harness.find_text("Spelling check complete.").is_none());
+
+    harness.editor.set_language("pseudo");
+    harness.idle_frame();
+    assert!(
+        harness
+            .find_text("⟦Spelling is checked in English only. This course's language is fr-CA.⟧")
+            .is_some()
+    );
+}

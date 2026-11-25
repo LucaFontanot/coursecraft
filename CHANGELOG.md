@@ -7,6 +7,7 @@ What changed in each release, newest first. Versions follow [semantic versioning
 - Insert › Media › Caption now opens the callout shapes so you can pick and draw one on the slide.
 - Opening a `course.json` now loads its pictures, audio and video from the `media/` folder beside it.
 - Published web courses now show a loading indicator until the player starts, or a short message if it fails to start.
+- Spell check now skips non-English courses and explains this in the Check Spelling window.
 
 ## 0.5.1
 

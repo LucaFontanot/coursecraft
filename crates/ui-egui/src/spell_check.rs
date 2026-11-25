@@ -335,13 +335,17 @@ impl Editor {
             .collect()
     }
 
-    /// Misspellings for `text`, or none when as-you-type checking is off.
+    /// Misspellings for `text`, or none when as-you-type checking is off or
+    /// the course language is not English.
     /// Ignored words are skipped for this session. `suggestions` is left
     /// empty: they are slow to work out, so ask [`Editor::spell_suggestions`]
     /// only when a menu needs them.
     #[must_use]
     pub fn spell_words(&mut self, text: &str) -> Vec<SpelledWord> {
-        if !self.ui.prefs.spell_check_as_you_type || text.is_empty() {
+        if !self.ui.prefs.spell_check_as_you_type
+            || text.is_empty()
+            || unsupported_course_language(self.session.course.language.as_deref()).is_some()
+        {
             return Vec::new();
         }
         let hash = hash_text(text);
@@ -503,11 +507,32 @@ pub fn consume_escape(editor: &mut Editor, ctx: &egui::Context) {
     }
 }
 
+/// Returns the trimmed BCP 47 tag when the course language is set to a
+/// non-English tag that the bundled English dictionary does not cover.
+/// Returns `None` when no language is set, empty, or starts with the `en`
+/// primary subtag (case-insensitive, e.g. `en`, `en-GB`, `en-US`).
+#[must_use]
+pub fn unsupported_course_language(language: Option<&str>) -> Option<&str> {
+    let tag = language?.trim();
+    if tag.is_empty() {
+        return None;
+    }
+    let primary = tag.split(['-', '_']).next().unwrap_or(tag);
+    if primary.eq_ignore_ascii_case("en") {
+        None
+    } else {
+        Some(tag)
+    }
+}
+
 /// Walk every author-visible string, skipping ignored words and occurrences.
 /// The Check Spelling window uses this; it does not depend on the as-you-type
 /// preference.
 #[must_use]
 pub fn collect_issues(editor: &mut Editor) -> Vec<SpellingIssue> {
+    if unsupported_course_language(editor.session.course.language.as_deref()).is_some() {
+        return Vec::new();
+    }
     let strings = course_strings(&editor.session.course);
     let ignored_words = editor.ui.spell_ignored.clone();
     let ignored_at = editor.ui.spell_ignored_at.clone();
@@ -689,6 +714,8 @@ pub fn show_spelling_window(editor: &mut Editor, ctx: &egui::Context) {
         .map(|word| editor.spell_suggestions(word))
         .unwrap_or_default();
 
+    let unsupported_lang =
+        unsupported_course_language(editor.session.course.language.as_deref()).map(str::to_owned);
     let mut open = true;
     let mut action = WindowAction::None;
     let mut change_to = editor.ui.spell_check.change_to.clone();
@@ -699,6 +726,7 @@ pub fn show_spelling_window(editor: &mut Editor, ctx: &egui::Context) {
             window_body(
                 &editor.ui.spell_check,
                 &suggestions,
+                unsupported_lang.as_deref(),
                 ui,
                 &mut change_to,
                 &mut action,
@@ -726,11 +754,20 @@ enum WindowAction {
 fn window_body(
     state: &SpellingState,
     suggestions: &[String],
+    unsupported_lang: Option<&str>,
     ui: &mut Ui,
     change_to: &mut String,
     action: &mut WindowAction,
 ) {
     let p = coursecraft_render::palette(ui.ctx());
+    if let Some(tag) = unsupported_lang {
+        let note = craft_i18n::fmt(
+            crate::tl!("Spelling is checked in English only. This course's language is {lang}."),
+            &[("lang", tag)],
+        );
+        ui.add(egui::Label::new(RichText::new(note).color(p.text_secondary)).wrap());
+        return;
+    }
     if state.issues.is_empty() {
         ui.label(RichText::new("Spelling check complete.").color(p.text));
         return;
